@@ -195,7 +195,7 @@ mod tests {
             }
             Kind::VoiceKeyer => {
                 e.set_operating_mode("phone", false);
-                e.send_voice(vec![0.25; 12_000]);
+                e.send_voice(vec![0.25; 12_000]).unwrap();
                 assert!(e.voice_tx.is_some(), "{kind:?}: baseline queued");
             }
             Kind::Cw => {

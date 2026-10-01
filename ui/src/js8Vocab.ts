@@ -6,7 +6,7 @@
 // side, js8::proto::command, is the wire authority and this table must agree with it), and
 // invariant formatters. None of it is prose and none of it goes through the catalog
 // (i18n/index.ts, the invariant-token rule): a translated command name would not be answered.
-import type { Js8ActivityRow, Js8Speed } from './types'
+import type { Js8ActivityRow, Js8Heard, Js8InboxEntry, Js8Speed } from './types'
 
 export const JS8 = 'JS8'
 export const HB = 'HB'
@@ -142,7 +142,7 @@ export function estimateFrames(
 
 /** One bucket: the newest decode heard at that offset. */
 export interface Js8OffsetRow {
-  /** The bucket key — the newest decode's offset, rounded to whole Hz. */
+  /** The bucket key — the newest decode's offset, truncated to whole Hz as JS8Call's is. */
   offsetHz: number
   atMs: number
   snrDb: number
@@ -167,9 +167,11 @@ export interface Js8OffsetRow {
  * carries the bucket's key, exactly as JS8Call re-keys a bucket on a nearby decode.
  */
 export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8OffsetRow[] {
-  const buckets: Js8OffsetRow[] = []
+  const buckets = new Map<number, Js8OffsetRow>()
   for (const r of [...rows].sort((a, b) => a.atMs - b.atMs)) {
-    const hz = Math.round(r.freqHz)
+    // JS8Call's `frequencyOffset()`: the decoder's frequency held in an int, so truncated
+    // (decodedtext.cpp:248, decodedtext.h:80).
+    const hz = Math.trunc(r.freqHz)
     const row: Js8OffsetRow = {
       offsetHz: hz,
       atMs: r.atMs,
@@ -181,18 +183,91 @@ export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8Offset
       mine: r.mine,
       lowConf: r.lowConf,
     }
-    // A decode within its own speed's rxThreshold of a bucket JOINS it, and the bucket takes the
-    // NEW offset as its key (mainwindow.cpp:3968-3981, the tolerance of the decode being filed).
-    const tolerance = JS8_SPEEDS[r.speed].rxThresholdHz
-    const hit = buckets.findIndex((b) => Math.abs(b.offsetHz - hz) <= tolerance)
-    if (hit === -1) buckets.push(row)
-    else buckets[hit] = row
+    // A decode at an offset already filed goes there (mainwindow.cpp:3969). One at a new offset
+    // takes over the filed offset within its own speed's rxThreshold that `generateOffsets` meets
+    // first counting up from offset − range, the lowest in range, and that bucket takes the NEW
+    // offset as its key (:3970-3981, :3730-3739).
+    if (!buckets.has(hz)) {
+      const range = JS8_SPEEDS[r.speed].rxThresholdHz
+      for (let prev = hz - range; prev <= hz + range; prev++) {
+        if (buckets.delete(prev)) break
+      }
+    }
+    buckets.set(hz, row)
   }
-  return buckets.sort((a, b) => a.offsetHz - b.offsetHz)
+  return [...buckets.values()].sort((a, b) => a.offsetHz - b.offsetHz)
+}
+
+/**
+ * Band activity under JS8Call's "Remove messages from band activity after" (`ActivityAging`, 2
+ * minutes by default, Configuration.cpp:1854; the rule at mainwindow.cpp:9845-9856). A row whose
+ * newest decode was heard that many whole minutes ago or more (`utcTimestamp.secsTo(now) / 60 >=
+ * activityAging`) is left off, unless its offset is the selected one; 0 is off. JS8Call's selected
+ * offset is the row the operator clicked. A row here is picked by the double-click that moves RX
+ * to it, so the caller passes the RX offset. Filing is untouched: `bandActivityByOffset` runs over
+ * every decode, as JS8Call's buckets keep their aged frames; only what is shown ages.
+ */
+export function js8ShownOffsetRows(
+  rows: readonly Js8OffsetRow[],
+  o: { agingMin: number; nowMs: number; selectedHz: number | null },
+): Js8OffsetRow[] {
+  if (!(o.agingMin > 0)) return [...rows]
+  return rows.filter(
+    (r) => r.offsetHz === o.selectedHz || Math.trunc((o.nowMs - r.atMs) / 60_000) < o.agingMin,
+  )
 }
 
 /** JS8Call's "Time Delta" face: whole milliseconds of DT (mainwindow.cpp:9936). Units are a
  *  technical token, and the sign matters — an early station reads negative. */
 export function dtLabel(dtS: number): string {
   return `${Math.round(dtS * 1000)} ms`
+}
+
+/** JS8Call's `Radio::base_callsign` (Radio.cpp:117-133): the longer side of the first '/', the
+ *  right-hand side on a tie, upper-cased. */
+function js8BaseCall(call: string): string {
+  const c = call.trim().toUpperCase(), slash = c.indexOf('/')
+  if (slash < 0) return c
+  return c.length - slash - 1 >= slash ? c.slice(slash + 1) : c.slice(0, slash)
+}
+
+/**
+ * The calls with an unread message to me in the inbox — to my call or its base, from that call —
+ * which is JS8Call's `m_rxInboxCountCache` as `refreshInboxCounts` counts it (mainwindow.cpp:
+ * 9404-9416). JS8Call flags such a station ⚑ and lifts it to the top of its call list
+ * (:10199-10207, :10246-10251), and callsign aging keeps it.
+ */
+export function js8UnreadFrom(inbox: readonly Js8InboxEntry[], myCall: string): Set<string> {
+  const me = myCall.trim().toUpperCase()
+  const toMe = (to: string) => to !== '' && (to === me || to === js8BaseCall(me))
+  return new Set(
+    inbox.filter((e) => e.state === 'unread' && toMe(e.to.trim().toUpperCase())).map((e) => e.from),
+  )
+}
+
+/** JS8Call's "pin messages to the top" (mainwindow.cpp:10199-10207): the stations with an unread
+ *  message to me first, the rest after, each keeping the order it had — a stable partition. */
+export function js8UnreadFirst<T extends { call: string }>(rows: readonly T[], unreadFrom: ReadonlySet<string>): T[] {
+  if (unreadFrom.size === 0) return [...rows]
+  return [...rows.filter((r) => unreadFrom.has(r.call)), ...rows.filter((r) => !unreadFrom.has(r.call))]
+}
+
+/**
+ * The Stations list under JS8Call's callsign aging (mainwindow.cpp:10209-10233). With an aging of
+ * `agingMin` minutes (0, JS8Call's default, is off: `CallsignAging`, Configuration.cpp:1853), a
+ * call last heard that many whole minutes ago or more (`utcTimestamp.secsTo(now) / 60 >=
+ * callsignAging`) is left off, unless it is the selected call or has an unread message to me in
+ * the inbox: to my call or its base, from that call (`m_rxInboxCountCache`, :9404-9416). The order
+ * is kept, and nothing is dropped from `stations` itself: JS8Call ages its list, not its memory.
+ */
+export function js8ListedStations(
+  stations: readonly Js8Heard[],
+  inbox: readonly Js8InboxEntry[],
+  o: { agingMin: number; nowMs: number; selectedCall: string; myCall: string },
+): Js8Heard[] {
+  if (!(o.agingMin > 0)) return [...stations]
+  const unreadFrom = js8UnreadFrom(inbox, o.myCall)
+  return stations.filter(
+    (h) => h.call === o.selectedCall || unreadFrom.has(h.call) || Math.trunc((o.nowMs - h.lastMs) / 60_000) < o.agingMin,
+  )
 }

@@ -5276,15 +5276,216 @@ fn journal_assistance(settings: &tempo_app::settings::Settings, note: &str, forc
         let excess = log.len() - ASSISTANCE_JOURNAL_CAP;
         log.drain(..excess);
     }
-    if let Ok(text) = serde_json::to_string(&*log) {
-        let path = assistance_journal_path();
+    write_assistance_journal(&assistance_journal_path(), &log);
+}
+
+/// The assistance journal at `path` for the launch: its rows, or none when there is no file, or
+/// one this build cannot read. That one is kept aside ([`tempo_core::keep_aside`]), because the
+/// launch journals its own row at once and would write over the record.
+fn restore_assistance_journal(path: &Path, now: i64) -> Vec<AssistanceEvent> {
+    tempo_core::keep_aside::read_or_keep("assistance", path, now, |text| {
+        serde_json::from_str::<Vec<AssistanceEvent>>(text).map_err(|e| e.to_string())
+    })
+    .unwrap_or_default()
+}
+
+/// Write the assistance journal to `path` (atomic tmp+rename, best-effort), unless the file there
+/// is one this run could not read and could not move aside: the record in it is never written
+/// over.
+fn write_assistance_journal(path: &Path, log: &[AssistanceEvent]) {
+    if tempo_core::keep_aside::refuses(path) {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(log) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let tmp = path.with_extension("json.tmp");
         if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+            let _ = std::fs::rename(&tmp, path);
         }
+    }
+}
+
+#[cfg(test)]
+mod assistance_journal_tests {
+    //! The assistance journal on the launch's read and the journal's own write, when the file
+    //! there cannot be read: kept, byte for byte, under a dated name and never written over, and
+    //! named for the screen. A journal whose only news is fields, and no journal, read as they
+    //! always have.
+    use super::*;
+    use tempo_core::keep_aside::Kept;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn kept_under(dir: &Path) -> Vec<Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    fn row(note: &str) -> AssistanceEvent {
+        AssistanceEvent {
+            ts_unix: 1_790_000_000,
+            unassisted: true,
+            sources: vec![AssistanceSourceState {
+                name: "DX cluster".into(),
+                active: false,
+            }],
+            note: note.into(),
+        }
+    }
+
+    /// The record as this build writes it: one row.
+    fn a_journal() -> String {
+        serde_json::to_string(&vec![row("UNASSISTED entry declared by the operator")]).unwrap()
+    }
+
+    /// An unreadable record is kept, byte for byte, beside the new one; the launch's own row,
+    /// written the moment it starts, makes a new record and does not touch the kept one.
+    fn assert_kept(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("kept");
+        let path = dir.join("assistance_journal.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut log = restore_assistance_journal(&path, NOW);
+        assert!(log.is_empty(), "{what}: nothing is read out of it");
+        log.push(row("Nexus started"));
+        write_assistance_journal(&path, &log);
+
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable record must survive the launch's own row, byte for byte, moved aside"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "assistance",
+                path: dir.join(ASIDE),
+                kept_in_place: false,
+            }],
+            "{what}: the screen is told where it is"
+        );
+        assert_eq!(
+            restore_assistance_journal(&path, NOW + 1).len(),
+            1,
+            "{what}: the new record is this build's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_assistance_journal_cut_short_is_kept_and_never_written_over() {
+        let whole = a_journal().into_bytes();
+        assert_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a source state a later build could record.
+    #[test]
+    fn an_assistance_journal_with_a_value_this_build_does_not_know_is_kept_and_never_written_over()
+    {
+        let unknown = a_journal().replacen("\"active\":false", "\"active\":\"partly\"", 1);
+        assert!(
+            unknown.contains("partly"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept("an unknown value", unknown.into_bytes());
+    }
+
+    /// A record that cannot be moved aside (every dated name taken, in a folder the writer can
+    /// write to) is never written over.
+    #[test]
+    fn an_assistance_journal_that_cannot_be_moved_is_never_written_over() {
+        let dir = scratch("stuck");
+        let path = dir.join("assistance_journal.json");
+        let bytes = b"[{\"tsUnix\":1790000000,\"unassisted\"".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(dir.join(ASIDE), b"taken").unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!(
+                    "assistance_journal.unreadable-20260930-142233-{n}.json"
+                )),
+                b"taken",
+            )
+            .unwrap();
+        }
+        let mut log = restore_assistance_journal(&path, NOW);
+        log.push(row("Nexus started"));
+        write_assistance_journal(&path, &log);
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable record must never be written over"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "assistance",
+                path: path.clone(),
+                kept_in_place: true,
+            }],
+            "the screen is told it was left in place"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_assistance_journal_whose_only_news_is_fields_reads_as_it_always_has() {
+        let dir = scratch("fields");
+        let path = dir.join("assistance_journal.json");
+        let journal = a_journal().replacen("{", "{\"aNewField\":7,", 1);
+        assert!(journal.contains("aNewField"));
+        std::fs::write(&path, &journal).unwrap();
+        assert_eq!(
+            (
+                restore_assistance_journal(&path, NOW).len(),
+                kept_under(&dir)
+            ),
+            (1, vec![]),
+            "read as it always has, with nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_assistance_journal_is_a_first_run() {
+        let dir = scratch("none");
+        let path = dir.join("assistance_journal.json");
+        assert_eq!(
+            (
+                restore_assistance_journal(&path, NOW).len(),
+                kept_under(&dir)
+            ),
+            (0, vec![]),
+            "no record: nothing read and nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -5738,7 +5939,192 @@ fn write_json_atomic(path: &std::path::Path, text: &str) -> bool {
 
 /// Atomically write the conversation JSON (see [`write_json_atomic`]).
 fn write_conversations_atomic(text: &str) -> bool {
-    write_json_atomic(&conversations_path(), text)
+    write_conversations_at(&conversations_path(), text)
+}
+
+/// [`write_conversations_atomic`] at `path`, unless the file there is one this run could not read
+/// and could not move aside: the threads in it are never written over.
+fn write_conversations_at(path: &Path, text: &str) -> bool {
+    !tempo_core::keep_aside::refuses(path) && write_json_atomic(path, text)
+}
+
+/// The Tempo conversation threads at `path` for the launch. `None` when there is no file, and when
+/// there is one this build cannot read, which is kept aside ([`tempo_core::keep_aside`]): the
+/// threads' own saver would otherwise write the empty roster over it moments after the launch.
+fn restore_conversations(path: &Path, now: i64) -> Option<Vec<tempo_app::dto::Conversation>> {
+    tempo_core::keep_aside::read_or_keep("conversations", path, now, |text| {
+        serde_json::from_str::<Vec<tempo_app::dto::Conversation>>(text).map_err(|e| e.to_string())
+    })
+}
+
+#[cfg(test)]
+mod conversations_file_tests {
+    //! The Tempo conversation threads on the launch's read and the threads' own write, when the
+    //! file there cannot be read: kept, byte for byte, under a dated name and never written over,
+    //! and named for the screen. A file whose only news is fields, and no file, read as they
+    //! always have.
+    use super::*;
+    use tempo_core::keep_aside::Kept;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn kept_under(dir: &Path) -> Vec<Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    /// The threads as this build writes them: one thread, one message, from W1ABC.
+    const THREADS: &str = r#"[{"peer":"W1ABC","messages":[{"from":"W1ABC","to":"K2DEF","text":"hello from the shack","slot":5,"directedToMe":true,"outbound":false,"snr":-10,"freqHz":1500.0,"dtSec":0.1,"tier":"TempoFast"}]}]"#;
+
+    fn peers(convs: &Option<Vec<tempo_app::dto::Conversation>>) -> Option<Vec<String>> {
+        convs
+            .as_ref()
+            .map(|c| c.iter().map(|t| t.peer.clone()).collect())
+    }
+
+    /// An unreadable file is kept, byte for byte, beside the new one; the threads' saver,
+    /// whose first pass writes the roster moments after the launch, makes a new file and does
+    /// not touch the kept one.
+    fn assert_kept(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("kept");
+        let path = dir.join("conversations.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let restored = restore_conversations(&path, NOW);
+        assert_eq!(peers(&restored), None, "{what}: nothing is read out of it");
+        assert!(
+            write_conversations_at(&path, "[]"),
+            "{what}: the saver writes a new file"
+        );
+
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable threads must survive the saver's first pass, byte for byte, moved aside"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "conversations",
+                path: dir.join(ASIDE),
+                kept_in_place: false,
+            }],
+            "{what}: the screen is told where it is"
+        );
+        assert_eq!(
+            peers(&restore_conversations(&path, NOW + 1)),
+            Some(vec![]),
+            "{what}: the new file is this build's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_cut_short_are_kept_and_never_written_over() {
+        let whole = THREADS.as_bytes();
+        assert_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a waveform tier from a later build.
+    #[test]
+    fn conversations_with_a_value_this_build_does_not_know_are_kept_and_never_written_over() {
+        let unknown = THREADS.replacen("\"tier\":\"TempoFast\"", "\"tier\":\"TempoUltra\"", 1);
+        assert!(
+            unknown.contains("TempoUltra"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept("an unknown value", unknown.into_bytes());
+    }
+
+    /// A file that cannot be moved aside (every dated name taken, in a folder the saver can write
+    /// to) is never written over.
+    #[test]
+    fn conversations_that_cannot_be_moved_are_never_written_over() {
+        let dir = scratch("stuck");
+        let path = dir.join("conversations.json");
+        let bytes = b"[{\"peer\":\"W1ABC\",\"messages\":[".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(dir.join(ASIDE), b"taken").unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!("conversations.unreadable-20260930-142233-{n}.json")),
+                b"taken",
+            )
+            .unwrap();
+        }
+        assert_eq!(peers(&restore_conversations(&path, NOW)), None);
+        let wrote = write_conversations_at(&path, "[]");
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable threads must never be written over"
+        );
+        assert!(!wrote, "the saver is told its write did not happen");
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "conversations",
+                path: path.clone(),
+                kept_in_place: true,
+            }],
+            "the screen is told it was left in place"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_whose_only_news_is_fields_read_as_they_always_have() {
+        let dir = scratch("fields");
+        let path = dir.join("conversations.json");
+        let threads = THREADS
+            .replacen("{\"peer\"", "{\"aNewField\":7,\"peer\"", 1)
+            .replacen("\"slot\"", "\"aNewMessageField\":true,\"slot\"", 1);
+        assert!(threads.contains("aNewMessageField"));
+        std::fs::write(&path, &threads).unwrap();
+        assert_eq!(
+            (peers(&restore_conversations(&path, NOW)), kept_under(&dir)),
+            (Some(vec!["W1ABC".to_string()]), vec![]),
+            "read as they always have, with nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_conversations_file_is_a_first_run() {
+        let dir = scratch("none");
+        let path = dir.join("conversations.json");
+        assert_eq!(
+            (peers(&restore_conversations(&path, NOW)), kept_under(&dir)),
+            (None, vec![]),
+            "no file: no threads and nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// The durable UI-state store: `ui-state.json`, a SIBLING of settings.json inside the current
@@ -14275,34 +14661,125 @@ mod rotctld_supervisor_tests {
         let answering = rotator_state(&format!("127.0.0.1:{port}"));
         assert_eq!(answering.reading, "position");
         assert!(answering.az_deg.is_some());
+        // Hamlib's dummy is an az/el rotator, 0–90°, and says so through the real daemon.
+        assert_eq!(answering.el_range, Some(Some([0.0, 90.0])));
+        assert!(answering.el_deg.is_some());
         drop(owner);
         // Nothing listening: the controller is off, or rotctld is not running.
         assert_eq!(
             rotator_state(&format!("127.0.0.1:{port}")),
             RotatorStateDto {
                 az_deg: None,
-                reading: "notAnswering"
+                reading: "notAnswering",
+                el_deg: None,
+                el_range: None,
             }
         );
         // A backend with no position to give (the Hy-Gain DCU-1 answers every `p` this way)
         // is not a silent controller: pointing and STOP still work there.
-        let dcu1 = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        let addr = dcu1.local_addr().expect("its address").to_string();
-        let daemon = std::thread::spawn(move || {
-            use std::io::{BufRead, Write};
-            let (mut sock, _) = dcu1.accept().expect("the read connects");
-            let mut line = String::new();
-            let _ = std::io::BufReader::new(sock.try_clone().expect("clone")).read_line(&mut line);
-            let _ = sock.write_all(b"RPRT -11\n");
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => DCU1_STATE,
+            _ => "RPRT -11\n",
         });
         assert_eq!(
             rotator_state(&addr),
             RotatorStateDto {
                 az_deg: None,
-                reading: "noPosition"
+                reading: "noPosition",
+                el_deg: None,
+                el_range: Some(None),
             }
         );
-        daemon.join().expect("the stand-in daemon");
+    }
+
+    /// What real Hamlib backends answer `\dump_state` with (rotctld 4.5.5 over a pty): the
+    /// Yaesu GS-232B the G-5500 runs on (603), the Hy-Gain DCU-1 (403), the Green Heron RT-21 (405).
+    const GS232B_STATE: &str = "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                                max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n";
+    const DCU1_STATE: &str = "1\n403\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                              max_el=0.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+    const RT21_STATE: &str = "1\n405\nmin_az=0.000000\nmax_az=359.899994\nmin_el=0.000000\n\
+                              max_el=90.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+
+    /// A rotctld stand-in on loopback answering up to two connections, one command each, with
+    /// `answer(command)`. An empty answer is silence, held past the client's deadline.
+    fn stand_in(answer: fn(&str) -> &'static str) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        l.set_nonblocking(true).expect("non-blocking accept");
+        std::thread::spawn(move || {
+            use std::io::{BufRead, Write};
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            let mut held = Vec::new();
+            while held.len() < 2 && std::time::Instant::now() < until {
+                let Ok((mut sock, _)) = l.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                };
+                let _ = sock.set_nonblocking(false);
+                let mut line = String::new();
+                let _ =
+                    std::io::BufReader::new(sock.try_clone().expect("clone")).read_line(&mut line);
+                let _ = sock.write_all(answer(line.trim_end()).as_bytes());
+                held.push(sock);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+        addr
+    }
+
+    #[test]
+    fn the_pane_learns_the_elevation_axis_from_what_the_backend_declares() {
+        // A G-5500 on its GS-232B at 123° / 45°: the elevation and the range to type one in.
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => GS232B_STATE,
+            _ => "123.000000\n45.000000\n",
+        });
+        assert_eq!(
+            rotator_state(&addr),
+            RotatorStateDto {
+                az_deg: Some(123.0),
+                reading: "position",
+                el_deg: Some(45.0),
+                el_range: Some(Some([0.0, 180.0])),
+            }
+        );
+        // The RT-21 declares 0–90° for a second controller Nexus's daemon never has: the pane
+        // is told there is no elevation axis — `null` on the wire.
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => RT21_STATE,
+            _ => "200.000000\n0.000000\n",
+        });
+        let rt21 = rotator_state(&addr);
+        assert_eq!(
+            rt21,
+            RotatorStateDto {
+                az_deg: Some(200.0),
+                reading: "position",
+                el_deg: None,
+                el_range: Some(None),
+            }
+        );
+        let wire = serde_json::to_value(&rt21).expect("json");
+        assert_eq!(wire.get("elRange"), Some(&serde_json::Value::Null));
+        // A busy rotctld leaves `\dump_state` unanswered: the position still comes back, and the
+        // range is ABSENT from the wire, never null, so the pane keeps the elevation it knew.
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => "",
+            _ => "123.000000\n45.000000\n",
+        });
+        let busy = rotator_state(&addr);
+        assert_eq!(
+            busy,
+            RotatorStateDto {
+                az_deg: Some(123.0),
+                reading: "position",
+                el_deg: Some(45.0),
+                el_range: None,
+            }
+        );
+        let wire = serde_json::to_value(&busy).expect("json");
+        assert_eq!(wire.get("elRange"), None, "{wire}");
     }
 }
 /// What an operator is told when a rotator command reaches no rotctld at all, in place of the
@@ -14323,9 +14800,17 @@ fn rotator_error(e: std::io::Error, external_host: &str) -> String {
     }
 }
 
-/// Point the antenna rotator at an absolute azimuth (degrees) via rotctld.
+/// Point the antenna rotator at an absolute azimuth (degrees) via rotctld — keeping an az/el
+/// rotator's ELEVATION where it is (`tempo_audio::rotator::point_keeping`), unless `el_deg` gives
+/// the one to go with it: the Rotor pane sends it while an elevation it set is still on its way,
+/// so turning the beam does not stop that climb. It used to send `P <az> 0`, which drives the
+/// elevation to 0 on every move of the beam.
 #[tauri::command]
-async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<(), String> {
+async fn point_rotator(
+    state: State<'_, SharedEngine>,
+    az_deg: f64,
+    el_deg: Option<f64>,
+) -> Result<(), String> {
     #[cfg(feature = "radio")]
     {
         let (host, external) = {
@@ -14341,14 +14826,57 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
                     .to_string(),
             );
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, az_deg))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| rotator_error(e, &external))
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::rotator::point_keeping(&host, Some(az_deg), el_deg)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| rotator_error(e, &external))
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = (state, az_deg);
+        let _ = (state, az_deg, el_deg);
+        Err("radio support is not built into this binary".to_string())
+    }
+}
+
+/// Point an az/el rotator at an elevation (degrees above the horizon) — the Rotor pane's
+/// elevation box. The azimuth stays where the rotator reports it, unless `az_deg` gives the one
+/// to go with it (a bearing the pane sent that is still on its way). An elevation outside the
+/// range the rotator's backend declares, or a rotator with no elevation axis, is refused before
+/// anything is sent (`tempo_audio::rotator::manual_line`). Desktop only: Nexus Remote does not
+/// offer it.
+#[tauri::command]
+async fn point_rotator_elevation(
+    state: State<'_, SharedEngine>,
+    el_deg: f64,
+    az_deg: Option<f64>,
+) -> Result<(), String> {
+    #[cfg(feature = "radio")]
+    {
+        let (host, external) = {
+            let eng = engine_lock(&state);
+            (
+                effective_rotator_addr(eng.settings()),
+                eng.settings().rotator_host.clone(),
+            )
+        };
+        let Some(host) = host else {
+            return Err(
+                "Set up your rotator in Settings (pick a model + port; Nexus runs rotctld for you)."
+                    .to_string(),
+            );
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::rotator::point_keeping(&host, az_deg, Some(el_deg))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| rotator_error(e, &external))
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = (state, el_deg, az_deg);
         Err("radio support is not built into this binary".to_string())
     }
 }
@@ -14558,10 +15086,13 @@ async fn point_rotator_at_call(
         } else {
             short
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, bearing))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| rotator_error(e, &external))?;
+        // The elevation stays where it is, as for every manual azimuth move (`point_rotator`).
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::rotator::point_keeping(&host, Some(bearing), None)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| rotator_error(e, &external))?;
         Ok(PointedAtDto::new(bearing, aim.to))
     }
     #[cfg(not(feature = "radio"))]
@@ -14730,11 +15261,54 @@ mod point_at_call_tests {
     }
 }
 
+#[cfg(test)]
+mod manual_pointing_tests {
+    //! Every command that moves the rotator BY HAND keeps the axis it is not given where the
+    //! rotator reports it (`tempo_audio::rotator::point_keeping`, whose own tests drive Hamlib's
+    //! real GS-232B backend and dummy). The satellite pass's azimuth-only `rotator::point` sends
+    //! `P <az> 0`, which on an az/el mount is an ELEVATION of zero: every turn of the beam used
+    //! to lay a G-5500's antenna on the horizon. Source-scanned, like the registration tests:
+    //! which function a command calls is the property under test, and no type sees it.
+
+    /// The body of the top-level `async fn name(…)` in lib.rs.
+    fn body(src: &str, name: &str) -> String {
+        src.split_once(&format!("\nasync fn {name}("))
+            .unwrap_or_else(|| panic!("the command {name} must exist"))
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0
+            .to_string()
+    }
+
+    #[test]
+    fn a_manual_move_keeps_the_axis_it_was_not_given() {
+        let src = include_str!("lib.rs");
+        for name in [
+            "point_rotator",
+            "point_rotator_at_call",
+            "point_rotator_elevation",
+        ] {
+            let body = body(src, name);
+            assert!(
+                body.contains("tempo_audio::rotator::point_keeping("),
+                "{name} must keep the axis it is not given (point_keeping)"
+            );
+            assert!(
+                !body.contains("tempo_audio::rotator::point("),
+                "{name} sends `P <az> 0`, the elevation of zero, on every move"
+            );
+        }
+    }
+}
+
 /// Where the rotator is, and what the read found — the Rotor pane's poll, which has to tell
 /// three stations apart: a rotator that reported its position; one whose backend has none to
 /// give (the Hy-Gain DCU-1: pointing and STOP still work); and one where nothing answered at all
 /// (the controller is off or unplugged, or rotctld is not running), which the pane must not call
-/// "pointing still works".
+/// "pointing still works". And, on a rotator with an elevation axis (the Yaesu G-5500 on its
+/// GS-232B), the elevation it reports and the range its backend declares, which is what puts the
+/// elevation in the pane at all.
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RotatorStateDto {
@@ -14742,23 +15316,47 @@ struct RotatorStateDto {
     az_deg: Option<f64>,
     /// `"position"`, `"noPosition"` or `"notAnswering"`.
     reading: &'static str,
+    /// Degrees above the horizon, as the rotator reports them; `None` when it reports none, and
+    /// whenever its backend declares no elevation axis.
+    el_deg: Option<f64>,
+    /// The elevation range the backend declares (`[min, max]`; a G-5500 on a GS-232B `[0, 180]`),
+    /// from rotctld's own `\dump_state` (`tempo_audio::rotator::read_limits`, never the model's
+    /// name). `Some(None)` — `null` on the wire — when it has no elevation axis; ABSENT when the
+    /// question went unanswered this time, so the pane keeps what it last knew rather than
+    /// blinking the elevation out while a busy rotctld catches up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    el_range: Option<Option<[f64; 2]>>,
 }
 
-/// Read the rotator at `addr` for [`RotatorStateDto`].
+/// Read the rotator at `addr` for [`RotatorStateDto`]: its position first, and what its backend
+/// declares only when it answered, so a daemon that is not there costs one connection, as it
+/// always did.
 fn rotator_state(addr: &str) -> RotatorStateDto {
-    match tempo_audio::rotator::read_position(addr) {
-        Ok((az, _)) => RotatorStateDto {
-            az_deg: Some(az),
-            reading: "position",
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => RotatorStateDto {
-            az_deg: None,
-            reading: "noPosition",
-        },
-        Err(_) => RotatorStateDto {
-            az_deg: None,
-            reading: "notAnswering",
-        },
+    let (az_deg, el, reading) = match tempo_audio::rotator::read_position(addr) {
+        Ok((az, el)) => (Some(az), el, "position"),
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => (None, None, "noPosition"),
+        Err(_) => {
+            return RotatorStateDto {
+                az_deg: None,
+                reading: "notAnswering",
+                el_deg: None,
+                el_range: None,
+            }
+        }
+    };
+    let el_range = tempo_audio::rotator::read_limits(addr)
+        .ok()
+        .map(|declared| {
+            declared
+                .as_ref()
+                .and_then(tempo_audio::rotator::Limits::elevation)
+                .map(|(lo, hi)| [lo, hi])
+        });
+    RotatorStateDto {
+        az_deg,
+        reading,
+        el_deg: el.filter(|_| el_range != Some(None)),
+        el_range,
     }
 }
 
@@ -15158,6 +15756,15 @@ async fn get_aprs_health(
     with_engine(&state, |eng| eng.aprs_health()).await
 }
 
+/// Why what was queued for APRS was last dropped instead of sent (TX off, or outside the licence's
+/// privileges), for the cockpit's status line; `None` once a frame keys. A read of its own, polled
+/// beside the health: the other APRS reads are also the Remote's (`remote_service::aprs`), and the
+/// hosted page checks them against exact key lists.
+#[tauri::command]
+async fn get_aprs_tx_notice(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
+    with_engine(&state, |eng| eng.aprs_tx_notice().map(str::to_string)).await
+}
+
 /// The APRS STATION roster — what the map and the station list draw, plus the aging thresholds
 /// that produced it.
 ///
@@ -15473,6 +16080,13 @@ async fn get_js8_state(state: State<'_, SharedEngine>) -> Result<tempo_app::dto:
     with_engine(&state, |eng| eng.js8_state()).await
 }
 
+/// Why the JS8 gate would refuse the locator in Settings, or None when it would take it. The
+/// cockpit's "send my grid" follows this, the gate's own rule, rather than a copy of it.
+#[tauri::command]
+async fn js8_locator_refusal(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
+    with_engine(&state, |eng| eng.js8_locator_refusal().map(str::to_string)).await
+}
+
 /// Persist the engine's settings after a JS8 verb changed one of them (the engine holds
 /// settings, the command layer owns the file — the `purge_log` shape).
 fn js8_persist_settings(eng: &Engine) {
@@ -15578,12 +16192,32 @@ fn js8_cq_repeat(
     Ok(eng.js8_state())
 }
 
-/// Cancel the pending automatic reply (safe no-op when none).
+/// The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
+/// AutoreplyConfirmation), named by the `display` and `fires_at_ms` it was shown with. A Yes puts
+/// it in the queue, where every TX gate applies when its period comes; a Yes to one no longer
+/// waiting is refused, so it can never send another reply.
 #[tauri::command(async)]
-fn js8_cancel(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+fn js8_answer_reply(
+    state: State<'_, SharedEngine>,
+    yes: bool,
+    display: String,
+    fires_at_ms: u64,
+) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_cancel();
+    eng.js8_answer_reply(yes, display, fires_at_ms)?;
     Ok(eng.js8_state())
+}
+
+/// The native cockpit's compose box, both ways (polled with the state while JS8 is visible):
+/// whether it holds text and the id of the reply it took; answered with the reply waiting for
+/// the box (AUTO off, as JS8Call puts it in its compose box). Keys nothing.
+#[tauri::command]
+async fn js8_composer(
+    state: State<'_, SharedEngine>,
+    composing: bool,
+    taken: Option<u32>,
+) -> Result<Option<tempo_app::dto::Js8ComposerPrefill>, String> {
+    with_engine(&state, move |mut eng| eng.js8_composer(composing, taken)).await
 }
 
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
@@ -15744,6 +16378,13 @@ struct SstvStateDto {
     /// Seconds of key-down elapsed / total for the in-flight image.
     tx_elapsed_secs: f32,
     tx_total_secs: f32,
+    /// Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
+    /// or outside the licence's privileges), or why the radio loop cut short the one going out
+    /// (`Engine::sstv_tx_cut`): the cockpit's warning line. Absent otherwise.
+    /// DESKTOP ONLY: the Remote strips it (`remote_service::application`), because the hosted
+    /// page reads this sample against an exact key list and refuses one with a key it lacks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_notice: Option<String>,
 }
 
 fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
@@ -15774,6 +16415,7 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
         tx_progress,
         tx_elapsed_secs,
         tx_total_secs,
+        tx_notice: eng.sstv_tx_notice().map(str::to_string),
     }
 }
 
@@ -16661,6 +17303,24 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
     }
 }
 
+/// Models whose Hamlib CAT PTT can choose the radio's MIC or DATA input — the only ones the Rig &
+/// CAT settings offer "Transmit audio source (CAT PTT): Rear/Data" on (#381). See
+/// [`tempo_audio::rigmodels::PTT_MIC_DATA_RIGS`] for the measurement.
+///
+/// An empty result means "could not be determined" (built without the `radio` feature), and the
+/// form offers no choice, so every radio keys Front/Mic as it always has.
+#[tauri::command]
+fn get_ptt_mic_data_rig_models() -> Vec<u32> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::PTT_MIC_DATA_RIGS.to_vec()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Ask a configured amplifier for one thing: `"bandDown"`, `"bandUp"` or `"operate"`.
 ///
 /// ⛔ THREE INTENTS, AND THE SET IS CLOSED. An unrecognised name is refused rather than
@@ -17379,7 +18039,8 @@ fn set_cw_keyer(
 // ----- Phone voice keyer: play / record / import recorded WAV messages -----
 
 /// Play a voice-keyer message: read the slot's WAV and queue it for the radio loop to
-/// transmit (PTT + audio). Errors if the slot has no recording.
+/// transmit (PTT + audio). Errors if the slot has no recording, or with the engine's reason
+/// when it refuses the send (TX off, outside the privileges), which the keyer's toast shows.
 #[tauri::command(async)]
 fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSnapshot, String> {
     let file = {
@@ -17400,7 +18061,7 @@ fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSna
         let samples = tempo_audio::voice::read_wav_12k(&file)
             .map_err(|e| format!("Could not read voice message: {e}"))?;
         let mut eng = engine_lock(&state);
-        eng.send_voice(samples);
+        eng.send_voice(samples)?;
         Ok(eng.snapshot())
     }
     #[cfg(not(feature = "radio"))]
@@ -20852,7 +21513,8 @@ fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDe
     match class {
         F::NotConfigured => conn_detail!(
             "nothing was sent — the Cloudlog instance URL, API key or station profile id is \
-             missing, or the URL is not https://. Set them in Settings ▸ Connectors."
+             missing, or the URL is not https:// (plain http:// is for an address on your own \
+             network only). Set them in Settings ▸ Connectors."
         ),
         F::Unreachable => conn_detail!(
             "the upload never reached the instance — check the URL and the network, and \
@@ -24507,10 +25169,12 @@ async fn cloudlog_station_info(
     let key = cloudlog_keychain()?
         .get_password()
         .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
-    // Blocking HTTP off the async executor (the push impls' rule). The key moves in and dies
-    // with the closure.
+    // Blocking HTTP off the async executor (the push impls' rule), and the destination check
+    // with it: for a plain-http name it is a lookup. The key moves in and dies with the closure.
     let found = tauri::async_runtime::spawn_blocking(move || {
-        propagation::live::cloudlog::fetch_station_info(&url, &key)
+        let dest = propagation::live::cloudlog::Destination::check(&url)?;
+        warn_cloudlog_cleartext(&dest);
+        propagation::live::cloudlog::fetch_station_info(&dest, &key)
     })
     .await
     .map_err(|e| format!("station lookup task failed: {e}"))?;
@@ -24575,7 +25239,40 @@ fn cloudlog_push_qso_impl(
     }
     let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
     let adif = tempo_core::logbook::adif_record(&rec);
-    propagation::live::cloudlog::upload(&url, &key, &station_id, &adif)
+    let dest = propagation::live::cloudlog::Destination::check(&url)?;
+    warn_cloudlog_cleartext(&dest);
+    propagation::live::cloudlog::upload(&dest, &key, &station_id, &adif)
+}
+
+/// #378: where this session has already been told that its Cloudlog/Wavelog API key travels
+/// unencrypted. One line per place, the first time, is the warning; a line per contact would
+/// bury every other line in the log.
+static CLOUDLOG_CLEARTEXT_WARNED: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// #378: say in the Connections log, once a session for each place it goes, that the API key is
+/// about to travel unencrypted. Plain http is accepted only on the operator's own network
+/// (`Destination` refused everything else before this is reached), and this is the half of
+/// that ruling the operator sees: the key is readable to anything on that network that
+/// listens. Nothing for https.
+fn warn_cloudlog_cleartext(dest: &propagation::live::cloudlog::Destination) {
+    let Some(to) = dest.cleartext_to() else {
+        return;
+    };
+    let first = CLOUDLOG_CLEARTEXT_WARNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(to.clone());
+    if first {
+        conn_log(
+            "Cloudlog",
+            "warn",
+            format!(
+                "plain http: the API key travels unencrypted to {to}, on your own network. Use \
+                 https:// to keep it encrypted"
+            ),
+        );
+    }
 }
 
 /// #226: the connection-log line for a Cloudlog/Wavelog failure that retrying cannot fix, or
@@ -25932,12 +26629,13 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
 
 // ── Radio programming ("Program" section): repeater search, projects, exports ──────────────────
 //
-// Location → repeater directory → picked channels → CHIRP/generic CSV. Pure logic lives in
-// propagation::{repeaters, memchan, chirp}; the live fetchers in propagation::live::{repeaterbook,
-// hearham, geocode}. This shell owns: the RepeaterBook token (OS keychain), the per-user disk
-// cache with TTL (compliance: per-user, on-demand, never bundled/redistributed), per-state fetch
-// throttling, source fallback (no token / non-US / RB failure → hearham), and the saved
-// programming projects in radioprog.json beside settings.json.
+// Location → repeater directories → picked channels → CHIRP/generic CSV. Pure logic lives in
+// propagation::{repeaters, memchan, chirp}; the live fetchers in propagation::live::{rsgb,
+// repeaterbook, hearham, geocode}. This shell owns: the RepeaterBook token (OS keychain), the
+// per-user disk cache with TTL (compliance: per-user, on-demand, never bundled/redistributed),
+// per-query fetch throttling, which directories a search reads (RSGB for a UK origin,
+// RepeaterBook for a US one, hearham always; merged into one row per machine) and their
+// fallbacks, and the saved programming projects in radioprog.json beside settings.json.
 
 /// Saved programming projects (channel lists) — sidecar file so hours of curation survive webview
 /// storage clears and stay reachable for future direct-programming paths.
@@ -25949,8 +26647,9 @@ fn radioprog_path() -> PathBuf {
         .join("radioprog.json")
 }
 
-/// Per-source repeater-directory cache dir (rb_<state_id>.json / hearham.json), beside
-/// settings.json. Losing it is harmless (re-fetch); it is never exported or shipped.
+/// Per-source repeater-directory cache dir (rb_<state_id>.json / rsgb_<square>.json /
+/// hearham.json), beside settings.json. Losing it is harmless (re-fetch); it is never exported
+/// or shipped.
 fn radioprog_cache_dir() -> PathBuf {
     settings_path()
         .parent()
@@ -25999,7 +26698,7 @@ struct RepeaterCacheFile {
 /// well inside RepeaterBook's "minimize load, no offline database" posture (age is shown in the
 /// UI and Refresh is explicit).
 const RADIOPROG_TTL_SECS: i64 = 7 * 24 * 3600;
-/// Manual-refresh throttle per RepeaterBook state export.
+/// Retry throttle per directory query: a RepeaterBook state export, an RSGB square.
 const RB_STATE_THROTTLE_SECS: i64 = 900;
 
 fn read_repeater_cache(name: &str) -> Option<RepeaterCacheFile> {
@@ -26020,69 +26719,102 @@ fn write_repeater_cache(name: &str, body: &str) {
     }
 }
 
-/// Last fetch attempt per RB state (unix secs) — the per-state refresh throttle.
+/// Last fetch attempt per directory query (unix secs) — the refresh throttle. Keyed by the
+/// query: a RepeaterBook state id ("17"), an RSGB square's cache name ("rsgb_IO83.json").
 static RB_LAST_TRY: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> =
     std::sync::Mutex::new(None);
 
-fn rb_throttle_ok(state_id: &str, now: i64) -> bool {
+fn directory_throttle_ok(query: &str, now: i64) -> bool {
     let mut g = RB_LAST_TRY.lock().unwrap_or_else(|e| e.into_inner());
     let map = g.get_or_insert_with(std::collections::HashMap::new);
-    let ok = now - map.get(state_id).copied().unwrap_or(0) >= RB_STATE_THROTTLE_SECS;
+    let ok = now - map.get(query).copied().unwrap_or(0) >= RB_STATE_THROTTLE_SECS;
     if ok {
-        map.insert(state_id.to_string(), now);
+        map.insert(query.to_string(), now);
     }
     ok
 }
 
-/// One search row: the directory record (display: distance/bearing/mode flags/status) plus the
-/// ready-to-add memory channel derived from it (propagation::repeaters::to_channel — duplex,
-/// offset and tone mapping stay in the tested Rust domain, never re-derived in TS).
+/// One search row: one MACHINE after the merge (propagation::repeaters::merge_nearby), as the
+/// record Program displays (distance/bearing/mode flags/status) plus the ready-to-add memory
+/// channel derived from it (propagation::repeaters::to_channel — duplex, offset and tone mapping
+/// stay in the tested Rust domain, never re-derived in TS).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RepeaterSearchRow {
     record: propagation::repeaters::RepeaterRecord,
     channel: propagation::memchan::Channel,
+    /// Every directory row behind this machine, the one it programs from first, each with its
+    /// channel id, so a channel saved from any of them still finds the machine.
+    sources: Vec<propagation::repeaters::SourceRef>,
+    /// Fields those rows disagree on: shown on the row, never silently resolved.
+    disagreements: Vec<propagation::repeaters::Disagreement>,
 }
 
-/// A repeater search result: which source answered, how old the data is, and the rows inside
-/// the radius (distance/bearing filled, nearest first).
+/// One directory a search read, and how old its list is.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RepeaterSearchResult {
-    /// "repeaterbook" | "hearham".
-    source: String,
-    /// Oldest payload timestamp behind these records (unix secs) — the UI's "as of" stamp.
+struct ListStamp {
+    source: propagation::repeaters::RepeaterSource,
+    /// Oldest payload timestamp behind this directory's rows (unix secs): the "as of" stamp, and
+    /// the date a row with none of its own shows.
     fetched_utc: i64,
     /// True when a fetch failed/was rate-limited and stale cache was served instead.
     stale: bool,
+}
+
+/// A repeater search result: the directories that answered, and the machines inside the radius
+/// (distance/bearing filled, nearest first).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepeaterSearchResult {
+    /// Every directory this search read, in precedence order (RSGB, RepeaterBook, hearham).
+    lists: Vec<ListStamp>,
     /// A major band this source lists nothing on here, when it lists something —
     /// hearham has real holes in rural country (no 2 m at all around Bozeman MT),
     /// and a channel list missing a whole band reads as complete when it isn't.
-    /// Only set on the hearham path, where adding a RepeaterBook token is the fix.
+    /// Only set when the list is hearham's alone, where adding a RepeaterBook token is the fix.
     coverage_gap: Option<&'static str>,
     /// States this search PLANNED to read but heard nothing from (2-letter codes), so
     /// a short list can say which directory is absent instead of reading as "there are
     /// no repeaters near you" (#241). Empty on a complete search and on the hearham
     /// path, which is one global feed rather than per-state exports.
     missing_states: Vec<String>,
+    /// A UK origin whose RSGB list could not be read (a failure, or a payload in a shape this
+    /// build cannot read: the endpoint is a BETA). The rows are hearham's alone, and the panel
+    /// says so in plain words; it is never an empty list.
+    rsgb_unavailable: bool,
+    /// Locator squares the radius reaches that RSGB was not asked about (at most nine are, per
+    /// search), so the rows there are hearham's alone.
+    rsgb_beyond: Vec<String>,
     rows: Vec<RepeaterSearchRow>,
 }
 
-fn search_rows(records: Vec<propagation::repeaters::RepeaterRecord>) -> Vec<RepeaterSearchRow> {
-    records
+fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSearchRow> {
+    machines
         .into_iter()
-        .map(|r| RepeaterSearchRow {
-            channel: propagation::repeaters::to_channel(&r),
-            record: r,
+        .map(|m| RepeaterSearchRow {
+            channel: propagation::repeaters::to_channel(&m.record),
+            record: m.record,
+            sources: m.sources,
+            disagreements: m.disagreements,
         })
         .collect()
 }
 
-/// Search repeaters within `radius_km` of a point. Source resolution for a US origin: RepeaterBook
-/// state exports — through the operator's own token when one is stored, else through the Nexus
-/// proxy (rb.hamradiotools.io, the centralized model: the app token lives server-side only).
-/// Cached TTL 7d, per-state throttle, stale cache on failure/429. When RepeaterBook is
-/// unreachable/dormant with no cache (or the origin is non-US) → hearham, same cache discipline.
+/// Search repeaters within `radius_km` of a point, merged from every directory that covers it
+/// into one row per machine (propagation::repeaters::merge_nearby: field by field the RSGB list,
+/// then RepeaterBook, then hearham; every source id kept; disagreements shown).
+///
+/// - **RSGB** (UK origins): one request per locator square the radius reaches, at most nine,
+///   each cached 7d on this PC behind the per-query retry throttle. Any square that yields
+///   nothing, or a payload in a shape this build cannot read, drops the RSGB list for this
+///   search: the rows are hearham's alone and `rsgb_unavailable` says so.
+/// - **RepeaterBook** (US origins): state exports — through the operator's own token when one
+///   is stored, else through the Nexus proxy (rb.hamradiotools.io, the centralized model: the
+///   app token lives server-side only). Cached TTL 7d, per-state throttle, stale cache on
+///   failure/429. Its rows stay on this PC: they reach this panel and nothing else.
+/// - **hearham**: every search (one global feed, cached 7d), the floor under the others.
+///
 /// All network + parsing off the main thread.
 #[tauri::command]
 async fn repeater_search(
@@ -26091,7 +26823,7 @@ async fn repeater_search(
     radius_km: f64,
 ) -> Result<RepeaterSearchResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        use propagation::repeaters as rpt;
+        use propagation::repeaters::{self as rpt, RepeaterSource};
         let origin = (lat, lon);
         let radius = radius_km.clamp(1.0, 500.0);
         let token = repeaterbook_keychain()
@@ -26100,7 +26832,10 @@ async fn repeater_search(
             .unwrap_or_default();
         let states = rpt::plan_states(origin, radius);
         let now = now_unix();
+        let mut lists: Vec<ListStamp> = Vec::new();
+        let mut missing_states = Vec::new();
 
+        let mut rb_records = Vec::new();
         if !states.is_empty() {
             // One entry per PLANNED state, whether or not it answered — a state that
             // yields nothing has to survive as far as the result, or the search reports
@@ -26117,7 +26852,7 @@ async fn repeater_search(
                     cached
                         .as_ref()
                         .map(|c| (c.body.clone(), c.fetched_utc, false))
-                } else if rb_throttle_ok(st, now) {
+                } else if directory_throttle_ok(st, now) {
                     // A stored personal token goes straight to RepeaterBook; otherwise the
                     // Nexus proxy (which holds the app token server-side + an edge cache).
                     let fetched = if token.is_empty() {
@@ -26156,57 +26891,305 @@ async fn repeater_search(
             }
             let cov = rpt::fold_state_fetches(&fetches);
             if cov.any_served() {
-                return Ok(RepeaterSearchResult {
-                    source: "repeaterbook".into(),
+                lists.push(ListStamp {
+                    source: RepeaterSource::Repeaterbook,
                     fetched_utc: cov.oldest_utc,
                     stale: cov.stale,
-                    coverage_gap: None,
-                    missing_states: cov.missing,
-                    rows: search_rows(rpt::filter_sort(&cov.records, origin, radius)),
                 });
-            }
-            // Every state failed with no cache (e.g. the proxy is dormant pre-approval) — fall
-            // through to hearham, but log the RB reason for the Connections panel.
-            if !last_err.is_empty() {
+                missing_states = cov.missing;
+                rb_records = cov.records;
+            } else if !last_err.is_empty() {
+                // Every state failed with no cache (e.g. the proxy is dormant pre-approval):
+                // hearham carries the search; log the RB reason for the Connections panel.
                 conn_log("RepeaterBook", "info", &last_err);
             }
         }
 
-        // hearham: the no-token default, the non-US path, and the RB fallback.
+        // RSGB: the UK coordinator's list, one square at a time. A payload that does not read
+        // as the RSGB shape is never cached, so it cannot replace a good list with one this
+        // build cannot read; a stale good list is served instead, as for the other sources.
+        let plan = rpt::plan_rsgb_squares(origin, radius);
+        let mut rsgb_records = Vec::new();
+        let mut rsgb_unavailable = false;
+        if !plan.ask.is_empty() {
+            let mut fetches: Vec<rpt::SquareFetch> = Vec::new();
+            let mut last_err = String::new();
+            for sq in &plan.ask {
+                let cache_name = format!("rsgb_{sq}.json");
+                let (fetch, err) = rsgb_square(
+                    sq,
+                    now,
+                    read_repeater_cache(&cache_name),
+                    || directory_throttle_ok(&cache_name, now),
+                    propagation::live::rsgb::fetch_square,
+                    |body| write_repeater_cache(&cache_name, body),
+                );
+                if let Some(e) = err {
+                    last_err = e;
+                }
+                fetches.push(fetch);
+            }
+            if !last_err.is_empty() {
+                conn_log("RSGB", "info", &last_err);
+            }
+            match rpt::fold_rsgb_squares(&fetches) {
+                Ok(layer) => {
+                    lists.push(ListStamp {
+                        source: RepeaterSource::Rsgb,
+                        fetched_utc: layer.oldest_utc,
+                        stale: layer.stale,
+                    });
+                    rsgb_records = layer.records;
+                }
+                Err(why) => {
+                    conn_log(
+                        "RSGB",
+                        "info",
+                        format!("the RSGB list was not used for this search: {why}"),
+                    );
+                    rsgb_unavailable = true;
+                }
+            }
+        }
+
+        // hearham: every search, the no-token default and the floor under the other two.
         let cached = read_repeater_cache("hearham.json");
         let fresh = cached
             .as_ref()
             .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
-        let (body, at, stale) = if fresh {
+        let hearham = if fresh {
             let c = cached.as_ref().unwrap();
-            (c.body.clone(), c.fetched_utc, false)
+            Ok((c.body.clone(), c.fetched_utc, false))
         } else {
             match propagation::live::hearham::fetch_all() {
                 Ok(b) => {
                     write_repeater_cache("hearham.json", &b);
-                    (b, now, false)
+                    Ok((b, now, false))
                 }
                 Err(e) => match cached.as_ref() {
-                    Some(c) => (c.body.clone(), c.fetched_utc, true),
-                    None => return Err(e),
+                    Some(c) => Ok((c.body.clone(), c.fetched_utc, true)),
+                    None => Err(e),
                 },
             }
         };
-        let records = rpt::parse_hearham_json(&body);
-        // Judged on what's inside the radius, not the whole global feed.
-        let in_radius = rpt::filter_sort(&records, origin, radius);
+        let hh_records = match hearham {
+            Ok((body, at, stale)) => {
+                lists.push(ListStamp {
+                    source: RepeaterSource::Hearham,
+                    fetched_utc: at,
+                    stale,
+                });
+                rpt::parse_hearham_json(&body)
+            }
+            // Nothing answered at all: the error is the result, as it always was.
+            Err(e) if lists.is_empty() => return Err(e),
+            Err(e) => {
+                conn_log("hearham", "info", &e);
+                Vec::new()
+            }
+        };
+
+        let machines =
+            rpt::merge_nearby(&[&rsgb_records, &rb_records, &hh_records], origin, radius);
+        // Judged on what's inside the radius, and only for a list that is hearham's alone.
+        let coverage_gap = if lists.iter().all(|l| l.source == RepeaterSource::Hearham) {
+            let records: Vec<rpt::RepeaterRecord> =
+                machines.iter().map(|m| m.record.clone()).collect();
+            rpt::missing_major_band(&records)
+        } else {
+            None
+        };
+        lists.sort_by_key(|l| l.source);
         Ok(RepeaterSearchResult {
-            source: "hearham".into(),
-            fetched_utc: at,
-            stale,
-            coverage_gap: rpt::missing_major_band(&in_radius),
-            // hearham is ONE global feed, not per-state exports — no state can go missing.
-            missing_states: Vec::new(),
-            rows: search_rows(in_radius),
+            lists,
+            coverage_gap,
+            missing_states,
+            rsgb_beyond: if rsgb_unavailable {
+                Vec::new()
+            } else {
+                plan.beyond
+            },
+            rsgb_unavailable,
+            rows: search_rows(machines),
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// One planned RSGB square for a search: the cache while it is fresh; else, when the retry
+/// throttle allows (`may_fetch`, asked only then, since asking records the attempt), a fetch,
+/// whose payload is `store`d only when it reads as the RSGB shape, so a payload this build cannot
+/// read never replaces a good list; else, or when the fetch fails or is unreadable, the stale
+/// cache; else nothing. The `String` says why a fetch was not used, for the connection log.
+fn rsgb_square(
+    square: &str,
+    now: i64,
+    cached: Option<RepeaterCacheFile>,
+    may_fetch: impl FnOnce() -> bool,
+    fetch: impl FnOnce(&str) -> Result<String, String>,
+    store: impl FnOnce(&str),
+) -> (propagation::repeaters::SquareFetch, Option<String>) {
+    let mut err = None;
+    let fresh = cached
+        .as_ref()
+        .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
+    let got = if fresh {
+        cached
+            .as_ref()
+            .map(|c| (c.body.clone(), c.fetched_utc, false))
+    } else {
+        let fetched = if may_fetch() {
+            match fetch(square) {
+                Ok(b) => match propagation::repeaters::parse_rsgb_json(&b) {
+                    Ok(_) => {
+                        store(&b);
+                        Some((b, now, false))
+                    }
+                    Err(e) => {
+                        err = Some(format!("{e} ({square})"));
+                        None
+                    }
+                },
+                Err(e) => {
+                    err = Some(e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        fetched.or_else(|| {
+            cached
+                .as_ref()
+                .map(|c| (c.body.clone(), c.fetched_utc, true))
+        })
+    };
+    let (body, fetched_utc, stale) = match got {
+        Some((b, at, s)) => (Some(b), at, s),
+        None => (None, 0, false),
+    };
+    (
+        propagation::repeaters::SquareFetch {
+            square: square.to_string(),
+            body,
+            fetched_utc,
+            stale,
+        },
+        err,
+    )
+}
+
+#[cfg(test)]
+mod rsgb_square_tests {
+    use super::*;
+
+    const GOOD: &str = r#"{"data":[{"id":1,"type":"AV","status":"OPERATIONAL","repeater":"GB3XX","town":"X","modeCodes":["A"],"tx":145600000,"rx":145000000,"ctcss":77,"txbw":12.5,"locator":"IO83LP"}]}"#;
+    const NOW: i64 = 1_800_000_000;
+    const WEEK: i64 = 7 * 24 * 3600;
+
+    fn cache(body: &str, age_secs: i64) -> Option<RepeaterCacheFile> {
+        Some(RepeaterCacheFile {
+            fetched_utc: NOW - age_secs,
+            body: body.into(),
+        })
+    }
+
+    /// The RSGB endpoint is a BETA. Should it start answering in another shape, the good list
+    /// this PC holds must survive: the unreadable payload is never stored, the old list is served
+    /// (marked stale) and the reason goes to the log.
+    #[test]
+    fn an_unreadable_payload_never_replaces_the_cached_list() {
+        let mut stored = None;
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, WEEK + 1),
+            || true,
+            |_| Ok("<html>502 Bad Gateway</html>".into()),
+            |b| stored = Some(b.to_string()),
+        );
+        assert_eq!(
+            stored, None,
+            "the unreadable payload was cached over the good list"
+        );
+        assert_eq!(f.body.as_deref(), Some(GOOD), "the good list is served");
+        assert!(f.stale);
+        assert!(err.is_some_and(|e| e.contains("IO83")));
+        // With nothing cached there is nothing to serve: the square gives nothing, the RSGB layer
+        // drops (fold_rsgb_squares) and the search shows hearham's rows alone, saying so.
+        let (f, _) = rsgb_square(
+            "IO83",
+            NOW,
+            None,
+            || true,
+            |_| Ok("[]".into()),
+            |_| panic!("stored"),
+        );
+        assert_eq!(f.body, None);
+    }
+
+    #[test]
+    fn a_readable_payload_is_stored_and_served_fresh() {
+        let mut stored = None;
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(r#"{"data":[]}"#, WEEK + 1),
+            || true,
+            |sq| {
+                assert_eq!(sq, "IO83");
+                Ok(GOOD.into())
+            },
+            |b| stored = Some(b.to_string()),
+        );
+        assert_eq!(stored.as_deref(), Some(GOOD));
+        assert_eq!(
+            (f.body.as_deref(), f.fetched_utc, f.stale, err),
+            (Some(GOOD), NOW, false, None)
+        );
+    }
+
+    #[test]
+    fn a_fresh_cache_asks_nothing_and_a_throttled_or_failed_fetch_serves_the_stale_one() {
+        let (f, _) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, 60),
+            || panic!("asked the throttle"),
+            |_| panic!("fetched"),
+            |_| panic!("stored"),
+        );
+        assert_eq!((f.body.as_deref(), f.stale), (Some(GOOD), false));
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, WEEK + 1),
+            || false,
+            |_| panic!("fetched while throttled"),
+            |_| panic!("stored"),
+        );
+        assert_eq!((f.body.as_deref(), f.stale, err), (Some(GOOD), true, None));
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, WEEK + 1),
+            || true,
+            |_| Err("RSGB: server returned HTTP 503".into()),
+            |_| panic!("stored"),
+        );
+        assert_eq!((f.body.as_deref(), f.stale), (Some(GOOD), true));
+        assert_eq!(err.as_deref(), Some("RSGB: server returned HTTP 503"));
+        let (f, _) = rsgb_square(
+            "IO83",
+            NOW,
+            None,
+            || true,
+            |_| Err("down".into()),
+            |_| panic!("stored"),
+        );
+        assert_eq!(f.body, None, "nothing to serve");
+    }
 }
 
 /// City-name search via OSM Nominatim (explicit Search click only — the UI never queries per
@@ -26254,12 +27237,108 @@ struct RadioProgProject {
     channels: Vec<propagation::memchan::Channel>,
 }
 
-fn load_radioprog() -> RadioProgFile {
-    std::fs::read_to_string(radioprog_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+/// The `version` this build writes, and the newest it reads.
+const RADIOPROG_VERSION: u32 = 1;
+
+/// `radioprog.json` read strictly: `Ok(None)` when there is no file, `Err` when there is one this
+/// build cannot use (unreadable, not JSON, a value or a `version` it does not know).
+///
+/// A field this build does not know is NOT a failure: serde ignores it, so a file from a newer
+/// Nexus that only ADDED fields reads as it always has.
+fn radioprog_read(path: &Path) -> Result<Option<RadioProgFile>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let file: RadioProgFile = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if file.version > RADIOPROG_VERSION {
+        return Err(format!(
+            "version {} is newer than this Nexus reads",
+            file.version
+        ));
+    }
+    Ok(Some(file))
 }
+
+/// What Program tells the operator about a projects file it could not read.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RadioProgFileNotice {
+    /// Where that file is now: the name it was moved aside to, or its own path when it could not
+    /// be moved.
+    path: String,
+    /// The move failed, so the file is still `radioprog.json` and no save writes over it.
+    kept_in_place: bool,
+}
+
+/// This run's notice about the projects file, for [`radioprog_file_notice`]. It stays for the
+/// session; the file it names stays for good.
+static RADIOPROG_NOTICE: Mutex<Option<RadioProgFileNotice>> = Mutex::new(None);
+
+fn remember_radioprog_notice(notice: &Option<RadioProgFileNotice>) {
+    if let (Some(n), Ok(mut slot)) = (notice, RADIOPROG_NOTICE.lock()) {
+        *slot = Some(n.clone());
+    }
+}
+
+/// `radioprog.json` for Program, and whether anything about it has to be said.
+///
+/// A file that is there but cannot be read is NEVER treated as an empty one. That was this
+/// loader's old shape (`from_str(..).ok().unwrap_or_default()`), and the empty result was the next
+/// save's input: the working list saves itself moments after any change, so a corrupt file, one
+/// cut short, or one from a newer Nexus lost every project. Instead the file is moved aside to a
+/// new timestamped name beside it, never deleted, and a fresh one starts. If it cannot be moved,
+/// it stays where it is and `writable` is false, so no save writes over it.
+struct RadioProgOpened {
+    file: RadioProgFile,
+    notice: Option<RadioProgFileNotice>,
+}
+
+impl RadioProgOpened {
+    fn writable(&self) -> bool {
+        !self.notice.as_ref().is_some_and(|n| n.kept_in_place)
+    }
+}
+
+fn radioprog_open(path: &Path, now: i64) -> RadioProgOpened {
+    let reason = match radioprog_read(path) {
+        Ok(file) => {
+            return RadioProgOpened {
+                file: file.unwrap_or_default(),
+                notice: None,
+            }
+        }
+        Err(reason) => reason,
+    };
+    // The shared name (`radioprog.unreadable-YYYYMMDD-HHMMSS.json`, `-2` … when taken). Program
+    // keeps its own notice, at the top of the section, rather than the shell's.
+    let moved = tempo_core::keep_aside::aside_path(path, now)
+        .filter(|aside| std::fs::rename(path, aside).is_ok());
+    eprintln!(
+        "tempo: {} could not be read ({reason}); {}",
+        path.display(),
+        match &moved {
+            Some(aside) => format!("kept as {}", aside.display()),
+            None => "could not move it aside, so Program will not save over it".to_string(),
+        }
+    );
+    RadioProgOpened {
+        file: RadioProgFile::default(),
+        notice: Some(RadioProgFileNotice {
+            path: moved
+                .as_deref()
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned(),
+            kept_in_place: moved.is_none(),
+        }),
+    }
+}
+
+/// Why a save is refused while an unreadable projects file sits where it would be written.
+const RADIOPROG_NOT_SAVED: &str =
+    "radioprog.json could not be read and could not be moved aside, so it was not saved over";
 
 /// The ONE writer of `radioprog.json`. `path` is a parameter rather than `radioprog_path()` so a
 /// test can point it at a scratch file — the remote curation path (`remote_service::operations::
@@ -26269,34 +27348,334 @@ fn store_radioprog(path: &Path, f: &RadioProgFile) -> Result<(), String> {
     std::fs::write(path, json).map_err(|e| format!("couldn't save programming projects: {e}"))
 }
 
-/// All saved programming projects.
-#[tauri::command]
-fn radioprog_list_projects() -> Result<Vec<RadioProgProject>, String> {
-    Ok(load_radioprog().projects)
+/// The projects at `path`, and the notice when the file there could not be read.
+fn radioprog_list_at(
+    path: &Path,
+    now: i64,
+) -> (Vec<RadioProgProject>, Option<RadioProgFileNotice>) {
+    let opened = radioprog_open(path, now);
+    (opened.file.projects, opened.notice)
 }
 
-/// Create/update one project (upsert by id; stamps updatedUtc, and createdUtc on first save).
-#[tauri::command]
-fn radioprog_save_project(mut project: RadioProgProject) -> Result<(), String> {
-    let mut f = load_radioprog();
-    f.version = 1;
-    project.updated_utc = now_unix();
+/// Upsert one project into the file at `path` (stamps updatedUtc, and createdUtc on first save).
+fn radioprog_save_at(
+    path: &Path,
+    mut project: RadioProgProject,
+    now: i64,
+) -> (Result<(), String>, Option<RadioProgFileNotice>) {
+    let opened = radioprog_open(path, now);
+    if !opened.writable() {
+        return (Err(RADIOPROG_NOT_SAVED.into()), opened.notice);
+    }
+    let mut f = opened.file;
+    f.version = RADIOPROG_VERSION;
+    project.updated_utc = now;
     if let Some(existing) = f.projects.iter_mut().find(|p| p.id == project.id) {
         project.created_utc = existing.created_utc;
         *existing = project;
     } else {
-        project.created_utc = now_unix();
+        project.created_utc = now;
         f.projects.push(project);
     }
-    store_radioprog(&radioprog_path(), &f)
+    (store_radioprog(path, &f), opened.notice)
+}
+
+/// Drop one project from the file at `path` (a missing id is a no-op success).
+fn radioprog_delete_at(
+    path: &Path,
+    id: &str,
+    now: i64,
+) -> (Result<(), String>, Option<RadioProgFileNotice>) {
+    let opened = radioprog_open(path, now);
+    if !opened.writable() {
+        return (Err(RADIOPROG_NOT_SAVED.into()), opened.notice);
+    }
+    let mut f = opened.file;
+    f.projects.retain(|p| p.id != id);
+    (store_radioprog(path, &f), opened.notice)
+}
+
+/// All saved programming projects.
+#[tauri::command]
+fn radioprog_list_projects() -> Result<Vec<RadioProgProject>, String> {
+    let (projects, notice) = radioprog_list_at(&radioprog_path(), now_unix());
+    remember_radioprog_notice(&notice);
+    Ok(projects)
+}
+
+/// Create/update one project (upsert by id; stamps updatedUtc, and createdUtc on first save).
+#[tauri::command]
+fn radioprog_save_project(project: RadioProgProject) -> Result<(), String> {
+    let (saved, notice) = radioprog_save_at(&radioprog_path(), project, now_unix());
+    remember_radioprog_notice(&notice);
+    saved
 }
 
 /// Delete one project by id (missing id is a no-op success).
 #[tauri::command]
 fn radioprog_delete_project(id: String) -> Result<(), String> {
-    let mut f = load_radioprog();
-    f.projects.retain(|p| p.id != id);
-    store_radioprog(&radioprog_path(), &f)
+    let (deleted, notice) = radioprog_delete_at(&radioprog_path(), &id, now_unix());
+    remember_radioprog_notice(&notice);
+    deleted
+}
+
+/// This run's notice about `radioprog.json`, when Program found it unreadable: Program shows it,
+/// naming where the file is.
+#[tauri::command]
+fn radioprog_file_notice() -> Option<RadioProgFileNotice> {
+    RADIOPROG_NOTICE.lock().ok().and_then(|n| n.clone())
+}
+
+#[cfg(test)]
+mod radioprog_file_tests {
+    //! `radioprog.json` on the desktop's own load and save path, the one the Program commands
+    //! run: an unreadable file is kept byte for byte and never saved over, and the notice names
+    //! where it is; a file that only ADDS fields reads as it always has; no file is a first run.
+    use super::*;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "radioprog.unreadable-20260930-142233.json";
+
+    /// A unique scratch directory; the name carries the test's own label.
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-radioprog-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn project(id: &str, channels: usize) -> RadioProgProject {
+        RadioProgProject {
+            id: id.into(),
+            name: "My channels".into(),
+            channels: (0..channels)
+                .map(|i| propagation::memchan::Channel {
+                    id: format!("manual:{i}"),
+                    name: format!("CH{i}"),
+                    rx_mhz: 146.94,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A file as this build writes it.
+    fn file_bytes(projects: Vec<RadioProgProject>) -> Vec<u8> {
+        serde_json::to_vec(&RadioProgFile {
+            version: 1,
+            projects,
+        })
+        .unwrap()
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn ids(projects: &[RadioProgProject]) -> Vec<&str> {
+        projects.iter().map(|p| p.id.as_str()).collect()
+    }
+
+    /// Two projects, as this build writes them, for the unreadable files below to start from.
+    fn two_projects() -> String {
+        String::from_utf8(file_bytes(vec![
+            project("working", 3),
+            project("denver-trip", 2),
+        ]))
+        .unwrap()
+    }
+
+    /// A file that is there but cannot be read is kept, byte for byte, under a new name beside
+    /// it; the save that follows (the working list saves itself moments after any change) starts
+    /// a new file and does not touch the kept one; and the notice names where the kept file is.
+    fn assert_kept_and_never_saved_over(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("unreadable");
+        let path = dir.join("radioprog.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (projects, notice) = radioprog_list_at(&path, NOW);
+        let (saved, _) = radioprog_save_at(&path, project("working", 1), NOW + 1);
+        assert!(saved.is_ok(), "{what}: the new list saves: {saved:?}");
+
+        let kept = holding(&dir, &bytes);
+        assert_eq!(
+            kept,
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable file must survive the save, byte for byte, moved aside"
+        );
+        assert_eq!(
+            notice,
+            Some(RadioProgFileNotice {
+                path: dir.join(ASIDE).to_string_lossy().into_owned(),
+                kept_in_place: false,
+            }),
+            "{what}: Program is told where the file is"
+        );
+        assert!(projects.is_empty(), "{what}: nothing is read out of it");
+        let (after, again) = radioprog_list_at(&path, NOW + 2);
+        assert_eq!((ids(&after), again), (vec!["working"], None), "{what}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_projects_file_cut_short_is_kept_and_never_saved_over() {
+        let whole = two_projects().into_bytes();
+        assert_kept_and_never_saved_over("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a tone mode from a later build.
+    #[test]
+    fn a_projects_file_with_a_value_this_build_does_not_know_is_kept_and_never_saved_over() {
+        let unknown_value =
+            two_projects().replacen("\"toneMode\":\"none\"", "\"toneMode\":\"dtcsrx\"", 1);
+        assert!(
+            unknown_value.contains("dtcsrx"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept_and_never_saved_over("an unknown value", unknown_value.into_bytes());
+    }
+
+    #[test]
+    fn a_projects_file_from_a_newer_version_is_kept_and_never_saved_over() {
+        let newer_version = two_projects().replacen("\"version\":1", "\"version\":2", 1);
+        assert!(newer_version.contains("\"version\":2"));
+        assert_kept_and_never_saved_over("a newer version", newer_version.into_bytes());
+    }
+
+    /// A newer Nexus that only ADDED fields writes a file this build still reads: the fields are
+    /// ignored, nothing is moved, and there is nothing to say.
+    #[test]
+    fn a_file_whose_only_news_is_fields_reads_as_it_always_has() {
+        let dir = scratch("added-fields");
+        let path = dir.join("radioprog.json");
+        let bytes = String::from_utf8(file_bytes(vec![project("working", 2), project("trip", 1)]))
+            .unwrap()
+            .replacen("\"projects\":", "\"aFileField\":7,\"projects\":", 1)
+            .replacen("\"radiusKm\":", "\"aProjectField\":true,\"radiusKm\":", 1)
+            .replacen("\"rxMhz\":", "\"aChannelField\":\"x\",\"rxMhz\":", 1)
+            .into_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+        let (projects, notice) = radioprog_list_at(&path, NOW);
+        assert_eq!(
+            (ids(&projects), notice),
+            (vec!["working", "trip"], None),
+            "read as it always has, with nothing to say"
+        );
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![path.clone()],
+            "left where it is"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// No file at all is a first run: nothing to show, nothing to say, and the first save makes it.
+    #[test]
+    fn no_file_is_a_first_run() {
+        let dir = scratch("first-run");
+        let path = dir.join("radioprog.json");
+        let (projects, notice) = radioprog_list_at(&path, NOW);
+        assert!(
+            projects.is_empty() && notice.is_none(),
+            "no file: nothing to show and nothing to say"
+        );
+        let (saved, notice) = radioprog_save_at(&path, project("working", 1), NOW);
+        assert!(saved.is_ok() && notice.is_none(), "the first save makes it");
+        let (projects, _) = radioprog_list_at(&path, NOW);
+        assert_eq!(ids(&projects), vec!["working"]);
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no file set aside"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A file that cannot be moved aside (its folder refuses the rename) stays where it is, and
+    /// then every save and delete REFUSES rather than write over it; the notice says so.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_moved_aside_is_never_saved_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("stuck");
+        let path = dir.join("radioprog.json");
+        let bytes = b"{ this is not json".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // CONTROL: a user the permissions do not bind (root) could rename anyway; the premise of
+        // this test would not hold, so say so instead of passing on nothing.
+        if std::fs::write(dir.join("probe"), b"").is_ok() {
+            let _ = std::fs::remove_file(dir.join("probe"));
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            eprintln!("skipped: this user can write a read-only folder, so no rename fails here");
+            return;
+        }
+        let (projects, listed) = radioprog_list_at(&path, NOW);
+        let (saved, _) = radioprog_save_at(&path, project("working", 1), NOW + 1);
+        let (deleted, _) = radioprog_delete_at(&path, "working", NOW + 2);
+        let after = std::fs::read(&path).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(after, bytes, "the unreadable file must never be saved over");
+        assert_eq!(
+            (saved, deleted),
+            (
+                Err(RADIOPROG_NOT_SAVED.into()),
+                Err(RADIOPROG_NOT_SAVED.into())
+            )
+        );
+        assert_eq!(
+            listed,
+            Some(RadioProgFileNotice {
+                path: path.to_string_lossy().into_owned(),
+                kept_in_place: true,
+            })
+        );
+        assert!(projects.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A second unreadable file never replaces one set aside earlier: the new one takes the next
+    /// free name (a rename onto an existing file would replace it).
+    #[test]
+    fn a_second_unreadable_file_never_replaces_the_first_one_kept() {
+        let dir = scratch("second");
+        let path = dir.join("radioprog.json");
+        let first = b"{ the first unreadable file".to_vec();
+        let second = b"{ the second one".to_vec();
+        std::fs::write(dir.join(ASIDE), &first).unwrap();
+        std::fs::write(&path, &second).unwrap();
+        let (_, notice) = radioprog_list_at(&path, NOW);
+        let next = dir.join("radioprog.unreadable-20260930-142233-2.json");
+        assert_eq!(
+            holding(&dir, &second),
+            vec![next.clone()],
+            "the second one kept, beside it"
+        );
+        assert_eq!(
+            holding(&dir, &first),
+            vec![dir.join(ASIDE)],
+            "the first one untouched"
+        );
+        assert_eq!(
+            notice.map(|n| n.path),
+            Some(next.to_string_lossy().into_owned()),
+            "the notice names the second one"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// Render a channel list to an export format: "chirp" (the CHIRP generic CSV, analog rows only)
@@ -28208,6 +29587,14 @@ pub fn run() {
             .find(|r| r.id == settings.active_radio)
             .map(|r| r.icom_data_mode)
             .unwrap_or(settings.icom_data_mode),
+        // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
+        // startup transport keys as the one every tick after it derives from settings.
+        tx_audio_source: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.tx_audio_source.clone())
+            .unwrap_or_else(|| settings.tx_audio_source.clone()),
         rig_model: settings.rig_model,
         // The operator's name for the active radio, so the STARTUP CAT line names it. Without
         // this the first line of every log said "model 1042" while every later line said
@@ -28607,15 +29994,12 @@ fn start_on_the_logbook(
                 *OPENINGS_LOG.lock().unwrap_or_else(|e| e.into_inner()) = eps;
             }
         }
-        // Assistance journal: restore the record, then stamp the launch. Stamping
-        // unconditionally (force) is deliberate — a restart mid-contest must leave no window
-        // the record is silent about what was running. (The atomic was mirrored earlier, before
-        // any feed could spawn.)
-        if let Ok(text) = std::fs::read_to_string(assistance_journal_path()) {
-            if let Ok(rows) = serde_json::from_str::<Vec<AssistanceEvent>>(&text) {
-                *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = rows;
-            }
-        }
+        // Assistance journal: restore the record (one this build cannot read is kept aside, and
+        // the screen says where), then stamp the launch. Stamping unconditionally (force) is
+        // deliberate — a restart mid-contest must leave no window the record is silent about
+        // what was running. (The atomic was mirrored earlier, before any feed could spawn.)
+        *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) =
+            restore_assistance_journal(&assistance_journal_path(), now_unix());
         journal_assistance(eng.settings(), "Nexus started", true);
         eng.set_grid_rarity_resolver(propagation::gridrarity::effective_tier_u8);
         // FCC callsign→state index: load the cached copy into the resolver, then auto-refresh in
@@ -28717,35 +30101,28 @@ fn start_on_the_logbook(
         eng.set_fd_log_path(fd_path);
         // A contact left in the confirm-before-log popup by a previous session (crash, power
         // loss, or a quit with the popup open) is a REAL QSO — the other station logged it.
-        // Restore the hold so the operator can still log it. Best-effort: a missing or corrupt
-        // journal just means there was nothing pending.
+        // Restore the hold so the operator can still log it. A missing journal means nothing
+        // was pending; one this build cannot read is kept aside, and the screen says where.
         eng.set_pending_qso_path(pending_qso_path());
-        if let Ok(text) = std::fs::read_to_string(pending_qso_path()) {
-            eng.load_pending_qso_json(&text);
-        }
+        eng.restore_pending_qso_journal(now_unix());
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation
         // threads: each restored bubble's held-vs-abandoned decision reads the live
         // queue (a held message whose journal entry survived stays "waiting to send"
-        // and transmits when its peer is next heard). Best-effort like the others.
+        // and transmits when its peer is next heard). A queue this build cannot read is kept
+        // aside, and the screen says where.
         eng.set_pending_msgs_path(pending_msgs_path());
-        if let Ok(text) = std::fs::read_to_string(pending_msgs_path()) {
-            eng.load_pending_msgs(&text);
-        }
-        // JS8 store-and-forward inbox: same contract as the Tempo journal above —
-        // best-effort, a missing or corrupt file yields an empty station.
+        eng.restore_pending_msgs(now_unix());
+        // JS8 store-and-forward inbox: a missing file is an empty station; one this build cannot
+        // read is kept aside, and the screen says where.
         eng.set_js8_journal_path(js8_station_path());
-        if let Ok(text) = std::fs::read_to_string(js8_station_path()) {
-            eng.js8_load_journal(&text);
-        }
+        eng.restore_js8_journal(now_unix());
         // Restore persisted Tempo conversation threads so chat history (and the `*`
-        // band feed) survives an app restart. Best-effort: a missing/corrupt file
-        // just yields an empty roster of threads.
-        if let Ok(text) = std::fs::read_to_string(conversations_path()) {
-            if let Ok(convs) = serde_json::from_str::<Vec<tempo_app::dto::Conversation>>(&text) {
-                eng.load_conversations(convs);
-            }
+        // band feed) survives an app restart. A missing file is an empty roster of threads;
+        // one this build cannot read is kept aside, and the screen says where.
+        if let Some(convs) = restore_conversations(&conversations_path(), now_unix()) {
+            eng.load_conversations(convs);
         }
         if persisted_source == SourceKind::Companion {
             if let Err(e) = eng.set_source(SourceKind::Companion) {
@@ -30241,6 +31618,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             detect_rigs,
             probe_cat_ports,
             point_rotator,
+            point_rotator_elevation,
             stop_rotator,
             set_log_form_grid,
             discover_flex,
@@ -30270,6 +31648,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             aprs_auto_arm,
             get_aprs_heard,
             get_aprs_health,
+            get_aprs_tx_notice,
             get_aprs_is_status,
             get_aprs_stations,
             aprs_send_beacon,
@@ -30292,6 +31671,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_psk_state,
             js8_enter,
             get_js8_state,
+            js8_locator_refusal,
             js8_set_speed,
             js8_set_rx_speeds,
             js8_send,
@@ -30299,7 +31679,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_call_cq,
             js8_arm,
             js8_cq_repeat,
-            js8_cancel,
+            js8_answer_reply,
+            js8_composer,
             js8_drop_queue,
             js8_inbox_mark,
             js8_inbox_delete,
@@ -30322,6 +31703,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_all_rig_models,
             get_portless_rig_models,
             get_cat_cw_unproven_rig_models,
+            get_ptt_mic_data_rig_models,
             amp_command,
             get_band_plan,
             set_license_class,
@@ -30528,6 +31910,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             radioprog_list_projects,
             radioprog_save_project,
             radioprog_delete_project,
+            radioprog_file_notice,
             export_channels,
             set_activation,
             clear_activation,
@@ -31575,6 +32958,38 @@ mod tests {
         assert_eq!(F::ALL.len(), 2 + refused.len());
     }
 
+    /// #378: plain http to the operator's own network sends the API key unencrypted, and the
+    /// Connections log says so: once a session for each place the key goes, and never for https.
+    #[test]
+    fn plain_http_to_the_lan_is_said_once_in_the_connections_log() {
+        use propagation::live::cloudlog::Destination;
+        // A loopback address no other test uses, so the session-wide set is this test's own.
+        let lan = Destination::check("http://127.0.0.37:8086")
+            .expect("a loopback address is on the operator's own network");
+        let lines = |needle: &str| {
+            super::get_connection_log()
+                .into_iter()
+                .filter(|e| e.connector == "Cloudlog" && e.message.contains(needle))
+                .map(|e| (e.level, e.message))
+                .collect::<Vec<_>>()
+        };
+        super::warn_cloudlog_cleartext(&lan);
+        super::warn_cloudlog_cleartext(&lan);
+        let said = lines("127.0.0.37");
+        assert_eq!(
+            said.len(),
+            1,
+            "once a session, not once a contact: {said:?}"
+        );
+        assert_eq!(said[0].0, "warn", "{said:?}");
+        assert!(said[0].1.contains("unencrypted"), "{}", said[0].1);
+        // Control: https is not plain http, and there is nothing to say about it.
+        let https =
+            Destination::check("https://cloudlog-n35.example.org").expect("an https destination");
+        super::warn_cloudlog_cleartext(&https);
+        assert!(lines("cloudlog-n35.example.org").is_empty());
+    }
+
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that
     /// cannot be made in `tempo-core`, because the crate that owns `cty.dat` depends on it.
     ///
@@ -32080,6 +33495,33 @@ mod tests {
                 "{name} is not registered: a press through the picture would fail at runtime"
             );
         }
+    }
+
+    /// The Rotor pane's elevation box reaches the rotator only if `point_rotator_elevation` is
+    /// DEFINED and REGISTERED — `ui/src/api.ts` invokes it, and a name missing from
+    /// `generate_handler!` fails at runtime with nothing at compile time to catch it: the box
+    /// would take a typed elevation and move nothing. Source-scanned, like the auto-arm test
+    /// below, because registration is the property under test and no type sees it.
+    #[test]
+    fn the_rotor_elevation_command_the_pane_calls_is_defined_and_registered() {
+        let src = include_str!("lib.rs");
+        // Column zero, not `contains`: this test's own text is in `src` too.
+        assert!(
+            src.lines()
+                .any(|l| l.starts_with("async fn point_rotator_elevation(")),
+            "the command the Rotor pane invokes must exist"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "point_rotator_elevation,"),
+            "point_rotator_elevation is not registered — the elevation box would fail at runtime"
+        );
     }
 
     /// The RTTY view-entry auto-arm reaches the frontend only if the command is DEFINED and
@@ -34808,7 +36250,7 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 17] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 18] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
@@ -34821,6 +36263,7 @@ mod tests {
         "read_rotator_state",
         "get_aprs_heard",
         "get_aprs_health",
+        "get_aprs_tx_notice",
         "get_aprs_stations",
         "get_aprs_is_status",
         "update_install_block",

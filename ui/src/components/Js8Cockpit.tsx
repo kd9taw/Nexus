@@ -37,12 +37,14 @@ import {
   haltTx,
   js8Arm,
   js8CallCq,
-  js8Cancel,
+  js8AnswerReply,
+  js8Composer,
   js8CqRepeat,
   js8DropQueue,
   js8Enter,
   js8InboxDelete,
   js8InboxMark,
+  js8LocatorRefusal,
   js8Send,
   js8SendCommand,
   js8SetSpeed,
@@ -80,10 +82,14 @@ import {
   TX_PLATE,
   ageLabel,
   bandActivityByOffset,
+  js8ShownOffsetRows,
+  js8UnreadFirst,
+  js8UnreadFrom,
   countBits,
   dtLabel,
   estimateFrames,
   fmtSnr,
+  js8ListedStations,
   utcClock,
 } from '../js8Vocab'
 
@@ -106,6 +112,12 @@ interface Props {
   onSetTxEnabled?: (on: boolean) => void
   theme?: string
   wheelSensitivity?: number
+  /** JS8Call's callsign aging from Settings, in minutes (0 = off): the Stations list leaves out
+   *  a call not heard for this long (`js8ListedStations`). */
+  callsignAgingMin?: number
+  /** JS8Call's band-activity aging, in minutes (Settings ▸ JS8; 0, the default here, is off):
+   *  App hands down the station's setting. */
+  activityAgingMin?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -163,6 +175,8 @@ export function Js8Cockpit({
   onSetTxEnabled,
   theme = 'dark',
   wheelSensitivity,
+  callsignAgingMin = 0,
+  activityAgingMin = 0,
   onOpenLogbook,
   panels,
   onOpenSettings,
@@ -200,6 +214,7 @@ export function Js8Cockpit({
       getJs8State()
         .then((s) => {
           if (owns()) setJs8(s)
+          if (!remote) return composerSync.current()
         })
         .catch(() => { if (owns() && remote) setJs8(null) }),
     )
@@ -215,6 +230,27 @@ export function Js8Cockpit({
     }
     idleTrippedRef.current = tripped
   }, [js8?.idleTripped, js8?.idleLimitMin])
+
+  // A MSG to me announces itself, as JS8Call's "New Message Received" box does
+  // (mainwindow.cpp:9143-9154): ONCE per message. What the first poll finds is taken as seen, so
+  // mail filed before this view opened (or restored from the journal) does not toast.
+  const seenInboxRef = useRef<Set<number> | null>(null)
+  useEffect(() => {
+    const inbox = js8?.inbox
+    if (!inbox) return
+    const seen = seenInboxRef.current
+    if (seen === null) {
+      seenInboxRef.current = new Set(inbox.map((e) => e.id))
+      return
+    }
+    for (const e of inbox) {
+      if (seen.has(e.id)) continue
+      seen.add(e.id)
+      if (e.state === 'unread') {
+        pushToast(t('js8.inbox.new', { from: e.from, time: utcClock(e.atMs) }), 'info', 8000)
+      }
+    }
+  }, [js8?.inbox])
 
   // ENTER the mode on the rising edge of `active` (works unconfigured, spec §Works unconfigured):
   // `js8_enter` sets the tier and the dial. ⚠️ RX ONLY, and the ENGINE guarantees it — the call
@@ -290,6 +326,34 @@ export function Js8Cockpit({
   const [cmdId, setCmdId] = useState<number | null>(null)
   const snapRef = useRef(snap)
   snapRef.current = snap
+  // THE COMPOSE BOX, BOTH WAYS (JS8Call's extFreeTextMsgEdit). With AUTO off the station puts a
+  // reply here for the operator to send, as JS8Call's processTxQueue types it into its box
+  // (mainwindow.cpp:9671): taken only into an EMPTY box, never over what the operator typed,
+  // and named back so the station knows the box holds it. The station is also told whether the
+  // box holds text. Native only: the Remote observes and has no compose box to fill.
+  const textRef = useRef(text)
+  textRef.current = text
+  const takenRef = useRef<number | null>(null)
+  const composerSync = useRef(async () => {})
+  composerSync.current = async () => {
+    if (!canControl) return
+    const taken = takenRef.current
+    const offered = await js8Composer(textRef.current.trim() !== '', taken).catch(() => undefined)
+    if (offered === undefined) return
+    if (takenRef.current === taken) takenRef.current = null
+    if (offered && typeof offered.text === 'string' && typeof offered.id === 'number' && textRef.current.trim() === '') {
+      takenRef.current = offered.id
+      textRef.current = offered.text
+      setToCall('')
+      setCmdId(null)
+      setText(offered.text)
+    }
+  }
+  const composing = text.trim() !== ''
+  useEffect(() => {
+    if (!active || remote) return
+    void composerSync.current()
+  }, [composing, active, remote])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
@@ -337,9 +401,12 @@ export function Js8Cockpit({
       if (s) setJs8(s)
     })
   }
-  const cancelPending = () => {
-    if (!canControl) return
-    void withErrorToast(() => js8Cancel(), t('js8.toast.cancel.failed')).then((s) => {
+  // JS8Call's AutoreplyConfirmation box (mainwindow.cpp:5209-5230): the answer names the reply it
+  // was shown for, so a Yes can never reach a different one.
+  const answerPending = (yes: boolean) => {
+    const p = js8?.pendingReply
+    if (!canControl || !p) return
+    void withErrorToast(() => js8AnswerReply(yes, p.display, p.firesAtMs), t('js8.toast.answer.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
@@ -381,8 +448,9 @@ export function Js8Cockpit({
     })
   }
   // JS8Call's query menu sends a station your locator in one click, `<call> GRID <my_grid()>`
-  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657); so is the button, and
-  // the engine refuses a send with no locator whatever the button says.
+  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657). The button is disabled
+  // whenever the JS8 gate refuses the locator (`locatorRefusal`), and the engine refuses such a
+  // send whatever the button says.
   const sendMyGrid = (call: string) => {
     if (!canControl) return
     if (refuseIfUnready()) return
@@ -473,6 +541,26 @@ export function Js8Cockpit({
   const units = useUnits()
   const myGrid = snap?.mygrid ?? ''
   const ownGrid = myGrid.trim().toUpperCase()
+  // JS8Call's Settings refuse a malformed locator (Configuration.cpp:2443-2446), so its GRID menu
+  // item only ever meets a good one or none, and is disabled for none (mainwindow.cpp:6657).
+  // Nexus's Settings can hold a malformed one, which the JS8 gate refuses. "Send my grid" asks
+  // that gate, its one rule, whenever the locator changes: disabled while it refuses, with its
+  // reason as the tooltip, and until it has answered. The Remote never asks (it cannot send).
+  const [locatorRefusal, setLocatorRefusal] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!active || !canControl) return
+    let live = true
+    void js8LocatorRefusal()
+      .then((reason) => {
+        if (live) setLocatorRefusal(reason)
+      })
+      .catch(() => {
+        if (live) setLocatorRefusal(undefined)
+      })
+    return () => {
+      live = false
+    }
+  }, [active, canControl, myGrid])
 
   // ONE row per offset, from the same activity feed (js8Vocab.bandActivityByOffset) — the
   // pane adds no engine state, it reads the decodes the transcript already carries.
@@ -499,6 +587,26 @@ export function Js8Cockpit({
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
   const now = js8DisplayNow(js8)
+  // The list only: the station keeps every call it heard, so the log strip, the rotator and the
+  // To box still know an aged one, as JS8Call's call activity does.
+  const listedStations = js8
+    ? js8ListedStations(js8.stations, js8.inbox, {
+        agingMin: callsignAgingMin,
+        nowMs: now,
+        selectedCall,
+        myCall: snap?.mycall ?? '',
+      })
+    : []
+  // Band activity under JS8Call's aging (js8Vocab.js8ShownOffsetRows), with RX's offset as the
+  // selected one.
+  const shownOffsetRows = js8ShownOffsetRows(offsetRows, {
+    agingMin: activityAgingMin,
+    nowMs: now,
+    selectedHz: snap?.radio.rxOffsetHz ?? null,
+  })
+
+  // ⚑ and the lift to the top for a station with an unread message to me (js8Vocab.js8UnreadFrom).
+  const unreadFrom = js8 ? js8UnreadFrom(js8.inbox, snap?.mycall ?? '') : new Set<string>()
 
   const hbTitle =
     js8?.hbOn && js8.armed.hb
@@ -542,17 +650,6 @@ export function Js8Cockpit({
         : t('js8.dock.estimate', { count: frames, secs: frames * speedInfo.periodS })
   const canSend = !overCap && (cmdId !== null ? toCall.trim() !== '' : text.trim() !== '')
   const pendingSecs = js8?.pendingReply ? Math.max(0, Math.ceil((js8.pendingReply.firesAtMs - now) / 1000)) : 0
-
-  /** Whether the pending reply's ORIGIN can key right now — the engine's per-origin arm
-   *  (switch && txEnabled && !idleTripped), not the latch alone. */
-  const pendingCanKey = (s: Js8State): boolean => {
-    const p = s.pendingReply
-    if (!p) return false
-    if (p.origin === 'autoReply') return s.armed.autoreply
-    if (p.origin === 'relay') return s.armed.relay
-    if (p.origin === 'hbAck') return s.armed.hbAck
-    return s.txEnabled
-  }
 
   /** Literal keys per origin, so the orphan guard sees each referenced. */
   const originLabel = (o: Js8Origin): string => {
@@ -654,10 +751,10 @@ export function Js8Cockpit({
       {...closeProps('offsets')}
     >
       <div className="js8-offsets" title={t('js8.panel.offsets.title')}>
-        {offsetRows.length === 0 ? (
+        {shownOffsetRows.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.panel.offsets.empty')}</div>
         ) : (
-          offsetRows.map((r) => (
+          shownOffsetRows.map((r) => (
             <div
               key={r.offsetHz}
               className={`js8-offset-row${r.mine ? ' mine' : ''}${r.directedToMe ? ' directed' : ''}${
@@ -700,7 +797,7 @@ export function Js8Cockpit({
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
-          sortPinnedFirst(js8.stations, pins).map((h) => {
+          sortPinnedFirst(js8UnreadFirst(listedStations, unreadFrom), pins).map((h) => {
             // The DX columns JS8Call carries (mainwindow.cpp:10296-10362): distance and
             // azimuth from MY grid to theirs, then the logbook's answer about this call. The
             // grid falls back to the one in the log when the station has not sent one — the
@@ -735,8 +832,10 @@ export function Js8Cockpit({
               </button>
               <span className="js8-cell">{grid}</span>
               <span className="js8-cell js8-snr">{fmtSnr(h.snrDb)}</span>
+              {/* JS8Call's call activity prints the offset held in an int, so truncated
+                  (`cd.offset`, mainwindow.cpp:10280 and :4029): the Band activity pane's rule. */}
               <span className="js8-cell">
-                {Math.round(h.freqHz)} {HZ}
+                {Math.trunc(h.freqHz)} {HZ}
               </span>
               <span className="js8-cell js8-speed">{JS8_SPEEDS[h.speed].letter}</span>
               <span className="js8-cell js8-age">{ageLabel(now - h.lastMs)}</span>
@@ -772,6 +871,11 @@ export function Js8Cockpit({
                   {det.comment}
                 </span>
               )}
+              {unreadFrom.has(h.call) && (
+                <span className="js8-chip" title={t('js8.station.unread.title', { call: h.call })}>
+                  ⚑
+                </span>
+              )}
               {h.lastHb && <span className="js8-chip">{HB}</span>}
               {h.lastCq && <span className="js8-chip">{CQ}</span>}
               {h.storedMsgs > 0 && (
@@ -795,9 +899,12 @@ export function Js8Cockpit({
                 <button
                   type="button"
                   className="cw-macro js8-query js8-send-grid"
-                  disabled={!canControl || !ownGrid}
+                  disabled={!canControl || locatorRefusal !== null}
                   onClick={() => sendMyGrid(h.call)}
-                  title={ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined}
+                  title={
+                    locatorRefusal ??
+                    (ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined)
+                  }
                 >
                   {ownGrid ? `${JS8_GRID.label} ${ownGrid}` : JS8_GRID.label}
                 </button>
@@ -1297,19 +1404,22 @@ export function Js8Cockpit({
             ))}
         </div>
 
-        {/* THE PENDING AUTO-REPLY (spec invariant 11): visible, counted down, cancellable.
-            Under the auto arm with TX off the station only SHOWS what it would have sent. */}
+        {/* THE AUTOMATIC REPLY THAT ASKS FIRST (JS8Call's AutoreplyConfirmation, on by default):
+            Yes queues it for the next period; No, or no answer before the count runs out, sends
+            nothing. With TX off it says so: a Yes then keys nothing. With the confirmation off a
+            reply never asks: it is in the queue below, and keys in the next period. */}
         {js8?.pendingReply && (
-          <div className="js8-dock-row js8-pending-row" role="status">
+          <div className="js8-dock-row js8-pending-row js8-confirm-row" role="status">
             <span className="js8-pending-text">
-              {pendingCanKey(js8)
-                ? t('js8.dock.pending', { to: js8.pendingReply.to, secs: pendingSecs, text: js8.pendingReply.display })
-                : !js8.txEnabled
-                  ? t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })
-                  : t('js8.dock.pending.idle', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
+              {js8.txEnabled
+                ? t('js8.dock.confirm', { text: js8.pendingReply.display })
+                : t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
             </span>
-            <button type="button" className="cw-macro js8-cancel" disabled={!canControl} onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
-              {t('js8.dock.pending.cancel.label')}
+            <button type="button" className="cw-macro js8-confirm-yes" disabled={!canControl} onClick={() => answerPending(true)} title={t('js8.dock.confirm.yes.title')}>
+              {t('js8.dock.confirm.yes.label')}
+            </button>
+            <button type="button" className="cw-macro js8-confirm-no" disabled={!canControl} onClick={() => answerPending(false)} title={t('js8.dock.confirm.no.title')}>
+              {t('js8.dock.confirm.no.label', { secs: pendingSecs })}
             </button>
           </div>
         )}

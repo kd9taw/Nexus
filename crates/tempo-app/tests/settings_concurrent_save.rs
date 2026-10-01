@@ -98,7 +98,7 @@ fn two_instances_saving_at_once_never_publish_a_torn_settings_file() {
     }
 
     // 1. Nothing torn was ever PUBLISHED. `Settings::load` renames an unparseable file aside as
-    //    `settings.json.corrupt`, so one of those existing is the fingerprint of a torn read —
+    //    `settings.unreadable-<UTC>.json`, so one of those existing is the fingerprint of a torn read —
     //    and every worker did `SAVES_PER_WORKER` loads, so the whole run was watched, not just
     //    the end state. See `a_torn_settings_file_really_does_leave_a_corrupt_sibling` for the
     //    positive control: this check DOES fire when a torn file reaches load().
@@ -183,10 +183,11 @@ fn a_torn_settings_file_really_does_leave_a_corrupt_sibling() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n != "settings.json")
         .collect();
-    assert_eq!(
-        leftovers,
-        vec!["settings.json.corrupt".to_string()],
-        "a torn file DOES leave the sibling the concurrent test asserts the absence of"
+    assert!(
+        leftovers.len() == 1
+            && leftovers[0].starts_with("settings.unreadable-")
+            && leftovers[0].ends_with(".json"),
+        "a torn file DOES leave the sibling the concurrent test asserts the absence of: {leftovers:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -315,6 +315,11 @@ html {
 }
 .ui-toast-msg {
   flex: 1;
+  /* A flex item never shrinks below its longest word on its own, and a file path is one long word:
+     the toast for a file Nexus kept pushed its own × out of the window. Let the message shrink,
+     and break a word that cannot fit. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ui-toast-close {
   /* The body is click-through (see .ui-toast); its controls are not. */
@@ -649,6 +654,17 @@ button.nb-chip:hover {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
 }
+/* THE LIGHT THEME LETTERS THE WORD IN INK and keeps the state on the chip's border, the band chip's
+   light treatment (#382). The chip sits on the page colour, where the state colours read 3.4–4.3:1
+   as lettering in every light theme, under the 4.5:1 floor; a border needs 3:1 and gets it. Dark is
+   untouched: there the state colours read 8.8:1 and up. The state class is in the selector so this
+   outranks the two rules above by specificity, not by where it sits (ProvenanceChip.contrast.test.tsx). */
+[data-theme='light'] .prop-prov.prov-live,
+[data-theme='light'] .prop-prov.prov-cached,
+[data-theme='light'] .prop-prov.prov-partial,
+[data-theme='light'] .prop-prov.prov-offline {
+  color: var(--text);
+}
 
 /* Space-weather gauges */
 .swx-strip {
@@ -766,8 +782,10 @@ button.nb-chip:hover {
 .ba-row:hover {
   background: var(--bg-elev);
 }
+/* A closed band recedes by its ink, not by fading the row: at half opacity its "Closed" read 1.98:1 and the reason
+   under it 2.26:1 in the dark theme, and the "Closed" 1.65:1 in the light one. */
 .ba-row.is-closed {
-  opacity: 0.5;
+  color: var(--text-dim);
 }
 .ba-band {
   font-family: var(--font-mono);
@@ -1048,9 +1066,18 @@ button.nb-chip:hover {
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* Rotor pane — compass rose + live needle. */
+/* Rotor pane — compass rose + live needle.
+   THE ROW WRAPS (2026-09-29, measured in Chrome over the Connect TV page). Beside the 148 px rose
+   a Connect rail leaves the column 122 px at the stock 300 px and 70 px at the sm tier's 248, and
+   on the base tree ■ STOP ran past the pane's edge, where the frame clips it with no scroll to
+   reach it: by 6 px at 300, 50 px at 248, 91 px at 200 (the rail minimum), at every zoom. An
+   az/el rotator's elevation box made it 72 px at 300. So the column stays beside the rose while
+   it gets its basis — two 3.25em boxes and a gap, which still fit in the 107 px left when the
+   pane body grows a scrollbar — and goes under the rose when it cannot, where the pane scrolls to
+   it; inside the column the boxes and STOP wrap too. */
 .rotor-row {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
 }
@@ -1090,6 +1117,7 @@ button.nb-chip:hover {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+  flex: 1 1 7em;
 }
 .rotor-az {
   font-size: 1.6em;
@@ -1100,29 +1128,49 @@ button.nb-chip:hover {
   font-size: 0.7em;
   font-weight: 500;
 }
+/* The elevation, on a rotator whose backend declares an elevation axis: under the bearing, a
+   step smaller. */
+.rotor-el {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
 .rotor-slewing {
   color: var(--alert-warning);
   font-family: var(--font-mono);
 }
 .rotor-entry {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
-.rotor-entry .settings-input {
-  width: 5em;
+/* Narrow enough for the bearing and the elevation side by side; no spinner arrows, which would
+   cover the digits at this width (a typed value goes out on Enter, as it always did). */
+.rotor-entry input.settings-input {
+  width: 3.25em;
+  padding: 0 var(--space-2);
+  -moz-appearance: textfield;
 }
+.rotor-entry input.settings-input::-webkit-outer-spin-button,
+.rotor-entry input.settings-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+/* STOP takes the stop colour every other stop control takes (`--state-weak`, both themes), not the
+   dark theme's #f87171, which lettered at 2.2:1 on every light theme; hovered, it letters in the
+   panel's own colour on that red, so each theme's red is matched by its own ink.
+   RotorPane.contrast.test.tsx measures it in every mode and skin. */
 .rotor-stop {
   background: transparent;
-  border: 1px solid #f87171;
-  color: #f87171;
+  border: 1px solid var(--state-weak);
+  color: var(--state-weak);
   border-radius: var(--radius-sm);
   font-weight: 700;
   padding: var(--space-1) var(--space-2);
   cursor: pointer;
 }
 .rotor-stop:hover {
-  background: #f87171;
-  color: #111;
+  background: var(--state-weak);
+  color: var(--panel);
 }
 .rotor-hint {
   margin: 0;
@@ -1325,8 +1373,9 @@ button.nb-chip:hover {
   color: var(--band-marginal);
   border-color: var(--band-marginal);
 }
+/* A closed mode recedes by the chip's faint ink and its strike, not by fading: at 45 % it read 2.05:1 in the dark
+   theme and 1.86:1 in the light one. */
 .cp-mode.closed {
-  opacity: 0.45;
   text-decoration: line-through;
 }
 /* Two small numeric inputs side-by-side (e.g. TX/RX antenna gain). */
@@ -1504,7 +1553,21 @@ button.nb-chip:hover {
      gives way to a fixed row, because the operator asked), and the panes fill it instead of
      stopping at the 30 % cap. The divider fits the stored % into this box on load and on every
      resize, from 4em to half the grid (features/paneSeam CONNECT_STRIP_*). Unset, the row is the
-     `auto` row above: nothing about the stock layout moves. */
+     `auto` row above: nothing about the stock layout moves.
+   · BELOW THE FLOOR, BOTH ROWS ARE FLOORED (2026-09-30). The strip's `auto` minimum is its panes'
+     content (css-grid §6.6: `.connect-strip` is no scroll container), capped at 30 % of the
+     effective VIEWPORT, while the map row's was 0 — so whenever the chrome above takes much of the
+     window, the map row took the whole deficit, and the rails in it with it. Measured in Chrome at
+     1920×1080 pinned at 175 % (effective 1097×617): the grid had 258 px, the strip kept 185, the map
+     row 39, and each rail box got 13.7 px (6 in Japanese) — title bars clipped, pickers out of
+     reach. Now the map row holds two rail boxes of 4em and the rail's gap, and the strip one box of
+     4em, in the unit of the strip divider's own floor: a pane's title bar and a line of it. They
+     are hard floors, so where they do not fit the Connect view scrolls (its `.layout.single` host,
+     below). A rail box asks for 5em while that still leaves the strip its 4em: a 248 px rail wraps
+     its titles onto two lines (every one, in Japanese at 175 %), and 4em under a two-line title bar
+     showed no line of the pane. That second em yields before it would make the view scroll. At
+     every supported size the rows get more than the floors, and nothing there moves:
+     connect-layout.test.ts computes the rows at the census's geometries. */
 .connect {
   flex: 1;
   min-height: 0;
@@ -1512,8 +1575,8 @@ button.nb-chip:hover {
   gap: var(--space-3);
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
-  grid-template-rows: minmax(0, 1fr);
-  grid-auto-rows: var(--cn-strip-h, auto);
+  grid-template-rows: minmax(max(calc(8em + var(--space-3)), min(calc(10em + var(--space-3)), calc(100% - 4em - var(--space-3)))), 1fr);
+  grid-auto-rows: var(--cn-strip-h, minmax(4em, auto));
   grid-template-areas: 'left center right';
 }
 .connect:where([data-rails='left']) {
@@ -1995,19 +2058,24 @@ button.nb-chip:hover {
 [data-viewport='xs'] .connect {
   grid-template-columns: minmax(0, 1fr);
   /* The globe row is the only explicit one here too: the rails and the strip auto-place into
-     implicit `auto` rows under it (grid-auto-rows on .connect), in DOM order — so a closed
-     rail or strip takes no row and leaves no gap in the stack. */
+     implicit rows under it, in DOM order — so a closed rail or strip takes no row and leaves
+     no gap in the stack. */
   grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh)));
   /* Every implicit row here is content-height, a strip the operator sized on a wider window
-     included: the stack scrolls, and a stack is not divided (layout L7). */
-  grid-auto-rows: auto;
+     included: the stack scrolls, and a stack is not divided (layout L7). `max-content`, NOT
+     `auto`: an auto row's floor is the item's min-height, the rails carry `min-height: 0` for
+     the two-rail grid, and this box is bounded — so both rail rows came out 0 px tall and their
+     frames painted over the rows under them (connect-layout.test.ts, the xs stack). */
+  grid-auto-rows: max-content;
   grid-template-areas: 'center';
-  /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
-     .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
+  /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolled — the shell rule on
+     .layout.single, .connect-shell and .connect itself all clipped or declared no overflow,
      and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
      floor and five auto rows stack beneath it, the rail panes and the bottom strip were
-     painted past the clip line with no path to them at all. Only this tier: the md/lg
-     grid is a bounded two-rail layout that must not gain a scrollbar. */
+     painted past the clip line with no path to them at all. (The host has scrolled since
+     2026-09-30, as the two-rail grid's deficit valve below the floor; this nearer scroller
+     keeps the stack scrolling inside the grid.) Only this tier: the md/lg grid never
+     scrolls itself. */
   overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
@@ -2104,6 +2172,130 @@ body.resizing-row {
   font-weight: 600;
   line-height: 1.35;
 }
+/* ---- STATE WORDS ON CONNECT, AND THE LIGHT THEMES ------------------------------------------------
+   A word that states a condition (a band's modelled state, a workability, a space-weather impact, a
+   need, a warning) is lettered in that state's colour. The colours were tuned as marks on the dark
+   theme; in every light theme they read 1.7–4.3:1 as lettering on the page colour Connect's panes sit
+   on, under the 4.5:1 floor. So the light themes take the provenance chip's treatment (and #382's):
+   the word in the theme's ink, the state on a border. Where the word's chip or row already has a
+   border in the state colour, that border carries it; a word without one is underlined in it, a line
+   gets a bar down its left edge, and the Space Wx caption keeps its colour on the gauge's bar just
+   above it. The dark themes are untouched. Every word is held to 4.5:1 in every theme, and its mark
+   to 3:1, by components/connect/ConnectStateWords.contrast.test.tsx. */
+
+/* Words whose state colour comes from their component as `--state-ink`, flagged `data-state-ink`: a
+   'mark' (a state) or 'recede' (the closed-band grey, which is no highlight: in every theme it is the
+   dim ink, unmarked, since as an underline it read 2.9:1 in the light themes and as lettering 4.47:1 in
+   the dark one). propViz.stateInkKind decides. */
+.ba-modeled[data-state-ink],
+.bbt-band[data-state-ink],
+.heatmap-band[data-state-ink],
+.swx-impact[data-state-ink] {
+  color: var(--state-ink);
+}
+[data-theme='light'] .ba-modeled[data-state-ink='mark'],
+[data-theme='light'] .bbt-band[data-state-ink='mark'],
+[data-theme='light'] .heatmap-band[data-state-ink='mark'],
+[data-theme='light'] .swx-impact[data-state-ink='mark'] {
+  color: var(--text);
+}
+.ba-modeled[data-state-ink='recede'],
+.bbt-band[data-state-ink='recede'],
+.heatmap-band[data-state-ink='recede'] {
+  color: var(--text-dim);
+}
+[data-theme='light'] .ba-modeled[data-state-ink='mark'],
+[data-theme='light'] .bbt-band[data-state-ink='mark'],
+[data-theme='light'] .heatmap-band[data-state-ink='mark'] > .heatmap-name {
+  text-decoration-line: underline;
+  text-decoration-color: var(--state-ink);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
+
+/* Words coloured by their class: the same, from the sheet. */
+[data-theme='light'] .cp-work.w-excellent,
+[data-theme='light'] .cp-work.w-good,
+[data-theme='light'] .cp-work.w-fair,
+[data-theme='light'] .amp-link,
+[data-theme='light'] .amp-link.amp-down {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
+[data-theme='light'] .cp-work.w-excellent,
+[data-theme='light'] .cp-work.w-good {
+  text-decoration-color: var(--band-open);
+}
+[data-theme='light'] .cp-work.w-fair {
+  text-decoration-color: var(--band-marginal);
+}
+[data-theme='light'] .amp-link {
+  text-decoration-color: var(--state-good);
+}
+[data-theme='light'] .amp-link.amp-down {
+  text-decoration-color: var(--alert-warning);
+}
+
+/* Lines: the bar down the left edge. The Kp storm line's own colour (then a fixed fallback orange, before
+   --state-warn was the theme's warning) read 1.7:1 even as a mark here, so its bar takes the theme's
+   warning colour. */
+[data-theme='light'] .kp-line.warn,
+[data-theme='light'] .kp-line.good,
+[data-theme='light'] .sat-stale,
+[data-theme='light'] .rotor-slewing,
+[data-theme='light'] .amp-fault.amp-alarm,
+[data-theme='light'] .amp-fault.amp-warn {
+  color: var(--text);
+  border-left: 3px solid var(--alert-warning);
+  padding-left: var(--space-2);
+}
+[data-theme='light'] .kp-line.good {
+  border-left-color: var(--state-good);
+}
+[data-theme='light'] .amp-fault.amp-alarm {
+  border-left-color: var(--state-weak);
+}
+
+/* Words whose chip or row already has a border in the state colour: the ink only. The Space Wx scale
+   chips' borders are fixed colours that read 1.9:1 (R) and 3.1:1 (G) on the light page, so they take
+   the theme's warning and critical colours. Satellite chips are Connect's own here; need chips take the
+   same treatment everywhere in the app (with the need chip's own rules). */
+[data-theme='light'] .cp-mode.good,
+[data-theme='light'] .cp-mode.fair,
+[data-theme='light'] .swsc-chip.swsc-minor,
+[data-theme='light'] .swsc-chip.swsc-major,
+[data-theme='light'] .chase-open.o-open,
+[data-theme='light'] .cfeed-ends,
+[data-theme='light'] .opening-band,
+[data-theme='light'] .getout-list .go-snr,
+[data-theme='light'] .getout-summary strong,
+[data-theme='light'] .connect .sat-chip.alive,
+[data-theme='light'] .connect .sat-chip.dead,
+[data-theme='light'] .connect .sat-chip.stale {
+  color: var(--text);
+}
+[data-theme='light'] .swsc-chip.swsc-minor {
+  border-color: var(--alert-warning);
+}
+[data-theme='light'] .swsc-chip.swsc-major {
+  border-color: var(--alert-critical);
+}
+/* Words lettered in the accent (operator, 2026-09-30: "Ink, accent as the mark"): the MUF in Band Outlook and the
+   path panel, Satellite Passes' next pass time and the scope's source badge. The accent was tuned as a mark, and
+   as lettering it reads 4.25:1 on the light page, under the 4.5:1 floor. In the light themes each takes the
+   theme's ink, with the accent kept as its underline. The badge is the spectrum's, on Connect's scope and in
+   Settings ▸ Audio alike (there it read 5.0:1 on the panel; it takes the same look). */
+[data-theme='light'] .connect-path .cp-muf strong,
+[data-theme='light'] .sat-when,
+[data-theme='light'] .mini-spectrum-src {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
 
 /* Settings ▸ Connections — credential presence + the rolling event log */
@@ -2189,18 +2381,15 @@ body.resizing-row {
 .conn-ev-name { color: var(--text-dim); min-width: 9ch; flex: none; }
 .conn-ev.ok .conn-ev-msg { color: var(--state-good); }
 .conn-ev.error .conn-ev-msg { color: var(--alert-critical, #e5484d); }
+.conn-ev.warn .conn-ev-msg { color: var(--state-warn); }
 .conn-ev.info .conn-ev-msg { color: var(--text); }
 
 /* DXpedition need chip + board filter + the DXpeditions section */
 .need-chip.need-dxped {
   background: color-mix(in srgb, #38bdf8 22%, transparent);
-  color: #38bdf8;
-  border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent);
 }
 .need-chip.need-state {
   background: color-mix(in srgb, var(--need-state) 20%, transparent);
-  color: var(--need-state);
-  border: 1px solid color-mix(in srgb, var(--need-state) 48%, transparent);
 }
 .np-filter {
   margin-left: 10px;
@@ -2878,6 +3067,14 @@ body.resizing-row {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
 }
+/* Light: the word in ink and the state on the border, as `.prop-prov` does and for the same reason
+   (ProvenanceChip.contrast.test.tsx). */
+[data-theme='light'] .map-prov.prov-live,
+[data-theme='light'] .map-prov.prov-cached,
+[data-theme='light'] .map-prov.prov-partial,
+[data-theme='light'] .map-prov.prov-offline {
+  color: var(--text);
+}
 /* Toolbar buttons that stand alone (not in a .map-proj segmented group): Reset, and the
    full-screen / Layers pair beside it. One look, one rule; only Reset takes the auto margin
    that pushes the trailing group to the right edge — repeating it on each of the three would
@@ -3095,7 +3292,15 @@ body.resizing-row {
   letter-spacing: 0.03em;
   color: var(--text-faint);
 }
-/* Band-condition strip — modelled colour pill + observed dot. */
+/* Band-condition strip — modelled colour pill + observed dot.
+   THE LETTERS ARE THE THEME'S INKS (#382). A row is a <button>, and a button draws its text in the
+   BROWSER's ink unless the sheet colours it: in 1.15.0 that followed the computer's light/dark, so
+   a light Windows drew black band names on the dark rail, and since the colour-scheme rule it is
+   still the browser's white or black, not --text (Night, High contrast and the themes ignored).
+   The pill's band colour (`--bc-color`, set per band by the component) is its tint and its edge,
+   never its letters: a word in the band colour on a tint of itself read 2.6–3.5:1 in the light
+   theme and 3.8:1 for "Closed" in the dark one. Guard: BandConditionStrip.test.tsx, every mode and
+   theme. */
 .band-cond {
   display: flex;
   flex-direction: column;
@@ -3110,6 +3315,7 @@ body.resizing-row {
   background: none;
   border: none;
   border-radius: var(--radius-sm);
+  color: var(--text);
   cursor: pointer;
   text-align: left;
 }
@@ -3128,9 +3334,17 @@ body.resizing-row {
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
   border-radius: 4px;
-  padding: 1px 6px;
+  /* One pixel less than before on every side: the edge takes it, so the pill's box is unchanged. */
+  padding: 0 5px;
   text-align: center;
   letter-spacing: 0.02em;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bc-color) 16%, transparent);
+  border: 1px solid var(--bc-color);
+}
+/* A closed band recedes: dim letters, still no red. */
+.bc-state.is-closed {
+  color: var(--text-dim);
 }
 .bc-dot {
   width: 8px;
@@ -3576,6 +3790,8 @@ body.resizing-row {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  --state-warn: var(--alert-warning);
+  --state-bad: var(--alert-critical);
   /* ASKED FOR, NOT YET CONFIRMED — the Remote optimistic dial and the confirming indicator on a
      control whose command is still out. De-emphasised ink rather than a colour of its own: the
      signal is "this is not the station's word yet", which is the same thing --text-dim says
@@ -3683,6 +3899,8 @@ body.resizing-row {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  --state-warn: var(--alert-warning);
+  --state-bad: var(--alert-critical);
   --state-pending: var(--text-dim);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
   /* The light --need-* inks do NOT live here — see the palette further down. */
@@ -5187,11 +5405,14 @@ body.resizing {
 }
 /* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
-   Same fix the detached window already applies. */
+   Same fix the detached window already applies. It is also the Connect view's deficit valve:
+   below the floor the grid's rows hold their floors (see .connect) and overflow the grid, and
+   this box scrolls to them. It clips where it always did, so nothing that fits moves or scrolls. */
 .layout.single:has(> .connect-shell) {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* Memories must flex-FILL too — under block+scroll `.memories-view { flex:1; min-height:0 }`
    is inert, `.mv-scroll` never becomes the scroller, and the table's sticky header anchors
@@ -6092,13 +6313,18 @@ select optgroup {
   color: var(--accent-ink);
   animation: pulse 0.9s ease-in-out infinite;
 }
+/* Every Stop TX reads in every theme (StopTx.contrast.test.tsx). The outline is the solid red (a
+   45 % mix was 1.61:1 on Lagoon's strip), the face is the page colour because the strips and the
+   log dialog are raised surfaces the red word cannot read on (3.64:1 on Lagoon's), and the hover
+   writes in the page colour on the red (white on the dark theme's red is 3.39:1). */
 .op-btn.stop {
   color: var(--state-weak);
-  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+  background: var(--bg);
+  border-color: var(--state-weak);
 }
 .op-btn.stop:hover {
   background: var(--state-weak);
-  color: #fff;
+  color: var(--bg);
 }
 
 /* ---- TX watchdog warning chip ---- */
@@ -6720,15 +6946,34 @@ select optgroup {
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
 }
+/* A NEED CHIP, WHEREVER IT SITS (Band Activity, the Call Roster, the station cards, the WATCH tile, the Needed
+   board, Spots, the Satellites section and Connect), IN EVERY THEME: the word in the theme's ink, the need on the
+   chip's tint and on its border at full strength. Lettered in its need colour on its own tint, the word read
+   mostly under the 4.5:1 floor, as low as 1.37:1 in the light theme (a DXPED chip) and 2.49:1 in the dark one
+   (NEW ONE on a watched station's row), in Chrome; the border, a mix of the colour, as low as 1.4:1. POTA and SOTA
+   take the theme's own colours (a fixed green and purple, set for the Needed board, overrode them in dark). On a
+   Band Activity row in its own need's colour the chip drops its tint (with the rows' rules).
+   NeedChip.contrast.test.tsx holds it on every host. */
 .need-chip {
   font-size: calc(10.5px * var(--text-scale));
   font-weight: 800;
   letter-spacing: 0.04em;
   border-radius: 999px;
   padding: 2px var(--space-2);
-  color: var(--need-color, var(--accent));
+  color: var(--text);
   background: color-mix(in srgb, var(--need-color, var(--accent)) 24%, transparent);
-  border: 1px solid color-mix(in srgb, var(--need-color, var(--accent)) 70%, transparent);
+  border: 1px solid var(--need-color, var(--accent));
+}
+/* AT NIGHT A CHIP'S OWN TINT IS 10 % OF ITS NEED COLOUR (operator, 2026-09-30: "10 % fill"). The night ink is dimmer
+   than the bright need colours, so the day's 24 % tint, stacked on a row that is need-tinted, selected or dimmed, took
+   a word as low as 3.31:1 (a POTA chip on a watched station's row); at 10 % every chip reads 4.44:1 or better at night,
+   none worse than it shipped. The border keeps the colour at full strength and the day look is unchanged. No need
+   colour moves, so the night block's contract holds (styles-night-contrast.test.ts). NeedChip.contrast.test.tsx
+   holds it. */
+[data-night='1'] .need-chip,
+[data-night='1'] .need-chip.need-dxped,
+[data-night='1'] .need-chip.need-state {
+  background: color-mix(in srgb, var(--need-color, var(--accent)) 10%, transparent);
 }
 .need-entity {
   --need-color: var(--need-entity);
@@ -8194,6 +8439,9 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--state-weak);
   font-weight: 800;
 }
+/* The outline is the solid red and the hover fills it under page-coloured words: a 50 % outline was
+   under 3:1 in every dark theme, and the 22 % hover fill took the word under 4.5:1
+   (StopTx.contrast.test.tsx). */
 .cw-abort,
 .cockpit-stoptx {
   padding: 6px var(--space-4);
@@ -8201,11 +8449,12 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 800;
   color: var(--state-weak);
   background: color-mix(in srgb, var(--state-weak) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--state-weak) 50%, transparent);
+  border: 1px solid var(--state-weak);
 }
 .cw-abort:hover,
 .cockpit-stoptx:hover {
-  background: color-mix(in srgb, var(--state-weak) 22%, transparent);
+  background: var(--state-weak);
+  color: var(--bg);
 }
 /* How far a REMOTE Stop has got, beside the button that sent it. `--state-weak` while it is only
    SENT (the station accepted it; the rig may still be keyed), `--state-good` once the station's own
@@ -14250,6 +14499,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
 }
+/* THE LEAD CHIP ON ITS OWN ROW (operator, 2026-09-30: "Chip drops its tint there"). A row tinted in a need's colour
+   leads with that need's chip. With the word in the ink, the chip's own tint stacked on the row's, and in the night
+   modes, whose ink is dimmer than the bright need colours, WATCH on a watched station's row read 3.12:1 in Chrome. So
+   on its own row the chip is an outline in the need colour, in every theme, and the row carries the tint; every other
+   chip keeps its own. NeedChip.contrast.test.tsx holds it. */
+.decode-row.need-watch .need-chip.need-watch,
+.decode-row.need-entity .need-chip.need-entity,
+.decode-row.need-zone .need-chip.need-zone,
+.decode-row.need-band .need-chip.need-band,
+.decode-row.need-mode .need-chip.need-mode,
+.decode-row.need-grid .need-chip.need-grid,
+.decode-row.need-state .need-chip.need-state,
+.decode-row.need-confirm .need-chip.need-confirm {
+  background: transparent;
+}
 /* Need micro-icon cluster trailing the message text. */
 .decode-needs {
   display: inline-flex;
@@ -15126,9 +15390,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 
 /* The destructive variant. Without this the Reset control renders IDENTICALLY to the "Back up"
    link beside it — same accent, same weight — which is the wrong affordance for the one action
-   in this block that cannot be undone. `--state-bad` is not defined by either theme; every other
-   use in this file supplies the same literal fallback, so this one does too rather than inventing
-   a token half the tree would not resolve. */
+   in this block that cannot be undone. It takes the sheet's red, the destructive colour, and not
+   `--state-bad`, which is the theme's critical alert colour. */
 .settings-linkbtn.danger {
   color: var(--state-weak);
 }
@@ -19377,6 +19640,22 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--text-faint) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
 }
+/* The row's badges in the light themes, as HUNT and the reference: NEW PARK (the accent on its own tint, 3.36:1) and
+   BAND OPEN (a fixed green on its own, 1.66:1, in Chrome) take the ink with their colour on their border at full
+   strength, BAND OPEN's being the theme's open-band colour. WORKED TODAY, a fact about the log and not a mark, takes the
+   dim ink in every theme (the faint one read 3.93:1 on its tint in the light theme, 4.47:1 in the dark one). Dark is
+   otherwise untouched. PotaSotaView.contrast.test.tsx holds them. */
+[data-theme='light'] .pota-view .pota-badge-new {
+  color: var(--text);
+  border-color: var(--accent);
+}
+[data-theme='light'] .pota-view .pota-badge-open {
+  color: var(--text);
+  border-color: var(--band-open);
+}
+.pota-view .pota-badge-worked {
+  color: var(--text-dim);
+}
 .pota-spot-line2 {
   display: flex;
   align-items: baseline;
@@ -19437,13 +19716,36 @@ button.cq-skiptx1.on {
 .pota-hunt-btn:active {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
 }
-
-/* need-chip colors for Pota/Sota NeedTags in the Needed board */
-.need-pota {
-  --need-color: #16a34a; /* forest green — parks */
+/* THE BOARD'S HUNT AND PARK REFERENCE IN THE LIGHT THEMES (operator, 2026-09-30: "Separate fix, every host"). Both
+   are lettered in the accent, which was tuned as a mark: as lettering the HUNT read 3.45:1 on its own tint (3.21:1 on
+   the hunted row) and the reference 4.25:1 on the row, in Chrome. In the light themes each takes the theme's ink and
+   keeps the accent: HUNT on its tint and on its border, now at full strength, and the reference as its underline. The
+   board is the same in the POTA / SOTA view, its pop-out and the Remote page. Program's Tune and Add buttons borrow the
+   HUNT look and take its rule too (4.01:1 on their tint, Chrome; ADDED's own is with Program's). The Hunting line above
+   the list letters the hunted park and call in the accent too (4.12:1 on its tint); they take the reference's look. Dark
+   is untouched, but for the hunted row (below). PotaSotaView.contrast.test.tsx holds it. */
+[data-theme='light'] .pota-hunt-btn {
+  color: var(--text);
+  border-color: var(--accent);
 }
-.need-sota {
-  --need-color: #9333ea; /* purple — summits */
+[data-theme='light'] .pota-view .pota-spot-ref,
+[data-theme='light'] .pota-view .pota-hunt-text strong {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
+/* THE HUNTED ROW, IN EVERY THEME (operator, 2026-09-30, "Fix both"). On the row's accent tint the frequency line, in the
+   faint ink, read 3.64:1 in the dark theme and 4.40:1 on the paper one, and HUNT, the accent on its own tint over the
+   row's, 4.20:1 on Slate (Chrome). Both take the theme's ink; HUNT keeps the accent on its border at full strength, as
+   in the light themes. The rest of the board's dark look is unchanged. */
+.pota-view .pota-spot-v2.selected .pota-hunt-btn {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.pota-view .pota-spot-v2.selected .pota-spot-meta {
+  color: var(--text);
 }
 
 /* spin animation for the refresh button loading state */
@@ -22264,6 +22566,8 @@ button.sat-chip:disabled {
   grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto auto;
   align-items: center;
   gap: var(--space-2);
+  /* The source line (and a disagreement) sit tight under the row they describe. */
+  row-gap: 0;
   padding: 3px var(--space-2);
   font-size: 0.8rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
@@ -22292,6 +22596,39 @@ button.sat-chip:disabled {
   color: var(--state-weak);
   border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
 }
+/* A machine its directories disagree about: a caution, in the warning hue. */
+.rp-differ-badge {
+  color: var(--state-warn);
+  border-color: color-mix(in srgb, var(--state-warn) 45%, transparent);
+}
+/* Under each row, across all its columns: the directories it came from with their date, and,
+   on a machine they disagree about, what each listed. */
+.rp-src,
+.rp-differ {
+  grid-column: 1 / -1;
+  font-size: var(--fs-micro);
+  line-height: 1.3;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.rp-differ {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  color: var(--state-warn);
+}
+/* In the light themes the warning hue is under 4.5:1 as small lettering (#a76d00 on the list's
+   #fbfcfe is 4.2:1), so the words take the ink and the badge keeps the hue on its border. */
+[data-theme='light'] .rp-differ,
+[data-theme='light'] .rp-differ-badge {
+  color: var(--text);
+}
+[data-theme='light'] .rp-differ-badge {
+  border-color: var(--state-warn);
+}
+.rp-stamp-list + .rp-stamp-list {
+  margin-left: var(--space-2);
+}
 .rp-actions {
   justify-self: end;
   display: inline-flex;
@@ -22300,6 +22637,13 @@ button.sat-chip:disabled {
 .rp-add.added {
   color: var(--state-good);
   border-color: color-mix(in srgb, var(--state-good) 50%, transparent);
+}
+/* In the light themes ADDED takes the HUNT look's rule (its green on the accent tint read 3.90:1 on the paper theme and
+   4.01:1 on the standard one, Chrome), with its green kept on its border at full strength. PotaSotaView.contrast.test.tsx
+   holds it. */
+[data-theme='light'] .rp-add.added {
+  color: var(--text);
+  border-color: var(--state-good);
 }
 /* ★ a machine straight into Memories favorites — same affordance as the
    Memories row star (.mv-star), so one star means one thing app-wide. */
@@ -24499,8 +24843,11 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   padding: 6px var(--space-5);
 }
+/* Live, it sits on the page colour: the TX bar is a raised surface, and the red word on it was
+   4.16:1 on Lagoon's (StopTx.contrast.test.tsx). */
 .sstv-tx-stop:not(:disabled) {
   color: var(--state-weak);
+  background: var(--bg);
   border-color: var(--state-weak);
 }
 .sstv-tx-stop:disabled {
@@ -25317,6 +25664,13 @@ tr.sel .aprs-sym {
   color: #0d1117;
   cursor: pointer;
   white-space: nowrap;
+}
+/* The light themes darken the accent so that white reads on it (--accent-ink), and the near-black
+   above read 2.1–3.7:1 there; the dark themes keep it (7.2:1 and up, 4.97:1 under violet at night).
+   Not a disabled button: that one is transparent and takes the banner's ink
+   (UpdateBanner.contrast.test.tsx). */
+[data-theme='light'] .update-install:not(:disabled) {
+  color: var(--accent-ink);
 }
 .update-install:hover:not(:disabled) { filter: brightness(1.1); }
 .update-install:disabled { opacity: 0.55; cursor: not-allowed; background: transparent; color: inherit; }

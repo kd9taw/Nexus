@@ -382,8 +382,9 @@ impl<'a> KeyboardLatch<'a> {
     /// Every gate the caller checked before the operator was allowed to key is
     /// re-checked here before every chunk, because a latch outlives the moment it
     /// was granted and the gates do not. Each failure DROPS THE LATCH (not merely
-    /// the feed) and unkeys — the queued-over path's equivalent gate merely HOLDS
-    /// its queue, and holding is not an option for a transmitter already keyed.
+    /// the feed) and unkeys — the queued-over path's equivalent gate HOLDS its
+    /// queue while a tune owns the rig (leaving the section drops it), and holding
+    /// is not an option for a transmitter already keyed.
     ///
     /// GATE-FOR-GATE, in evaluation order, and the order is part of the contract
     /// (the watchdog's clock must not be started by a tick that a gate or the

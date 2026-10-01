@@ -9,13 +9,17 @@
 # (the same Linux/WSL2 cross toolchain, with --bundles nsis) — see WINDOWS.md.
 # Published Windows binaries are cross-compiled beta and are not bundled here.
 #
-# Toolchain: the Rust jobs pin an exact stable (dtolnay/rust-toolchain@master with
+# Toolchain: the Rust jobs pin an exact stable (dtolnay/rust-toolchain with
 # toolchain: 1.93.1) instead of floating @stable. A floating stable silently rolls
 # rustfmt/clippy forward and reformats/re-lints the whole tree the day a new Rust
 # ships — which is exactly what bit this repo. Bump the version below deliberately
 # to adopt newer lints. The MSRV job intentionally stays pinned at 1.91.0
 # (raised from 1.87 when the RUSTSEC-2026-0217 fix moved deepcw to tract 0.23,
 # whose own rust-version is 1.91 — a security bump outranks MSRV stability).
+# The action is pinned to a commit of its master branch, the one release.yml uses, and so is every
+# other action here from outside GitHub's own: a branch or a tag is whatever that repository holds
+# the day the job runs. scripts/release-secrets.test.mjs refuses an action that is not, and a
+# download with no checksum, here as in release.yml.
 
 name: CI
 
@@ -98,7 +102,7 @@ jobs:
 
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
@@ -221,7 +225,7 @@ jobs:
 
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
@@ -314,7 +318,7 @@ jobs:
 
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
@@ -587,6 +591,16 @@ jobs:
       - name: scripts/gates still derives the gate list from this workflow
         run: node --test scripts/gates.test.mjs
 
+      # release.yml keeps every secret out of the jobs that build or run third-party code
+      # (FFTW, Hamlib, npm, crates.io, the AppImage tooling), signs the Windows and Linux
+      # installers in a job that builds nothing, and pins everything it downloads to build with, as
+      # this file and scripts/Dockerfile.pi pin theirs.
+      # A release exercises that once, in public, so it is read here on every commit instead, by a
+      # test that plants its own violations to prove it can still see one. Same argument as the
+      # suites around it: a tool whose only trigger is somebody remembering is not a gate.
+      - name: release.yml keeps its secrets out of the third-party builds, and the release and CI pin their downloads
+        run: node --test scripts/release-secrets.test.mjs
+
       # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
       # project that is mechanism rather than prose — wrong-remote, release-tag, identity, the
       # per-commit content scrub and the licence/NOTICE guard — and `.githooks/pre-push.test.sh`
@@ -669,7 +683,8 @@ jobs:
   # so this gate is not hypothetical.
   manual-epub:
     name: Manual EPUB validates (epubcheck)
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, as release.yml's manual job: the pillow pin below is the wheel for its CPython 3.12.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Tools (pandoc + pillow; Java is preinstalled)
@@ -677,7 +692,14 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends pandoc
-          python3 -m pip install --quiet pillow
+          # pillow: WebP→PNG for the EPUB. The exact version, a wheel only, and the sha256 PyPI publishes
+          # for the one file pip may pick here (CPython 3.12, x86_64), as release.yml's manual job
+          # installs it. To move it, take the new version's hash for the same wheel tag from
+          # https://pypi.org/pypi/pillow/<version>/json. pip reads it from stdin so that this step
+          # stays install commands only, which scripts/gates reads as setup, not as a gate.
+          python3 -m pip install --quiet --only-binary=:all: --require-hashes -r /dev/stdin <<'EOF'
+          pillow==12.3.0 --hash=sha256:78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91
+          EOF
       - name: Build the EPUB
         run: |
           set -euo pipefail
@@ -687,7 +709,11 @@ jobs:
         run: |
           set -euo pipefail
           EC=5.3.0
+          # The zip's sha256, as release.yml's manual job checks it (where its second source is noted).
+          # Move EC and this line together.
+          EC_SHA256=6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5
           curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EC}/epubcheck-${EC}.zip" -o /tmp/ec.zip
+          echo "$EC_SHA256  /tmp/ec.zip" | sha256sum -c -
           python3 -c "import zipfile; zipfile.ZipFile('/tmp/ec.zip').extractall('/tmp')"
           java -jar "/tmp/epubcheck-${EC}/epubcheck.jar" /tmp/Nexus-Manual.epub
 
@@ -710,7 +736,9 @@ jobs:
             gfortran libfftw3-dev libboost-dev cmake ninja-build pkg-config libssl-dev
 
       - name: Set up Rust 1.91 toolchain
-        uses: dtolnay/rust-toolchain@1.91.0
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.91.0
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v6
@@ -738,7 +766,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25  # v2, 2026-07-13
         with:
           command: check advisories bans sources licenses
 
@@ -749,7 +777,7 @@ jobs:
       # set than shipped (45 divergences measured). Do NOT "fix" this by making
       # src-tauri a workspace member; it needs a WebView toolchain Linux lacks.
       - name: cargo-deny (src-tauri lockfile)
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25  # v2, 2026-07-13
         with:
           command: check advisories bans sources licenses
           manifest-path: src-tauri/Cargo.toml
@@ -810,7 +838,7 @@ jobs:
       # onto that stack, silently, because cargo unifies features. The script header has the
       # measurement. cargo tree needs a toolchain, which cargo-deny's container does not give.
       - name: Set up Rust 1.93.1 toolchain (pinned — for cargo tree in the next step)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
 
@@ -855,7 +883,7 @@ jobs:
           node-version: 24
 
       - name: Set up Rust 1.93.1 toolchain (pinned) + windows-gnu target
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           targets: x86_64-pc-windows-gnu
@@ -959,7 +987,7 @@ jobs:
         run: |
           brew install cmake ninja gcc fftw boost
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           targets: aarch64-apple-darwin
@@ -1122,7 +1150,7 @@ jobs:
             webkit2gtk-driver xvfb dbus
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
 
@@ -1147,7 +1175,7 @@ jobs:
           --features radio,custom-protocol
 
       - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
+        run: cargo install tauri-driver --version "=2.1.0" --locked
 
       - name: Run the smoke flows
         run: |

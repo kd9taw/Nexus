@@ -241,7 +241,7 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   is latched), Tune, Esc (a window `keydown` bound only while RTTY is the visible view), the TX-enable
   latch and the sequencer's Abort (rendered only while auto runs); PSK — Stop TX, the dock's Esc/Stop
   macro (RTTY's shape and predicate), Tune, Esc (bound only while PSK is visible), the TX-enable
-  latch; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch.
+  latch; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch; APRS — the TX-enable latch (TX On/Off).
   **Tune reached RTTY and PSK on 2026-08-20**, with the RF-power slider it exists to set — the two
   keyboard cockpits had been shipping without the header's own declared base controls (power, Tune,
   ATU), which is the discoverability defect the triage found in a different form ("the ATU button is
@@ -259,12 +259,15 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   S&P are NOT stop controls and were removed from this list:** `set_tx_enabled` deliberately does not
   arm `slot_tx_abort` (operator 2026-07-31 — the FT over in flight completes; the button's own tooltip
   says so), and `onSetMode('qso-monitor')` ends the CQ run and drops the queue without arming anything.
-  **The latch is a stop in RTTY and SSTV only:** there `set_tx_enabled(false)` arms `rtty_abort` /
-  `sstv_abort`, which the audio loop turns into flush + unkey while an over is keying, and it stays a
-  *button* through those overs because `radio.transmitting` is the slot-TX indicator alone. APRS is a
-  seventh cockpit with no vocabulary at all, so the rule holds by construction — and it renders no stop
-  control; its TX On/Off is an arm latch that only holds the queue. The TopBar's TX cluster backstops
-  none of them — App hides it in Operate and in Phone/CW/RTTY/PSK/SSTV/APRS — so each cockpit stands on
+  **The latch is a stop in RTTY, PSK, SSTV and APRS:** in the first three `set_tx_enabled(false)` arms
+  `rtty_abort` / `psk_abort` / `sstv_abort`, which the audio loop turns into flush + unkey while an over
+  is keying, and it stays a *button* through those overs because `radio.transmitting` is the slot-TX
+  indicator alone. APRS arms no abort: its TX Off stops a beacon on the air through the loop's TX-off
+  cut (`tx_off_cut`, the unkey + flush of a non-slot over when the latch goes down; measured
+  2026-09-30), and drops what is still queued. APRS is a seventh cockpit with no vocabulary at all, so
+  the rule holds by construction, and that latch is its stop control.
+  The TopBar's TX cluster backstops none of them — App hides it in Operate and in
+  Phone/CW/RTTY/PSK/SSTV/APRS — so each cockpit stands on
   its own. **The sweeps do not match this census one for one** (the claim that they did was false for
   four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop
   TX/Esc-Stop macro/Tune/latch, PSK's Stop TX/Esc-Stop macro/Tune/latch and SSTV's Stop/latch (the one

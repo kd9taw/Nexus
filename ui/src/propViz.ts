@@ -22,6 +22,7 @@ import type {
   MapSpot,
   NeedKind,
   SatView,
+  SolarWind,
   TrendDir,
 } from './types'
 
@@ -54,6 +55,16 @@ export function tierVar(tier: ActivityTier): string {
     default: // Closed
       return 'var(--text-faint)' // faint — recedes
   }
+}
+
+/** How the sheet letters a word in a colour from these helpers (its `data-state-ink`). A STATE colour
+ *  is a 'mark': the light themes letter the word in the theme's ink and underline it in the colour.
+ *  The closed-band grey 'recede's: the light themes letter it in the dim ink, unmarked (a closed band is
+ *  not a highlight). One of the theme's own text inks is neither (null): the word keeps it as a plain
+ *  colour in every theme. */
+export function stateInkKind(v: string): 'mark' | 'recede' | null {
+  if (/^var\(--text(-dim|-faint)?\)$/.test(v)) return null
+  return v === 'var(--band-closed)' ? 'recede' : 'mark'
 }
 
 const NEED_ROLE: Record<NeedKind, keyof typeof STATUS> = {
@@ -174,6 +185,16 @@ export function bzImpact(bz: number): Impact {
   if (bz <= -10) return { sev: 'warn', text: t('prop.impact.bz.hardSouth') }
   if (bz <= -5) return { sev: 'warn', text: t('prop.impact.bz.south') }
   return { sev: 'quiet', text: t('prop.impact.bz.neutral') }
+}
+/** How long a solar-wind sample speaks for "now" — the station's own threshold (SOLAR_WIND_STALE_SECS
+ * in crates/propagation/src/solar_wind.rs; propViz.solarWind.test.ts reads it out of that file). Past
+ * it the insight feed stops speaking from the sample and the gauges say how old the reading is. */
+export const SOLAR_WIND_STALE_SECS = 30 * 60
+/** How old a solar-wind sample is at `nowMs`, in whole seconds (never negative), or null when the
+ * station did not date it — an older station's, whose age cannot be known, so nothing is claimed. */
+export function solarWindAgeSecs(sw: SolarWind, nowMs: number): number | null {
+  if (sw.timeUnix == null) return null
+  return Math.max(0, Math.floor(nowMs / 1000 - sw.timeUnix))
 }
 /** A-index (24 h average of geomagnetic activity — the day's character, where Kp is
  * the last 3 h). NOAA scale: <8 quiet · 8–15 unsettled · 16–29 active · 30+ storm. */

@@ -156,6 +156,10 @@ const SETTINGS_KEYS: &[&str] = &[
     "sstvDefaultTxMode",
     "sstvTxPowerPct",
     "wheelTuneSensitivity",
+    // The JS8 cockpit's Stations list ages calls by it, on the Remote as at the station.
+    "js8CallsignAgingMin",
+    // …and its Band activity pane ages rows by this one.
+    "js8ActivityAgingMin",
     "specialOp",
 ];
 fn settings_view(settings: &tempo_app::settings::Settings) -> Result<Value, &'static str> {
@@ -261,6 +265,9 @@ impl Publisher {
                 Command::Sstv => {
                     super::sstv::preflight(&eng)?;
                     let mut state = crate::sstv_state_dto(&eng);
+                    // The desktop's drop notice stays on the desktop: the hosted page reads this
+                    // sample against an exact key list, and one key it lacks refuses the sample.
+                    state.tx_notice = None;
                     let class = eng.settings().license_class;
                     let captured_at_ms = super::now_ms();
                     drop(eng);
@@ -314,6 +321,10 @@ impl Publisher {
                     let pending_key = eng.pending_qso_log_key();
                     drop(eng);
                     serde_json::to_value(snapshot).map(|mut value| {
+                        // Paths on this computer, and the remedy is at this computer.
+                        if let Some(fields) = value.as_object_mut() {
+                            fields.remove("keptFiles");
+                        }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
                         value["currentQsoLogKey"] = serde_json::json!(current_key);
@@ -606,6 +617,107 @@ mod tests {
         assert_eq!(serde_json::to_value(engine.settings()).unwrap(), settings);
         assert!(!engine.snapshot().radio.tx_enabled);
     }
+    /// The desktop's SSTV drop notice never reaches the hosted page. `remote-web/sstv.ts` reads
+    /// this sample against an exact key list and refuses one with a key it lacks, so while a
+    /// notice stands on the desktop the sample's keys must still be exactly the page's.
+    #[test]
+    fn the_sstv_sample_keeps_the_pages_exact_keys_while_a_drop_notice_stands() {
+        use std::sync::{Arc, Mutex};
+        let mut engine = tempo_app::engine::Engine::with_settings(Default::default());
+        engine.set_license_class("extra");
+        engine.set_frequency(14.290, "20m", "USB");
+        engine.set_operating_mode("phone", false);
+        engine
+            .sstv_send(vec![0.0; 24_000], "PD-120".into())
+            .expect("scene guard: the picture is accepted");
+        engine.set_frequency(14.050, "20m", "USB");
+        assert!(
+            engine.poll_sstv_tx().is_none(),
+            "scene guard: refused outside the privileges"
+        );
+        let local = serde_json::to_value(crate::sstv_state_dto(&engine)).unwrap();
+        assert!(
+            local["txNotice"].is_string(),
+            "scene guard: the desktop is told why"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Sstv, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        let mut keys: Vec<&str> = reply["data"]["state"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        let mut page = vec![
+            "armed",
+            "mode",
+            "linesDone",
+            "linesTotal",
+            "previewRgbBase64",
+            "previewWidth",
+            "previewHeight",
+            "hedrShiftHz",
+            "gallery",
+            "health",
+            "sending",
+            "txMode",
+            "txProgress",
+            "txElapsedSecs",
+            "txTotalSecs",
+        ];
+        page.sort_unstable();
+        assert_eq!(
+            keys, page,
+            "the Remote sample's keys are not exactly the page's"
+        );
+    }
+    /// A file the station could not read and kept is said on the station's own screen, never
+    /// through the Remote: its path is this computer's, and what to do about it is here.
+    #[test]
+    fn a_kept_files_path_never_reaches_the_remote() {
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-kept-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pending_qso.json");
+        std::fs::write(&path, b"{ torn").unwrap();
+        tempo_core::keep_aside::keep_aside("pendingQso", &path, 1_790_778_153, "torn");
+        let where_kept = dir.to_string_lossy().into_owned();
+        let engine = tempo_app::engine::Engine::with_settings(Default::default());
+        assert!(
+            engine
+                .snapshot()
+                .kept_files
+                .iter()
+                .any(|k| k.path.starts_with(&where_kept)),
+            "control: the station's own snapshot carries it"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("keptFiles").is_none(),
+            "the Remote's snapshot carries no kept files"
+        );
+        assert!(
+            !data.contains(&where_kept),
+            "no path of this computer's reaches the Remote"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {
         use std::sync::{Arc, Mutex};
@@ -830,6 +942,29 @@ mod tests {
         let view = settings_view(&settings).unwrap();
         assert_eq!(view["activeRadio"], 7);
         assert!(view.get("radios").is_none());
+    }
+
+    /// The Remote's JS8 cockpit ages its Stations list by the station's own callsign aging, so
+    /// the live view carries it. A station from before the setting sends none, which the page
+    /// reads as off, what that station does.
+    #[test]
+    fn the_live_view_carries_the_js8_callsign_aging() {
+        let settings = tempo_app::settings::Settings {
+            js8_callsign_aging_min: 10,
+            ..Default::default()
+        };
+        assert_eq!(settings_view(&settings).unwrap()["js8CallsignAgingMin"], 10);
+    }
+
+    /// …and its Band activity pane by the station's band-activity aging. A station from before
+    /// the setting sends none, which the page reads as off: that station ages no row.
+    #[test]
+    fn the_live_view_carries_the_js8_activity_aging() {
+        let settings = tempo_app::settings::Settings {
+            js8_activity_aging_min: 5,
+            ..Default::default()
+        };
+        assert_eq!(settings_view(&settings).unwrap()["js8ActivityAgingMin"], 5);
     }
 
     #[test]

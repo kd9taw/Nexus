@@ -97,7 +97,9 @@ pane or a width and the menu reads Custom. Over an arrangement of your own the m
 says that a pick replaces it, and **Undo** puts it back, widths included. The panes a
 layout closes stay in their slots, so ticking one in the menu brings back what the
 layout parked there. On a smaller window the columns narrow to fit (the map keeps
-its 280 px minimum). A layout never changes the map's own settings: the Globe, 3D,
+its 280 px minimum). With a large zoom on a smaller screen every pane keeps its title
+bar, with its picker and ✕, in view, and when even that does not fit, Connect scrolls.
+A layout never changes the map's own settings: the Globe, 3D,
 Flat or Beam pick, the layers and the colouring stay as you left them for each intent.
 
 The panes you can assign:
@@ -122,7 +124,7 @@ The panes you can assign:
 | Sporadic-E | live VHF Es openings when present |
 | Measured MUF | real ionosonde MUF measurements |
 | Satellite Passes | next amateur-satellite passes over your grid |
-| Rotor | rotator control + compass (appears once a rotctld is configured) |
+| Rotor | rotator control + compass, and the elevation on an az/el rotator (appears once a rotctld is configured) |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
 
 The default layout puts the conditions reference on the left, the flagship

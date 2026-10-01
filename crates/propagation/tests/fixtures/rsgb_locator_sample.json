@@ -1,0 +1,370 @@
+{
+ "data": [
+  {
+   "id": 4808,
+   "fac": true,
+   "type": "DM",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "WAKEFIELD",
+   "modeCodes": [
+    "A"
+   ],
+   "tx": 430812500,
+   "repeater": "GB3BW",
+   "rx": 438412500,
+   "ctcss": 88.5,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO93HO",
+   "dbwErp": 10,
+   "extraDetails": {
+    "ngr": "SE3813",
+    "antennaHeight": 10,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 1031,
+   "fac": true,
+   "type": "AV",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "WORKSOP",
+   "modeCodes": [
+    "A"
+   ],
+   "tx": 430925000,
+   "repeater": "GB3XN",
+   "rx": 438525000,
+   "ctcss": 71.9,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO93KJ",
+   "dbwErp": 14,
+   "extraDetails": {
+    "ngr": "SK5886",
+    "antennaHeight": 16,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 6863,
+   "fac": true,
+   "type": "DM",
+   "status": "NOT OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "SHIPLEY",
+   "modeCodes": [
+    "A",
+    "M:1"
+   ],
+   "tx": 430887500,
+   "repeater": "GB3XL",
+   "rx": 438487500,
+   "ctcss": 82.5,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO93CT",
+   "dbwErp": 11.1,
+   "extraDetails": {
+    "ngr": "SE1536",
+    "antennaHeight": 10,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 4356,
+   "fac": true,
+   "type": "DM",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "PRESTON",
+   "modeCodes": [
+    "A",
+    "M:10",
+    "F"
+   ],
+   "tx": 433375000,
+   "repeater": "GB3PP",
+   "rx": 434975000,
+   "ctcss": 82.5,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO83",
+   "dbwErp": 10,
+   "extraDetails": {
+    "ngr": "SD5627",
+    "antennaHeight": 0,
+    "polarisation": ""
+   }
+  },
+  {
+   "id": 2437,
+   "fac": true,
+   "type": "AV",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "NORTHWICH",
+   "modeCodes": [
+    "A"
+   ],
+   "tx": 433175000,
+   "repeater": "GB7SJ",
+   "rx": 434775000,
+   "ctcss": 103.5,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO83RF",
+   "dbwErp": 10,
+   "extraDetails": {
+    "ngr": "SJ6569",
+    "antennaHeight": 6,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 744,
+   "fac": true,
+   "type": "AV",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "CAERGWRLE",
+   "modeCodes": [
+    "A"
+   ],
+   "tx": 433150000,
+   "repeater": "GB3CR",
+   "rx": 434750000,
+   "ctcss": 110.9,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO83",
+   "dbwErp": 14,
+   "extraDetails": {
+    "ngr": "SJ2957",
+    "antennaHeight": 0,
+    "polarisation": ""
+   }
+  },
+  {
+   "id": 2293,
+   "fac": false,
+   "type": "DM",
+   "status": "REDUCED OUTPUT",
+   "keeperCallsign": "",
+   "town": "DISLEY",
+   "modeCodes": [
+    "A",
+    "F"
+   ],
+   "tx": 145650000,
+   "repeater": "GB3MN",
+   "rx": 145050000,
+   "ctcss": 82.5,
+   "txbw": 12.5,
+   "band": "2M",
+   "locator": "IO83XH",
+   "dbwErp": 13,
+   "extraDetails": {
+    "ngr": "SJ9781",
+    "antennaHeight": 7,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 207,
+   "fac": true,
+   "type": "DM",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "SOUTHPORT",
+   "modeCodes": [
+    "A",
+    "F"
+   ],
+   "tx": 145612500,
+   "repeater": "GB3OA",
+   "rx": 145012500,
+   "ctcss": 82.5,
+   "txbw": 12.5,
+   "band": "2M",
+   "locator": "IO83LP",
+   "dbwErp": 10,
+   "extraDetails": {
+    "ngr": "SD3341",
+    "antennaHeight": 20,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 6531,
+   "fac": true,
+   "type": "DG",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "CHORLEY",
+   "modeCodes": [
+    "M"
+   ],
+   "tx": 431137500,
+   "repeater": "MB6JB",
+   "rx": 431137500,
+   "ctcss": 0,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO83QP",
+   "dbwErp": 7,
+   "extraDetails": {
+    "ngr": "SD5918",
+    "antennaHeight": 10,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 355,
+   "fac": true,
+   "type": "AG",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "OLDHAM",
+   "modeCodes": [
+    "A"
+   ],
+   "tx": 430012500,
+   "repeater": "MB7IGF",
+   "rx": 430012500,
+   "ctcss": 82.5,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO83XM",
+   "dbwErp": 7,
+   "extraDetails": {
+    "ngr": "SD9904",
+    "antennaHeight": 6,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 3515,
+   "fac": true,
+   "type": "AG",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "CARRICKFERGUS",
+   "modeCodes": [
+    "A"
+   ],
+   "tx": 145337500,
+   "repeater": "MB7INI",
+   "rx": 145337500,
+   "ctcss": 77,
+   "txbw": 12.5,
+   "band": "2M",
+   "locator": "IO74",
+   "dbwErp": 7,
+   "extraDetails": {
+    "ngr": "IJ3988",
+    "antennaHeight": 0,
+    "polarisation": ""
+   }
+  },
+  {
+   "id": 990,
+   "fac": true,
+   "type": "TV",
+   "status": "NOT OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "STOKE ON TRENT",
+   "modeCodes": [
+    "T"
+   ],
+   "tx": 1318500000,
+   "repeater": "GB3UD",
+   "rx": 1249000000,
+   "ctcss": 0,
+   "txbw": 600,
+   "band": "23CM",
+   "locator": "IO83VC",
+   "dbwErp": 10,
+   "extraDetails": {
+    "ngr": "SJ8557",
+    "antennaHeight": 0,
+    "polarisation": "H"
+   }
+  },
+  {
+   "id": 4612,
+   "fac": true,
+   "type": "PX",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "WEST KIRBY",
+   "modeCodes": [
+    "X"
+   ],
+   "tx": 144950000,
+   "repeater": "GB7VAX",
+   "rx": 144950000,
+   "ctcss": 0,
+   "txbw": 12.5,
+   "band": "2M",
+   "locator": "IO83JJ",
+   "dbwErp": 14,
+   "extraDetails": {
+    "ngr": "SJ2287",
+    "antennaHeight": 5,
+    "polarisation": "V"
+   }
+  },
+  {
+   "id": 5600,
+   "fac": true,
+   "type": "RL",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "NORTHWICH",
+   "modeCodes": [
+    "A",
+    "F"
+   ],
+   "tx": 438050000,
+   "repeater": "GB7DZ-L",
+   "rx": 433050000,
+   "ctcss": 103.5,
+   "txbw": 12.5,
+   "band": "70CM",
+   "locator": "IO83",
+   "dbwErp": 7,
+   "extraDetails": {
+    "ngr": "SJ6570",
+    "antennaHeight": 0,
+    "polarisation": ""
+   }
+  },
+  {
+   "id": 5190,
+   "fac": true,
+   "type": "DV",
+   "status": "OPERATIONAL",
+   "keeperCallsign": "",
+   "town": "LONGRIDGE",
+   "modeCodes": [
+    "E"
+   ],
+   "tx": 434050000,
+   "repeater": "GB7PR",
+   "rx": 434050000,
+   "ctcss": 0,
+   "txbw": 25,
+   "band": "70CM",
+   "locator": "IO83RU",
+   "dbwErp": 9.5,
+   "extraDetails": {
+    "ngr": "SD6238",
+    "antennaHeight": 3,
+    "polarisation": "H"
+   }
+  }
+ ]
+}

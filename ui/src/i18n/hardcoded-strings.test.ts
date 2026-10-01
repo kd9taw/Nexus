@@ -499,6 +499,9 @@ const MIGRATED = [
   // Parsec presence mode's words (the Settings readout, the status-lane stop report) — migrated
   // from birth. The station sends tokens; every sentence is here, from the catalog.
   'features/parsecPresence.ts',
+  // The words for a file the station could not read and kept — migrated from birth. The station
+  // sends a store token and a path; every sentence is here, from the catalog.
+  'features/keptFiles.ts',
 ]
 
 /**
@@ -546,9 +549,9 @@ const MIGRATED = [
  *
  * `AprsCockpit.tsx` (batch 14, 2026-08-19) is here for exactly that reason and no other:
  * every string in it is migrated except the TX On/Off ARM LATCH — its label and its two
- * tooltips. APRS renders no stop control at all (the latch only holds the queue, so it is on
- * no cockpit's stop-line census), but the latch is still a transmit-path control, and those
- * move with the sweeps. It graduates the moment that batch lands.
+ * tooltips. That latch is APRS's one stop control (turning it off stops a beacon on the air and
+ * drops what is still queued), a transmit-path control, and those move with the sweeps. It
+ * graduates the moment that batch lands.
  *
  * `OperateQsoStrip.tsx` (batch 18, 2026-08-19) is here on the same narrow ruling, for FOUR
  * controls: STOP TX and TUNE — Operate's stop-line census, and Stop TX is the only control in

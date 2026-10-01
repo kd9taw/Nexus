@@ -634,6 +634,10 @@ struct Shared {
     /// ([`LogWriter::hold_looks`]).
     #[cfg(test)]
     looks: LookHold,
+    /// A test's hold on the writer's thread before it does anything, as a thread the system
+    /// starts late would be ([`LogWriter::start_held`]).
+    #[cfg(test)]
+    start: LookHold,
 }
 
 /// Tests only: a hold on the writer's look at other processes' commits, at the moment it has seen
@@ -775,15 +779,47 @@ impl LogWriter {
     /// If the thread cannot be spawned the database is dropped and every submission fails
     /// loudly — rather than the alternative, which is writing inline on the caller's thread
     /// and putting the disk back under the Engine lock.
+    ///
+    /// Counting other processes' commits starts HERE, however late the thread runs: every commit
+    /// another process makes after this returns is counted ([`Baseline`], read before the thread
+    /// is started).
     pub fn start(db: LogDb) -> LogWriter {
+        let baseline = Baseline::of(&db);
+        Self::start_from(db, baseline)
+    }
+
+    /// [`Self::start`], counting other processes' commits from `baseline`, which the caller read
+    /// on `db` itself ([`Baseline::of`]): a window that read the log on this connection before
+    /// the writer took it over, and must hear of every commit that read did not hold.
+    pub fn start_from(db: LogDb, baseline: Baseline) -> LogWriter {
+        Self::start_sharing(db, baseline, Arc::new(Shared::default()))
+    }
+
+    /// Tests only: [`Self::start`], with the writer's thread held before it does anything until
+    /// [`Self::held_start`]'s value is dropped — the thread of a writer the system starts late.
+    #[cfg(test)]
+    fn start_held(db: LogDb) -> LogWriter {
+        let baseline = Baseline::of(&db);
+        let shared = Arc::new(Shared::default());
+        lock(&shared.start.state).0 = true;
+        Self::start_sharing(db, baseline, shared)
+    }
+
+    /// Tests only: the hold [`Self::start_held`] put on the writer's thread; dropping it lets the
+    /// thread run.
+    #[cfg(test)]
+    fn held_start(&self) -> HeldLooks<'_> {
+        HeldLooks(&self.shared.start)
+    }
+
+    fn start_sharing(db: LogDb, baseline: Baseline, shared: Arc<Shared>) -> LogWriter {
         let (tx, rx) = channel::<Msg>();
         let (gone_tx, gone) = channel::<Gone>();
-        let shared = Arc::new(Shared::default());
         let thread = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("nexus-logdb".into())
-                .spawn(move || pump(db, &rx, &gone, &shared))
+                .spawn(move || pump(db, baseline, &rx, &gone, &shared))
                 .ok()
         };
         let live = thread.is_some();
@@ -1288,6 +1324,35 @@ struct IndexSeq {
     own: u64,
 }
 
+/// Where a writer starts counting other processes' commits from ([`LogWriter::foreign_commits`],
+/// [`LogWriter::foreign_index_moves`]): the connection's `PRAGMA data_version` and the shared
+/// `index_seq`, as one read of the store saw them. Every commit another process makes after that
+/// read is counted.
+///
+/// It is read before the writer's thread runs, never by the thread itself: a thread the system
+/// starts late would take a commit made in the meantime as part of its starting point and never
+/// count it. A window that reads the log as it opens takes it inside that same read
+/// ([`LogDb::in_one_snapshot`]), so a commit landing after the read is one its writer counts.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Baseline {
+    /// `None` when it could not be read: the writer's first look takes it, as it once always did.
+    data_version: Option<i64>,
+    /// Nought when unreadable, which a store that never had one also holds.
+    index_seq: u64,
+}
+
+impl Baseline {
+    /// The baseline as `db` reads it now — or, inside a read transaction on it, as that
+    /// transaction's picture holds it. The writer it is given to must be started on `db` itself:
+    /// `PRAGMA data_version` belongs to one connection.
+    pub fn of(db: &LogDb) -> Baseline {
+        Baseline {
+            data_version: db.data_version().ok(),
+            index_seq: db.index_seq().unwrap_or(0),
+        }
+    }
+}
+
 /// Look for another connection's commits and count them — and, when there are some, how many
 /// moved the store's `index_seq`. See [`LogWriter::foreign_commits`].
 ///
@@ -1315,7 +1380,16 @@ fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, seq: &IndexSeq, shared: &Sh
     *seen = Some(now);
 }
 
-fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Shared) {
+fn pump(
+    mut db: LogDb,
+    baseline: Baseline,
+    rx: &Receiver<Msg>,
+    gone: &Receiver<Gone>,
+    shared: &Shared,
+) {
+    // Tests only: the thread held here, before it does anything ([`LogWriter::start_held`]).
+    #[cfg(test)]
+    shared.start.pass();
     io_fence::enter_log_lane();
     let mut queue: VecDeque<Job> = VecDeque::new();
     // Copies wait for the queue ahead of them to empty: a copy must hold every change
@@ -1323,13 +1397,15 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Share
     let mut copies: VecDeque<CopyRequest> = VecDeque::new();
     // Callers waiting for a look at other processes' commits ([`LogWriter::foreign_commits_now`]).
     let mut looks: Vec<std::sync::mpsc::SyncSender<u64>> = Vec::new();
-    let mut seen_version: Option<i64> = None;
-    // Where the shared `index_seq` stands before this writer moves it (unreadable: from nought,
-    // which a store that never had one also holds).
+    // Where counting other processes' commits starts: the baseline read before this thread ran
+    // ([`Baseline`]), never a point this thread picks when it runs — a commit made in the
+    // meantime would be inside that point, and never counted.
+    let mut seen_version: Option<i64> = baseline.data_version;
     let mut seq = IndexSeq {
-        base: db.index_seq().unwrap_or(0),
+        base: baseline.index_seq,
         own: 0,
     };
+    // The first look: a commit made since the baseline is counted now.
     watch_foreign(&db, &mut seen_version, &seq, shared);
     // Revisions submitted and not yet resolved — the low end of this set is the durability
     // watermark.
@@ -2942,6 +3018,36 @@ mod tests {
         assert!(
             wait_until(&|| a.foreign_commits() > before),
             "and A sees B's"
+        );
+    }
+
+    /// ⛔ A WRITER COUNTS EVERY COMMIT ANOTHER PROCESS MAKES AFTER IT WAS STARTED, HOWEVER LATE ITS
+    /// THREAD RUNS. `start` returning is where counting starts. The writer's thread used to take
+    /// its own starting point when it first ran, so a thread the system started late took a
+    /// commit made in the meantime as part of its starting point and never counted it: main's
+    /// CI saw exactly that in the test above ("B sees A's commit", 2026-09-30). Here B's thread is
+    /// held at its start until A's commit is on disk.
+    #[test]
+    fn a_writer_counts_a_commit_made_after_it_started_however_late_its_thread_runs() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start_held(LogDb::open(&scratch.db()).expect("b"));
+        let held = b.held_start();
+        assert!(
+            held.reached(Duration::from_secs(10)),
+            "premise: B's thread is held at its start"
+        );
+        let t = a.submit(change(1, vec![rec("W1AW", 1)]));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        drop(held);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while b.foreign_commits() == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            b.foreign_commits(),
+            1,
+            "B counts A's commit, made after B was started"
         );
     }
 

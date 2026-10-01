@@ -31,11 +31,11 @@ beforeAll(() => {
 afterEach(() => { cleanup(); clients.splice(0).forEach(c => c.disconnected()); vi.useRealTimers(); vi.clearAllMocks() })
 async function tick(ms = 0) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
 
-function fixture(capabilities: string[]) {
+function fixture(capabilities: string[], settings: Record<string, unknown> = {}) {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] })
   let doc = structuredClone(configuration) as SettingsConfiguration
   doc.revision = 'a'.repeat(64)
-  Object.assign(doc.settings, { autoLog: false, preferRrr: false, contestCheck: '' })
+  Object.assign(doc.settings, { autoLog: false, preferRrr: false, contestCheck: '' }, settings)
   const frame = structuredClone(frames.spe) as MonitorFrame
   const sent: any[] = [], values = new Map<string, string>()
   const data = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v) }, removeItem: (k: string) => { values.delete(k) } }
@@ -135,4 +135,33 @@ it('against a desktop that offers no preference writes, every field stays read-o
   expect(contestCheck().disabled).toBe(true)
   expect(saveButton().disabled).toBe(true)
   expect(h.changes()).toHaveLength(0)
+})
+
+// JS8 groups change only at the station: it denies `js8Groups` to every Remote write (its
+// WRITE_DENIED_KEYS, since writes began in 1.13.0) and this page cannot build one. So a group
+// JS8Call will not let be joined (@APRSIS, @JS8NET) cannot reach a station from here. The field
+// is read-only while it holds one, and a preference saved beside it goes out alone and is not
+// refused: the desktop panel's refusal asks for an edit the Remote cannot make.
+it('never writes JS8 groups: the field stays read-only holding @APRSIS, and a save beside it sends only its own key', async () => {
+  const h = fixture(['settingsLogging', 'settingsControl'], { js8Groups: ['@APRSIS'] })
+  await tick()
+  tab('Digital')
+  expect((screen.getByDisplayValue('@APRSIS') as HTMLInputElement).disabled, 'the Groups field is read-only here').toBe(true)
+  fireEvent.click(autoLog())
+  fireEvent.click(saveButton()); await tick()
+  expect(h.changes().map(r => r.change.values), 'the save beside it').toEqual([{ autoLog: true }])
+  expect(screen.queryByText(/cannot be joined/), "the desktop panel's refusal is not the Remote's").toBeNull()
+})
+
+// Following the radio's split is a transmit-gate input the station denies to every Remote write
+// (`splitDetectEnabled` is in its WRITE_DENIED_KEYS), so the switch stays read-only here even with
+// station control, while a preference the station does offer is editable in the same page.
+it("keeps Follow the radio's split read-only from a browser, even with station control", async () => {
+  fixture(['settingsLogging', 'settingsControl'])
+  await tick()
+  tab('Digital')
+  expect(autoLog().disabled, 'control: this page may change an offered preference').toBe(false)
+  tab('Radio')
+  const follow = screen.getByRole('switch', { name: t('settings.rigControl.splitDetect.label') }) as HTMLButtonElement
+  expect(follow.disabled).toBe(true)
 })

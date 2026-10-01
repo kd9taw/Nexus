@@ -376,6 +376,25 @@ fn field_raw<'a>(vals: &'a [crate::contest::FieldValue], key: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// What [`FieldDayLog::merge_adif`] found in a journal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdifMerge {
+    /// Rows it restored into the log.
+    pub restored: usize,
+    /// Records it could not read: no CALL, or cut off before their `<EOR>`. Rows it passed over
+    /// on purpose (from a previous event, or already in the log) are neither.
+    pub unreadable: usize,
+}
+
+/// What became of one journal record ([`FieldDayLog::merge_adif`]).
+enum RowFate {
+    Restored,
+    /// No CALL: not a record this log can hold.
+    NoCall,
+    /// Passed over on purpose: from a previous event, or already in the log.
+    Passed,
+}
+
 /// A dupe-checked contest log with scoring — and **the log IS the session**: its
 /// lifetime is the session's, so its rows need no per-row session id.
 #[derive(Debug)]
@@ -1323,7 +1342,11 @@ impl FieldDayLog {
     /// self-expires), rows already in the dupe index are skipped, and garbage
     /// input merges nothing — never an error. Restored dupe keys keep the ROW's
     /// band, so they survive a mid-event QSY.
-    pub fn merge_adif(&mut self, text: &str, min_when_unix: u64) {
+    ///
+    /// Returns what it found ([`AdifMerge`]): the rows it restored, and the records it could not
+    /// read — no CALL, or cut off before their `<EOR>` — which the journal's reader keeps the
+    /// file for, because the next contact rewrites the journal from this log without them.
+    pub fn merge_adif(&mut self, text: &str, min_when_unix: u64) -> AdifMerge {
         // Minimal `<NAME:len>value` tokenizer mirroring logbook.rs `parse_adif`
         // (this journal only needs the handful of FD tags).
         let body = match text.to_ascii_uppercase().find("<EOH>") {
@@ -1331,6 +1354,8 @@ impl FieldDayLog {
             None => text,
         };
         let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut merged = AdifMerge::default();
+        let mut torn = false;
         let bytes = body.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
@@ -1340,12 +1365,19 @@ impl FieldDayLog {
             }
             let end = match body[i..].find('>') {
                 Some(e) => i + e,
-                None => break,
+                None => {
+                    torn = true;
+                    break;
+                }
             };
             let tag = &body[i + 1..end];
             i = end + 1;
             if tag.eq_ignore_ascii_case("EOR") {
-                self.restore_row(&cur, min_when_unix);
+                match self.restore_row(&cur, min_when_unix) {
+                    RowFate::Restored => merged.restored += 1,
+                    RowFate::NoCall => merged.unreadable += 1,
+                    RowFate::Passed => {}
+                }
                 cur.clear();
                 continue;
             }
@@ -1360,13 +1392,22 @@ impl FieldDayLog {
             i += len;
             cur.insert(name, val);
         }
+        // A record cut off before its `<EOR>`: the tail a torn write leaves.
+        if torn || !cur.is_empty() {
+            merged.unreadable += 1;
+        }
+        merged
     }
 
     /// One tokenized journal record → the log (the dupe-checked insert half of
     /// [`merge_adif`](Self::merge_adif)).
-    fn restore_row(&mut self, f: &std::collections::HashMap<String, String>, min_when_unix: u64) {
+    fn restore_row(
+        &mut self,
+        f: &std::collections::HashMap<String, String>,
+        min_when_unix: u64,
+    ) -> RowFate {
         let Some(call) = f.get("CALL").filter(|c| !c.trim().is_empty()) else {
-            return;
+            return RowFate::NoCall;
         };
         // ADIF MODE → (mode class, actual mode): the reverse of the map in
         // [`adif`](Self::adif) — keep the two in step. A digital MODE keeps its
@@ -1438,7 +1479,7 @@ impl FieldDayLog {
             _ => 0,
         };
         if when_unix < min_when_unix {
-            return;
+            return RowFate::Passed;
         }
         // The ROW's band, not the log's current one — a restored dupe key must
         // keep its original band across a mid-event QSY.
@@ -1520,7 +1561,7 @@ impl FieldDayLog {
                 .unwrap_or_default(),
         );
         let Some(dupe) = self.admit(key) else {
-            return;
+            return RowFate::Passed;
         };
         // The journaled sync seq round-trips; a legacy row without the tag
         // backfills the next free seq in row order (1..n on a whole legacy
@@ -1603,6 +1644,7 @@ impl FieldDayLog {
             dupe,
             sat,
         });
+        RowFate::Restored
     }
 
     /// Export the log as a Cabrillo entry — headers (§6.1) then one QSO line per
@@ -3400,6 +3442,67 @@ mod tests {
         // Garbage input merges nothing and never errors.
         restored.merge_adif("not adif <CALL:junk><EOR> \u{fe0f}<QSO_DATE:8>x<EOR>", 0);
         assert_eq!(restored.qso_count(), 0, "garbage merges nothing");
+    }
+
+    /// What a merge reports: the rows it restored, and the records it could not read (no CALL,
+    /// or cut off before their `<EOR>`), which the journal's reader keeps the file for. Rows it
+    /// passes over on purpose, a previous event's or ones already in the log, are neither.
+    #[test]
+    fn merge_adif_reports_the_records_it_could_not_read() {
+        let fresh = || {
+            FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20m",
+            )
+        };
+        let mut log = fresh();
+        assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
+        assert!(log.log_mode_at("N0GHI", "5A", "MN", "PH", 0, 1_782_583_620));
+        let whole = log.adif();
+        let merged = |text: &str, min_when_unix: u64| fresh().merge_adif(text, min_when_unix);
+        assert_eq!(
+            merged(&whole, 0),
+            AdifMerge {
+                restored: 2,
+                unreadable: 0
+            },
+            "a whole journal"
+        );
+        let last_eor = whole.rfind("<EOR>").expect("a record end");
+        assert_eq!(
+            merged(&whole[..last_eor - 4], 0),
+            AdifMerge {
+                restored: 1,
+                unreadable: 1
+            },
+            "cut off inside its last record"
+        );
+        let no_call = whole.replacen("<CALL:5>K1ABC", "<NOTE:5>K1ABC", 1);
+        assert_ne!(no_call, whole, "the fixture must lose a call");
+        assert_eq!(
+            merged(&no_call, 0),
+            AdifMerge {
+                restored: 1,
+                unreadable: 1
+            },
+            "a record with no call"
+        );
+        assert_eq!(
+            merged(&whole, 1_782_583_501),
+            AdifMerge {
+                restored: 1,
+                unreadable: 0
+            },
+            "a previous event's row is passed over, not unreadable"
+        );
+        let mut again = fresh();
+        again.merge_adif(&whole, 0);
+        assert_eq!(
+            again.merge_adif(&whole, 0),
+            AdifMerge::default(),
+            "rows already in the log are passed over, not unreadable"
+        );
     }
 
     use super::*;

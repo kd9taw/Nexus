@@ -124,7 +124,7 @@ it('connects exactly one real JS8 cockpit without entry, inbox, send, shortcut o
   const activityRow=root.querySelector('.js8-row'), observedReads=js8Reads
   await waitFor(()=>expect(js8Reads).toBeGreaterThan(observedReads+1), {timeout:2000})
   expect(root.querySelector('.js8-row')).toBe(activityRow)
-  const controls=root.querySelectorAll<HTMLButtonElement>('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-cancel,.js8-drop')
+  const controls=root.querySelectorAll<HTMLButtonElement>('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-confirm-yes,.js8-confirm-no,.js8-drop')
   expect(controls.length).toBeGreaterThan(15)
   for(const button of controls){expect(button.disabled).toBe(true);fireEvent.click(button)}
   fireEvent.doubleClick(root.querySelector('.js8-offset-row')!)
@@ -148,7 +148,7 @@ it('connects exactly one real JS8 cockpit without entry, inbox, send, shortcut o
     'check_for_update','get_propagation','sat_track_status','get_tle_status','get_kp_forecast','get_xray_now',
     'get_dxped_windows','get_feed_health','get_need_alerts','get_all_spots','get_fd_ruleset','log_operators','read_rotator','get_sat_transponder']
   expect(calls.filter(c=>!reads.includes(c))).toEqual([])
-  for(const forbidden of ['get_log','get_licensed_band_plan','qrz_lookup','resolve_entity','js8_enter','js8_send','js8_inbox_mark']) expect(calls).not.toContain(forbidden)
+  for(const forbidden of ['get_log','get_licensed_band_plan','qrz_lookup','resolve_entity','js8_enter','js8_send','js8_inbox_mark','js8_answer_reply','js8_composer']) expect(calls).not.toContain(forbidden)
 })
 
 it.each(['TempoFast', 'TempoDeep'])('browses the actual %s conversations without sending, archiving or changing the station', async tier => {

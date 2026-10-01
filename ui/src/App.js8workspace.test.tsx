@@ -28,6 +28,7 @@ import { render, cleanup, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AppSnapshot } from './types'
+import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
 // ── the snapshot the app boots on ───────────────────────────────────────────────────────────
 // Two stations on Tempo tiers, so the roster the bleed drags in has visible rows.
@@ -248,6 +249,68 @@ describe('the JS8 section', () => {
     expect(tempoChat()).not.toBeNull()
     expect(tempoRail()).not.toBeNull()
     expect(waterfalls().length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// The same App-on-JS8 mount carries one more seam: the Settings value App hands the cockpit.
+// The aging rule is js8Vocab's (`js8ListedStations`) and the cockpit's wiring is pinned in
+// Js8Cockpit.roster.test.tsx; this is the line between them, in App.
+describe('the JS8 Stations list takes its callsign aging from Settings', () => {
+  it('a station not heard for the aging in Settings is not listed', async () => {
+    const api = await import('./api')
+    const now = Date.now()
+    const heard = (call: string, agoMs: number) => ({
+      call, grid: null, snrDb: -9, freqHz: 1500, speed: 'normal', lastMs: now - agoMs,
+      lastHb: true, lastCq: false, storedMsgs: 0,
+    })
+    vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, js8CallsignAgingMin: 10 }) as never)
+    vi.mocked(api.getJs8State).mockImplementation(
+      async () => ({ ...js8State, stations: [heard('W0OLD', 11 * 60_000), heard('W0NEW', 60_000)] }) as never,
+    )
+    try {
+      await mountOn('js8')
+      await waitFor(
+        () =>
+          expect(
+            onScreen('[data-pane="stations"] .js8-station-call').map((b) => b.textContent),
+            'W0OLD, heard 11 minutes ago, is aged out',
+          ).toEqual(['W0NEW']),
+        { timeout: 3000 },
+      )
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => null as never)
+      vi.mocked(api.getJs8State).mockImplementation(async () => js8State as never)
+    }
+  })
+})
+
+// …and the band-activity aging, the same seam for the Band activity pane (js8ShownOffsetRows).
+describe('the JS8 Band activity pane takes its aging from Settings', () => {
+  it('a row older than the aging in Settings is not shown', async () => {
+    const api = await import('./api')
+    const now = Date.now()
+    const row = (freqHz: number, agoMs: number) => ({
+      atMs: now - agoMs, speed: 'normal', freqHz, snrDb: -9, dtS: 0.1, from: 'W0OLD', text: `W0OLD: @HB HEARTBEAT ${freqHz}`,
+      directedToMe: false, mine: false, complete: true, lowConf: false,
+    })
+    vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, js8ActivityAgingMin: 2 }) as never)
+    vi.mocked(api.getJs8State).mockImplementation(
+      async () => ({ ...js8State, activity: [row(700, 3 * 60_000), row(1508, 30_000)] }) as never,
+    )
+    try {
+      await mountOn('js8')
+      await waitFor(
+        () =>
+          expect(
+            onScreen('[data-pane="offsets"] .js8-offset-row .js8-freq').map((c) => c.textContent),
+            'the 700 Hz row, 3 minutes old, has aged out',
+          ).toEqual(['1508 Hz']),
+        { timeout: 3000 },
+      )
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => null as never)
+      vi.mocked(api.getJs8State).mockImplementation(async () => js8State as never)
+    }
   })
 })
 

@@ -53,6 +53,7 @@ import {
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
 import { contestStartWarning } from './features/contestLocation'
+import { keptFileMessage } from './features/keptFiles'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
 import { setUnitsMirror } from './units'
@@ -712,6 +713,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     )
   }, [snap?.logStoreProblem, remote])
 
+  // A file the station could not read and kept rather than save over (a torn journal, or one a
+  // newer Nexus wrote): each said ONCE a session, sticky until dismissed, as the notice above
+  // is. Not on the Remote: its snapshot never carries these paths, which are this computer's.
+  const keptFilesShown = useRef(new Set<string>())
+  useEffect(() => {
+    if (remote) return
+    for (const file of snap?.keptFiles ?? []) {
+      const said = `${file.store}\n${file.path}`
+      if (keptFilesShown.current.has(said)) continue
+      keptFilesShown.current.add(said)
+      pushToast(keptFileMessage(file), 'error', 0)
+    }
+  }, [snap?.keptFiles, remote])
+
   // The logbook database refused a change (C10b). The station keeps it in memory — sending it
   // again while the refusal can pass, holding it for the quit when it cannot — and the screen
   // says so while it lasts (operator, 2026-09-23: "Never silently lose a contact"): one sticky
@@ -1131,7 +1146,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the roster's "sort by need"). From the GATED alerts, so a disabled mode never colours a
   // station the board hides.
   const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
-  const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>(remote?.bandPlan ?? [])
   useEffect(() => {
     if (remote) setBandPlan(remote.bandPlan)
@@ -1273,14 +1287,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [activeTier])
 
-  // Periodic re-eval ticker so the unread badges refresh smoothly between snapshot
-  // polls (the unread memos read a ref cursor that a dep change alone won't catch).
-  useEffect(() => {
-    const id = window.setInterval(() => setTypingTick((t) => t + 1), 400)
-    return () => window.clearInterval(id)
-  }, [])
-
-
   const activePeer = remote ? remoteSelection ?? snap?.activePeer ?? null : snap?.activePeer ?? null
 
   // mark the active conversation as read whenever it updates
@@ -1298,6 +1304,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (conv) readCounts.current[activePeer] = conv.messages.length
   }, [snap, activePeer])
 
+  // The unread badges are a function of the snapshot, the active peer and the read cursor, and
+  // they follow the first two. They need no clock: the cursor moves only in the effect above,
+  // after a render that a new snapshot or a new active peer caused, and only for the ACTIVE peer
+  // (which never shows a badge) and for threads that are gone (which have none), so a memo can
+  // never hold a stale count between snapshots. (A 400 ms ticker used to re-run these, and with
+  // them the whole App, 2.5 times a second while nothing changed. It had outlived the mock
+  // typing indicator it was written for.)
   const unreadByPeer = useMemo(() => {
     const out: Record<string, number> = {}
     if (!snap) return out
@@ -1313,7 +1326,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       void inbound
     }
     return out
-  }, [snap, activePeer, typingTick])
+  }, [snap, activePeer])
 
   // Unread on the "*" band feed (CQs/broadcasts from others). Tracked separately
   // from unreadByPeer (which is per-station) and shown on the pinned Band row; the
@@ -1325,7 +1338,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     const read = readCounts.current['*'] ?? 0
     const readInbound = Math.min(read, band.messages.length)
     return band.messages.slice(readInbound).filter((m) => !m.outbound).length
-  }, [snap, activePeer, typingTick])
+  }, [snap, activePeer])
 
   const handleSelect = useCallback((call: string) => {
     if (remote) { setRemoteSelection(call); return }
@@ -3617,6 +3630,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 onSetTxEnabled={handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                callsignAgingMin={settings?.js8CallsignAgingMin ?? 0}
+                activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
               />

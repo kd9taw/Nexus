@@ -833,6 +833,25 @@ pub struct Settings {
     /// joined group. JS8Call default ON (G3). Second act of the two-act rule.
     #[serde(default = "default_js8_autoreply")]
     pub js8_autoreply: bool,
+    /// JS8Call's `AutoreplyConfirmation`, "Ask for confirmation before sending autoreply
+    /// transmissions": ON by default, as JS8Call ships it (Configuration.cpp:1949), and what a
+    /// file from before this setting loads as. On, every automatic reply waits in the cockpit for
+    /// your Yes and is not sent after 89 s without one; off, replies go by themselves.
+    #[serde(default = "default_js8_autoreply_confirmation")]
+    pub js8_autoreply_confirmation: bool,
+    /// JS8Call's "Only autoreply to these callsigns" (`AutoWhitelist`): empty, its default,
+    /// answers everyone; otherwise only a station on it, by its call as heard or its base call.
+    /// A station kept out is acted on in no way: no reply, relay, delivery, filing or storing.
+    #[serde(default)]
+    pub js8_autoreply_allow: Vec<String>,
+    /// JS8Call's "Never autoreply to these callsigns" (`AutoBlacklist`, default empty): a
+    /// station on it, as heard or by its base call, is acted on in no way.
+    #[serde(default)]
+    pub js8_autoreply_deny: Vec<String>,
+    /// JS8Call's "Never acknowledge heartbeats from these callsigns" (`HBBlacklist`, default
+    /// empty): a heartbeat from one draws no HB-ACK.
+    #[serde(default)]
+    pub js8_hb_ack_deny: Vec<String>,
     /// Relay `>` traffic for other stations (third-party traffic — §97.115 is the operator's).
     /// JS8Call default ON (G3). Second act of the two-act rule.
     #[serde(default = "default_js8_relay")]
@@ -842,6 +861,20 @@ pub struct Settings {
     /// of 5; 0 disables. The ordinary 6-min wall-clock watchdog is a separate clock.
     #[serde(default = "default_js8_idle_watchdog_min")]
     pub js8_idle_watchdog_min: u16,
+    /// JS8Call's callsign aging (`CallsignAging`), in minutes; 0 = off, JS8Call's default, and
+    /// what a file from before this setting loads as. A station not heard for this long leaves
+    /// the JS8 Stations list (unless it is selected or has an unread message for me), and is
+    /// left out of HEARING? replies and of the station journal. JS8Call's field runs 0-1440.
+    #[serde(default)]
+    pub js8_callsign_aging_min: u16,
+    /// JS8Call's band-activity aging (`ActivityAging`, "Remove messages from band activity
+    /// after"), in minutes; 2 is JS8Call's default (Configuration.cpp:1854) and what a file from
+    /// before this setting loads as, and 0 is off. A Band activity row whose newest decode was
+    /// heard this many whole minutes ago leaves the pane, unless RX is on its offset
+    /// (mainwindow.cpp:9845-9856). Display only: nothing the station keeps or sends reads it.
+    /// JS8Call's field runs 0-1440.
+    #[serde(default = "default_js8_activity_aging_min")]
+    pub js8_activity_aging_min: u16,
     /// Free text answered to `INFO?` (JS8Call "My Info").
     #[serde(default)]
     pub js8_info: String,
@@ -1311,6 +1344,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// The active radio's transmit audio source for CAT PTT (flat mirror — see
+    /// [`RadioProfile::tx_audio_source`]). "front" is today's behaviour.
+    #[serde(default = "default_tx_audio_source")]
+    pub tx_audio_source: String,
     /// Plain SSB instead of the DATA submode on the soundcard modes, for the active radio
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
@@ -3251,6 +3288,25 @@ fn one() -> u8 {
     1
 }
 
+/// "Transmit audio source (CAT PTT)" (#381): the radio's front/mic input, keyed with `T 1` —
+/// what every release has sent, and WSJT-X's own default.
+pub const TX_AUDIO_FRONT: &str = "front";
+/// …or its rear/data input, keyed with `T 3` (`RIG_PTT_ON_DATA`) on a radio whose driver can.
+pub const TX_AUDIO_REAR: &str = "rear";
+
+/// serde default for `tx_audio_source`: Front/Mic, so a settings file from before the field
+/// loads keying exactly as it did.
+fn default_tx_audio_source() -> String {
+    TX_AUDIO_FRONT.to_string()
+}
+
+/// Does this stored `tx_audio_source` ask for the rear/data input? Only that word does; anything
+/// else — an unknown value, a hand-edit gone wrong — is Front/Mic, the key-down Nexus has always
+/// sent.
+pub fn tx_audio_source_is_rear(v: &str) -> bool {
+    v.trim().eq_ignore_ascii_case(TX_AUDIO_REAR)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RadioProfile {
@@ -3315,6 +3371,18 @@ pub struct RadioProfile {
     /// otherwise, and 2/3 want a real radio in front of someone before they are called working.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// "Transmit audio source (CAT PTT)" (#381, WSJT-X's choice): which input the radio transmits
+    /// when Nexus keys it over CAT. `"front"` (the default) keys `T 1` exactly as every release
+    /// has. `"rear"` keys `T 3`, Hamlib's `RIG_PTT_ON_DATA`, which a mic/data driver sends as a
+    /// DATA transmit — `TX1;` on a TS-590S, "DATA SEND (ACC2/USB input)" in Kenwood's manual —
+    /// for an interface such as a SignaLink on the data input. Offered only on the radios of
+    /// `tempo_audio::rigmodels::PTT_MIC_DATA_RIGS` over a Hamlib link, and ignored on any other.
+    ///
+    /// ⚠️ A KEY-DOWN VERB AND NOTHING MORE, for the transmissions whose audio Nexus plays. The
+    /// release is `T 0` either way, and the Phone cockpit's own PTT (the operator talking into
+    /// the radio's microphone) and an FSK keyline still key `T 1`, as they always have.
+    #[serde(default = "default_tx_audio_source")]
+    pub tx_audio_source: String,
     pub icom_native_cat: bool,
     /// Command PLAIN SSB (USB/LSB by band) instead of the DATA submode on the soundcard
     /// modes — Digital (FT8/FT4/FT1), RTTY-AFSK and SSTV. Off by default: the DATA submode
@@ -3483,6 +3551,11 @@ pub struct RadioProfilePatch {
     /// written before the field existed still deserializes as today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// See `RadioProfile::tx_audio_source` — "front" / "rear".
+    ///
+    /// ⚠️ NO `#[serde(default)]`, for `rated_watts`'s reason: a UI that forgot to send it would
+    /// otherwise put every radio it edits back to Front/Mic, in silence, on each Save.
+    pub tx_audio_source: String,
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
@@ -3565,6 +3638,7 @@ impl RadioProfilePatch {
         p.rigctld_port = self.rigctld_port;
         p.icom_native_cat = self.icom_native_cat;
         p.icom_data_mode = self.icom_data_mode;
+        p.tx_audio_source = self.tx_audio_source;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.audio_in = self.audio_in;
@@ -3675,6 +3749,7 @@ impl Default for RadioProfile {
             rigctld_port: 4534,
             icom_native_cat: false,
             icom_data_mode: 1,
+            tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             audio_in: String::new(),
@@ -4006,6 +4081,11 @@ fn default_js8_autoreply() -> bool {
     true
 }
 
+/// JS8Call ships AutoreplyConfirmation ON. See [`Settings::js8_autoreply_confirmation`].
+fn default_js8_autoreply_confirmation() -> bool {
+    true
+}
+
 /// JS8Call ships relay ON (G3). See [`Settings::js8_relay`].
 fn default_js8_relay() -> bool {
     true
@@ -4014,6 +4094,11 @@ fn default_js8_relay() -> bool {
 /// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
 fn default_js8_idle_watchdog_min() -> u16 {
     60
+}
+
+/// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
+fn default_js8_activity_aging_min() -> u16 {
+    2
 }
 
 impl Default for Settings {
@@ -4057,8 +4142,14 @@ impl Default for Settings {
             js8_cq_interval_min: 0,
             js8_hb_ack: false,
             js8_autoreply: default_js8_autoreply(),
+            js8_autoreply_confirmation: default_js8_autoreply_confirmation(),
+            js8_autoreply_allow: Vec::new(),
+            js8_autoreply_deny: Vec::new(),
+            js8_hb_ack_deny: Vec::new(),
             js8_relay: default_js8_relay(),
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
+            js8_callsign_aging_min: 0,
+            js8_activity_aging_min: default_js8_activity_aging_min(),
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
@@ -4142,6 +4233,7 @@ impl Default for Settings {
             split_detect_enabled: false,
             yaesu_rf_scope: false,
             icom_data_mode: 1,
+            tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
@@ -4483,6 +4575,7 @@ impl Settings {
             rigctld_port: self.rigctld_port,
             icom_native_cat: self.icom_native_cat,
             icom_data_mode: self.icom_data_mode,
+            tx_audio_source: self.tx_audio_source.clone(),
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
             audio_in: self.audio_in.clone(),
@@ -4872,6 +4965,7 @@ impl Settings {
         // mode selects which audio input the rig transmits from, so the wrong one is wrong
         // TX audio routing on the radio you just switched to.
         self.icom_data_mode = p.icom_data_mode;
+        self.tx_audio_source = p.tx_audio_source;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
@@ -4915,6 +5009,7 @@ impl Settings {
             rigctld_port,
             icom_native_cat,
             icom_data_mode,
+            tx_audio_source,
             yaesu_rf_scope,
             data_modes_plain_ssb,
             sstv_hold_data_submode,
@@ -4946,6 +5041,7 @@ impl Settings {
             self.rigctld_port,
             self.icom_native_cat,
             self.icom_data_mode,
+            self.tx_audio_source.clone(),
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
@@ -4978,6 +5074,7 @@ impl Settings {
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.icom_data_mode = icom_data_mode;
+            p.tx_audio_source = tx_audio_source;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
@@ -5053,9 +5150,19 @@ impl Settings {
     /// present-but-CORRUPT file is NOT silently defaulted — that would be
     /// indistinguishable from a first run, wiping the operator's identity/rig config
     /// and resetting `license_class` to `Open` (re-opening TX privileges). Instead the
-    /// bad file is set aside as a sibling `.corrupt` file for recovery, then defaults
-    /// apply.
+    /// bad file is kept aside ([`tempo_core::keep_aside`]: renamed, untouched, to
+    /// `settings.unreadable-YYYYMMDD-HHMMSS.json` beside it, never replacing an earlier one,
+    /// and named on the screen), then defaults apply. When it cannot be moved, it stays where
+    /// it is and [`Self::save`] refuses to write over it for the rest of the run.
     pub fn load(path: &Path) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        Self::load_at(path, now)
+    }
+
+    /// [`Self::load`] with the clock given: `now_unix` dates a file kept aside.
+    pub(crate) fn load_at(path: &Path, now_unix: i64) -> Self {
         // The RETIRED `satDoppler` opt-in, read from the raw file before serde
         // discards it as an unknown key. It is dead as a switch (the downlink
         // no longer asks), but it is the one signal that separates a pre-0.26
@@ -5074,15 +5181,11 @@ impl Settings {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
             // Present but UNREADABLE (permissions, an AV/backup tool's exclusive
-            // lock): NOT a first run — set the intact file aside so a later save()
-            // of the defaults can't clobber it (best-effort; a held lock can make
-            // the rename fail too, but then the file survives in place).
+            // lock): NOT a first run — keep the intact file aside so a later save()
+            // of the defaults can't clobber it. A held lock can make the rename fail
+            // too: then the file stays where it is, and save() refuses to write over it.
             Err(e) => {
-                eprintln!(
-                    "tempo: cannot read {} ({e}); setting it aside as .corrupt and starting from defaults",
-                    path.display()
-                );
-                let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
+                tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
                 Settings::default()
             }
             Ok(text) => match serde_json::from_str(&text) {
@@ -5107,13 +5210,9 @@ impl Settings {
                     s
                 }
                 Err(e) => {
-                    // Corrupt file: preserve the evidence (best-effort — defaults are
-                    // still the right fallback even if the rename fails).
-                    eprintln!(
-                        "tempo: {} is corrupt ({e}); setting it aside as .corrupt and starting from defaults",
-                        path.display()
-                    );
-                    let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
+                    // Corrupt file: keep the evidence (defaults are still the right fallback,
+                    // and when the rename fails save() refuses to write over the file).
+                    tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
                     Settings::default()
                 }
             },
@@ -5349,6 +5448,14 @@ impl Settings {
     /// aside, before any writer exists): a command hands the writer a snapshot under the Engine
     /// lock and its thread writes it, and every write of one file holds that writer's file lock.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        // A settings file this run could not read and could not move aside is the operator's
+        // real configuration: every save, the launch's own included, refuses to write over it
+        // ([`Self::load`]).
+        if tempo_core::keep_aside::refuses(path) {
+            return Err(std::io::Error::other(
+                "settings.json could not be read and could not be moved aside, so it was not saved over",
+            ));
+        }
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -5757,6 +5864,25 @@ mod tests {
         std::env::temp_dir().join(format!("tempo_settings_{label}_{}", std::process::id()))
     }
 
+    /// The settings files `load` kept aside in `dir` (`settings.unreadable-<UTC>[-n].json`).
+    fn kept_aside_in(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| {
+                        p.file_name().is_some_and(|n| {
+                            let n = n.to_string_lossy();
+                            n.starts_with("settings.unreadable-") && n.ends_with(".json")
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        found
+    }
+
     /// ⭐⭐ **The link that makes §2.5's every-sent-slot-has-a-source rule real.**
     ///
     /// A rules file names the source of a slot it sends; the loader refuses any name
@@ -5859,6 +5985,7 @@ mod tests {
             rigctld_port: 4533,
             icom_native_cat: true,
             icom_data_mode: 2,
+            tx_audio_source: "rear".into(),
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
             audio_in: "USB Audio CODEC #2".into(),
@@ -6202,6 +6329,7 @@ mod tests {
             rigctld_port: 0,
             icom_native_cat: false,
             icom_data_mode: 3,
+            tx_audio_source: "rear".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             audio_in: String::new(),
@@ -6352,6 +6480,7 @@ mod tests {
             rigctld_port: 0,
             icom_native_cat: false,
             icom_data_mode: 1,
+            tx_audio_source: "front".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             audio_in: String::new(),
@@ -6431,6 +6560,7 @@ mod tests {
             "ratedWatts": 100,
             "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
             "icomNativeCat": false, "dataModesPlainSsb": false, "sstvHoldDataSubmode": false,
+            "txAudioSource": "front",
             "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
             "txLevel": 0.9, "rxGain": 1.0,
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
@@ -6602,6 +6732,7 @@ mod tests {
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: 1,
+            tx_audio_source: p.tx_audio_source.clone(),
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
@@ -8404,7 +8535,7 @@ mod tests {
 
         let back = Settings::load(&path);
         assert!(
-            !path.with_extension("json.corrupt").exists(),
+            kept_aside_in(&dir).is_empty(),
             "one bad macro set the WHOLE settings file aside"
         );
         assert_eq!(back.mycall, "W9XYZ", "identity survived");
@@ -8432,7 +8563,7 @@ mod tests {
         file["dialMhz"] = serde_json::json!("fourteen");
         std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
         assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
-        assert!(path.with_extension("json.corrupt").exists());
+        assert_eq!(kept_aside_in(&dir).len(), 1, "the file was kept aside");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8562,7 +8693,7 @@ mod tests {
 
         let back = Settings::load(&path);
         assert!(
-            !path.with_extension("json.corrupt").exists(),
+            kept_aside_in(&dir).is_empty(),
             "one bad macro set the WHOLE settings file aside"
         );
         assert_eq!(back.mycall, "W9XYZ", "identity survived");
@@ -8589,7 +8720,7 @@ mod tests {
         file["dialMhz"] = serde_json::json!("fourteen");
         std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
         assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
-        assert!(path.with_extension("json.corrupt").exists());
+        assert_eq!(kept_aside_in(&dir).len(), 1, "the file was kept aside");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8621,6 +8752,24 @@ mod tests {
             s.js8_idle_watchdog_min, 60,
             "JS8Call TxIdleWatchdog default"
         );
+        assert_eq!(
+            s.js8_callsign_aging_min, 0,
+            "JS8Call CallsignAging default: off"
+        );
+        assert_eq!(
+            s.js8_activity_aging_min, 2,
+            "JS8Call ActivityAging default: 2 minutes"
+        );
+        assert!(
+            s.js8_autoreply_confirmation,
+            "JS8Call AutoreplyConfirmation default: on"
+        );
+        assert!(
+            s.js8_autoreply_allow.is_empty()
+                && s.js8_autoreply_deny.is_empty()
+                && s.js8_hb_ack_deny.is_empty(),
+            "JS8Call AutoWhitelist / AutoBlacklist / HBBlacklist default: empty"
+        );
         assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
 
         let json = serde_json::to_string(&s).unwrap();
@@ -8631,8 +8780,14 @@ mod tests {
             "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
             "\"js8Autoreply\":true",
+            "\"js8AutoreplyConfirmation\":true",
+            "\"js8AutoreplyAllow\":[]",
+            "\"js8AutoreplyDeny\":[]",
+            "\"js8HbAckDeny\":[]",
             "\"js8Relay\":true",
             "\"js8IdleWatchdogMin\":60",
+            "\"js8CallsignAgingMin\":0",
+            "\"js8ActivityAgingMin\":2",
             "\"js8Info\":\"\"",
             "\"js8Status\":\"\"",
             "\"js8Groups\":[]",
@@ -8644,14 +8799,41 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
+        assert!(
+            old.js8_autoreply_confirmation,
+            "an upgrader's file asks before each automatic reply, as JS8Call ships"
+        );
+        assert!(
+            old.js8_autoreply_allow.is_empty() && old.js8_hb_ack_deny.is_empty(),
+            "an upgrader's file keeps nobody out"
+        );
+        let unasked: Settings =
+            serde_json::from_str(r#"{"js8AutoreplyConfirmation":false}"#).unwrap();
+        assert!(
+            !unasked.js8_autoreply_confirmation,
+            "an explicit no-confirmation survives the load"
+        );
+        assert_eq!(
+            old.js8_callsign_aging_min, 0,
+            "an upgrader's file ages nothing"
+        );
+        assert_eq!(
+            old.js8_activity_aging_min, 2,
+            "an upgrader's file ages band activity at JS8Call's 2 minutes"
+        );
         // An explicit opt-out survives the round trip.
         let off: Settings = serde_json::from_str(
-            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"]}"#,
+            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"],"js8CallsignAgingMin":30,"js8ActivityAgingMin":0}"#,
         )
         .unwrap();
         assert!(!off.js8_autoreply && !off.js8_relay);
         assert_eq!((off.js8_speed, off.js8_rx_speeds), (3, 2));
         assert_eq!(off.js8_groups, vec!["@FUN".to_string()]);
+        assert_eq!(off.js8_callsign_aging_min, 30);
+        assert_eq!(
+            off.js8_activity_aging_min, 0,
+            "band activity aging off stays off, not the default"
+        );
         let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
         assert_eq!(back, off);
 
@@ -8668,8 +8850,14 @@ mod tests {
             "js8CqIntervalMin",
             "js8HbAck",
             "js8Autoreply",
+            "js8AutoreplyConfirmation",
+            "js8AutoreplyAllow",
+            "js8AutoreplyDeny",
+            "js8HbAckDeny",
             "js8Relay",
             "js8IdleWatchdogMin",
+            "js8CallsignAgingMin",
+            "js8ActivityAgingMin",
             "js8Info",
             "js8Status",
             "js8Groups",
@@ -8685,6 +8873,27 @@ mod tests {
             !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
                 && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
             "HB and CQ-repeat on/off are session-only and must never be settings"
+        );
+    }
+
+    /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the
+    /// operator's Settings Save, in the panel. The file keeps it: every background save (window
+    /// places, band and rig state, through `SettingsWriter`, which calls `save`) writes it back
+    /// as it is, and it loads as it was. The engine never joins it either way.
+    #[test]
+    fn a_legacy_js8_group_is_saved_and_loaded_as_it_is() {
+        let dir = scratch_dir("js8_legacy_group");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let s = Settings {
+            js8_groups: vec!["@APRSIS".into(), "@ARES".into(), "@JS8NET".into()],
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).js8_groups,
+            vec!["@APRSIS", "@ARES", "@JS8NET"],
+            "a background save keeps the groups as they are"
         );
     }
 
@@ -9072,6 +9281,77 @@ mod tests {
         s2.voice_mic_device = "USB Microphone".into();
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
         assert_eq!(back.voice_mic_device, "USB Microphone");
+    }
+
+    /// #381: "Transmit audio source (CAT PTT)". A settings file — and a radio profile — written
+    /// before the field existed loads as Front/Mic, the key-down every release has sent; Rear/Data
+    /// survives a save/load; and only the word "rear" asks for the data input.
+    #[test]
+    fn the_transmit_audio_source_loads_old_files_as_front_mic_and_keeps_a_choice() {
+        assert_eq!(Settings::default().tx_audio_source, TX_AUDIO_FRONT);
+        assert_eq!(RadioProfile::default().tx_audio_source, TX_AUDIO_FRONT);
+        let old: Settings =
+            serde_json::from_str(r#"{"mycall":"W9XYZ","pttMethod":"cat"}"#).unwrap();
+        assert_eq!(old.tx_audio_source, TX_AUDIO_FRONT, "an old settings file");
+        let old_radio: RadioProfile =
+            serde_json::from_str(r#"{"id":2,"pttMethod":"cat","rigModel":2031}"#).unwrap();
+        assert_eq!(
+            old_radio.tx_audio_source, TX_AUDIO_FRONT,
+            "an old radio profile"
+        );
+
+        let mut s = Settings::default();
+        s.tx_audio_source = TX_AUDIO_REAR.into();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"txAudioSource\":\"rear\""),
+            "camelCase on disk"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.tx_audio_source, TX_AUDIO_REAR,
+            "Rear/Data survives a save/load"
+        );
+
+        for (v, rear) in [
+            ("rear", true),
+            ("Rear", true),
+            (" rear ", true),
+            ("front", false),
+            ("", false),
+            ("rearish", false),
+            ("data", false),
+        ] {
+            assert_eq!(tx_audio_source_is_rear(v), rear, "{v:?}");
+        }
+    }
+
+    /// "Follow the radio's split": the Settings switch writes `splitDetectEnabled`, which must be
+    /// the exact key this field serialises as (a mismatch is a switch that does nothing). A file
+    /// written before the switch loads as off, and a stored value survives a save and a load.
+    #[test]
+    fn split_detect_enabled_is_off_by_default_and_round_trips_on_its_wire_key() {
+        assert!(!Settings::default().split_detect_enabled);
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            !old.split_detect_enabled,
+            "a file from before the switch loads as off"
+        );
+        let on: Settings = serde_json::from_str(r#"{"splitDetectEnabled":true}"#).unwrap();
+        assert!(
+            on.split_detect_enabled,
+            "the key the switch writes is the key read"
+        );
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(
+            json.contains("\"splitDetectEnabled\":true"),
+            "…and the key it is saved under"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.split_detect_enabled,
+            "a stored value survives a save and a load"
+        );
     }
 
     #[test]
@@ -9694,15 +9974,16 @@ mod tests {
         let back = Settings::load(&path);
         assert_eq!(back.mycall, "", "corrupt file falls back to defaults");
         assert_eq!(back.license_class, LicenseClass::Open);
-        let corrupt = path.with_extension("json.corrupt");
-        assert!(
-            corrupt.exists(),
+        let kept = kept_aside_in(&dir);
+        assert_eq!(
+            kept.len(),
+            1,
             "corrupt settings.json set aside for recovery, not discarded"
         );
         assert_eq!(
-            std::fs::read_to_string(&corrupt).unwrap(),
+            std::fs::read_to_string(&kept[0]).unwrap(),
             truncated,
-            "the .corrupt file holds the original bad bytes"
+            "the kept file holds the original bad bytes"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9729,12 +10010,154 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         let back = Settings::load(&path);
         assert_eq!(back.mycall, "", "unreadable file falls back to defaults");
-        let corrupt = path.with_extension("json.corrupt");
-        assert!(
-            corrupt.exists(),
+        let kept = kept_aside_in(&dir);
+        assert_eq!(
+            kept.len(),
+            1,
             "the intact-but-unreadable file is set aside, not left for save() to clobber"
         );
-        let _ = std::fs::set_permissions(&corrupt, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(&kept[0], std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-09-30 14:22:33 UTC, for the dated names of the files kept below.
+    const KEPT_AT: i64 = 1_790_778_153;
+
+    /// The settings files kept this run under `dir`, as the screen is told of them (the list is
+    /// the whole process's, and tests run in parallel).
+    fn kept_for(dir: &std::path::Path) -> Vec<tempo_core::keep_aside::Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    /// ⭐ A SECOND set-aside never replaces the first. The one fixed name, `settings.json.corrupt`,
+    /// did: a rename onto an existing file replaces it on every platform, so a second unreadable
+    /// file took the first one's place, and the first, the operator's real settings, was gone.
+    #[test]
+    fn a_second_unreadable_settings_file_never_replaces_the_first_one_kept() {
+        let dir = scratch_dir("kept_twice");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let first = br#"{"mycall":"W9XYZ","licenseClass":"#.to_vec();
+        let second = br#"{"mycall":"K1ABC""#.to_vec();
+        std::fs::write(&path, &first).unwrap();
+        let _ = Settings::load_at(&path, KEPT_AT);
+        std::fs::write(&path, &second).unwrap();
+        let _ = Settings::load_at(&path, KEPT_AT);
+
+        let one = dir.join("settings.unreadable-20260930-142233.json");
+        let two = dir.join("settings.unreadable-20260930-142233-2.json");
+        assert_eq!(
+            std::fs::read(&one).ok(),
+            Some(first),
+            "the first kept file must survive a second set-aside, byte for byte"
+        );
+        assert_eq!(
+            std::fs::read(&two).ok(),
+            Some(second),
+            "the second one kept beside it"
+        );
+        let said: Vec<(std::path::PathBuf, bool)> = kept_for(&dir)
+            .into_iter()
+            .map(|k| (k.path, k.kept_in_place))
+            .collect();
+        assert_eq!(
+            said,
+            vec![(one, false), (two, false)],
+            "the screen is told where each one is"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settings file that cannot be moved aside stays where it is, and the launch's save of the
+    /// defaults, like every save, refuses to write over the operator's real configuration.
+    #[test]
+    fn a_settings_file_that_cannot_be_moved_aside_is_never_saved_over() {
+        let dir = scratch_dir("kept_in_place");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let bytes = br#"{"mycall":"W9XYZ","licenseClass":"techn"#.to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        // Every name a set-aside could use is taken: the old fixed one by a folder, the dated ones
+        // by files, in a folder every writer can write to.
+        std::fs::create_dir_all(path.with_extension("json.corrupt")).unwrap();
+        std::fs::write(
+            dir.join("settings.unreadable-20260930-142233.json"),
+            b"taken",
+        )
+        .unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!("settings.unreadable-20260930-142233-{n}.json")),
+                b"taken",
+            )
+            .unwrap();
+        }
+
+        let loaded = Settings::load_at(&path, KEPT_AT);
+        assert_eq!(loaded.mycall, "", "defaults apply");
+        let saved = loaded.save(&path);
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable settings file must never be saved over"
+        );
+        assert!(saved.is_err(), "the save says it did not happen");
+        let said: Vec<(std::path::PathBuf, bool)> = kept_for(&dir)
+            .into_iter()
+            .map(|k| (k.path, k.kept_in_place))
+            .collect();
+        assert_eq!(
+            said,
+            vec![(path.clone(), true)],
+            "the screen is told it was left in place"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settings file from a newer build that only ADDED fields loads as it always has, and
+    /// nothing is kept aside or said.
+    #[test]
+    fn a_settings_file_whose_only_news_is_fields_loads_as_it_always_has() {
+        let dir = scratch_dir("kept_fields");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut file = serde_json::to_value(Settings {
+            mycall: "W9XYZ".into(),
+            ..Settings::default()
+        })
+        .unwrap();
+        file["aSettingFromANewerBuild"] = serde_json::json!(7);
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let loaded = Settings::load_at(&path, KEPT_AT);
+        assert_eq!(
+            (
+                loaded.mycall.as_str(),
+                kept_aside_in(&dir).len(),
+                kept_for(&dir).len()
+            ),
+            ("W9XYZ", 0, 0),
+            "loaded as it always has, with nothing kept and nothing to say"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_settings_file_is_a_first_run_with_nothing_kept() {
+        let dir = scratch_dir("kept_none");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let loaded = Settings::load_at(&dir.join("settings.json"), KEPT_AT);
+        assert_eq!(
+            (loaded.mycall.as_str(), kept_for(&dir).len()),
+            ("", 0),
+            "no file: defaults, and nothing to say"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

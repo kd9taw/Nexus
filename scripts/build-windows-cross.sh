@@ -64,14 +64,13 @@ if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ]; then
 else
   tmp="$(mktemp -d)"
   ( cd "$tmp"
-    # ⚠️ HTTPS AND A PINNED HASH, because of WHERE this runs. The `make` two lines below
-    # executes whatever this tarball contains, and in release.yml it does so inside the same
-    # step that holds TAURI_SIGNING_PRIVATE_KEY and CLUBLOG_API_KEY — and four lines later that
-    # same step runs `cargo tauri build --bundles nsis`. A tampered tarball therefore does not
-    # just run on a runner: it gets statically linked into Nexus.exe and then legitimately
-    # SIGNED and published, and "Verify installer" only checks a size floor. This used to be
-    # plain `http://` with nothing to compare the bytes against, so an on-path attacker, a DNS
-    # spoof, or a compromise of one academic web host was enough.
+    # ⚠️ HTTPS AND A PINNED HASH, because of WHAT this becomes. The `make` two lines below
+    # executes whatever this tarball contains. release.yml runs it in a step of its own
+    # (`--no-gui`) with no secret in its environment — but the library it builds is statically
+    # linked into Nexus.exe, which is then legitimately SIGNED and published, and "Verify
+    # installer" only checks a size floor. A tampered tarball ships. This used to be plain
+    # `http://` with nothing to compare the bytes against, so an on-path attacker, a DNS spoof,
+    # or a compromise of one academic web host was enough.
     #
     # The hash was confirmed against a SECOND party rather than just recomputed from what the
     # site served: Gentoo's sci-libs/fftw Manifest publishes size 4144100 and a SHA512 for
@@ -208,7 +207,12 @@ if [ "$GUI" = 1 ]; then
   ok "DeepCW engine staged (weights + metadata)"
   # cargo tauri build enables asset embedding (custom-protocol — the fix for the
   # blank "page cannot be displayed" screen) and bundles the offline installer.
-  ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis )
+  # With no updater key in the environment it builds with --no-sign, because Tauri treats
+  # "a pubkey is configured but no private key" as fatal. That is how release.yml runs this:
+  # its build jobs never see the key, and a separate job signs the finished installer. A local
+  # build with the key in ~/.nexus-build.env still signs here, as before.
+  no_sign=(); [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || no_sign=(--no-sign)
+  ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis "${no_sign[@]}" )
   ok "Nexus.exe + installer"
 fi
 

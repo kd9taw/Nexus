@@ -3282,7 +3282,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit').length`),1)
       assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit .waterfall-wrap').length`),1)
       assert.equal(await evaluate(`!!document.querySelector('.grid-stations,.grid-center .conversation')`),false)
-      assert.ok(await evaluate(`[...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-cancel,.js8-drop')].length>15 && [...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-cancel,.js8-drop')].every(e=>e.disabled)`))
+      assert.ok(await evaluate(`[...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-confirm-yes,.js8-confirm-no,.js8-drop')].length>15 && [...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-confirm-yes,.js8-confirm-no,.js8-drop')].every(e=>e.disabled)`))
       await click(`document.querySelector('.js8-station-call')`)
       await until(`document.querySelector('.js8-to')?.value==='W1AW' && document.querySelector('.js8-cockpit .le-call')?.value==='W1AW'`)
       await click(`document.querySelector('.js8-pin')`)

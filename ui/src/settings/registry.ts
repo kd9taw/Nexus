@@ -144,7 +144,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'test cat', 'split', 'stop bits', 'parity', 'handshake', 'data bits', 'rig control',
       // The rig's RATED OUTPUT — full scale for the Phone meter's power arc. An operator who
       // wants it will search for what they call it, and none of those words is "rated".
-      'rated power', 'watts', 'power scale', 'meter scale', 'qrp', '100w', 's meter', 'meter'],
+      'rated power', 'watts', 'power scale', 'meter scale', 'qrp', '100w', 's meter', 'meter',
+      // #381's "Transmit audio source (CAT PTT)", under the words of its symptom and its cure: an
+      // interface on the rear jack transmitting nothing when CAT keys the radio.
+      'transmit audio source', 'rear/data', 'front/mic', 'signalink', 'acc2', 'data jack',
+      'no tx audio', 'no audio on transmit',
+      // "Follow the radio's split", under what an operator calls it: a split set at the radio's
+      // own front panel, which Nexus reads instead of only trusting one it set itself.
+      'follow split', 'radio split', 'rig split', 'front panel split', 'split detection'],
   },
   {
     id: 'rig-advanced',
@@ -339,7 +346,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'digital',
     keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
       'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
-      'idle watchdog', 'allcall'],
+      'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
+      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging'],
   },
   {
     id: 'sstv',

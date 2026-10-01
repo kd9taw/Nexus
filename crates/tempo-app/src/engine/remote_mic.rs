@@ -653,7 +653,11 @@ mod tests {
         s.held_tick(0);
         assert!(s.e.mic_armed());
         assert_eq!(s.e.tx_owner(), Some(super::super::TxOwner::Mic));
-        s.e.send_voice(vec![0.25; 12_000]);
+        assert_eq!(
+            s.e.send_voice(vec![0.25; 12_000]),
+            Err(super::super::TxOwner::Mic.busy_reason()),
+            "the keyer's refusal must name the microphone"
+        );
         assert!(
             s.e.voice_tx.is_none(),
             "a voice message was queued under the microphone"
@@ -667,7 +671,7 @@ mod tests {
         );
         // The other way round: a voice message owns the transmitter, so a press is refused.
         let mut s = scene();
-        s.e.send_voice(vec![0.25; 12_000]);
+        s.e.send_voice(vec![0.25; 12_000]).unwrap();
         assert_eq!(
             s.e.tx_owner(),
             Some(super::super::TxOwner::Voice),

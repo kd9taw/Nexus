@@ -136,45 +136,89 @@ fi
 # values together. The directory is the bundler's own: dirs::cache_dir() (an absolute
 # XDG_CACHE_HOME, else ~/.cache) joined with `tauri` — bundle.useLocalToolsDir would move it, and
 # nothing sets that.
-gtk_plugin_rev=dda522bce37387f1b853d9095713bfaa924c8423
-gtk_plugin_sha256=7804c9eef13e59bf2783aad9882ef9db8f3f3f9e8d631874b1d348d550a3693f
+#
+# AND SO IS EVERYTHING ELSE THAT BUNDLER DOWNLOADS (`prepare_tools`, same file): AppRun, linuxdeploy,
+# and its gstreamer and appimage plugins, each fetched only when absent, two from moving refs (the
+# gstreamer plugin from `master`; the appimage plugin from a `continuous` release its CI rebuilds on
+# the 1st of every month). And that plugin's appimagetool downloads the AppImage RUNTIME, the first
+# code an operator's machine runs when the AppImage starts, from type2-runtime's `continuous` release
+# on every pack unless it is handed one. It is handed the pinned one through LDAI_RUNTIME_FILE, here
+# and in the repack below, and release.yml's Verify step proves the shipped AppImage carries it. The
+# two `continuous` builds have no fixed URL, so those pins are the last tagged releases:
+# linuxdeploy-plugin-appimage 1-alpha-20250213-1, and type2-runtime 20251108 (the runtime source
+# 1.15.0 shipped, built by an older toolchain). Only the x86_64 tools are pinned, because no arm64
+# AppImage is built anywhere (the Pi packages are .deb only).
 case "${XDG_CACHE_HOME:-}" in /*) tauri_tools="$XDG_CACHE_HOME/tauri" ;; *) tauri_tools="$HOME/.cache/tauri" ;; esac
-gtk_plugin="$tauri_tools/linuxdeploy-plugin-gtk.sh"
-if ! echo "$gtk_plugin_sha256  $gtk_plugin" | sha256sum -c --status - 2>/dev/null; then
-  mkdir -p "$tauri_tools"
-  curl -fsSL -o "$gtk_plugin.part" \
-    "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/$gtk_plugin_rev/linuxdeploy-plugin-gtk.sh" \
-    || die "could not download linuxdeploy-plugin-gtk.sh at $gtk_plugin_rev"
-  echo "$gtk_plugin_sha256  $gtk_plugin.part" | sha256sum -c --status - \
-    || die "linuxdeploy-plugin-gtk.sh at $gtk_plugin_rev does not match its pinned sha256 (got
-  $(sha256sum "$gtk_plugin.part" | cut -d' ' -f1)) — refusing to build an AppImage whose GTK
-  start-up hook nobody has read."
-  mv -f "$gtk_plugin.part" "$gtk_plugin"
+pinned=()
+# pin_tool <file> <url> <sha256> [<sha256 of the file as the bundler leaves it>]
+pin_tool() {
+  local f="$tauri_tools/$1"
+  if ! echo "$3  $f" | sha256sum -c --status - 2>/dev/null \
+     && ! { [ -n "${4:-}" ] && echo "$4  $f" | sha256sum -c --status - 2>/dev/null; }; then
+    mkdir -p "$tauri_tools"
+    curl -fsSL -o "$f.part" "$2" || die "could not download $1 from $2"
+    echo "$3  $f.part" | sha256sum -c --status - \
+      || die "$1 from $2 does not match its pinned sha256 (got $(sha256sum "$f.part" | cut -d' ' -f1))
+  — refusing to build an AppImage with a tool nobody has read."
+    mv -f "$f.part" "$f"
+  fi
+  chmod +x "$f"
+  pinned+=("$1 $3 ${4:-}")
+}
+pin_tool linuxdeploy-plugin-gtk.sh \
+  https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/dda522bce37387f1b853d9095713bfaa924c8423/linuxdeploy-plugin-gtk.sh \
+  7804c9eef13e59bf2783aad9882ef9db8f3f3f9e8d631874b1d348d550a3693f
+if [ "$(uname -m)" = x86_64 ]; then
+  pin_tool AppRun-x86_64 \
+    https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64 \
+    f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f
+  # The bundler zeroes three bytes of this one in place on every build (its AppImage magic, so that
+  # desktop-integration tools leave it alone), hence the second digest.
+  pin_tool linuxdeploy-x86_64.AppImage \
+    https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage \
+    e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef \
+    20eebde3c18ae2e44279bd624fc72482503aece216d5d77f10932235342f71c1
+  pin_tool linuxdeploy-plugin-gstreamer.sh \
+    https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/linuxdeploy-plugin-gstreamer.sh \
+    c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94
+  pin_tool linuxdeploy-plugin-appimage.AppImage \
+    https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-x86_64.AppImage \
+    992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3
+  pin_tool runtime-x86_64 \
+    https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64 \
+    2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+  export LDAI_RUNTIME_FILE="$tauri_tools/runtime-x86_64"
 fi
-chmod +x "$gtk_plugin"
-ok "linuxdeploy-plugin-gtk pinned at ${gtk_plugin_rev:0:10} (sha256 verified)"
+ok "the bundler's tools are pinned and sha256-verified (${#pinned[@]})"
 # The signature Tauri makes HERE is over bytes the repack below replaces, so it is deleted the
 # moment the build finishes and remade at the end over the final file. `latest.json` is generated
 # FROM the `.sig`, and a stale one does NOT fail anything: it ships, and every Linux self-update
 # then fails verification. Deleting it is what makes that unrepresentable rather than merely
 # avoided — after this point no `.sig` exists until the one made over the shipped bytes.
 #
-# ⚠️ DO NOT go back to withholding the key with `env -u` (which is what this file did until
+# ⚠️ DO NOT withhold the key without `--no-sign` (`env -u` alone is what this file did until
 # 1.8.0, and it broke the release build). Tauri treats "a pubkey is configured but no private key
 # is present" as a FATAL error, not a warning — it bundles both artifacts and then exits 1 with
-# "A public key has been found, but no private key". Every other platform job passes the key
-# normally; the difference here was never intended.
-( cd "$REPO/src-tauri" && cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# "A public key has been found, but no private key". `--no-sign` is the supported way to build
+# without the key, and it is passed exactly when no key is present. That is how release.yml runs
+# this script: its build job never sees the key, and a separate job signs the finished AppImage.
+# A local build with the key in ~/.nexus-build.env still signs, below.
+no_sign=(); [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || no_sign=(--no-sign)
+( cd "$REPO/src-tauri" && cargo tauri build --features radio,custom-protocol --bundles deb,appimage "${no_sign[@]}" )
 # Kill the premature signature immediately — before the repack, so there is no window in which a
 # stale one could be picked up by anything.
 find "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true
 ok "Nexus .deb + AppImage"
-# The pin only holds while the bundler leaves the file alone. tauri-cli 2.12.0 does not: it
-# re-downloads the script from `master` on every build, and this check refused the 1.15.0 AppImage
-# for it. So tauri-cli is pinned at 2.11.5 (above, and in release.yml and the Windows scripts).
-echo "$gtk_plugin_sha256  $gtk_plugin" | sha256sum -c --status - \
-  || die "the pinned linuxdeploy-plugin-gtk.sh was replaced during the build — the AppImage's GTK
-  hook came from an unpinned copy. Check the bundler's download logic before shipping it."
+# The pins only hold while the bundler leaves the files alone. tauri-cli 2.12.0 does not: it
+# re-downloads the gtk script from `master` on every build, and this check refused the 1.15.0
+# AppImage for it. So tauri-cli is pinned at 2.11.5 (above, and in release.yml and the Windows scripts).
+for p in "${pinned[@]}"; do
+  read -r name sha alt <<<"$p"
+  echo "$sha  $tauri_tools/$name" | sha256sum -c --status - 2>/dev/null \
+    || { [ -n "$alt" ] && echo "$alt  $tauri_tools/$name" | sha256sum -c --status - 2>/dev/null; } \
+    || die "the pinned $name was replaced during the build — the AppImage was made with an unpinned
+  copy. Check the bundler's download logic before shipping it."
+done
 
 # --- The Wayland client library has to come from the HOST (#138) --------------------------------
 #
@@ -371,11 +415,11 @@ fi
 # shipped file unchanged.
 if [ "${repack_needed:-0}" = "1" ]; then
   bold "Repacking the AppImage"
-  # Tauri already downloaded this during the bundle step, so the repack adds no new dependency and
-  # uses the same packer that produced the original.
-  packer="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
-  [ -x "$packer" ] || die "linuxdeploy's appimage plugin is not in ~/.cache/tauri — expected it
-  there after 'cargo tauri build'. Set it executable, or rebuild so Tauri fetches it."
+  # The pinned packer placed above, the one that produced the original, so the repack adds no new
+  # dependency. LDAI_RUNTIME_FILE (exported above) hands it the pinned runtime again.
+  packer="$tauri_tools/linuxdeploy-plugin-appimage.AppImage"
+  [ -x "$packer" ] || die "linuxdeploy's appimage plugin is not in $tauri_tools — expected the pinned
+  copy placed before 'cargo tauri build'."
   ( cd "$work" && APPIMAGE_EXTRACT_AND_RUN=1 ARCH="${ARCH:-x86_64}" OUTPUT=repacked.AppImage \
       "$packer" --appdir squashfs-root >/dev/null 2>&1 ) \
     || die "repacking the AppImage failed"
@@ -388,7 +432,8 @@ fi
 rm -rf "$work"
 
 # --- Sign, now that the bytes are final ---------------------------------------------------------
-# Unsigned when no key is present, which is every developer build and was already true before.
+# Unsigned when no key is present: a developer build, and release.yml, which signs the finished
+# AppImage in a job of its own so that the key never reaches the runner that runs this script.
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
   # It must not exist yet: the build's own signature was deleted above, so anything here would be
   # a signature over pre-repack bytes and every Linux self-update would fail verification.
@@ -402,7 +447,7 @@ if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
     || die "the .sig is older than the AppImage it signs — refusing to publish it"
   ok "AppImage signed for self-update"
 else
-  warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage published unsigned (developer build)"
+  warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage left unsigned (a developer build, or release.yml, which signs it in its own job)"
 fi
 
 fi  # end: an AppImage was produced

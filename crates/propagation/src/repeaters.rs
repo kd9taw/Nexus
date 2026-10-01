@@ -1,21 +1,29 @@
 //! Repeater-directory parsing + query planning for the "Program" section.
 //!
-//! Pure logic: normalize the two feeds (RepeaterBook JSON export, hearham.com
-//! open API) into [`RepeaterRecord`]s, plan which RepeaterBook state exports a
-//! radius query needs (their API has no lat/lng parameter — like CHIRP, we pull
-//! whole states and haversine-filter client-side), filter/sort by distance, and
-//! convert a picked repeater into a programmable [`Channel`]. HTTP lives in
-//! `crate::live::{repeaterbook, hearham}`; caching/orchestration in the shell.
+//! Pure logic: normalize the three feeds (the RSGB ETCC list for UK origins, the
+//! RepeaterBook JSON export, the hearham.com open API) into [`RepeaterRecord`]s, plan
+//! which RepeaterBook state exports and which RSGB locator squares a radius query
+//! needs (RepeaterBook's API has no lat/lng parameter — like CHIRP, we pull whole
+//! states and haversine-filter client-side), merge the sources into one row per
+//! machine ([`merge_nearby`]: field by field from the highest-precedence source, every
+//! source id kept, a disagreement shown and never silently resolved), filter/sort by
+//! distance, and convert a picked repeater into a programmable [`Channel`]. HTTP lives
+//! in `crate::live::{rsgb, repeaterbook, hearham}`; caching/orchestration in the shell.
 
-use crate::geo::{bearing_deg, haversine_km, latlon_to_maidenhead};
+use crate::geo::{bearing_deg, haversine_km, latlon_to_maidenhead, maidenhead_to_latlon};
 use crate::gridstate::state_for_grid;
 use crate::memchan::{ChanMode, Channel, ChannelSource, Duplex, ToneMode};
 use serde::{Deserialize, Serialize};
 
-/// Which directory a record came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Which directory a record came from, declared in PRECEDENCE order, highest first:
+/// [`merge_nearby`] takes each field of a machine from the highest source that has it. The
+/// national coordinator's own list, then RepeaterBook (the operator's personal token), then
+/// hearham. The derived `Ord` IS that order, so the variants must not be reordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RepeaterSource {
+    /// The UK coordinator's list: RSGB ETCC (ukrepeater.net), for UK origins.
+    Rsgb,
     Repeaterbook,
     Hearham,
 }
@@ -37,6 +45,9 @@ pub struct RepeaterRecord {
     pub ctcss_dec_hz: Option<f32>,
     /// DCS code (uplink), when the machine uses digital code squelch.
     pub dcs: Option<u16>,
+    /// DCS code on the downlink, when the source gives one. The same code as `dcs` makes the
+    /// channel DCS both ways; without it the code is sent only ([`to_channel`]).
+    pub dcs_dec: Option<u16>,
     pub lat: f64,
     pub lon: f64,
     pub city: String,
@@ -47,11 +58,18 @@ pub struct RepeaterRecord {
     pub dstar: bool,
     pub fusion: bool,
     pub dmr_color_code: Option<u8>,
+    /// Channel width, kHz, when the source says: RepeaterBook's "FM Bandwidth"; hearham's
+    /// "NFM" is recorded as the narrowband 12.5. A narrow machine programs as NFM.
     pub bandwidth_khz: Option<f32>,
     /// On-air per the directory (RB "Operational Status", hearham `operational`).
     pub operational: bool,
     /// Open for general use (RB "Use" == OPEN; hearham has no field → true).
     pub open_use: bool,
+    /// The source's own date for this entry, as it writes it: RepeaterBook's "Last Update"
+    /// (`2026-05-14`). `None` when it gives none — hearham and the RSGB API have no date per
+    /// machine, and the proxy's narrowed RepeaterBook rows drop it.
+    #[serde(default)]
+    pub updated: Option<String>,
     /// Filled by [`filter_sort`] — distance/bearing from the query origin.
     pub distance_km: f64,
     pub bearing_deg: f64,
@@ -72,6 +90,18 @@ fn jf64(v: &serde_json::Value, k: &str) -> Option<f64> {
         Some(serde_json::Value::Number(n)) => n.as_f64(),
         Some(serde_json::Value::String(s)) => s.trim().parse().ok(),
         _ => None,
+    }
+}
+
+/// A bandwidth in kHz: a number, or a string of one, with or without the unit RepeaterBook's
+/// own pages print ("12.5", 12.5, "12.5 kHz"). Anything else is not known.
+fn jkhz(v: &serde_json::Value, k: &str) -> Option<f32> {
+    match v.get(k) {
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim().to_ascii_lowercase();
+            t.strip_suffix("khz").unwrap_or(&t).trim().parse().ok()
+        }
+        _ => jf64(v, k).map(|b| b as f32),
     }
 }
 
@@ -160,6 +190,11 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 } else {
                     None
                 },
+                dcs_dec: if tsq.starts_with(['D', 'd']) {
+                    dcs_code(&tsq)
+                } else {
+                    None
+                },
                 lat,
                 lon,
                 city: jstr(v, "Nearest City"),
@@ -170,11 +205,12 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 dstar: jyes(v, "D-Star"),
                 fusion: jyes(v, "System Fusion"),
                 dmr_color_code: jf64(v, "DMR Color Code").map(|c| c as u8),
-                bandwidth_khz: jf64(v, "FM Bandwidth").map(|b| b as f32),
+                bandwidth_khz: jkhz(v, "FM Bandwidth"),
                 // RB reports "On-air" / "Off-air" / "Unknown"; only a positive
                 // off-air marks it down (unknown machines still get programmed).
                 operational: !status.eq_ignore_ascii_case("off-air"),
                 open_use: jstr(v, "Use").is_empty() || jstr(v, "Use").eq_ignore_ascii_case("open"),
+                updated: Some(jstr(v, "Last Update")).filter(|d| !d.is_empty()),
                 distance_km: 0.0,
                 bearing_deg: 0.0,
             })
@@ -184,9 +220,100 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
 
 // ── hearham ─────────────────────────────────────────────────────────────────
 
+/// The mode words a hearham `mode` value is made of. The directory joins them with `/`
+/// ("YSF/FM", "P25/NFM") or `+` ("FM+YSF"), and a few values run them together with no
+/// separator ("D-STARDMR", "P25YSFD-STARNXDNDMR/FM"): every distinct value in the
+/// directory, 29 of them, was counted on 2026-09-30. No word is a prefix of another, so a
+/// scan takes the one word that fits. A piece holding anything else is dropped whole
+/// rather than guessed at. Expects the value already upper-cased.
+fn hearham_mode_words(mode: &str) -> Vec<&'static str> {
+    const WORDS: [&str; 14] = [
+        "FM", "NFM", "DMR", "D-STAR", "DSTAR", "YSF", "C4FM", "FUSION", "P25", "NXDN", "M17",
+        "AX25", "ATV", "TV",
+    ];
+    let mut out = Vec::new();
+    for piece in mode.split(['/', '+']) {
+        let mut rest = piece.trim();
+        let mut words = Vec::new();
+        while let Some(w) = WORDS.iter().find(|w| rest.starts_with(**w)) {
+            words.push(*w);
+            rest = &rest[w.len()..];
+        }
+        if rest.is_empty() {
+            out.extend(words);
+        }
+    }
+    out
+}
+
+/// The 104 standard DCS codes (the set CHIRP's generic CSV accepts), each written as its
+/// three octal digits read as a decimal number, the way [`Channel::dtcs_code`] holds one.
+const DCS_CODES: [u16; 104] = [
+    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74, 114, 115, 116, 122, 125, 131,
+    132, 134, 143, 145, 152, 155, 156, 162, 165, 172, 174, 205, 212, 223, 225, 226, 243, 244, 245,
+    246, 251, 252, 255, 261, 263, 265, 266, 271, 274, 306, 311, 315, 325, 331, 332, 343, 346, 351,
+    356, 364, 365, 371, 411, 412, 413, 423, 431, 432, 445, 446, 452, 454, 455, 462, 464, 465, 466,
+    503, 506, 516, 523, 526, 532, 546, 565, 606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712,
+    723, 731, 732, 734, 743, 754,
+];
+
+/// A DCS code in one part of a hearham tone field. Every shape the directory used on
+/// 2026-09-30 is read: "DCS023", "DCS 043", "DCS411N", "D023", "DPL411", "DPL 432" and the
+/// two-digit "DCS51" (code 051). Only a standard code is taken ("DCS 740" is none), and a
+/// bare number, a trailing "*" or ".0" is not, since what those mean is not written down.
+fn hearham_dcs_part(part: &str) -> Option<u16> {
+    let p = part.trim().to_ascii_uppercase();
+    let rest = p
+        .strip_prefix("DCS")
+        .or_else(|| p.strip_prefix("DPL"))
+        .or_else(|| p.strip_prefix('D'))?;
+    let digits = rest.trim_start();
+    let digits = digits.strip_suffix('N').unwrap_or(digits);
+    if !(2..=3).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let code: u16 = digits.parse().ok()?;
+    DCS_CODES.contains(&code).then_some(code)
+}
+
+/// The squelch a hearham tone field asks for: a CTCSS tone or a DCS code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Squelch {
+    Ctcss(f32),
+    Dcs(u16),
+}
+
+/// The squelch in a hearham tone field. A machine that runs several modes can have one
+/// parameter per mode joined with `/`: "CC1/146.2" (the DMR colour code, then the FM tone),
+/// "NAC293/100.0", "67.0/CC9/RAN1/NAC293/C/CAN0", "NAC353/D244" (58 rows on 2026-09-30). The
+/// squelch is the part that reads as a tone or a DCS code. Parts that disagree, two different
+/// tones ("88.5/71.9") or a tone and a code ("77.0/D454"), are left unknown rather than
+/// guessed at. A field with no `/` reads as [`tone_hz`] or [`hearham_dcs_part`] reads it.
+fn hearham_squelch(field: &str) -> Option<Squelch> {
+    let mut found = field.split('/').filter_map(|part| {
+        tone_hz(part)
+            .map(Squelch::Ctcss)
+            .or_else(|| hearham_dcs_part(part).map(Squelch::Dcs))
+    });
+    let first = found.next()?;
+    found.all(|s| s == first).then_some(first)
+}
+
+/// The DMR colour code in a hearham tone field: its `"CCn"` part, alone or joined with
+/// `/` as in [`hearham_squelch`].
+fn hearham_cc(field: &str) -> Option<u8> {
+    field.split('/').find_map(cc_code)
+}
+
 /// Parse the hearham.com `/api/repeaters/v1` payload (bare array; `frequency` +
 /// `offset` in Hz as integers; tones as strings — `"0.00"`/`""` = none, and DMR
-/// rows carry the color code as `"CC2"` in `encode`).
+/// rows carry the color code as `"CC2"` in `encode`, joined with `/` to the FM tone
+/// on a machine that runs both, see [`hearham_squelch`]).
+///
+/// `mode` can name several modes ([`hearham_mode_words`]). A machine is FM when any
+/// of them is FM or NFM (or the mode is empty), and each digital flag comes from its
+/// own word, so "YSF/FM" is an FM machine that is also Fusion. A mode the record has
+/// no field for (P25, NXDN, M17, …) sets nothing and never makes a machine FM.
 pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
     rows.iter()
@@ -200,36 +327,432 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
             let offset_hz = jf64(v, "offset").unwrap_or(0.0);
             let output_mhz = freq_hz / 1e6;
             let mode = jstr(v, "mode").to_ascii_uppercase();
+            let words = hearham_mode_words(&mode);
+            let names = |any: &[&str]| words.iter().any(|w| any.contains(w));
             let enc = jstr(v, "encode");
             let dec = jstr(v, "decode");
-            let is_dmr = mode == "DMR" || cc_code(&enc).is_some();
+            let is_dmr = names(&["DMR"]) || hearham_cc(&enc).is_some();
+            let up = hearham_squelch(&enc);
+            let down = hearham_squelch(&dec);
+            let ctcss = |s: Option<Squelch>| match s {
+                Some(Squelch::Ctcss(hz)) => Some(hz),
+                _ => None,
+            };
+            // DCS is the uplink's (`encode`). The downlink confirms it only by giving the SAME
+            // code; any other downlink (none, a tone, another code, one Nexus cannot read) leaves
+            // it send-only, with the receiver open (`to_channel`), never guessed at.
+            let dcs = match up {
+                Some(Squelch::Dcs(code)) => Some(code),
+                _ => None,
+            };
+            let dcs_dec = match down {
+                Some(Squelch::Dcs(code)) if dcs == Some(code) => Some(code),
+                _ => None,
+            };
             Some(RepeaterRecord {
                 source: RepeaterSource::Hearham,
                 source_id: jstr(v, "id"),
                 callsign: jstr(v, "callsign"),
                 output_mhz,
                 input_mhz: (freq_hz + offset_hz) / 1e6,
-                ctcss_enc_hz: tone_hz(&enc),
-                ctcss_dec_hz: tone_hz(&dec),
-                dcs: None,
+                ctcss_enc_hz: ctcss(up),
+                ctcss_dec_hz: ctcss(down),
+                dcs,
+                dcs_dec,
                 lat,
                 lon,
                 city: jstr(v, "city"),
                 county: String::new(),
                 state: String::new(),
-                fm: mode == "FM" || mode.is_empty(),
+                fm: mode.is_empty() || names(&["FM", "NFM"]),
                 dmr: is_dmr,
-                dstar: mode == "D-STAR" || mode == "DSTAR",
-                fusion: mode == "FUSION" || mode == "YSF" || mode == "C4FM",
-                dmr_color_code: cc_code(&enc),
-                bandwidth_khz: None,
+                dstar: names(&["D-STAR", "DSTAR"]),
+                fusion: names(&["YSF", "C4FM", "FUSION"]),
+                dmr_color_code: hearham_cc(&enc),
+                bandwidth_khz: names(&["NFM"]).then_some(NARROW_FM_KHZ),
                 operational: jf64(v, "operational").unwrap_or(1.0) != 0.0,
                 open_use: jstr(v, "restriction").is_empty(),
+                updated: None,
                 distance_km: 0.0,
                 bearing_deg: 0.0,
             })
         })
         .collect()
+}
+
+// ── RSGB ETCC (the UK coordinator) ──────────────────────────────────────────
+
+/// The RSGB listing types Program keeps: voice repeaters (analogue `AV`, digital `DV`, both
+/// `DM`) and the simplex internet gateways hams program like any other channel (`AG`, `DG`).
+/// The rest of the list is not a voice channel: packet mailboxes and nodes (`PX`, `PN`), APRS
+/// (`AP`), regenerative nodes (`RN`), ATV (`TV`) and link transmitters (`RL`, "GB3MN-L", which
+/// carry a repeater's link rather than its users). The API page documents the mode flags but
+/// not these codes; they were read off the listings (three squares, 372 rows, 2026-10-01),
+/// where every `AV` row is a GB3 analogue duplex machine and every `AG` an MB7 simplex one.
+const RSGB_VOICE_TYPES: [&str; 5] = ["AV", "DV", "DM", "AG", "DG"];
+
+/// Parse one `api-beta.rsgb.online/locator/<square>` payload: `{"data": [ … ]}`, one object per
+/// listing with `repeater` (the callsign), `type`, `status`, `town`, `modeCodes` (`["A","F"]`; a
+/// DMR machine is `"M:<colour code>"`), `tx`/`rx` in Hz (`tx` is the machine's OUTPUT, what you
+/// listen to, `rx` its input), `ctcss` in Hz, `txbw` in kHz, `locator` (4, 6 or 8 characters)
+/// and `extraDetails.ngr`, a 1 km grid reference ([`rsgb_position`]).
+///
+/// `Err` when the payload is not that shape: not an object with a `data` list, or a listing
+/// without a string `repeater` and `type`, numeric `tx` and `rx` and a `modeCodes` list. One such
+/// listing fails the whole payload: the endpoint is a BETA, and a renamed field would otherwise
+/// read as a square with nothing in it. Listings of a type Program does not program
+/// ([`RSGB_VOICE_TYPES`]), or with no output frequency or no position, are skipped.
+///
+/// A `ctcss` of 0 is read as no tone listed, not as "this machine takes no tone", so a lower
+/// source's tone still programs ([`merge_nearby`]): a tone sent to a machine that needs none
+/// does no harm, and a missing one cannot open a machine that needs it. A `status` of
+/// "NOT OPERATIONAL" is off the air; "REDUCED OUTPUT" is on it. `fac` is undocumented and unread.
+pub fn parse_rsgb_json(json: &str) -> Result<Vec<RepeaterRecord>, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| "the RSGB payload is not JSON".to_string())?;
+    let rows = root
+        .get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "the RSGB payload has no \"data\" list".to_string())?;
+    let mut out = Vec::new();
+    for v in rows {
+        let call = v.get("repeater").and_then(|x| x.as_str());
+        let kind = v.get("type").and_then(|x| x.as_str());
+        let tx = v.get("tx").and_then(|x| x.as_f64());
+        let rx = v.get("rx").and_then(|x| x.as_f64());
+        let codes = v.get("modeCodes").and_then(|x| x.as_array());
+        let (Some(call), Some(kind), Some(tx), Some(rx), Some(codes)) = (call, kind, tx, rx, codes)
+        else {
+            return Err("an RSGB listing has no callsign, type, frequencies or mode codes".into());
+        };
+        if !RSGB_VOICE_TYPES.contains(&kind.trim().to_ascii_uppercase().as_str()) || tx <= 0.0 {
+            continue;
+        }
+        let ngr = v
+            .get("extraDetails")
+            .map(|e| jstr(e, "ngr"))
+            .unwrap_or_default();
+        let Some((lat, lon)) = rsgb_position(&jstr(v, "locator"), &ngr) else {
+            continue;
+        };
+        let (mut fm, mut dmr, mut dstar, mut fusion, mut colour) =
+            (false, false, false, false, None);
+        for code in codes.iter().filter_map(|c| c.as_str()) {
+            let (flag, access) = match code.split_once(':') {
+                Some((f, a)) => (f.trim(), Some(a.trim())),
+                None => (code.trim(), None),
+            };
+            match flag {
+                "A" => fm = true,
+                "D" => dstar = true,
+                "F" => fusion = true,
+                "M" => {
+                    dmr = true;
+                    colour = access
+                        .and_then(|a| a.parse::<u8>().ok())
+                        .filter(|cc| *cc <= 15);
+                }
+                // Tetra, P25, NXDN, M17 and the packet flags: the record has no field for them.
+                _ => {}
+            }
+        }
+        out.push(RepeaterRecord {
+            source: RepeaterSource::Rsgb,
+            source_id: jstr(v, "id"),
+            callsign: call.trim().to_ascii_uppercase(),
+            output_mhz: tx / 1e6,
+            input_mhz: if rx > 0.0 { rx / 1e6 } else { tx / 1e6 },
+            ctcss_enc_hz: jf64(v, "ctcss")
+                .map(|hz| hz as f32)
+                .filter(|hz| (60.0..300.0).contains(hz)),
+            ctcss_dec_hz: None,
+            dcs: None,
+            dcs_dec: None,
+            lat,
+            lon,
+            city: jstr(v, "town")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            county: String::new(),
+            state: String::new(),
+            fm,
+            dmr,
+            dstar,
+            fusion,
+            dmr_color_code: colour,
+            bandwidth_khz: jkhz(v, "txbw").filter(|khz| *khz > 0.0),
+            operational: !jstr(v, "status").eq_ignore_ascii_case("not operational"),
+            open_use: true,
+            updated: None,
+            distance_km: 0.0,
+            bearing_deg: 0.0,
+        });
+    }
+    Ok(out)
+}
+
+/// Where an RSGB listing is. A 6- or 8-character locator places it to within a few km and is
+/// used as it stands. When the list gives only the 4-character square (it truncates some sites:
+/// 105 of 372 listings on 2026-10-01) the square's centre can be 75 km from the machine, so the
+/// 1 km grid reference beside it is used instead, but only when it lands inside that square:
+/// a reference that contradicts the coordinator's own locator never moves a machine out of it.
+/// All 105 did land inside.
+///
+/// On a few 6-character listings the two disagree (11 of 267, by up to 88 km, both ways round:
+/// GB3OA's reference is in Blackpool for a Southport machine, GB7MN's locator on the Wirral for
+/// one in Stoke). The locator is kept: it is the field the API itself is searched by.
+fn rsgb_position(locator: &str, ngr: &str) -> Option<(f64, f64)> {
+    let loc = locator.trim().to_ascii_uppercase();
+    if loc.len() >= 6 {
+        if let Some(p) = maidenhead_to_latlon(&loc) {
+            return Some(p);
+        }
+    }
+    let square = loc.get(..4).filter(|sq| maidenhead_to_latlon(sq).is_some());
+    match (square, grid_ref_to_latlon(ngr)) {
+        (Some(sq), Some(p)) if latlon_to_maidenhead(p.0, p.1) == sq => Some(p),
+        (Some(sq), _) => maidenhead_to_latlon(sq),
+        (None, p) => p,
+    }
+}
+
+/// A Transverse Mercator national grid: its ellipsoid (semi-axes, m), central scale factor,
+/// true origin (degrees) and false origin (m).
+struct TmGrid {
+    a: f64,
+    b: f64,
+    f0: f64,
+    lat0: f64,
+    lon0: f64,
+    e0: f64,
+    n0: f64,
+}
+
+/// The British National Grid: OSGB36 on the Airy 1830 ellipsoid.
+const BRITISH_GRID: TmGrid = TmGrid {
+    a: 6_377_563.396,
+    b: 6_356_256.909,
+    f0: 0.999_601_271_7,
+    lat0: 49.0,
+    lon0: -2.0,
+    e0: 400_000.0,
+    n0: -100_000.0,
+};
+
+/// The Irish Grid: Ireland 1965 on the modified Airy ellipsoid.
+const IRISH_GRID: TmGrid = TmGrid {
+    a: 6_377_340.189,
+    b: 6_356_034.447,
+    f0: 1.000_035,
+    lat0: 53.5,
+    lon0: -8.0,
+    e0: 200_000.0,
+    n0: 250_000.0,
+};
+
+/// Easting/northing (m) on `g` → (lat, lon) in degrees on its own datum, by the Ordnance
+/// Survey's series ("A guide to coordinate systems in Great Britain", annex C, whose worked
+/// example the tests reproduce).
+fn tm_inverse(g: &TmGrid, east: f64, north: f64) -> (f64, f64) {
+    let (a, b, f0) = (g.a, g.b, g.f0);
+    let (lat0, lon0) = (g.lat0.to_radians(), g.lon0.to_radians());
+    let e2 = 1.0 - (b * b) / (a * a);
+    let n = (a - b) / (a + b);
+    let (n2, n3) = (n * n, n * n * n);
+    let meridian_arc = |phi: f64| {
+        let (d, s) = (phi - lat0, phi + lat0);
+        b * f0
+            * ((1.0 + n + 1.25 * n2 + 1.25 * n3) * d
+                - (3.0 * n + 3.0 * n2 + 2.625 * n3) * d.sin() * s.cos()
+                + (1.875 * n2 + 1.875 * n3) * (2.0 * d).sin() * (2.0 * s).cos()
+                - (35.0 / 24.0) * n3 * (3.0 * d).sin() * (3.0 * s).cos())
+    };
+    let mut phi = lat0 + (north - g.n0) / (a * f0);
+    for _ in 0..20 {
+        let gap = north - g.n0 - meridian_arc(phi);
+        if gap.abs() < 1e-5 {
+            break;
+        }
+        phi += gap / (a * f0);
+    }
+    let (s, c, t) = (phi.sin(), phi.cos(), phi.tan());
+    let nu = a * f0 / (1.0 - e2 * s * s).sqrt();
+    let rho = a * f0 * (1.0 - e2) / (1.0 - e2 * s * s).powf(1.5);
+    let eta2 = nu / rho - 1.0;
+    let (t2, t4, t6) = (t * t, t.powi(4), t.powi(6));
+    let vii = t / (2.0 * rho * nu);
+    let viii = t / (24.0 * rho * nu.powi(3)) * (5.0 + 3.0 * t2 + eta2 - 9.0 * t2 * eta2);
+    let ix = t / (720.0 * rho * nu.powi(5)) * (61.0 + 90.0 * t2 + 45.0 * t4);
+    let x = 1.0 / (c * nu);
+    let xi = 1.0 / (c * 6.0 * nu.powi(3)) * (nu / rho + 2.0 * t2);
+    let xii = 1.0 / (c * 120.0 * nu.powi(5)) * (5.0 + 28.0 * t2 + 24.0 * t4);
+    let xiia = 1.0 / (c * 5040.0 * nu.powi(7)) * (61.0 + 662.0 * t2 + 1320.0 * t4 + 720.0 * t6);
+    let de = east - g.e0;
+    let lat = phi - vii * de.powi(2) + viii * de.powi(4) - ix * de.powi(6);
+    let lon = lon0 + x * de - xi * de.powi(3) + xii * de.powi(5) - xiia * de.powi(7);
+    (lat.to_degrees(), lon.to_degrees())
+}
+
+/// A British or Irish grid reference → (lat, lon) at the centre of the square it names.
+///
+/// British National Grid: two letters and an even number of digits ("SJ2957" is a 1 km square).
+/// Irish Grid, which the RSGB list writes with an `I` before its one letter ("IJ4076" is
+/// J 40 76, Belfast). Both grids letter their 100 km squares A–Z without I, five to a row from
+/// the top. The latitude and longitude come out on the grid's own datum (OSGB36, Ireland 1965),
+/// within about 120 m of WGS84 here, far inside the kilometre the reference itself carries, so
+/// no datum shift is applied. Anything else (no reference, another grid) is `None`.
+fn grid_ref_to_latlon(reference: &str) -> Option<(f64, f64)> {
+    const LETTERS: &[u8; 25] = b"ABCDEFGHJKLMNOPQRSTUVWXYZ";
+    let r: String = reference
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let b = r.as_bytes();
+    let letter = |c: u8| LETTERS.iter().position(|&l| l == c);
+    let (grid, e100, n100) = match b {
+        [b'I', l, ..] => {
+            let l = letter(*l)?;
+            (&IRISH_GRID, l % 5, 4 - l / 5)
+        }
+        [l1 @ (b'H' | b'J' | b'N' | b'O' | b'S' | b'T'), l2, ..] => {
+            let (l1, l2) = (letter(*l1)?, letter(*l2)?);
+            (
+                &BRITISH_GRID,
+                ((l1 + 3) % 5) * 5 + l2 % 5,
+                19 - (l1 / 5) * 5 - l2 / 5,
+            )
+        }
+        _ => return None,
+    };
+    let digits = &r[2..];
+    if !(2..=10).contains(&digits.len())
+        || !digits.len().is_multiple_of(2)
+        || !digits.bytes().all(|d| d.is_ascii_digit())
+    {
+        return None;
+    }
+    let half = digits.len() / 2;
+    let unit = 10f64.powi(5 - half as i32);
+    let east = e100 as f64 * 100_000.0 + digits[..half].parse::<f64>().ok()? * unit + unit / 2.0;
+    let north = n100 as f64 * 100_000.0 + digits[half..].parse::<f64>().ok()? * unit + unit / 2.0;
+    Some(tm_inverse(grid, east, north))
+}
+
+/// The 4-character locator squares holding UK land (England, Scotland, Wales, Northern Ireland,
+/// the Isle of Man and the Channel Islands), which the RSGB list covers. An origin in one is a
+/// UK origin, and only these are ever asked about. Listed from the coastline and checked against
+/// hearham: every square it places a GB- or MB-prefixed machine in (2,023 machines, 2026-10-01)
+/// is here. Four are shared with a neighbour (IO64 and IO65 with Ireland, IN89 and JO00 with
+/// France); an origin there asks RSGB too, which only adds the UK machines in range of it.
+const RSGB_SQUARES: [&str; 41] = [
+    "IN69", "IN79", "IN89", "IO64", "IO65", "IO66", "IO67", "IO68", "IO70", "IO71", "IO72", "IO73",
+    "IO74", "IO75", "IO76", "IO77", "IO78", "IO80", "IO81", "IO82", "IO83", "IO84", "IO85", "IO86",
+    "IO87", "IO88", "IO89", "IO90", "IO91", "IO92", "IO93", "IO94", "IO95", "IO97", "IO99", "IP80",
+    "IP90", "JO00", "JO01", "JO02", "JO03",
+];
+
+/// The most RSGB squares one search asks about, nearest first. Nine is a 3×3 block, which holds
+/// all of the default 50 mi radius anywhere in the UK; a wider search asks about the nine
+/// nearest and names the rest ([`RsgbPlan::beyond`]), where the rows are hearham's alone. Each
+/// square is one request, cached for a week, so a search costs at most nine.
+pub const RSGB_SQUARES_PER_SEARCH: usize = 9;
+
+/// Which RSGB locator squares a radius search asks about.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RsgbPlan {
+    /// The squares to ask about, nearest first. Empty for an origin outside the UK.
+    pub ask: Vec<String>,
+    /// UK squares the radius reaches that are NOT asked about, nearest first.
+    pub beyond: Vec<String>,
+}
+
+/// Plan the RSGB requests for a radius search: none unless the origin is in a UK square
+/// ([`RSGB_SQUARES`]); otherwise every UK square the radius reaches, nearest first, at most
+/// [`RSGB_SQUARES_PER_SEARCH`] of them.
+pub fn plan_rsgb_squares(origin: (f64, f64), radius_km: f64) -> RsgbPlan {
+    let home = latlon_to_maidenhead(origin.0, origin.1);
+    if !RSGB_SQUARES.contains(&home.as_str()) {
+        return RsgbPlan::default();
+    }
+    let mut near: Vec<(f64, &str)> = RSGB_SQUARES
+        .iter()
+        .filter_map(|sq| {
+            let d = km_to_square(origin, sq)?;
+            (d <= radius_km).then_some((d, *sq))
+        })
+        .collect();
+    near.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(b.1))
+    });
+    let mut squares = near.into_iter().map(|(_, sq)| sq.to_string());
+    RsgbPlan {
+        ask: squares.by_ref().take(RSGB_SQUARES_PER_SEARCH).collect(),
+        beyond: squares.collect(),
+    }
+}
+
+/// Distance from `origin` to the nearest point of a 2°×1° locator square (0 inside it).
+fn km_to_square(origin: (f64, f64), square: &str) -> Option<f64> {
+    let (lat, lon) = maidenhead_to_latlon(square)?;
+    let nearest = (
+        origin.0.clamp(lat - 0.5, lat + 0.5),
+        origin.1.clamp(lon - 1.0, lon + 1.0),
+    );
+    Some(haversine_km(origin, nearest))
+}
+
+/// What ONE planned square's RSGB fetch gave a search: [`StateFetch`]'s counterpart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SquareFetch {
+    /// The 4-character locator square, as [`plan_rsgb_squares`] produced it.
+    pub square: String,
+    /// The payload, fresh or cached. `None` = nothing: the fetch failed with no cache to serve.
+    pub body: Option<String>,
+    /// When `body` was obtained (unix secs).
+    pub fetched_utc: i64,
+    /// `body` came from cache because the fetch failed or was throttled.
+    pub stale: bool,
+}
+
+/// The RSGB list behind a search, when every square it asked about was read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RsgbLayer {
+    pub records: Vec<RepeaterRecord>,
+    /// Oldest payload behind `records`: the list's "as of" stamp.
+    pub oldest_utc: i64,
+    /// At least one square was served from stale cache.
+    pub stale: bool,
+}
+
+/// Fold the squares' fetches into the RSGB layer of a search, or say why there is none. ANY
+/// square that gave nothing, or gave a payload [`parse_rsgb_json`] cannot read, drops the whole
+/// layer: the endpoint is a BETA, a list with a square missing would read as complete, and the
+/// shell then shows hearham's rows alone with a plain notice, never an empty list. The reason
+/// goes to the connection log, not the screen.
+pub fn fold_rsgb_squares(fetches: &[SquareFetch]) -> Result<RsgbLayer, String> {
+    if fetches.is_empty() {
+        return Err("no RSGB square was asked about".into());
+    }
+    let mut layer = RsgbLayer {
+        records: Vec::new(),
+        oldest_utc: i64::MAX,
+        stale: false,
+    };
+    for f in fetches {
+        let body = f
+            .body
+            .as_deref()
+            .ok_or_else(|| format!("RSGB gave nothing for {}", f.square))?;
+        let rows = parse_rsgb_json(body).map_err(|e| format!("{e} ({})", f.square))?;
+        layer.records.extend(rows);
+        layer.oldest_utc = layer.oldest_utc.min(f.fetched_utc);
+        layer.stale |= f.stale;
+    }
+    Ok(layer)
 }
 
 // ── query planning ──────────────────────────────────────────────────────────
@@ -470,11 +993,349 @@ pub fn filter_sort(
     out
 }
 
+// ── one row per machine ─────────────────────────────────────────────────────
+
+/// Outputs (and, between rows without a callsign, inputs) at most this far apart are the same
+/// channel. Under half of the narrowest 6.25 kHz raster, so neighbouring channels never merge.
+const SAME_CHANNEL_MHZ: f64 = 0.0025;
+/// Rows without a callsign are one machine only when closer together than this.
+const SAME_SITE_KM: f64 = 5.0;
+/// How far past the radius each source is read before merging, so a machine its sources place
+/// either side of the edge still becomes one row (which is then judged by its own position).
+const MERGE_MARGIN_KM: f64 = 10.0;
+
+/// One directory row behind a merged machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRef {
+    pub source: RepeaterSource,
+    pub source_id: String,
+    /// The channel id this row gives ([`to_channel`]). A channel saved from any of a machine's
+    /// rows finds the machine by it, whichever source the machine now programs from.
+    pub channel_id: String,
+    /// The row's own date ([`RepeaterRecord::updated`]).
+    pub updated: Option<String>,
+}
+
+/// A field a machine's sources disagree on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DisputedField {
+    /// The access tone or DCS code on the uplink.
+    Tone,
+    /// Where you transmit: the input, and so the shift.
+    Input,
+    /// The modes: a lower source names one the machine's top source does not.
+    Mode,
+    /// The DMR colour code.
+    ColorCode,
+}
+
+/// What one source said about a disputed field, as the row shows it ("88.5", "D023", "438.525",
+/// "FM+DMR", "CC1": tokens, never words).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Said {
+    pub source: RepeaterSource,
+    pub value: String,
+}
+
+/// A disagreement between a machine's sources. Shown, never silently resolved: the row programs
+/// the first value (the highest-precedence source's) and shows every other one beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Disagreement {
+    pub field: DisputedField,
+    pub said: Vec<Said>,
+}
+
+/// One machine after the merge.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Machine {
+    /// What Program shows and programs: field by field from the highest-precedence row that
+    /// has the field. Its `source`/`source_id` are that top row's.
+    pub record: RepeaterRecord,
+    /// Every row merged in, the top one first.
+    pub sources: Vec<SourceRef>,
+    pub disagreements: Vec<Disagreement>,
+}
+
+/// Merge every source's rows near `origin` into one row per machine within `radius_km`, nearest
+/// first (ties by output).
+///
+/// **One machine.** Two rows are the same machine when their outputs are within
+/// [`SAME_CHANNEL_MHZ`] and their callsigns, without link decoration ([`machine_call`]), match;
+/// with no callsign on either, their inputs must be within [`SAME_CHANNEL_MHZ`] too and their
+/// sites within [`SAME_SITE_KM`]. Rows of one source merge as well: hearham lists a mixed machine
+/// once per mode and a linked one once per node.
+///
+/// **Precedence** follows [`RepeaterSource`]: the coordinator, then RepeaterBook, then hearham.
+/// Each field comes from the highest row that has it (a coordinator listing with no tone takes
+/// hearham's), and the tone fields (CTCSS both ways, DCS) come together from one row, never
+/// mixed. The modes are the top source's, all its rows together, so a mixed machine that a
+/// coordinator lists with FM is ONE programmable FM row carrying its CTCSS and its colour code,
+/// even where hearham lists only its DMR side.
+///
+/// **Disagreements** on the tone, the input, the modes and the colour code stay on the machine
+/// ([`Disagreement`]). A row that only lacks a field disagrees with nothing.
+pub fn merge_nearby(
+    layers: &[&[RepeaterRecord]],
+    origin: (f64, f64),
+    radius_km: f64,
+) -> Vec<Machine> {
+    let mut rows: Vec<RepeaterRecord> = layers
+        .iter()
+        .flat_map(|layer| filter_sort(layer, origin, radius_km + MERGE_MARGIN_KM))
+        .collect();
+    // Precedence first; within one source, nearest first (filter_sort's order, kept by a
+    // stable sort), so the top row of a machine is its best source's nearest listing.
+    rows.sort_by_key(|r| r.source);
+    let mut groups: Vec<Vec<RepeaterRecord>> = Vec::new();
+    for r in rows {
+        match groups
+            .iter_mut()
+            .find(|g| g.iter().any(|x| same_machine(x, &r)))
+        {
+            Some(g) => g.push(r),
+            None => groups.push(vec![r]),
+        }
+    }
+    let mut out: Vec<Machine> = groups
+        .into_iter()
+        .map(|g| machine(g, origin))
+        .filter(|m| m.record.distance_km <= radius_km)
+        .collect();
+    out.sort_by(|a, b| {
+        a.record
+            .distance_km
+            .partial_cmp(&b.record.distance_km)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.record
+                    .output_mhz
+                    .partial_cmp(&b.record.output_mhz)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    out
+}
+
+/// The callsign a machine is known by, without the decoration a list adds for a link or a node
+/// ("GB7DZ-L", "K1ABC-R", "W1XYZ/R"): upper case, up to the first `-`, `/` or space.
+fn machine_call(call: &str) -> String {
+    let up = call.trim().to_ascii_uppercase();
+    up.split(['-', '/', ' '])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Are `a` and `b` the same machine? See [`merge_nearby`].
+fn same_machine(a: &RepeaterRecord, b: &RepeaterRecord) -> bool {
+    let near = |x: f64, y: f64| (x - y).abs() <= SAME_CHANNEL_MHZ + 1e-9;
+    if !near(a.output_mhz, b.output_mhz) {
+        return false;
+    }
+    let (call_a, call_b) = (machine_call(&a.callsign), machine_call(&b.callsign));
+    if !call_a.is_empty() && !call_b.is_empty() {
+        return call_a == call_b;
+    }
+    near(a.input_mhz, b.input_mhz) && haversine_km((a.lat, a.lon), (b.lat, b.lon)) < SAME_SITE_KM
+}
+
+/// The modes a row names, as bits: FM, DMR, D-STAR, Fusion.
+fn modes(r: &RepeaterRecord) -> u8 {
+    u8::from(r.fm) | u8::from(r.dmr) << 1 | u8::from(r.dstar) << 2 | u8::from(r.fusion) << 3
+}
+
+/// "FM+DMR" for a set of mode bits; "—" for a machine none of the four describes.
+fn modes_label(bits: u8) -> String {
+    let names = ["FM", "DMR", "D-STAR", "YSF"];
+    let on: Vec<&str> = (0..4)
+        .filter(|i| bits & (1 << i) != 0)
+        .map(|i| names[i])
+        .collect();
+    if on.is_empty() {
+        "—".into()
+    } else {
+        on.join("+")
+    }
+}
+
+/// `MHz` as Program prints a frequency: four decimals, trailing zeros dropped.
+fn mhz_label(mhz: f64) -> String {
+    let s = format!("{mhz:.4}");
+    let s = s.trim_end_matches('0');
+    if s.ends_with('.') {
+        format!("{s}0")
+    } else {
+        s.to_string()
+    }
+}
+
+/// A disagreement over one field, when the values said (with a number to compare them by) are
+/// not all `same` as the first. Repeats of a source's value are shown once.
+fn disputed(
+    field: DisputedField,
+    said: Vec<(Said, f64)>,
+    same: impl Fn(f64, f64) -> bool,
+) -> Option<Disagreement> {
+    let first = said.first()?.1;
+    if said.iter().all(|(_, v)| same(first, *v)) {
+        return None;
+    }
+    let mut out: Vec<Said> = Vec::new();
+    for (s, _) in said {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    Some(Disagreement { field, said: out })
+}
+
+/// Build one machine from its rows, in precedence order (`rows[0]` is the top row).
+fn machine(rows: Vec<RepeaterRecord>, origin: (f64, f64)) -> Machine {
+    let top = &rows[0];
+    let mut rec = top.clone();
+    let first_text = |get: fn(&RepeaterRecord) -> &String| {
+        rows.iter()
+            .map(get)
+            .find(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_default()
+    };
+    rec.callsign = first_text(|r| &r.callsign);
+    rec.city = first_text(|r| &r.city);
+    rec.county = first_text(|r| &r.county);
+    rec.state = first_text(|r| &r.state);
+    // The tone fields travel together, from the first row that gives any of them.
+    if let Some(t) = rows
+        .iter()
+        .find(|r| r.ctcss_enc_hz.is_some() || r.ctcss_dec_hz.is_some() || r.dcs.is_some())
+    {
+        rec.ctcss_enc_hz = t.ctcss_enc_hz;
+        rec.ctcss_dec_hz = t.ctcss_dec_hz;
+        rec.dcs = t.dcs;
+        rec.dcs_dec = t.dcs_dec;
+    }
+    // The modes: everything the top source's rows name, together.
+    let top_modes = rows
+        .iter()
+        .filter(|r| r.source == top.source)
+        .fold(0, |bits, r| bits | modes(r));
+    rec.fm = top_modes & 1 != 0;
+    rec.dmr = top_modes & 2 != 0;
+    rec.dstar = top_modes & 4 != 0;
+    rec.fusion = top_modes & 8 != 0;
+    rec.dmr_color_code = if rec.dmr {
+        rows.iter().filter(|r| r.dmr).find_map(|r| r.dmr_color_code)
+    } else {
+        None
+    };
+    if rec.fm {
+        rec.bandwidth_khz = rows.iter().filter(|r| r.fm).find_map(|r| r.bandwidth_khz);
+    }
+    rec.distance_km = haversine_km(origin, (rec.lat, rec.lon));
+    rec.bearing_deg = bearing_deg(origin, (rec.lat, rec.lon));
+
+    let said = |r: &RepeaterRecord, value: String| Said {
+        source: r.source,
+        value,
+    };
+    let tones = rows
+        .iter()
+        .filter_map(|r| match (r.dcs, r.ctcss_enc_hz) {
+            // A DCS code compares as 10000 + code: never equal to a CTCSS tone.
+            (Some(code), _) => Some((said(r, format!("D{code:03}")), 10_000.0 + f64::from(code))),
+            (None, Some(hz)) => Some((said(r, format!("{hz:.1}")), f64::from(hz))),
+            (None, None) => None,
+        })
+        .collect();
+    let inputs = rows
+        .iter()
+        .map(|r| (said(r, mhz_label(r.input_mhz)), r.input_mhz))
+        .collect();
+    let colours = rows
+        .iter()
+        .filter(|r| r.dmr)
+        .filter_map(|r| {
+            r.dmr_color_code
+                .map(|cc| (said(r, format!("CC{cc}")), f64::from(cc)))
+        })
+        .collect();
+    let mut disagreements: Vec<Disagreement> = [
+        disputed(DisputedField::Tone, tones, |a, b| (a - b).abs() < 0.05),
+        disputed(DisputedField::Input, inputs, |a, b| {
+            (a - b).abs() <= SAME_CHANNEL_MHZ + 1e-9
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    // Mode: a lower source naming a mode the top source does not list.
+    let beyond: Vec<&RepeaterRecord> = rows
+        .iter()
+        .filter(|r| r.source != top.source && modes(r) & !top_modes != 0)
+        .collect();
+    if !beyond.is_empty() {
+        let mut said_modes = vec![Said {
+            source: top.source,
+            value: modes_label(top_modes),
+        }];
+        for r in beyond {
+            let s = said(r, modes_label(modes(r)));
+            if !said_modes.contains(&s) {
+                said_modes.push(s);
+            }
+        }
+        disagreements.push(Disagreement {
+            field: DisputedField::Mode,
+            said: said_modes,
+        });
+    }
+    disagreements.extend(disputed(DisputedField::ColorCode, colours, |a, b| a == b));
+
+    let mut sources: Vec<SourceRef> = Vec::new();
+    for r in &rows {
+        if !sources
+            .iter()
+            .any(|s| s.source == r.source && s.source_id == r.source_id)
+        {
+            sources.push(SourceRef {
+                source: r.source,
+                source_id: r.source_id.clone(),
+                channel_id: channel_id(r),
+                updated: r.updated.clone(),
+            });
+        }
+    }
+    Machine {
+        record: rec,
+        sources,
+        disagreements,
+    }
+}
+
 // ── record → channel ────────────────────────────────────────────────────────
+
+/// The id a record's channel takes: `<source>:<source id>` ("rsgb:4808", "rb:42-1", "hh:15279").
+fn channel_id(r: &RepeaterRecord) -> String {
+    let prefix = match r.source {
+        RepeaterSource::Rsgb => "rsgb",
+        RepeaterSource::Repeaterbook => "rb",
+        RepeaterSource::Hearham => "hh",
+    };
+    format!("{prefix}:{}", r.source_id)
+}
 
 /// Offsets bigger than this are treated as a true split (cross-band or exotic)
 /// rather than a +/- shift. The largest conventional shift is 23cm's 12–20 MHz.
 const MAX_SHIFT_MHZ: f64 = 30.0;
+
+/// The narrowband FM channel width. A machine whose source gives this bandwidth or less
+/// (RepeaterBook's "FM Bandwidth" 12.5; hearham's "NFM" is recorded as it) is an NFM channel.
+const NARROW_FM_KHZ: f32 = 12.5;
 
 /// Convert a picked repeater into a programmable [`Channel`].
 ///
@@ -483,7 +1344,10 @@ const MAX_SHIFT_MHZ: f64 = 30.0;
 /// like +1.0 MHz on 2m stay correct); beyond [`MAX_SHIFT_MHZ`] ⇒ `Split` with
 /// the absolute input frequency. Tone: uplink PL ⇒ `Tone` (the safe default —
 /// TSQL would mute a machine that doesn't transmit tone); downlink-only tone ⇒
-/// `TSql`; DCS ⇒ `Dtcs`. Mode: FM unless the record is digital-only.
+/// `TSql`; DCS ⇒ `Dtcs`, both ways only when the downlink gives the same code and
+/// otherwise send-only ([`Channel::dtcs_tx_only`], the DCS counterpart of `Tone`, for the
+/// same reason). Mode: FM, or NFM for a machine its source marks narrow
+/// ([`NARROW_FM_KHZ`]), unless the record is digital-only.
 pub fn to_channel(r: &RepeaterRecord) -> Channel {
     let diff = r.input_mhz - r.output_mhz;
     let (duplex, offset_mhz) = if diff.abs() < 1e-6 {
@@ -502,7 +1366,11 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         (None, None, None) => (ToneMode::None, 88.5, 88.5),
     };
     let mode = if r.fm {
-        ChanMode::Fm
+        if r.bandwidth_khz.is_some_and(|khz| khz <= NARROW_FM_KHZ) {
+            ChanMode::Nfm
+        } else {
+            ChanMode::Fm
+        }
     } else if r.dmr {
         ChanMode::Dmr
     } else if r.dstar {
@@ -518,14 +1386,7 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         r.callsign.clone()
     };
     Channel {
-        id: format!(
-            "{}:{}",
-            match r.source {
-                RepeaterSource::Repeaterbook => "rb",
-                RepeaterSource::Hearham => "hh",
-            },
-            r.source_id
-        ),
+        id: channel_id(r),
         name,
         rx_mhz: r.output_mhz,
         duplex,
@@ -534,6 +1395,7 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         rtone_hz: rtone,
         ctone_hz: ctone,
         dtcs_code: r.dcs.unwrap_or(23),
+        dtcs_tx_only: r.dcs.is_some() && r.dcs_dec != r.dcs,
         mode,
         comment: if r.city.is_empty() {
             r.callsign.clone()
@@ -543,6 +1405,7 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         dmr_color_code: r.dmr_color_code,
         source: Some(ChannelSource {
             source: match r.source {
+                RepeaterSource::Rsgb => "rsgb".into(),
                 RepeaterSource::Repeaterbook => "repeaterbook".into(),
                 RepeaterSource::Hearham => "hearham".into(),
             },
@@ -676,6 +1539,440 @@ mod tests {
         assert!(recs.iter().any(|r| !r.operational));
     }
 
+    /// One hearham row in the `/api/repeaters/v1` shape (the fixture's fields), carrying
+    /// `mode` and `encode` exactly as the directory writes them. The mode strings in the tests
+    /// below are the directory's own (every distinct value, counted 2026-09-30); the rest of the
+    /// row is filler.
+    fn hh_row(mode: &str, encode: &str) -> RepeaterRecord {
+        hh_row_tones(mode, encode, "")
+    }
+
+    /// [`hh_row`] with the downlink tone field (`decode`) too.
+    fn hh_row_tones(mode: &str, encode: &str, decode: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"{decode}","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
+        );
+        let mut recs = parse_hearham_json(&json);
+        assert_eq!(recs.len(), 1, "the {mode:?} row did not parse");
+        recs.remove(0)
+    }
+
+    /// The flags a record carries, by name — what Program reads: `fm` decides whether the
+    /// machine is listed by default and can be added, the others pick its badge.
+    fn flag_names(r: &RepeaterRecord) -> Vec<&'static str> {
+        [
+            (r.fm, "FM"),
+            (r.dmr, "DMR"),
+            (r.dstar, "D-STAR"),
+            (r.fusion, "YSF"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect()
+    }
+
+    /// Every case whose parsed flags differ from the expected ones, so a failure names each
+    /// mode string at once rather than stopping at the first.
+    fn wrong_flags(cases: &[(&str, &[&str])]) -> Vec<String> {
+        cases
+            .iter()
+            .filter_map(|&(mode, want)| {
+                let got = flag_names(&hh_row(mode, "100.0"));
+                (got != want).then(|| format!("{mode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect()
+    }
+
+    /// A hearham mode that names FM beside a digital mode is an FM machine that ALSO keeps the
+    /// digital mode. Reading only an exact "FM" left these with no flag at all, so Program hid
+    /// them and could not add them (315 "YSF/FM", 32 "DMR/FM", 18 "D-STAR/FM" rows, and the
+    /// run-together forms, on 2026-09-30).
+    #[test]
+    fn a_hearham_mode_naming_fm_beside_a_digital_mode_is_fm_and_keeps_it() {
+        let wrong = wrong_flags(&[
+            ("YSF/FM", &["FM", "YSF"]),
+            ("FM/YSF", &["FM", "YSF"]),
+            ("FM+YSF", &["FM", "YSF"]),
+            ("DMR/FM", &["FM", "DMR"]),
+            ("D-STAR/FM", &["FM", "D-STAR"]),
+            ("YSFD-STAR/FM", &["FM", "D-STAR", "YSF"]),
+            ("P25YSFD-STARNXDNDMR/FM", &["FM", "DMR", "D-STAR", "YSF"]),
+            ("P25YSFD-STARM17NXDNDMR/FM", &["FM", "DMR", "D-STAR", "YSF"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "FM beside a digital mode");
+
+        // The DMR colour code still arrives in `encode` on such a row: it stays a colour code
+        // (never a CTCSS tone), and the machine programs as FM.
+        let r = hh_row("DMR/FM", "CC1");
+        assert!(r.fm && r.dmr, "DMR/FM with CC1: {:?}", flag_names(&r));
+        assert_eq!(r.dmr_color_code, Some(1));
+        assert_eq!(r.ctcss_enc_hz, None);
+        assert_eq!(to_channel(&r).mode, ChanMode::Fm);
+    }
+
+    /// "NFM" is narrow FM, so an NFM machine is an FM machine: listed, and addable. It programs
+    /// as a narrow channel ([`a_machine_its_source_marks_narrow_is_an_nfm_channel`]).
+    #[test]
+    fn a_hearham_nfm_machine_is_fm() {
+        let wrong = wrong_flags(&[
+            ("NFM", &["FM"]),
+            ("P25/NFM", &["FM"]),
+            ("DMR/NFM", &["FM", "DMR"]),
+            ("NXDN/NFM", &["FM"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "NFM");
+        assert_eq!(to_channel(&hh_row("NFM", "100.0")).mode, ChanMode::Nfm);
+    }
+
+    /// FM beside a mode the record has no field for (P25, NXDN, M17) is still FM.
+    #[test]
+    fn a_hearham_mode_naming_fm_beside_an_unrecorded_mode_is_fm() {
+        let wrong = wrong_flags(&[
+            ("P25/FM", &["FM"]),
+            ("NXDN/FM", &["FM"]),
+            ("M17/FM", &["FM"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "FM beside P25/NXDN/M17");
+    }
+
+    /// A mode without FM in it stays digital-only (not listed by default, not addable), with
+    /// each digital mode it names read, the run-together forms included. "C4FM" is Fusion: the
+    /// letters FM inside a token are not FM.
+    #[test]
+    fn a_hearham_mode_without_fm_stays_digital_and_names_each_mode() {
+        let wrong = wrong_flags(&[
+            ("DMR", &["DMR"]),
+            ("D-STAR", &["D-STAR"]),
+            ("DSTAR", &["D-STAR"]),
+            ("YSF", &["YSF"]),
+            ("C4FM", &["YSF"]),
+            ("FUSION", &["YSF"]),
+            ("DMR/DSTAR", &["DMR", "D-STAR"]),
+            ("P25/D-STAR", &["D-STAR"]),
+            ("D-STARDMR", &["DMR", "D-STAR"]),
+            ("P25YSFD-STARNXDNDMR", &["DMR", "D-STAR", "YSF"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "digital-only modes");
+    }
+
+    /// A tone field that joins one parameter per mode with `/` gives the FM tone and the DMR
+    /// colour code in it. The machines in the tests above write theirs this way ("CC1/146.2",
+    /// "NAC293/100.0"), and read as one value that was no tone at all, so they would program
+    /// with no tone. Every tone field below is one the directory writes.
+    #[test]
+    fn a_hearham_tone_field_joining_several_modes_gives_its_tone_and_colour_code() {
+        let cases: [(&str, &str, Option<f32>, Option<u8>); 9] = [
+            ("DMR/FM", "CC1/146.2", Some(146.2), Some(1)),
+            ("P25/FM", "NAC293/100.0", Some(100.0), None),
+            ("P25/FM", "131.8/NAC293", Some(131.8), None),
+            ("YSF/FM", "67.0/CC9/RAN1/NAC293/C/CAN0", Some(67.0), Some(9)),
+            ("DMR/FM", "B/CC1", None, Some(1)),
+            // Two different tones: which one opens the machine is not written, so neither.
+            ("YSF/FM", "88.5/71.9", None, None),
+            ("FM", "B/71.9/88.5", None, None),
+            // One value reads as before.
+            ("FM", "100.0", Some(100.0), None),
+            ("DMR", "CC2", None, Some(2)),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(mode, encode, tone, cc)| {
+                let r = hh_row(mode, encode);
+                let got = (r.ctcss_enc_hz, r.dmr_color_code);
+                (got != (tone, cc))
+                    .then(|| format!("{encode:?}: got {got:?}, want {:?}", (tone, cc)))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "joined tone fields");
+
+        // What the operator exports: an FM channel with the tone that opens the machine.
+        let c = to_channel(&hh_row("DMR/FM", "CC1/146.2"));
+        assert_eq!(
+            (c.mode, c.tone_mode, c.rtone_hz),
+            (ChanMode::Fm, ToneMode::Tone, 146.2)
+        );
+    }
+
+    /// hearham writes a DCS code in its tone field in several shapes, and every shape in the
+    /// directory on 2026-09-30 is here. Each reads as its code, so the machine exports DTCS with
+    /// it; read as a tone it was no squelch at all. A code outside the 104 standard ones, a bare
+    /// number, and a trailing "*" or ".0" (their meaning is not written down) are not read.
+    #[test]
+    fn a_hearham_dcs_code_in_any_of_the_directorys_shapes_is_read() {
+        let cases: [(&str, Option<u16>); 15] = [
+            ("DCS023", Some(23)),
+            ("DCS 043", Some(43)),
+            ("DCS411N", Some(411)),
+            ("D023", Some(23)),
+            ("DPL411", Some(411)),
+            ("DPL 432", Some(432)),
+            ("DCS51", Some(51)),
+            ("NAC353/D244", Some(244)),
+            ("D244/NAC293", Some(244)),
+            ("DCS 740", None),
+            ("DCS100", None),
+            ("DCS017", None),
+            ("D031*", None),
+            ("DCS172.0", None),
+            ("023", None),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(encode, want)| {
+                let got = hh_row("FM", encode).dcs;
+                (got != want).then(|| format!("{encode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "DCS codes");
+
+        // What the operator exports: DTCS with the code, and no CTCSS read out of it.
+        let r = hh_row("NFM", "DCS023");
+        assert_eq!(r.ctcss_enc_hz, None);
+        let c = to_channel(&r);
+        assert_eq!((c.tone_mode, c.dtcs_code), (ToneMode::Dtcs, 23));
+    }
+
+    /// The uplink's DCS code is the machine's, and the downlink only confirms it: the same
+    /// code there makes the channel DCS both ways, anything else (a tone on a cross-mode
+    /// machine, another code, "D031*" that Nexus cannot read) leaves it send-only
+    /// ([`a_dcs_code_on_the_uplink_only_exports_as_send_only_dcs`]). A field whose own parts
+    /// disagree, a tone and a code ("77.0/D454"), gives neither. Every pair below is one the
+    /// directory writes.
+    #[test]
+    fn a_hearham_dcs_code_is_the_uplinks_and_only_the_same_downlink_code_confirms_it() {
+        // (encode, decode, the uplink's code, the downlink's code, the uplink's CTCSS)
+        type Case<'a> = (&'a str, &'a str, Option<u16>, Option<u16>, Option<f32>);
+        let cases: [Case; 7] = [
+            ("DCS023", "DCS023", Some(23), Some(23), None),
+            ("D031", "D031*", Some(31), None, None),
+            ("DCS172", "DCS172.0", Some(172), None, None),
+            ("77.0/D454", "", None, None, None),
+            ("DCS365", "DCS364", Some(365), None, None),
+            ("D311", "100", Some(311), None, None),
+            ("D244/NAC293", "131.8/NAC293", Some(244), None, None),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(encode, decode, dcs, dcs_dec, tone)| {
+                let r = hh_row_tones("NFM", encode, decode);
+                let got = (r.dcs, r.dcs_dec, r.ctcss_enc_hz);
+                (got != (dcs, dcs_dec, tone)).then(|| {
+                    format!(
+                        "{encode:?}/{decode:?}: got {got:?}, want {:?}",
+                        (dcs, dcs_dec, tone)
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "uplink and downlink DCS codes");
+    }
+
+    /// A one-row RepeaterBook export carrying `bandwidth` as the raw JSON value of its
+    /// "FM Bandwidth" field (`null` = absent).
+    fn rb_row_bw(bandwidth: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"{{"results":[{{"Callsign":"W9NAR","Frequency":"146.9400","Input Freq":"146.3400","PL":"103.5","TSQ":"","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"7","FM Analog":"Yes","FM Bandwidth":{bandwidth}}}]}}"#
+        );
+        let mut recs = parse_repeaterbook_json(&json);
+        assert_eq!(recs.len(), 1, "the {bandwidth} row did not parse");
+        recs.remove(0)
+    }
+
+    /// A machine its source marks narrow is a narrow (NFM) channel: hearham's "NFM" word (55
+    /// rows on 2026-09-30) and RepeaterBook's "FM Bandwidth" of 12.5 kHz, written as a number or
+    /// with the unit RepeaterBook's own pages print. Everything else stays wide FM.
+    #[test]
+    fn a_machine_its_source_marks_narrow_is_an_nfm_channel() {
+        let hearham = [
+            ("NFM", ChanMode::Nfm),
+            ("P25/NFM", ChanMode::Nfm),
+            ("DMR/NFM", ChanMode::Nfm),
+            ("FM", ChanMode::Fm),
+            ("YSF/FM", ChanMode::Fm),
+        ];
+        let repeaterbook = [
+            (r#""12.5""#, ChanMode::Nfm),
+            ("12.5", ChanMode::Nfm),
+            (r#""12.5 kHz""#, ChanMode::Nfm),
+            (r#""25""#, ChanMode::Fm),
+            (r#""25 kHz""#, ChanMode::Fm),
+            (r#""wide""#, ChanMode::Fm),
+            ("null", ChanMode::Fm),
+        ];
+        let mut wrong: Vec<String> = hearham
+            .iter()
+            .filter_map(|&(mode, want)| {
+                let got = to_channel(&hh_row(mode, "100.0")).mode;
+                (got != want).then(|| format!("hearham {mode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        wrong.extend(repeaterbook.iter().filter_map(|&(bw, want)| {
+            let got = to_channel(&rb_row_bw(bw)).mode;
+            (got != want).then(|| format!("RepeaterBook {bw}: got {got:?}, want {want:?}"))
+        }));
+        assert_eq!(wrong, Vec::<String>::new(), "narrow channels");
+    }
+
+    /// What the operator's radio gets: both export files write a narrow machine's mode as NFM.
+    #[test]
+    fn a_narrow_machine_exports_as_nfm_in_both_files() {
+        let c = to_channel(&hh_row("NFM", "100.0"));
+        let chirp = crate::chirp::to_chirp_csv(std::slice::from_ref(&c), 8, "");
+        let row = chirp.lines().nth(1).expect("a CHIRP row");
+        assert_eq!(
+            row.split(',').nth(10),
+            Some("NFM"),
+            "CHIRP Mode column: {row}"
+        );
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        let row = csv.lines().nth(1).expect("a CSV row");
+        assert_eq!(
+            row.split(',').nth(10),
+            Some("NFM"),
+            "generic CSV Mode column: {row}"
+        );
+    }
+
+    /// A one-row RepeaterBook export with its uplink (`PL`) and downlink (`TSQ`) tone fields.
+    fn rb_row_tones(pl: &str, tsq: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"{{"results":[{{"Callsign":"W9DCS","Frequency":"146.9400","Input Freq":"146.3400","PL":"{pl}","TSQ":"{tsq}","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"8","FM Analog":"Yes"}}]}}"#
+        );
+        let mut recs = parse_repeaterbook_json(&json);
+        assert_eq!(recs.len(), 1, "the {pl}/{tsq} row did not parse");
+        recs.remove(0)
+    }
+
+    /// One CSV line split into its fields, honouring the quotes `csv_field` puts around a
+    /// value with a comma in it (a city such as "Rockford, Illinois" in the comment).
+    fn csv_fields(line: &str) -> Vec<String> {
+        let (mut out, mut cur, mut quoted) = (Vec::new(), String::new(), false);
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' if quoted && chars.peek() == Some(&'"') => {
+                    cur.push('"');
+                    chars.next();
+                }
+                '"' => quoted = !quoted,
+                ',' if !quoted => out.push(std::mem::take(&mut cur)),
+                _ => cur.push(ch),
+            }
+        }
+        out.push(cur);
+        out
+    }
+
+    /// The columns a record's CHIRP row carries, read back by CHIRP's own column names.
+    fn chirp_columns(r: &RepeaterRecord, names: &[&str]) -> Vec<String> {
+        let csv = crate::chirp::to_chirp_csv(&[to_channel(r)], 8, "");
+        let mut lines = csv.lines();
+        let header = csv_fields(lines.next().expect("a header"));
+        let row = csv_fields(lines.next().expect("a CHIRP row"));
+        names
+            .iter()
+            .map(|name| {
+                header
+                    .iter()
+                    .position(|h| h == name)
+                    .and_then(|i| row.get(i))
+                    .map_or_else(|| format!("<no {name} column>"), |v| v.to_string())
+            })
+            .collect()
+    }
+
+    /// A machine whose source gives its DCS code on the uplink only is send-only DCS: CHIRP's
+    /// Cross mode "DTCS->", the code on transmit and the receiver open, which is the DCS
+    /// counterpart of `Tone`. As DTCS both ways, a machine whose output carries no code would
+    /// keep the radio squelched. hearham's uplink-only rows (32 on 2026-09-30) and
+    /// RepeaterBook's PL-only rows alike. A downlink that gives the same code stays DTCS both
+    /// ways; a downlink with a tone or another code (a cross-mode machine) is send-only too.
+    #[test]
+    fn a_dcs_code_on_the_uplink_only_exports_as_send_only_dcs() {
+        let cases = [
+            (
+                "hearham, uplink only",
+                hh_row_tones("FM", "DCS023", ""),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "hearham, both ways",
+                hh_row_tones("FM", "DCS023", "DCS023"),
+                ["DTCS", "023", "Tone->Tone"],
+            ),
+            (
+                "hearham, tone down",
+                hh_row_tones("NFM", "D311", "100"),
+                ["Cross", "311", "DTCS->"],
+            ),
+            (
+                "RepeaterBook, PL only",
+                rb_row_tones("D023", ""),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "RepeaterBook, PL and TSQ",
+                rb_row_tones("D023", "D023"),
+                ["DTCS", "023", "Tone->Tone"],
+            ),
+            (
+                "RepeaterBook, tone down",
+                rb_row_tones("D023", "100.0"),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "a CTCSS machine",
+                hh_row_tones("FM", "100.0", ""),
+                ["Tone", "023", "Tone->Tone"],
+            ),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(what, r, want)| {
+                let got = chirp_columns(r, &["Tone", "DtcsCode", "CrossMode"]);
+                (got != want).then(|| format!("{what}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(
+            wrong,
+            Vec::<String>::new(),
+            "send-only DCS in the CHIRP export"
+        );
+    }
+
+    /// The generic CSV names send-only DCS in its Tone Mode column with CHIRP's word for it.
+    #[test]
+    fn send_only_dcs_is_named_in_the_generic_csv() {
+        let c = to_channel(&hh_row_tones("FM", "DCS023", ""));
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        let mut lines = csv.lines();
+        let header = csv_fields(lines.next().expect("a header"));
+        let row = csv_fields(lines.next().expect("a CSV row"));
+        let at = |name: &str| {
+            header
+                .iter()
+                .position(|h| h == name)
+                .map(|i| row[i].as_str())
+        };
+        assert_eq!((at("Tone Mode"), at("DCS")), (Some("DTCS->"), Some("023")));
+    }
+
+    /// A mode the record has no field for is never FM on its own, and a plain or empty mode is
+    /// FM, as before.
+    #[test]
+    fn a_hearham_mode_with_no_field_is_never_fm_on_its_own() {
+        let wrong = wrong_flags(&[
+            ("P25", &[]),
+            ("NXDN", &[]),
+            ("AX25", &[]),
+            ("ATV", &[]),
+            ("TV", &[]),
+            ("FM", &["FM"]),
+            ("", &["FM"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "modes with no field");
+    }
+
     /// The shared-access path serves rows narrowed to the fields below, while
     /// a user on their own `rbuapp_` token gets the full export straight from
     /// RepeaterBook. Both must produce identical records, or the two paths
@@ -686,7 +1983,15 @@ mod tests {
         let full = parse_repeaterbook_json(RB_FIXTURE);
         let narrowed = parse_repeaterbook_json(RB_NARROWED_FIXTURE);
         assert!(!full.is_empty(), "fixture parsed nothing");
-        assert_eq!(narrowed, full, "narrowing the export changed a record");
+        // Except the row's date: "Last Update" is not among the proxy's 20 fields, so a row
+        // that came through it says "no date" (the list's fetch date stands in) — by design.
+        assert!(full.iter().any(|r| r.updated.is_some()));
+        assert!(narrowed.iter().all(|r| r.updated.is_none()));
+        let undated: Vec<RepeaterRecord> = full
+            .into_iter()
+            .map(|r| RepeaterRecord { updated: None, ..r })
+            .collect();
+        assert_eq!(narrowed, undated, "narrowing the export changed a record");
     }
 
     /// The measured cases from the hearham directory that motivated this check.
@@ -754,6 +2059,11 @@ mod tests {
             "one row is missing coords and must be skipped"
         );
         let w9abc = recs.iter().find(|r| r.callsign == "W9ABC").unwrap();
+        assert_eq!(
+            w9abc.updated.as_deref(),
+            Some("2026-05-14"),
+            "the row's own date"
+        );
         assert!((w9abc.output_mhz - 146.94).abs() < 1e-9);
         assert!((w9abc.input_mhz - 146.34).abs() < 1e-9);
         assert_eq!(w9abc.ctcss_enc_hz, Some(103.5));
@@ -820,5 +2130,510 @@ mod tests {
         }
         assert_eq!(state_id_for("WI"), Some("55"));
         assert_eq!(state_id_for("XX"), None);
+    }
+
+    // ── RSGB + the merge (N46 P1) ───────────────────────────────────────────
+
+    /// Real listings, kept small: RSGB rows from `api-beta.rsgb.online/locator/` IO83, IO93 and
+    /// IO74, and their hearham twins, both read 2026-10-01 (keeper callsigns and hearham's free
+    /// text blanked). Repeater data: RSGB ETCC (ukrepeater.net), and hearham.com.
+    const RSGB_FIXTURE: &str = include_str!("../tests/fixtures/rsgb_locator_sample.json");
+    const HEARHAM_UK_FIXTURE: &str = include_str!("../tests/fixtures/hearham_uk_sample.json");
+    /// Manchester: the middle of the comparison the merge was designed from.
+    const MANCHESTER: (f64, f64) = (53.48, -2.24);
+
+    fn rsgb(call: &str) -> RepeaterRecord {
+        parse_rsgb_json(RSGB_FIXTURE)
+            .expect("the fixture is the real shape")
+            .into_iter()
+            .find(|r| r.callsign == call)
+            .unwrap_or_else(|| panic!("{call} is not in the RSGB fixture"))
+    }
+
+    #[test]
+    fn an_rsgb_payload_reads_its_voice_listings_with_their_modes_and_tone() {
+        let recs = parse_rsgb_json(RSGB_FIXTURE).expect("the real shape parses");
+        let calls: Vec<&str> = recs.iter().map(|r| r.callsign.as_str()).collect();
+        // ATV (GB3UD), a packet mailbox (GB7VAX) and a link transmitter (GB7DZ-L) are not
+        // voice channels; the twelve voice listings are all kept, Tetra-only GB7PR included.
+        for gone in ["GB3UD", "GB7VAX", "GB7DZ-L"] {
+            assert!(!calls.contains(&gone), "{gone} is not a channel to program");
+        }
+        assert_eq!(recs.len(), 12, "{calls:?}");
+
+        let pp = rsgb("GB3PP");
+        assert_eq!(pp.source, RepeaterSource::Rsgb);
+        assert_eq!(pp.source_id, "4356");
+        assert!((pp.output_mhz - 433.375).abs() < 1e-9, "tx is the output");
+        assert!((pp.input_mhz - 434.975).abs() < 1e-9, "rx is the input");
+        assert_eq!(pp.ctcss_enc_hz, Some(82.5));
+        assert_eq!(pp.ctcss_dec_hz, None, "the list gives the access tone only");
+        assert!(pp.fm && pp.dmr && pp.fusion && !pp.dstar, "A, M:10, F");
+        assert_eq!(
+            pp.dmr_color_code,
+            Some(10),
+            "\"M:10\" is DMR on colour code 10"
+        );
+        assert_eq!(pp.bandwidth_khz, Some(12.5));
+        assert_eq!(pp.updated, None, "the API has no date per listing");
+
+        let jb = rsgb("MB6JB");
+        assert!(jb.dmr && !jb.fm, "a bare \"M\" is DMR");
+        assert_eq!(jb.dmr_color_code, None, "with no colour code given");
+        assert_eq!(jb.ctcss_enc_hz, None, "a ctcss of 0 is no tone listed");
+
+        assert!(!rsgb("GB3XL").operational, "NOT OPERATIONAL");
+        assert!(
+            rsgb("GB3MN").operational,
+            "REDUCED OUTPUT is still on the air"
+        );
+        let pr = rsgb("GB7PR");
+        assert!(
+            !pr.fm && !pr.dmr && !pr.dstar && !pr.fusion,
+            "Tetra has no field"
+        );
+        assert_eq!(rsgb("MB7INI").city, "CARRICKFERGUS");
+        assert_eq!(rsgb("GB3BW").city, "WAKEFIELD");
+    }
+
+    #[test]
+    fn an_rsgb_payload_in_another_shape_is_refused_never_read_as_empty() {
+        assert_eq!(
+            parse_rsgb_json(r#"{"data":[]}"#),
+            Ok(vec![]),
+            "an empty square is fine"
+        );
+        let row = r#"{"id":1,"type":"AV","status":"OPERATIONAL","repeater":"GB3XX","town":"X","modeCodes":["A"],"tx":145600000,"rx":145000000,"ctcss":77,"txbw":12.5,"locator":"IO83LP"}"#;
+        assert_eq!(
+            parse_rsgb_json(&format!(r#"{{"data":[{row}]}}"#)).map(|r| r.len()),
+            Ok(1),
+            "CONTROL: the one-row payload the cases below each break"
+        );
+        let shapes = [
+            ("a bare list", format!("[{row}]")),
+            ("another wrapper", format!(r#"{{"results":[{row}]}}"#)),
+            (
+                "tx renamed",
+                format!(r#"{{"data":[{}]}}"#, row.replace("\"tx\"", "\"output\"")),
+            ),
+            (
+                "modeCodes as text",
+                format!(r#"{{"data":[{}]}}"#, row.replace(r#"["A"]"#, r#""A""#)),
+            ),
+            (
+                "no callsign",
+                format!(
+                    r#"{{"data":[{}]}}"#,
+                    row.replace("\"repeater\"", "\"call\"")
+                ),
+            ),
+            (
+                "an HTML error page",
+                "<html><body>502 Bad Gateway</body></html>".to_string(),
+            ),
+        ];
+        for (what, body) in shapes {
+            assert!(
+                parse_rsgb_json(&body).is_err(),
+                "{what} must be refused, not read as empty"
+            );
+        }
+    }
+
+    #[test]
+    fn an_rsgb_position_is_its_locator_or_a_grid_reference_inside_its_square() {
+        // The Ordnance Survey's own worked example (annex C): E 651409.903, N 313177.270 is
+        // 52°39′27.2531″N 1°43′4.5177″E on OSGB36.
+        let (lat, lon) = tm_inverse(&BRITISH_GRID, 651_409.903, 313_177.270);
+        assert!(
+            (lat - (52.0 + 39.0 / 60.0 + 27.2531 / 3600.0)).abs() < 1e-7,
+            "{lat}"
+        );
+        assert!(
+            (lon - (1.0 + 43.0 / 60.0 + 4.5177 / 3600.0)).abs() < 1e-7,
+            "{lon}"
+        );
+        // The same point as a 10-figure reference (TG, 1 m squares, so half a metre off).
+        let (lat, lon) = grid_ref_to_latlon("TG 51409 13177").expect("a GB reference");
+        assert!((lat - 52.657_570).abs() < 2e-5 && (lon - 1.717_922).abs() < 2e-5);
+        // Irish Grid, as the list writes it: GB3NI's IJ4076 lands inside IO74CO, the
+        // coordinator's own locator for the same site (54.583–54.625 N, 5.833–5.750 W).
+        let (lat, lon) = grid_ref_to_latlon("IJ4076").expect("an Irish reference");
+        assert!(
+            (54.583..54.625).contains(&lat) && (-5.834..-5.75).contains(&lon),
+            "{lat},{lon}"
+        );
+        for bad in ["", "IJ", "SJ295", "XX1234", "J4076", "SJ29X7", "IÉ4076"] {
+            assert_eq!(grid_ref_to_latlon(bad), None, "{bad:?}");
+        }
+
+        // A 6-character locator is used as it stands, even where the reference disagrees
+        // (GB3OA: Southport by its locator, Blackpool by its reference).
+        assert_eq!(
+            rsgb_position("IO83LP", "SD3341"),
+            maidenhead_to_latlon("IO83LP")
+        );
+        // A 4-character square takes the reference inside it (GB3CR, Caergwrle), which is
+        // NOT the square's centre 50 km away…
+        let cr = rsgb_position("IO83", "SJ2957").expect("placed");
+        assert_eq!(Some(cr), grid_ref_to_latlon("SJ2957"));
+        assert_eq!(latlon_to_maidenhead(cr.0, cr.1), "IO83");
+        assert!(haversine_km(cr, maidenhead_to_latlon("IO83").unwrap()) > 40.0);
+        // …but never one outside it (a London reference): the square's centre then.
+        assert_eq!(
+            rsgb_position("IO83", "TQ3080"),
+            maidenhead_to_latlon("IO83")
+        );
+        assert_eq!(rsgb_position("", "SJ2957"), grid_ref_to_latlon("SJ2957"));
+        assert_eq!(rsgb_position("", ""), None);
+        // Through the parser: MB7INI's 4-character IO74 and Irish IJ3988 (Carrickfergus).
+        let ini = rsgb("MB7INI");
+        assert!(
+            (ini.lat - 54.72).abs() < 0.03 && (ini.lon + 5.81).abs() < 0.03,
+            "{ini:?}"
+        );
+    }
+
+    #[test]
+    fn a_uk_origin_asks_rsgb_about_the_nearest_squares_and_names_the_rest() {
+        // Manchester sits in IO83, 16 km from IO93 and over 50 km from IO82/IO84.
+        let near = plan_rsgb_squares(MANCHESTER, 40.0);
+        assert_eq!(near.ask, vec!["IO83", "IO93"]);
+        assert!(near.beyond.is_empty());
+
+        let wide = plan_rsgb_squares(MANCHESTER, 322.0);
+        assert_eq!(wide.ask.len(), RSGB_SQUARES_PER_SEARCH);
+        assert_eq!(wide.ask[0], "IO83");
+        assert!(!wide.beyond.is_empty(), "200 mi reaches past nine squares");
+        let km = |sq: &String| km_to_square(MANCHESTER, sq).unwrap();
+        let farthest_asked = wide.ask.iter().map(km).fold(0.0, f64::max);
+        assert!(
+            wide.beyond.iter().all(|sq| km(sq) >= farthest_asked),
+            "nearest first"
+        );
+        assert!(wide
+            .ask
+            .iter()
+            .chain(&wide.beyond)
+            .all(|sq| RSGB_SQUARES.contains(&sq.as_str())));
+
+        // Belfast is a UK origin (IO74); Dublin (IO63), Paris and Chicago are not.
+        assert_eq!(plan_rsgb_squares((54.60, -5.93), 25.0).ask[0], "IO74");
+        for elsewhere in [(53.35, -6.26), (48.86, 2.35), (41.88, -87.63)] {
+            assert_eq!(plan_rsgb_squares(elsewhere, 100.0), RsgbPlan::default());
+        }
+    }
+
+    #[test]
+    fn the_rsgb_layer_is_every_square_it_asked_about_or_none() {
+        let one = |sq: &str, body: Option<&str>, at: i64, stale: bool| SquareFetch {
+            square: sq.into(),
+            body: body.map(str::to_string),
+            fetched_utc: at,
+            stale,
+        };
+        let ok = fold_rsgb_squares(&[
+            one("IO83", Some(RSGB_FIXTURE), 900, false),
+            one("IO93", Some(r#"{"data":[]}"#), 1000, true),
+        ])
+        .expect("both squares answered");
+        assert_eq!(ok.records.len(), 12);
+        assert_eq!(ok.oldest_utc, 900, "the older square's stamp");
+        assert!(ok.stale);
+
+        let silent = fold_rsgb_squares(&[
+            one("IO83", Some(RSGB_FIXTURE), 900, false),
+            one("IO93", None, 0, false),
+        ]);
+        assert!(
+            silent.as_ref().is_err_and(|e| e.contains("IO93")),
+            "{silent:?}"
+        );
+        let changed = fold_rsgb_squares(&[
+            one("IO83", Some(RSGB_FIXTURE), 900, false),
+            one("IO93", Some("[]"), 1000, false),
+        ]);
+        assert!(
+            changed.is_err(),
+            "a payload in another shape drops the layer"
+        );
+        assert!(fold_rsgb_squares(&[]).is_err());
+    }
+
+    /// One merged machine as a line, by value: what it programs, where it came from and what its
+    /// sources disagree on.
+    fn golden_line(m: &Machine) -> String {
+        let r = &m.record;
+        let tone = match (r.dcs, r.ctcss_enc_hz) {
+            (Some(c), _) => format!("D{c:03}"),
+            (None, Some(hz)) => format!("{hz:.1}"),
+            (None, None) => "-".into(),
+        };
+        let cc = r.dmr_color_code.map_or("-".to_string(), |c| c.to_string());
+        let sources: Vec<&str> = m.sources.iter().map(|s| s.channel_id.as_str()).collect();
+        let differ: Vec<String> = m
+            .disagreements
+            .iter()
+            .map(|d| {
+                let said: Vec<String> = d
+                    .said
+                    .iter()
+                    .map(|s| format!("{:?} {}", s.source, s.value))
+                    .collect();
+                format!("{:?}({})", d.field, said.join("|"))
+            })
+            .collect();
+        format!(
+            "{} {} in {} {} {} cc{} {} [{}] {}",
+            r.callsign,
+            mhz_label(r.output_mhz),
+            mhz_label(r.input_mhz),
+            tone,
+            modes_label(modes(r)),
+            cc,
+            if r.operational { "on" } else { "off" },
+            sources.join(" "),
+            differ.join(" ")
+        )
+        .trim_end()
+        .to_string()
+    }
+
+    /// THE GOLDEN: the coordinator's listings and hearham's around Manchester, merged. Each line
+    /// was reasoned from the two fixtures before the merge first ran:
+    /// - GB3BW: RSGB says 88.5 and input 438.4125; hearham lists it twice at 82.5, once with
+    ///   that input and once as simplex. Both disagreements shown, RSGB's values programmed.
+    /// - GB3XN: hearham has it simplex; RSGB gives the 438.525 input (a radio programmed from
+    ///   hearham alone could not open it).
+    /// - GB3XL, GB3PP: hearham lists only the DMR side; RSGB says FM too, so each is ONE
+    ///   programmable FM row with its CTCSS and colour code (GB3PP's colour codes disagree).
+    /// - GB7SJ, MB6JB, GB3OA: hearham names a mode RSGB does not list.
+    /// - GB3CR: hearham places its twin in County Fermanagh, outside the radius, so RSGB's row
+    ///   stands alone; MB7ITW is hearham's alone; GB7PR (Tetra) is RSGB's alone.
+    #[test]
+    fn the_uk_merge_golden() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let got: Vec<String> = merge_nearby(&[&coordinator, &[], &hearham], MANCHESTER, 100.0)
+            .iter()
+            .map(golden_line)
+            .collect();
+        let want = [
+            "MB7IGF 430.0125 in 430.0125 82.5 FM cc- on [rsgb:355 hh:15527]",
+            "GB3MN 145.65 in 145.05 82.5 FM+YSF cc- on [rsgb:2293 hh:14327]",
+            "MB6JB 431.1375 in 431.1375 - DMR cc- on [rsgb:6531 hh:18598] Mode(Rsgb DMR|Hearham FM)",
+            "GB7SJ 433.175 in 434.775 103.5 FM cc- on [rsgb:2437 hh:4042] Mode(Rsgb FM|Hearham DMR)",
+            "GB3PP 433.375 in 434.975 82.5 FM+DMR+YSF cc10 on [rsgb:4356 hh:3959] ColorCode(Rsgb CC10|Hearham CC9)",
+            "GB7PR 434.05 in 434.05 - — cc- on [rsgb:5190]",
+            "GB3XL 430.8875 in 438.4875 82.5 FM+DMR cc1 off [rsgb:6863 hh:4017]",
+            "MB7ITW 50.53 in 50.53 71.9 FM cc- off [hh:671]",
+            "GB3OA 145.6125 in 145.0125 82.5 FM+YSF cc- on [rsgb:207 hh:692 hh:4092] Mode(Rsgb FM+YSF|Hearham DMR)",
+            "GB3BW 430.8125 in 438.4125 88.5 FM cc- on [rsgb:4808 hh:12141 hh:12268] Tone(Rsgb 88.5|Hearham 82.5) Input(Rsgb 438.4125|Hearham 438.4125|Hearham 430.8125)",
+            "GB3CR 433.15 in 434.75 110.9 FM cc- on [rsgb:744]",
+            "GB3XN 430.925 in 438.525 71.9 FM cc- on [rsgb:1031 hh:721] Input(Rsgb 438.525|Hearham 430.925)",
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// A hand-built row for the rule tests (no parser involved): FM on 146.94, input 146.34,
+    /// no tone, near Hartford; `source`, id and callsign given.
+    fn row(source: RepeaterSource, id: &str, call: &str) -> RepeaterRecord {
+        RepeaterRecord {
+            source,
+            source_id: id.into(),
+            callsign: call.into(),
+            output_mhz: 146.94,
+            input_mhz: 146.34,
+            ctcss_enc_hz: None,
+            ctcss_dec_hz: None,
+            dcs: None,
+            dcs_dec: None,
+            lat: 41.73,
+            lon: -72.71,
+            city: String::new(),
+            county: String::new(),
+            state: String::new(),
+            fm: true,
+            dmr: false,
+            dstar: false,
+            fusion: false,
+            dmr_color_code: None,
+            bandwidth_khz: None,
+            operational: true,
+            open_use: true,
+            updated: None,
+            distance_km: 0.0,
+            bearing_deg: 0.0,
+        }
+    }
+    const HARTFORD: (f64, f64) = (41.76, -72.69);
+    fn merged(rows: &[RepeaterRecord]) -> Vec<Machine> {
+        merge_nearby(&[rows], HARTFORD, 50.0)
+    }
+
+    #[test]
+    fn one_machine_is_one_callsign_on_one_output() {
+        let a = row(RepeaterSource::Hearham, "1", "W1AW");
+        let b = row(RepeaterSource::Repeaterbook, "2", "w1aw-r");
+        assert_eq!(
+            merged(&[a.clone(), b.clone()]).len(),
+            1,
+            "the base callsign, any case"
+        );
+        let near = RepeaterRecord {
+            output_mhz: 146.9425,
+            ..b.clone()
+        };
+        assert_eq!(
+            merged(&[a.clone(), near]).len(),
+            1,
+            "2.5 kHz apart: one channel"
+        );
+        let next = RepeaterRecord {
+            output_mhz: 146.9431,
+            ..b.clone()
+        };
+        assert_eq!(
+            merged(&[a.clone(), next]).len(),
+            2,
+            "3.1 kHz apart: two channels"
+        );
+        let other = row(RepeaterSource::Repeaterbook, "3", "W1XYZ");
+        assert_eq!(
+            merged(&[a, other]).len(),
+            2,
+            "two callsigns on one site are two machines"
+        );
+    }
+
+    #[test]
+    fn without_a_callsign_it_takes_both_frequencies_and_one_site() {
+        let a = row(RepeaterSource::Hearham, "1", "");
+        let b = row(RepeaterSource::Repeaterbook, "2", "W1AW");
+        let at = |r: &RepeaterRecord, north_km: f64| RepeaterRecord {
+            lat: r.lat + north_km / 111.2,
+            ..r.clone()
+        };
+        assert_eq!(
+            merged(&[a.clone(), at(&b, 4.0)]).len(),
+            1,
+            "4 km apart: one machine"
+        );
+        assert_eq!(
+            merged(&[a.clone(), at(&b, 6.0)]).len(),
+            2,
+            "6 km apart: two"
+        );
+        let other_input = RepeaterRecord {
+            input_mhz: b.input_mhz + 0.005,
+            ..b.clone()
+        };
+        assert_eq!(
+            merged(&[a.clone(), other_input]).len(),
+            2,
+            "another input: two"
+        );
+        let m = &merged(&[a, b])[0];
+        assert_eq!(
+            m.record.callsign, "W1AW",
+            "the callsign comes from the row that has one"
+        );
+        assert_eq!(m.sources.len(), 2, "every source id kept");
+    }
+
+    #[test]
+    fn each_field_comes_from_the_coordinator_then_repeaterbook_then_hearham() {
+        let tone = |r: RepeaterRecord, enc: Option<f32>, dec: Option<f32>| RepeaterRecord {
+            ctcss_enc_hz: enc,
+            ctcss_dec_hz: dec,
+            ..r
+        };
+        let coord = row(RepeaterSource::Rsgb, "1", "W1AW");
+        let rb = RepeaterRecord {
+            city: "Newington".into(),
+            ..tone(
+                row(RepeaterSource::Repeaterbook, "2", "W1AW"),
+                Some(123.0),
+                None,
+            )
+        };
+        let hh = tone(
+            row(RepeaterSource::Hearham, "3", "W1AW"),
+            Some(100.0),
+            Some(100.0),
+        );
+
+        // The coordinator gives no tone: RepeaterBook's, and the disagreement with hearham shown.
+        // The argument order does not matter; the source does.
+        for rows in [
+            vec![hh.clone(), rb.clone(), coord.clone()],
+            vec![coord.clone(), rb.clone(), hh.clone()],
+        ] {
+            let m = &merged(&rows)[0];
+            assert_eq!(m.record.ctcss_enc_hz, Some(123.0));
+            assert_eq!(
+                m.record.ctcss_dec_hz, None,
+                "the tone fields come from ONE row"
+            );
+            assert_eq!(m.record.city, "Newington", "a field the coordinator lacks");
+            assert_eq!(
+                m.record.source,
+                RepeaterSource::Rsgb,
+                "the top row is the coordinator's"
+            );
+            let ids: Vec<&str> = m.sources.iter().map(|s| s.channel_id.as_str()).collect();
+            assert_eq!(ids, ["rsgb:1", "rb:2", "hh:3"]);
+            assert_eq!(
+                m.disagreements,
+                vec![Disagreement {
+                    field: DisputedField::Tone,
+                    said: vec![
+                        Said {
+                            source: RepeaterSource::Repeaterbook,
+                            value: "123.0".into()
+                        },
+                        Said {
+                            source: RepeaterSource::Hearham,
+                            value: "100.0".into()
+                        },
+                    ],
+                }]
+            );
+        }
+        // The coordinator's own tone wins over both.
+        let m = &merged(&[tone(coord, Some(88.5), None), rb, hh])[0];
+        assert_eq!(m.record.ctcss_enc_hz, Some(88.5));
+        assert_eq!(m.disagreements[0].said.len(), 3);
+    }
+
+    #[test]
+    fn a_mixed_machine_the_coordinator_lists_with_fm_programs_as_one_fm_row() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        // hearham alone: GB3XL is a DMR row, nothing to program.
+        let alone = merge_nearby(&[&hearham], MANCHESTER, 100.0);
+        let xl = alone.iter().find(|m| m.record.callsign == "GB3XL").unwrap();
+        assert!(!xl.record.fm);
+        assert_eq!(to_channel(&xl.record).mode, ChanMode::Dmr);
+        // With the coordinator: one FM row, its CTCSS and its colour code.
+        let both = merge_nearby(&[&coordinator, &hearham], MANCHESTER, 100.0);
+        let xl: Vec<&Machine> = both
+            .iter()
+            .filter(|m| m.record.callsign == "GB3XL")
+            .collect();
+        assert_eq!(xl.len(), 1, "one row per machine");
+        let c = to_channel(&xl[0].record);
+        assert_eq!(
+            (c.mode, c.tone_mode, c.rtone_hz),
+            (ChanMode::Nfm, ToneMode::Tone, 82.5)
+        );
+        assert_eq!(c.dmr_color_code, Some(1));
+        assert_eq!((c.duplex, c.id.as_str()), (Duplex::Plus, "rsgb:6863"));
+        assert!((c.offset_mhz - 7.6).abs() < 1e-9);
+        let src = c.source.expect("provenance");
+        assert_eq!(
+            (src.source.as_str(), src.source_id.as_str()),
+            ("rsgb", "6863")
+        );
     }
 }

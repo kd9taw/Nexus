@@ -35,7 +35,8 @@ pub enum ToneMode {
     Tone,
     /// CTCSS encode + decode (tone squelch both ways).
     TSql,
-    /// DCS/DTCS digital code squelch.
+    /// DCS/DTCS digital code squelch: both ways, or on transmit only when
+    /// [`Channel::dtcs_tx_only`] is set.
     Dtcs,
 }
 
@@ -63,7 +64,7 @@ impl ChanMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSource {
-    /// "repeaterbook" | "hearham".
+    /// "rsgb" | "repeaterbook" | "hearham".
     pub source: String,
     /// The source's repeater id.
     pub source_id: String,
@@ -93,6 +94,13 @@ pub struct Channel {
     pub ctone_hz: f32,
     /// DCS code (when `tone_mode == Dtcs`).
     pub dtcs_code: u16,
+    /// With `tone_mode == Dtcs`: the code goes out on transmit only and the receiver stays
+    /// open (CHIRP's Cross mode "DTCS->"), the DCS counterpart of [`ToneMode::Tone`], for a
+    /// machine whose source gives its code on the uplink alone. A FIELD rather than another
+    /// tone mode on purpose: a build that predates it ignores it (reading DCS both ways),
+    /// where an unknown tone mode would fail the whole `radioprog.json` parse, and that
+    /// loader falls back to an empty file.
+    pub dtcs_tx_only: bool,
     pub mode: ChanMode,
     pub comment: String,
     // ── forward-compat (persisted now, exported in v2) ──
@@ -116,6 +124,7 @@ impl Default for Channel {
             rtone_hz: 88.5,
             ctone_hz: 88.5,
             dtcs_code: 23,
+            dtcs_tx_only: false,
             mode: ChanMode::Fm,
             comment: String::new(),
             dmr_color_code: None,
@@ -190,7 +199,8 @@ pub fn sanitize_name(name: &str, max_len: usize) -> String {
 
 /// Generic CSV export — a plain spreadsheet-friendly dump (Anytone CPS / RT
 /// Systems users copy columns from it; it is NOT the CHIRP format, see
-/// [`crate::chirp`]). `attribution` becomes a trailing comment line ("" = none).
+/// [`crate::chirp`]). `attribution` becomes trailing comment lines ("" = none), one per line
+/// of it ([`attribution_lines`]).
 pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
     let mut out = String::from(
         "Channel,Name,RX Frequency (MHz),TX Frequency (MHz),Duplex,Offset (MHz),\
@@ -207,6 +217,8 @@ pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
             ToneMode::None => "None",
             ToneMode::Tone => "Tone",
             ToneMode::TSql => "TSQL",
+            // CHIRP's word for DCS on transmit only.
+            ToneMode::Dtcs if c.dtcs_tx_only => "DTCS->",
             ToneMode::Dtcs => "DTCS",
         };
         let mode = match c.mode {
@@ -233,10 +245,21 @@ pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
             csv_field(&c.comment),
         ));
     }
-    if !attribution.is_empty() {
-        out.push_str(&format!("# {attribution}\n"));
-    }
+    out.push_str(&attribution_lines(attribution));
     out
+}
+
+/// The attribution as comment lines, `# ` before each of its lines: the directories a list came
+/// from each require their own ("Repeater data: RSGB ETCC (ukrepeater.net)" beside hearham's),
+/// so it arrives as several lines, and a line written without its `#` would read as a channel.
+/// Blank lines are dropped; "" is no attribution at all.
+pub(crate) fn attribution_lines(attribution: &str) -> String {
+    attribution
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("# {line}\n"))
+        .collect()
 }
 
 /// Quote a CSV field only when it needs it.
@@ -320,6 +343,24 @@ mod tests {
     }
 
     #[test]
+    fn generic_csv_writes_each_attribution_line_as_a_comment() {
+        let csv = to_generic_csv(
+            &[chan(146.94, Duplex::Minus, 0.6)],
+            "Repeater data: RSGB ETCC (ukrepeater.net)\nRepeater data from hearham.com",
+        );
+        let tail: Vec<&str> = csv.lines().skip(2).collect();
+        assert_eq!(
+            tail,
+            [
+                "# Repeater data: RSGB ETCC (ukrepeater.net)",
+                "# Repeater data from hearham.com"
+            ]
+        );
+        assert_eq!(attribution_lines(""), "", "no attribution, no line");
+        assert_eq!(attribution_lines(" \n\n"), "", "blank lines are dropped");
+    }
+
+    #[test]
     fn channel_serde_roundtrip_camel_case() {
         let c = chan(146.94, Duplex::Minus, 0.6);
         let json = serde_json::to_string(&c).unwrap();
@@ -331,5 +372,28 @@ mod tests {
         let sparse: Channel = serde_json::from_str(r#"{"name":"X","rxMhz":146.52}"#).unwrap();
         assert_eq!(sparse.rx_mhz, 146.52);
         assert_eq!(sparse.duplex, Duplex::Simplex);
+    }
+
+    /// A field this build does not know is ignored, not an error: that is what lets a later
+    /// build add one (send-only DCS was added as a field, not a new tone mode) without an
+    /// earlier build failing to read `radioprog.json`, whose loader falls back to an EMPTY
+    /// file on any parse error and would then save over every project.
+    #[test]
+    fn a_channel_field_this_build_does_not_know_is_ignored() {
+        let later: Channel = serde_json::from_str(
+            r#"{"name":"X","rxMhz":146.94,"toneMode":"dtcs","dtcsCode":23,"aFieldFromLater":true}"#,
+        )
+        .expect("an unknown field must not fail the parse");
+        assert_eq!((later.tone_mode, later.dtcs_code), (ToneMode::Dtcs, 23));
+
+        // And send-only DCS survives the save the Remote's export reads back.
+        let send_only = Channel {
+            tone_mode: ToneMode::Dtcs,
+            dtcs_tx_only: true,
+            ..chan(146.94, Duplex::Minus, 0.6)
+        };
+        let json = serde_json::to_string(&send_only).unwrap();
+        assert!(json.contains("\"dtcsTxOnly\":true"), "{json}");
+        assert_eq!(serde_json::from_str::<Channel>(&json).unwrap(), send_only);
     }
 }

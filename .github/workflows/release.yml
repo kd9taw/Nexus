@@ -28,6 +28,16 @@
 # the last 356 main runs, 43%, because ci.yml cancels superseded runs on the same ref). So
 # there are now two kinds of gate here: the artifact gates, and one SOURCE gate that asks
 # whether the commit being released ever passed. Both must hold.
+#
+# PINNED DOWNLOADS. Everything this workflow fetches to build with is pinned to a digest or a
+# commit: actions from outside GitHub's own (by commit SHA), the DeepCW model, FFTW, Hamlib, the
+# tauri bundler's AppImage tools and the AppImage runtime (scripts/build-linux.sh), epubcheck,
+# the manual's Python packages, and the Pi container's images, Node.js and rustup-init
+# (scripts/Dockerfile.pi, which also takes npm at an exact version). A branch, a `continuous`
+# release or a floating version lets a release change with no commit here.
+# scripts/release-secrets.test.mjs refuses a download it cannot see pinned, here, in ci.yml and in
+# Dockerfile.pi. What it cannot see: the package managers (apt, Homebrew), which verify what they
+# fetch but float its version.
 
 name: Release
 
@@ -186,7 +196,7 @@ jobs:
             libusb-1.0-0-dev \
             libfuse2
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
 
@@ -196,22 +206,19 @@ jobs:
 
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
+      #
+      # NO SIGNING SECRET IN THIS JOB, and that is the point of it. build-linux.sh compiles and runs
+      # code nobody here wrote (Hamlib from its release tarball, npm's install scripts, every
+      # crates.io build script, the AppImage tooling), and it used to do all of that holding the
+      # updater signing key. With no key it builds with `--no-sign`; the finished AppImage is
+      # uploaded unsigned and signed by the sign-updaters job, on a runner that builds nothing.
+      # scripts/release-secrets.test.mjs holds that down.
       - name: Build .deb + AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
-          # The AppImage is self-updatable and gets a .sig; the .deb is apt-managed and cannot
-          # self-update, so it is published unsigned by design.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-linux.sh
 
       - name: Verify artifacts
-        env:
-          # Only consulted to decide whether the AppImage's updater signature is REQUIRED
-          # below — the macOS job's shape (see "Verify the artifacts" there). A build that
-          # HAD the signing key must ship the .sig; a fork without secrets legitimately
-          # cannot.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           deb=$(find src-tauri/target/release/bundle/deb -name '*.deb' -print -quit)
@@ -352,6 +359,31 @@ jobs:
           [ -s "$appdir/squashfs-root/usr/lib/Nexus/resources/openssl/LICENSE.txt" ] \
             || { echo "OpenSSL's licence text is missing from the AppImage"; exit 1; }
           echo "AppImage: libssl.so.3, libcrypto.so.3 and OpenSSL's licence present — ok"
+          # THE RUNTIME IS THE PINNED ONE. The AppImage runtime is the first code an operator's
+          # machine runs when Nexus starts, and appimagetool downloads it from a moving
+          # `continuous` release unless it is handed one. build-linux.sh hands it the pinned
+          # type2-runtime (LDAI_RUNTIME_FILE), and this proves the packer took it: the shipped file
+          # must begin with exactly those bytes. appimagetool writes only the runtime's .digest_md5.
+          python3 - "$app" "$HOME/.cache/tauri/runtime-x86_64" <<'PY'
+          import struct, sys
+          shipped_path, pinned_path = sys.argv[1:3]
+          pinned = open(pinned_path, 'rb').read()
+          with open(shipped_path, 'rb') as f:
+              shipped = f.read(len(pinned))
+          shoff, = struct.unpack_from('<Q', pinned, 0x28)
+          shentsize, shnum, shstrndx = struct.unpack_from('<HHH', pinned, 0x3A)
+          hdr = lambda i: struct.unpack_from('<IIQQQQ', pinned, shoff + i * shentsize)
+          strtab = hdr(shstrndx)[4]
+          name = lambda off: pinned[strtab + off:pinned.index(b'\0', strtab + off)].decode()
+          md5 = [(o, o + s) for n, _, _, _, o, s in map(hdr, range(shnum)) if name(n) == '.digest_md5']
+          if len(md5) != 1:
+              sys.exit(f'{pinned_path} has {len(md5)} .digest_md5 sections, not one: not a type2 runtime')
+          lo, hi = md5[0]
+          bad = [i for i in range(len(pinned)) if not lo <= i < hi and (i >= len(shipped) or shipped[i] != pinned[i])]
+          if bad:
+              sys.exit(f'the AppImage runtime is not the pinned one: {len(bad)} bytes differ, the first at {bad[0]:#x}')
+          print(f'AppImage runtime: the pinned type2-runtime ({len(pinned)} bytes) — ok')
+          PY
           mkdir -p out && cp "$app" out/
           # NAME THE PC PACKAGE FOR THE MACHINE IT INSTALLS ON, not just its architecture
           # (operator ask, 1.0.0). Tauri emits Nexus_<ver>_amd64.deb; the Pi jobs emit
@@ -361,32 +393,8 @@ jobs:
           # is not a Debian package, so renaming it would churn the updater manifest for nothing.
           ver=$(dpkg-deb -f "$deb" Version)
           cp "$deb" "out/Nexus_${ver}_pc_amd64.deb"
-          # The AppImage's updater signature. THE KEY DECIDES WHETHER IT IS REQUIRED, not the
-          # note that used to stand here.
-          #
-          # This line read `[ -f "$app.sig" ] && cp ... || echo "note: unsigned build"`, which
-          # made a missing signature indistinguishable from a fork build with no secrets —
-          # the release published anyway, one `note:` deep in a 400-line log. The consequence
-          # is not cosmetic and it is silent by design at the client: latest.json's `add()`
-          # omits any platform with no .sig, so a signing regression on this platform ships a
-          # manifest with no linux-x86_64 entry, every AppImage's hourly update check then
-          # finds nothing forever, and useSelfUpdate swallows that — nobody ever reports it.
-          # That is the mac QA audit's 2026-08-17 finding, and it applied here identically.
-          #
-          # macOS has had the right shape since it shipped; this is that shape, and Windows
-          # has it too. Gated on the KEY and not on the event, so a workflow_dispatch dry-run
-          # catches a bundler regression before a tag does.
-          if [ -f "$app.sig" ]; then
-            cp "$app.sig" out/
-            echo "AppImage updater signature present and staged"
-          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "signing key present but the bundler produced no $app.sig"
-            echo "Publishing this would ship a latest.json with no linux-x86_64 entry and"
-            echo "silently strand every AppImage on its current version."
-            exit 1
-          else
-            echo "note: unsigned build (no signing secrets)"
-          fi
+          # The AppImage goes out UNSIGNED. Its updater signature is made in the sign-updaters
+          # job from this artifact, and that job fails when the key exists and no .sig appears.
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
@@ -401,13 +409,6 @@ jobs:
   windows:
     name: Windows (NSIS installer)
     runs-on: ubuntu-latest
-    env:
-      # Baked into the binary via option_env! (build.rs). Only referenced in this
-      # tag/dispatch-triggered job — NEVER in a pull_request job — so a fork PR cannot
-      # reach it. The key is extractable from any shipped binary regardless (it is a
-      # read-only ClubLog most-wanted token); the proper fix is a proxy — see
-      # nexus-notes/clublog-key-proxy-plan.md.
-      CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -436,7 +437,7 @@ jobs:
             binutils-mingw-w64-x86-64 \
             libboost-dev cmake ninja-build build-essential nsis nasm
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           targets: x86_64-pc-windows-gnu
@@ -445,22 +446,30 @@ jobs:
         with:
           node-version: 24
 
+      # FFTW, and any other native library build-windows-cross.sh compiles from a downloaded
+      # tarball, is built HERE, with no secret in the environment: third-party builds run
+      # before any key is loaded (operator's ruling, 2026-09-29). The script caches each one
+      # under target/, so the installer step below finds them built and compiles none of them
+      # again. This is the command ci.yml's windows-cross job runs on every push.
+      - name: Cross-build FFTW + libtempo modem exes
+        run: bash scripts/build-windows-cross.sh --no-gui
+
       - name: Cross-build the NSIS installer
-        # Signed for self-update: the bundler emits a `.sig` beside the installer when these are
-        # present. If the secrets are absent (a fork, or before they are configured) the build
-        # still succeeds unsigned — the updater simply has nothing to verify, which is the right
-        # failure: no release, rather than an unsigned one clients would refuse anyway.
+        # Built UNSIGNED: with no updater key in its environment the script passes the bundler
+        # `--no-sign`, and the sign-updaters job signs the finished installer on a runner that
+        # builds nothing. The one secret here is the ClubLog key, because it is compiled in:
+        # option_env! bakes it into the binary
+        # (build.rs), so the cargo run that compiles Nexus has to see it, and that run also
+        # compiles every crates.io crate and runs the UI build. Only referenced in this
+        # tag/dispatch-triggered workflow — NEVER in a pull_request job — so a fork PR cannot
+        # reach it. The key is extractable from any shipped binary regardless (it is a
+        # read-only ClubLog most-wanted token); the proper fix is a proxy — see
+        # nexus-notes/clublog-key-proxy-plan.md.
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: bash scripts/build-windows-cross.sh
 
       - name: Verify installer
-        env:
-          # Only consulted to decide whether the updater signature is REQUIRED below — the
-          # macOS job's shape. A build that HAD the key must ship the .sig; a fork without
-          # secrets legitimately cannot.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           exe=$(find src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis -name '*-setup.exe' -print -quit)
@@ -481,22 +490,8 @@ jobs:
             || { echo "NSIS listing has no WebView2 payload — webviewInstallMode broke"; 7z l "$exe" | tail -40; exit 1; }
           [ "$sz" -gt 190000000 ] || { echo "installer only $sz bytes — too small to contain the ~150 MB offline WebView2 runtime"; exit 1; }
           mkdir -p out && cp "$exe" out/
-          # The updater signature. THE KEY DECIDES WHETHER IT IS REQUIRED — same change, same
-          # reason as the AppImage above and the same shape macOS has always had. Windows is
-          # the platform where this costs the most: it is the majority of the install base,
-          # and a latest.json missing its windows-x86_64 entry strands every one of those
-          # installs on its current version with no symptom anyone would think to report.
-          if [ -f "$exe.sig" ]; then
-            cp "$exe.sig" out/
-            echo "NSIS updater signature present and staged"
-          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "signing key present but the bundler produced no $exe.sig"
-            echo "Publishing this would ship a latest.json with no windows-x86_64 entry and"
-            echo "silently strand every Windows install on its current version."
-            exit 1
-          else
-            echo "note: unsigned build (no signing secrets)"
-          fi
+          # The installer goes out UNSIGNED. Its updater signature is made in the sign-updaters
+          # job from this artifact, and that job fails when the key exists and no .sig appears.
 
           # ---- Crash symbols -------------------------------------------------------------
           # A field crash report names a bare offset ("Nexus.exe+0x01ebcc35") and nothing can
@@ -537,6 +532,145 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------------------
+  # THE UPDATER SIGNATURES — a job of their own, on a runner that builds nothing.
+  #
+  # The Windows and Linux jobs compile and run code nobody here wrote: FFTW and Hamlib from
+  # their tarballs, every crates.io build script, npm's install scripts, the AppImage tooling.
+  # Keeping the updater key out of those STEPS' environments was not enough on its own: a hosted
+  # runner is handed every secret its job references when the job starts, and every step on it
+  # has passwordless sudo, which is how the tj-actions/changed-files compromise (March 2025) read
+  # secrets out of runner memory. So neither build job references the key at all. They upload
+  # their installers unsigned; `sign-updaters` signs them on a fresh runner that checks out the
+  # repository, downloads artifacts and runs the signer, and nothing else; and the publish job
+  # takes the `.sig` files from there. (macOS cannot follow: Apple's signing runs inside the
+  # bundler, which signs the updater tarball in the same run. See that job.)
+  #
+  # The signer is tauri-cli itself, built by `updater-signer`, a job with no secret that compiles
+  # tauri-cli and nothing else. It is not taken from a build job, because anything that ran there
+  # could have replaced the binary that is then handed the key.
+  # ---------------------------------------------------------------------------------------
+  updater-signer:
+    name: Build the updater signer (tauri-cli, no secret)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.93.1
+
+      # Pinned as every other tauri-cli install is (see the macOS job's "Install tauri-cli").
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "=2.11.5" --locked
+
+      - name: Stage the signer
+        run: |
+          set -euo pipefail
+          mkdir -p signer
+          cp "$(command -v cargo-tauri)" signer/
+          signer/cargo-tauri --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-updater-signer
+          path: signer/cargo-tauri
+          if-no-files-found: error
+
+  sign-updaters:
+    name: Sign the Windows and Linux installers for self-update
+    needs: [updater-signer, linux-x86, windows]
+    runs-on: ubuntu-latest
+    steps:
+      # For tauri.conf.json: the version the NSIS signature binds, stamped exactly as the build
+      # jobs stamp it, and the public key every signature must match.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: signer
+          pattern: nexus-updater-signer
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: unsigned
+          pattern: nexus-windows
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: unsigned
+          pattern: nexus-linux-x86
+          merge-multiple: true
+
+      # THE KEY DECIDES WHETHER A SIGNATURE IS REQUIRED. latest.json's `add()` omits any platform
+      # with no .sig, so a missing signature ships a manifest with no windows-x86_64 or
+      # linux-x86_64 entry: every one of those installs' hourly update checks then finds nothing,
+      # forever, and useSelfUpdate swallows that (the mac QA audit's 2026-08-17 finding, which
+      # applied to both). So with the key present both signatures must appear or this fails; a
+      # fork without secrets builds unsigned.
+      #
+      # Both signatures bind the app version, as the bundler's always did (tauri-cli 2.11.5 adds it
+      # there, and `signer sign` only when asked). The AppImage's used not to (1.15.0's has none):
+      # it was made by `signer sign` after the repack, and without the version a client whose
+      # updater ever sets `requireSignedVersion` would refuse every Linux update. The check after
+      # signing reads the version back out of each trusted comment, which the signature covers.
+      #
+      # Each signature's key id must be the public key's in tauri.conf.json, the one compiled into
+      # every client. The bundler only warned when they differed, and a signature by another key
+      # is one every installed client rejects. A deliberate key rotation signs with the OLD key,
+      # which this refuses; such a release changes this check in the same commit.
+      - name: Sign the NSIS installer and the AppImage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exe=$(find unsigned -name '*_x64-setup.exe' -print -quit)
+          app=$(find unsigned -name '*_amd64.AppImage' -print -quit)
+          [ -n "$exe" ] || { echo "no NSIS installer in the nexus-windows artifact"; exit 1; }
+          [ -n "$app" ] || { echo "no AppImage in the nexus-linux-x86 artifact"; exit 1; }
+          mkdir -p sigs
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "note: unsigned build (no signing secrets)"; exit 0
+          fi
+          # The build jobs hold no key, so a .sig in their artifacts was made by something that did.
+          for f in "$exe" "$app"; do
+            [ ! -e "$f.sig" ] || { echo "$f arrived with a .sig; a build job signed it, so it held the key. Refusing."; exit 1; }
+          done
+          chmod +x signer/cargo-tauri
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          signer/cargo-tauri signer sign --app-version "$ver" "$exe" >/dev/null
+          signer/cargo-tauri signer sign --app-version "$ver" "$app" >/dev/null
+          # A key id: bytes 2..9 of the second line of a minisign key or signature file, which
+          # tauri base64-wraps whole.
+          keyid() { base64 -d | sed -n 2p | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n'; }
+          want=$(jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json | keyid)
+          [ -n "$want" ] || { echo "no updater public key in tauri.conf.json"; exit 1; }
+          for f in "$exe" "$app"; do
+            [ -s "$f.sig" ] || { echo "signing produced no .sig beside $f"; exit 1; }
+            [ "$f.sig" -nt "$f" ] || { echo "the .sig is older than $f; refusing"; exit 1; }
+            got=$(keyid < "$f.sig")
+            [ "$got" = "$want" ] || { echo "$f.sig is signed by key $got, but clients trust $want; refusing"; exit 1; }
+            # The trusted comment is "timestamp:…<TAB>file:…<TAB>version:…", the version last.
+            case "$(base64 -d < "$f.sig" | sed -n 3p)" in
+              *$'\t'"version:$ver") ;;
+              *) echo "$f.sig does not bind version $ver; refusing"; exit 1 ;;
+            esac
+            cp "$f.sig" sigs/
+          done
+          echo "signed for self-update with key $want (version $ver):"; ls -l sigs/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-updater-sigs
+          path: sigs/*
+          # A fork without secrets signs nothing. With the key present, the step above has already
+          # failed unless both signatures are here.
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------------------
   # macOS — Apple Silicon DMG, signed and notarized. First shipped 1.5.1 (operator's
   # Apple Developer enrollment 2026-08-16).
   #
@@ -551,12 +685,15 @@ jobs:
   # App Store Connect API key (APPLE_API_KEY_ID / APPLE_API_ISSUER_ID /
   # APPLE_API_KEY_CONTENT) — Tauri runs notarytool + stapling itself when those are in
   # the environment. No Apple ID password anywhere.
+  #
+  # ORDER: everything that compiles or runs third-party code comes first, with no signing
+  # secret in its environment; the certificate is imported only after the last build, and the
+  # keychain is deleted as soon as the bundle is signed. Any step that ran while the identity
+  # sat in the keychain could have signed with it, whatever that step's own env said.
   # ---------------------------------------------------------------------------------------
   macos:
     name: macOS (Apple Silicon .dmg)
     runs-on: macos-14
-    env:
-      CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -580,7 +717,7 @@ jobs:
       - name: Install build dependencies
         run: brew install cmake ninja gcc fftw boost libusb
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           targets: aarch64-apple-darwin
@@ -589,6 +726,40 @@ jobs:
         with:
           node-version: 24
 
+      - name: Build the web UI
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      # Pinned, not "^2": tauri-cli 2.12.0 (2026-09-26) re-downloads linuxdeploy-plugin-gtk.sh over
+      # the pinned copy (scripts/build-linux.sh refused the 1.15.0 AppImage for it). Every job builds
+      # with the version 1.14.0 shipped with; move it deliberately, all four installs together.
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "=2.11.5" --locked
+
+      # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
+      # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
+      # without it, which is the exact hole this whole change closes. The script's own CAT-DEAD
+      # guard fails the build rather than producing a bundle with licence texts and no Hamlib.
+      - name: Stage Hamlib (bundled rigctld — no brew install for the user)
+        run: bash scripts/fetch-hamlib-unix.sh
+
+      # EVERY COMPILE HAPPENS HERE, with no signing secret in its environment: `--no-bundle` stops
+      # tauri-cli after the build, and the bundle step below only runs the bundler on the
+      # binary this one left in target/ (tauri-cli 2.11.5 `bundle` compiles nothing). Until
+      # this split, the whole of `cargo tauri build` (every crates.io build script and proc
+      # macro, and the UI build) ran holding the notarization key and the updater key, with the
+      # Developer ID identity unlocked in the keychain. The ClubLog key is here because it is
+      # compiled in (see the Windows job).
+      - name: Compile the app
+        env:
+          CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
+        run: |
+          ( cd src-tauri && cargo tauri build --target aarch64-apple-darwin \
+              --features radio,custom-protocol --no-bundle )
+
+      # Imported only now, after the last build. From here until the bundle step deletes the
+      # keychain, anything this job runs can sign with the identity.
       - name: Import the signing certificate into an ephemeral keychain
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -612,24 +783,6 @@ jobs:
           [ -n "$ident" ] || { echo "no Developer ID Application identity in the certificate"; exit 1; }
           echo "APPLE_SIGNING_IDENTITY=$ident" >> "$GITHUB_ENV"
           echo "signing as: $ident"
-
-      - name: Build the web UI
-        run: |
-          npm --prefix ui ci
-          npm --prefix ui run build
-
-      # Pinned, not "^2": tauri-cli 2.12.0 (2026-09-26) re-downloads linuxdeploy-plugin-gtk.sh over
-      # the pinned copy (scripts/build-linux.sh refused the 1.15.0 AppImage for it). Every job builds
-      # with the version 1.14.0 shipped with; move it deliberately, all four installs together.
-      - name: Install tauri-cli
-        run: cargo install tauri-cli --version "=2.11.5" --locked
-
-      # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
-      # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
-      # without it, which is the exact hole this whole change closes. The script's own CAT-DEAD
-      # guard fails the build rather than producing a bundle with licence texts and no Hamlib.
-      - name: Stage Hamlib (bundled rigctld — no brew install for the user)
-        run: bash scripts/fetch-hamlib-unix.sh
 
       # ⭐ AND SIGN IT, or notarization rejects the whole app. Apple requires EVERY Mach-O
       # inside the bundle to carry a Developer ID signature, the hardened runtime and a secure
@@ -668,7 +821,12 @@ jobs:
           done
           echo "all staged Hamlib binaries signed, hardened and timestamped"
 
-      - name: Build, sign and notarize the DMG
+      # The bundler, and only the bundler: codesign, notarytool and stapling for the .app and
+      # the DMG, then the updater tarball and its signature. The updater key is in this step,
+      # not in a signing step of its own as on Windows and Linux, because the bundler makes that
+      # tarball and signs it in one run, and `--no-sign` would also skip the Apple signature.
+      # Nothing is compiled here: the binary is the one "Compile the app" left.
+      - name: Bundle, sign and notarize the DMG
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -680,16 +838,20 @@ jobs:
           # notarytool wants the .p8 on disk; Tauri picks it up via APPLE_API_KEY_PATH.
           printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
           export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
-          ( cd src-tauri && cargo tauri build --target aarch64-apple-darwin \
+          ( cd src-tauri && cargo tauri bundle --target aarch64-apple-darwin \
               --features radio,custom-protocol --bundles app,dmg )
           rm -f "$RUNNER_TEMP/AuthKey.p8"
+          # The Developer ID identity goes too: the Verify step below runs the bundled rigctld,
+          # and nothing after this line signs anything.
+          security delete-keychain "$RUNNER_TEMP/nexus-signing.keychain-db"
 
       - name: Verify the artifacts
         env:
           # Only consulted to decide whether the updater bundle is REQUIRED below —
           # a build that had the signing key must ship it; a fork without secrets
-          # legitimately cannot.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # legitimately cannot. Whether the key exists, not the key itself: this step
+          # runs the bundled rigctld, which has no business near it.
+          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           set -euo pipefail
           bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
@@ -752,7 +914,7 @@ jobs:
           if [ -n "$tarball" ] && [ -f "$tarball.sig" ]; then
             cp "$tarball" "out/Nexus_${ver}_aarch64.app.tar.gz"
             cp "$tarball.sig" "out/Nexus_${ver}_aarch64.app.tar.gz.sig"
-          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+          elif [ "$SIGNING_KEY_PRESENT" = true ]; then
             # The key was present, so a missing tarball/.sig is a bundler regression,
             # not a fork build — and it must fail HERE, with the same hard bar as the
             # DMG above. Left as a note, it publishes a latest.json with no
@@ -1014,7 +1176,16 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends pandoc
-          python3 -m pip install --quiet websockets pillow  # websockets: CDP for the PDF; pillow: WebP→PNG for the EPUB
+          # websockets: CDP for the PDF (build-manual-pdf.py needs websockets.sync, from 11 on, so not
+          # Ubuntu's 10.4); pillow: WebP→PNG for the EPUB. Exact versions, wheels only, and the sha256
+          # of every file pip may pick for this runner's CPython 3.12 on x86_64, as PyPI publishes
+          # them: an unpinned install is whatever PyPI serves that day. To move one, take the new
+          # version's hashes for the same wheel tags from https://pypi.org/pypi/<name>/<version>/json.
+          cat > "$RUNNER_TEMP/manual-requirements.txt" <<'EOF'
+          websockets==17.1 --hash=sha256:0c863507ada5805517ca6dff1c524dcd42942efe6304dacf06700878398d21a6 --hash=sha256:f221081107b8c48184d99f7019604486376e7ef826037e70aad6b02540732c23
+          pillow==12.3.0 --hash=sha256:78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91
+          EOF
+          python3 -m pip install --quiet --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/manual-requirements.txt"
       - name: Build the manual
         run: |
           set -euo pipefail
@@ -1030,7 +1201,12 @@ jobs:
         run: |
           set -euo pipefail
           EC=5.3.0
+          # The zip's sha256 as GitHub publishes it for the release asset AND as Homebrew's epubcheck
+          # formula recorded it for 5.3.0 (homebrew-core ed833e77, 2025-09-01): a second party, not a
+          # hash recomputed from what the host served. Move EC and this line together.
+          EC_SHA256=6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5
           curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EC}/epubcheck-${EC}.zip" -o /tmp/ec.zip
+          echo "$EC_SHA256  /tmp/ec.zip" | sha256sum -c -
           python3 -c "import zipfile; zipfile.ZipFile('/tmp/ec.zip').extractall('/tmp')"
           java -jar "/tmp/epubcheck-${EC}/epubcheck.jar" manualdist/Nexus-Manual.epub
       - uses: actions/upload-artifact@v4
@@ -1050,7 +1226,11 @@ jobs:
     # and none of them runs a test. A skipped or failed `needs` job skips this one, which is
     # what makes the gate unskippable — there is no path that creates the Release without it.
     # publish-pi needs `publish`, so it is behind this too and deliberately not gated again.
-    needs: [ci-evidence, linux-x86, windows, smoke-windows, macos, smoke-macos, manual]
+    #
+    # sign-updaters is here because the Windows and Linux updater signatures come from it, and
+    # a pattern download from a job this one does not wait for can find nothing and still
+    # succeed: latest.json would then drop both platforms without a word.
+    needs: [ci-evidence, linux-x86, windows, smoke-windows, sign-updaters, macos, smoke-macos, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -1079,6 +1259,12 @@ jobs:
         with:
           path: dist
           pattern: nexus-macos
+          merge-multiple: true
+      # The NSIS and AppImage .sig files, beside the installers they sign.
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nexus-updater-sigs
           merge-multiple: true
 
       - name: Derive + cross-check the version

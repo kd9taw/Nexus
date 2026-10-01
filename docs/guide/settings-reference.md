@@ -181,8 +181,8 @@ Run more than one rig. Always shown — with one radio it is just a card and an
 ![Three radio cards stacked. The first, named Yeasu, is outlined and badged ACTIVE, its meta line reading Yaesu FTDX10, CAT COM3, audio Line 3, CAT helper port 4532, with band chips 160m through 6m lit. The second, 9700, has Edit, Make active and Remove buttons and lights 2m and 70cm. The third, 991a, lights 6m and 2m. An "+ Add radio" button sits below.](../img/manual/settings-radios.webp)
 
 *A three-radio roster in Nexus 1.10.3. The outlined card is the **active** radio;
-the form further down the tab edits whichever card you last pressed **Edit** on,
-which need not be the same one.*
+the per-radio settings further down the tab edit whichever card you last pressed
+**Edit** on, which need not be the same one.*
 
 With two or more radios, three more controls appear:
 
@@ -283,8 +283,13 @@ the rig that ends up active.
 
 ### Rig & CAT
 
-Every control here is **per radio**: it belongs to whichever card you pressed
-**Edit** on, not to the station.
+Most controls here are **per radio**: they belong to whichever card you pressed
+**Edit** on, not to the station. These are **station-wide** instead, one setting
+for all your radios: **Interface keys RTS on the CAT port**, **Split operation**,
+**Follow the radio's split** and **Wheel tuning sensitivity**, and under
+Advanced, **Sharing port**, **Serial handshake** and **Keying line at startup**.
+Changing one while you edit another radio changes it for the radio you are
+operating too.
 
 ![The left half of the Rig & CAT row: PTT Method set to CAT (via rigctld), an unticked "Interface keys RTS on the CAT port" box, a Zero-config setup group with a "Detect my radio" button, and Rig Model with a search box above a dropdown reading Yaesu FTDX10.](../img/manual/settings-rig-cat.webp)
 
@@ -294,6 +299,15 @@ Baud continue across to the right.*
 - **PTT Method** — "How transmit is keyed": CAT (via rigctld), Serial RTS, Serial
   DTR, or VOX (no keying). PTT and CAT are independent axes — VOX PTT with full
   CAT control is a valid setup.
+- **Transmit audio source (CAT PTT)** — appears on CAT PTT for a radio whose
+  Hamlib driver can key either of its audio inputs (the Kenwood TS-480, TS-590S,
+  TS-590SG, TS-890S and TS-990S, the Yaesu FTDX-5000, the ELAD FDM-DUO and a few
+  more). **Front/Mic** is how Nexus has always keyed the radio. **Rear/Data** keys
+  its data input instead (Hamlib's data transmit: `TX1;` on a Kenwood), for a sound
+  card on the rear DATA or ACC jack, such as a SignaLink, or on the radio's own USB
+  audio. The symptom it cures: the radio keys but sends no audio from Nexus, while
+  VOX works. The Phone cockpit's PTT and an FSK keyline key as they always have.
+  Per radio.
 - **PTT Serial Port** — appears on RTS/DTR. The COM port your keying line is on,
   for an SO2R controller (u2R/MK2R) that routes PTT separately from CAT. Blank =
   keying shares the CAT port, which is how a single-cable interface like a
@@ -339,6 +353,12 @@ Baud continue across to the right.*
   harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B
   split. Fake It = retunes the VFO around each over (works on any CAT rig). None
   = stock WSJT-X default."
+- **Follow the radio's split** — off by default. Turn it on and Nexus reads the
+  radio's own split, so a split you set at the radio is the one it checks your
+  licence privileges against; if the radio says it is split but not where it
+  transmits, Nexus will not transmit. Nexus first asks each radio whether its
+  split can be read without moving it, and never asks one that cannot. Station-wide,
+  like Split operation.
 - **Wheel tuning sensitivity** — how far the dial moves per mouse-wheel notch.
   Lower it if a free-spin mouse tunes too far per flick. Applies to the frequency
   readout and the Phone/CW scope wheel.
@@ -371,6 +391,23 @@ Baud continue across to the right.*
   file. It keeps running while you're on other screens.
 - **Flex radio IP (native panadapter)** — the FlexRadio's own LAN IP (SmartSDR
   API, port 4992). "This is the *radio's* address, not the SmartSDR-CAT port."
+- **Serial handshake** — **Auto** (the default), **None**,
+  **Hardware (RTS/CTS)** or **XON/XOFF**. It tells Nexus what your cable actually
+  does, instead of letting it guess. On Auto, Nexus goes by what your rig's
+  Hamlib driver declares, as it always has; any other choice is passed to rigctld
+  as your cable's handshake and replaces that guess. Leave it on Auto unless your
+  rig keys at launch. If CAT stops working after a change, put it back on Auto:
+  on some rigs Hamlib quietly refuses the setting and then answers without ever
+  having opened the radio, so you get a CAT light and a rig that ignores you.
+  Station-wide.
+- **Keying line at startup** — **Auto** (the default), **Never touch it**,
+  **Hold it low** or **Hold it high**: what the serial line that keys your
+  transmitter (RTS or DTR) is held at while you are not transmitting. It exists
+  for one fault, a rig that keys at launch before you have touched anything, so
+  leave it on Auto unless that is happening to you. Auto changes nothing about
+  how your station works today. If CAT stops working after a change, put it back
+  on Auto. Only you can see whether the rig unkeys, so try it on a rig you are
+  watching. Station-wide.
 
 **Test CAT** saves, launches the bundled `rigctld` (Hamlib ships with Nexus on
 Windows — no separate install), and reads the rig's frequency to confirm the
@@ -493,10 +530,16 @@ right.*
   rotator attached; **Other Hamlib model #…** takes any model number `rotctl -l`
   knows. Entries say **(az)** or **(az/el)** where the backend declares it, so
   you can tell an azimuth-only model from a full az/el one before you buy into it.
+  The **Yaesu G-5500 / G-5500DC** has no computer port and no Hamlib model of its
+  own: it runs through its GS-232B or GS-232A interface, so it is named on those
+  two entries. Pick the one for your interface.
   One board worth naming: **DF9GR's Easy-Rotor-Control V4** speaks three protocols,
   chosen in its own Service Tool. Configured the way its manual recommends
-  (GS-232B, 9600) it belongs on **Yaesu GS-232B**; only in DCU-1 mode does it
-  belong on the **DF9GR ERC** entry, which runs at 4800.
+  (GS-232B, 9600) it belongs on the **GS-232B interface** entry; only in DCU-1 mode
+  does it belong on the **DF9GR ERC** entry, which runs at 4800.
+  **PstRotatorAz / PstRotator (UDP)** is Hamlib model 3, for YO3DMU's PstRotatorAz.
+  It is the one entry that talks over the network rather than a serial port (see
+  the next item).
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:
   SPID Rot2Prog runs at 600, Rot1Prog at 1200, and the Idiom Press Rotor-EZ,
@@ -504,7 +547,11 @@ right.*
   RC2800 and the Prosistels are the 9600 that used to be handed to everyone. At
   the wrong rate a rotator never answers and reads exactly like broken hardware,
   so the hint under the field names your model's rate and says plainly when the
-  saved value cannot work.
+  saved value cannot work. For **PstRotatorAz** the port is its UDP address,
+  `127.0.0.1:12000` on the same PC, and the baud does not matter. Turn on UDP
+  Control in PstRotatorAz's Setup. The hint there also warns that Hamlib's backend
+  for it writes the bearing it sends oddly (123.4° goes out as `123.400002.2`), so
+  PstRotatorAz may not turn to it.
 - **External rotctld (advanced)** — a `host:port` for a rotctld you run yourself,
   or one on another machine. It OVERRIDES the model and port above and stops the
   integrated daemon. It needs the port: a bare host name is not an address.
@@ -1105,6 +1152,13 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 - **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
   a Slow station and a Turbo station on the same band both print, each activity row
   marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
+  not heard for this many minutes drops off the cockpit's Stations list (the one you have
+  selected, or one with an unread message for you, stays) and is left out of your
+  `HEARING?` replies. Up to 1440, a day.
+- **Band activity aging (minutes)** — 2 by default, as in JS8Call. A row of the cockpit's
+  Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX
+  is on its offset. 0 keeps every row. Up to 1440, a day.
 
 **Automatic transmissions**
 
@@ -1117,13 +1171,26 @@ nothing until you enable TX in the cockpit, every session.
   free slot between 500 and 1000 Hz. The HB chip itself is session-only.
 - **Answer heartbeats** — off by default, as in JS8Call. On, a heard heartbeat gets your
   signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
-  that station is offered to it.
+  that station is offered to it. **Never acknowledge heartbeats from these callsigns**,
+  comma-separated and empty by default, leaves those stations unanswered.
 - **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
-  `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered after a
-  one-period countdown you can cancel in the cockpit. `@ALLCALL` queries are answered at
-  most once per station every 15 minutes.
+  `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
+  or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On
+  `@ALLCALL` only `QUERY MSGS` is answered, when a message waits for that station, at most
+  once every 15 minutes. Off, a reply is put in the cockpit's message box for you to send,
+  as JS8Call does, and `QUERY MSGS` is not answered.
+- **Ask for confirmation before sending automatic replies** — on by default, as in
+  JS8Call. Every automatic reply (to a query, an `ACK`, a relay, a heartbeat
+  acknowledgement) waits in the cockpit for your **Yes**; **No**, or no answer within 89
+  seconds, sends nothing. Off, each goes by itself in the next period.
+- **Only auto-reply to these callsigns** / **Never auto-reply to these callsigns** —
+  JS8Call's allow and deny lists, comma-separated, empty by default. A station is matched by
+  its call as heard or its base call (`W1AW` covers `W1AW/P`). Empty, the allow list lets
+  everyone in; set, anyone not on it, like anyone on the deny list, is not acted on at all: no
+  reply, no relay, its message not filed, nothing held for it.
 - **Relay for other stations** — on by default, as in JS8Call: a message routed through
-  your callsign is passed along, and `MSG TO:` messages are held in your inbox until the
+  your callsign is passed along (with Auto-reply off it is put in the message box for you
+  to send), and `MSG TO:` messages are held in your inbox until the
   addressee asks for them. This is third-party traffic; whether it is permitted where
   you operate is your call.
 - **Idle watchdog (minutes)** — after this long with nothing typed, heartbeats,
@@ -1140,7 +1207,9 @@ nothing until you enable TX in the cockpit, every session.
 - **STATUS** — what a `STATUS?` query gets back. Blank sends the JS8Call form: `IDLE`,
   the idle minutes, and the app name.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
-  them counts as addressed to you. `@ALLCALL` is everyone and is always on.
+  them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
+  `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
+  this field, and says so.
 
 ### SSTV
 
@@ -1716,7 +1785,11 @@ placeholder — a stored key is never displayed back.*
 Auto-forward each logged QSO to your self-hosted Cloudlog or Wavelog logbook over
 HTTP.
 
-- **Base URL** — your site root. "Leave blank to disable."
+- **Base URL** — your site root. "Leave blank to disable." It must be `https://`, except
+  for an instance on your own network: a 192.168.x.x, 10.x.x.x, 172.16–31.x.x or
+  127.x.x.x address (or a local IPv6 one), or a name whose every address is one of those,
+  may use plain `http://`. The API key then travels unencrypted, so a note under the field
+  says so, and the Connections log says where it went, once a session for each address.
 - **Station profile id** — "Your station location number — in Wavelog or Cloudlog
   ▸ Station Locations, it is the number at the end of that location's Edit link
   (…/station/edit/3 means 3). Not your callsign." A value that isn't a number is

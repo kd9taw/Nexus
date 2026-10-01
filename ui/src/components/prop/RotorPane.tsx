@@ -13,14 +13,22 @@
 // cockpit's stop-line census and no sweep looks for it — so nothing here is deferred.
 //
 // The units rule lands on the COMPASS: every azimuth and elevation in degrees, the true/
-// magnetic `°T`/`°M` marks, the `az°` the entry field asks for and the four cardinal letters
-// are the vocabulary of the instrument and stay in the code.
+// magnetic `°T`/`°M` marks, the `az°` and `el°` the entry fields ask for, the `EL` plate and the
+// four cardinal letters are the vocabulary of the instrument and stay in the code.
+//
+// ELEVATION (2026-09-29, the Yaesu G-5500): shown and settable only when the rotator's own
+// backend declares an elevation axis (`read_rotator_state`'s `elRange`, from rotctld's
+// `\dump_state` — never guessed from the model's name), within the range it declares. Each move
+// carries the other axis only while the mast is still on its way to it (features/rotorTargets);
+// otherwise the backend keeps that axis where the rotator reports it. The one ■ STOP stops both.
+// A browser on Nexus Remote keeps the azimuth-only pane it had.
 import { useEffect, useRef, useState } from 'react'
 import {
   getDeclination,
   getSatTrackStatus,
   getSettings,
   pointRotator,
+  pointRotatorElevation,
   readRotator,
   readRotatorState,
   stopRotator,
@@ -32,6 +40,7 @@ import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
 import { pollSingleFlight } from '../../singleFlight'
+import { follow, pending, type Pending } from '../../features/rotorTargets'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
@@ -40,6 +49,9 @@ const R = SIZE / 2 - 10
  *  for. Tokens, named so the catalog guard reads them as a decision. */
 const CARDINALS = ['N', 'E', 'S', 'W']
 const AZ_ENTRY = 'az°'
+/** The elevation's plate and the abbreviation its entry field asks for. */
+const EL_PLATE = 'EL'
+const EL_ENTRY = 'el°'
 
 function azFromClick(e: React.MouseEvent<SVGSVGElement>): number {
   const rect = e.currentTarget.getBoundingClientRect()
@@ -53,6 +65,16 @@ export function RotorPane() {
   const [az, setAz] = useState<number | null>(null)
   const [target, setTarget] = useState<number | null>(null)
   const [entry, setEntry] = useState('')
+  // The elevation as the rotator reports it, and the range its backend declares — null for a
+  // rotator with no elevation axis, which is what keeps the elevation out of the pane there.
+  const [el, setEl] = useState<number | null>(null)
+  const [elRange, setElRange] = useState<[number, number] | null>(null)
+  const [targetEl, setTargetEl] = useState<number | null>(null)
+  const [elEntry, setElEntry] = useState('')
+  // What this pane still hands over for the axis it is NOT moving (features/rotorTargets):
+  // followed through every reading, dropped on arrival, STOP, a satellite track or a failure.
+  const pendingAz = useRef<Pending | null>(null)
+  const pendingEl = useRef<Pending | null>(null)
   const [declination, setDeclination] = useState<number | null>(null)
   // Satellite auto-track owning the rotor right now (Satellites section's loop).
   // Shown so the operator knows WHY the needle moves on its own — and so a manual
@@ -86,6 +108,13 @@ export function RotorPane() {
               if (!owns()) return
               setAz(st?.azDeg ?? null)
               setReading(st?.reading ?? null)
+              setEl(st?.elDeg ?? null)
+              // Absent: rotctld did not answer what the rotator can do this time, so what was
+              // known stands. No rotator at all is null.
+              if (st == null) setElRange(null)
+              else if (st.elRange !== undefined) setElRange(st.elRange)
+              pendingAz.current = follow(pendingAz.current, st?.azDeg ?? null, true)
+              pendingEl.current = follow(pendingEl.current, st?.elDeg ?? null, false)
             })
           : readRotator().then((v) => {
               if (owns()) setAz(v)
@@ -94,9 +123,13 @@ export function RotorPane() {
           if (!owns()) return
           setAz(null)
           setReading(null)
+          setEl(null)
         }),
         getSatTrackStatus().then((t) => {
-          if (owns()) setSatTrack(t)
+          if (!owns()) return
+          setSatTrack(t)
+          // A pass owns the mast: nothing this pane sent before it may be handed over after it.
+          if (t) pendingAz.current = pendingEl.current = null
         }),
       ]),
     )
@@ -125,20 +158,51 @@ export function RotorPane() {
   const slew = (deg: number) => {
     const d = ((Math.round(deg) % 360) + 360) % 360
     setTarget(d)
+    // An elevation still on its way goes with the bearing; otherwise the backend keeps the
+    // elevation where the rotator reports it. A browser sends the bearing alone, as it always has.
+    const withEl = local ? pendingEl.current?.deg : undefined
+    pendingAz.current = pending(d)
     // ALWAYS stop the sat track first (no-op when idle): while a track owns the
     // rotor the loop re-commands az/el every 3 s, so a bare pointRotator would be
     // reverted within one tick. Halt the loop, then take the rotor manually.
     stopSatTrack()
       .then(() => {
         setSatTrack(null)
-        return pointRotator(d)
+        return withEl === undefined ? pointRotator(d) : pointRotator(d, withEl)
       })
-      .catch((e) =>
+      .catch((e) => {
+        pendingAz.current = null
         pushToast(
           t('rotor.pane.slew.failed', { error: e instanceof Error ? e.message : String(e) }),
           'error',
-        ),
-      )
+        )
+      })
+  }
+
+  const elevate = (deg: number) => {
+    if (!elRange) return
+    const [lo, hi] = elRange
+    const e = Math.round(deg)
+    // Refused here, before anything is sent, rather than clamped onto the stop.
+    if (!Number.isFinite(e) || e < lo || e > hi) {
+      pushToast(t('rotor.pane.el.outside', { min: lo, max: hi }), 'error')
+      return
+    }
+    setTargetEl(e)
+    const withAz = pendingAz.current?.deg
+    pendingEl.current = pending(e)
+    stopSatTrack()
+      .then(() => {
+        setSatTrack(null)
+        return withAz === undefined ? pointRotatorElevation(e) : pointRotatorElevation(e, withAz)
+      })
+      .catch((err) => {
+        pendingEl.current = null
+        pushToast(
+          t('rotor.pane.slew.failed', { error: err instanceof Error ? err.message : String(err) }),
+          'error',
+        )
+      })
   }
 
   const needle = (deg: number, len: number) => {
@@ -208,20 +272,12 @@ export function RotorPane() {
             {az == null ? '—°T' : `${Math.round(az)}°T`}
             {mag != null && <span className="rotor-mag"> {mag}°M</span>}
           </div>
-          {satTrack && (
+          {elRange && (
             <div
-              className="rotor-slewing"
-              title={t('rotor.pane.track.title', {
-                bird: satTrack.name,
-                state: satTrack.state,
-              })}
+              className="rotor-el mono"
+              title={t('rotor.pane.el.title', { min: elRange[0], max: elRange[1] })}
             >
-              ⟳ {satTrack.name}
-            </div>
-          )}
-          {target != null && (az == null || Math.abs(((target - az + 540) % 360) - 180) > 2) && (
-            <div className="rotor-slewing" title={t('rotor.pane.commanded.title')}>
-              → {target}°
+              {EL_PLATE} {el == null ? '—' : Math.round(el)}°
             </div>
           )}
           <div className="rotor-entry">
@@ -241,10 +297,32 @@ export function RotorPane() {
               }}
               aria-label={t('rotor.pane.entry.aria')}
             />
+            {elRange && (
+              <input
+                className="settings-input mono"
+                type="number"
+                min={elRange[0]}
+                max={elRange[1]}
+                placeholder={EL_ENTRY}
+                value={elEntry}
+                onChange={(e) => setElEntry(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && elEntry.trim() !== '') {
+                    elevate(Number(elEntry))
+                    setElEntry('')
+                  }
+                }}
+                aria-label={t('rotor.pane.el.entry.aria', { min: elRange[0], max: elRange[1] })}
+              />
+            )}
             <button
               type="button"
               className="rotor-stop"
-              onClick={() =>
+              onClick={() => {
+                // One STOP for both axes (rotctld `S`, the GS-232B's All Stop), and nothing this
+                // pane sent before it may be handed over after it: the next move keeps both axes
+                // where they stopped.
+                pendingAz.current = pendingEl.current = null
                 // Stop the track first (no-op when idle): the satTrack poll is up to
                 // 2 s stale, and a bare rotor stop mid-pass would be undone by the
                 // loop's next 3 s tick. Belt-and-braces halt.
@@ -252,6 +330,12 @@ export function RotorPane() {
                   .then(() => {
                     setSatTrack(null)
                     return stopRotator()
+                  })
+                  .then(() => {
+                    // Stopped, so heading nowhere: what it was sent to is no longer on its way.
+                    // Not before the rotator answers — a stop that failed may leave it moving.
+                    setTarget(null)
+                    setTargetEl(null)
                   })
                   .catch((e) =>
                     pushToast(
@@ -261,15 +345,40 @@ export function RotorPane() {
                       'error',
                     ),
                   )
-              }
+              }}
               title={t('rotor.pane.stop.title')}
             >
               {t('rotor.pane.stop.label')}
             </button>
           </div>
+          {/* What is on its way, UNDER the controls: above them, each line pushed ■ STOP down the
+              moment a slew began, which is when it is wanted — and in a short rail, off the pane. */}
+          {satTrack && (
+            <div
+              className="rotor-slewing"
+              title={t('rotor.pane.track.title', {
+                bird: satTrack.name,
+                state: satTrack.state,
+              })}
+            >
+              ⟳ {satTrack.name}
+            </div>
+          )}
+          {target != null && (az == null || Math.abs(((target - az + 540) % 360) - 180) > 2) && (
+            <div className="rotor-slewing" title={t('rotor.pane.commanded.title')}>
+              → {target}°
+            </div>
+          )}
+          {elRange && targetEl != null && (el == null || Math.abs(targetEl - el) > 2) && (
+            <div className="rotor-slewing" title={t('rotor.pane.commandedEl.title')}>
+              → {EL_PLATE} {targetEl}°
+            </div>
+          )}
           <p className="rotor-hint">
             {az != null
-              ? t('rotor.pane.hint')
+              ? elRange
+                ? t('rotor.pane.hint.azel')
+                : t('rotor.pane.hint')
               : silent
                 ? t('rotor.pane.notAnswering')
                 : t('rotor.pane.hint.noPosition')}

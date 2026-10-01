@@ -26,8 +26,14 @@ export const SETTINGS_KEYS = [
   'js8CqIntervalMin',
   'js8HbAck',
   'js8Autoreply',
+  'js8AutoreplyConfirmation',
+  'js8AutoreplyAllow',
+  'js8AutoreplyDeny',
+  'js8HbAckDeny',
   'js8Relay',
   'js8IdleWatchdogMin',
+  'js8CallsignAgingMin',
+  'js8ActivityAgingMin',
   'js8Info',
   'js8Status',
   'js8Groups',
@@ -329,6 +335,17 @@ export const NEWER_SETTINGS = {
   // for a key such a station cannot store.
   alertContinents: [],
   alertEntities: [],
+  // A station that predates JS8Call's callsign aging ages no call, which is the setting off.
+  js8CallsignAgingMin: 0,
+  // …and one that predates its band-activity aging shows every row, which is that setting off.
+  js8ActivityAgingMin: 0,
+  // …and one that predates JS8Call's reply confirmation sends each automatic reply after a
+  // countdown, never asking: the setting off.
+  js8AutoreplyConfirmation: false,
+  // …and one that predates JS8Call's allow/deny lists keeps nobody out: all three empty.
+  js8AutoreplyAllow: [],
+  js8AutoreplyDeny: [],
+  js8HbAckDeny: [],
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -398,8 +415,14 @@ export const SETTINGS_SHAPES = {
   "js8CqIntervalMin": "number",
   "js8HbAck": "boolean",
   "js8Autoreply": "boolean",
+  "js8AutoreplyConfirmation": "boolean",
+  "js8AutoreplyAllow": "array",
+  "js8AutoreplyDeny": "array",
+  "js8HbAckDeny": "array",
   "js8Relay": "boolean",
   "js8IdleWatchdogMin": "number",
+  "js8CallsignAgingMin": "number",
+  "js8ActivityAgingMin": "number",
   "js8Info": "string",
   "js8Status": "string",
   "js8Groups": "array",

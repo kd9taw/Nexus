@@ -1469,6 +1469,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     setModeSlug(slug)
   }
 
+  // Set the moment this dock's Stop fires (`stopTx`): it says "stopped" itself, so the end it
+  // causes is not announced a second time when the engine reports it. A new picture clears it.
+  const ownStop = useRef(false)
   const sendImage = async () => {
     if (!canControl) return
     if (!packed || sending) return
@@ -1556,6 +1559,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       )
     }, t('sstv.tx.send.failed')).then((s) => {
       if (s) {
+        ownStop.current = false // a new picture: its end is said afresh
         setSstv(s)
         if (s.sending)
           announce(t('sstv.tx.announce.sending', { mode: m?.name ?? packed.slug }), {
@@ -1567,6 +1571,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
 
   const stopTx = () => {
     if (!canControl) return
+    ownStop.current = true
     void sstvStop()
       .then((s) => {
         setSstv(s)
@@ -1574,15 +1579,35 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         // SSTV's stop-line census. It moves with the button, in the transmit-path batch.
         announce('SSTV transmit stopped', { assertive: true })
       })
-      .catch(() => {})
+      .catch(() => {
+        ownStop.current = false
+      })
   }
 
-  // Announce natural completion (sending true → false without an explicit Stop).
+  // ⛔ HOW A PICTURE ENDED, SAID ONCE as it stops sending: "finished" only for a picture that
+  // played out (N57b, 2026-09-30: one that did not was never finished).
+  //  • This dock's Stop has already said "stopped", the moment it fired.
+  //  • A picture the engine dropped or cut short shows its warning line, an alert that says why.
+  //  • A picture that played out still shows its whole key-down elapsed: the radio loop stamps
+  //    played = total on the tick the picture ends, and every early end clears it (Stop, TX Off,
+  //    Stop TX, a halt, the loop's own cut). Read from the progress rather than from a field of
+  //    its own because the Remote page renders this view too, and its sample carries the
+  //    progress but never the notice.
+  //  • Any other end came early: "stopped", never "finished".
+  const txNotice = sstv?.txNotice
+  const playedOut =
+    (sstv?.txTotalSecs ?? 0) > 0 && (sstv?.txElapsedSecs ?? 0) >= (sstv?.txTotalSecs ?? 0)
   const wasSending = useRef(false)
   useEffect(() => {
-    if (wasSending.current && !sending) announce(t('sstv.tx.announce.finished'))
+    if (wasSending.current && !sending) {
+      if (ownStop.current) ownStop.current = false
+      else if (txNotice) {
+        // The warning line beside Send is the announcement.
+      } else if (playedOut) announce(t('sstv.tx.announce.finished'))
+      else announce(t('sstv.tx.announce.stopped'), { assertive: true })
+    }
     wasSending.current = sending
-  }, [sending])
+  }, [sending, txNotice, playedOut])
 
   const txProgressPct = Math.round((sstv?.txProgress ?? 0) * 100)
   const txRemaining = Math.max(0, (sstv?.txTotalSecs ?? 0) - (sstv?.txElapsedSecs ?? 0))
@@ -2401,6 +2426,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <div className="sstv-tx-progress-track">
               <div className="sstv-tx-progress-fill" style={{ width: `${txProgressPct}%` }} />
             </div>
+          </div>
+        )}
+        {/* A picture the engine DROPPED while it waited for the transmitter (TX went off, the
+            dial left the licence privileges, or the Phone screen was left), or one the radio
+            loop CUT SHORT on the air (transmit went off under it, or a tune, a radio switch or
+            another stop ended its transmission), says so here, beside Send, until the next
+            picture keys: the engine's own sentence, like the RTTY, PSK and CW keyer warnings. */}
+        {!sending && txNotice && (
+          <div className="cw-keyer-warn" role="alert">
+            ⚠ {txNotice}
           </div>
         )}
       </div>

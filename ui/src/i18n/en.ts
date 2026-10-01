@@ -2400,6 +2400,9 @@ export const EN = {
   'prop.impact.bz.hardSouth': 'field hard south — storm likely, polar paths fading',
   'prop.impact.bz.south': 'field south — high-lat paths softening soon',
   'prop.impact.bz.neutral': 'field neutral/north — stable',
+  // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
+  'prop.spaceWx.bz.stale': 'last reading {{ago}}',
+  'prop.spaceWx.bz.none': 'no solar-wind reading',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
@@ -4626,6 +4629,20 @@ export const EN = {
   'program.missingStates':
     'RepeaterBook did not answer for <b>{{states}}</b>, so repeaters there are missing from this list. That is a fetch that failed, not an empty area — fetch again in a few minutes.',
 
+  // The UK coordinator's list, a beta endpoint. `{{rsgb}}` and `{{hearham}}` are the two
+  // directories' own names and `{{squares}}` a list of 4-character locator squares: tokens.
+  'program.rsgb.unavailable':
+    "The {{rsgb}} repeater list could not be read just now, so these are <b>{{hearham}}'s machines alone</b>. Fetch again later to add the coordinator's.",
+  'program.rsgb.beyond':
+    "{{rsgb}} is asked about the locator squares nearest you, not every one this radius reaches, so the machines in <b>{{squares}}</b> are {{hearham}}'s alone.",
+
+  // The saved-projects file Program could not read. `{{path}}` is a file path on the operator's
+  // computer — a token, never translated. "Program" in the second is this section's own name.
+  'program.projectsFile.setAside':
+    'Nexus could not read your saved channel lists, so it kept that file, untouched, at <code>{{path}}</code> and started a new list. Nothing was deleted.',
+  'program.projectsFile.keptInPlace':
+    'Nexus could not read your saved channel lists at <code>{{path}}</code> and could not move that file aside, so Program will not save until it is moved or repaired. Nothing was deleted.',
+
   // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
   'program.filters.aria': 'Result filters',
   'program.filters.allBands': 'All',
@@ -4652,6 +4669,20 @@ export const EN = {
   'program.results.tryWider': 'Try {{radius}}',
   'program.results.showDigital': 'Show digital',
   'program.row.offAir': 'OFF-AIR',
+  // Each machine's directories and date. `{{sources}}` names them ("RSGB + hearham"), `{{date}}`
+  // is a directory's own date as it writes it (2026-05-14) and `{{age}}` the list's age as
+  // program.age.* prints it ("2d ago").
+  'program.row.source.updated': '{{sources}} · updated {{date}}',
+  'program.row.source.noDate': '{{sources}} · no date · fetched {{age}}',
+  // Where the directories disagree. `{{used}}` and `{{others}}` are a directory's name with what
+  // it lists ("RSGB 88.5", "hearham 438.525", "RSGB FM+DMR", "hearham CC9"): tokens.
+  'program.row.differ.label': 'Sources differ',
+  'program.row.differ.title':
+    'The directories disagree about this machine. The row programs the first value shown; check the others before you rely on it.',
+  'program.row.differ.tone': 'Tone {{used}} is programmed (also listed: {{others}})',
+  'program.row.differ.input': 'Input {{used}} is programmed (also listed: {{others}})',
+  'program.row.differ.mode': 'Mode {{used}} is programmed (also listed: {{others}})',
+  'program.row.differ.colorCode': 'Color code {{used}} is programmed (also listed: {{others}})',
   'program.row.star.title':
     'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
   'program.row.unstar.title':
@@ -5195,7 +5226,7 @@ export const EN = {
   'settings.radios.bands.hint': 'Covers bands (for auto band-routing; none = covers all):',
   'settings.radios.add.action': '+ Add radio',
   'settings.radios.hint.multi':
-    "The Rig / CAT + Audio settings below edit “{{name}}”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.",
+    "The Rig / CAT + Audio settings below edit “{{name}}”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio. These Rig / CAT controls are station-wide instead, so changing one changes every radio: “Interface keys RTS on the CAT port”, “Split operation”, “Follow the radio's split”, “Wheel tuning sensitivity”, and under Advanced, “Sharing port”, “Serial handshake” and “Keying line at startup”.",
   'settings.radios.hint.single':
     'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.',
   // The accessible name is its own entry, not a slice of the hint below it: a hint is a whole
@@ -5275,6 +5306,13 @@ export const EN = {
   'settings.rigControl.ptt.rts': 'Serial RTS',
   'settings.rigControl.ptt.dtr': 'Serial DTR',
   'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  // #381. Front/Mic and Rear/Data name the radio's two audio inputs and are prose; CAT, PTT, VOX,
+  // USB, the jack labels DATA and ACC, and SignaLink (an interface) are invariant tokens.
+  'settings.rigControl.txAudio.label': 'Transmit audio source (CAT PTT)',
+  'settings.rigControl.txAudio.front': 'Front/Mic',
+  'settings.rigControl.txAudio.rear': 'Rear/Data',
+  'settings.rigControl.txAudio.hint':
+    'Which of the radio’s audio inputs transmits when Nexus keys it over CAT. <b>Front/Mic</b> is how Nexus has always keyed the radio. <b>Rear/Data</b> keys its data input instead: choose it if your sound card reaches the radio through its rear DATA or ACC jack (where a SignaLink plugs in) or its own USB audio, and the radio sends no audio from Nexus although it does on VOX. The Phone cockpit’s PTT is not affected and keys the radio as it always has. <b>Per radio.</b>',
   'settings.rigControl.pttPort.label': 'PTT Serial Port',
   // `{{example}}` is the platform's own device-name example, supplied by the panel as an
   // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
@@ -5401,6 +5439,11 @@ export const EN = {
   'settings.rigControl.split.fakeit': 'Fake It',
   'settings.rigControl.split.hint':
     'Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in 500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.',
+  // "Follow the radio's split" (`splitDetectEnabled`). Split stays the ham word it is across these
+  // catalogs; the help says what the switch does, when it holds transmit, and which radio it never asks.
+  'settings.rigControl.splitDetect.label': "Follow the radio's split",
+  'settings.rigControl.splitDetect.hint':
+    'Nexus reads the radio’s split, so a split you set at the radio is the one it checks your licence privileges against; if the radio says it is split but not where it transmits, Nexus will not transmit. A radio whose split can only be read by moving it is never asked. Off by default.',
 
   // The multiplier beside this label (×1.00) is a number and is rendered by the panel.
   'settings.rigControl.wheel.label': 'Wheel tuning sensitivity',
@@ -5663,6 +5706,12 @@ export const EN = {
     'This controller runs at {{rate}} baud — the rate its Hamlib backend declares. Leave it here.',
   'settings.rotator.baud.hint.wrong':
     '<b>This controller runs at {{rate}} baud, not {{set}}</b> — at the wrong rate it never answers and reads as broken hardware. Set {{rate}}, or re-pick the model above to fill it in.',
+  // In place of the baud hint when the model is PstRotatorAz (Hamlib model 3). `{{address}}`,
+  // `{{sent}}` and `{{bearing}}` are invariant tokens the panel supplies: where PstRotatorAz
+  // listens, and what Hamlib's backend for it sends for a bearing. UDP Control and Setup are names
+  // in PstRotatorAz's own English window.
+  'settings.rotator.port.hint.pstRotator':
+    'PstRotatorAz: enter {{address}} as the port, and turn on UDP Control in its Setup (the baud is not used). Its Hamlib backend can garble the bearing it sends — {{sent}} for {{bearing}}° — so PstRotatorAz may not turn to it.',
   'settings.rotator.external.label': 'External rotctld (advanced)',
   // `{{example}}` is a host:port the panel supplies as an invariant token.
   'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',
@@ -6386,6 +6435,12 @@ export const EN = {
   'settings.js8.rxSpeeds.label': 'Decode these speeds',
   'settings.js8.rxSpeeds.hint':
     'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+  'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
+  'settings.js8.callsignAgingMin.hint':
+    'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
+  'settings.js8.activityAgingMin.label': 'Band activity aging (minutes)',
+  'settings.js8.activityAgingMin.hint':
+    '2 by default, as in JS8Call. A row of the Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX is on its offset. 0 keeps every row. Up to 1440 (a day).',
   'settings.js8.automatic.title': 'Automatic transmissions',
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':
@@ -6396,12 +6451,21 @@ export const EN = {
   'settings.js8.hbAck.label': 'Answer heartbeats',
   'settings.js8.hbAck.hint':
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
+  'settings.js8.hbAckDeny.label': 'Never acknowledge heartbeats from these callsigns',
+  'settings.js8.hbAckDeny.hint': 'Comma-separated, empty by default as in JS8Call. A heartbeat from a station on this list draws no acknowledgement.',
   'settings.js8.autoreply.label': 'Auto-reply to queries',
   'settings.js8.autoreply.hint':
-    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered after a one-period countdown you can cancel in the cockpit. @ALLCALL queries are answered at most once per station every 15 minutes. Needs TX on.',
+    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Off, a reply is put in the message box for you to send, as JS8Call does, and QUERY MSGS is not answered. Needs TX on.',
+  'settings.js8.autoreplyConfirmation.label': 'Ask for confirmation before sending automatic replies',
+  'settings.js8.autoreplyConfirmation.hint':
+    'On by default, as in JS8Call: every automatic reply (to a query, an ACK, a relay, a heartbeat acknowledgement) waits in the cockpit for your Yes, and is not sent if you say No or do not answer within 89 seconds. Off, each goes by itself in the next period.',
+  'settings.js8.autoreplyAllow.label': 'Only auto-reply to these callsigns',
+  'settings.js8.autoreplyAllow.hint': 'Comma-separated. Empty, the JS8Call default, answers everyone. Otherwise only a station on this list, by its call as heard or its base call (W1AW covers W1AW/P), is answered; anyone else is not acted on at all: no reply, no relay, nothing filed or held for them.',
+  'settings.js8.autoreplyDeny.label': 'Never auto-reply to these callsigns',
+  'settings.js8.autoreplyDeny.hint': 'Comma-separated, empty by default as in JS8Call. A station on this list (W1AW covers W1AW/P) is not acted on at all: no reply, no relay, its message not filed.',
   'settings.js8.relay.label': 'Relay for other stations',
   'settings.js8.relay.hint':
-    'On by default, as in JS8Call: a message routed through your callsign is passed along, and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
+    'On by default, as in JS8Call: a message routed through your callsign is passed along (with Auto-reply off, it is put in the message box for you to send), and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
   'settings.js8.idleWatchdogMin.label': 'Idle watchdog (minutes)',
   'settings.js8.idleWatchdogMin.hint':
     'After this long with nothing typed, heartbeats, auto-replies and relaying all switch off and the cockpit says so — the JS8Call rule, so an unattended station goes quiet. 60 by default; 0 turns the watchdog off; anything below 5 counts as 5. TX enable is left as it was.',
@@ -7009,6 +7073,10 @@ export const EN = {
   'settings.confirmations.cloudlog.url.label': 'Base URL',
   'settings.confirmations.cloudlog.url.hint':
     'Your Cloudlog/Wavelog site root. Leave blank to disable.',
+  // #378: shown under the Base URL once it starts with http://. `{{ranges}}` is the local-network
+  // address ranges (192.168.x.x and the rest), as an operator types them — a token list.
+  'settings.confirmations.cloudlog.url.plainHttp':
+    'With plain http:// your API key travels unencrypted to this address. That is allowed only for an address on your own network ({{ranges}}, or a name that resolves only to those), and any other is refused.',
   'settings.confirmations.cloudlog.stationId.label': 'Station profile id',
   // #226. `…/station/edit/3` is a URL fragment, and Wavelog/Cloudlog/Station Locations are the
   // product's own names — tokens inside the sentence.
@@ -8449,6 +8517,7 @@ export const EN = {
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
   'js8.station.sendGrid.title': 'Send your grid square {{grid}} to {{call}}',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+  'js8.station.unread.title': 'Unread message for you from {{call}}, in the Inbox',
   'js8.station.pin.title': 'Pin {{call}} to the top of this list',
   'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
   'js8.station.distance.title': 'Great-circle distance to {{grid}}, from your grid square',
@@ -8467,6 +8536,7 @@ export const EN = {
   'js8.inbox.delete.label': 'Delete',
   'js8.inbox.delete.title': 'Delete this message from the inbox',
   'js8.inbox.failed': 'Inbox change refused',
+  'js8.inbox.new': 'New message from {{from}} at {{time}} UTC, in the Inbox',
 
   // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
   'js8.dock.aria': 'JS8 composer',
@@ -8500,17 +8570,17 @@ export const EN = {
   'js8.dock.estimate.title':
     'How many periods this takes on the air (one frame per period). An estimate — the engine packs the real frames and refuses anything over ten minutes of airtime.',
   'js8.dock.autoreply.title.off':
-    'Auto-reply is off — SNR?, GRID?, INFO?, QUERY and MSG to you go unanswered. Click to turn it on (remembered). It answers only while TX is on.',
+    'Auto-reply is off — an answer to SNR?, GRID?, INFO? or STATUS? to you, an ACK for a MSG or a relay is put in the message box for you to send, as JS8Call does, and nothing keys by itself; QUERY MSGS goes unanswered. Click to turn it on (remembered). It answers only while TX is on.',
   'js8.dock.autoreply.title.on':
     'Auto-reply is on, but TX is off — nothing keys; a reply is shown as “would have replied”. Enable TX (the header pill) to let replies go out.',
   'js8.dock.autoreply.title.armed':
-    'Auto-reply is ARMED: SNR?, GRID?, INFO?, QUERY and MSG addressed to you, @ALLCALL or a group you joined are answered after a visible countdown you can cancel. Click to turn it off.',
+    'Auto-reply is ARMED: SNR?, GRID?, INFO?, QUERY and MSG addressed to you or a group you joined are answered, each after your Yes when Settings asks for one. Click to turn it off.',
   'js8.dock.relay.title.off':
     'Relay is off — a > message routed through you is displayed and not passed on. Click to turn it on (remembered). Relaying is third-party traffic; you are responsible for it.',
   'js8.dock.relay.title.on':
     'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
   'js8.dock.relay.title.armed':
-    'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. Click to turn it off.',
+    'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. With Auto-reply off, it is put in the message box for you to send instead. Click to turn it off.',
   'js8.dock.hbAck.title.off':
     'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
   'js8.dock.hbAck.title.on':
@@ -8521,13 +8591,16 @@ export const EN = {
   // than nine edits is the same as js8.panel.activity.differs).
   'js8.dock.arm.differs':
     'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
-  'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
-  'js8.dock.pending.idle': 'Would reply to {{to}} — not armed (idle watchdog), nothing keys: {{text}}',
   'js8.toast.idleTripped':
     'JS8 idle watchdog: no operator activity for {{min}} min — heartbeat, autoreply and relay are off. TX stays as you left it; any send or switch re-arms them.',
-  'js8.dock.pending.cancel.label': 'Cancel',
-  'js8.dock.pending.cancel.title': 'Cancel this automatic reply before it goes out',
+  // JS8Call's AutoreplyConfirmation box, its own words (mainwindow.cpp:5211-5212): Yes / No, with
+  // the seconds to No on the No button, as JS8Call counts them on its default button.
+  'js8.dock.confirm': 'A transmission is queued for autoreply: {{text}} — would you like to send this transmission?',
+  'js8.dock.confirm.yes.label': 'Yes',
+  'js8.dock.confirm.yes.title': 'Send it: it goes out in the next period, through every TX check.',
+  'js8.dock.confirm.no.label': 'No ({{secs}})',
+  'js8.dock.confirm.no.title': 'Do not send it. With no answer it is No when the count reaches 0, as in JS8Call.',
   'js8.dock.queue.title': 'Queued frames — one leaves per period while TX is on. F/L mark the first and last frame of a message.',
   'js8.dock.queue.drop.label': 'Drop queue',
   'js8.dock.queue.drop.title': 'Drop every queued frame. Not a stop: a frame already on the air finishes — Stop TX cuts it.',
@@ -8549,7 +8622,7 @@ export const EN = {
   'js8.toast.arm.failed': 'JS8 switch refused',
   'js8.toast.command.failed': 'JS8 command refused',
   'js8.toast.noAddressee': 'A command needs a station — put a callsign, @ALLCALL or a group in To',
-  'js8.toast.cancel.failed': 'Could not cancel the reply',
+  'js8.toast.answer.failed': 'Could not answer the question',
   'js8.toast.drop.failed': 'Could not drop the queue',
 
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
@@ -8737,6 +8810,7 @@ export const EN = {
   'sstv.tx.send.failed': 'SSTV send refused',
   'sstv.tx.announce.sending': 'Transmitting SSTV {{mode}}',
   'sstv.tx.announce.finished': 'SSTV transmit finished',
+  'sstv.tx.announce.stopped': 'SSTV transmit stopped',
   'sstv.tx.progress': 'TX — {{mode}} · {{clock}} remaining',
 
   // ── SSTV ▸ the gallery ──────────────────────────────────────────────────────────────
@@ -9465,6 +9539,31 @@ export const EN = {
     'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
   'shell.logStore.failed':
     'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
+  // A file Nexus could not read at launch and KEPT rather than save over (features/keptFiles.ts):
+  // a torn journal, or one a newer Nexus wrote. `{{path}}` is the file's full path on the
+  // operator's computer, a token. One sentence per store says what the file held; `other` is a
+  // store this build has no words for. “Log this QSO?” is the popup's own title
+  // (logPrompt.title), quoted as this language shows it.
+  'shell.keptFile.pendingQso':
+    'Nexus could not read the file of QSOs that were waiting in the “Log this QSO?” popup, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.fieldDay':
+    'Nexus could not read all of the backup of your Field Day or contest log, so it kept that file, untouched, at {{path}}, and started a new backup from the contacts it could read. Nothing was deleted.',
+  'shell.keptFile.js8Inbox':
+    'Nexus could not read your JS8 inbox, so it kept that file, untouched, at {{path}}, and started a new inbox. Nothing was deleted.',
+  'shell.keptFile.pendingMsgs':
+    'Nexus could not read the file of Tempo messages waiting to send, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.assistance':
+    'Nexus could not read your Assistance record, so it kept that file, untouched, at {{path}}, and started a new record. Nothing was deleted.',
+  'shell.keptFile.conversations':
+    'Nexus could not read your Tempo conversations, so it kept that file, untouched, at {{path}}, and started with none. Nothing was deleted.',
+  'shell.keptFile.settings':
+    'Nexus could not read your settings, so it kept that file, untouched, at {{path}}, and started from the default settings. Nothing was deleted.',
+  'shell.keptFile.other':
+    'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
+  'shell.keptFile.keptInPlace':
+    'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
+  'shell.keptFile.settingsKeptInPlace':
+    'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
   // window open until they are saved (components/LogbookSaving.tsx). `{{count}}` is a number of
   // changes; `{{reason}}` is the station's diagnostic wording, passed through untranslated. The
@@ -10133,6 +10232,13 @@ export const EN = {
   'rotor.pane.notAnswering':
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
+  // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
+  // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.
+  'rotor.pane.el.title': 'Elevation above the horizon · this rotator reaches {{min}}–{{max}}°',
+  'rotor.pane.commandedEl.title': 'Commanded elevation — the antenna is on its way',
+  'rotor.pane.el.entry.aria': 'Elevation to move to (degrees, {{min}}–{{max}})',
+  'rotor.pane.el.outside': 'This rotator reaches {{min}}–{{max}}° of elevation',
+  'rotor.pane.hint.azel': 'click the rose or type a bearing or an elevation · headings are TRUE',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

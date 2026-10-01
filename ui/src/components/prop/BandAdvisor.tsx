@@ -6,9 +6,9 @@
 // OPERATOR-REACHABLE activity (own-call + near-region); "Worldwide" ranks by the
 // global cluster/RBN firehose. The toggle teaches the chaser the difference
 // between workable-for-me and merely-busy-somewhere.
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import type { BandReport } from '../../types'
-import { tierVar, modeledVar, dualStateLabel } from '../../propViz'
+import { tierVar, modeledVar, dualStateLabel, stateInkKind } from '../../propViz'
 import { t } from '../../i18n'
 
 export function BandAdvisor({
@@ -81,6 +81,10 @@ export function BandAdvisor({
           // never a dead "Quiet" — the core fix. Only genuinely modeled-closed bands recede.
           const ds = dualStateLabel(b.modeled, b.tier)
           const stateColor = b.modeled ? modeledVar(b.modeled) : tierVar(b.tier)
+          // A state colour rides as `--state-ink` so the sheet can letter it per theme (in the light
+          // themes: the ink, underlined in the colour, or the dim ink for a closed band); a receding
+          // neutral stays a plain colour.
+          const stateInk = stateInkKind(stateColor)
           return (
             <div
               className={`ba-row${ds.word === 'Closed' ? ' is-closed' : ''}${onBandClick ? ' is-clickable' : ''}${activeBand === b.band ? ' is-active' : ''}`}
@@ -103,7 +107,11 @@ export function BandAdvisor({
                 />
               </span>
               <span className="ba-state">
-                <span className="ba-modeled" style={{ color: stateColor }}>
+                <span
+                  className="ba-modeled"
+                  data-state-ink={stateInk ?? undefined}
+                  style={(stateInk ? { '--state-ink': stateColor } : { color: stateColor }) as CSSProperties}
+                >
                   {ds.word}
                 </span>
                 {ds.sub && <span className="ba-observed">{ds.sub}</span>}

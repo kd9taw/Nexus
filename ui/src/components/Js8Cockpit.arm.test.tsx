@@ -52,7 +52,6 @@ vi.mock('../api', async (importOriginal) => {
     js8SendCommand: vi.fn(async () => s()),
     js8CallCq: vi.fn(async () => s()),
     js8Arm: vi.fn(async () => s()),
-    js8Cancel: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
     // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
     // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
@@ -102,7 +101,6 @@ async function poll() {
     await vi.advanceTimersByTimeAsync(600)
   })
 }
-const q = <T extends Element>(sel: string) => document.querySelector(sel) as T
 
 describe('the idle-watchdog toast', () => {
   it('fires ONCE on the rising edge of idleTripped and not on later polls', async () => {
@@ -126,39 +124,30 @@ describe('the idle-watchdog toast', () => {
   })
 })
 
-describe('the pending row knows whether its reply can key', () => {
-  const pendingReply = { origin: 'autoReply' as const, to: 'W1AW', display: 'KD9TAW: W1AW SNR -05', firesAtMs: Date.now() + 17_000 }
-
-  it('TX off → the "TX is off" face', async () => {
-    state.current = { ...base(), pendingReply }
-    await renderCockpit()
-    expect(q('.js8-pending-row').textContent).toMatch(/TX is off/)
-    expect(q('.js8-cancel')).not.toBeNull()
+// JS8Call's "New Message Received" box (mainwindow.cpp:9143-9154) for a MSG filed to me: once per
+// message, and not for what the inbox held when the view opened.
+describe('a new MSG to me announces itself', () => {
+  const entry = (id: number, state: 'unread' | 'read' | 'store') => ({
+    id, from: 'W1AW', to: 'KD9TAW', text: 'HELLO', path: ['W1AW'], state, atMs: Date.UTC(2026, 8, 30, 14, 5, 9), freqHz: 1500, snrDb: -7,
   })
-
-  it('TX on but the origin not armed (idle-tripped) → the "not armed" face', async () => {
-    state.current = { ...base(), txEnabled: true, idleTripped: true, pendingReply, armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false } }
+  it('toasts once for a new unread message, and not for what was already there', async () => {
+    // A fresh object on every poll, as the engine's replies are.
+    const before = () => ({ ...base(), inbox: [entry(1, 'unread'), entry(2, 'read')] })
+    const after = () => ({ ...base(), inbox: [entry(1, 'unread'), entry(2, 'read'), entry(3, 'unread'), entry(4, 'store')] })
+    state.current = before()
     await renderCockpit()
-    expect(q('.js8-pending-row').textContent).toMatch(/not armed/i)
-    expect(q('.js8-pending-row').textContent).not.toMatch(/TX is off/)
-    expect(q('.js8-cancel')).not.toBeNull()
-  })
-
-  it('both acts present → the countdown', async () => {
-    state.current = { ...base(), txEnabled: true, pendingReply, armed: { autoreply: true, relay: true, hbAck: false, hb: false, cq: false } }
-    await renderCockpit()
-    expect(q('.js8-pending-row').textContent).toMatch(/\d+ s/)
-    expect(q('.js8-pending-row').textContent).not.toMatch(/not armed|TX is off/i)
-  })
-
-  it('a relay reply reads the RELAY switch, not the autoreply one', async () => {
-    state.current = {
-      ...base(),
-      txEnabled: true,
-      pendingReply: { ...pendingReply, origin: 'relay' },
-      armed: { autoreply: true, relay: false, hbAck: false, hb: false, cq: false },
-    }
-    await renderCockpit()
-    expect(q('.js8-pending-row').textContent).toMatch(/not armed/i)
+    state.current = before()
+    await poll()
+    expect(toast.pushToast, 'what the inbox held when the view opened toasted').not.toHaveBeenCalled()
+    state.current = after()
+    await poll()
+    expect(toast.pushToast).toHaveBeenCalledTimes(1)
+    expect(String(toast.pushToast.mock.calls[0][0])).toBe('New message from W1AW at 14:05:09 UTC, in the Inbox')
+    state.current = after()
+    await poll()
+    state.current = after()
+    await poll()
+    expect(toast.pushToast, 'a message toasts once, not every poll').toHaveBeenCalledTimes(1)
   })
 })
+
