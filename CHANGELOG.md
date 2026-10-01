@@ -486,6 +486,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio's split, Wheel tuning sensitivity, and under Advanced, Sharing port, Serial handshake and
   Keying line at startup. The note and the manual now name them, so changing one while you edit
   another radio no longer surprises the radio you are operating.
+- **Less work for the computer while nothing is happening.** The main window redrew itself two and
+  a half times a second on a timer, even with nothing new to show, on top of the redraw that each
+  new reading from the radio already brings. It now redraws only when something has changed. The
+  unread counts in the Tempo station list update exactly as before.
 - **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
   you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
   relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of

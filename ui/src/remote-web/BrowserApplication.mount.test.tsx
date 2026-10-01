@@ -144,15 +144,15 @@ it('the Listen control still sends after the workspace boots', async () => {
 })
 
 // Every 500 ms the workspace host re-renders itself to re-read the sample age. That changes
-// nothing App renders, so it may not run App: the budget below is the boot and App's own
-// 400 ms unread-badge ticker, and the host's tick contributes nothing. The observation lane
-// is silent here on purpose. Its publishes DO run App, and by today's wiring rightly so -
+// nothing App renders, so it may not run App: the budget below is the boot alone, because App
+// keeps no clock of its own (its 400 ms unread-badge ticker is gone: the badges follow the
+// snapshots, see App.ticker.test.tsx), and the host's tick contributes nothing. The observation
+// lane is silent here on purpose. Its publishes DO run App, and by today's wiring rightly so -
 // App subscribes to the rig observation through useReceiverSettings (App.tsx) for the Tempo
 // waterfall's rx-offset fallback - so a live lane would put that separate cost inside this
 // bound and hide what the bound is about.
 const WINDOW_MS = 4000
-const OWN_TICKS = Math.floor(WINDOW_MS / 400)
-const BUDGET = 3 + OWN_TICKS
+const BUDGET = 3
 
 /** Advances the clock one timer at a time, each in its own act(). A single act() around the
  *  whole window would coalesce every update raised inside it into ONE render, and report one
