@@ -608,6 +608,105 @@ describe('Needed-and-Hunting.md matches NEED_TIER', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 5. Rig & CAT scope — the fields the panel keeps once for the whole station vs the
+//    manual's Rig & CAT intro and the banner over the radio cards.
+// ---------------------------------------------------------------------------
+
+describe('the Rig & CAT intro and the radio-cards banner name the station-wide controls', () => {
+  // The intro said "Every control here is per radio", and the banner said that editing
+  // another radio configures it WITHOUT changing the one you are operating, while seven of
+  // the section's controls wrote fields the station keeps ONCE. Changing radio 2's serial
+  // handshake changed radio 1's. So neither list is typed here: the CODE side is every field
+  // the rig-control fieldset writes minus the fields `radioPatch` carries per radio (Save
+  // sends exactly those to the edited card), and the DOC side is the control labels the
+  // intro bolds and the banner quotes.
+  const REF = 'docs/guide/settings-reference.md'
+  const panel = read(uiSrc('components/SettingsPanel.tsx'))
+
+  const fn = panel.indexOf('export function radioPatch(')
+  const perRadio = new Set(
+    [...balancedSpan(panel, panel.indexOf('{', panel.indexOf('return {', fn))).matchAll(/^\s{4}(\w+):/gm)].map(
+      (m) => m[1],
+    ),
+  )
+
+  const start = panel.indexOf('id="settings-rig-control"')
+  const next = /<fieldset className="settings-section" id="settings-/g
+  next.lastIndex = start + 1
+  const section = panel.slice(start, next.exec(panel)?.index ?? panel.length)
+
+  interface RigCatControl {
+    field: string
+    label: string
+    stationWide: boolean
+    at: number
+  }
+
+  /** Every field the section writes, labelled by the nearest `settings.rigControl.*.label` before the writer. */
+  function controlsIn(src: string): RigCatControl[] {
+    const writes = [
+      ...[...src.matchAll(/\bupdate(?:Bool|Num)?\(\s*'(\w+)'/g)].map((m) => ({ field: m[1], at: m.index ?? 0 })),
+      // A field written through a setter of its own (`setSplitMode`) counts when the section
+      // reads it back as `form.<field>`; React state setters (`setCatResult`) never are.
+      ...[...src.matchAll(/\bset([A-Z]\w*)\(/g)]
+        .map((m) => ({ field: m[1][0].toLowerCase() + m[1].slice(1), at: m.index ?? 0 }))
+        .filter((w) => new RegExp(`\\bform\\.${w.field}\\b`).test(src)),
+    ]
+    const labels = [...src.matchAll(/t\('(settings\.rigControl\.[\w.]+?\.label)'\)/g)]
+    return writes.map((w) => {
+      const key = labels.filter((l) => (l.index ?? 0) < w.at).pop()?.[1]
+      const text = key ? EN[key as MessageKey] : undefined
+      return {
+        field: w.field,
+        // A plural entry is an object, never a control's label.
+        label: typeof text === 'string' ? text : '(no label)',
+        stationWide: !perRadio.has(w.field),
+        at: w.at,
+      }
+    })
+  }
+  const controls = controlsIn(section)
+
+  /** The names a text gives, whitespace folded because the manual hard-wraps inside a bold span. */
+  const named = (text: string, re: RegExp) => new Set([...text.matchAll(re)].map((m) => m[1].replace(/\s+/g, ' ')))
+
+  /** Station-wide controls the text leaves out, and per-radio controls it lists as station-wide. */
+  function scopeErrors(names: Set<string>, where: string): string[] {
+    const missing = controls
+      .filter((c) => c.stationWide && !names.has(c.label))
+      .map((c) => `${where} does not name "${c.label}", whose field ${c.field} is station-wide (radioPatch does not carry it)`)
+    const wrong = controls
+      .filter((c) => !c.stationWide && names.has(c.label))
+      .map((c) => `${where} names "${c.label}" as station-wide, but radioPatch carries its field ${c.field} per radio`)
+    return [...new Set([...missing, ...wrong])]
+  }
+
+  it('control: reads the section through its Advanced group, and a list that drops one is reported', () => {
+    const advanced = section.indexOf('id="rig-advanced"')
+    expect(advanced, 'the rig-control fieldset contains its Advanced group').toBeGreaterThan(0)
+    expect(controls.some((c) => c.at > advanced), 'a writer is found inside Advanced').toBe(true)
+    expect(controls.filter((c) => !c.stationWide).length, 'per-radio writers found').toBeGreaterThan(10)
+    const stationWide = controls.filter((c) => c.stationWide)
+    expect(stationWide.length, 'station-wide writers found').toBeGreaterThan(0)
+    const planted = new Set(stationWide.slice(1).map((c) => c.label))
+    expect(scopeErrors(planted, 'planted')).toEqual([expect.stringContaining(`"${stationWide[0].label}"`)])
+  })
+
+  it('the manual intro names every station-wide control, and no per-radio one', () => {
+    const md = read(repo(REF))
+    const at = md.indexOf('\n### Rig & CAT\n')
+    const intro = md.slice(at, md.indexOf('\n- **', at))
+    const errors = scopeErrors(named(intro, /\*\*([^*]+)\*\*/g), `${REF} Rig & CAT intro`)
+    expect(errors, errors.join('\n')).toEqual([])
+  })
+
+  it('the banner over the radio cards names the same controls', () => {
+    const errors = scopeErrors(named(EN['settings.radios.hint.multi'], /“([^”]+)”/g), "en.ts 'settings.radios.hint.multi'")
+    expect(errors, errors.join('\n')).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // WHAT THESE GUARDS DO NOT CATCH — written down rather than chased with more
 // guards, because overstating a guard's reach is how the next gap hides.
 //
@@ -624,7 +723,14 @@ describe('Needed-and-Hunting.md matches NEED_TIER', () => {
 //   says …"), which is how a doc honestly reports a stale in-app string.
 // - It reads only Markdown under docs/. In-app strings are not checked against anything —
 //   SettingsPanel.tsx's JT65 hint claiming Nexus "does not transmit it" is exactly this
-//   class of contradiction and no guard in this repo sees it.
+//   class of contradiction and no guard in this repo sees it. The one exception is the
+//   English radio-cards banner in section 5; its German, Spanish, French and Japanese
+//   copies are not compared.
+// - Section 5 sees a Rig & CAT control only through an `update*('<field>'` call or a
+//   `set<Field>(` setter whose field the section reads back, and labels it by the nearest
+//   `settings.rigControl.*.label` before the writer. A control written any other way
+//   (Rig Model's picker, the Detect flow's fills) is outside it, and so is any scope claim
+//   about the other sections of the Radio tab.
 // - Column-3 macro text is compared only where the column is headed "Content".
 //   docs/guide/cw.md heads its column "Sends" and glosses the macro in prose, so its
 //   labels are guarded and its bodies are not.
