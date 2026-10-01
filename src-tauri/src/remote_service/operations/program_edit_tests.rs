@@ -224,8 +224,8 @@ fn a_row_that_is_not_there_and_a_move_off_the_end_are_refused() {
 }
 
 /// A file with no working list, and a file that cannot be read at all. Neither may be "fixed" by
-/// writing a fresh empty list over it — that is the `load_radioprog` trap, and here it would
-/// destroy the operator's named projects rather than just show a blank screen.
+/// writing a fresh empty list over it — the trap the desktop's old loader fell into, and here it
+/// would destroy the operator's named projects rather than just show a blank screen.
 #[test]
 fn an_unreadable_or_absent_list_is_never_written_over() {
     let dir = dir("absent");

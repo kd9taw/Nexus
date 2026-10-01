@@ -2927,6 +2927,8 @@ export const JA: PartialCatalog = {
   "program.age.hours": "{{hours}}時間前",
   "program.age.days": "{{days}}日前",
   "program.missingStates": "RepeaterBookが<b>{{states}}</b>について応答しなかったため、その地域のレピータはこの一覧に含まれていません。地域が空なのではなく取得に失敗しています — 数分後にもう一度取得してください。",
+  "program.projectsFile.setAside": "保存済みのチャンネルリストを読み込めなかったため、そのファイルを変更せずに<code>{{path}}</code>として残し、新しいリストを開始しました。削除されたものはありません。",
+  "program.projectsFile.keptInPlace": "<code>{{path}}</code>にある保存済みのチャンネルリストを読み込めず、ファイルを退避することもできなかったため、ファイルが移動または修復されるまでプログラムは保存しません。削除されたものはありません。",
   "program.coverageGap": "{{source}}にはこの地域の<b>{{band}}</b>レピータの登録がありません。レピータのある地域では珍しいことです — 地方のカバー率にむらがあるため、このリストには載っていない局がある可能性があります。<b>設定 ▸ 連携</b>でRepeaterBook APIトークンを追加すると補完できます。",
   "program.filters.aria": "結果フィルター",
   "program.filters.allBands": "すべて",
