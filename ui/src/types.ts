@@ -1782,6 +1782,13 @@ export interface Js8QueueRow {
 }
 
 /** An automatic reply waiting out its countdown (cancellable until `firesAtMs`). */
+/** A reply the station put in the composer (AUTO off, as JS8Call types it into its compose
+ * box). Native only, never part of Js8State. */
+export interface Js8ComposerPrefill {
+  id: number
+  text: string
+}
+
 export interface Js8PendingReply {
   origin: Js8Origin
   to: string

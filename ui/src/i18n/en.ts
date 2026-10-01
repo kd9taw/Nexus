@@ -6348,13 +6348,13 @@ export const EN = {
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
   'settings.js8.autoreply.label': 'Auto-reply to queries',
   'settings.js8.autoreply.hint':
-    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Needs TX on.',
+    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Off, a reply is put in the message box for you to send, as JS8Call does, and QUERY MSGS is not answered. Needs TX on.',
   'settings.js8.autoreplyConfirmation.label': 'Ask for confirmation before sending automatic replies',
   'settings.js8.autoreplyConfirmation.hint':
     'On by default, as in JS8Call: every automatic reply (to a query, an ACK, a relay, a heartbeat acknowledgement) waits in the cockpit for your Yes, and is not sent if you say No or do not answer within 89 seconds. Off, each goes by itself in the next period.',
   'settings.js8.relay.label': 'Relay for other stations',
   'settings.js8.relay.hint':
-    'On by default, as in JS8Call: a message routed through your callsign is passed along, and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
+    'On by default, as in JS8Call: a message routed through your callsign is passed along (with Auto-reply off, it is put in the message box for you to send), and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
   'settings.js8.idleWatchdogMin.label': 'Idle watchdog (minutes)',
   'settings.js8.idleWatchdogMin.hint':
     'After this long with nothing typed, heartbeats, auto-replies and relaying all switch off and the cockpit says so — the JS8Call rule, so an unattended station goes quiet. 60 by default; 0 turns the watchdog off; anything below 5 counts as 5. TX enable is left as it was.',
@@ -8455,7 +8455,7 @@ export const EN = {
   'js8.dock.estimate.title':
     'How many periods this takes on the air (one frame per period). An estimate — the engine packs the real frames and refuses anything over ten minutes of airtime.',
   'js8.dock.autoreply.title.off':
-    'Auto-reply is off — SNR?, GRID?, INFO?, QUERY and MSG to you go unanswered. Click to turn it on (remembered). It answers only while TX is on.',
+    'Auto-reply is off — an answer to SNR?, GRID?, INFO? or STATUS? to you, an ACK for a MSG or a relay is put in the message box for you to send, as JS8Call does, and nothing keys by itself; QUERY MSGS goes unanswered. Click to turn it on (remembered). It answers only while TX is on.',
   'js8.dock.autoreply.title.on':
     'Auto-reply is on, but TX is off — nothing keys; a reply is shown as “would have replied”. Enable TX (the header pill) to let replies go out.',
   'js8.dock.autoreply.title.armed':
@@ -8465,7 +8465,7 @@ export const EN = {
   'js8.dock.relay.title.on':
     'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
   'js8.dock.relay.title.armed':
-    'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. Click to turn it off.',
+    'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. With Auto-reply off, it is put in the message box for you to send instead. Click to turn it off.',
   'js8.dock.hbAck.title.off':
     'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
   'js8.dock.hbAck.title.on':

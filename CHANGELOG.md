@@ -348,6 +348,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: with AUTOREPLY off, a reply goes in your message box for you to send, as in JS8Call.**
+  JS8Call still answers a query to you with AUTO unchecked: it types the answer (an SNR, GRID,
+  INFO, STATUS or HEARING reply, the ACK for a MSG, a relay) into its message box, and you send it
+  or not. Nexus did nothing. Now the answer is put in the JS8 message box, the To box and command
+  cleared, exactly as it would go out, once the box is empty and nothing of yours is going out; it
+  never keys by itself, and Send keys it as your own message. QUERY MSGS and heartbeats are still
+  answered only with AUTOREPLY on, as in JS8Call. A relay with AUTOREPLY off now waits in the box
+  too, where it used to go out by itself.
 - **JS8: an automatic reply goes out in the next period, as JS8Call sends it.** JS8Call keys a
   reply in the period right after the one the query came in; Nexus first counted it down for one
   period and two seconds and so answered two periods late, by which time the other station had

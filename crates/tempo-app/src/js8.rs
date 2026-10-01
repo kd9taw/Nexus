@@ -27,7 +27,8 @@ use modes::Js8Speed;
 
 use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
-    Js8ActivityRow, Js8Armed, Js8PendingReply, Js8QueueRow, Js8State, SourceKind, Tier,
+    Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8PendingReply, Js8QueueRow, Js8State,
+    SourceKind, Tier,
 };
 use crate::settings::Settings;
 
@@ -829,6 +830,20 @@ impl Engine {
             None if yes => Err(JS8_REPLY_GONE.to_string()),
             None => Ok(()),
         }
+    }
+
+    /// The cockpit's compose box, both ways (JS8Call's `extFreeTextMsgEdit`): whether it holds
+    /// text, and the id of the reply it took into the box since it last said; answered with the
+    /// reply the station has put in the composer (AUTO off, `addMessageText`, mainwindow.cpp:
+    /// 9671), until the cockpit takes it. Never keys anything: the operator's Send does.
+    pub fn js8_composer(
+        &mut self,
+        composing: bool,
+        taken: Option<u32>,
+    ) -> Option<Js8ComposerPrefill> {
+        let (actions, offered) = self.js8_station.sync_composer(composing, taken);
+        self.js8_handle_actions(actions);
+        offered.map(|(id, text)| Js8ComposerPrefill { id, text })
     }
 
     /// Sender-class, NOT a stop: empties the outbox and nothing else. The HB schedule, the
@@ -2469,7 +2484,8 @@ mod tests {
         assert!(overs.is_empty(), "nothing old keys: {overs:?}");
     }
 
-    /// With autoreply off, JS8Call's AUTO unchecked, the MSG is filed and nothing keys.
+    /// With autoreply off, JS8Call's AUTO unchecked, the MSG is filed and nothing keys: its ACK
+    /// is put in the composer, as JS8Call types it into its compose box.
     #[test]
     fn with_autoreply_off_a_js8_msg_is_filed_and_nothing_keys() {
         let mut e = hb_engine("EN52", 0, 1500.0);
@@ -2480,10 +2496,19 @@ mod tests {
         }
         let st = e.js8_state();
         assert_eq!(st.inbox.len(), 1, "control: the MSG is filed");
-        assert!(st.pending_reply.is_none(), "no ACK counts down");
+        assert!(
+            st.pending_reply.is_none() && st.queue.is_empty(),
+            "no ACK waits to key"
+        );
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
         assert!(overs.is_empty(), "nothing keys: {overs:?}");
+        let offered = e.js8_composer(false, None).map(|p| p.text);
+        assert_eq!(
+            offered.as_deref(),
+            Some("W1AW ACK"),
+            "the ACK is in the composer"
+        );
     }
 
     /// A settings change during an idle trip re-applies the switches to the station
@@ -3232,6 +3257,71 @@ mod tests {
             overs.iter().map(|o| o.0).collect::<Vec<_>>(),
             [(t1 / 15_000 + 1) * 15_000],
             "a Yes: the boundary after it"
+        );
+    }
+
+    // ===== (D) AUTO off: the reply goes to the composer =====
+
+    /// ⭐ With AUTO off a reply is put in the composer, JS8Call's compose box (`addMessageText`,
+    /// mainwindow.cpp:9671), and never keyed by itself (:9674-9685), over minutes; the operator's
+    /// Send keys it then, as their own message, the very frame the automatic reply keys.
+    #[test]
+    fn with_auto_off_a_js8_reply_goes_to_the_composer_and_keys_only_when_sent() {
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let mut auto = hb_engine("EN52", 0, 1500.0);
+        auto.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let plan = auto
+            .plan_tx(t0 / 15_000 + 1)
+            .expect("AUTO on: the reply keys");
+        let TxWaveform::Js8 {
+            word: auto_word, ..
+        } = plan.waveform
+        else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_arm(Js8Switch::Autoreply, false).expect("AUTO off");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let p = e
+            .js8_composer(false, None)
+            .expect("the reply is in the composer");
+        assert_eq!(p.text, "W1AW SNR -07");
+        assert!(
+            run_js8_loop_from(&mut e, t0, 120).is_empty(),
+            "never keyed by itself"
+        );
+        assert_eq!(
+            e.js8_composer(true, Some(p.id)),
+            None,
+            "taken into the box: nothing more is offered"
+        );
+        e.js8_send(None, p.text)
+            .expect("the operator sends what the box holds");
+        let slot = tempo_core::timing::now_unix_ms() as u64 / 15_000 + 1;
+        let plan = e.plan_tx(slot).expect("Send keys it");
+        let TxWaveform::Js8 { word, .. } = plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(
+            word, auto_word,
+            "the frame the automatic reply keys, bit for bit"
+        );
+    }
+
+    /// The composer is the operator's: TX off, outside the privileges, nothing in it keys, and
+    /// the reply is still put there (JS8Call fills its box whatever TX is doing).
+    #[test]
+    fn with_auto_off_and_js8_tx_off_the_reply_still_reaches_the_composer() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_arm(Js8Switch::Autoreply, false).expect("AUTO off");
+        e.set_tx_enabled(false);
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(run_js8_loop_from(&mut e, t0, 30).is_empty(), "nothing keys");
+        assert_eq!(
+            e.js8_composer(false, None).map(|p| p.text).as_deref(),
+            Some("W1AW SNR -07")
         );
     }
 }

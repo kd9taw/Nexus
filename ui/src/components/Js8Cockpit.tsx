@@ -38,6 +38,7 @@ import {
   js8Arm,
   js8CallCq,
   js8AnswerReply,
+  js8Composer,
   js8CqRepeat,
   js8DropQueue,
   js8Enter,
@@ -213,6 +214,7 @@ export function Js8Cockpit({
       getJs8State()
         .then((s) => {
           if (owns()) setJs8(s)
+          if (!remote) return composerSync.current()
         })
         .catch(() => { if (owns() && remote) setJs8(null) }),
     )
@@ -324,6 +326,34 @@ export function Js8Cockpit({
   const [cmdId, setCmdId] = useState<number | null>(null)
   const snapRef = useRef(snap)
   snapRef.current = snap
+  // THE COMPOSE BOX, BOTH WAYS (JS8Call's extFreeTextMsgEdit). With AUTO off the station puts a
+  // reply here for the operator to send, as JS8Call's processTxQueue types it into its box
+  // (mainwindow.cpp:9671): taken only into an EMPTY box, never over what the operator typed,
+  // and named back so the station knows the box holds it. The station is also told whether the
+  // box holds text. Native only: the Remote observes and has no compose box to fill.
+  const textRef = useRef(text)
+  textRef.current = text
+  const takenRef = useRef<number | null>(null)
+  const composerSync = useRef(async () => {})
+  composerSync.current = async () => {
+    if (!canControl) return
+    const taken = takenRef.current
+    const offered = await js8Composer(textRef.current.trim() !== '', taken).catch(() => undefined)
+    if (offered === undefined) return
+    if (takenRef.current === taken) takenRef.current = null
+    if (offered && typeof offered.text === 'string' && typeof offered.id === 'number' && textRef.current.trim() === '') {
+      takenRef.current = offered.id
+      textRef.current = offered.text
+      setToCall('')
+      setCmdId(null)
+      setText(offered.text)
+    }
+  }
+  const composing = text.trim() !== ''
+  useEffect(() => {
+    if (!active || remote) return
+    void composerSync.current()
+  }, [composing, active, remote])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */

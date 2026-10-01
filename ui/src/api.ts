@@ -36,6 +36,7 @@ import type {
   FeedHealth,
   ImportStats,
   JourneySummary,
+  Js8ComposerPrefill,
   Js8State,
   Js8InboxState,
   Js8Switch,
@@ -2823,6 +2824,13 @@ export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
  * Arming keys nothing — the session TX latch is the first act. */
 export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
   return invoke<Js8State>('js8_cq_repeat', { on, idx })
+}
+
+/** The native cockpit's compose box, both ways: whether it holds text, and the id of the reply
+ * it took into the box since it last asked; answered with the reply waiting for the box (AUTO
+ * off, as JS8Call fills its compose box), or null. Keys nothing. */
+export async function js8Composer(composing: boolean, taken: number | null): Promise<Js8ComposerPrefill | null> {
+  return invoke<Js8ComposerPrefill | null>('js8_composer', { composing, taken })
 }
 
 /** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's

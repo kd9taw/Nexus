@@ -75,7 +75,8 @@ Everything automatic is gated twice. The first act is the **TX On** latch in the
 never remembered across launches. The second is the switch for that kind of transmission:
 **AUTOREPLY** (answers SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS addressed to you,
 and acknowledges with an ACK a MSG to you or to a group you joined, or a MSG TO: you hold for
-another station, as JS8Call does),
+another station, as JS8Call does; with it off, the answer, the ACK or a relay is put in the
+message box for you to send instead, and nothing keys by itself),
 **RELAY** (passes on messages routed through your callsign and holds MSG TO: traffic),
 **HB ACK** (answers heartbeats with your report) — those three persist in Settings, at
 JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which is

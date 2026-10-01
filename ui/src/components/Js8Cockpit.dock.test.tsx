@@ -3,11 +3,11 @@
 // THE JS8 TX DOCK — what each control asks the engine, and the three faces of a second-act
 // chip. The invariant this file exists for (spec TX-safety 1 and 11): a switch that is ON
 // while the session TX latch is OFF must never LOOK armed — the APRS rule — and a pending
-// auto-reply is visible, counted down and cancellable before it fires. Nothing here can key:
+// auto-reply is visible and asks Yes / No before it can go (JS8Call's confirmation box). Nothing here can key:
 // every handler is an engine call, and the engine refuses on a receive-only tier (B6) or on
 // a down gate (B7) with a reason this cockpit toasts.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
 import type { AppSnapshot, Js8State } from '../types'
@@ -39,6 +39,8 @@ const base = (): Js8State => ({
 })
 const state: { current: Js8State } = { current: base() }
 
+/** What the station offers the compose box (AUTO off), as `js8_composer` answers. */
+const composer = vi.hoisted(() => ({ offer: null as { id: number; text: string } | null }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   const auto: Record<string, unknown> = {}
@@ -55,6 +57,7 @@ vi.mock('../api', async (importOriginal) => {
     js8CallCq: vi.fn(async () => s()),
     js8Arm: vi.fn(async () => s()),
     js8AnswerReply: vi.fn(async () => s()),
+    js8Composer: vi.fn(async () => composer.offer),
     js8DropQueue: vi.fn(async () => s()),
     js8LocatorRefusal: vi.fn(async () => null),
     // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
@@ -75,6 +78,7 @@ const js8Send = api.js8Send as ReturnType<typeof vi.fn>
 const js8SendCommand = api.js8SendCommand as ReturnType<typeof vi.fn>
 const js8Arm = api.js8Arm as ReturnType<typeof vi.fn>
 const js8AnswerReply = api.js8AnswerReply as ReturnType<typeof vi.fn>
+const js8Composer = api.js8Composer as ReturnType<typeof vi.fn>
 const js8DropQueue = api.js8DropQueue as ReturnType<typeof vi.fn>
 const js8LocatorRefusal = api.js8LocatorRefusal as ReturnType<typeof vi.fn>
 
@@ -90,6 +94,8 @@ beforeEach(() => {
   js8SendCommand.mockClear()
   js8Arm.mockClear()
   js8AnswerReply.mockClear()
+  js8Composer.mockClear()
+  composer.offer = null
   js8DropQueue.mockClear()
   js8LocatorRefusal.mockReset()
   js8LocatorRefusal.mockImplementation(async () => null)
@@ -285,6 +291,46 @@ describe('the automatic reply asks Yes / No, as JS8Call does', () => {
     expect(q('.js8-confirm-row').textContent).toMatch(/TX is off, nothing keys/)
     expect(q('.js8-confirm-yes')).not.toBeNull()
     expect(q('.js8-confirm-no')).not.toBeNull()
+  })
+})
+
+// With AUTO off JS8Call types the reply into its compose box for the operator to send
+// (`addMessageText`, mainwindow.cpp:9671) and never keys it (:9674-9685); the box takes it only
+// when it is empty (:9657).
+describe('with AUTO off the reply lands in the compose box, for you to send', () => {
+  it('fills an empty box with the reply, clears To and the command, and names it back', async () => {
+    composer.offer = { id: 7, text: 'W1AW SNR -03' }
+    await renderCockpit()
+    type('.js8-to', 'K1ABC')
+    type('.js8-compose', '')
+    await waitFor(() => expect(q<HTMLInputElement>('.js8-compose').value).toBe('W1AW SNR -03'))
+    expect(q<HTMLInputElement>('.js8-to').value, 'the reply names its station itself').toBe('')
+    expect(q<HTMLSelectElement>('.js8-cmd-select').value, 'sent as typed, no command').toBe('')
+    composer.offer = null
+    await waitFor(() => expect(js8Composer).toHaveBeenLastCalledWith(true, 7))
+    await act(async () => {
+      fireEvent.click(q('.js8-send'))
+    })
+    expect(js8Send).toHaveBeenLastCalledWith(null, 'W1AW SNR -03')
+  })
+
+  it('a reply that arrives later, the box still empty, is picked up on the next poll', async () => {
+    await renderCockpit()
+    await waitFor(() => expect(js8Composer).toHaveBeenCalledWith(false, null))
+    composer.offer = { id: 9, text: 'W1AW ACK' }
+    await waitFor(() => expect(q<HTMLInputElement>('.js8-compose').value).toBe('W1AW ACK'), { timeout: 2000 })
+  })
+
+  it('never writes over what the operator typed, and says the box holds text', async () => {
+    await renderCockpit()
+    type('.js8-compose', 'HELLO')
+    composer.offer = { id: 8, text: 'W1AW SNR -03' }
+    await waitFor(() => expect(js8Composer).toHaveBeenLastCalledWith(true, null))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600))
+    })
+    expect(q<HTMLInputElement>('.js8-compose').value).toBe('HELLO')
+    expect(js8Composer).not.toHaveBeenCalledWith(expect.anything(), 8)
   })
 })
 

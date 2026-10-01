@@ -1137,13 +1137,15 @@ nothing until you enable TX in the cockpit, every session.
   `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
   or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On
   `@ALLCALL` only `QUERY MSGS` is answered, when a message waits for that station, at most
-  once every 15 minutes.
+  once every 15 minutes. Off, a reply is put in the cockpit's message box for you to send,
+  as JS8Call does, and `QUERY MSGS` is not answered.
 - **Ask for confirmation before sending automatic replies** — on by default, as in
   JS8Call. Every automatic reply (to a query, an `ACK`, a relay, a heartbeat
   acknowledgement) waits in the cockpit for your **Yes**; **No**, or no answer within 89
   seconds, sends nothing. Off, each goes by itself in the next period.
 - **Relay for other stations** — on by default, as in JS8Call: a message routed through
-  your callsign is passed along, and `MSG TO:` messages are held in your inbox until the
+  your callsign is passed along (with Auto-reply off it is put in the message box for you
+  to send), and `MSG TO:` messages are held in your inbox until the
   addressee asks for them. This is third-party traffic; whether it is permitted where
   you operate is your call.
 - **Idle watchdog (minutes)** — after this long with nothing typed, heartbeats,

@@ -523,7 +523,8 @@ pub struct Js8QueueRow {
     pub last: bool,
 }
 
-/// An automatic reply waiting out its countdown (cancellable until `fires_at_ms`).
+/// An automatic reply waiting for the operator's Yes (JS8Call's AutoreplyConfirmation box):
+/// `fires_at_ms` is when it answers No by itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Js8PendingReply {
@@ -531,6 +532,16 @@ pub struct Js8PendingReply {
     pub to: String,
     pub display: String,
     pub fires_at_ms: u64,
+}
+
+/// A reply the station put in the composer (AUTO off, JS8Call's `addMessageText`): the native
+/// cockpit takes `text` into its compose box when the box is empty and names `id` back. Native
+/// only: it is not part of `Js8State`, so the Remote's view of the station is unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8ComposerPrefill {
+    pub id: u32,
+    pub text: String,
 }
 
 /// The live JS8 state the cockpit polls (~500 ms while visible) — `PskRxState`'s role.
