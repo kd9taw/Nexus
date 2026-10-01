@@ -1744,8 +1744,10 @@ impl Station {
         self.stop_cq_repeat();
     }
 
-    /// Reset the idle-watchdog baseline to `now_ms` (and clear any standing trip). Called
-    /// internally by every operator send, and PUBLICLY by the engine when the operator
+    /// Reset the idle-watchdog baseline to `now_ms` (and clear any standing trip): the only way
+    /// a trip ends, so the count restarts whenever it does (a trip cleared with the count left
+    /// running came back on the next tick). Called internally by every operator send, and
+    /// PUBLICLY by the engine for every operator act and when the operator
     /// ENTERS the tier: a freshly built `Station` has `last_activity_ms == 0`, so without a
     /// baseline the first `tick` at a real wall clock would read the station as decades idle
     /// and trip the watchdog on the operator's first decode. Entering the view is the
@@ -1834,7 +1836,7 @@ impl Station {
             })
     }
 
-    /// Whole minutes since the operator last acted: every operator send and entering the tier
+    /// Whole minutes since the operator last acted: every operator act and entering the tier
     /// (`mark_active`), the baseline the idle watchdog reads. It is the count JS8Call's
     /// once-a-minute `incrementIdleTimer` keeps and its UI activity resets (mainwindow.cpp:
     /// 10969-10979). A station never marked active has no baseline and reads 0, as JS8Call's
@@ -1849,10 +1851,6 @@ impl Station {
 
     pub fn idle_tripped(&self) -> bool {
         self.idle_tripped
-    }
-
-    pub fn clear_idle_trip(&mut self) {
-        self.idle_tripped = false;
     }
 
     pub fn last_tx_display(&self) -> Option<&str> {

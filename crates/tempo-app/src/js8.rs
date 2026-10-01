@@ -558,7 +558,8 @@ impl Engine {
                     // JS8Call parity: HB, autoreply and relay stand down and the queues
                     // drop; `tx_enabled` is UNTOUCHED (it is the operator's latch, not the
                     // station's). The persisted switches are NOT rewritten — `Js8State.armed`
-                    // reads `!idle_tripped`, and any operator verb clears the trip. The
+                    // reads `!idle_tripped`, and any operator verb ends the trip and gives the
+                    // station back its switches (`js8_restart_idle_clock`). The
                     // cockpit toasts on the rising edge of `idle_tripped` (B7.9).
                     self.js8_hb_on = false;
                     self.js8_station.halt();
@@ -577,8 +578,11 @@ impl Engine {
 
     /// Change the TRANSMIT speed (0..=3). Re-points the decoder at the new window and the
     /// slot clock at the new period (the audio loop follows `active_slot_secs`), and the
-    /// station at the new countdown. The latch is untouched. The command layer persists.
+    /// station at the new countdown. The latch is untouched. The command layer persists. The
+    /// cockpit's press is an operator act; the Remote's speed write (`_with_installer` alone,
+    /// a saved choice) is not.
     pub fn js8_set_speed(&mut self, speed_idx: u8) -> Result<(), String> {
+        self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
         self.js8_set_speed_with_installer(speed_idx, |engine, source| engine.install_source(source))
     }
 
@@ -616,6 +620,7 @@ impl Engine {
     /// Change which speeds the receiver decodes (bitmask, `Js8Speed::bit()`). A mask that
     /// decodes nothing is refused — nobody means "go deaf". The command layer persists.
     pub fn js8_set_rx_speeds(&mut self, mask: u8) -> Result<(), String> {
+        self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
         if mask & 0x0F == 0 {
             return Err("at least one JS8 speed must stay enabled".to_string());
         }
@@ -624,6 +629,7 @@ impl Engine {
     }
 
     pub fn js8_inbox_mark(&mut self, id: u32, state: InboxState) -> Result<(), String> {
+        self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
         if self.js8_station.inbox_mark(id, state) {
             self.js8_persist();
             Ok(())
@@ -633,6 +639,7 @@ impl Engine {
     }
 
     pub fn js8_inbox_delete(&mut self, id: u32) -> Result<(), String> {
+        self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
         if self.js8_station.inbox_delete(id) {
             self.js8_persist();
             Ok(())
@@ -754,6 +761,7 @@ impl Engine {
     /// verb: on success it restarts the wall-clock watchdog. Never arms TX.
     pub fn js8_send(&mut self, to: Option<String>, text: String) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_restart_idle_clock(now_ms);
         let to_ref = match to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(s) => Some(
                 ::js8::proto::callsign::CallRef::parse(s)
@@ -774,6 +782,7 @@ impl Engine {
     /// A directed command from the 32-entry palette (`cmd` = `Command::id`).
     pub fn js8_send_command(&mut self, to: String, cmd: u8, arg: String) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_restart_idle_clock(now_ms);
         let to_ref = ::js8::proto::callsign::CallRef::parse(to.trim())
             .ok_or_else(|| format!("{to} is not a callsign or @group JS8 can address"))?;
         let command =
@@ -791,6 +800,7 @@ impl Engine {
     /// CQ (`idx` into the CQS table: 0 "CQ CQ CQ" … 7 "CQ"). Counts as Operator origin.
     pub fn js8_call_cq(&mut self, idx: u8) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_restart_idle_clock(now_ms);
         let r = self.js8_identity_set().and_then(|()| {
             self.js8_station
                 .call_cq(idx, now_ms)
@@ -800,9 +810,23 @@ impl Engine {
         r
     }
 
+    /// An operator act, whatever it then does: every JS8 verb below starts here. It restarts the
+    /// idle count and ends an idle trip, as every key or mouse press in JS8Call's window does
+    /// (`eventFilter` → `resetIdleTimer()`, `tx_watchdog(false)`, mainwindow.cpp:2979-2988). The
+    /// trip turned the station's autoreply and relay off (`trip_idle`), so the station gets them
+    /// back as Settings has them, which is what the dock shows (`js8_state`'s `armed`), as
+    /// JS8Call's Idle Timeout box puts AUTO back when the operator closes it (:11013-11019). The
+    /// heartbeat and the repeating CQ stay off until their own switch. Not an act, and never
+    /// here: a poll (`js8_state`, `js8_composer`), a read, the clock, what is heard, a Settings
+    /// change, a Remote's write. The wall-clock watchdog keeps its own rule (`js8_after_verb`).
+    pub(crate) fn js8_restart_idle_clock(&mut self, now_ms: u64) {
+        self.js8_station.mark_active(now_ms);
+        self.js8_apply_station_config();
+    }
+
     /// What every operator verb does with its outcome: a success clears `last_error` and
     /// restarts the wall-clock watchdog (an operator act); a refusal is kept for the
-    /// cockpit and touches no clock.
+    /// cockpit and leaves the wall clock alone. (The idle count restarted as the act began.)
     fn js8_after_verb(&mut self, r: &Result<(), String>) {
         match r {
             Ok(()) => {
@@ -816,10 +840,11 @@ impl Engine {
     /// The SECOND operator act (the first is the session TX latch). Autoreply / Relay /
     /// HB-ack persist to Settings (the Tauri command saves them); Hb is session-only and
     /// never persisted (G3). Turning a switch ON keys nothing by itself — `plan_js8_tx`
-    /// still needs `tx_enabled` — but it is an operator verb: it retires an idle trip and
-    /// restarts the wall-clock watchdog, exactly as any other operator action does.
+    /// still needs `tx_enabled` — but it is an operator verb: on or off, it restarts the idle
+    /// count and ends an idle trip, and on, it restarts the wall-clock watchdog.
     pub fn js8_arm(&mut self, which: Js8Switch, on: bool) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_restart_idle_clock(now_ms);
         match which {
             Js8Switch::Autoreply => self.settings.js8_autoreply = on,
             Js8Switch::Relay => self.settings.js8_relay = on,
@@ -835,7 +860,6 @@ impl Engine {
             self.js8_station.set_hb(on, now_ms);
         }
         if on {
-            self.js8_station.clear_idle_trip();
             self.reset_tx_watchdog();
         }
         Ok(())
@@ -848,10 +872,11 @@ impl Engine {
     /// TX, a tier change and a mode change each cancel the schedule.
     pub fn js8_set_cq_repeat(&mut self, on: bool, idx: u8) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        // An operator verb: on or off, it restarts the idle count and ends an idle trip; on, it
+        // restarts the wall clock.
+        self.js8_restart_idle_clock(now_ms);
         self.js8_station.set_cq(on, idx, now_ms);
         if on {
-            // An operator verb: it retires an idle trip and restarts the wall clock.
-            self.js8_station.clear_idle_trip();
             self.reset_tx_watchdog();
         }
         Ok(())
@@ -869,6 +894,8 @@ impl Engine {
         fires_at_ms: u64,
     ) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        // Yes or No, and to a reply no longer waiting too: the press is the act.
+        self.js8_restart_idle_clock(now_ms);
         match self
             .js8_station
             .answer_reply(&display, fires_at_ms, yes, now_ms)
@@ -899,9 +926,11 @@ impl Engine {
         offered.map(|(id, text)| Js8ComposerPrefill { id, text })
     }
 
-    /// Sender-class, NOT a stop: empties the outbox and nothing else. The HB schedule, the
-    /// TX latch and a frame already on the air are untouched — Stop TX is `halt_tx`.
+    /// Sender-class, NOT a stop: empties the outbox, and as an operator act restarts the idle
+    /// count. The HB schedule, the TX latch and a frame already on the air are untouched —
+    /// Stop TX is `halt_tx`.
     pub fn js8_drop_queue(&mut self) {
+        self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
         self.js8_station.drop_queue();
     }
 
@@ -2604,6 +2633,196 @@ mod tests {
             ["KD9TAW: TEST"],
             "only the operator's message keys, nothing heard while tripped: {overs:?}"
         );
+    }
+
+    /// A JS8 engine whose 5-minute idle watchdog has just tripped at `t0` (the wall clock's now):
+    /// the operator's last act six minutes ago, W1AW's MSG in the inbox.
+    fn tripped_engine() -> (Engine, u64) {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_idle_watchdog_min = 5;
+        e.js8_apply_station_config();
+        let msg = ::js8::proto::compose::frames(
+            "W1AW",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "MSG HELLO",
+            Js8Speed::Normal,
+        )
+        .expect("composes");
+        for (f, i3) in msg {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+        }
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(t0 - 6 * 60_000); // the operator's last act, six minutes ago
+        e.js8_tick(t0);
+        let st = e.js8_state();
+        assert!(st.idle_tripped, "control: the watchdog tripped");
+        assert_eq!(st.inbox.len(), 1, "control: W1AW's MSG is in the inbox");
+        (e, t0)
+    }
+
+    /// Every operator act in the JS8 cockpit restarts the idle count and ends an idle trip,
+    /// whatever the act then does, as every key or mouse press in JS8Call's window does
+    /// (`eventFilter` → `resetIdleTimer()`, `tx_watchdog(false)`, mainwindow.cpp:2979-2988): each
+    /// switch on or off, the repeating CQ on or off, Drop queue, a Yes or a No (to a question the
+    /// trip took away), the inbox's Read and Delete, a speed, a send. A second later the trip has
+    /// not come back and the count reads 0, and the station carries AUTOREPLY and RELAY as
+    /// Settings has them, which is what the dock shows (`js8_state`'s `armed`). A switch and the
+    /// repeating CQ cleared the trip but not the count, so the next tick tripped it again.
+    #[test]
+    fn every_js8_operator_act_restarts_the_idle_count_and_the_trip_stays_ended() {
+        type Act = fn(&mut Engine);
+        let acts: [(&str, Act); 20] = [
+            ("AUTOREPLY on", |e| {
+                e.js8_arm(Js8Switch::Autoreply, true).unwrap()
+            }),
+            ("AUTOREPLY off", |e| {
+                e.js8_arm(Js8Switch::Autoreply, false).unwrap()
+            }),
+            ("RELAY on", |e| e.js8_arm(Js8Switch::Relay, true).unwrap()),
+            ("RELAY off", |e| e.js8_arm(Js8Switch::Relay, false).unwrap()),
+            ("HB ACK on", |e| e.js8_arm(Js8Switch::HbAck, true).unwrap()),
+            ("HB ACK off", |e| {
+                e.js8_arm(Js8Switch::HbAck, false).unwrap()
+            }),
+            ("HB on", |e| e.js8_arm(Js8Switch::Hb, true).unwrap()),
+            ("HB off", |e| e.js8_arm(Js8Switch::Hb, false).unwrap()),
+            ("CQ repeat on", |e| e.js8_set_cq_repeat(true, 0).unwrap()),
+            ("CQ repeat off", |e| e.js8_set_cq_repeat(false, 0).unwrap()),
+            ("Drop queue", |e| e.js8_drop_queue()),
+            ("Yes", |e| {
+                let _ = e.js8_answer_reply(true, "W1AW SNR -07".into(), 0);
+            }),
+            ("No", |e| {
+                let _ = e.js8_answer_reply(false, "W1AW SNR -07".into(), 0);
+            }),
+            ("Read", |e| {
+                let id = e.js8_state().inbox[0].id;
+                e.js8_inbox_mark(id, InboxState::Read).unwrap()
+            }),
+            ("Delete", |e| {
+                let id = e.js8_state().inbox[0].id;
+                e.js8_inbox_delete(id).unwrap()
+            }),
+            ("speed", |e| e.js8_set_speed(2).unwrap()),
+            ("RX speeds", |e| e.js8_set_rx_speeds(0x03).unwrap()),
+            ("send", |e| e.js8_send(None, "TEST".into()).unwrap()),
+            ("command", |e| {
+                e.js8_send_command("W1AW".into(), Command::SnrQuery.id(), String::new())
+                    .unwrap()
+            }),
+            ("CQ", |e| e.js8_call_cq(0).unwrap()),
+        ];
+        for (name, act) in acts {
+            let (mut e, t0) = tripped_engine();
+            act(&mut e);
+            e.js8_tick(t0 + 1_000);
+            let st = e.js8_state();
+            assert!(
+                !st.idle_tripped,
+                "{name}: the trip stays ended a second later"
+            );
+            assert_eq!(st.idle_minutes, 0, "{name}: the idle count restarted");
+            let cfg = e.js8_station.config();
+            assert_eq!(
+                (cfg.autoreply, cfg.relay),
+                (e.settings.js8_autoreply, e.settings.js8_relay),
+                "{name}: the station carries AUTOREPLY and RELAY as the dock shows them"
+            );
+        }
+    }
+
+    /// …and what that means on the air. After the trip, the operator's send ends it and the dock
+    /// shows AUTOREPLY and RELAY armed; an SNR? heard once the send has gone out is then answered
+    /// on the air, not put in the message box, and a MSG TO: is held, as those two switches say.
+    /// (The station kept both off after the send: the SNR? waited in the message box as with
+    /// AUTOREPLY off, and the MSG TO: was not held.)
+    #[test]
+    fn after_an_idle_trip_a_send_re_arms_autoreply_and_relay_as_the_dock_shows() {
+        let (mut e, t0) = tripped_engine();
+        e.js8_send(None, "TEST".into())
+            .expect("the operator's send ends the trip");
+        let st = e.js8_state();
+        assert!(
+            !st.idle_tripped && st.armed.autoreply && st.armed.relay,
+            "control: the dock shows AUTOREPLY and RELAY armed"
+        );
+        run_js8_loop_from(&mut e, t0, 60); // the send goes out
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let overs = run_js8_loop_from(&mut e, t0 + 61_000, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(
+            booked,
+            ["KD9TAW: TEST", "KD9TAW: W1AW SNR -07"],
+            "the SNR? is answered on the air: {overs:?}"
+        );
+        assert_eq!(
+            e.js8_composer(false, None),
+            None,
+            "nothing waits in the message box"
+        );
+        for (f, i3) in msg_to_frames() {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+        }
+        assert!(
+            e.js8_state()
+                .inbox
+                .iter()
+                .any(|m| m.state == InboxState::Store && m.to == "K1ABC"),
+            "the MSG TO: for K1ABC is held, as RELAY on says"
+        );
+    }
+
+    /// Nothing that is not the operator's hand restarts the idle count, or the watchdog would
+    /// never trip with the cockpit open: the cockpit's polls (`js8_state`, the message box's
+    /// `js8_composer`), the locator check, what is heard, the clock, and a Remote's speed write
+    /// (a saved choice, as a Settings change is). JS8Call's count also runs on until a key or
+    /// mouse press: `resetIdleTimer` has one caller, the `eventFilter` (mainwindow.cpp:2987).
+    #[test]
+    fn a_poll_what_is_heard_and_a_remote_write_do_not_restart_the_idle_count() {
+        let (mut e, t0) = tripped_engine();
+        let _ = e.js8_state();
+        let _ = e.js8_composer(true, None);
+        let _ = e.js8_composer(false, None);
+        let _ = e.js8_locator_refusal();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        e.js8_tick(t0 + 1_000);
+        e.js8_set_speed_with_installer(2, |engine, source| engine.install_source(source))
+            .expect("the Remote's speed write");
+        let st = e.js8_state();
+        assert!(st.idle_tripped, "still tripped");
+        assert_eq!(st.idle_minutes, 6, "the idle count runs on");
+    }
+
+    /// Coming back to JS8 after an idle trip starts the session's count again and ends the trip,
+    /// and the station carries AUTOREPLY and RELAY as Settings has them, by whichever path the
+    /// tier comes back: the view's `js8_enter`, or `set_tier` alone (the UDP and companion
+    /// paths, which never call `js8_enter`).
+    #[test]
+    fn coming_back_to_js8_after_an_idle_trip_gives_the_station_back_its_switches() {
+        type Back = fn(&mut Engine);
+        let paths: [(&str, Back); 2] = [
+            ("js8_enter", |e| e.js8_enter()),
+            ("set_tier", |e| e.set_tier(Tier::Js8)),
+        ];
+        for (name, back) in paths {
+            let (mut e, _) = tripped_engine();
+            e.set_tier(Tier::Ft8);
+            back(&mut e);
+            let st = e.js8_state();
+            assert!(!st.idle_tripped, "{name}: the trip ended with the session");
+            let cfg = e.js8_station.config();
+            assert_eq!(
+                (cfg.autoreply, cfg.relay),
+                (e.settings.js8_autoreply, e.settings.js8_relay),
+                "{name}: the station carries AUTOREPLY and RELAY as the dock shows them"
+            );
+        }
     }
 
     /// A `MSG TO:` I hold for another station, on the air: stored, then answered `W1AW ACK`

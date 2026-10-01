@@ -637,6 +637,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counted down a reply, and the reply went out after your next send. Now nothing is answered,
   relayed or delivered while the watchdog stands, as JS8Call does, and nothing heard meanwhile goes
   out later.
+- **JS8: what you do in the JS8 screen restarts the idle watchdog, as in JS8Call.** After the idle
+  watchdog had turned auto-reply, relay and the heartbeat off, turning a switch or the repeating CQ
+  back on ended it for one second only: the watchdog still counted from your last send and tripped
+  again, with its notice. Now each send, each switch on or off, Drop queue, Yes or No, Read or
+  Delete in the Inbox and a speed choice starts the idle count again, as each key press or click
+  does in JS8Call. A send did end the watchdog, but left auto-reply and relay off while the dock
+  showed them on: a query heard afterwards waited in your message box instead of being answered,
+  and a MSG TO: for another station was not held. They now come back on, as the dock shows them.
+  The heartbeat and the repeating CQ stay off until you turn them on.
 - **JS8: the Auto-reply hint and tooltip say what is answered.** Settings' Auto-reply hint now
   names the ACK for a message to you or a group you joined and for a MSG TO: you hold, and says
   that on @ALLCALL only QUERY MSGS is answered; the cockpit's AUTOREPLY tooltip no longer says
