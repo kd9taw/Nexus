@@ -12,8 +12,9 @@
 //! `Tone->Tone`, which applies only to a `Cross` row (both checked against CHIRP's
 //! `generic_csv.py` and `chirp_common.CROSS_MODES`, 2026-09-30). CHIRP itself clamps
 //! names/fields a given radio can't hold when the operator copies rows into a radio
-//! image — so this CSV is safe for every model. A `# comment` attribution line is
-//! appended after the rows; CHIRP ignores lines it can't parse.
+//! image — so this CSV is safe for every model. The attribution, a `# comment` line per
+//! directory the rows came from, is appended after the rows; CHIRP ignores lines it can't
+//! parse.
 
 use crate::memchan::{csv_field, sanitize_name, ChanMode, Channel, Duplex, ToneMode};
 
@@ -25,7 +26,7 @@ pub const CHIRP_HEADER: &str = "Location,Name,Frequency,Duplex,Offset,Tone,rTone
 /// filter is a safety net so a digital channel can never corrupt an import).
 /// `name_cap` = the per-radio display limit chosen in the UI (CHIRP would clamp
 /// at copy time anyway; capping here makes the file match the preview exactly).
-/// `attribution` ("" = none) becomes a trailing comment line.
+/// `attribution` ("" = none) becomes trailing comment lines, one per line of it.
 pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) -> String {
     let mut out = String::from(CHIRP_HEADER);
     out.push('\n');
@@ -69,9 +70,7 @@ pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) ->
         ));
         loc += 1;
     }
-    if !attribution.is_empty() {
-        out.push_str(&format!("# {attribution}\n"));
-    }
+    out.push_str(&crate::memchan::attribution_lines(attribution));
     out
 }
 
@@ -146,5 +145,30 @@ Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPola
         );
         let csv = to_chirp_csv(&[long], 7, "");
         assert!(csv.contains("1,W9ABC R,146.940000"), "{csv}");
+    }
+
+    /// A list merged from two directories carries both credits, each its own comment line: a
+    /// second line written without its `#` would be read by CHIRP as a channel row.
+    #[test]
+    fn every_attribution_line_is_its_own_comment() {
+        let ok = fm("GB3BW", 430.8125, Duplex::Plus, 7.6, ToneMode::Tone, 88.5);
+        let csv = to_chirp_csv(
+            &[ok],
+            7,
+            "Repeater data: RSGB ETCC (ukrepeater.net)\n\nRepeater data from hearham.com\n",
+        );
+        let tail: Vec<&str> = csv.lines().skip(2).collect();
+        assert_eq!(
+            tail,
+            [
+                "# Repeater data: RSGB ETCC (ukrepeater.net)",
+                "# Repeater data from hearham.com"
+            ]
+        );
+        assert_eq!(
+            csv.lines().count(),
+            4,
+            "a header, one row, two credits: {csv}"
+        );
     }
 }
