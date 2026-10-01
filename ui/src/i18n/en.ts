@@ -6971,6 +6971,10 @@ export const EN = {
   'settings.confirmations.cloudlog.url.label': 'Base URL',
   'settings.confirmations.cloudlog.url.hint':
     'Your Cloudlog/Wavelog site root. Leave blank to disable.',
+  // #378: shown under the Base URL once it starts with http://. `{{ranges}}` is the local-network
+  // address ranges (192.168.x.x and the rest), as an operator types them — a token list.
+  'settings.confirmations.cloudlog.url.plainHttp':
+    'With plain http:// your API key travels unencrypted to this address. That is allowed only for an address on your own network ({{ranges}}, or a name that resolves only to those), and any other is refused.',
   'settings.confirmations.cloudlog.stationId.label': 'Station profile id',
   // #226. `…/station/edit/3` is a URL fragment, and Wavelog/Cloudlog/Station Locations are the
   // product's own names — tokens inside the sentence.

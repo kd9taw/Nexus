@@ -4271,6 +4271,7 @@ export const JA: PartialCatalog = {
   "settings.confirmations.cloudlog.note": "記録した各QSOをセルフホストの<b>Cloudlog</b>または<b>Wavelog</b>ログブックへ自動転送します（HTTP）。APIキーは自分のサーバーごとのトークンです — キーとステーションプロファイルIDを入力し、トグルをオンにしてください。",
   "settings.confirmations.cloudlog.url.label": "ベースURL",
   "settings.confirmations.cloudlog.url.hint": "Cloudlog/Wavelogサイトのルートです。空欄で無効になります。",
+  "settings.confirmations.cloudlog.url.plainHttp": "http:// のままでは、APIキーが暗号化されずにこのアドレスへ送られます。これが許されるのは自分のネットワーク内のアドレス（{{ranges}}、またはそうしたアドレスだけに解決される名前）に限られ、それ以外は拒否されます。",
   "settings.confirmations.cloudlog.stationId.label": "ステーションプロファイルID",
   "settings.confirmations.cloudlog.stationId.hint": "ステーションロケーションの番号です。Wavelog／Cloudlog ▸ Station Locations で、そのロケーションの編集リンク末尾の数字です（…/station/edit/3 なら 3）。コールサインではありません。",
   "settings.confirmations.cloudlog.stationId.notNumber": "コールサインのようです。Wavelog／Cloudlog はステーションロケーションの番号を必要とします。",
