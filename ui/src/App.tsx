@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StationDataContext, useStationCapability } from './stationAccess'
+import { StationDataContext, useStationCapability, useStationStopControl } from './stationAccess'
 import { publishBandConditions } from './bandConditions'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
@@ -2651,15 +2651,18 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // that halt while one of them is on show. CAPTURE phase, so nothing on the screen can swallow the
   // key; never preventDefault, so every other meaning of Esc still happens on the same press: a menu
   // or dialog still closes (Radix dismisses only an Esc nobody has prevented), Satellites still
-  // closes the bird detail, the voice keyer still stops itself.
+  // closes the bird detail, the voice keyer still stops itself. Bound only with STOP AUTHORITY, the
+  // one every Stop TX button follows (useStationStopControl: always on the desktop; in a browser,
+  // the station's stop token): an observer's Esc is no halt at all, as the cockpits' own Esc is not.
+  const stopAllowed = useStationStopControl()
   useEffect(() => {
-    if (!ESC_HALT_VIEWS.has(effectiveView)) return
+    if (!stopAllowed || !ESC_HALT_VIEWS.has(effectiveView)) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') handleHaltTx()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [effectiveView, handleHaltTx])
+  }, [effectiveView, handleHaltTx, stopAllowed])
 
   if (!snap) {
     return (

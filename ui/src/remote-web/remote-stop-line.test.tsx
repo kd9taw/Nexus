@@ -272,6 +272,30 @@ it('the hosted page: a browser without control sends nothing for Esc on any of t
   expect(h.commands()).toHaveLength(0)
 })
 
+// Stop authority is what every Stop TX button follows (useStationStopControl), and App's Esc follows
+// it too: an observer's Esc is not a refused halt, it is no halt at all, so it never reaches the
+// transport and never toasts a refusal. Recorded at the transport, as BrowserApplication.test.tsx's
+// observer cockpits are, so a refused attempt would show here even though nothing left the browser.
+it('the hosted page: an observer’s Esc on those screens does not even attempt a halt', async () => {
+  const attempted: string[] = []
+  uninstall = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string): Promise<T> => {
+    attempted.push(command)
+    return hostedAnswer(command) as T
+  } })
+  localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: Object.fromEntries(allFeatureIds().map(id => [id, true])) }))
+  render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <App remote={{ snapshot: digital, settings: settings as unknown as Settings, bandPlan: [], stale: false, status: <div/>, cwPhone: true, stationModes: true, navigation: true }}/>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+  await settle()
+  for (const [view, rail] of ESC_RAIL) {
+    await railTo(view, rail)
+    escOn()
+    await settle()
+  }
+  expect(attempted.length, 'control: the transport recorded the page’s reads').toBeGreaterThan(0)
+  expect(attempted.filter(c => c === 'halt_tx')).toEqual([])
+})
+
 it('every cockpit vocabulary has a Remote stop case, or is declared elsewhere', () => {
   const ELSEWHERE: Record<string, string> = {
     // Operate's Stop TX is FtStopControl (useStationStopControl) in the QSO strip and the log dialog;
