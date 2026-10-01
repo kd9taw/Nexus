@@ -50,6 +50,10 @@ const WORKFLOW =
 const TEXT = fs.readFileSync(WORKFLOW, 'utf8');
 // BUILD_LINUX=<path> reads a different copy of scripts/build-linux.sh (the pinned-download checks).
 const BUILD_LINUX = process.env.BUILD_LINUX || path.join(ROOT, 'scripts', 'build-linux.sh');
+// CI_WORKFLOW and DOCKERFILE_PI do the same for ci.yml and scripts/Dockerfile.pi, which the pinned-download
+// checks read too: ci.yml gates every push, and Dockerfile.pi builds the Pi packages that ship.
+const CI_WORKFLOW = process.env.CI_WORKFLOW || path.join(ROOT, '.github', 'workflows', 'ci.yml');
+const DOCKERFILE_PI = process.env.DOCKERFILE_PI || path.join(ROOT, 'scripts', 'Dockerfile.pi');
 
 // Which step sees which secret's VALUE: every one of them, so this table is the map. A presence
 // test (`secrets.X != ''`, which the Verify steps use to decide whether a signature is required)
@@ -614,11 +618,12 @@ test('a signature made without the version is reported', () => {
 });
 
 // ---- Pinned downloads --------------------------------------------------------------------------
-// Everything the release fetches to build with is pinned to a digest or a commit, or a release can
+// Everything the release and CI fetch to build with is pinned to a digest or a commit, or a build can
 // change with no commit here: an action by branch, a tool from a `continuous` release, a package at
-// whatever version its index serves that day. These checks read what release.yml and build-linux.sh
-// NAME. They cannot see a package manager's choice (apt and Homebrew verify what they fetch but float
-// its version) or the Pi container's own downloads (scripts/Dockerfile.pi).
+// whatever version its index serves that day. These checks read what release.yml, ci.yml,
+// build-linux.sh and Dockerfile.pi NAME. They cannot see a package manager's choice (apt, apk and
+// Homebrew verify what they fetch but float its version), or what a pinned third-party action fetches
+// inside itself.
 //
 // What tauri's AppImage bundler downloads for itself: tauri-bundler 2.9.4 (what tauri-cli 2.11.5
 // locks), bundle/linux/appimage/linuxdeploy.rs, `prepare_tools`, each fetched only when absent, plus
@@ -635,28 +640,115 @@ const BUNDLER_TOOLS = [
 const MOVING = /\/(?:master|main|HEAD|continuous|latest)\//;
 // Downloads that are not something to build with: publish-pi reads back the SHA256SUMS.txt this run
 // has just published, to append the Pi sums to it.
-const NOT_BUILD_INPUTS = [['publish-pi', 'Upload to the release + extend SHA256SUMS']];
+const NOT_BUILD_INPUTS = [['release.yml', 'publish-pi', 'Upload to the release + extend SHA256SUMS']];
 const FETCH = /\b(?:curl|wget)\b|\bgh\s+release\s+download\b/;
 const CHECKSUM = /\b(?:sha256sum|sha512sum)\b(?:\s+--?[a-z-]+)*\s+-c\b|\bshasum\s+-a\s+(?:256|512)\b(?:\s+--?[a-z-]+)*\s+-c\b/;
 
-function unpinnedDownloads(wf, script) {
+// The rules every workflow is held to: an action from outside GitHub's own at a commit, every fetch
+// checked in its own step, pip by hash, cargo installs exact and locked, npm only from a lockfile.
+function unpinnedInWorkflow(wf, file) {
   const v = [];
   for (const j of wf.jobs.values()) {
     for (const s of j.steps) {
       if (!s) continue;
       if (s.uses && !/^actions\//.test(s.uses) && !/@[0-9a-f]{40}$/.test(s.uses)) {
-        v.push(`job ${j.id}: \`${s.uses}\` names a branch or a tag, not a commit`);
+        v.push(`${file}: job ${j.id}: \`${s.uses}\` names a branch or a tag, not a commit`);
       }
       const code = (s.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-      const input = !NOT_BUILD_INPUTS.some(([jid, name]) => jid === j.id && name === s.name);
-      if (input && FETCH.test(code) && !CHECKSUM.test(code)) v.push(`job ${j.id}, step "${s.label}": downloads with no checksum check in the same step`);
-      if (/\bpip3?\s+install\b/.test(code) && !/--require-hashes\b/.test(code)) v.push(`job ${j.id}, step "${s.label}": pip installs without --require-hashes`);
+      const input = !NOT_BUILD_INPUTS.some(([f, jid, name]) => f === file && jid === j.id && name === s.name);
+      if (input && FETCH.test(code) && !CHECKSUM.test(code)) v.push(`${file}: job ${j.id}, step "${s.label}": downloads with no checksum check in the same step`);
+      if (/\bpip3?\s+install\b/.test(code) && !/--require-hashes\b/.test(code)) v.push(`${file}: job ${j.id}, step "${s.label}": pip installs without --require-hashes`);
       for (const m of code.matchAll(/\bcargo\s+install\b[^\n]*/g)) {
-        if (!/--version\s+"=[0-9.]+"/.test(m[0]) || !/--locked\b/.test(m[0])) v.push(`job ${j.id}, step "${s.label}": \`${m[0].trim()}\` is not an exact, --locked version`);
+        if (!/--version\s+"=[0-9.]+"/.test(m[0]) || !/--locked\b/.test(m[0])) v.push(`${file}: job ${j.id}, step "${s.label}": \`${m[0].trim()}\` is not an exact, --locked version`);
       }
-      if (/\bnpm\s+(?:install|i|add)\b/.test(code)) v.push(`job ${j.id}, step "${s.label}": npm install resolves afresh; use npm ci`);
+      if (/\bnpm\s+(?:install|i|add)\b/.test(code)) v.push(`${file}: job ${j.id}, step "${s.label}": npm install resolves afresh; use npm ci`);
     }
   }
+  return v;
+}
+
+// A Dockerfile's instructions, continuation lines joined and comment lines dropped, and its parser
+// directives (the `# key=value` lines at the top). A RUN heredoc and an escape directive are refused
+// rather than read: a fetch inside a heredoc would be invisible here, and another escape character
+// would join the wrong lines.
+function dockerInstructions(text, file) {
+  const out = [];
+  const directives = new Map();
+  let top = true;
+  let cur = null;
+  for (const [i, raw] of text.split('\n').entries()) {
+    const directive = top && raw.match(/^#\s*([A-Za-z]+)\s*=\s*(\S.*?)\s*$/);
+    if (directive) {
+      if (directive[1].toLowerCase() === 'escape') throw new Error(`${file}:${i + 1}: an escape directive — this reader does not model it`);
+      directives.set(directive[1].toLowerCase(), { value: directive[2], line: i + 1 });
+      continue;
+    }
+    top = false;
+    if (/^\s*(?:#.*)?$/.test(raw)) continue;
+    const cont = /\\\s*$/.test(raw);
+    const line = raw.replace(/\\\s*$/, '').trim();
+    if (cur) {
+      cur.args += ` ${line}`;
+    } else {
+      const m = line.match(/^([A-Za-z]+)\s+(.*)$/);
+      if (!m) throw new Error(`${file}:${i + 1}: a line that is not an instruction — this reader does not model it\n  ${raw}`);
+      cur = { op: m[1].toUpperCase(), args: m[2], line: i + 1 };
+    }
+    if (!cont) {
+      if (cur.op === 'RUN' && /<<-?\s*["']?[A-Za-z_]+/.test(cur.args)) throw new Error(`${file}:${cur.line}: a RUN heredoc — this reader does not model it`);
+      out.push(cur);
+      cur = null;
+    }
+  }
+  out.directives = directives;
+  return out;
+}
+
+// The rules a Dockerfile is held to: the frontend (`# syntax=`) and every base image by digest (or a
+// stage of this file that is), no download piped into a shell, no RUN that downloads without a
+// checksum check in the same RUN, npm packages at exact versions. A download is curl or wget where a
+// command starts, so a package list that names them (`apt-get install curl`) is not one.
+const DOCKER_FETCH = /(?:^|&&|\|\||[;|(`])\s*(?:sudo\s+)?(?:curl|wget)\b/;
+function unpinnedInDockerfile(text, file) {
+  const v = [];
+  const ins = dockerInstructions(text, file);
+  const syntax = ins.directives.get('syntax');
+  if (syntax && !/@sha256:[0-9a-f]{64}$/.test(syntax.value)) v.push(`${file}:${syntax.line}: the syntax directive names ${syntax.value}, a tag, not a digest`);
+  const argDefaults = new Map();
+  const stages = new Set();
+  for (const d of ins) {
+    if (d.op === 'ARG' && !stages.size) {
+      const m = d.args.match(/^(\w+)=(\S+)$/);
+      if (m) argDefaults.set(m[1], m[2]);
+    }
+    if (d.op === 'FROM') {
+      const m = d.args.match(/^(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?$/i);
+      if (!m) throw new Error(`${file}:${d.line}: a FROM this reader cannot read\n  FROM ${d.args}`);
+      const [, image, name] = m;
+      // An image named through an ARG must, with the ARG's default, name a stage defined above it.
+      const resolved = image.replace(/\$\{(\w+)\}|\$(\w+)/g, (_, a, b) => argDefaults.get(a ?? b) ?? '\0');
+      if (image !== resolved) {
+        if (!stages.has(resolved)) v.push(`${file}:${d.line}: FROM ${image} does not name a stage of this file (it resolves to ${resolved.replace('\0', '<no default>')})`);
+      } else if (image !== 'scratch' && !stages.has(image) && !/@sha256:[0-9a-f]{64}$/.test(image)) {
+        v.push(`${file}:${d.line}: FROM ${image} names a tag, not a digest`);
+      }
+      if (name) stages.add(name);
+    }
+    if (d.op === 'RUN') {
+      if (/\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:ba|da|z)?sh\b/.test(d.args)) v.push(`${file}:${d.line}: pipes a download into a shell`);
+      if (DOCKER_FETCH.test(d.args) && !CHECKSUM.test(d.args)) v.push(`${file}:${d.line}: downloads with no checksum check in the same RUN`);
+      for (const m of d.args.matchAll(/\bnpm\s+(?:install|i|add)\b([^&;|]*)/g)) {
+        for (const spec of m[1].trim().split(/\s+/).filter((t) => t && !t.startsWith('-'))) {
+          if (!/^(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+$/.test(spec)) v.push(`${file}:${d.line}: npm installs ${spec}, not an exact version`);
+        }
+      }
+    }
+  }
+  return v;
+}
+
+function unpinnedDownloads(wf, script) {
+  const v = unpinnedInWorkflow(wf, 'release.yml');
   // build-linux.sh's pins: `pin_tool <file> <url> <sha256> [<sha256>]`, continuation lines joined.
   const calls = script.replace(/\\\n\s*/g, ' ').split('\n').map((l) => l.trim()).filter((l) => /^pin_tool\s/.test(l)).map((l) => l.split(/\s+/));
   for (const tool of BUNDLER_TOOLS) {
@@ -674,15 +766,32 @@ function unpinnedDownloads(wf, script) {
   // A pin the artifact does not show is a guess: the Linux Verify step checks the shipped runtime.
   const verify = wf.jobs.get('linux-x86')?.steps.find((s) => s?.name === 'Verify artifacts');
   if (!/^\s*python3 - "\$app" "\$HOME\/\.cache\/tauri\/runtime-x86_64" <<'PY'$/m.test(verify?.run ?? '')) {
-    v.push('job linux-x86, step "Verify artifacts": does not check that the shipped AppImage carries the pinned runtime');
+    v.push('release.yml: job linux-x86, step "Verify artifacts": does not check that the shipped AppImage carries the pinned runtime');
   }
   return v;
 }
 
 const SCRIPT = fs.readFileSync(BUILD_LINUX, 'utf8');
+const CI_TEXT = fs.readFileSync(CI_WORKFLOW, 'utf8');
+const CI_WF = readWorkflow(CI_TEXT, path.basename(CI_WORKFLOW));
+const DOCKERFILE = fs.readFileSync(DOCKERFILE_PI, 'utf8');
 
-test('everything the release fetches to build with is pinned', () => {
-  const v = unpinnedDownloads(WF, SCRIPT);
+test('the readers account for every step of ci.yml and every instruction of Dockerfile.pi', () => {
+  // The positive controls for the two other files: a reader that dropped a step or an instruction
+  // would find nothing unpinned in it.
+  const raw = [...CI_TEXT.matchAll(EXPR)].filter(([, e]) => MENTIONS.test(e)).length;
+  assert.equal(CI_WF.refs.length, raw, 'the reader filed a different number of secret expressions than ci.yml holds');
+  const steps = [...CI_WF.jobs.values()].reduce((n, j) => n + j.steps.filter(Boolean).length, 0);
+  assert.equal(steps, CI_TEXT.match(/^ {6}- [A-Za-z0-9_-]+:/gm)?.length ?? 0, 'the reader found a different number of steps than ci.yml has');
+  const ins = dockerInstructions(DOCKERFILE, 'Dockerfile.pi');
+  const lines = DOCKERFILE.split('\n');
+  const starts = lines.filter((l, i) => /^[A-Za-z]+\s/.test(l) && !/\\\s*$/.test(lines[i - 1] ?? '')).length;
+  assert.equal(ins.length, starts, 'the Dockerfile reader found a different number of instructions than Dockerfile.pi has');
+  assert.ok(ins.filter((d) => d.op === 'RUN' && /\bcurl\b/.test(d.args)).length >= 2, 'the Dockerfile reader sees no RUN that downloads; it is reading the wrong file');
+});
+
+test('everything the release and CI fetch to build with is pinned', () => {
+  const v = [...unpinnedDownloads(WF, SCRIPT), ...unpinnedInWorkflow(CI_WF, 'ci.yml'), ...unpinnedInDockerfile(DOCKERFILE, 'Dockerfile.pi')];
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
 });
 
@@ -700,6 +809,44 @@ test('an unpinned download planted in the workflow or build-linux.sh is reported
     const v = unpinnedDownloads(readWorkflow(text), script);
     assert.ok(v.some((x) => x.includes(needle)), `a planted unpinned download was not reported. Expected:\n  ${needle}\ngot:\n  ${v.join('\n  ') || '(nothing)'}`);
   }
+});
+
+test('an unpinned download planted in ci.yml is reported', () => {
+  const sha = '02cb101ec7c40f2c49e1d9714d64511d8e1b74de';
+  const deny = '3c6349835b2b7b196a839186cb8b78e02f7b5f25';
+  const cases = [
+    [plant(CI_TEXT, `dtolnay/rust-toolchain@${sha}  # master, 2026-09-12\n        with:\n          toolchain: 1.91.0`, 'dtolnay/rust-toolchain@1.91.0\n        with:\n          toolchain: 1.91.0'), 'ci.yml: job msrv: `dtolnay/rust-toolchain@1.91.0` names a branch or a tag'],
+    [plant(CI_TEXT, `cargo-deny-action@${deny}  # v2, 2026-07-13\n        with:\n          command: check advisories bans sources licenses\n          manifest-path:`, 'cargo-deny-action@v2\n        with:\n          command: check advisories bans sources licenses\n          manifest-path:'), 'ci.yml: job deny: `EmbarkStudios/cargo-deny-action@v2` names a branch or a tag'],
+    [plant(CI_TEXT, ' --require-hashes -r /dev/stdin', ' -r /dev/stdin'), 'ci.yml: job manual-epub, step "Tools (pandoc + pillow; Java is preinstalled)": pip installs without --require-hashes'],
+    [plant(CI_TEXT, '          echo "$EC_SHA256  /tmp/ec.zip" | sha256sum -c -\n', ''), 'ci.yml: job manual-epub, step "Validate with W3C epubcheck": downloads with no checksum check'],
+    [plant(CI_TEXT, 'cargo install tauri-driver --version "=2.1.0" --locked', 'cargo install tauri-driver --locked'), 'ci.yml: job e2e-linux, step "Install tauri-driver": `cargo install tauri-driver --locked` is not an exact, --locked version'],
+  ];
+  for (const [text, needle] of cases) {
+    const v = unpinnedInWorkflow(readWorkflow(text, 'ci.yml'), 'ci.yml');
+    assert.ok(v.some((x) => x.includes(needle)), `a planted unpinned download was not reported. Expected:\n  ${needle}\ngot:\n  ${v.join('\n  ') || '(nothing)'}`);
+  }
+});
+
+test('an unpinned download planted in Dockerfile.pi is reported', () => {
+  const cases = [
+    [plant(DOCKERFILE, 'debian:trixie@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c', 'debian:trixie'), 'FROM debian:trixie names a tag, not a digest'],
+    [plant(DOCKERFILE, 'FROM debian-${BASE} AS build', 'FROM debian:${BASE} AS build'), 'FROM debian:${BASE} does not name a stage of this file (it resolves to debian:bookworm)'],
+    [plant(DOCKERFILE, 'ENV DEBIAN_FRONTEND=noninteractive\n', 'ENV DEBIAN_FRONTEND=noninteractive\nRUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -\n'), 'pipes a download into a shell'],
+    [plant(DOCKERFILE, '    && echo "15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433  /tmp/rustup-init" | sha256sum -c - \\\n', ''), 'downloads with no checksum check in the same RUN'],
+    [plant(DOCKERFILE, 'npm install -g npm@11.21.0', 'npm install -g npm@11'), 'npm installs npm@11, not an exact version'],
+    [plant(DOCKERFILE, '# syntax=docker/dockerfile:1.27@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e\n', '# syntax=docker/dockerfile:1\n'), 'Dockerfile.pi:1: the syntax directive names docker/dockerfile:1, a tag, not a digest'],
+  ];
+  for (const [text, needle] of cases) {
+    const v = unpinnedInDockerfile(text, 'Dockerfile.pi');
+    assert.ok(v.some((x) => x.includes(needle)), `a planted unpinned download was not reported. Expected:\n  ${needle}\ngot:\n  ${v.join('\n  ') || '(nothing)'}`);
+  }
+});
+
+test('the Dockerfile reader refuses what it cannot place', () => {
+  const heredoc = plant(DOCKERFILE, 'ENV DEBIAN_FRONTEND=noninteractive\n', 'ENV DEBIAN_FRONTEND=noninteractive\nRUN <<EOF\ncurl -fsSL https://example.invalid/x | sh\nEOF\n');
+  assert.throws(() => unpinnedInDockerfile(heredoc, 'Dockerfile.pi'), /a RUN heredoc/);
+  const escape = plant(DOCKERFILE, '# syntax=', '# escape=`\n# syntax=');
+  assert.throws(() => unpinnedInDockerfile(escape, 'Dockerfile.pi'), /an escape directive/);
 });
 
 test('the reader refuses what it cannot place', () => {
