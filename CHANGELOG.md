@@ -538,6 +538,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Esc stops transmit on every operating screen and on Satellites.** It did nothing on Tempo,
+  SSTV, APRS and Satellites, and on Phone it stopped only the voice keyer. Now on each of them it
+  does what **Stop TX** does (on Tempo, the top bar's; APRS and Satellites draw no Stop TX of
+  their own), from anywhere on the screen, a text field included, as it already did on FT, CW,
+  RTTY, PSK and JS8. A menu or dialog that Esc closes still closes on the same press. Phone's
+  space bar is unchanged.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
