@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-verify-ptbr.py — check a filled-in Nexus pt-BR translation CSV.
+verify-it.py — check a filled-in Nexus Italian translation CSV.
 
-    python3 verify-ptbr.py nexus-ptbr-translation.csv
+    python3 verify-it.py nexus-it-translation.csv
 
 It checks the MECHANICAL things only: that every row is still there, that the English and
 do-not-translate columns were not edited, and that nothing which must survive a translation
 byte-for-byte got renamed, dropped, added, or re-punctuated. It says nothing about whether the
-Portuguese is good — that is your job and it cannot be checked by a program.
+Italian is good — that is your job and it cannot be checked by a program.
 
 Python 3 only. No installation, no dependencies.
 
@@ -22,12 +22,17 @@ import sys
 from collections import Counter, defaultdict
 
 # ── What the kit shipped, so a missing row can be detected without a second file ───────────
-EXPECTED_ROWS = 5259
-EXPECTED_KEYS_SHA = 'ea3da67e41d0afc2bd935ce731da5f2164bb537df10be25791aed6cef91e4bb7'
-EXPECTED_ENGLISH_SHA = '60f80d447658d6eb462d3b005786079ac6e53dd8d73853cad46227afa467969b'
-EXPECTED_DNT_SHA = 'f1abe7e916f2f33c4c64d44f0f6f10e3bf2492c19793c9fba38078c6c6214cdd'
-EXPECTED_TIERS = {1: 627, 2: 313, 3: 853, 4: 382, 5: 2319, 6: 765}
-COLUMNS = ['priority', 'key', 'english', 'portuguese', 'do_not_translate', 'notes']
+# make-kit.py rewrites the lines between the two markers every time it builds the CSV, from the
+# file it just wrote. Do not edit them by hand: a pin that disagrees with the CSV beside it
+# reports a translator's untouched file as damaged.
+# >>> make-kit pins
+EXPECTED_ROWS = 6396
+EXPECTED_KEYS_SHA = '5accdce0bf6a8cb8fddf5fba4b085f77353dad20793fdca47871ec4366e470cf'
+EXPECTED_ENGLISH_SHA = 'b5e8b75a439e44ef329da7d0b4554c3503a2ace23ba80cc3711aee5648eebdf5'
+EXPECTED_DNT_SHA = '205f12d96ed99b72df4b472d4963c72ebf640d4e356fcd0bc5ead2b234bd80a6'
+EXPECTED_TIERS = {1: 710, 2: 319, 3: 1006, 4: 409, 5: 2681, 6: 1271}
+# <<< make-kit pins
+COLUMNS = ['priority', 'key', 'english', 'italian', 'do_not_translate', 'notes']
 
 RE_PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
 RE_SINGLE_BRACE = re.compile(r'(?<!\{)\{([a-z]\w*)\}(?!\})')
@@ -74,6 +79,26 @@ def sha(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def pins(rows):
+    """What a CSV's untranslatable columns add up to. make-kit.py writes these as the EXPECTED_*
+    constants above, and this file compares a returned CSV against them — one formula, used by
+    both, so the two cannot drift apart."""
+    ordered = sorted(rows, key=lambda r: r['key'])
+    tiers = Counter()
+    for r in rows:
+        try:
+            tiers[int(r['priority'])] += 1
+        except (ValueError, KeyError):
+            pass
+    return {
+        'rows': len(rows),
+        'keys': sha('\n'.join(sorted(r['key'] for r in rows))),
+        'english': sha('\n'.join(r['key'] + '\t' + r['english'] for r in ordered)),
+        'dnt': sha('\n'.join(r['key'] + '\t' + r['do_not_translate'] for r in ordered)),
+        'tiers': dict(sorted(tiers.items())),
+    }
+
+
 def markers(text):
     """Counter of marker tokens, e.g. {'<b>': 2, '</b>': 2}."""
     return Counter('<%s%s>' % (slash, name) for slash, name in RE_MARKER.findall(text))
@@ -82,7 +107,7 @@ def markers(text):
 def is_all_invariant(english, required):
     """True when the English is nothing but tokens, numbers and punctuation.
 
-    Such a row is legitimately identical in Portuguese ("FT8", "{{call}}", "599 · 20m"),
+    Such a row is legitimately identical in Italian ("FT8", "{{call}}", "599 · 20m"),
     so leaving it unchanged is not a sign of an untranslated row.
     """
     stripped = english
@@ -97,18 +122,18 @@ def is_all_invariant(english, required):
 def check_row(row, rep):
     key = row['key']
     english = row['english']
-    pt = row['portuguese']
+    it = row['italian']
     dnt = [t.strip() for t in row['do_not_translate'].split('|') if t.strip()]
 
-    if pt == '':
+    if it == '':
         return False                      # not translated yet: nothing to check, nothing wrong
-    if pt.strip() == '':
+    if it.strip() == '':
         rep.error('a cell holds only spaces, which the program treats as untranslated',
-                  key, 'Either write the Portuguese or clear the cell completely.')
+                  key, 'Either write the Italian or clear the cell completely.')
         return False
 
     # 1. {{placeholders}} — same names, same number of each. Order may change.
-    want, got = Counter(RE_PLACEHOLDER.findall(english)), Counter(RE_PLACEHOLDER.findall(pt))
+    want, got = Counter(RE_PLACEHOLDER.findall(english)), Counter(RE_PLACEHOLDER.findall(it))
     if want != got:
         missing = sorted((want - got).elements())
         extra = sorted((got - want).elements())
@@ -118,16 +143,16 @@ def check_row(row, rep):
         if extra:
             bits.append('not in the English: ' + ', '.join('{{%s}}' % m for m in extra))
         rep.error('a {{slot}} was renamed, dropped or added', key,
-                  'English:    %s\nPortuguese: %s\n%s' % (english, pt, '; '.join(bits)))
+                  'English: %s\nItalian: %s\n%s' % (english, it, '; '.join(bits)))
 
     # 1b. single braces where double braces were meant — renders as literal text
-    singles = [s for s in RE_SINGLE_BRACE.findall(pt) if s in set(RE_PLACEHOLDER.findall(english))]
+    singles = [s for s in RE_SINGLE_BRACE.findall(it) if s in set(RE_PLACEHOLDER.findall(english))]
     if singles:
         rep.error('a slot was written with single braces instead of double', key,
-                  'Portuguese: %s\nWrite {{%s}}, not {%s}.' % (pt, singles[0], singles[0]))
+                  'Italian: %s\nWrite {{%s}}, not {%s}.' % (it, singles[0], singles[0]))
 
     # 2. <markers> — same tags, same count, and each one closed.
-    mw, mg = markers(english), markers(pt)
+    mw, mg = markers(english), markers(it)
     if mw != mg:
         missing = sorted((mw - mg).elements())
         extra = sorted((mg - mw).elements())
@@ -137,16 +162,16 @@ def check_row(row, rep):
         if extra:
             bits.append('invented or duplicated: ' + ' '.join(extra))
         rep.error('a <marker> was changed', key,
-                  'English:    %s\nPortuguese: %s\n%s\nOnly the marker names the English uses will '
+                  'English: %s\nItalian: %s\n%s\nOnly the marker names the English uses will '
                   'do anything; anything else is printed on screen as literal text.'
-                  % (english, pt, '; '.join(bits)))
+                  % (english, it, '; '.join(bits)))
     stack = []
-    for slash, name in RE_MARKER.findall(pt):
+    for slash, name in RE_MARKER.findall(it):
         if slash:
             if not stack or stack[-1] != name:
                 rep.error('a <marker> is out of order or was never opened', key,
-                          'Portuguese: %s\n</%s> closes a marker that is not open at that point. '
-                          'Each <%s> is closed by the matching </%s>, in order.' % (pt, name, name, name))
+                          'Italian: %s\n</%s> closes a marker that is not open at that point. '
+                          'Each <%s> is closed by the matching </%s>, in order.' % (it, name, name, name))
                 stack = []
                 break
             stack.pop()
@@ -154,34 +179,34 @@ def check_row(row, rep):
             stack.append(name)
     if stack:
         rep.error('a <marker> was left unclosed', key,
-                  'Portuguese: %s\nEvery <%s> needs a matching </%s>.' % (pt, stack[0], stack[0]))
+                  'Italian: %s\nEvery <%s> needs a matching </%s>.' % (it, stack[0], stack[0]))
 
     # 3. {MACRO} tokens — single braces, all capitals. Literal, always.
-    cw, cg = Counter(RE_CWTOKEN.findall(english)), Counter(RE_CWTOKEN.findall(pt))
+    cw, cg = Counter(RE_CWTOKEN.findall(english)), Counter(RE_CWTOKEN.findall(it))
     if cw != cg:
         rep.error('a CW macro token was changed', key,
-                  'English:    %s\nPortuguese: %s\nThese are matched literally by the macro '
-                  'expander. Copy them exactly.' % (english, pt))
+                  'English: %s\nItalian: %s\nThese are matched literally by the macro '
+                  'expander. Copy them exactly.' % (english, it))
 
     # 4. Ham vocabulary and other terms of art listed in do_not_translate.
     plain = [t for t in dnt if not (t.startswith('{') or t.startswith('<'))]
-    absent = [t for t in plain if t not in pt]
+    absent = [t for t in plain if t not in it]
     if absent:
-        rep.error('a term that must be copied through is not in the Portuguese', key,
-                  'English:    %s\nPortuguese: %s\nNot found: %s\nIf you believe one of these '
-                  'really is said in Portuguese in Brazil, say so and I will change the list.'
-                  % (english, pt, ', '.join(absent)))
+        rep.error('a term that must be copied through is not in the Italian', key,
+                  'English: %s\nItalian: %s\nNot found: %s\nIf you believe one of these '
+                  'really is said in Italian on the air, say so and I will change the list.'
+                  % (english, it, ', '.join(absent)))
 
     # 5. A decimal comma the English did not have. This is the operating fault.
-    if RE_DECIMAL_COMMA.search(pt) and not RE_DECIMAL_COMMA.search(english):
+    if RE_DECIMAL_COMMA.search(it) and not RE_DECIMAL_COMMA.search(english):
         rep.error('a decimal comma appeared in a number', key,
-                  'English:    %s\nPortuguese: %s\nAn operator reads these off the screen and '
-                  'dials them into a radio. Technical numbers keep the dot.' % (english, pt))
+                  'English: %s\nItalian: %s\nAn operator reads these off the screen and '
+                  'dials them into a radio. Technical numbers keep the dot.' % (english, it))
 
-    # 6. Copied English sitting in the Portuguese column.
-    if pt.strip() == english.strip() and not is_all_invariant(english, plain):
-        rep.warn('the Portuguese is identical to the English', key,
-                 'Text: %s\nFine if that really is the Portuguese; otherwise this row is not done.'
+    # 6. Copied English sitting in the Italian column.
+    if it.strip() == english.strip() and not is_all_invariant(english, plain):
+        rep.warn('the Italian is identical to the English', key,
+                 'Text: %s\nFine if that really is the Italian; otherwise this row is not done.'
                  % english)
 
     return True
@@ -205,7 +230,7 @@ def main(argv):
         print('PROBLEM: could not open %s (%s)' % (path, exc))
         return 1
 
-    print('Nexus pt-BR translation check')
+    print('Nexus Italian translation check')
     print('file: %s' % path)
 
     if header != COLUMNS:
@@ -217,6 +242,7 @@ def main(argv):
         return 1
 
     rep = Report()
+    got = pins(rows)
 
     # ── the census: is every row still here, and untouched where it must be ──────────────
     if len(rows) != EXPECTED_ROWS:
@@ -234,19 +260,18 @@ def main(argv):
         rep.error('the same key appears more than once', '(whole file)',
                   'Duplicated: %s' % ', '.join(sorted(dupes)[:10]))
 
-    ordered = sorted(rows, key=lambda r: r['key'])
-    keys_ok = sha('\n'.join(sorted(r['key'] for r in rows))) == EXPECTED_KEYS_SHA
+    keys_ok = got['keys'] == EXPECTED_KEYS_SHA
     if not keys_ok:
         rep.error('the key column is not the one the kit shipped', '(whole file)',
                   'Some keys were changed, removed or added. The program matches rows by key, so '
                   'a changed key is a lost string. Start again from the original CSV and paste '
-                  'your Portuguese column across.\n(The english and do_not_translate columns are '
+                  'your Italian column across.\n(The english and do_not_translate columns are '
                   'not checked while rows are missing — fix the rows first.)')
-    if keys_ok and sha('\n'.join(r['key'] + '\t' + r['english'] for r in ordered)) != EXPECTED_ENGLISH_SHA:
+    if keys_ok and got['english'] != EXPECTED_ENGLISH_SHA:
         rep.error('the english column was edited', '(whole file)',
-                  'The English text must stay exactly as shipped — it is what the Portuguese is '
+                  'The English text must stay exactly as shipped — it is what the Italian is '
                   'matched against. If some English is wrong, tell me rather than fixing it here.')
-    if keys_ok and sha('\n'.join(r['key'] + '\t' + r['do_not_translate'] for r in ordered)) != EXPECTED_DNT_SHA:
+    if keys_ok and got['dnt'] != EXPECTED_DNT_SHA:
         rep.error('the do_not_translate column was edited', '(whole file)',
                   'Leave that column alone. If a term on it should be translated after all, say '
                   'so and I will change the kit.')
@@ -267,7 +292,7 @@ def main(argv):
     for row in rows:
         if '::' in row['key']:
             base, form = row['key'].rsplit('::', 1)
-            plural[base][form] = row['portuguese']
+            plural[base][form] = row['italian']
     for base, forms in plural.items():
         done = [f for f, v in forms.items() if v.strip()]
         if done and len(done) != len(forms):
@@ -278,13 +303,13 @@ def main(argv):
                         ', '.join(sorted(f for f in forms if f not in done))))
         elif len(done) == len(forms) and len(set(forms.values())) == 1 and len(forms) > 1:
             rep.warn('both plural forms are the same sentence', base,
-                     'Text: %s\nThat is correct in some languages. In Portuguese the singular and '
+                     'Text: %s\nThat is correct in some languages. In Italian the singular and '
                      'plural usually differ — worth a second look.' % list(forms.values())[0])
 
     # A translator who pastes the English column across would otherwise get warnings only.
-    copied = len(rep.warnings.get('the Portuguese is identical to the English', ()))
+    copied = len(rep.warnings.get('the Italian is identical to the English', ()))
     if filled >= 20 and copied * 5 > filled:
-        rep.error('most of the Portuguese column is still English', '(whole file)',
+        rep.error('most of the Italian column is still English', '(whole file)',
                   '%d of the %d filled rows are word-for-word the English. That is what a copied '
                   'column looks like, not a translation. If it was deliberate, ignore this; if the '
                   'column got pasted by accident, start again from the original CSV.'
@@ -300,15 +325,15 @@ def main(argv):
     print('Rows translated:   %d   (%.1f%%)' % (filled, pct))
     for tier in sorted(EXPECTED_TIERS):
         total = EXPECTED_TIERS[tier]
-        got = per_tier.get(tier, 0)
-        bar = '#' * int(round(20.0 * got / total)) if total else ''
+        n = per_tier.get(tier, 0)
+        bar = '#' * int(round(20.0 * n / total)) if total else ''
         print('    tier %d: %5d of %5d  %-20s %5.1f%%'
-              % (tier, got, total, bar, 100.0 * got / total if total else 0.0))
+              % (tier, n, total, bar, 100.0 * n / total if total else 0.0))
     print('-' * 72)
 
     if rep.n_errors():
         print()
-        print('%d problem%s to fix. Nothing here is about your Portuguese — every one is a token, '
+        print('%d problem%s to fix. Nothing here is about your Italian — every one is a token, '
               'a marker or a row that moved.' % (rep.n_errors(), '' if rep.n_errors() == 1 else 's'))
         if rep.n_warnings():
             print('%d more thing%s worth a look.'

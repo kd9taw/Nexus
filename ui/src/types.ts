@@ -1903,9 +1903,12 @@ export interface SstvState {
   /** Seconds of key-down elapsed / total for the in-flight image. */
   txElapsedSecs: number
   txTotalSecs: number
-  /** Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
-   * or outside the licence privileges) — the cockpit's warning line. Absent when nothing was
-   * dropped since a picture last keyed, and always absent on the Remote (the station strips it). */
+  /** Why the last picture ended without going out whole — the cockpit's warning line: one that
+   * waited for the transmitter and was dropped instead of sent (TX off, outside the licence
+   * privileges, or the Phone screen left), or one the radio loop cut short on the air (transmit
+   * went off under it, or a tune, a radio switch or another stop ended its transmission). Absent
+   * when there is nothing to say since a picture last keyed, and always absent on the Remote (the
+   * station strips it). */
   txNotice?: string
 }
 

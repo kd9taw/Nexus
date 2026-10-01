@@ -149,9 +149,11 @@ describe('SstvView: a picture the engine dropped', () => {
     await poll({ ...IDLE, txNotice: NOTICE })
     expect(screen.getByRole('alert').textContent).toContain(NOTICE)
     expect(finishedAnnouncements()).toBe(0)
-    // Control: a picture that keys and completes is still announced as finished.
+    // Control: a picture that keys and completes is still announced as finished. It completes
+    // as the engine leaves one that played out: its mode, and its whole key-down elapsed (an
+    // IDLE answer here is how a picture stopped part-way reads, which is "stopped").
     await poll(QUEUED)
-    await poll(IDLE)
+    await poll({ ...IDLE, txMode: 'Scottie 1', txProgress: 1, txElapsedSecs: 110, txTotalSecs: 110 })
     expect(finishedAnnouncements()).toBe(1)
   })
 })

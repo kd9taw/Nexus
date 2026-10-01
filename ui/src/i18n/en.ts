@@ -5145,7 +5145,7 @@ export const EN = {
   'settings.radios.bands.hint': 'Covers bands (for auto band-routing; none = covers all):',
   'settings.radios.add.action': '+ Add radio',
   'settings.radios.hint.multi':
-    "The Rig / CAT + Audio settings below edit “{{name}}”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.",
+    "The Rig / CAT + Audio settings below edit “{{name}}”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio. These Rig / CAT controls are station-wide instead, so changing one changes every radio: “Interface keys RTS on the CAT port”, “Split operation”, “Follow the radio's split”, “Wheel tuning sensitivity”, and under Advanced, “Sharing port”, “Serial handshake” and “Keying line at startup”.",
   'settings.radios.hint.single':
     'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.',
   // The accessible name is its own entry, not a slice of the hint below it: a hint is a whole
@@ -8701,6 +8701,7 @@ export const EN = {
   'sstv.tx.send.failed': 'SSTV send refused',
   'sstv.tx.announce.sending': 'Transmitting SSTV {{mode}}',
   'sstv.tx.announce.finished': 'SSTV transmit finished',
+  'sstv.tx.announce.stopped': 'SSTV transmit stopped',
   'sstv.tx.progress': 'TX — {{mode}} · {{clock}} remaining',
 
   // ── SSTV ▸ the gallery ──────────────────────────────────────────────────────────────

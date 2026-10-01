@@ -170,8 +170,8 @@ Run more than one rig. Always shown — with one radio it is just a card and an
 ![Three radio cards stacked. The first, named Yeasu, is outlined and badged ACTIVE, its meta line reading Yaesu FTDX10, CAT COM3, audio Line 3, CAT helper port 4532, with band chips 160m through 6m lit. The second, 9700, has Edit, Make active and Remove buttons and lights 2m and 70cm. The third, 991a, lights 6m and 2m. An "+ Add radio" button sits below.](../img/manual/settings-radios.webp)
 
 *A three-radio roster in Nexus 1.10.3. The outlined card is the **active** radio;
-the form further down the tab edits whichever card you last pressed **Edit** on,
-which need not be the same one.*
+the per-radio settings further down the tab edit whichever card you last pressed
+**Edit** on, which need not be the same one.*
 
 With two or more radios, three more controls appear:
 
@@ -272,8 +272,13 @@ the rig that ends up active.
 
 ### Rig & CAT
 
-Every control here is **per radio**: it belongs to whichever card you pressed
-**Edit** on, not to the station.
+Most controls here are **per radio**: they belong to whichever card you pressed
+**Edit** on, not to the station. These are **station-wide** instead, one setting
+for all your radios: **Interface keys RTS on the CAT port**, **Split operation**,
+**Follow the radio's split** and **Wheel tuning sensitivity**, and under
+Advanced, **Sharing port**, **Serial handshake** and **Keying line at startup**.
+Changing one while you edit another radio changes it for the radio you are
+operating too.
 
 ![The left half of the Rig & CAT row: PTT Method set to CAT (via rigctld), an unticked "Interface keys RTS on the CAT port" box, a Zero-config setup group with a "Detect my radio" button, and Rig Model with a search box above a dropdown reading Yaesu FTDX10.](../img/manual/settings-rig-cat.webp)
 
@@ -375,6 +380,23 @@ Baud continue across to the right.*
   file. It keeps running while you're on other screens.
 - **Flex radio IP (native panadapter)** — the FlexRadio's own LAN IP (SmartSDR
   API, port 4992). "This is the *radio's* address, not the SmartSDR-CAT port."
+- **Serial handshake** — **Auto** (the default), **None**,
+  **Hardware (RTS/CTS)** or **XON/XOFF**. It tells Nexus what your cable actually
+  does, instead of letting it guess. On Auto, Nexus goes by what your rig's
+  Hamlib driver declares, as it always has; any other choice is passed to rigctld
+  as your cable's handshake and replaces that guess. Leave it on Auto unless your
+  rig keys at launch. If CAT stops working after a change, put it back on Auto:
+  on some rigs Hamlib quietly refuses the setting and then answers without ever
+  having opened the radio, so you get a CAT light and a rig that ignores you.
+  Station-wide.
+- **Keying line at startup** — **Auto** (the default), **Never touch it**,
+  **Hold it low** or **Hold it high**: what the serial line that keys your
+  transmitter (RTS or DTR) is held at while you are not transmitting. It exists
+  for one fault, a rig that keys at launch before you have touched anything, so
+  leave it on Auto unless that is happening to you. Auto changes nothing about
+  how your station works today. If CAT stops working after a change, put it back
+  on Auto. Only you can see whether the rig unkeys, so try it on a rig you are
+  watching. Station-wide.
 
 **Test CAT** saves, launches the bundled `rigctld` (Hamlib ships with Nexus on
 Windows — no separate install), and reads the rig's frequency to confirm the

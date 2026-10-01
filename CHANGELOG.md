@@ -502,6 +502,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus checks your licence privileges against; if the radio says it is split but not where it
   transmits, Nexus will not transmit. Nexus never asks a radio whose split can only be read by
   moving it. From a browser the switch is shown but cannot be changed.
+- **Settings says which Rig & CAT controls belong to every radio.** With two or more radios, the
+  note over the radio cards said that editing another radio would not change the one you are
+  operating, and the manual said every Rig & CAT control is per radio. Seven are station-wide, one
+  setting for all your radios: Interface keys RTS on the CAT port, Split operation, Follow the
+  radio's split, Wheel tuning sensitivity, and under Advanced, Sharing port, Serial handshake and
+  Keying line at startup. The note and the manual now name them, so changing one while you edit
+  another radio no longer surprises the radio you are operating.
+- **Less work for the computer while nothing is happening.** The main window redrew itself two and
+  a half times a second on a timer, even with nothing new to show, on top of the redraw that each
+  new reading from the radio already brings. It now redraws only when something has changed. The
+  unread counts in the Tempo station list update exactly as before.
 - **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
   you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
   relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of
@@ -699,6 +710,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stops with the transmission, at once, and the warning line beside Send says it was stopped and
   why. SSTV's own Stop, TX Off and Stop TX work as before, and a picture that plays out ends
   exactly as it did.
+- **SSTV: a picture you stop is announced as stopped, not finished.** With a screen reader, a
+  picture stopped part-way with TX Off or Stop TX used to be announced as "SSTV transmit
+  finished", and SSTV's own Stop said "SSTV transmit stopped" and then "finished". Now a picture
+  that ends before its end is announced once, as "SSTV transmit stopped", and "finished" is said
+  only when the whole picture went out. A picture Nexus stopped for you still shows its warning
+  line beside Send instead. Nothing about when or how a picture is sent or stopped changed.
 - **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
   beacon, a message or an automatic ack waits a moment until the radio is free to key it.
   Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was
@@ -1102,13 +1119,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
   Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
   as before.
-- **Need chips are easy to read in the light themes, wherever they appear.** The NEW ONE, ZONE,
-  BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the Call
-  Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
-  lettered their word in the need's own colour, which was hard to read in every light theme; a
-  DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
-  Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
-  before.
+- **Need chips are easy to read in the light and dark themes, wherever they appear.** The NEW ONE,
+  ZONE, BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the
+  Call Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
+  lettered their word in the need's own colour, which was hard to read in every light theme and
+  in many places in the dark ones; a DXPED chip nearly vanished. The word now takes the theme's
+  text colour everywhere, as on Connect, and the need's colour stays on the chip's border. On a
+  Band Activity row already in a need's colour, that need's chip is an outline in the colour and
+  the row carries the tint. In night mode a chip's own fill is fainter, so its word stays easy to
+  read on the dimmed screen, and its border keeps the full colour. In the dark themes the POTA and
+  SOTA chips, and their marks on the band strip, the band map and the spot legend, now take the
+  theme's own green and purple, as in the light themes.
 - **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
   Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
   source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
@@ -1135,7 +1156,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with their colour kept on their border, and its WORKED TODAY badge reads in the dim text colour.
   The park and call in the Hunting line above the list take the text colour too, underlined in the
   accent.
-  The dark themes look exactly as before.
+- **The hunted POTA / SOTA row, WORKED TODAY and Program's Tune and Add buttons are easy to read in
+  every theme.** On the hunted row the frequency was hard to read on the paper theme and in the dark
+  themes, and HUNT on the Slate and Lagoon themes and at night; WORKED TODAY was dim in the dark
+  themes. Both words on the hunted row now take the theme's text colour, HUNT with the accent kept
+  on its border, and WORKED TODAY takes the dim text colour. Program's Tune and Add buttons, which
+  look like HUNT, take its light-theme look, and ✓ Added keeps its green on its border.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
