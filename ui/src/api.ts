@@ -2825,11 +2825,6 @@ export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
   return invoke<Js8State>('js8_cq_repeat', { on, idx })
 }
 
-/** Cancel the pending automatic reply (its countdown chip's Cancel). */
-export async function js8Cancel(): Promise<Js8State> {
-  return invoke<Js8State>('js8_cancel')
-}
-
 /** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
  * AutoreplyConfirmation box), named by the `display` and `firesAtMs` it was shown with so an
  * answer can never reach a different reply. A Yes to one no longer waiting is refused. */

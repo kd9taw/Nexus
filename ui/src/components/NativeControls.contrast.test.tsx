@@ -186,7 +186,6 @@ const MACRO_KEYS: Control[] = [
   { name: 'SSTV image retry', chain: [el('div', ['sstv-remote-image']), el('button', ['cw-macro'], { type: 'button' })] },
   { name: 'JS8 station query', chain: [el('div', []), el('button', ['cw-macro', 'js8-query'], { type: 'button' })] },
   { name: 'JS8 inbox Read/Delete', chain: [el('div', []), el('button', ['cw-macro', 'js8-inbox-act'], { type: 'button' })] },
-  { name: 'JS8 Cancel pending', chain: [el('div', []), el('button', ['cw-macro', 'js8-cancel'], { type: 'button' })] },
   { name: 'JS8 reply Yes', chain: [el('div', []), el('button', ['cw-macro', 'js8-confirm-yes'], { type: 'button' })] },
   { name: 'JS8 reply No', chain: [el('div', []), el('button', ['cw-macro', 'js8-confirm-no'], { type: 'button' })] },
   { name: 'JS8 Drop queue', chain: [el('div', []), el('button', ['cw-macro', 'js8-drop'], { type: 'button' })] },

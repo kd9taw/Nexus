@@ -4744,7 +4744,6 @@ impl Engine {
             info: String::new(),
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
-            reply_delay_ms: 17_000,
             autoreply_confirmation: true,
         };
         Self {
@@ -45499,11 +45498,11 @@ mod tests {
         assert!(waves[0].len() < 15 * 12_000, "bounded by its period");
     }
 
-    /// B5's config builder is the ONE settings → station seam; B7 depends on two of its
-    /// numbers: the idle-watchdog floor of 5 minutes (JS8Call's minimum; 0 stays "off") and
-    /// the autoreply countdown of one period + 2 s.
+    /// B5's config builder is the ONE settings → station seam; B7 depends on its idle-watchdog
+    /// floor of 5 minutes (JS8Call's minimum; 0 stays "off"). (The autoreply countdown it also
+    /// built is gone: a reply keys in the next period, as JS8Call's does.)
     #[test]
-    fn js8_station_config_applies_the_idle_floor_and_the_reply_countdown() {
+    fn js8_station_config_applies_the_idle_floor() {
         let mut s = Settings {
             mycall: "KD9TAW".to_string(),
             js8_speed: modes::Js8Speed::Slow.index(),
@@ -45512,7 +45511,6 @@ mod tests {
         };
         let cfg = Engine::js8_station_config(&s);
         assert_eq!(cfg.idle_watchdog_min, 5, "floor 5");
-        assert_eq!(cfg.reply_delay_ms, 30_000 + 2_000, "one Slow period + 2 s");
         assert_eq!(cfg.allcall_reply_interval_ms, 15 * 60 * 1000);
         s.js8_idle_watchdog_min = 0;
         assert_eq!(
@@ -45546,19 +45544,21 @@ mod tests {
             e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
             let st = e.js8_state();
             assert!(
-                st.pending_reply.is_some(),
-                "the station still computes the reply (shown, not sent)"
+                st.pending_reply.is_some() || !st.queue.is_empty(),
+                "the station still computes the reply (shown, not sent; asks: {asks})"
             );
             assert!(!st.armed.autoreply, "…and reports it as NOT armed");
             for s in s0..s0 + 4 {
                 assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
             }
             assert!(!e.tx_enabled());
-            // The countdown expires while the latch is down → cancelled, never carried.
+            // With the latch down the queued reply is dropped, and the question is No by
+            // itself: never carried.
             e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
+            let st = e.js8_state();
             assert!(
-                e.js8_state().pending_reply.is_none(),
-                "an expired unarmed reply is cancelled"
+                st.pending_reply.is_none() && st.queue.is_empty(),
+                "an unarmed reply is gone, never carried (asks: {asks})"
             );
             e.set_tx_enabled(true);
             for s in s0 + 4..s0 + 8 {
@@ -45615,11 +45615,10 @@ mod tests {
         );
     }
 
-    /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second. The
-    /// confirmation off, so it goes by itself; `both_acts_and_a_yes_yield_exactly_one_reply` is
-    /// the asking path.
+    /// Both acts: EXACTLY ONE reply, in the next period, never a second. The confirmation off,
+    /// so it goes by itself; `both_acts_and_a_yes_yield_exactly_one_reply` is the asking path.
     #[test]
-    fn both_acts_present_yield_exactly_one_reply_after_the_countdown() {
+    fn both_acts_present_yield_exactly_one_reply_in_the_next_period() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.js8_autoreply_confirmation = false;
         e.js8_enter();
@@ -45630,16 +45629,19 @@ mod tests {
         );
         let s0 = js8_slot_now();
         e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
-        let pending = e.js8_state().pending_reply.expect("a countdown is shown");
-        assert!(pending.display.contains("W1AW SNR"), "{}", pending.display);
+        let queued = e
+            .js8_state()
+            .queue
+            .first()
+            .cloned()
+            .expect("the reply is queued, shown");
+        assert!(queued.display.contains("W1AW SNR"), "{}", queued.display);
         assert!(e.js8_state().armed.autoreply);
-        let keyed: Vec<u64> = (s0..s0 + 6).filter(|&s| !e.poll_tx(s).is_empty()).collect();
-        assert_eq!(keyed.len(), 1, "exactly one reply: keyed on {keyed:?}");
-        assert!(
-            keyed[0] >= s0 + 2,
-            "…and only after the countdown (keyed on {})",
-            keyed[0]
-        );
+        // The radio loop plans each period at its boundary; the next one is s0 + 1.
+        let keyed: Vec<u64> = (s0 + 1..s0 + 7)
+            .filter(|&s| !e.poll_tx(s).is_empty())
+            .collect();
+        assert_eq!(keyed, [s0 + 1], "exactly one reply, in the next period");
         assert!(e.js8_state().pending_reply.is_none());
         assert!(e
             .snapshot()
@@ -45683,17 +45685,18 @@ mod tests {
             .any(|d| d.mine && d.message.contains("W1AW SNR")));
     }
 
-    /// Cancel is the operator's veto on the countdown (the confirmation off).
+    /// No is the operator's veto on an automatic reply (it replaced the countdown's Cancel):
+    /// the reply it names never keys.
     #[test]
-    fn js8_cancel_stops_a_pending_reply() {
+    fn a_no_stops_a_pending_reply() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.settings.js8_autoreply_confirmation = false;
         e.js8_enter();
         e.set_tx_enabled(true);
         let s0 = js8_slot_now();
         e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
-        assert!(e.js8_state().pending_reply.is_some());
-        e.js8_cancel();
+        let p = e.js8_state().pending_reply.expect("the reply asks");
+        e.js8_answer_reply(false, p.display, p.fires_at_ms)
+            .expect("No");
         assert!(e.js8_state().pending_reply.is_none());
         for s in s0..s0 + 6 {
             assert!(e.poll_tx(s).is_empty());

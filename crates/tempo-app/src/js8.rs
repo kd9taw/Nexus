@@ -84,9 +84,9 @@ impl Engine {
     /// ONE place Settings → `StationConfig` (an associated fn on `&Settings`, so the arm
     /// verbs and `js8_apply_station_config` build it from the SAME source the persisted
     /// switches live in). Identity is uppercased and trimmed the way the wire packs it; the
-    /// idle floor of 5 minutes is applied here (0 stays 0 = off); the autoreply countdown is
-    /// one period + 2 s at the TRANSMIT speed (`js8_speed`, degraded to Normal on a stale
-    /// index — the same rule `js8_tx_speed` applies).
+    /// idle floor of 5 minutes is applied here (0 stays 0 = off); the speed is the TRANSMIT
+    /// speed (`js8_speed`, degraded to Normal on a stale index — the same rule `js8_tx_speed`
+    /// applies).
     pub(crate) fn js8_station_config(s: &Settings) -> StationConfig {
         let speed = Js8Speed::from_index(s.js8_speed).unwrap_or(Js8Speed::Normal);
         StationConfig {
@@ -116,7 +116,6 @@ impl Engine {
             info: s.js8_info.clone(),
             status: s.js8_status.clone(),
             allcall_reply_interval_ms: JS8_ALLCALL_INTERVAL_MS,
-            reply_delay_ms: u64::from(speed.period_s()) * 1000 + 2_000,
             autoreply_confirmation: s.js8_autoreply_confirmation,
         }
     }
@@ -338,11 +337,10 @@ impl Engine {
     pub fn js8_tick(&mut self, now_ms: u64) {
         let aged = self.js8_reasm.age(now_ms);
         self.js8_handle_events(aged, false, now_ms);
-        // A countdown that expires while the TX latch is DOWN is cancelled, never carried:
-        // arming TX ten minutes later must not fire a reply to a query nobody is waiting
-        // for. The countdown was shown the whole time (the cockpit's "would have replied"
-        // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
-        // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
+        // What waits while the TX latch is DOWN is dropped, never carried: arming TX ten
+        // minutes later must not fire a reply to a query nobody is waiting for. (A reply asking
+        // for the operator's Yes stays shown, "would reply … TX is off"; a Yes queues it, and the
+        // queue is dropped here.) No locator in Settings is the same case: JS8Call's `startTx` refuses there too
         // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
         // (:5310), and with TX on it says why (the alert at :5265). So is a frequency outside
         // the licence's privileges, which `plan_tx` refuses before this mode's planner runs:
@@ -350,9 +348,9 @@ impl Engine {
         let no_locator = self.js8_no_usable_locator();
         let outside = !self.tx_allowed();
         if !self.tx_enabled() || no_locator || outside {
-            // A reply waiting for the operator's Yes is not falling due: it stays shown, and a
-            // Yes now puts it in the queue, which this same rule drops.
-            let mut dropped = self.js8_station.drop_due_replies(now_ms);
+            // An automatic reply is in the queue as soon as it is made (or a Yes puts it there),
+            // so the queue's rule below is its rule. One still asking stays shown.
+            let mut dropped = false;
             // …and a heartbeat that falls due is dropped and its interval re-based, so turning
             // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
             // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
@@ -803,11 +801,6 @@ impl Engine {
             self.reset_tx_watchdog();
         }
         Ok(())
-    }
-
-    /// The operator's veto on a pending automatic reply (the visible countdown's Cancel).
-    pub fn js8_cancel(&mut self) {
-        self.js8_station.cancel_pending_reply();
     }
 
     /// The operator's Yes or No to the automatic reply the cockpit shows as (`display`,
@@ -2138,16 +2131,17 @@ mod tests {
         let due = e.js8_state().hb_next_at_ms.expect("scheduled");
         e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
         assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: autoreply is on, and a reply counts down"
+            queued(&e).iter().any(|q| q.contains("W1AW SNR")),
+            "control: autoreply is on, and the reply is queued: {:?}",
+            queued(&e)
         );
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 6 * 60); // through the reply and the heartbeat
         assert!(overs.is_empty(), "nothing keys with no locator: {overs:?}");
         let st = e.js8_state();
         assert!(
-            st.pending_reply.is_none(),
-            "the reply was dropped when it fell due"
+            st.queue.is_empty() && st.pending_reply.is_none(),
+            "the reply was dropped at the refusal"
         );
         assert_eq!(
             st.hb_next_at_ms,
@@ -2261,8 +2255,9 @@ mod tests {
         let due = e.js8_state().hb_next_at_ms.expect("scheduled");
         e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
         assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: autoreply is on, and a reply counts down"
+            queued(&e).iter().any(|q| q.contains("W1AW SNR")),
+            "control: autoreply is on, and the reply is queued: {:?}",
+            queued(&e)
         );
         e.set_frequency(14.020, "20m", "USB");
         assert!(
@@ -2277,8 +2272,8 @@ mod tests {
         );
         let st = e.js8_state();
         assert!(
-            st.pending_reply.is_none(),
-            "the reply was dropped when it fell due"
+            st.queue.is_empty() && st.pending_reply.is_none(),
+            "the reply was dropped at the refusal"
         );
         assert_eq!(
             st.hb_next_at_ms,
@@ -2330,30 +2325,28 @@ mod tests {
     }
 
     /// ⭐ THE ACK ON THE AIR. A MSG to me with TX on and autoreply at its default (on) is filed
-    /// and answered `W1AW ACK`, after the countdown every automatic reply shows: one frame, on
-    /// my own offset, booked where it keyed, and nothing after it.
+    /// and answered `W1AW ACK` in the next period, as JS8Call answers it: one frame, on my own
+    /// offset, booked where it keyed, and nothing after it. (With the confirmation off, so it goes
+    /// by itself; asking first is `a_js8_reply_asks_first_and_keys_once_after_the_yes`.)
     #[test]
-    fn a_js8_msg_to_me_is_acked_on_the_air_after_the_countdown() {
+    fn a_js8_msg_to_me_is_acked_on_the_air_in_the_next_period() {
         let mut e = hb_engine("EN52", 0, 1500.0);
         for d in msg_to_me("W1AW", "HELLO FROM OHIO") {
             e.js8_ingest(&[d], 0);
         }
         let st = e.js8_state();
         assert_eq!(st.inbox.len(), 1, "control: the MSG is filed");
-        let p = st.pending_reply.expect("the ACK counts down");
+        assert!(st.pending_reply.is_none(), "nothing counts down");
+        let q = st.queue.first().cloned().expect("the ACK is queued");
         assert_eq!(
-            (p.origin, p.to.as_str(), p.display.as_str()),
-            (Origin::AutoReply, "W1AW", "KD9TAW: W1AW ACK")
+            (q.origin, q.display.as_str()),
+            (Origin::AutoReply, "KD9TAW: W1AW ACK")
         );
         assert!(st.armed.autoreply, "…armed: TX on, autoreply on");
-        // The first period that starts once the countdown is over.
-        let slot = p.fires_at_ms.div_ceil(15_000);
+        // The next period's boundary.
+        let slot = tempo_core::timing::now_unix_ms() as u64 / 15_000 + 1;
         e.js8_tick(slot * 15_000 - 1_000);
-        assert!(
-            e.plan_tx(slot - 1).is_none(),
-            "nothing keys before the countdown is over"
-        );
-        let plan = e.plan_tx(slot).expect("the ACK keys in that period");
+        let plan = e.plan_tx(slot).expect("the ACK keys in the next period");
         let TxWaveform::Js8 { word, f0, .. } = &plan.waveform else {
             panic!("a JS8 plan carries the typed waveform");
         };
@@ -2380,18 +2373,17 @@ mod tests {
         for d in msg_to_me("W1AW", "HELLO") {
             e.js8_ingest(&[d], 0);
         }
-        let shown = e.js8_state().pending_reply.map(|p| p.display);
         assert_eq!(
-            shown.as_deref(),
-            Some("KD9TAW: W1AW ACK"),
-            "control: the ACK counts down in view"
+            queued(&e),
+            ["KD9TAW: W1AW ACK"],
+            "control: the ACK is queued, in view"
         );
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let off = run_js8_loop_from(&mut e, t0, 60);
         assert!(off.is_empty(), "nothing keys with TX off: {off:?}");
         assert!(
-            e.js8_state().pending_reply.is_none(),
-            "the ACK was dropped when it fell due"
+            queued(&e).is_empty(),
+            "the ACK was dropped at the refusal, not carried"
         );
         e.set_tx_enabled(true);
         let on = run_js8_loop_from(&mut e, t0 + 60_000, 60);
@@ -2407,9 +2399,10 @@ mod tests {
         for d in msg_to_me("W1AW", "HELLO") {
             e.js8_ingest(&[d], 0);
         }
-        assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: the ACK counts down"
+        assert_eq!(
+            queued(&e),
+            ["KD9TAW: W1AW ACK"],
+            "control: the ACK is queued"
         );
         e.set_frequency(14.020, "20m", "USB");
         assert!(
@@ -2420,10 +2413,7 @@ mod tests {
         let off = run_js8_loop_from(&mut e, t0, 60);
         assert!(off.is_empty(), "nothing keys outside privileges: {off:?}");
         let st = e.js8_state();
-        assert!(
-            st.pending_reply.is_none(),
-            "the ACK was dropped when it fell due"
-        );
+        assert!(st.queue.is_empty(), "the ACK was dropped at the refusal");
         assert_eq!(
             st.last_error.as_deref(),
             Some(OUTSIDE_PRIVILEGES),
@@ -2466,12 +2456,13 @@ mod tests {
         for d in msg_to_me("W1AW", "HELLO") {
             e.js8_ingest(&[d], 0);
         }
-        assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: the ACK counts down"
+        assert_eq!(
+            queued(&e),
+            ["KD9TAW: W1AW ACK"],
+            "control: the ACK is queued"
         );
         e.halt_tx();
-        assert!(e.js8_state().pending_reply.is_none(), "Stop TX cancels it");
+        assert!(queued(&e).is_empty(), "Stop TX drops it");
         e.set_tx_enabled(true);
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
@@ -2551,12 +2542,8 @@ mod tests {
             (1, InboxState::Store),
             "control: the MSG TO: is held for K1ABC"
         );
-        let shown = st.pending_reply.map(|p| p.display);
-        assert_eq!(
-            shown.as_deref(),
-            Some("KD9TAW: W1AW ACK"),
-            "the ACK counts down"
-        );
+        let shown: Vec<String> = st.queue.into_iter().map(|q| q.display).collect();
+        assert_eq!(shown, ["KD9TAW: W1AW ACK"], "the ACK is queued");
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
         assert_eq!(overs.len(), 1, "one ACK over: {overs:?}");
@@ -3027,6 +3014,11 @@ mod tests {
         e
     }
 
+    /// What the cockpit's queue shows, a message per frame.
+    fn queued(e: &Engine) -> Vec<String> {
+        e.js8_state().queue.into_iter().map(|q| q.display).collect()
+    }
+
     /// The question the cockpit shows: (display, the moment it says No by itself).
     fn question(e: &Engine) -> (String, u64) {
         let p = e.js8_state().pending_reply.expect("a reply asks");
@@ -3207,5 +3199,39 @@ mod tests {
         e.set_tx_enabled(true);
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         assert!(run_js8_loop_from(&mut e, t0, 60).is_empty(), "nothing keys");
+    }
+
+    // ===== (C) JS8Call's cadence, on the air =====
+
+    /// ⭐ THE CADENCE, MEASURED ON THE AIR PATH. With the confirmation off, a query heard now is
+    /// answered at the next period's boundary: the period after the one it was heard in, as
+    /// JS8Call schedules it (`processCommandActivity` → `enqueueMessage`, mainwindow.cpp:9388 →
+    /// `processTxQueue`, :9627-9690, in the same 1 Hz pass → TX at the next period start,
+    /// `guiUpdate`, :4510-4521). Nexus counted down one period + 2 s first and keyed it two
+    /// periods later. A Yes is the same: the boundary after it.
+    #[test]
+    fn a_js8_reply_keys_at_the_next_boundary_as_js8call_keys_it() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        let next = (t0 / 15_000 + 1) * 15_000;
+        assert_eq!(
+            overs.iter().map(|o| o.0).collect::<Vec<_>>(),
+            [next],
+            "the reply keys once, at the next boundary"
+        );
+
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        let t1 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_answer_reply(true, display, no_at).expect("Yes");
+        let overs = run_js8_loop_from(&mut e, t1, 60);
+        assert_eq!(
+            overs.iter().map(|o| o.0).collect::<Vec<_>>(),
+            [(t1 / 15_000 + 1) * 15_000],
+            "a Yes: the boundary after it"
+        );
     }
 }

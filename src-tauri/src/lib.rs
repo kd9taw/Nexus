@@ -15797,14 +15797,6 @@ fn js8_cq_repeat(
     Ok(eng.js8_state())
 }
 
-/// Cancel the pending automatic reply (safe no-op when none).
-#[tauri::command(async)]
-fn js8_cancel(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
-    let mut eng = engine_lock(&state);
-    eng.js8_cancel();
-    Ok(eng.js8_state())
-}
-
 /// The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
 /// AutoreplyConfirmation), named by the `display` and `fires_at_ms` it was shown with. A Yes puts
 /// it in the queue, where every TX gate applies when its period comes; a Yes to one no longer
@@ -30543,7 +30535,6 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_call_cq,
             js8_arm,
             js8_cq_repeat,
-            js8_cancel,
             js8_answer_reply,
             js8_drop_queue,
             js8_inbox_mark,

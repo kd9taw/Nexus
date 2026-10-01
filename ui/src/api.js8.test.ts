@@ -35,7 +35,6 @@ describe('JS8 api wrappers', () => {
     await api.js8SendCommand('KD2UWR', 0, '')
     await api.js8CallCq(0)
     await api.js8Arm('autoreply', true)
-    await api.js8Cancel()
     await api.js8AnswerReply(true, 'KD9TAW: W1AW SNR -07', 1_700_000_089_000)
     await api.js8DropQueue()
     await api.js8InboxMark(7, 'read')
@@ -50,7 +49,6 @@ describe('JS8 api wrappers', () => {
       { cmd: 'js8_send_command', args: { to: 'KD2UWR', cmd: 0, arg: '' } },
       { cmd: 'js8_call_cq', args: { idx: 0 } },
       { cmd: 'js8_arm', args: { which: 'autoreply', on: true } },
-      { cmd: 'js8_cancel', args: undefined },
       // Tauri maps `firesAtMs` to the Rust `fires_at_ms`, as `dialMhz` to `dial_mhz`.
       { cmd: 'js8_answer_reply', args: { yes: true, display: 'KD9TAW: W1AW SNR -07', firesAtMs: 1_700_000_089_000 } },
       { cmd: 'js8_drop_queue', args: undefined },

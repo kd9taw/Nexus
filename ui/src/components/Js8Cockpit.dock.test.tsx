@@ -54,7 +54,6 @@ vi.mock('../api', async (importOriginal) => {
     js8SendCommand: vi.fn(async () => s()),
     js8CallCq: vi.fn(async () => s()),
     js8Arm: vi.fn(async () => s()),
-    js8Cancel: vi.fn(async () => s()),
     js8AnswerReply: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
     js8LocatorRefusal: vi.fn(async () => null),
@@ -75,7 +74,6 @@ vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> })
 const js8Send = api.js8Send as ReturnType<typeof vi.fn>
 const js8SendCommand = api.js8SendCommand as ReturnType<typeof vi.fn>
 const js8Arm = api.js8Arm as ReturnType<typeof vi.fn>
-const js8Cancel = api.js8Cancel as ReturnType<typeof vi.fn>
 const js8AnswerReply = api.js8AnswerReply as ReturnType<typeof vi.fn>
 const js8DropQueue = api.js8DropQueue as ReturnType<typeof vi.fn>
 const js8LocatorRefusal = api.js8LocatorRefusal as ReturnType<typeof vi.fn>
@@ -91,7 +89,6 @@ beforeEach(() => {
   js8Send.mockClear()
   js8SendCommand.mockClear()
   js8Arm.mockClear()
-  js8Cancel.mockClear()
   js8AnswerReply.mockClear()
   js8DropQueue.mockClear()
   js8LocatorRefusal.mockReset()
@@ -105,8 +102,8 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function renderCockpit(s: AppSnapshot = snap, props: { autoreplyConfirmation?: boolean } = {}) {
-  const r = render(<Js8Cockpit snap={s} {...props} />)
+async function renderCockpit(s: AppSnapshot = snap) {
+  const r = render(<Js8Cockpit snap={s} />)
   await act(async () => {
     await Promise.resolve()
     await Promise.resolve()
@@ -221,21 +218,6 @@ describe('the second-act chips never look armed without the session TX latch', (
 })
 
 describe('the pending auto-reply and the queue', () => {
-  it('with the confirmation off: the countdown and Cancel → js8Cancel; with TX off it says nothing will key', async () => {
-    state.current = { ...base(), pendingReply: { origin: 'autoReply', to: 'W1AW', display: 'KD9TAW: W1AW SNR -03', firesAtMs: Date.now() + 14_000 } }
-    await renderCockpit(snap, { autoreplyConfirmation: false })
-    expect(document.querySelector('.js8-confirm-row')).toBeNull()
-    const row = q('.js8-pending-row')
-    expect(row).not.toBeNull()
-    expect(row.closest('.cockpit-txdock')).not.toBeNull()
-    expect(row.textContent).toContain('W1AW')
-    expect(row.textContent).toContain('SNR -03')
-    await act(async () => {
-      fireEvent.click(q('.js8-cancel'))
-    })
-    expect(js8Cancel).toHaveBeenCalledTimes(1)
-  })
-
   it('renders the queue rows with their origin and Drop queue → js8DropQueue (not a stop)', async () => {
     state.current = {
       ...base(),
@@ -281,7 +263,6 @@ describe('the automatic reply asks Yes / No, as JS8Call does', () => {
     expect(row.textContent).toContain('would you like to send this transmission?')
     expect(q('.js8-confirm-yes').textContent).toBe('Yes')
     expect(q('.js8-confirm-no').textContent).toMatch(/^No \((89|88)\)$/)
-    expect(document.querySelector('.js8-cancel')).toBeNull()
   })
 
   it('Yes and No each answer THAT reply, named by what it showed', async () => {
@@ -296,7 +277,6 @@ describe('the automatic reply asks Yes / No, as JS8Call does', () => {
       fireEvent.click(q('.js8-confirm-no'))
     })
     expect(js8AnswerReply).toHaveBeenLastCalledWith(false, p.display, p.firesAtMs)
-    expect(js8Cancel).not.toHaveBeenCalled()
   })
 
   it('with TX off it still asks, and says nothing will key', async () => {

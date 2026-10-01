@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this transmission?", with **Yes** and **No**. Yes sends it in the next period, through every TX
   check; No sends nothing, and so does no answer: after 89 seconds it is No, JS8Call's 90-second box
   as it counts. A message held for another station is handed over only on Yes. Turn the setting
-  off and replies go by themselves, as before.
+  off and replies go by themselves, in the next period.
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
   reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this
@@ -348,6 +348,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: an automatic reply goes out in the next period, as JS8Call sends it.** JS8Call keys a
+  reply in the period right after the one the query came in; Nexus first counted it down for one
+  period and two seconds and so answered two periods late, by which time the other station had
+  often moved on. Now a reply made by itself (the confirmation off) is queued as it is made, in
+  view in the dock's queue, and keys at the next boundary, through every TX check as before (the
+  TX latch, your callsign and locator, your privileges, the idle watchdog, one frame per period,
+  Stop TX, and Drop queue to take it back). A reply you confirm goes at the boundary after your
+  Yes. The countdown and its Cancel are gone; No is the veto now.
 - **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
   in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
   group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.

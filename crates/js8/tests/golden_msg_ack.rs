@@ -35,7 +35,6 @@ fn ack_keyed_by(acker: &str, speed: Speed, msg: &Message) -> Option<TxFrame> {
         mycall: acker.to_string(),
         speed,
         groups,
-        reply_delay_ms: 1,
         // The logged replies keyed by themselves, the period after what they answer: those
         // stations did not ask first (JS8Call's AutoreplyConfirmation off).
         autoreply_confirmation: false,

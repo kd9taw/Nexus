@@ -3619,7 +3619,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 callsignAgingMin={settings?.js8CallsignAgingMin ?? 0}
                 activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
-                autoreplyConfirmation={settings?.js8AutoreplyConfirmation !== false}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
               />

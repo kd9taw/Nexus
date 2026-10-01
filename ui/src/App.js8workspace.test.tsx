@@ -314,27 +314,6 @@ describe('the JS8 Band activity pane takes its aging from Settings', () => {
   })
 })
 
-// …and JS8Call's reply confirmation: with it on (the default) a waiting reply asks Yes / No; off, it
-// counts down with Cancel. The line between Settings and the cockpit's dock row, in App.
-describe('the JS8 dock asks about a reply as Settings says', () => {
-  for (const [confirm, face] of [[true, '.js8-confirm-row'], [false, '.js8-cancel']] as const) {
-    it(`js8AutoreplyConfirmation ${confirm}: ${face}`, async () => {
-      const api = await import('./api')
-      const pendingReply = { origin: 'autoReply', to: 'W1AW', display: 'KD9TAW: W1AW SNR -03', firesAtMs: Date.now() + 60_000 }
-      vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, js8AutoreplyConfirmation: confirm }) as never)
-      vi.mocked(api.getJs8State).mockImplementation(async () => ({ ...js8State, pendingReply }) as never)
-      try {
-        await mountOn('js8')
-        await waitFor(() => expect(onScreen(face).length, `the ${face} face`).toBe(1), { timeout: 3000 })
-        expect(onScreen(confirm ? '.js8-cancel' : '.js8-confirm-row').length).toBe(0)
-      } finally {
-        vi.mocked(api.getSettings).mockImplementation(async () => null as never)
-        vi.mocked(api.getJs8State).mockImplementation(async () => js8State as never)
-      }
-    })
-  }
-})
-
 // ── the SHAPE guard: the next cockpit, not this one ─────────────────────────────────────────
 //
 // The defect above was not a JS8 mistake, it was a MISSING PAIRING: a view can be given a

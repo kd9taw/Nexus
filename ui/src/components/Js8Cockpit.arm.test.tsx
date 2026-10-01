@@ -52,7 +52,6 @@ vi.mock('../api', async (importOriginal) => {
     js8SendCommand: vi.fn(async () => s()),
     js8CallCq: vi.fn(async () => s()),
     js8Arm: vi.fn(async () => s()),
-    js8Cancel: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
     // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
     // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
@@ -89,8 +88,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function renderCockpit(props: { autoreplyConfirmation?: boolean } = {}) {
-  const r = render(<Js8Cockpit snap={snap} {...props} />)
+async function renderCockpit() {
+  const r = render(<Js8Cockpit snap={snap} />)
   await act(async () => {
     await vi.advanceTimersByTimeAsync(10)
   })
@@ -102,7 +101,6 @@ async function poll() {
     await vi.advanceTimersByTimeAsync(600)
   })
 }
-const q = <T extends Element>(sel: string) => document.querySelector(sel) as T
 
 describe('the idle-watchdog toast', () => {
   it('fires ONCE on the rising edge of idleTripped and not on later polls', async () => {
@@ -153,41 +151,3 @@ describe('a new MSG to me announces itself', () => {
   })
 })
 
-// These are the faces of a reply COUNTING DOWN, which it does with JS8Call's confirmation off; with it
-// on (the default) the reply asks Yes / No instead (Js8Cockpit.dock.test.tsx).
-describe('the pending row knows whether its reply can key', () => {
-  const pendingReply = { origin: 'autoReply' as const, to: 'W1AW', display: 'KD9TAW: W1AW SNR -05', firesAtMs: Date.now() + 17_000 }
-
-  it('TX off → the "TX is off" face', async () => {
-    state.current = { ...base(), pendingReply }
-    await renderCockpit({ autoreplyConfirmation: false })
-    expect(q('.js8-pending-row').textContent).toMatch(/TX is off/)
-    expect(q('.js8-cancel')).not.toBeNull()
-  })
-
-  it('TX on but the origin not armed (idle-tripped) → the "not armed" face', async () => {
-    state.current = { ...base(), txEnabled: true, idleTripped: true, pendingReply, armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false } }
-    await renderCockpit({ autoreplyConfirmation: false })
-    expect(q('.js8-pending-row').textContent).toMatch(/not armed/i)
-    expect(q('.js8-pending-row').textContent).not.toMatch(/TX is off/)
-    expect(q('.js8-cancel')).not.toBeNull()
-  })
-
-  it('both acts present → the countdown', async () => {
-    state.current = { ...base(), txEnabled: true, pendingReply, armed: { autoreply: true, relay: true, hbAck: false, hb: false, cq: false } }
-    await renderCockpit({ autoreplyConfirmation: false })
-    expect(q('.js8-pending-row').textContent).toMatch(/\d+ s/)
-    expect(q('.js8-pending-row').textContent).not.toMatch(/not armed|TX is off/i)
-  })
-
-  it('a relay reply reads the RELAY switch, not the autoreply one', async () => {
-    state.current = {
-      ...base(),
-      txEnabled: true,
-      pendingReply: { ...pendingReply, origin: 'relay' },
-      armed: { autoreply: true, relay: false, hbAck: false, hb: false, cq: false },
-    }
-    await renderCockpit({ autoreplyConfirmation: false })
-    expect(q('.js8-pending-row').textContent).toMatch(/not armed/i)
-  })
-})

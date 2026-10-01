@@ -6351,7 +6351,7 @@ export const EN = {
     'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Needs TX on.',
   'settings.js8.autoreplyConfirmation.label': 'Ask for confirmation before sending automatic replies',
   'settings.js8.autoreplyConfirmation.hint':
-    'On by default, as in JS8Call: every automatic reply (to a query, an ACK, a relay, a heartbeat acknowledgement) waits in the cockpit for your Yes, and is not sent if you say No or do not answer within 89 seconds. Off, they go by themselves.',
+    'On by default, as in JS8Call: every automatic reply (to a query, an ACK, a relay, a heartbeat acknowledgement) waits in the cockpit for your Yes, and is not sent if you say No or do not answer within 89 seconds. Off, each goes by itself in the next period.',
   'settings.js8.relay.label': 'Relay for other stations',
   'settings.js8.relay.hint':
     'On by default, as in JS8Call: a message routed through your callsign is passed along, and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
@@ -8476,13 +8476,9 @@ export const EN = {
   // than nine edits is the same as js8.panel.activity.differs).
   'js8.dock.arm.differs':
     'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
-  'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
-  'js8.dock.pending.idle': 'Would reply to {{to}} — not armed (idle watchdog), nothing keys: {{text}}',
   'js8.toast.idleTripped':
     'JS8 idle watchdog: no operator activity for {{min}} min — heartbeat, autoreply and relay are off. TX stays as you left it; any send or switch re-arms them.',
-  'js8.dock.pending.cancel.label': 'Cancel',
-  'js8.dock.pending.cancel.title': 'Cancel this automatic reply before it goes out',
   // JS8Call's AutoreplyConfirmation box, its own words (mainwindow.cpp:5211-5212): Yes / No, with
   // the seconds to No on the No button, as JS8Call counts them on its default button.
   'js8.dock.confirm': 'A transmission is queued for autoreply: {{text}} — would you like to send this transmission?',
@@ -8511,7 +8507,6 @@ export const EN = {
   'js8.toast.arm.failed': 'JS8 switch refused',
   'js8.toast.command.failed': 'JS8 command refused',
   'js8.toast.noAddressee': 'A command needs a station — put a callsign, @ALLCALL or a group in To',
-  'js8.toast.cancel.failed': 'Could not cancel the reply',
   'js8.toast.answer.failed': 'Could not answer the question',
   'js8.toast.drop.failed': 'Could not drop the queue',
 

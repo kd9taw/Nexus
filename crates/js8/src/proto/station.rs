@@ -176,12 +176,12 @@ pub struct StationConfig {
     pub info: String,
     pub status: String,
     pub allcall_reply_interval_ms: u64,
-    pub reply_delay_ms: u64,
     /// JS8Call's `AutoreplyConfirmation`, "Ask for confirmation before sending autoreply
     /// transmissions" (Configuration.ui:855), on as JS8Call ships it (Configuration.cpp:1949).
     /// On, every automatic reply waits for the operator's Yes and is No by itself after
     /// [`CONFIRM_NO_AFTER_MS`] (`confirmThenEnqueueMessage`, mainwindow.cpp:9385-9389; the
-    /// HB-ACK's own, :6301-6307). Off, replies go automatically.
+    /// HB-ACK's own, :6301-6307). Off, a reply goes into the queue as it is made
+    /// (`enqueueMessage`, :9388) and keys in the next period.
     pub autoreply_confirmation: bool,
 }
 
@@ -202,7 +202,6 @@ impl Default for StationConfig {
             info: String::new(),
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
-            reply_delay_ms: 0,
             autoreply_confirmation: true,
         }
     }
@@ -314,7 +313,8 @@ struct OutMsg {
     display: String,
 }
 
-/// A scheduled automatic reply, cancellable until `fires_at_ms`.
+/// An automatic reply waiting for the operator's Yes (JS8Call's AutoreplyConfirmation box):
+/// `fires_at_ms` is when the box answers No by itself.
 #[derive(Debug, Clone)]
 struct Pending {
     origin: Origin,
@@ -323,9 +323,6 @@ struct Pending {
     display: String,
     fires_at_ms: u64,
     freq_hint: FreqHint,
-    /// Waiting for the operator's Yes (`autoreply_confirmation`): `fires_at_ms` is then when
-    /// JS8Call's box answers No by itself, and nothing releases it but a Yes.
-    asks: bool,
     /// The held message a `QUERY MSG n` hands over: marked Delivered when the reply is
     /// released, as JS8Call's callback marks it (`markMsgDelivered`, mainwindow.cpp:9227-9235,
     /// run by `processTxQueue` once the reply is dequeued, :9687-9689), so a No leaves it held.
@@ -1040,9 +1037,11 @@ impl Station {
 
     /// Every automatic reply's one way in. With `autoreply_confirmation` on it waits for the
     /// operator's Yes, and answers No by itself after [`CONFIRM_NO_AFTER_MS`], as JS8Call's
-    /// `confirmThenEnqueueMessage(90, …)` box does (mainwindow.cpp:5209-5230, :9385-9389);
-    /// otherwise it counts down to go by itself. `delivers` is the held message a `QUERY MSG n`
-    /// hands over, marked Delivered as the reply is released.
+    /// `confirmThenEnqueueMessage(90, …)` box does (mainwindow.cpp:5209-5230, :9385-9389).
+    /// Otherwise it is released at once, JS8Call's `enqueueMessage` (:9388): `processTxQueue`
+    /// dequeues it within the second (:9627-9690) and its TX starts at the next period
+    /// (`guiUpdate`, :4510-4521), which here is the next `next_frame`. `delivers` is the held
+    /// message a `QUERY MSG n` hands over, marked Delivered as the reply is released.
     #[allow(clippy::too_many_arguments)]
     fn schedule(
         &mut self,
@@ -1063,21 +1062,13 @@ impl Station {
             });
             return;
         }
-        let asks = self.cfg.autoreply_confirmation;
-        let fires_at_ms = if asks {
-            now_ms + CONFIRM_NO_AFTER_MS
-        } else {
-            now_ms + self.reply_delay_ms()
-        };
-        let delivers = if asks {
-            delivers
-        } else {
-            // It goes by itself: handed over now, as before.
-            self.mark_delivered(delivers, actions);
-            None
-        };
         let to = clamp_str(to, MAX_CALL_LEN);
         let text = clamp_str(text, MAX_TEXT_LEN);
+        if !self.cfg.autoreply_confirmation {
+            self.release(origin, &text, freq_hint, delivers, actions);
+            return;
+        }
+        let fires_at_ms = now_ms + CONFIRM_NO_AFTER_MS;
         let display = format!("{}: {text}", self.base());
         self.pending.push(Pending {
             origin,
@@ -1086,7 +1077,6 @@ impl Station {
             display: display.clone(),
             fires_at_ms,
             freq_hint,
-            asks,
             delivers,
         });
         actions.push(StationAction::ReplyPending {
@@ -1097,11 +1087,27 @@ impl Station {
         });
     }
 
-    fn reply_delay_ms(&self) -> u64 {
-        if self.cfg.reply_delay_ms != 0 {
-            self.cfg.reply_delay_ms
+    /// A reply goes: into the outbox, where the next period keys it, handing over the held
+    /// message it delivers. A full outbox refuses it, said, rather than queue it behind stale
+    /// traffic.
+    fn release(
+        &mut self,
+        origin: Origin,
+        text: &str,
+        freq_hint: FreqHint,
+        delivers: Option<u32>,
+        actions: &mut Vec<StationAction>,
+    ) {
+        let Ok(out) = self.compose_out(origin, text, freq_hint) else {
+            return;
+        };
+        if self.push_outbox(out) {
+            self.mark_delivered(delivers, actions);
         } else {
-            self.cfg.speed.period_s() as u64 * 1000 + 2000
+            actions.push(StationAction::Toast {
+                text: "Reply queue full: auto-reply dropped".into(),
+                directed_to_me: false,
+            });
         }
     }
 
@@ -1116,7 +1122,7 @@ impl Station {
         // A reply nobody answered is No when its box runs out (SelfDestructMessageBox.cpp:68):
         // nothing is sent and a held message it would have handed over stays held.
         self.pending.retain(|p| {
-            let no = p.asks && now_ms >= p.fires_at_ms;
+            let no = now_ms >= p.fires_at_ms;
             if no {
                 actions.push(StationAction::Toast {
                     text: format!("Auto-reply not sent, no answer: {}", p.display),
@@ -1137,8 +1143,8 @@ impl Station {
         // outbox with nothing pending, so a slow drain can never let CQs pile up, and
         // `bump_cq_schedule` re-bases on NOW, so a missed window is skipped rather than
         // replayed. If anything is queued, the CQ simply waits for the next tick — one frame
-        // per period is the whole rule.
-        if self.cq_on && self.outbox.is_empty() && self.pending.is_empty() {
+        // per period is the whole rule. A reply still asking does not hold it (see `next_frame`).
+        if self.cq_on && self.outbox.is_empty() {
             if let Some(next) = self.cq_next_ms {
                 if now_ms >= next {
                     let _ = self.enqueue_cq();
@@ -1229,28 +1235,15 @@ impl Station {
         busy: &dyn Fn(f32) -> bool,
         rng: &mut dyn FnMut() -> u32,
     ) -> Option<TxFrame> {
-        // release fired pending replies into the outbox (oldest first); one waiting for the
-        // operator's Yes is released by the Yes alone (`answer_reply`).
-        self.pending.sort_by_key(|p| p.fires_at_ms);
-        let mut i = 0;
-        while i < self.pending.len() {
-            if !self.pending[i].asks && self.pending[i].fires_at_ms <= period_start_ms {
-                let p = self.pending.remove(i);
-                if let Ok(out) = self.compose_out(p.origin, &p.text, p.freq_hint) {
-                    // If the outbox is full, the reply is dropped rather than queued behind stale
-                    // traffic (bounded downstream of the surfaced `MAX_PENDING` cap).
-                    let _ = self.push_outbox(out);
-                }
-            } else {
-                i += 1;
-            }
-        }
+        // A reply waiting for the operator's Yes is never released here: the Yes releases it
+        // (`answer_reply`), and one made with the confirmation off is in the outbox already.
         // A heartbeat due in THIS period goes out in it. Its deadline is a period boundary
         // + 1 s; JS8Call's 1 Hz `checkRepeat` (mainwindow.cpp:5723) fires within a second after
         // that boundary and its late-start rule (`guiUpdate`, :4512) keys it in the same period.
         // Nexus keys at the boundary, so the boundary releases it. A SCHEDULE, never a queue:
-        // only into an EMPTY outbox with nothing pending.
-        if self.hb_on && self.outbox.is_empty() && self.pending.is_empty() {
+        // only into an EMPTY outbox. A reply still asking does not hold it: JS8Call's question
+        // box holds nothing back (mainwindow.cpp:5227-5229).
+        if self.hb_on && self.outbox.is_empty() {
             if let Some(next) = self.hb_next_ms {
                 if period_start_ms + 1000 >= next {
                     let _ = self.enqueue_heartbeat(period_start_ms);
@@ -1494,14 +1487,10 @@ impl Station {
         self.cq_next_ms = None;
     }
 
-    pub fn cancel_pending_reply(&mut self) {
-        self.pending.clear();
-    }
-
     /// The operator's answer to the reply shown as (`display`, `fires_at_ms`), JS8Call's Yes or
     /// No (mainwindow.cpp:5219-5226). Yes releases it to the outbox, where the next period keys
-    /// it, and hands over the held message a delivery carries; No drops it, whatever kind it is,
-    /// so a No is never answered by a frame. Either is the operator's act: it restarts the idle
+    /// it, and hands over the held message a delivery carries; No drops it, so a No is never
+    /// answered by a frame. Either is the operator's act: it restarts the idle
     /// count and clears an idle trip, as any click in JS8Call does (`eventFilter`,
     /// mainwindow.cpp:2979-2988). `None` when no such reply waits any more.
     pub fn answer_reply(
@@ -1517,34 +1506,11 @@ impl Station {
             .position(|p| p.display == display && p.fires_at_ms == fires_at_ms)?;
         self.mark_active(now_ms);
         let mut actions = Vec::new();
-        if !yes {
-            self.pending.remove(i);
-        } else if self.pending[i].asks {
-            let p = self.pending.remove(i);
-            self.mark_delivered(p.delivers, &mut actions);
-            if let Ok(out) = self.compose_out(p.origin, &p.text, p.freq_hint) {
-                // A full outbox drops it rather than queue it behind stale traffic, as a
-                // countdown's release does.
-                let _ = self.push_outbox(out);
-            }
+        let p = self.pending.remove(i);
+        if yes {
+            self.release(p.origin, &p.text, p.freq_hint, p.delivers, &mut actions);
         }
         Some(actions)
-    }
-
-    /// For a moment when nothing may transmit (TX off, no locator, outside the privileges): once a
-    /// reply counting down to go by itself falls due, every such reply is dropped, never carried
-    /// to a later moment. A reply waiting for the operator's Yes stays shown. True when any was
-    /// dropped.
-    pub fn drop_due_replies(&mut self, now_ms: u64) -> bool {
-        if !self
-            .pending
-            .iter()
-            .any(|p| !p.asks && p.fires_at_ms <= now_ms)
-        {
-            return false;
-        }
-        self.pending.retain(|p| p.asks);
-        true
     }
 
     pub fn drop_queue(&mut self) {
@@ -1553,7 +1519,7 @@ impl Station {
     }
 
     /// The outbox alone: what waits to be keyed, the rest of a message already going out
-    /// included. The pending countdowns and every schedule stay as they are. Returns how many
+    /// included. A reply still asking and every schedule stay as they are. Returns how many
     /// messages it held and whether one of them was the operator's own.
     pub fn drop_outbox(&mut self) -> (usize, bool) {
         let operator = self.outbox.iter().any(|o| o.origin == Origin::Operator);
@@ -1901,7 +1867,6 @@ mod tests {
             mycall: "KD9TAW".into(),
             grid: "EN52".into(),
             speed: Speed::Normal,
-            reply_delay_ms: 1000,
             autoreply_confirmation: false,
             ..Default::default()
         }
@@ -1993,12 +1958,8 @@ mod tests {
         let mut s = Station::new(c);
         s.set_hb(true, 0);
         s.on_event(&heartbeat("W1AW", -5), 1000);
-        // pending until the countdown; then an HbAck frame on the dial.
-        assert!(
-            drain(&mut s, 1500).is_none(),
-            "reply waits for its countdown"
-        );
-        let f = drain(&mut s, 5000).expect("HB-ack after the delay");
+        // queued at once (the confirmation off), and keyed in the next period.
+        let f = drain(&mut s, 1500).expect("HB-ack in the next period");
         assert_eq!(f.origin, Origin::HbAck);
         assert_eq!(
             f.freq_hint,
@@ -2092,10 +2053,13 @@ mod tests {
             &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, &body, -5),
             t,
         );
-        let before = s.pending.len();
+        let before = s.pending.len() + s.outbox.len();
         s.pending.retain(|p| p.text != "W1AW ACK");
+        s.outbox.retain(|o| o.display != "KD9TAW: W1AW ACK");
         assert!(
-            s.pending.len() + 1 == before || before == MAX_PENDING,
+            s.pending.len() + s.outbox.len() + 1 == before
+                || s.pending.len() == MAX_PENDING
+                || s.outbox.len() == MAX_OUTBOX,
             "the stored MSG TO: draws its ACK, unless the reply queue is full"
         );
     }
@@ -2619,7 +2583,11 @@ mod tests {
             &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -7),
             0,
         );
-        assert_eq!(s.pending_len(), 1, "precondition: a reply is pending");
+        assert_eq!(
+            s.pending_len() + s.outbox_len(),
+            1,
+            "precondition: a reply is waiting"
+        );
         let acts = s.tick(5 * 60 * 1000);
         assert!(acts.iter().any(|a| matches!(a, StationAction::IdleTripped)));
         assert!(s.idle_tripped() && !s.config().autoreply && !s.config().relay && !s.hb_on());
@@ -3520,9 +3488,27 @@ mod tests {
         encode_frame(&ack, whole, Speed::Normal).expect("packs")
     }
 
-    /// The texts of the automatic replies counting down, oldest first.
+    /// The texts of the automatic replies waiting to go, oldest first: asking for a Yes, or in
+    /// the queue, where one made with the confirmation off goes at once.
     fn waiting(s: &Station) -> Vec<String> {
-        s.pending.iter().map(|p| p.text.clone()).collect()
+        let mine = format!("{}: ", s.base());
+        s.pending
+            .iter()
+            .map(|p| p.text.clone())
+            .chain(
+                s.outbox
+                    .iter()
+                    .filter(|o| {
+                        matches!(o.origin, Origin::AutoReply | Origin::Relay | Origin::HbAck)
+                    })
+                    .map(|o| {
+                        o.display
+                            .strip_prefix(&mine)
+                            .unwrap_or(&o.display)
+                            .to_string()
+                    }),
+            )
+            .collect()
     }
 
     /// ⭐ A MSG TO ME IS FILED UNREAD, as JS8Call's `addCommandToMyInbox` files it
@@ -3560,19 +3546,8 @@ mod tests {
                 .any(|a| matches!(a, StationAction::InboxChanged)),
             "the journal is not told"
         );
-        assert!(
-            acts.iter().any(|a| matches!(
-                a,
-                StationAction::ReplyPending { origin: Origin::AutoReply, to, display, .. }
-                    if to == "W1AW" && display == "KD9TAW: W1AW ACK"
-            )),
-            "no ACK counts down: {acts:?}"
-        );
-        assert!(
-            drain(&mut s, 5_500).is_none(),
-            "the ACK waits for its countdown"
-        );
-        let f = drain(&mut s, 6_000).expect("the ACK after the countdown");
+        assert_eq!(waiting(&s), ["W1AW ACK"], "the ACK is queued: {acts:?}");
+        let f = drain(&mut s, 6_000).expect("the ACK in the next period");
         assert_eq!(
             (f.origin, f.display.as_str(), f.freq_hint, f.first, f.last),
             (
@@ -3825,14 +3800,15 @@ mod tests {
         s.send(None, "FIRST", 0)
             .expect("an operator message ahead of the ACK");
         s.on_event(&msg, 1_000);
-        s.on_event(&msg, 1_500); // a copy while the ACK counts down
+        s.on_event(&msg, 1_500); // a copy while the ACK waits in the queue
         assert_eq!(waiting(&s), ["W1AW ACK"], "one ACK for two copies");
         let f = drain(&mut s, 2_000).expect("the operator's message keys first");
         assert_eq!(f.origin, Origin::Operator);
-        assert!(waiting(&s).is_empty(), "the ACK is queued behind it");
+        assert_eq!(waiting(&s), ["W1AW ACK"], "the ACK is queued behind it");
         s.on_event(&msg, 2_500);
-        assert!(
-            waiting(&s).is_empty(),
+        assert_eq!(
+            waiting(&s),
+            ["W1AW ACK"],
             "a copy while the ACK is queued draws none"
         );
         s.on_event(
@@ -3841,7 +3817,7 @@ mod tests {
         );
         assert_eq!(
             waiting(&s),
-            ["N0XYZ ACK"],
+            ["W1AW ACK", "N0XYZ ACK"],
             "another station's MSG has its own ACK"
         );
         let mut acks = Vec::new();
@@ -4004,6 +3980,7 @@ mod tests {
         c.status = "QRV".into();
         let mut s = Station::new(c);
         s.set_hb(true, 0);
+        s.on_event(&heartbeat("W1AW/P", -5), 1_000);
         for cmd in [
             Command::SnrQuery,
             Command::GridQuery,
@@ -4017,17 +3994,16 @@ mod tests {
                 1_000,
             );
         }
-        s.on_event(&heartbeat("W1AW/P", -5), 1_000);
         assert_eq!(
             waiting(&s),
             [
+                "W1AW/P HEARTBEAT SNR -05",
                 "W1AW/P SNR -05",
                 "W1AW/P GRID EN52",
                 "W1AW/P INFO RIG IC7300",
                 "W1AW/P STATUS QRV",
                 "W1AW/P HEARING",
                 "W1AW/P NO",
-                "W1AW/P HEARTBEAT SNR -05",
             ],
             "every reply names W1AW/P as heard"
         );
@@ -4044,8 +4020,14 @@ mod tests {
             last: true,
             data: false,
         };
+        let hb_ack = drain(&mut s, 2_000).map(|f| f.origin);
         assert_eq!(
-            drain(&mut s, 2_000).map(|f| f.word),
+            hb_ack,
+            Some(Origin::HbAck),
+            "the HB-ACK, first in the queue"
+        );
+        assert_eq!(
+            drain(&mut s, 17_000).map(|f| f.word),
             Some(encode_frame(&snr, whole, Speed::Normal).unwrap()),
             "the SNR reply carries the portable flag"
         );
@@ -4062,7 +4044,9 @@ mod tests {
             ),
             0,
         );
-        s.pending.clear(); // its ACK is not what this is about
+        // its ACK is not what this is about
+        s.pending.clear();
+        s.outbox.clear();
         let id = s.inbox()[0].id;
         s.on_event(
             &directed("W1AW/P", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
@@ -4206,56 +4190,54 @@ mod tests {
         );
     }
 
+    /// Both ways a reply waits are bounded under a flood of queries to me, which @ALLCALL's
+    /// hold-off does not limit: asking (the questions, `MAX_PENDING`) and, with the confirmation
+    /// off, in the queue (`MAX_OUTBOX`). A refusal is said, never silent.
     #[test]
     fn pending_and_outbox_refuse_under_a_direct_to_me_flood() {
-        let mut s = Station::new(cfg());
-        // positive control: a few direct queries all queue.
-        for i in 0..5u32 {
-            s.on_event(
-                &directed(
-                    &format!("K{i}ABC"),
-                    "KD9TAW",
-                    Some(Command::SnrQuery),
-                    None,
-                    "",
-                    -7,
-                ),
-                i as u64,
+        for asks in [true, false] {
+            let mut s = Station::new(StationConfig {
+                autoreply_confirmation: asks,
+                ..cfg()
+            });
+            let query = |i: &str| directed(i, "KD9TAW", Some(Command::SnrQuery), None, "", -7);
+            // positive control: a few direct queries all wait.
+            for i in 0..5u32 {
+                s.on_event(&query(&format!("K{i}ABC")), i as u64);
+            }
+            assert_eq!(s.pending_len() + s.outbox_len(), 5, "asks: {asks}");
+            let mut refused = false;
+            for i in 0..5000u32 {
+                let acts = s.on_event(&query(&format!("N{i:04}")), 100 + i as u64);
+                if acts.iter().any(|a| matches!(a, StationAction::Toast { text, .. } if text.contains("Reply queue full"))) {
+                    refused = true;
+                }
+            }
+            assert!(
+                refused,
+                "asks: {asks}: the flood exceeded the cap but no refusal was surfaced"
+            );
+            assert!(
+                s.pending_len() <= MAX_PENDING,
+                "pending unbounded: {}",
+                s.pending_len()
+            );
+            assert!(
+                s.outbox_len() <= MAX_OUTBOX,
+                "outbox unbounded: {}",
+                s.outbox_len()
+            );
+            // drain does not let the outbox grow past its cap either.
+            let mut rng = || 0u32;
+            for k in 0..200u64 {
+                let _ = s.next_frame(1_000_000 + k * 15000, &|_| false, &mut rng);
+            }
+            assert!(
+                s.outbox_len() <= MAX_OUTBOX,
+                "outbox unbounded: {}",
+                s.outbox_len()
             );
         }
-        assert_eq!(s.pending_len(), 5);
-        // flood direct-to-me (NOT rate-limited like @ALLCALL) → pending is capped and refusals
-        // are surfaced as toasts, never grown.
-        let mut refused = false;
-        for i in 0..5000u32 {
-            let acts = s.on_event(
-                &directed(
-                    &format!("N{i:04}"),
-                    "KD9TAW",
-                    Some(Command::SnrQuery),
-                    None,
-                    "",
-                    -7,
-                ),
-                100 + i as u64,
-            );
-            if acts.iter().any(|a| matches!(a, StationAction::Toast { text, .. } if text.contains("Reply queue full"))) { refused = true; }
-        }
-        assert!(
-            refused,
-            "flood exceeded the cap but no refusal was surfaced"
-        );
-        assert!(
-            s.pending_len() <= 32,
-            "pending unbounded: {}",
-            s.pending_len()
-        );
-        // drain does not let the outbox grow past its cap either.
-        let mut rng = || 0u32;
-        for k in 0..200u64 {
-            let _ = s.next_frame(1_000_000 + k * 15000, &|_| false, &mut rng);
-        }
-        assert!(s.outbox_len() <= 32, "outbox unbounded: {}", s.outbox_len());
     }
 
     #[test]
@@ -4660,23 +4642,6 @@ mod tests {
         }
     }
 
-    /// A No is never answered by a frame, whatever kind of reply it reaches: a reply counting down
-    /// (made with the confirmation off) stops too. A Yes to it changes nothing: it goes at its time.
-    #[test]
-    fn a_no_stops_a_reply_counting_down_too() {
-        let mut s = Station::new(cfg());
-        s.on_event(&snr_query("W1AW"), 1000);
-        let p = s.pending_reply().expect("counts down");
-        s.answer_reply(&p.display, p.fires_at_ms, false, 1500);
-        assert!(keyed_in(&mut s, 5000, 4).is_empty(), "No: nothing keys");
-
-        let mut s = Station::new(cfg());
-        s.on_event(&snr_query("W1AW"), 1000);
-        let p = s.pending_reply().expect("counts down");
-        s.answer_reply(&p.display, p.fires_at_ms, true, 1500);
-        assert_eq!(keyed_in(&mut s, 5000, 4), ["KD9TAW: W1AW SNR -07"]);
-    }
-
     /// Stop TX (`halt`) and the idle watchdog drop a reply still asking, as they drop every reply.
     #[test]
     fn stop_tx_and_the_idle_watchdog_drop_a_reply_still_asking() {
@@ -4698,21 +4663,90 @@ mod tests {
         assert!(s.pending_reply().is_none(), "the trip drops it");
     }
 
-    /// With nothing able to transmit, a reply counting down that falls due is dropped with every
-    /// other such reply; one asking stays shown, for the operator to answer.
+    // ===== (C) JS8Call's cadence: a reply keys in the next period =====
+
+    /// ⭐ JS8Call's schedule for an automatic reply, measured. The decoder takes a cycle once
+    /// `framesForSymbols` of it are in (`decodeEnqueueReadyExperiment`, mainwindow.cpp:3472-3476),
+    /// `frames_needed` here; the 1 Hz `guiUpdate` then runs `processCommandActivity`, which
+    /// queues the reply (`enqueueMessage`, :9388), and `processTxQueue` in the same pass
+    /// (:4734-4737), which puts it in the compose box and starts TX (:9671-9685). That moment is
+    /// past the cycle's transmit window (`m_bTxTime`, :4441-4447), so the reply keys at the next
+    /// period's start (:4510-4521): the period right after the one the query was in. With the
+    /// confirmation off Nexus keys it there too, at every speed. (The golden log agrees: twelve
+    /// Normal ACKs one period after the MSG, a Fast one in the next Fast period.)
     #[test]
-    fn drop_due_replies_drops_the_countdowns_and_keeps_a_question() {
+    fn with_confirmation_off_a_reply_keys_in_the_period_js8call_keys_it() {
+        for speed in [Speed::Slow, Speed::Normal, Speed::Fast, Speed::Turbo] {
+            let period = u64::from(speed.period_s()) * 1000;
+            let decoded = 100 * period + (speed.frames_needed() as u64 * 1000) / 12_000;
+            let mut s = Station::new(StationConfig {
+                mycall: "KD9TAW".into(),
+                grid: "EN52".into(),
+                speed,
+                autoreply_confirmation: false,
+                ..Default::default()
+            });
+            s.on_event(&snr_query("W1AW"), decoded);
+            let keyed: Vec<u64> = (101..106u64)
+                .filter(|k| drain(&mut s, k * period).is_some())
+                .collect();
+            assert_eq!(keyed, [101], "{speed:?}: the period after the query, once");
+        }
+    }
+
+    /// With the confirmation off a reply is queued as it is made: in view in the queue at once,
+    /// never a countdown, and Drop queue or Stop TX take it back before its period.
+    #[test]
+    fn with_confirmation_off_a_reply_is_queued_at_once_and_droppable() {
         let mut s = Station::new(cfg());
         s.on_event(&snr_query("W1AW"), 1000);
-        s.set_config(asking_cfg());
-        s.on_event(&snr_query("K1ABC"), 1500);
-        assert!(!s.drop_due_replies(1500), "nothing due yet");
-        assert!(s.drop_due_replies(1000 + 1000), "the countdown fell due");
-        let left = s.pending_reply().expect("the question stays");
-        assert_eq!(left.display, "KD9TAW: K1ABC SNR -07");
+        assert!(s.pending_reply().is_none(), "nothing counts down");
+        let q: Vec<String> = s.queue().into_iter().map(|f| f.display).collect();
+        assert_eq!(q, ["KD9TAW: W1AW SNR -07"], "queued at once");
+        s.drop_queue();
         assert!(
-            !s.drop_due_replies(80_000),
-            "a question never falls due here"
+            keyed_in(&mut s, 15_000, 4).is_empty(),
+            "Drop queue: nothing keys"
         );
+        s.on_event(&snr_query("W1AW"), 20_000);
+        s.halt();
+        assert!(
+            keyed_in(&mut s, 30_000, 4).is_empty(),
+            "Stop TX: nothing keys"
+        );
+    }
+
+    /// A reply still asking holds back nothing else: a heartbeat or a repeating CQ due meanwhile
+    /// keys on time, as JS8Call's question box holds nothing back (mainwindow.cpp:5227-5229).
+    #[test]
+    fn a_reply_still_asking_holds_back_no_heartbeat_or_cq() {
+        let mut s = Station::new(StationConfig {
+            hb_interval_min: 5,
+            ..asking_cfg()
+        });
+        s.on_event(&snr_query("K1ABC"), 500);
+        s.set_hb(true, 1000);
+        let hb_due = s.hb_next_ms().expect("scheduled");
+        assert!(
+            s.pending_reply().is_some(),
+            "control: a reply asks at the heartbeat"
+        );
+        let boundary = (hb_due - 1000) / 15_000 * 15_000;
+        let f = drain(&mut s, boundary).expect("the heartbeat keys on time");
+        assert_eq!(f.origin, Origin::Heartbeat);
+
+        let mut s = Station::new(StationConfig {
+            cq_interval_min: 1,
+            ..asking_cfg()
+        });
+        s.on_event(&snr_query("W1AW"), 500); // before the CQ: traffic to me stops a repeat
+        s.set_cq(true, 0, 1000);
+        assert!(
+            s.pending_reply().is_some(),
+            "control: a reply asks at the CQ"
+        );
+        s.tick(61_000);
+        let f = drain(&mut s, 75_000).expect("the CQ keys on time");
+        assert_eq!(f.origin, Origin::CqRepeat);
     }
 }

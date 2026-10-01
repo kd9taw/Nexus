@@ -38,7 +38,6 @@ import {
   js8Arm,
   js8CallCq,
   js8AnswerReply,
-  js8Cancel,
   js8CqRepeat,
   js8DropQueue,
   js8Enter,
@@ -118,9 +117,6 @@ interface Props {
   /** JS8Call's band-activity aging, in minutes (Settings ▸ JS8; 0, the default here, is off):
    *  App hands down the station's setting. */
   activityAgingMin?: number
-  /** JS8Call's AutoreplyConfirmation from Settings (on by default): the pending reply is a
-   *  question, Yes / No with the seconds to its own No, instead of a countdown with Cancel. */
-  autoreplyConfirmation?: boolean
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -180,7 +176,6 @@ export function Js8Cockpit({
   wheelSensitivity,
   callsignAgingMin = 0,
   activityAgingMin = 0,
-  autoreplyConfirmation = true,
   onOpenLogbook,
   panels,
   onOpenSettings,
@@ -373,12 +368,6 @@ export function Js8Cockpit({
   const toggleSwitch = (which: Js8Switch, on: boolean) => {
     if (!canControl) return
     void withErrorToast(() => js8Arm(which, !on), t('js8.toast.arm.failed')).then((s) => {
-      if (s) setJs8(s)
-    })
-  }
-  const cancelPending = () => {
-    if (!canControl) return
-    void withErrorToast(() => js8Cancel(), t('js8.toast.cancel.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
@@ -631,17 +620,6 @@ export function Js8Cockpit({
         : t('js8.dock.estimate', { count: frames, secs: frames * speedInfo.periodS })
   const canSend = !overCap && (cmdId !== null ? toCall.trim() !== '' : text.trim() !== '')
   const pendingSecs = js8?.pendingReply ? Math.max(0, Math.ceil((js8.pendingReply.firesAtMs - now) / 1000)) : 0
-
-  /** Whether the pending reply's ORIGIN can key right now — the engine's per-origin arm
-   *  (switch && txEnabled && !idleTripped), not the latch alone. */
-  const pendingCanKey = (s: Js8State): boolean => {
-    const p = s.pendingReply
-    if (!p) return false
-    if (p.origin === 'autoReply') return s.armed.autoreply
-    if (p.origin === 'relay') return s.armed.relay
-    if (p.origin === 'hbAck') return s.armed.hbAck
-    return s.txEnabled
-  }
 
   /** Literal keys per origin, so the orphan guard sees each referenced. */
   const originLabel = (o: Js8Origin): string => {
@@ -1398,8 +1376,9 @@ export function Js8Cockpit({
 
         {/* THE AUTOMATIC REPLY THAT ASKS FIRST (JS8Call's AutoreplyConfirmation, on by default):
             Yes queues it for the next period; No, or no answer before the count runs out, sends
-            nothing. With TX off it says so: a Yes then keys nothing. */}
-        {js8?.pendingReply && autoreplyConfirmation && (
+            nothing. With TX off it says so: a Yes then keys nothing. With the confirmation off a
+            reply never asks: it is in the queue below, and keys in the next period. */}
+        {js8?.pendingReply && (
           <div className="js8-dock-row js8-pending-row js8-confirm-row" role="status">
             <span className="js8-pending-text">
               {js8.txEnabled
@@ -1411,24 +1390,6 @@ export function Js8Cockpit({
             </button>
             <button type="button" className="cw-macro js8-confirm-no" disabled={!canControl} onClick={() => answerPending(false)} title={t('js8.dock.confirm.no.title')}>
               {t('js8.dock.confirm.no.label', { secs: pendingSecs })}
-            </button>
-          </div>
-        )}
-
-        {/* THE PENDING AUTO-REPLY with the confirmation off (spec invariant 11): visible, counted
-            down, cancellable. Under the auto arm with TX off the station only SHOWS what it would
-            have sent. */}
-        {js8?.pendingReply && !autoreplyConfirmation && (
-          <div className="js8-dock-row js8-pending-row" role="status">
-            <span className="js8-pending-text">
-              {pendingCanKey(js8)
-                ? t('js8.dock.pending', { to: js8.pendingReply.to, secs: pendingSecs, text: js8.pendingReply.display })
-                : !js8.txEnabled
-                  ? t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })
-                  : t('js8.dock.pending.idle', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
-            </span>
-            <button type="button" className="cw-macro js8-cancel" disabled={!canControl} onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
-              {t('js8.dock.pending.cancel.label')}
             </button>
           </div>
         )}
