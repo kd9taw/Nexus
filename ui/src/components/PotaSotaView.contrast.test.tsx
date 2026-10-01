@@ -77,9 +77,11 @@ const api = vi.hoisted(() => {
       id: callsign.toLowerCase(), name: callsign, rxMhz: outputMhz, duplex: 'minus', offsetMhz: 0.6, toneMode: 'tone', rtoneHz: 100, ctoneHz: 100,
       dtcsCode: 23, mode: 'fm', comment: 'Red Lion', source: { source: 'repeaterbook', sourceId: callsign, callsign },
     },
+    sources: [{ source: 'repeaterbook', sourceId: callsign, channelId: callsign.toLowerCase(), updated: null }],
+    disagreements: [],
   })
-  const result = { source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false, coverageGap: null, missingStates: [],
-    rows: [machine('W3ZGD', 146.865), machine('K3RLN', 147.09)] } as unknown as RepeaterSearchResult
+  const result = { lists: [{ source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false }], coverageGap: null,
+    missingStates: [], rsgbUnavailable: false, rsgbBeyond: [], rows: [machine('W3ZGD', 146.865), machine('K3RLN', 147.09)] } as unknown as RepeaterSearchResult
   return {
     getOtaSpots: vi.fn(async (): Promise<OtaSpot[]> => []),
     getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
