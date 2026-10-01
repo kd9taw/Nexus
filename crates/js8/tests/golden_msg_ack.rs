@@ -35,10 +35,13 @@ fn ack_keyed_by(acker: &str, speed: Speed, msg: &Message) -> Option<TxFrame> {
         mycall: acker.to_string(),
         speed,
         groups,
-        reply_delay_ms: 1,
+        // The logged replies keyed by themselves, the period after what they answer: those
+        // stations did not ask first (JS8Call's AutoreplyConfirmation off).
+        autoreply_confirmation: false,
         ..StationConfig::default()
     });
     s.on_event(&MessageEvent::Message(msg.clone()), 0);
+    s.process_tx_queue(); // JS8Call's processTxQueue, within the second
     let mut rng = || 0u32;
     s.next_frame(60_000, &|_| false, &mut rng)
 }

@@ -1782,6 +1782,13 @@ export interface Js8QueueRow {
 }
 
 /** An automatic reply waiting out its countdown (cancellable until `firesAtMs`). */
+/** A reply the station put in the composer (AUTO off, as JS8Call types it into its compose
+ * box). Native only, never part of Js8State. */
+export interface Js8ComposerPrefill {
+  id: number
+  text: string
+}
+
 export interface Js8PendingReply {
   origin: Js8Origin
   to: string
@@ -3498,6 +3505,16 @@ export interface Settings {
   /** Autoreply to directed queries addressed to me / @ALLCALL / a joined group
    * (JS8Call default on). Second act of the two-act rule. */
   js8Autoreply: boolean
+  /** JS8Call's AutoreplyConfirmation (default on): every automatic reply waits in the cockpit for
+   * the operator's Yes and is not sent after 89 s without one. Off, replies go by themselves. */
+  js8AutoreplyConfirmation: boolean
+  /** JS8Call's "Only autoreply to these callsigns" (empty = everyone): anyone else is acted on in
+   * no way. Matched by the call as heard or its base call. */
+  js8AutoreplyAllow: string[]
+  /** JS8Call's "Never autoreply to these callsigns": a station on it is acted on in no way. */
+  js8AutoreplyDeny: string[]
+  /** JS8Call's "Never acknowledge heartbeats from these callsigns". */
+  js8HbAckDeny: string[]
   /** Relay `>` traffic for other stations (third-party traffic; JS8Call default on). */
   js8Relay: boolean
   /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/

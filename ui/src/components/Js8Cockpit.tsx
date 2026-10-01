@@ -37,7 +37,8 @@ import {
   haltTx,
   js8Arm,
   js8CallCq,
-  js8Cancel,
+  js8AnswerReply,
+  js8Composer,
   js8CqRepeat,
   js8DropQueue,
   js8Enter,
@@ -213,6 +214,7 @@ export function Js8Cockpit({
       getJs8State()
         .then((s) => {
           if (owns()) setJs8(s)
+          if (!remote) return composerSync.current()
         })
         .catch(() => { if (owns() && remote) setJs8(null) }),
     )
@@ -324,6 +326,34 @@ export function Js8Cockpit({
   const [cmdId, setCmdId] = useState<number | null>(null)
   const snapRef = useRef(snap)
   snapRef.current = snap
+  // THE COMPOSE BOX, BOTH WAYS (JS8Call's extFreeTextMsgEdit). With AUTO off the station puts a
+  // reply here for the operator to send, as JS8Call's processTxQueue types it into its box
+  // (mainwindow.cpp:9671): taken only into an EMPTY box, never over what the operator typed,
+  // and named back so the station knows the box holds it. The station is also told whether the
+  // box holds text. Native only: the Remote observes and has no compose box to fill.
+  const textRef = useRef(text)
+  textRef.current = text
+  const takenRef = useRef<number | null>(null)
+  const composerSync = useRef(async () => {})
+  composerSync.current = async () => {
+    if (!canControl) return
+    const taken = takenRef.current
+    const offered = await js8Composer(textRef.current.trim() !== '', taken).catch(() => undefined)
+    if (offered === undefined) return
+    if (takenRef.current === taken) takenRef.current = null
+    if (offered && typeof offered.text === 'string' && typeof offered.id === 'number' && textRef.current.trim() === '') {
+      takenRef.current = offered.id
+      textRef.current = offered.text
+      setToCall('')
+      setCmdId(null)
+      setText(offered.text)
+    }
+  }
+  const composing = text.trim() !== ''
+  useEffect(() => {
+    if (!active || remote) return
+    void composerSync.current()
+  }, [composing, active, remote])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
@@ -371,9 +401,12 @@ export function Js8Cockpit({
       if (s) setJs8(s)
     })
   }
-  const cancelPending = () => {
-    if (!canControl) return
-    void withErrorToast(() => js8Cancel(), t('js8.toast.cancel.failed')).then((s) => {
+  // JS8Call's AutoreplyConfirmation box (mainwindow.cpp:5209-5230): the answer names the reply it
+  // was shown for, so a Yes can never reach a different one.
+  const answerPending = (yes: boolean) => {
+    const p = js8?.pendingReply
+    if (!canControl || !p) return
+    void withErrorToast(() => js8AnswerReply(yes, p.display, p.firesAtMs), t('js8.toast.answer.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
@@ -617,17 +650,6 @@ export function Js8Cockpit({
         : t('js8.dock.estimate', { count: frames, secs: frames * speedInfo.periodS })
   const canSend = !overCap && (cmdId !== null ? toCall.trim() !== '' : text.trim() !== '')
   const pendingSecs = js8?.pendingReply ? Math.max(0, Math.ceil((js8.pendingReply.firesAtMs - now) / 1000)) : 0
-
-  /** Whether the pending reply's ORIGIN can key right now — the engine's per-origin arm
-   *  (switch && txEnabled && !idleTripped), not the latch alone. */
-  const pendingCanKey = (s: Js8State): boolean => {
-    const p = s.pendingReply
-    if (!p) return false
-    if (p.origin === 'autoReply') return s.armed.autoreply
-    if (p.origin === 'relay') return s.armed.relay
-    if (p.origin === 'hbAck') return s.armed.hbAck
-    return s.txEnabled
-  }
 
   /** Literal keys per origin, so the orphan guard sees each referenced. */
   const originLabel = (o: Js8Origin): string => {
@@ -1382,19 +1404,22 @@ export function Js8Cockpit({
             ))}
         </div>
 
-        {/* THE PENDING AUTO-REPLY (spec invariant 11): visible, counted down, cancellable.
-            Under the auto arm with TX off the station only SHOWS what it would have sent. */}
+        {/* THE AUTOMATIC REPLY THAT ASKS FIRST (JS8Call's AutoreplyConfirmation, on by default):
+            Yes queues it for the next period; No, or no answer before the count runs out, sends
+            nothing. With TX off it says so: a Yes then keys nothing. With the confirmation off a
+            reply never asks: it is in the queue below, and keys in the next period. */}
         {js8?.pendingReply && (
-          <div className="js8-dock-row js8-pending-row" role="status">
+          <div className="js8-dock-row js8-pending-row js8-confirm-row" role="status">
             <span className="js8-pending-text">
-              {pendingCanKey(js8)
-                ? t('js8.dock.pending', { to: js8.pendingReply.to, secs: pendingSecs, text: js8.pendingReply.display })
-                : !js8.txEnabled
-                  ? t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })
-                  : t('js8.dock.pending.idle', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
+              {js8.txEnabled
+                ? t('js8.dock.confirm', { text: js8.pendingReply.display })
+                : t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
             </span>
-            <button type="button" className="cw-macro js8-cancel" disabled={!canControl} onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
-              {t('js8.dock.pending.cancel.label')}
+            <button type="button" className="cw-macro js8-confirm-yes" disabled={!canControl} onClick={() => answerPending(true)} title={t('js8.dock.confirm.yes.title')}>
+              {t('js8.dock.confirm.yes.label')}
+            </button>
+            <button type="button" className="cw-macro js8-confirm-no" disabled={!canControl} onClick={() => answerPending(false)} title={t('js8.dock.confirm.no.title')}>
+              {t('js8.dock.confirm.no.label', { secs: pendingSecs })}
             </button>
           </div>
         )}

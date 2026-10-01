@@ -16192,12 +16192,32 @@ fn js8_cq_repeat(
     Ok(eng.js8_state())
 }
 
-/// Cancel the pending automatic reply (safe no-op when none).
+/// The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
+/// AutoreplyConfirmation), named by the `display` and `fires_at_ms` it was shown with. A Yes puts
+/// it in the queue, where every TX gate applies when its period comes; a Yes to one no longer
+/// waiting is refused, so it can never send another reply.
 #[tauri::command(async)]
-fn js8_cancel(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+fn js8_answer_reply(
+    state: State<'_, SharedEngine>,
+    yes: bool,
+    display: String,
+    fires_at_ms: u64,
+) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_cancel();
+    eng.js8_answer_reply(yes, display, fires_at_ms)?;
     Ok(eng.js8_state())
+}
+
+/// The native cockpit's compose box, both ways (polled with the state while JS8 is visible):
+/// whether it holds text and the id of the reply it took; answered with the reply waiting for
+/// the box (AUTO off, as JS8Call puts it in its compose box). Keys nothing.
+#[tauri::command]
+async fn js8_composer(
+    state: State<'_, SharedEngine>,
+    composing: bool,
+    taken: Option<u32>,
+) -> Result<Option<tempo_app::dto::Js8ComposerPrefill>, String> {
+    with_engine(&state, move |mut eng| eng.js8_composer(composing, taken)).await
 }
 
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
@@ -31353,7 +31373,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_call_cq,
             js8_arm,
             js8_cq_repeat,
-            js8_cancel,
+            js8_answer_reply,
+            js8_composer,
             js8_drop_queue,
             js8_inbox_mark,
             js8_inbox_delete,

@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the Base URL as soon as you type an `http://` address, and the Connections log says where
   it went, once a session for each address. Any other `http://` address is refused before anything
   is sent, as before; `https://` is unchanged; and Nexus never follows a redirect with your key.
+- **JS8: JS8Call's allow and deny lists.** Settings ▸ Digital ▸ JS8 has JS8Call's three lists,
+  comma-separated and empty by default as in JS8Call: **Only auto-reply to these callsigns**,
+  **Never auto-reply to these callsigns** and **Never acknowledge heartbeats from these
+  callsigns**. A station is matched by its call as heard or its base call, so W1AW covers
+  W1AW/P. A station the first two keep out is not acted on at all, as in JS8Call: no reply, no
+  relay, its message not filed, nothing held for it.
+- **JS8: each automatic reply asks you first, as JS8Call does.** JS8Call ships with "Ask for
+  confirmation before sending autoreply transmissions" on, and so does Nexus now (Settings ▸
+  Digital ▸ JS8). An answer to a query, an ACK, a relay or a heartbeat acknowledgement waits in
+  the dock as JS8Call's question, "A transmission is queued for autoreply … would you like to send
+  this transmission?", with **Yes** and **No**. Yes sends it in the next period, through every TX
+  check; No sends nothing, and so does no answer: after 89 seconds it is No, JS8Call's 90-second box
+  as it counts. A message held for another station is handed over only on Yes. Turn the setting
+  off and replies go by themselves, in the next period.
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
   reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this
@@ -116,16 +130,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`W1AW ACK` for a message from W1AW), the reply a JS8Call station sends, so the sender sees that
   it arrived; a message that came through a relay is acknowledged back along the same relay path.
   It is an automatic reply like the others: it needs TX on and AUTOREPLY on (the default, as in
-  JS8Call), waits one period in the dock with its countdown and Cancel, and is dropped, not sent
-  later, if TX is off, your locator is missing or the frequency is outside your privileges when it
-  comes due. A message to @ALLCALL, to another station or to a group you have not joined is never
+  JS8Call), asks for your Yes first unless you turned that off, and is dropped, not sent later, if
+  TX is off, your locator is missing or the frequency is outside your privileges when its turn
+  comes. A message to @ALLCALL, to another station or to a group you have not joined is never
   acknowledged, and a copy that arrives while the ACK is still waiting does not get a second one.
 - **JS8: a message you hold for another station is acknowledged, as JS8Call acknowledges it.** When a
   station leaves a MSG TO: with you for someone else, Nexus now answers the sender with an ACK
   (`W1AW ACK`), the reply a JS8Call station sends, so the sender knows you have it; one that came
   through a relay is acknowledged back along that relay path. It is an automatic reply like the
-  acknowledgement of a message to you: it needs TX on and AUTOREPLY on, and waits in the dock with
-  its countdown and Cancel.
+  acknowledgement of a message to you: it needs TX on and AUTOREPLY on, and asks for your Yes
+  first unless you turned that off.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -348,6 +362,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
+  message box holds text (you are typing, a reply waits there, or a message of yours is going out)
+  or while a message to you is still arriving; a reply already queued waits until the box is
+  free. A heartbeat acknowledgement waits for no message to be arriving, as in JS8Call, rather
+  than for your own queue to be empty. While the idle watchdog stands nothing is filed or held
+  either, and a message to your call as you set it (a /P or a prefixed call) is yours, as JS8Call
+  reads "to me".
+- **JS8: with AUTOREPLY off, a reply goes in your message box for you to send, as in JS8Call.**
+  JS8Call still answers a query to you with AUTO unchecked: it types the answer (an SNR, GRID,
+  INFO, STATUS or HEARING reply, the ACK for a MSG, a relay) into its message box, and you send it
+  or not. Nexus did nothing. Now the answer is put in the JS8 message box, the To box and command
+  cleared, exactly as it would go out, once the box is empty and nothing of yours is going out; it
+  never keys by itself, and Send keys it as your own message. QUERY MSGS and heartbeats are still
+  answered only with AUTOREPLY on, as in JS8Call. A relay with AUTOREPLY off now waits in the box
+  too, where it used to go out by itself.
+- **JS8: an automatic reply goes out in the next period, as JS8Call sends it.** JS8Call keys a
+  reply in the period right after the one the query came in; Nexus first counted it down for one
+  period and two seconds and so answered two periods late, by which time the other station had
+  often moved on. Now a reply made by itself (the confirmation off) is queued as it is made, in
+  view in the dock's queue, and keys at the next boundary, through every TX check as before (the
+  TX latch, your callsign and locator, your privileges, the idle watchdog, one frame per period,
+  Stop TX, and Drop queue to take it back). A reply you confirm goes at the boundary after your
+  Yes. The countdown and its Cancel are gone; No is the veto now.
 - **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
   in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
   group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.

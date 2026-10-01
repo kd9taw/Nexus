@@ -3,11 +3,11 @@
 // THE JS8 TX DOCK — what each control asks the engine, and the three faces of a second-act
 // chip. The invariant this file exists for (spec TX-safety 1 and 11): a switch that is ON
 // while the session TX latch is OFF must never LOOK armed — the APRS rule — and a pending
-// auto-reply is visible, counted down and cancellable before it fires. Nothing here can key:
+// auto-reply is visible and asks Yes / No before it can go (JS8Call's confirmation box). Nothing here can key:
 // every handler is an engine call, and the engine refuses on a receive-only tier (B6) or on
 // a down gate (B7) with a reason this cockpit toasts.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
 import type { AppSnapshot, Js8State } from '../types'
@@ -39,6 +39,8 @@ const base = (): Js8State => ({
 })
 const state: { current: Js8State } = { current: base() }
 
+/** What the station offers the compose box (AUTO off), as `js8_composer` answers. */
+const composer = vi.hoisted(() => ({ offer: null as { id: number; text: string } | null }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   const auto: Record<string, unknown> = {}
@@ -54,7 +56,8 @@ vi.mock('../api', async (importOriginal) => {
     js8SendCommand: vi.fn(async () => s()),
     js8CallCq: vi.fn(async () => s()),
     js8Arm: vi.fn(async () => s()),
-    js8Cancel: vi.fn(async () => s()),
+    js8AnswerReply: vi.fn(async () => s()),
+    js8Composer: vi.fn(async () => composer.offer),
     js8DropQueue: vi.fn(async () => s()),
     js8LocatorRefusal: vi.fn(async () => null),
     // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
@@ -74,7 +77,8 @@ vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> })
 const js8Send = api.js8Send as ReturnType<typeof vi.fn>
 const js8SendCommand = api.js8SendCommand as ReturnType<typeof vi.fn>
 const js8Arm = api.js8Arm as ReturnType<typeof vi.fn>
-const js8Cancel = api.js8Cancel as ReturnType<typeof vi.fn>
+const js8AnswerReply = api.js8AnswerReply as ReturnType<typeof vi.fn>
+const js8Composer = api.js8Composer as ReturnType<typeof vi.fn>
 const js8DropQueue = api.js8DropQueue as ReturnType<typeof vi.fn>
 const js8LocatorRefusal = api.js8LocatorRefusal as ReturnType<typeof vi.fn>
 
@@ -89,7 +93,9 @@ beforeEach(() => {
   js8Send.mockClear()
   js8SendCommand.mockClear()
   js8Arm.mockClear()
-  js8Cancel.mockClear()
+  js8AnswerReply.mockClear()
+  js8Composer.mockClear()
+  composer.offer = null
   js8DropQueue.mockClear()
   js8LocatorRefusal.mockReset()
   js8LocatorRefusal.mockImplementation(async () => null)
@@ -218,20 +224,6 @@ describe('the second-act chips never look armed without the session TX latch', (
 })
 
 describe('the pending auto-reply and the queue', () => {
-  it('shows the countdown and Cancel → js8Cancel; with TX off it says nothing will key', async () => {
-    state.current = { ...base(), pendingReply: { origin: 'autoReply', to: 'W1AW', display: 'KD9TAW: W1AW SNR -03', firesAtMs: Date.now() + 14_000 } }
-    await renderCockpit()
-    const row = q('.js8-pending-row')
-    expect(row).not.toBeNull()
-    expect(row.closest('.cockpit-txdock')).not.toBeNull()
-    expect(row.textContent).toContain('W1AW')
-    expect(row.textContent).toContain('SNR -03')
-    await act(async () => {
-      fireEvent.click(q('.js8-cancel'))
-    })
-    expect(js8Cancel).toHaveBeenCalledTimes(1)
-  })
-
   it('renders the queue rows with their origin and Drop queue → js8DropQueue (not a stop)', async () => {
     state.current = {
       ...base(),
@@ -261,9 +253,91 @@ describe('the pending auto-reply and the queue', () => {
   })
 })
 
+// JS8Call's AutoreplyConfirmation (on by default, Configuration.cpp:1949): each automatic reply is a
+// question, its own words (mainwindow.cpp:5211-5212), Yes / No with the seconds to No on No.
+describe('the automatic reply asks Yes / No, as JS8Call does', () => {
+  const asking = () => ({ origin: 'autoReply' as const, to: 'W1AW', display: 'KD9TAW: W1AW SNR -03', firesAtMs: Date.now() + 89_000 })
+
+  it("asks in JS8Call's words, in the TX dock, with Yes and No (seconds) and no Cancel", async () => {
+    state.current = { ...base(), txEnabled: true, pendingReply: asking() }
+    await renderCockpit()
+    const row = q('.js8-confirm-row')
+    expect(row).not.toBeNull()
+    expect(row.closest('.cockpit-txdock')).not.toBeNull()
+    expect(row.closest('.pane-frame')).toBeNull()
+    expect(row.textContent).toContain('A transmission is queued for autoreply: KD9TAW: W1AW SNR -03')
+    expect(row.textContent).toContain('would you like to send this transmission?')
+    expect(q('.js8-confirm-yes').textContent).toBe('Yes')
+    expect(q('.js8-confirm-no').textContent).toMatch(/^No \((89|88)\)$/)
+  })
+
+  it('Yes and No each answer THAT reply, named by what it showed', async () => {
+    const p = asking()
+    state.current = { ...base(), txEnabled: true, pendingReply: p }
+    await renderCockpit()
+    await act(async () => {
+      fireEvent.click(q('.js8-confirm-yes'))
+    })
+    expect(js8AnswerReply).toHaveBeenLastCalledWith(true, p.display, p.firesAtMs)
+    await act(async () => {
+      fireEvent.click(q('.js8-confirm-no'))
+    })
+    expect(js8AnswerReply).toHaveBeenLastCalledWith(false, p.display, p.firesAtMs)
+  })
+
+  it('with TX off it still asks, and says nothing will key', async () => {
+    state.current = { ...base(), pendingReply: asking() }
+    await renderCockpit()
+    expect(q('.js8-confirm-row').textContent).toMatch(/TX is off, nothing keys/)
+    expect(q('.js8-confirm-yes')).not.toBeNull()
+    expect(q('.js8-confirm-no')).not.toBeNull()
+  })
+})
+
+// With AUTO off JS8Call types the reply into its compose box for the operator to send
+// (`addMessageText`, mainwindow.cpp:9671) and never keys it (:9674-9685); the box takes it only
+// when it is empty (:9657).
+describe('with AUTO off the reply lands in the compose box, for you to send', () => {
+  it('fills an empty box with the reply, clears To and the command, and names it back', async () => {
+    composer.offer = { id: 7, text: 'W1AW SNR -03' }
+    await renderCockpit()
+    type('.js8-to', 'K1ABC')
+    type('.js8-compose', '')
+    await waitFor(() => expect(q<HTMLInputElement>('.js8-compose').value).toBe('W1AW SNR -03'))
+    expect(q<HTMLInputElement>('.js8-to').value, 'the reply names its station itself').toBe('')
+    expect(q<HTMLSelectElement>('.js8-cmd-select').value, 'sent as typed, no command').toBe('')
+    composer.offer = null
+    await waitFor(() => expect(js8Composer).toHaveBeenLastCalledWith(true, 7))
+    await act(async () => {
+      fireEvent.click(q('.js8-send'))
+    })
+    expect(js8Send).toHaveBeenLastCalledWith(null, 'W1AW SNR -03')
+  })
+
+  it('a reply that arrives later, the box still empty, is picked up on the next poll', async () => {
+    await renderCockpit()
+    await waitFor(() => expect(js8Composer).toHaveBeenCalledWith(false, null))
+    composer.offer = { id: 9, text: 'W1AW ACK' }
+    await waitFor(() => expect(q<HTMLInputElement>('.js8-compose').value).toBe('W1AW ACK'), { timeout: 2000 })
+  })
+
+  it('never writes over what the operator typed, and says the box holds text', async () => {
+    await renderCockpit()
+    type('.js8-compose', 'HELLO')
+    composer.offer = { id: 8, text: 'W1AW SNR -03' }
+    await waitFor(() => expect(js8Composer).toHaveBeenLastCalledWith(true, null))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600))
+    })
+    expect(q<HTMLInputElement>('.js8-compose').value).toBe('HELLO')
+    expect(js8Composer).not.toHaveBeenCalledWith(expect.anything(), 8)
+  })
+})
+
 // JS8Call's query menu has "GRID <locator> - Send my current station Maidenhead grid locator"
 // (mainwindow.cpp:6656), disabled with no locator (:6657), which sends `<call> GRID <my_grid()>`
 // (:6665) at once (TransmitDirected, on by default: Configuration.cpp:1947). The station row's
+
 // one-click queries are Nexus's query menu.
 describe('send my grid, from a station row', () => {
   const sendGrid = () => q<HTMLButtonElement>('.js8-station-acts .js8-send-grid')

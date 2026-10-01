@@ -36,6 +36,7 @@ import type {
   FeedHealth,
   ImportStats,
   JourneySummary,
+  Js8ComposerPrefill,
   Js8State,
   Js8InboxState,
   Js8Switch,
@@ -2832,9 +2833,18 @@ export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
   return invoke<Js8State>('js8_cq_repeat', { on, idx })
 }
 
-/** Cancel the pending automatic reply (its countdown chip's Cancel). */
-export async function js8Cancel(): Promise<Js8State> {
-  return invoke<Js8State>('js8_cancel')
+/** The native cockpit's compose box, both ways: whether it holds text, and the id of the reply
+ * it took into the box since it last asked; answered with the reply waiting for the box (AUTO
+ * off, as JS8Call fills its compose box), or null. Keys nothing. */
+export async function js8Composer(composing: boolean, taken: number | null): Promise<Js8ComposerPrefill | null> {
+  return invoke<Js8ComposerPrefill | null>('js8_composer', { composing, taken })
+}
+
+/** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
+ * AutoreplyConfirmation box), named by the `display` and `firesAtMs` it was shown with so an
+ * answer can never reach a different reply. A Yes to one no longer waiting is refused. */
+export async function js8AnswerReply(yes: boolean, display: string, firesAtMs: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_answer_reply', { yes, display, firesAtMs })
 }
 
 /** Drop the outbox — a SENDER-class control, not a stop (Stop TX is haltTx). */

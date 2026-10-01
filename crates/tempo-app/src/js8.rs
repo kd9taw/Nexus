@@ -27,7 +27,8 @@ use modes::Js8Speed;
 
 use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
-    Js8ActivityRow, Js8Armed, Js8PendingReply, Js8QueueRow, Js8State, SourceKind, Tier,
+    Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8PendingReply, Js8QueueRow, Js8State,
+    SourceKind, Tier,
 };
 use crate::settings::Settings;
 
@@ -49,6 +50,9 @@ const JS8_NO_LOCATOR: &str =
 /// PSK's own refusals.
 const JS8_REFUSED_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
      privileges, so what was waiting to go out was dropped, not held for later.";
+/// …and a Yes to an automatic reply that no longer waits for one.
+const JS8_REPLY_GONE: &str = "That automatic reply is no longer waiting: it was answered, or its \
+     time ran out. Nothing was sent.";
 /// …and when transmit going off drops a message the operator queued: RTTY's and PSK's words.
 const JS8_QUEUE_REFUSED_TX_OFF: &str = "JS8 stopped: transmit was turned off, so what was still \
      queued was dropped, not held for later. Send it again when you are ready.";
@@ -63,6 +67,15 @@ pub enum Js8Switch {
     Relay,
     HbAck,
     Hb,
+}
+
+/// A callsign list from Settings as the station reads it: trimmed, upper-cased, the empties gone
+/// (JS8Call's `splitWords`, Configuration.cpp:2416-2428).
+fn js8_call_list(list: &[String]) -> Vec<String> {
+    list.iter()
+        .map(|c| c.trim().to_ascii_uppercase())
+        .filter(|c| !c.is_empty())
+        .collect()
 }
 
 /// xorshift32 — a deterministic, dependency-free source for the heartbeat sub-band pick.
@@ -81,9 +94,9 @@ impl Engine {
     /// ONE place Settings → `StationConfig` (an associated fn on `&Settings`, so the arm
     /// verbs and `js8_apply_station_config` build it from the SAME source the persisted
     /// switches live in). Identity is uppercased and trimmed the way the wire packs it; the
-    /// idle floor of 5 minutes is applied here (0 stays 0 = off); the autoreply countdown is
-    /// one period + 2 s at the TRANSMIT speed (`js8_speed`, degraded to Normal on a stale
-    /// index — the same rule `js8_tx_speed` applies).
+    /// idle floor of 5 minutes is applied here (0 stays 0 = off); the speed is the TRANSMIT
+    /// speed (`js8_speed`, degraded to Normal on a stale index — the same rule `js8_tx_speed`
+    /// applies).
     pub(crate) fn js8_station_config(s: &Settings) -> StationConfig {
         let speed = Js8Speed::from_index(s.js8_speed).unwrap_or(Js8Speed::Normal);
         StationConfig {
@@ -113,7 +126,10 @@ impl Engine {
             info: s.js8_info.clone(),
             status: s.js8_status.clone(),
             allcall_reply_interval_ms: JS8_ALLCALL_INTERVAL_MS,
-            reply_delay_ms: u64::from(speed.period_s()) * 1000 + 2_000,
+            autoreply_confirmation: s.js8_autoreply_confirmation,
+            autoreply_allow: js8_call_list(&s.js8_autoreply_allow),
+            autoreply_deny: js8_call_list(&s.js8_autoreply_deny),
+            hb_ack_deny: js8_call_list(&s.js8_hb_ack_deny),
         }
     }
 
@@ -308,6 +324,11 @@ impl Engine {
     pub fn js8_ingest(&mut self, decodes: &[modes::Decode], _slot: u64) {
         let now_ms = now_unix_secs() * 1000;
         self.js8_tick(now_ms);
+        // The whole batch into the buffers first, as JS8Call files a decode pass before
+        // `processCommandActivity` reads it; the station then sees which buffers are still open
+        // (a message still arriving), and its queue runs once the pass is processed, as
+        // `processTxQueue` does (mainwindow.cpp:4734-4737).
+        let mut batch = Vec::new();
         for d in decodes {
             let (Some(raw), Some(modes::ModeKind::Js8 { speed })) = (d.raw, d.mode) else {
                 continue;
@@ -323,9 +344,23 @@ impl Engine {
                 quality: d.qual,
             };
             let low_conf = d.qual < JS8_LOW_CONF;
-            let events = self.js8_reasm.feed(&rx, now_ms);
+            batch.push((self.js8_reasm.feed(&rx, now_ms), low_conf));
+        }
+        self.js8_note_rx_buffers();
+        for (events, low_conf) in batch {
             self.js8_handle_events(events, low_conf, now_ms);
         }
+        let actions = self.js8_station.process_tx_queue();
+        self.js8_handle_actions(actions);
+    }
+
+    /// Tell the station which receive buffers are open, for JS8Call's "a message still arriving"
+    /// rules (mainwindow.cpp:9062-9066, :9369-9374).
+    fn js8_note_rx_buffers(&mut self) {
+        let open = self.js8_reasm.has_open();
+        let to: Vec<String> = self.js8_reasm.open_heads_to().map(str::to_string).collect();
+        self.js8_station
+            .note_rx_buffers(open, to.iter().map(String::as_str));
     }
 
     /// The engine's once-a-second JS8 clock (the radio loop calls it at `Tier::Js8`; ingest
@@ -333,12 +368,12 @@ impl Engine {
     /// minutes — inert in the receive-only build, but the plumbing is the TX batch's).
     pub fn js8_tick(&mut self, now_ms: u64) {
         let aged = self.js8_reasm.age(now_ms);
+        self.js8_note_rx_buffers();
         self.js8_handle_events(aged, false, now_ms);
-        // A countdown that expires while the TX latch is DOWN is cancelled, never carried:
-        // arming TX ten minutes later must not fire a reply to a query nobody is waiting
-        // for. The countdown was shown the whole time (the cockpit's "would have replied"
-        // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
-        // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
+        // What waits while the TX latch is DOWN is dropped, never carried: arming TX ten
+        // minutes later must not fire a reply to a query nobody is waiting for. (A reply asking
+        // for the operator's Yes stays shown, "would reply … TX is off"; a Yes queues it, and the
+        // queue is dropped here.) No locator in Settings is the same case: JS8Call's `startTx` refuses there too
         // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
         // (:5310), and with TX on it says why (the alert at :5265). So is a frequency outside
         // the licence's privileges, which `plan_tx` refuses before this mode's planner runs:
@@ -346,13 +381,9 @@ impl Engine {
         let no_locator = self.js8_no_usable_locator();
         let outside = !self.tx_allowed();
         if !self.tx_enabled() || no_locator || outside {
+            // An automatic reply is in the queue as soon as it is made (or a Yes puts it there),
+            // so the queue's rule below is its rule. One still asking stays shown.
             let mut dropped = false;
-            if let Some(p) = self.js8_station.pending_reply() {
-                if p.fires_at_ms <= now_ms {
-                    self.js8_station.cancel_pending_reply();
-                    dropped = true;
-                }
-            }
             // …and a heartbeat that falls due is dropped and its interval re-based, so turning
             // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
             // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
@@ -826,9 +857,46 @@ impl Engine {
         Ok(())
     }
 
-    /// The operator's veto on a pending automatic reply (the visible countdown's Cancel).
-    pub fn js8_cancel(&mut self) {
-        self.js8_station.cancel_pending_reply();
+    /// The operator's Yes or No to the automatic reply the cockpit shows as (`display`,
+    /// `fires_at_ms`), JS8Call's confirmation box (mainwindow.cpp:5209-5230). A Yes puts it in
+    /// the queue, where every gate applies when its period comes, and is an operator act like a
+    /// send (it restarts the wall-clock watchdog); a No drops it. A Yes to a reply no longer
+    /// waiting (answered, or its 89 s ran out) is refused, so it never sends something else.
+    pub fn js8_answer_reply(
+        &mut self,
+        yes: bool,
+        display: String,
+        fires_at_ms: u64,
+    ) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        match self
+            .js8_station
+            .answer_reply(&display, fires_at_ms, yes, now_ms)
+        {
+            Some(actions) => {
+                self.js8_handle_actions(actions);
+                if yes {
+                    self.js8_after_verb(&Ok(()));
+                }
+                Ok(())
+            }
+            None if yes => Err(JS8_REPLY_GONE.to_string()),
+            None => Ok(()),
+        }
+    }
+
+    /// The cockpit's compose box, both ways (JS8Call's `extFreeTextMsgEdit`): whether it holds
+    /// text, and the id of the reply it took into the box since it last said; answered with the
+    /// reply the station has put in the composer (AUTO off, `addMessageText`, mainwindow.cpp:
+    /// 9671), until the cockpit takes it. Never keys anything: the operator's Send does.
+    pub fn js8_composer(
+        &mut self,
+        composing: bool,
+        taken: Option<u32>,
+    ) -> Option<Js8ComposerPrefill> {
+        let (actions, offered) = self.js8_station.sync_composer(composing, taken);
+        self.js8_handle_actions(actions);
+        offered.map(|(id, text)| Js8ComposerPrefill { id, text })
     }
 
     /// Sender-class, NOT a stop: empties the outbox and nothing else. The HB schedule, the
@@ -1656,9 +1724,12 @@ mod tests {
 
     /// A JS8 engine on 20 m with the TX latch up, the heartbeat interval `hb_min`, the
     /// operator's locator `grid` and TX offset `offset_hz`. The heartbeat is not armed.
+    /// An engine on 20 m with TX on, whose automatic replies go by themselves (the confirmation
+    /// off), so a test sees each one on the air; `asking_engine` is JS8Call's default.
     fn hb_engine(grid: &str, hb_min: u16, offset_hz: f32) -> Engine {
         let mut e = Engine::new("KD9TAW", grid, 0);
         e.settings.js8_hb_interval_min = hb_min;
+        e.settings.js8_autoreply_confirmation = false;
         e.js8_apply_station_config();
         e.js8_enter();
         e.set_frequency(14.078, "20m", "USB");
@@ -2128,16 +2199,17 @@ mod tests {
         let due = e.js8_state().hb_next_at_ms.expect("scheduled");
         e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
         assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: autoreply is on, and a reply counts down"
+            queued(&e).iter().any(|q| q.contains("W1AW SNR")),
+            "control: autoreply is on, and the reply is queued: {:?}",
+            queued(&e)
         );
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 6 * 60); // through the reply and the heartbeat
         assert!(overs.is_empty(), "nothing keys with no locator: {overs:?}");
         let st = e.js8_state();
         assert!(
-            st.pending_reply.is_none(),
-            "the reply was dropped when it fell due"
+            st.queue.is_empty() && st.pending_reply.is_none(),
+            "the reply was dropped at the refusal"
         );
         assert_eq!(
             st.hb_next_at_ms,
@@ -2251,8 +2323,9 @@ mod tests {
         let due = e.js8_state().hb_next_at_ms.expect("scheduled");
         e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
         assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: autoreply is on, and a reply counts down"
+            queued(&e).iter().any(|q| q.contains("W1AW SNR")),
+            "control: autoreply is on, and the reply is queued: {:?}",
+            queued(&e)
         );
         e.set_frequency(14.020, "20m", "USB");
         assert!(
@@ -2267,8 +2340,8 @@ mod tests {
         );
         let st = e.js8_state();
         assert!(
-            st.pending_reply.is_none(),
-            "the reply was dropped when it fell due"
+            st.queue.is_empty() && st.pending_reply.is_none(),
+            "the reply was dropped at the refusal"
         );
         assert_eq!(
             st.hb_next_at_ms,
@@ -2320,30 +2393,28 @@ mod tests {
     }
 
     /// ⭐ THE ACK ON THE AIR. A MSG to me with TX on and autoreply at its default (on) is filed
-    /// and answered `W1AW ACK`, after the countdown every automatic reply shows: one frame, on
-    /// my own offset, booked where it keyed, and nothing after it.
+    /// and answered `W1AW ACK` in the next period, as JS8Call answers it: one frame, on my own
+    /// offset, booked where it keyed, and nothing after it. (With the confirmation off, so it goes
+    /// by itself; asking first is `a_js8_reply_asks_first_and_keys_once_after_the_yes`.)
     #[test]
-    fn a_js8_msg_to_me_is_acked_on_the_air_after_the_countdown() {
+    fn a_js8_msg_to_me_is_acked_on_the_air_in_the_next_period() {
         let mut e = hb_engine("EN52", 0, 1500.0);
         for d in msg_to_me("W1AW", "HELLO FROM OHIO") {
             e.js8_ingest(&[d], 0);
         }
         let st = e.js8_state();
         assert_eq!(st.inbox.len(), 1, "control: the MSG is filed");
-        let p = st.pending_reply.expect("the ACK counts down");
+        assert!(st.pending_reply.is_none(), "nothing counts down");
+        let q = st.queue.first().cloned().expect("the ACK is queued");
         assert_eq!(
-            (p.origin, p.to.as_str(), p.display.as_str()),
-            (Origin::AutoReply, "W1AW", "KD9TAW: W1AW ACK")
+            (q.origin, q.display.as_str()),
+            (Origin::AutoReply, "KD9TAW: W1AW ACK")
         );
         assert!(st.armed.autoreply, "…armed: TX on, autoreply on");
-        // The first period that starts once the countdown is over.
-        let slot = p.fires_at_ms.div_ceil(15_000);
+        // The next period's boundary.
+        let slot = tempo_core::timing::now_unix_ms() as u64 / 15_000 + 1;
         e.js8_tick(slot * 15_000 - 1_000);
-        assert!(
-            e.plan_tx(slot - 1).is_none(),
-            "nothing keys before the countdown is over"
-        );
-        let plan = e.plan_tx(slot).expect("the ACK keys in that period");
+        let plan = e.plan_tx(slot).expect("the ACK keys in the next period");
         let TxWaveform::Js8 { word, f0, .. } = &plan.waveform else {
             panic!("a JS8 plan carries the typed waveform");
         };
@@ -2370,18 +2441,17 @@ mod tests {
         for d in msg_to_me("W1AW", "HELLO") {
             e.js8_ingest(&[d], 0);
         }
-        let shown = e.js8_state().pending_reply.map(|p| p.display);
         assert_eq!(
-            shown.as_deref(),
-            Some("KD9TAW: W1AW ACK"),
-            "control: the ACK counts down in view"
+            queued(&e),
+            ["KD9TAW: W1AW ACK"],
+            "control: the ACK is queued, in view"
         );
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let off = run_js8_loop_from(&mut e, t0, 60);
         assert!(off.is_empty(), "nothing keys with TX off: {off:?}");
         assert!(
-            e.js8_state().pending_reply.is_none(),
-            "the ACK was dropped when it fell due"
+            queued(&e).is_empty(),
+            "the ACK was dropped at the refusal, not carried"
         );
         e.set_tx_enabled(true);
         let on = run_js8_loop_from(&mut e, t0 + 60_000, 60);
@@ -2397,9 +2467,10 @@ mod tests {
         for d in msg_to_me("W1AW", "HELLO") {
             e.js8_ingest(&[d], 0);
         }
-        assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: the ACK counts down"
+        assert_eq!(
+            queued(&e),
+            ["KD9TAW: W1AW ACK"],
+            "control: the ACK is queued"
         );
         e.set_frequency(14.020, "20m", "USB");
         assert!(
@@ -2410,10 +2481,7 @@ mod tests {
         let off = run_js8_loop_from(&mut e, t0, 60);
         assert!(off.is_empty(), "nothing keys outside privileges: {off:?}");
         let st = e.js8_state();
-        assert!(
-            st.pending_reply.is_none(),
-            "the ACK was dropped when it fell due"
-        );
+        assert!(st.queue.is_empty(), "the ACK was dropped at the refusal");
         assert_eq!(
             st.last_error.as_deref(),
             Some(OUTSIDE_PRIVILEGES),
@@ -2456,19 +2524,21 @@ mod tests {
         for d in msg_to_me("W1AW", "HELLO") {
             e.js8_ingest(&[d], 0);
         }
-        assert!(
-            e.js8_state().pending_reply.is_some(),
-            "control: the ACK counts down"
+        assert_eq!(
+            queued(&e),
+            ["KD9TAW: W1AW ACK"],
+            "control: the ACK is queued"
         );
         e.halt_tx();
-        assert!(e.js8_state().pending_reply.is_none(), "Stop TX cancels it");
+        assert!(queued(&e).is_empty(), "Stop TX drops it");
         e.set_tx_enabled(true);
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
         assert!(overs.is_empty(), "nothing old keys: {overs:?}");
     }
 
-    /// With autoreply off, JS8Call's AUTO unchecked, the MSG is filed and nothing keys.
+    /// With autoreply off, JS8Call's AUTO unchecked, the MSG is filed and nothing keys: its ACK
+    /// is put in the composer, as JS8Call types it into its compose box.
     #[test]
     fn with_autoreply_off_a_js8_msg_is_filed_and_nothing_keys() {
         let mut e = hb_engine("EN52", 0, 1500.0);
@@ -2479,10 +2549,19 @@ mod tests {
         }
         let st = e.js8_state();
         assert_eq!(st.inbox.len(), 1, "control: the MSG is filed");
-        assert!(st.pending_reply.is_none(), "no ACK counts down");
+        assert!(
+            st.pending_reply.is_none() && st.queue.is_empty(),
+            "no ACK waits to key"
+        );
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
         assert!(overs.is_empty(), "nothing keys: {overs:?}");
+        let offered = e.js8_composer(false, None).map(|p| p.text);
+        assert_eq!(
+            offered.as_deref(),
+            Some("W1AW ACK"),
+            "the ACK is in the composer"
+        );
     }
 
     /// A settings change during an idle trip re-applies the switches to the station
@@ -2541,12 +2620,8 @@ mod tests {
             (1, InboxState::Store),
             "control: the MSG TO: is held for K1ABC"
         );
-        let shown = st.pending_reply.map(|p| p.display);
-        assert_eq!(
-            shown.as_deref(),
-            Some("KD9TAW: W1AW ACK"),
-            "the ACK counts down"
-        );
+        let shown: Vec<String> = st.queue.into_iter().map(|q| q.display).collect();
+        assert_eq!(shown, ["KD9TAW: W1AW ACK"], "the ACK is queued");
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
         assert_eq!(overs.len(), 1, "one ACK over: {overs:?}");
@@ -3005,5 +3080,362 @@ mod tests {
             0,
             "an older file ages nothing"
         );
+    }
+
+    // ===== (E) JS8Call's AutoreplyConfirmation, on the air =====
+
+    /// `hb_engine` at JS8Call's default: every automatic reply asks Yes/No first.
+    fn asking_engine() -> Engine {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_autoreply_confirmation = true;
+        e.js8_apply_station_config();
+        e
+    }
+
+    /// What the cockpit's queue shows, a message per frame.
+    fn queued(e: &Engine) -> Vec<String> {
+        e.js8_state().queue.into_iter().map(|q| q.display).collect()
+    }
+
+    /// The question the cockpit shows: (display, the moment it says No by itself).
+    fn question(e: &Engine) -> (String, u64) {
+        let p = e.js8_state().pending_reply.expect("a reply asks");
+        let now = tempo_core::timing::now_unix_ms() as u64;
+        assert!(
+            p.fires_at_ms >= now + 88_000,
+            "a question, No 89 s after it asked (not a countdown): {p:?}"
+        );
+        (p.display, p.fires_at_ms)
+    }
+
+    /// The setting is the station's: JS8Call's `AutoreplyConfirmation` reaches it both ways.
+    #[test]
+    fn the_js8_confirmation_setting_reaches_the_station() {
+        let mut s = Settings::default();
+        assert!(
+            Engine::js8_station_config(&s).autoreply_confirmation,
+            "on by default"
+        );
+        s.js8_autoreply_confirmation = false;
+        assert!(
+            !Engine::js8_station_config(&s).autoreply_confirmation,
+            "off"
+        );
+    }
+
+    /// ⭐ ON THE AIR. A query with TX on asks first: nothing keys while it waits, over periods
+    /// on end; the operator's Yes puts it in the queue and it keys once, in the next period.
+    #[test]
+    fn a_js8_reply_asks_first_and_keys_once_after_the_yes() {
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        assert_eq!(display, "KD9TAW: W1AW SNR -07");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(
+            no_at >= t0 + 88_000,
+            "it says No by itself 89 s after it asked"
+        );
+        let waiting = run_js8_loop_from(&mut e, t0, 60);
+        assert!(
+            waiting.is_empty(),
+            "nothing keys while it asks: {waiting:?}"
+        );
+        e.js8_answer_reply(true, display, no_at).expect("Yes");
+        assert!(e.js8_state().pending_reply.is_none(), "answered");
+        let after = run_js8_loop_from(&mut e, t0 + 61_000, 60);
+        assert_eq!(after.len(), 1, "Yes: one reply keys: {after:?}");
+        let mine: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(mine, ["KD9TAW: W1AW SNR -07"]);
+    }
+
+    /// No, or no answer in 89 s, keys nothing, now or later; a Yes after that is refused and says
+    /// so, so it can never send something else.
+    #[test]
+    fn a_js8_reply_answered_no_or_not_at_all_never_keys() {
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        e.js8_answer_reply(false, display.clone(), no_at)
+            .expect("No");
+        assert!(e.js8_state().pending_reply.is_none(), "No: answered");
+        assert!(
+            run_js8_loop_from(&mut e, t0, 120).is_empty(),
+            "No: nothing keys"
+        );
+
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        let overs = run_js8_loop_from(&mut e, t0, 120);
+        assert!(overs.is_empty(), "unanswered: nothing keys: {overs:?}");
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "No by itself at 89 s"
+        );
+        assert_eq!(
+            e.js8_answer_reply(true, display, no_at),
+            Err(JS8_REPLY_GONE.to_string()),
+            "a late Yes is refused"
+        );
+        assert!(
+            run_js8_loop_from(&mut e, t0 + 121_000, 60).is_empty(),
+            "…and sends nothing"
+        );
+    }
+
+    /// TX off: the question shows (JS8Call asks regardless); a Yes puts the reply in the queue,
+    /// which TX off drops, and turning TX on later sends nothing old.
+    #[test]
+    fn a_yes_with_js8_tx_off_sends_nothing_now_or_later() {
+        let mut e = asking_engine();
+        e.set_tx_enabled(false);
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        e.js8_answer_reply(true, display, no_at).expect("Yes");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(
+            run_js8_loop_from(&mut e, t0, 30).is_empty(),
+            "nothing keys with TX off"
+        );
+        assert!(e.js8_state().queue.is_empty(), "the queue was dropped");
+        e.set_tx_enabled(true);
+        assert!(
+            run_js8_loop_from(&mut e, t0 + 31_000, 60).is_empty(),
+            "TX on: nothing old"
+        );
+    }
+
+    /// Outside the licence's privileges a Yes'd reply is dropped at the refusal and the cockpit
+    /// says why (N61's rule); a tune back inside them sends nothing old.
+    #[test]
+    fn a_yes_outside_privileges_is_dropped_says_so_and_is_never_sent_later() {
+        let mut e = asking_engine();
+        e.set_license_class("general");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: outside a General's privileges"
+        );
+        e.js8_answer_reply(true, display, no_at).expect("Yes");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(
+            run_js8_loop_from(&mut e, t0, 30).is_empty(),
+            "nothing keys outside them"
+        );
+        assert_eq!(
+            e.js8_state().last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        assert!(
+            run_js8_loop_from(&mut e, t0 + 31_000, 60).is_empty(),
+            "a tune back: nothing old"
+        );
+    }
+
+    /// With no locator in Settings a Yes'd reply keys nothing: the start is refused and the queue
+    /// dropped, as for every JS8 transmission (JS8Call's `ensureCallsignSet`, :5264-5268).
+    #[test]
+    fn a_yes_with_no_js8_locator_keys_nothing() {
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        e.settings.mygrid = String::new();
+        e.js8_answer_reply(true, display, no_at).expect("Yes");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(run_js8_loop_from(&mut e, t0, 60).is_empty(), "nothing keys");
+        assert_eq!(e.js8_state().last_error.as_deref(), Some(JS8_NO_LOCATOR));
+    }
+
+    /// Stop TX drops a reply still asking, with everything else waiting: nothing keys after.
+    #[test]
+    fn stop_tx_drops_a_js8_reply_still_asking() {
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        e.halt_tx();
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "Stop TX drops the question"
+        );
+        assert_eq!(
+            e.js8_answer_reply(true, display, no_at),
+            Err(JS8_REPLY_GONE.to_string()),
+            "a Yes after Stop TX answers nothing"
+        );
+        e.set_tx_enabled(true);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(run_js8_loop_from(&mut e, t0, 60).is_empty(), "nothing keys");
+    }
+
+    // ===== (C) JS8Call's cadence, on the air =====
+
+    /// ⭐ THE CADENCE, MEASURED ON THE AIR PATH. With the confirmation off, a query heard now is
+    /// answered at the next period's boundary: the period after the one it was heard in, as
+    /// JS8Call schedules it (`processCommandActivity` → `enqueueMessage`, mainwindow.cpp:9388 →
+    /// `processTxQueue`, :9627-9690, in the same 1 Hz pass → TX at the next period start,
+    /// `guiUpdate`, :4510-4521). Nexus counted down one period + 2 s first and keyed it two
+    /// periods later. A Yes is the same: the boundary after it.
+    #[test]
+    fn a_js8_reply_keys_at_the_next_boundary_as_js8call_keys_it() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        let next = (t0 / 15_000 + 1) * 15_000;
+        assert_eq!(
+            overs.iter().map(|o| o.0).collect::<Vec<_>>(),
+            [next],
+            "the reply keys once, at the next boundary"
+        );
+
+        let mut e = asking_engine();
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let (display, no_at) = question(&e);
+        let t1 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_answer_reply(true, display, no_at).expect("Yes");
+        let overs = run_js8_loop_from(&mut e, t1, 60);
+        assert_eq!(
+            overs.iter().map(|o| o.0).collect::<Vec<_>>(),
+            [(t1 / 15_000 + 1) * 15_000],
+            "a Yes: the boundary after it"
+        );
+    }
+
+    // ===== (D) AUTO off: the reply goes to the composer =====
+
+    /// ⭐ With AUTO off a reply is put in the composer, JS8Call's compose box (`addMessageText`,
+    /// mainwindow.cpp:9671), and never keyed by itself (:9674-9685), over minutes; the operator's
+    /// Send keys it then, as their own message, the very frame the automatic reply keys.
+    #[test]
+    fn with_auto_off_a_js8_reply_goes_to_the_composer_and_keys_only_when_sent() {
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let mut auto = hb_engine("EN52", 0, 1500.0);
+        auto.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let plan = auto
+            .plan_tx(t0 / 15_000 + 1)
+            .expect("AUTO on: the reply keys");
+        let TxWaveform::Js8 {
+            word: auto_word, ..
+        } = plan.waveform
+        else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_arm(Js8Switch::Autoreply, false).expect("AUTO off");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let p = e
+            .js8_composer(false, None)
+            .expect("the reply is in the composer");
+        assert_eq!(p.text, "W1AW SNR -07");
+        assert!(
+            run_js8_loop_from(&mut e, t0, 120).is_empty(),
+            "never keyed by itself"
+        );
+        assert_eq!(
+            e.js8_composer(true, Some(p.id)),
+            None,
+            "taken into the box: nothing more is offered"
+        );
+        e.js8_send(None, p.text)
+            .expect("the operator sends what the box holds");
+        let slot = tempo_core::timing::now_unix_ms() as u64 / 15_000 + 1;
+        let plan = e.plan_tx(slot).expect("Send keys it");
+        let TxWaveform::Js8 { word, .. } = plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(
+            word, auto_word,
+            "the frame the automatic reply keys, bit for bit"
+        );
+    }
+
+    /// The composer is the operator's: TX off, outside the privileges, nothing in it keys, and
+    /// the reply is still put there (JS8Call fills its box whatever TX is doing).
+    #[test]
+    fn with_auto_off_and_js8_tx_off_the_reply_still_reaches_the_composer() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_arm(Js8Switch::Autoreply, false).expect("AUTO off");
+        e.set_tx_enabled(false);
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        assert!(run_js8_loop_from(&mut e, t0, 30).is_empty(), "nothing keys");
+        assert_eq!(
+            e.js8_composer(false, None).map(|p| p.text).as_deref(),
+            Some("W1AW SNR -07")
+        );
+    }
+
+    // ===== (F) JS8Call's reply-skipping rules, on the engine =====
+
+    /// The compose box holds replies (mainwindow.cpp:9364-9367): while the cockpit says its box
+    /// holds text, a query to me is not answered, not even asked about; once it is empty, it is.
+    #[test]
+    fn a_js8_reply_is_not_made_while_the_compose_box_holds_text() {
+        let mut e = asking_engine();
+        assert_eq!(e.js8_composer(true, None), None, "the operator types");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none() && st.queue.is_empty(),
+            "no reply made"
+        );
+        e.js8_composer(false, None);
+        e.js8_ingest(&[snr_query_to_me("K1ABC")], 0);
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "the box empty: answered"
+        );
+    }
+
+    /// A message to me still arriving holds replies (mainwindow.cpp:9369-9374): the first frame of
+    /// a MSG to me and a query heard in the same pass draw no reply to the query; the MSG, once it
+    /// has closed, draws its ACK.
+    #[test]
+    fn no_js8_reply_while_a_message_to_me_is_still_arriving() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let msg = msg_to_me("K1ABC", "HELLO FROM OHIO, THE BAND IS OPEN TO EUROPE");
+        assert!(msg.len() > 2, "control: a multi-frame MSG");
+        e.js8_ingest(&[msg[0].clone(), snr_query_to_me("W1AW")], 0);
+        assert!(
+            queued(&e).is_empty(),
+            "no reply while the MSG to me arrives"
+        );
+        for d in &msg[1..] {
+            e.js8_ingest(std::slice::from_ref(d), 0);
+        }
+        assert_eq!(
+            queued(&e),
+            ["KD9TAW: K1ABC ACK"],
+            "the MSG, closed, draws its ACK"
+        );
+    }
+
+    /// The lists reach the station as JS8Call reads them (`splitWords`, Configuration.cpp:
+    /// 2416-2428): trimmed, upper-cased, the empties gone.
+    #[test]
+    fn the_js8_allow_and_deny_lists_reach_the_station() {
+        let s = Settings {
+            js8_autoreply_allow: vec![" w1aw ".into(), "".into(), "K1ABC".into()],
+            js8_autoreply_deny: vec!["n0xyz".into()],
+            js8_hb_ack_deny: vec!["kd2uwr ".into()],
+            ..Settings::default()
+        };
+        let c = Engine::js8_station_config(&s);
+        assert_eq!(c.autoreply_allow, ["W1AW", "K1ABC"]);
+        assert_eq!(c.autoreply_deny, ["N0XYZ"]);
+        assert_eq!(c.hb_ack_deny, ["KD2UWR"]);
     }
 }

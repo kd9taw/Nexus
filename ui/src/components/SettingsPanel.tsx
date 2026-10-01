@@ -1965,6 +1965,16 @@ export function SettingsPanel({
     markDirty()
     setForm((prev) => (prev ? { ...prev, js8Groups: groups } : prev))
   }
+  // JS8Call's allow/deny lists, one comma-separated field each, upper-cased as JS8Call's
+  // `splitWords` reads them (Configuration.cpp:2416-2428).
+  const setJs8CallList = (key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny', raw: string) => {
+    markDirty()
+    const calls = raw
+      .split(',')
+      .map((c) => c.trim().toUpperCase())
+      .filter(Boolean)
+    setForm((prev) => (prev ? { ...prev, [key]: calls } : prev))
+  }
   const parseJs8Groups = (raw: string): string[] =>
     raw
       .split(',')
@@ -8586,6 +8596,17 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">{t('settings.js8.hbAck.hint')}</span>
               </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.hbAckDeny.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8HbAckDeny ?? []}
+                  onText={(raw) => setJs8CallList('js8HbAckDeny', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.hbAckDeny.hint')}</span>
+              </label>
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
@@ -8602,6 +8623,44 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">{t('settings.js8.autoreply.hint')}</span>
               </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.autoreplyConfirmation.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    // `!== false`: on by default, as JS8Call ships AutoreplyConfirmation.
+                    aria-checked={form.js8AutoreplyConfirmation !== false}
+                    className={`toggle${form.js8AutoreplyConfirmation !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AutoreplyConfirmation', form.js8AutoreplyConfirmation === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.autoreplyConfirmation.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.autoreplyAllow.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8AutoreplyAllow ?? []}
+                  onText={(raw) => setJs8CallList('js8AutoreplyAllow', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.autoreplyAllow.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.autoreplyDeny.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8AutoreplyDeny ?? []}
+                  onText={(raw) => setJs8CallList('js8AutoreplyDeny', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.autoreplyDeny.hint')}</span>
+              </label>
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.relay.label')}</span>

@@ -833,6 +833,25 @@ pub struct Settings {
     /// joined group. JS8Call default ON (G3). Second act of the two-act rule.
     #[serde(default = "default_js8_autoreply")]
     pub js8_autoreply: bool,
+    /// JS8Call's `AutoreplyConfirmation`, "Ask for confirmation before sending autoreply
+    /// transmissions": ON by default, as JS8Call ships it (Configuration.cpp:1949), and what a
+    /// file from before this setting loads as. On, every automatic reply waits in the cockpit for
+    /// your Yes and is not sent after 89 s without one; off, replies go by themselves.
+    #[serde(default = "default_js8_autoreply_confirmation")]
+    pub js8_autoreply_confirmation: bool,
+    /// JS8Call's "Only autoreply to these callsigns" (`AutoWhitelist`): empty, its default,
+    /// answers everyone; otherwise only a station on it, by its call as heard or its base call.
+    /// A station kept out is acted on in no way: no reply, relay, delivery, filing or storing.
+    #[serde(default)]
+    pub js8_autoreply_allow: Vec<String>,
+    /// JS8Call's "Never autoreply to these callsigns" (`AutoBlacklist`, default empty): a
+    /// station on it, as heard or by its base call, is acted on in no way.
+    #[serde(default)]
+    pub js8_autoreply_deny: Vec<String>,
+    /// JS8Call's "Never acknowledge heartbeats from these callsigns" (`HBBlacklist`, default
+    /// empty): a heartbeat from one draws no HB-ACK.
+    #[serde(default)]
+    pub js8_hb_ack_deny: Vec<String>,
     /// Relay `>` traffic for other stations (third-party traffic — §97.115 is the operator's).
     /// JS8Call default ON (G3). Second act of the two-act rule.
     #[serde(default = "default_js8_relay")]
@@ -4053,6 +4072,11 @@ fn default_js8_autoreply() -> bool {
     true
 }
 
+/// JS8Call ships AutoreplyConfirmation ON. See [`Settings::js8_autoreply_confirmation`].
+fn default_js8_autoreply_confirmation() -> bool {
+    true
+}
+
 /// JS8Call ships relay ON (G3). See [`Settings::js8_relay`].
 fn default_js8_relay() -> bool {
     true
@@ -4109,6 +4133,10 @@ impl Default for Settings {
             js8_cq_interval_min: 0,
             js8_hb_ack: false,
             js8_autoreply: default_js8_autoreply(),
+            js8_autoreply_confirmation: default_js8_autoreply_confirmation(),
+            js8_autoreply_allow: Vec::new(),
+            js8_autoreply_deny: Vec::new(),
+            js8_hb_ack_deny: Vec::new(),
             js8_relay: default_js8_relay(),
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
             js8_callsign_aging_min: 0,
@@ -8722,6 +8750,16 @@ mod tests {
             s.js8_activity_aging_min, 2,
             "JS8Call ActivityAging default: 2 minutes"
         );
+        assert!(
+            s.js8_autoreply_confirmation,
+            "JS8Call AutoreplyConfirmation default: on"
+        );
+        assert!(
+            s.js8_autoreply_allow.is_empty()
+                && s.js8_autoreply_deny.is_empty()
+                && s.js8_hb_ack_deny.is_empty(),
+            "JS8Call AutoWhitelist / AutoBlacklist / HBBlacklist default: empty"
+        );
         assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
 
         let json = serde_json::to_string(&s).unwrap();
@@ -8732,6 +8770,10 @@ mod tests {
             "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
             "\"js8Autoreply\":true",
+            "\"js8AutoreplyConfirmation\":true",
+            "\"js8AutoreplyAllow\":[]",
+            "\"js8AutoreplyDeny\":[]",
+            "\"js8HbAckDeny\":[]",
             "\"js8Relay\":true",
             "\"js8IdleWatchdogMin\":60",
             "\"js8CallsignAgingMin\":0",
@@ -8747,6 +8789,20 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
+        assert!(
+            old.js8_autoreply_confirmation,
+            "an upgrader's file asks before each automatic reply, as JS8Call ships"
+        );
+        assert!(
+            old.js8_autoreply_allow.is_empty() && old.js8_hb_ack_deny.is_empty(),
+            "an upgrader's file keeps nobody out"
+        );
+        let unasked: Settings =
+            serde_json::from_str(r#"{"js8AutoreplyConfirmation":false}"#).unwrap();
+        assert!(
+            !unasked.js8_autoreply_confirmation,
+            "an explicit no-confirmation survives the load"
+        );
         assert_eq!(
             old.js8_callsign_aging_min, 0,
             "an upgrader's file ages nothing"
@@ -8784,6 +8840,10 @@ mod tests {
             "js8CqIntervalMin",
             "js8HbAck",
             "js8Autoreply",
+            "js8AutoreplyConfirmation",
+            "js8AutoreplyAllow",
+            "js8AutoreplyDeny",
+            "js8HbAckDeny",
             "js8Relay",
             "js8IdleWatchdogMin",
             "js8CallsignAgingMin",
