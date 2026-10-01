@@ -881,11 +881,14 @@ const FD_WHO_EXAMPLES = {
  * The Confirmations placeholders that are TOKENS rather than prose — same rule as
  * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
  * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
- * placeholder is the bare number `1` and stays inline, as every number alone does.
+ * placeholder is the bare number `1` and stays inline, as every number alone does. `lanRanges`
+ * is the address ranges the plain-http note names (#378): addresses, written as an operator types
+ * them, interpolated into the prose rather than left in it.
  */
 const CONFIRMATION_EXAMPLES = {
   rbToken: 'rbuapp_…',
   cloudlogUrl: 'https://log.example.com',
+  lanRanges: '192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x',
 } as const
 
 /**
@@ -11385,6 +11388,15 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.confirmations.cloudlog.url.hint')}
                   </span>
+                  {/* #378: plain http:// is accepted for an address on the operator's own network
+                      only, and the API key then travels unencrypted, so say so as it is typed. */}
+                  {/^http:\/\//i.test((form.cloudlogUrl ?? '').trim()) && (
+                    <span className="settings-note" role="note">
+                      {t('settings.confirmations.cloudlog.url.plainHttp', {
+                        ranges: CONFIRMATION_EXAMPLES.lanRanges,
+                      })}
+                    </span>
+                  )}
                 </label>
 
                 <label className="settings-field">

@@ -1,7 +1,8 @@
 //! Cloudlog / Wavelog QSO upload (HTTP JSON). Cloudlog (and its Wavelog fork) are self-hosted
 //! web logbooks with an identical QSO API: `POST {base}/index.php/api/qso` with the instance
 //! API key + station-profile id + one ADIF record. The URL + JSON builders are pure (unit-
-//! tested); [`upload`] does the blocking POST.
+//! tested); [`upload`] does the blocking POST, to where [`Destination`] decided it may go —
+//! `https://`, or plain `http://` to the operator's own network only (#378).
 //!
 //! # ⛔ Where the API key is kept out of, and by what
 //!
@@ -44,7 +45,8 @@ use super::neterr;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CloudlogFailure {
     /// Nothing was sent: the instance URL, the API key or the station profile id is missing,
-    /// or the URL is not `https://`.
+    /// or the URL is not `https://` and not plain `http://` to the operator's own network (see
+    /// [`Destination`]).
     NotConfigured,
     /// Nexus never got an answer out of the instance — DNS, a refused connect, a rejected
     /// TLS handshake, a redirect.
@@ -136,6 +138,196 @@ pub fn api_url(base: &str) -> String {
     } else {
         format!("{b}/index.php/api/qso")
     }
+}
+
+/// Where one Cloudlog/Wavelog request may go, decided once, before anything is sent (#378).
+///
+/// ⛔ CREDENTIAL. Every request to the instance carries the API key: in the body of an upload,
+/// in the PATH of a station_info lookup. Over `https://` that is what it always was, and that
+/// path is untouched: the same https-only client, the same proxies, no redirects. Plain
+/// `http://` sends the key unencrypted, so it is accepted only where the key cannot leave the
+/// operator's own network, and every part of that is decided here rather than left to the
+/// socket:
+///
+/// - **The host is on the network** ([`on_own_network`]): a literal address in one of its
+///   ranges, or a name EVERY address of which is in one. A name with a single address outside
+///   is refused, because nothing here chooses which of its addresses a connection would use.
+/// - **The request goes where the check looked, and only there.** A name's checked addresses
+///   are pinned into the client (`resolve_to_addrs`), so nothing resolves the name again between
+///   the check and the send: a name re-pointed in that window (DNS rebinding) cannot take the
+///   key with it. The client takes no proxy (an `HTTP_PROXY` in the environment would carry the
+///   key to the proxy, and the proxy would resolve the name itself) and follows no redirect.
+///
+/// Anything else that says `http://` is refused before a socket is opened, as it always was.
+pub struct Destination {
+    /// The base URL as Settings holds it, trimmed. [`upload`] and [`fetch_station_info`] build
+    /// their endpoints from it, so both go to the host checked here.
+    base: String,
+    /// `Some` only for plain http to the operator's own network.
+    lan: Option<LanHost>,
+}
+
+/// A plain-http host on the operator's own network, as checked.
+struct LanHost {
+    /// The URL's host as reqwest looks it up: the parser lowercases a name, and an IPv6
+    /// literal keeps its brackets.
+    host: String,
+    /// The addresses a NAME was checked at, pinned into the client. Empty for a literal
+    /// address, which nothing resolves.
+    pinned: Vec<std::net::SocketAddr>,
+}
+
+/// A host-name lookup: the system resolver in use, a stand-in in the tests.
+type Lookup<'a> = &'a dyn Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>>;
+
+/// How long a host name's lookup may take. reqwest bounds its own lookups by the request's
+/// timeout; this one happens before the request, so it has a bound of its own.
+const LOOKUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl Destination {
+    /// Decide where a request to `base_url` may go. The system resolver answers for a name.
+    pub fn check(base_url: &str) -> Result<Destination, CloudlogError> {
+        Self::check_with(base_url, &system_lookup)
+    }
+
+    fn check_with(base_url: &str, lookup: Lookup<'_>) -> Result<Destination, CloudlogError> {
+        let base = base_url.trim().to_string();
+        // Anything that is not plain http (https://, another scheme, a URL that does not parse)
+        // is left to the https-only client exactly as before, which sends only https.
+        let url = match reqwest::Url::parse(&api_url(&base)) {
+            Ok(u) if u.scheme() == "http" => u,
+            _ => return Ok(Destination { base, lan: None }),
+        };
+        let host = url.host_str().unwrap_or_default().to_string();
+        // A literal address arrives here as the URL parser normalised it (`0x7f.1` is
+        // `127.0.0.1` by now), which is also the address reqwest connects to.
+        let literal = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .ok();
+        let pinned = match literal {
+            Some(ip) if on_own_network(ip) => Vec::new(),
+            Some(ip) => return Err(plain_http_refused(&format!("{ip} is not one"))),
+            None => {
+                let port = url.port_or_known_default().unwrap_or(80);
+                let found = lookup(&host, port).map_err(|_| {
+                    plain_http_refused(&format!("{host} could not be looked up to check"))
+                })?;
+                if let Some(off) = found.iter().find(|a| !on_own_network(a.ip())) {
+                    return Err(plain_http_refused(&format!(
+                        "{host} resolves to {}, which is not one",
+                        off.ip()
+                    )));
+                }
+                if found.is_empty() {
+                    return Err(plain_http_refused(&format!(
+                        "{host} resolves to no address"
+                    )));
+                }
+                found
+            }
+        };
+        Ok(Destination {
+            base,
+            lan: Some(LanHost { host, pinned }),
+        })
+    }
+
+    /// Where the API key travels unencrypted, for the Connections log: the host, and for a
+    /// name the addresses it was checked at. `None` over https.
+    pub fn cleartext_to(&self) -> Option<String> {
+        let lan = self.lan.as_ref()?;
+        if lan.pinned.is_empty() {
+            return Some(lan.host.clone());
+        }
+        let mut ips: Vec<String> = Vec::new();
+        for a in &lan.pinned {
+            let ip = a.ip().to_string();
+            if !ips.contains(&ip) {
+                ips.push(ip);
+            }
+        }
+        Some(format!("{} ({})", lan.host, ips.join(", ")))
+    }
+
+    /// The client for this destination. https: exactly the client every request used before
+    /// #378. Plain http on the operator's network: no proxy, no redirect, and a name pinned to
+    /// the addresses it was checked at.
+    fn client(&self) -> Result<reqwest::blocking::Client, CloudlogError> {
+        let builder = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none());
+        let builder = match &self.lan {
+            None => builder.https_only(true),
+            Some(lan) if lan.pinned.is_empty() => builder.no_proxy(),
+            Some(lan) => builder.no_proxy().resolve_to_addrs(&lan.host, &lan.pinned),
+        };
+        builder.build().map_err(|_| {
+            CloudlogError::new(CloudlogFailure::Unreachable, "couldn't build HTTP client")
+        })
+    }
+}
+
+/// Is `ip` on the operator's own network, so that a key sent to it in the clear stays there?
+///
+/// Loopback (127/8, `::1`), the private IPv4 ranges (10/8, 172.16/12, 192.168/16), link-local
+/// (169.254/16, fe80::/10, which are never routed off the link) and IPv6 unique-local
+/// (fc00::/7). An IPv4-mapped IPv6 address counts as the IPv4 address it carries.
+///
+/// Deliberately not on it: 100.64/10, the carrier-grade NAT range, which a provider's own
+/// network uses as readily as a home VPN does; the unspecified, broadcast and multicast
+/// addresses; and every global address, a home's own IPv6 prefix included, because nothing in
+/// an address says which global addresses are the operator's.
+fn on_own_network(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => on_own_network(std::net::IpAddr::V4(v4)),
+            None => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+        },
+    }
+}
+
+/// The refusal for plain http anywhere but the operator's own network. `why` says what about
+/// this host failed the check.
+fn plain_http_refused(why: &str) -> CloudlogError {
+    CloudlogError::new(
+        CloudlogFailure::NotConfigured,
+        format!(
+            "Cloudlog/Wavelog: the instance URL must be https://. Plain http:// is accepted only \
+             for an address on your own network (192.168.x.x, 10.x.x.x, 172.16–31.x.x, \
+             127.x.x.x and the like, or a name that resolves only to such addresses), because \
+             the API key travels unencrypted, and {why}. Nothing was sent"
+        ),
+    )
+}
+
+/// The system resolver, bounded by [`LOOKUP_DEADLINE`].
+fn system_lookup(host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    use std::net::ToSocketAddrs;
+    let target = (host.to_string(), port);
+    within(LOOKUP_DEADLINE, move || {
+        target.to_socket_addrs().map(Iterator::collect)
+    })
+}
+
+/// `f`'s answer, or a timeout if it has none by `deadline`. A lookup cannot be cancelled, so
+/// its thread is left to finish on its own; nothing waits for it.
+fn within<F>(deadline: std::time::Duration, f: F) -> std::io::Result<Vec<std::net::SocketAddr>>
+where
+    F: FnOnce() -> std::io::Result<Vec<std::net::SocketAddr>> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(deadline).unwrap_or_else(|_| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the lookup took too long",
+        ))
+    })
 }
 
 /// Escape a string for embedding in a JSON string literal.
@@ -385,10 +577,11 @@ fn server_reason(text: &str, key: &str) -> Option<String> {
 
 /// POST one ADIF record to a Cloudlog/Wavelog instance. `Ok(body)` when the record is actually
 /// filed; a redacted error otherwise (the API key is in the REQUEST body — never echoed into an
-/// error string). Enforces HTTPS + no redirects so a credential-bearing request can't be
-/// downgraded onto cleartext, matching every sibling connector.
+/// error string). Sent where `dest` decided it may go — `https://`, or plain `http://` to the
+/// operator's own network only — and never after a redirect, so a credential-bearing request
+/// cannot be moved onto cleartext or off that network.
 pub fn upload(
-    base_url: &str,
+    dest: &Destination,
     key: &str,
     station_id: &str,
     adif: &str,
@@ -418,16 +611,9 @@ pub fn upload(
              Nothing was sent — fix it in Settings",
         ));
     }
-    let url = api_url(base_url);
+    let url = api_url(&dest.base);
     let body = build_body(key, station_id, adif);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| {
-            CloudlogError::new(CloudlogFailure::Unreachable, "couldn't build HTTP client")
-        })?;
+    let client = dest.client()?;
     let resp = client
         .post(&url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -442,10 +628,12 @@ pub fn upload(
         // this request needs anyway: the API key is in its body.
         .map_err(|e| {
             if e.is_builder() {
-                // The one case the old sentence WAS right about: `https_only` rejects an
-                // http:// URL here, before any I/O (reqwest async_impl/client.rs:2582).
-                // Nothing was sent, and the fix is in Settings — the same class as an empty
-                // key, not a network failure.
+                // The one case the old sentence WAS right about: `https_only` rejects a URL
+                // that is not https:// here, before any I/O (reqwest async_impl/client.rs:2582).
+                // A plain http:// one never gets this far — `Destination` decided it — so what
+                // lands here is another scheme or a URL that does not parse. Nothing was sent,
+                // and the fix is in Settings — the same class as an empty key, not a network
+                // failure.
                 CloudlogError::new(
                     CloudlogFailure::NotConfigured,
                     "Cloudlog/Wavelog: the instance URL must be https:// — an upload carrying \
@@ -473,6 +661,15 @@ fn classify(status: u16, text: &str, key: &str) -> Result<String, CloudlogError>
     if (200..300).contains(&status) {
         return classify_body(text, reason.as_deref());
     }
+    // #378: neither client follows a redirect with the key in the request, so a 3xx arrives
+    // here as an answer. Say which answer it was: "refused the upload" would read as the
+    // instance saying no, when it only said "not here".
+    if (300..400).contains(&status) {
+        return Err(CloudlogError::new(
+            CloudlogFailure::Refused,
+            redirected(status),
+        ));
+    }
     // The status line is a bounded value Nexus reads off the wire, not text out of the body,
     // so classifying by it carries nothing the instance chose. 404 is the wrong-URL case
     // #226's reporter could not tell from the others, and 5xx is the instance's own trouble
@@ -499,6 +696,14 @@ fn classify(status: u16, text: &str, key: &str) -> Result<String, CloudlogError>
             None => format!("Cloudlog HTTP {status} — {what}, and said no more."),
         },
     ))
+}
+
+/// What the operator is told about a redirect, which is never followed with the API key.
+fn redirected(status: u16) -> String {
+    format!(
+        "Cloudlog HTTP {status} — the instance answered with a redirect, and Nexus never \
+         follows one with the API key. Put the address it redirects to in Settings"
+    )
 }
 
 /// One station location as Wavelog/Cloudlog reports it (#226). Their `station_info` answer is
@@ -585,6 +790,12 @@ pub fn classify_station_info(
                  and that it is not a read-only one",
             ))
         }
+        300..=399 => {
+            return Err(CloudlogError::new(
+                CloudlogFailure::Refused,
+                redirected(status),
+            ))
+        }
         404 => {
             return Err(CloudlogError::new(
                 CloudlogFailure::NotAnApi,
@@ -621,26 +832,20 @@ pub fn classify_station_info(
         .collect())
 }
 
-/// GET the operator's station locations (#226). HTTPS only, no redirects, the same 20 s timeout
-/// `upload` uses. Runs ONLY on an explicit button press — never on load and never on a timer —
-/// because it spends the API key on the wire.
+/// GET the operator's station locations (#226). Sent where `dest` decided it may go, as
+/// [`upload`] is, with no redirects and the same 20 s timeout. Runs ONLY on an explicit button
+/// press — never on load and never on a timer — because it spends the API key on the wire.
 pub fn fetch_station_info(
-    base_url: &str,
+    dest: &Destination,
     key: &str,
 ) -> Result<Vec<CloudlogStation>, CloudlogError> {
-    let url = station_info_url(base_url, key)?;
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| {
-            CloudlogError::new(CloudlogFailure::Unreachable, "couldn't build HTTP client")
-        })?;
+    let url = station_info_url(&dest.base, key)?;
+    let client = dest.client()?;
     let resp = client.get(&url).send().map_err(|e| {
         if e.is_builder() {
-            // `https_only` refused an http:// URL before any I/O — a Settings problem, and the
-            // one that matters most here: this request's URL carries the key.
+            // `https_only` refused a URL that is not https:// before any I/O (plain http:// was
+            // decided by `Destination` and never gets here) — a Settings problem, and the one
+            // that matters most here: this request's URL carries the key.
             CloudlogError::new(
                 CloudlogFailure::NotConfigured,
                 "Cloudlog/Wavelog: the instance URL must be https:// — a request carrying the \
@@ -661,8 +866,18 @@ pub fn fetch_station_info(
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::net::TcpListener;
+    use std::net::{SocketAddr, TcpListener};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
+
+    /// The destination for `base`, through the system resolver, as Settings would produce it.
+    fn dest(base: &str) -> Destination {
+        match Destination::check(base) {
+            Ok(d) => d,
+            Err(e) => panic!("{base} was refused: {}", e.message),
+        }
+    }
 
     /// #226's defect on the transport arm: every way of failing to reach the instance was
     /// flattened into one sentence blaming the URL.
@@ -678,7 +893,13 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = l.local_addr().expect("addr").port();
         drop(l);
-        let e = upload(&format!("https://127.0.0.1:{port}"), KEY, "3", "<eor>").unwrap_err();
+        let e = upload(
+            &dest(&format!("https://127.0.0.1:{port}")),
+            KEY,
+            "3",
+            "<eor>",
+        )
+        .unwrap_err();
         let err = e.message;
         assert!(
             err.contains("could not connect"),
@@ -701,7 +922,13 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(300));
             }
         });
-        let e = upload(&format!("https://127.0.0.1:{port}"), KEY, "3", "<eor>").unwrap_err();
+        let e = upload(
+            &dest(&format!("https://127.0.0.1:{port}")),
+            KEY,
+            "3",
+            "<eor>",
+        )
+        .unwrap_err();
         let err = e.message;
         assert!(
             err.contains("antivirus"),
@@ -712,9 +939,12 @@ mod tests {
         assert!(!err.contains(KEY), "API key leaked into the message: {err}");
 
         // The control: the one case the old sentence was right about must keep its answer.
-        // `https_only` rejects an http:// URL before any I/O. Nothing was sent and the fix is
-        // in Settings, so its CLASS is the not-configured one, not the network one.
-        let e = upload("http://log.example.invalid", KEY, "3", "<eor>").unwrap_err();
+        // An http:// URL off the operator's own network is refused before any I/O (#378 takes
+        // plain http only on it). Nothing was sent and the fix is in Settings, so its CLASS is
+        // the not-configured one, not the network one.
+        let e = Destination::check("http://203.0.113.7")
+            .and_then(|d| upload(&d, KEY, "3", "<eor>"))
+            .unwrap_err();
         let err = e.message;
         assert!(
             err.contains("https://"),
@@ -724,14 +954,14 @@ mod tests {
 
         // …and the two Settings-side refusals, which never open a socket at all.
         assert_eq!(
-            upload("https://log.example.invalid", "  ", "3", "<eor>")
+            upload(&dest("https://log.example.invalid"), "  ", "3", "<eor>")
                 .unwrap_err()
                 .class,
             CloudlogFailure::NotConfigured,
             "an empty API key is a configuration problem, not a network one"
         );
         assert_eq!(
-            upload("https://log.example.invalid", KEY, " ", "<eor>")
+            upload(&dest("https://log.example.invalid"), KEY, " ", "<eor>")
                 .unwrap_err()
                 .class,
             CloudlogFailure::NotConfigured,
@@ -747,7 +977,7 @@ mod tests {
     #[test]
     fn a_station_profile_id_that_is_not_a_number_is_refused_before_sending() {
         for id in ["DG3ET", "3a", "home", "-3", "3.0"] {
-            let e = upload("https://log.example.invalid", KEY, id, "<eor>").unwrap_err();
+            let e = upload(&dest("https://log.example.invalid"), KEY, id, "<eor>").unwrap_err();
             assert_eq!(
                 e.class,
                 CloudlogFailure::NotConfigured,
@@ -767,7 +997,7 @@ mod tests {
         }
         // Control: a numeric id (spaces trimmed, as Settings stores it) is NOT refused for its
         // shape — it goes on to the network, which for this unresolvable host is Unreachable.
-        let e = upload("https://log.example.invalid", KEY, " 3 ", "<eor>").unwrap_err();
+        let e = upload(&dest("https://log.example.invalid"), KEY, " 3 ", "<eor>").unwrap_err();
         assert_eq!(e.class, CloudlogFailure::Unreachable, "{}", e.message);
     }
 
@@ -841,7 +1071,7 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = l.local_addr().expect("addr").port();
         drop(l);
-        let e = fetch_station_info(&format!("https://127.0.0.1:{port}"), KEY).unwrap_err();
+        let e = fetch_station_info(&dest(&format!("https://127.0.0.1:{port}")), KEY).unwrap_err();
         let runs = key_runs(KEY);
         assert!(
             !runs.is_empty(),
@@ -1169,5 +1399,511 @@ mod tests {
         );
         let err = classify(500, "", KEY).unwrap_err().message;
         assert!(err.contains("500"), "the status must still be named: {err}");
+    }
+
+    // ---- #378: plain http, and only on the operator's own network ----------------------------
+
+    /// A stand-in resolver that answers `addrs` to every question and counts the questions.
+    fn lookup_answering(
+        addrs: Vec<SocketAddr>,
+    ) -> (
+        impl Fn(&str, u16) -> std::io::Result<Vec<SocketAddr>>,
+        Arc<AtomicUsize>,
+    ) {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let n = asked.clone();
+        let lookup = move |_host: &str, _port: u16| {
+            n.fetch_add(1, Ordering::SeqCst);
+            Ok(addrs.clone())
+        };
+        (lookup, asked)
+    }
+
+    /// One HTTP response, `Content-Length` and `Connection: close` filled in.
+    fn answer(status: &str, headers: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    const CREATED: &str = r#"{"status":"created"}"#;
+
+    /// One HTTP request off a socket: its head, and as much body as its Content-Length says.
+    fn read_request(sock: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match sock.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+            if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if buf.len() >= end + 4 + len {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// A plain-http instance on loopback that answers ONE request with `response`, verbatim,
+    /// and hands back what it received.
+    fn http_once(response: String) -> (u16, std::sync::mpsc::Receiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = l.accept() {
+                let got = read_request(&mut sock);
+                let _ = sock.write_all(response.as_bytes());
+                let _ = sock.flush();
+                let _ = tx.send(got);
+            }
+        });
+        (port, rx)
+    }
+
+    /// A loopback listener that only counts the connections it gets, until `stop` is set.
+    fn counting_listener() -> (u16, Arc<AtomicUsize>, Arc<AtomicBool>) {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.set_nonblocking(true).expect("nonblocking");
+        let port = l.local_addr().expect("addr").port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (h, s) = (hits.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !s.load(Ordering::SeqCst) {
+                match l.accept() {
+                    Ok(_) => {
+                        h.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(10)),
+                }
+            }
+        });
+        (port, hits, stop)
+    }
+
+    /// #378 (IZ5FSA): a Wavelog on the LAN, with no certificate, reached over plain http. The
+    /// upload and the station-location lookup both go through, key and all, to the instance
+    /// there.
+    #[test]
+    fn a_plain_http_request_to_a_lan_address_is_sent() {
+        let (port, got) = http_once(answer(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            CREATED,
+        ));
+        let r = upload(
+            &dest(&format!("http://127.0.0.1:{port}")),
+            KEY,
+            "3",
+            "<eor>",
+        );
+        let req = got.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        assert!(
+            req.starts_with("POST /index.php/api/qso "),
+            "the upload never reached the LAN instance ({:?}): {req:?}",
+            r.as_ref().err().map(|e| e.message.clone())
+        );
+        assert!(
+            req.contains(KEY),
+            "the key rides in the body, as over https"
+        );
+        if let Err(e) = r {
+            panic!(
+                "the instance filed the QSO, and the upload says: {}",
+                e.message
+            );
+        }
+
+        let (port, got) = http_once(answer("200 OK", "Content-Type: application/json\r\n", "[]"));
+        let list = fetch_station_info(&dest(&format!("http://127.0.0.1:{port}")), KEY);
+        let req = got.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        assert!(
+            req.starts_with(&format!("GET /index.php/api/station_info/{KEY} ")),
+            "the station lookup never reached the LAN instance: {req:?}"
+        );
+        match list {
+            Ok(l) => assert!(l.is_empty(), "{} stations from an empty list", l.len()),
+            Err(e) => panic!("an empty station list is not an error: {}", e.message),
+        }
+    }
+
+    /// #378: the literal addresses that are the operator's own network. The parser's own
+    /// normalisation decides what a literal is (`0x7f.1` IS 127.0.0.1, to reqwest as to this
+    /// check), and a literal is never looked up.
+    #[test]
+    fn plain_http_is_accepted_for_an_address_on_the_operators_own_network() {
+        let (lookup, asked) = lookup_answering(Vec::new());
+        for host in [
+            "127.0.0.1",
+            "127.255.255.254",
+            "0x7f.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.20",
+            "169.254.10.20",
+            "[::1]",
+            "[fd00::20]",
+            "[fe80::1]",
+            "[::ffff:192.168.1.20]",
+        ] {
+            match Destination::check_with(&format!("http://{host}:8086/wavelog"), &lookup) {
+                Ok(d) => assert!(
+                    d.cleartext_to().is_some(),
+                    "{host}: accepted, so the log must be able to say where the key goes"
+                ),
+                Err(e) => panic!("{host} is on the operator's own network: {}", e.message),
+            }
+        }
+        assert_eq!(
+            Destination::check_with("http://192.168.1.20/", &lookup)
+                .ok()
+                .and_then(|d| d.cleartext_to())
+                .as_deref(),
+            Some("192.168.1.20"),
+            "a literal address is named as it is"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "a literal address was looked up"
+        );
+    }
+
+    /// #378, and the half that was true before it: plain http to anything off the operator's
+    /// own network is refused before a socket is opened, and says how to fix it. Through the
+    /// whole send, so the assertion holds for the code before #378 (which refused at the client)
+    /// as for the code after it (which refuses at the check).
+    #[test]
+    fn plain_http_to_an_address_off_the_network_is_refused_as_before() {
+        let (lookup, asked) = lookup_answering(Vec::new());
+        let send = |url: &str| {
+            Destination::check_with(url, &lookup).and_then(|d| upload(&d, KEY, "3", "<eor>"))
+        };
+        for host in [
+            "203.0.113.7",
+            "8.8.8.8",
+            "100.64.0.1",
+            "0.0.0.0",
+            "172.32.0.1",
+            "192.169.1.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "[2001:db8::20]",
+            "[::ffff:8.8.8.8]",
+            "[::]",
+        ] {
+            let e = send(&format!("http://{host}/"))
+                .err()
+                .unwrap_or_else(|| panic!("{host} is not on the operator's own network"));
+            assert_eq!(
+                e.class,
+                CloudlogFailure::NotConfigured,
+                "{host}: {}",
+                e.message
+            );
+            assert!(
+                e.message.contains("https://"),
+                "{host}: say what is wanted — {}",
+                e.message
+            );
+        }
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "a literal address was looked up"
+        );
+    }
+
+    /// #378: a host NAME is accepted only if EVERY address it resolves to is on the network.
+    /// Nothing here chooses which address a connection uses, so one address outside is enough
+    /// to refuse — and a name that cannot be looked up cannot be checked.
+    #[test]
+    fn a_name_is_accepted_only_if_every_address_it_resolves_to_is_on_the_network() {
+        let sa = |s: &str| s.parse::<SocketAddr>().expect(s);
+        let (lookup, asked) = lookup_answering(vec![sa("192.168.1.20:80"), sa("[fd00::20]:80")]);
+        let d = Destination::check_with("http://wavelog.lan", &lookup)
+            .expect("a name whose addresses are all on the network");
+        assert_eq!(
+            d.cleartext_to().as_deref(),
+            Some("wavelog.lan (192.168.1.20, fd00::20)"),
+            "the log names the host and the addresses it was checked at"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "looked up once, for the check"
+        );
+
+        for (what, addrs, named) in [
+            (
+                "one global address among private ones",
+                vec![sa("192.168.1.20:80"), sa("[2001:db8::20]:80")],
+                "2001:db8::20",
+            ),
+            (
+                "a public address",
+                vec![sa("93.184.216.34:80")],
+                "93.184.216.34",
+            ),
+            ("no address at all", Vec::new(), "no address"),
+        ] {
+            let (lookup, _) = lookup_answering(addrs);
+            let e = Destination::check_with("http://wavelog.lan", &lookup)
+                .err()
+                .unwrap_or_else(|| panic!("{what}: accepted"));
+            assert_eq!(e.class, CloudlogFailure::NotConfigured, "{what}");
+            assert!(e.message.contains(named), "{what}: name it — {}", e.message);
+        }
+
+        let failing = |_: &str, _: u16| -> std::io::Result<Vec<SocketAddr>> {
+            Err(std::io::Error::other("x"))
+        };
+        let e = Destination::check_with("http://wavelog.lan", &failing)
+            .err()
+            .expect("a name that cannot be looked up cannot be checked");
+        assert!(
+            e.message.contains("could not be looked up"),
+            "{}",
+            e.message
+        );
+
+        // The real resolver, on a name that cannot exist (RFC 6761 `.invalid`): refused, by
+        // whichever of the two ways this box's DNS answers it.
+        let e = Destination::check("http://nexus-n35.invalid")
+            .err()
+            .expect("a name that resolves nowhere on the network is refused");
+        assert_eq!(e.class, CloudlogFailure::NotConfigured, "{}", e.message);
+    }
+
+    /// #378, DNS rebinding. A name is checked, then sent to; if anything resolved it AGAIN in
+    /// between, a name re-pointed in that window would take the key with it. The request must go
+    /// to the address the check saw, still asking for the instance by name.
+    #[test]
+    fn a_lan_name_is_pinned_to_the_address_the_check_saw() {
+        use std::net::ToSocketAddrs;
+        let name = "nexus-n35-lan.test";
+        // Positive control: this box cannot resolve the name (RFC 6761 `.test`), so a request
+        // that reaches the instance can only have gone to the pinned address. If it could, a
+        // lookup at send time would look exactly like the pin, and this test would prove
+        // nothing.
+        assert!(
+            (name, 80)
+                .to_socket_addrs()
+                .map(|mut a| a.next().is_none())
+                .unwrap_or(true),
+            "control: {name} resolves on this box, so a pin cannot be told from a lookup"
+        );
+        let (port, got) = http_once(answer(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            CREATED,
+        ));
+        // A rebinding name: loopback for the check, a public address for anything after it.
+        let asked = Arc::new(AtomicUsize::new(0));
+        let n = asked.clone();
+        let rebinding = move |_: &str, p: u16| -> std::io::Result<Vec<SocketAddr>> {
+            let first = n.fetch_add(1, Ordering::SeqCst) == 0;
+            Ok(vec![if first {
+                SocketAddr::from(([127, 0, 0, 1], p))
+            } else {
+                SocketAddr::from(([93, 184, 216, 34], p))
+            }])
+        };
+        let d = Destination::check_with(&format!("http://{name}:{port}"), &rebinding)
+            .expect("checked at loopback");
+        let r = upload(&d, KEY, "3", "<eor>");
+        let req = got.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        assert!(
+            req.contains(KEY),
+            "the upload never reached the checked address ({:?})",
+            r.as_ref().err().map(|e| e.message.clone())
+        );
+        assert!(
+            req.to_ascii_lowercase()
+                .contains(&format!("host: {name}:{port}")),
+            "the instance must still be asked for by name (a virtual host needs it): {req:?}"
+        );
+        assert!(r.is_ok(), "{:?}", r.err().map(|e| e.message));
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "the name was looked up again after the check"
+        );
+    }
+
+    /// #378: a redirect is never followed with the key. Here it points off the checked host,
+    /// with a 307, which keeps the method AND the body, so a client that followed it would hand
+    /// the key to another host.
+    #[test]
+    fn a_redirect_off_the_lan_host_is_not_followed() {
+        let (elsewhere, hits, stop) = counting_listener();
+        let (port, got) = http_once(answer(
+            "307 Temporary Redirect",
+            &format!("Location: http://localhost:{elsewhere}/index.php/api/qso\r\n"),
+            "",
+        ));
+        let r = upload(
+            &dest(&format!("http://127.0.0.1:{port}")),
+            KEY,
+            "3",
+            "<eor>",
+        );
+        let req = got.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        std::thread::sleep(Duration::from_millis(300));
+        stop.store(true, Ordering::SeqCst);
+        // Positive control: the upload went to the LAN instance, so what this tests is the
+        // redirect, not a refusal of plain http.
+        assert!(
+            req.contains(KEY),
+            "the upload never reached the LAN instance: {req:?}"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "the redirect was followed: the key went on to a second host"
+        );
+        let e = r.expect_err("a redirect is not a filed QSO");
+        assert_eq!(e.class, CloudlogFailure::Refused, "{}", e.message);
+        assert!(
+            e.message.contains("redirect"),
+            "say it was a redirect: {}",
+            e.message
+        );
+    }
+
+    /// #378: an `HTTP_PROXY` in the environment never sees a LAN upload. A proxy would carry
+    /// the key off the network, and would resolve a pinned name for itself.
+    ///
+    /// The environment belongs to the whole process, so the upload runs in a child: this test
+    /// binary, filtered to this one test, with `HTTP_PROXY` pointing at a listener here. The
+    /// child also makes one request through a default client, which DOES honour the proxy: the
+    /// positive control, without which a proxy nobody ever used would pass this test.
+    #[test]
+    fn a_lan_upload_never_goes_through_a_proxy() {
+        const CHILD: &str = "NEXUS_TEST_CLOUDLOG_PROXY_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let (port, got) = http_once(answer(
+                "200 OK",
+                "Content-Type: application/json\r\n",
+                CREATED,
+            ));
+            let r = upload(
+                &dest(&format!("http://127.0.0.1:{port}")),
+                KEY,
+                "3",
+                "<eor>",
+            );
+            let req = got.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+            assert!(
+                req.contains(KEY),
+                "the upload did not go to the instance directly ({:?})",
+                r.err().map(|e| e.message)
+            );
+            // The control request: the proxy listener must see exactly this one.
+            let _ = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("client")
+                .get("http://127.0.0.1:9/")
+                .send();
+            return;
+        }
+        let (proxy, hits, stop) = counting_listener();
+        let me = format!(
+            "{}::a_lan_upload_never_goes_through_a_proxy",
+            module_path!().split_once("::").map_or("", |(_, rest)| rest)
+        );
+        let via = format!("http://127.0.0.1:{proxy}");
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([me.as_str(), "--exact", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HTTP_PROXY", &via)
+            .env("http_proxy", &via)
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .output()
+            .expect("run the child");
+        std::thread::sleep(Duration::from_millis(200));
+        stop.store(true, Ordering::SeqCst);
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            shown.contains("running 1 test"),
+            "control: the child ran no test, so it proved nothing:\n{shown}"
+        );
+        assert!(out.status.success(), "the child failed:\n{shown}");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the proxy must see the control request and nothing else (2 means the LAN upload \
+             went through it; 0 means the control never reached it)"
+        );
+    }
+
+    /// #378 leaves https alone: no lookup ahead of the request, no pin, nothing said about
+    /// cleartext. Anything that is neither https:// nor plain http:// still gets the https-only
+    /// refusal it always did.
+    #[test]
+    fn https_is_decided_exactly_as_before() {
+        let (lookup, asked) = lookup_answering(Vec::new());
+        for url in [
+            "https://log.example.org",
+            "HTTPS://Log.Example.org/index.php",
+            "https://192.168.1.20",
+        ] {
+            let d = Destination::check_with(url, &lookup)
+                .ok()
+                .unwrap_or_else(|| panic!("{url} is refused"));
+            assert!(d.cleartext_to().is_none(), "{url} is not plain http");
+        }
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "an https destination was looked up ahead of the request"
+        );
+        let e =
+            upload(&dest("ftp://127.0.0.1:21"), KEY, "3", "<eor>").expect_err("ftp:// is not sent");
+        assert_eq!(e.class, CloudlogFailure::NotConfigured, "{}", e.message);
+        assert!(e.message.contains("https://"), "{}", e.message);
+    }
+
+    /// #378: a lookup that never answers is given up on, so a hung resolver cannot hold the
+    /// upload worker the way reqwest's own timeout would not let it.
+    #[test]
+    fn a_lookup_that_never_answers_is_given_up_on() {
+        let t0 = std::time::Instant::now();
+        let r = within(Duration::from_millis(100), || {
+            std::thread::sleep(Duration::from_secs(3));
+            Ok(Vec::new())
+        });
+        assert_eq!(
+            r.err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::TimedOut)
+        );
+        assert!(
+            t0.elapsed() < Duration::from_secs(2),
+            "waited {:?}",
+            t0.elapsed()
+        );
+        // Control: an answer inside the deadline is the answer.
+        let ten = SocketAddr::from(([10, 0, 0, 1], 80));
+        let r = within(Duration::from_secs(2), move || Ok(vec![ten]));
+        assert_eq!(r.ok(), Some(vec![ten]));
     }
 }

@@ -2376,6 +2376,7 @@ body.resizing-row {
 .conn-ev-name { color: var(--text-dim); min-width: 9ch; flex: none; }
 .conn-ev.ok .conn-ev-msg { color: var(--state-good); }
 .conn-ev.error .conn-ev-msg { color: var(--alert-critical, #e5484d); }
+.conn-ev.warn .conn-ev-msg { color: var(--state-warn); }
 .conn-ev.info .conn-ev-msg { color: var(--text); }
 
 /* DXpedition need chip + board filter + the DXpeditions section */

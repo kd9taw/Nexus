@@ -21088,7 +21088,8 @@ fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDe
     match class {
         F::NotConfigured => conn_detail!(
             "nothing was sent — the Cloudlog instance URL, API key or station profile id is \
-             missing, or the URL is not https://. Set them in Settings ▸ Connectors."
+             missing, or the URL is not https:// (plain http:// is for an address on your own \
+             network only). Set them in Settings ▸ Connectors."
         ),
         F::Unreachable => conn_detail!(
             "the upload never reached the instance — check the URL and the network, and \
@@ -24743,10 +24744,12 @@ async fn cloudlog_station_info(
     let key = cloudlog_keychain()?
         .get_password()
         .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
-    // Blocking HTTP off the async executor (the push impls' rule). The key moves in and dies
-    // with the closure.
+    // Blocking HTTP off the async executor (the push impls' rule), and the destination check
+    // with it: for a plain-http name it is a lookup. The key moves in and dies with the closure.
     let found = tauri::async_runtime::spawn_blocking(move || {
-        propagation::live::cloudlog::fetch_station_info(&url, &key)
+        let dest = propagation::live::cloudlog::Destination::check(&url)?;
+        warn_cloudlog_cleartext(&dest);
+        propagation::live::cloudlog::fetch_station_info(&dest, &key)
     })
     .await
     .map_err(|e| format!("station lookup task failed: {e}"))?;
@@ -24811,7 +24814,40 @@ fn cloudlog_push_qso_impl(
     }
     let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
     let adif = tempo_core::logbook::adif_record(&rec);
-    propagation::live::cloudlog::upload(&url, &key, &station_id, &adif)
+    let dest = propagation::live::cloudlog::Destination::check(&url)?;
+    warn_cloudlog_cleartext(&dest);
+    propagation::live::cloudlog::upload(&dest, &key, &station_id, &adif)
+}
+
+/// #378: where this session has already been told that its Cloudlog/Wavelog API key travels
+/// unencrypted. One line per place, the first time, is the warning; a line per contact would
+/// bury every other line in the log.
+static CLOUDLOG_CLEARTEXT_WARNED: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// #378: say in the Connections log, once a session for each place it goes, that the API key is
+/// about to travel unencrypted. Plain http is accepted only on the operator's own network
+/// (`Destination` refused everything else before this is reached), and this is the half of
+/// that ruling the operator sees: the key is readable to anything on that network that
+/// listens. Nothing for https.
+fn warn_cloudlog_cleartext(dest: &propagation::live::cloudlog::Destination) {
+    let Some(to) = dest.cleartext_to() else {
+        return;
+    };
+    let first = CLOUDLOG_CLEARTEXT_WARNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(to.clone());
+    if first {
+        conn_log(
+            "Cloudlog",
+            "warn",
+            format!(
+                "plain http: the API key travels unencrypted to {to}, on your own network. Use \
+                 https:// to keep it encrypted"
+            ),
+        );
+    }
 }
 
 /// #226: the connection-log line for a Cloudlog/Wavelog failure that retrying cannot fix, or
@@ -32186,6 +32222,38 @@ mod tests {
         }
         // Every class is decided one way or the other: a class added later must land here.
         assert_eq!(F::ALL.len(), 2 + refused.len());
+    }
+
+    /// #378: plain http to the operator's own network sends the API key unencrypted, and the
+    /// Connections log says so: once a session for each place the key goes, and never for https.
+    #[test]
+    fn plain_http_to_the_lan_is_said_once_in_the_connections_log() {
+        use propagation::live::cloudlog::Destination;
+        // A loopback address no other test uses, so the session-wide set is this test's own.
+        let lan = Destination::check("http://127.0.0.37:8086")
+            .expect("a loopback address is on the operator's own network");
+        let lines = |needle: &str| {
+            super::get_connection_log()
+                .into_iter()
+                .filter(|e| e.connector == "Cloudlog" && e.message.contains(needle))
+                .map(|e| (e.level, e.message))
+                .collect::<Vec<_>>()
+        };
+        super::warn_cloudlog_cleartext(&lan);
+        super::warn_cloudlog_cleartext(&lan);
+        let said = lines("127.0.0.37");
+        assert_eq!(
+            said.len(),
+            1,
+            "once a session, not once a contact: {said:?}"
+        );
+        assert_eq!(said[0].0, "warn", "{said:?}");
+        assert!(said[0].1.contains("unencrypted"), "{}", said[0].1);
+        // Control: https is not plain http, and there is nothing to say about it.
+        let https =
+            Destination::check("https://cloudlog-n35.example.org").expect("an https destination");
+        super::warn_cloudlog_cleartext(&https);
+        assert!(lines("cloudlog-n35.example.org").is_empty());
     }
 
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that

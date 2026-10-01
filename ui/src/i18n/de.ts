@@ -905,6 +905,7 @@ export const DE: PartialCatalog = {
   "settings.confirmations.cloudlog.note": "Leitet jedes geloggte QSO automatisch an Ihr selbst gehostetes <b>Cloudlog</b>- oder <b>Wavelog</b>-Logbuch weiter (HTTP). Der API-Schlüssel ist ein Token Ihrer eigenen Instanz — ihn eintragen, die ID Ihres Stationsprofils angeben und den Schalter einschalten.",
   "settings.confirmations.cloudlog.url.label": "Basis-URL",
   "settings.confirmations.cloudlog.url.hint": "Die Wurzeladresse Ihrer Cloudlog-/Wavelog-Seite. Zum Abschalten leer lassen.",
+  "settings.confirmations.cloudlog.url.plainHttp": "Mit einfachem http:// wird Ihr API-Schlüssel unverschlüsselt an diese Adresse übertragen. Das ist nur für eine Adresse in Ihrem eigenen Netz erlaubt ({{ranges}} oder ein Name, der nur zu solchen Adressen aufgelöst wird); jede andere wird abgelehnt.",
   "settings.confirmations.cloudlog.stationId.label": "ID des Stationsprofils",
   "settings.confirmations.cloudlog.stationId.hint": "Die Nummer des Stationsstandorts — in Wavelog oder Cloudlog ▸ Station Locations die Zahl am Ende des Bearbeiten-Links dieses Standorts (…/station/edit/3 bedeutet 3). Nicht das Rufzeichen.",
   "settings.confirmations.cloudlog.stationId.notNumber": "Das sieht nach einem Rufzeichen aus — Wavelog und Cloudlog erwarten die Nummer des Stationsstandorts.",
