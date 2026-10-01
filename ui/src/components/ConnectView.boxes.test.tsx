@@ -197,11 +197,11 @@ describe('a pane’s manual link — ⋯ ▸ ? … in the manual', () => {
 
   it('a pane the manual describes links to its own section, opening in the browser', async () => {
     const { container } = await mount()
-    // The default layout: Conditions (left, top) is a row of the pane-grid table; Chase (right, top)
+    // The default layout: Best band (left, top) is a row of the pane-grid table; Chase (right, top)
     // has a section of its own.
     expect([DEFAULT_SLOTS.left1, DEFAULT_SLOTS.right1], 'control: the default layout').toEqual(['advisory', 'chase'])
     let a = link(openMenu(container, 'left1'))!
-    expect(a.textContent).toBe('?Conditions in the manual')
+    expect(a.textContent).toBe('?Best band in the manual')
     expect(a.getAttribute('href')).toBe('https://hamradiotools.io/manual/connect#the-pane-grid')
     expect(a.getAttribute('target')).toBe('_blank')
     expect(a.getAttribute('rel')).toBe('noreferrer')

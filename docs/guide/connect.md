@@ -33,7 +33,7 @@ One **map picker** at the top of the map chooses the view:
   from your QTH.
 
 Each intent preset remembers its own pick. **Layers** sits in the top-left
-corner of every view and folds away to a pill, the same way Conditions does.
+corner of every view and folds away to a pill, the same way the Propagation card does.
 
 The **Layers** menu toggles what's drawn on top:
 
@@ -128,7 +128,7 @@ opens), one of the four, or **Custom** once you have moved or resized anything y
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|
-| Map first | Conditions, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
+| Map first | Best band, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
 | List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
 | Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
 | Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height (and Satellites turns on) | 400 px |
@@ -188,7 +188,7 @@ The panes you can assign:
 
 | Pane | Shows |
 |---|---|
-| Conditions | the propagation headline + any warning banners |
+| Best band | the propagation headline (which band is best now) + any warning banners |
 | Band Advisor | every HF band ranked best-first, with plain reasoning |
 | Bands for you | each band as a tile saying Open, Marginal or Closed for you now, with a dot when the band is being heard, ★ on the best band and a ring on your radio's band; click a tile to show that band on the map |
 | Selection | detail on the station/spot you clicked, with a ▶ Work button |
@@ -198,7 +198,7 @@ The panes you can assign:
 | Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
 | Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
 | Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
-| Best Band → Region | the best band to reach each region |
+| Bands by region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
 | NCDXF Beacons | the NCDXF beacon schedule, with heard badges |
 | Insights | notable propagation events, narrated |

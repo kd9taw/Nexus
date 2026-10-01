@@ -170,7 +170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is outside your licence privileges, whatever colour you pick for them.
 - **Three ready-made layouts for Connect: Map first, List first and Dashboard.** **⊞ Panels** on
   Connect now opens with a **Layout** section. **Map first** gives the map the full height and all
-  but two narrow side columns (Conditions and Band Advisor, Chase and Space Wx). **List first**
+  but two narrow side columns (Best band and Band Advisor, Chase and Space Wx). **List first**
   puts Chase, Chase Feed, Getting Out and Openings in two wide columns with a small map between
   them. **Dashboard** opens seven panes around a smaller map: Space Wx and Band Advisor on the
   left, Chase and Getting Out on the right, Openings, Band Outlook and Greyline along the bottom.

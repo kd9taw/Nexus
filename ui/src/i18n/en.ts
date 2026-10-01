@@ -2246,9 +2246,9 @@ export const EN = {
   // acronym and stays in the component; the three trend arias are whole strings rather than
   // a stem plus a direction word.
   'map.insights.collapsed.title': 'Show propagation insights',
-  'map.insights.pill': 'Conditions',
+  'map.insights.pill': 'Propagation',
   'map.insights.aria': 'Propagation insights',
-  'map.insights.title': 'Conditions',
+  'map.insights.title': 'Propagation',
   'map.insights.collapse.title': 'Collapse',
   'map.insights.muf.title':
     'Maximum Usable Frequency — the modelled DX ceiling right now; bands below it are open',
@@ -7311,7 +7311,7 @@ export const EN = {
   'connect.layout.button.title': 'Choose a layout for this screen: Map first, List first, Dashboard or Frame',
 
   // Pane names, as they read in the picker and in each pane's header.
-  'connect.pane.advisory.title': 'Conditions',
+  'connect.pane.advisory.title': 'Best band',
   'connect.pane.bandAdvisor.title': 'Band Advisor',
   'connect.pane.bandTiles.title': 'Bands for you',
   'connect.pane.selection.title': 'Selection',
@@ -7342,7 +7342,7 @@ export const EN = {
   'connect.solar.trend.aria': '{{index}} daily, {{from}} to {{to}}: low {{low}}, high {{high}}',
   'connect.pane.spacewx.title': 'Space Wx',
   'connect.pane.getout.title': 'Getting Out',
-  'connect.pane.bestband.title': 'Best Band → Region',
+  'connect.pane.bestband.title': 'Bands by region',
   'connect.pane.activity.title': 'Activity Matrix',
   'connect.pane.beacons.title': 'NCDXF Beacons',
   'connect.pane.insights.title': 'Insights',
