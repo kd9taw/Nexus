@@ -1,7 +1,7 @@
 // One grid slot: a header (pane title, a content-picker to reassign the slot, and ✕ to close
 // it) over a body that renders the pane's full panel, falling back to its one-sentence
-// projection when there is no data yet. The picker auto-lists every registry entry, so B2/B3
-// panes appear with no change here.
+// projection when there is no data yet. The picker auto-lists every registry entry under its group,
+// so a new pane appears with no change here.
 //
 // The Basic/Expert detail toggle was removed 2026-07-26 (operator) — every pane renders in full.
 // `def.basic()` is NOT the removed mode: it is the loading / no-data / offline hint for every
@@ -42,8 +42,8 @@
 // dashboard window does on every snapshot. Off (no interval) by default.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every pane's name
-// arrives already translated from the registry (`panes.tsx`, resolved through getters); the
-// picker's B2/B3 groups are named by their tier code, which is not prose. The ✕ uses the
+// arrives already translated from the registry (`panes.tsx`, resolved through getters), and so do
+// the picker's groups, named by what the boxes are for (`PANE_CATEGORY_LABEL`). The ✕ uses the
 // cockpit frame's own words (`pane.hide.*`) — one gesture, one sentence, in every view.
 //
 // THE DASHBOARD RAIL beside the cockpits renders these same frames in its own four slots
@@ -51,7 +51,7 @@
 // frames (PaneSeam) the boxes it measures and repaints — a ref, never a size.
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from 'react'
 import { t } from '../../i18n'
-import { PANES, paneById } from './panes'
+import { PANES, PANE_CATEGORIES, PANE_CATEGORY_LABEL, paneById } from './panes'
 import { BoxMenu } from './BoxMenu'
 import { paneHelpUrl } from './paneHelp'
 import type { PaneContext } from './paneContext'
@@ -213,13 +213,10 @@ export function PaneFrame<S extends string = SlotId>({
             title={t('connect.slot.pick.title')}
             onChange={(e) => onAssign(slotId, e.target.value as PaneId)}
           >
-            {(['core', 'b2', 'b3'] as const).map((cat) => {
+            {PANE_CATEGORIES.map((cat) => {
               const items = PANES.filter((p) => p.category === cat)
               return items.length ? (
-                <optgroup
-                  key={cat}
-                  label={cat === 'core' ? t('connect.slot.group.core') : cat.toUpperCase()}
-                >
+                <optgroup key={cat} label={PANE_CATEGORY_LABEL[cat]()}>
                   {items.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.title}

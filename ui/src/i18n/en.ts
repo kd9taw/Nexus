@@ -7228,11 +7228,14 @@ export const EN = {
   'connect.popOut.label': '⧉ Pop out',
   'connect.popOut.title': 'Open Connect in its own window (for a second monitor)',
 
-  // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`),
-  // and the B2/B3 picker groups are named by their tier code — neither is prose.
+  // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`), which
+  // is not prose. The picker's groups, and ⋯ ▸ Add a tab's, say what the boxes in them are for.
   'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
   'connect.slot.pick.title': 'Choose what this slot shows',
-  'connect.slot.group.core': 'Panels',
+  'connect.slot.group.bands': 'Bands',
+  'connect.slot.group.spaceWx': 'Space weather',
+  'connect.slot.group.activity': 'Activity',
+  'connect.slot.group.station': 'Station',
   // A pane's ⋯ menu (connect/BoxMenu): the pane's own options. `{{title}}` is the pane's name, `{{pct}}`
   // a whole number. The A− / A+ glyphs beside the two words stay in the code.
   'connect.box.menu.aria': 'Options for {{title}}',

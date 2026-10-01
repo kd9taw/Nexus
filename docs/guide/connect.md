@@ -293,9 +293,10 @@ controllers disagreeing about where the amplifier should be.
 
 ![A pane picker open: the closed control reads "24h Band×Hour", and the list below is grouped — Panels (Conditions, Band Advisor, Selection, Band Outlook, Openings, Openings Log, Space Wx, Getting Out), B2 (Kp outlook, Best Band → Region, Activity Matrix, NCDXF Beacons, Insights, Chase) and B3 (Greyline, 24h Band×Hour highlighted as the current choice, Sporadic-E).](../img/manual/connect-pane-picker.webp)
 
-*A pane picker open in Nexus 1.10.3. The **Panels** / **B2** / **B3** headings
-are the picker's own grouping of the pane list — any pane in any group can go
-in any slot.*
+*A pane picker open in Nexus 1.10.3, when its headings were Panels, B2 and B3.
+They now say what the boxes under them are for: **Bands**, **Space weather**,
+**Activity** and **Station**, in the picker and in **⋯ ▸ Add a tab** alike. Any
+pane in any group can go in any slot.*
 
 1. Click the picker in any pane frame's corner.
 2. Choose a pane from the list. If that pane already lives in another slot, the

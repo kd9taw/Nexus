@@ -31,7 +31,7 @@ import * as RM from '@radix-ui/react-dropdown-menu'
 import { t } from '../../i18n'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP } from '../../features/panelState'
 import { ROTATE_CHOICES, type PaneId } from '../../features/connectConfig'
-import { PANES } from './panes'
+import { PANES, PANE_CATEGORIES, PANE_CATEGORY_LABEL } from './panes'
 
 export function BoxMenu({
   title,
@@ -130,13 +130,11 @@ export function BoxMenu({
                 <RM.Portal>
                   <RM.SubContent className="ui-menu box-menu box-menu-panes" sideOffset={2} collisionPadding={8}>
                     <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
-                      {(['core', 'b2', 'b3'] as const).map((cat) => {
+                      {PANE_CATEGORIES.map((cat) => {
                         const items = PANES.filter((p) => p.category === cat && addable?.includes(p.id))
                         return items.length ? (
                           <RM.Group key={cat}>
-                            <RM.Label className="box-menu-label">
-                              {cat === 'core' ? t('connect.slot.group.core') : cat.toUpperCase()}
-                            </RM.Label>
+                            <RM.Label className="box-menu-label">{PANE_CATEGORY_LABEL[cat]()}</RM.Label>
                             {items.map((p) => (
                               <RM.Item key={p.id} className="ui-menu-item" onSelect={() => onAddTab(p.id)}>
                                 {p.title}

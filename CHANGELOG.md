@@ -496,6 +496,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of the window, with the frequency, the band list, TX Off, Tune and Stop TX, is no longer shown
   on Connect; every other screen still has it. To stop a transmission while Connect is on screen,
   press **Esc**, or go to any other screen and press **Stop TX** there.
+- **Connect's boxes have clearer names, and their menus are grouped by what the boxes are for.**
+  The headline box is now **Best band**, the card that floats over the map is **Propagation**, and
+  **Best Band → Region** is **Bands by region**, so nothing else on Connect is called "Conditions"
+  and the two band boxes no longer read alike. A box's picker and **⋯ ▸ Add a tab** list the boxes
+  under **Bands**, **Space weather**, **Activity** and **Station** instead of Panels, B2 and B3.
 - **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
   in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
   group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.
