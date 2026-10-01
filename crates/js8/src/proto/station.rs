@@ -38,9 +38,10 @@
 //!   only when a message waits, once per station per `allcall_reply_interval_ms` (:8812, :9275).
 //! - Relay (`>`): retransmit `rest *DE* MYCALL`; at the final hop parse the chain to `A>B>C` and
 //!   answer `A>B>C ACK` (unless the embedded text is itself an autoreply command).
-//! - Store-and-forward: `MSG TO:` stores a `Store` inbox row keyed to the base callsign; the next
-//!   heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and marks it
-//!   `Delivered`.
+//! - Store-and-forward: with relay on, `MSG TO:` stores a `Store` inbox row keyed to the base
+//!   callsign and is answered `<from> ACK`, as JS8Call answers it (mainwindow.cpp:9014-9051); the
+//!   next heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and
+//!   marks it `Delivered`.
 //! - A `MSG` to me or a joined group (never `@ALLCALL`) is filed `Unread` in my inbox, as
 //!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133), and answered as JS8Call
 //!   answers it (:9139): `<from> ACK` to the sender as heard, or `<path> ACK` back along the relay
@@ -418,9 +419,17 @@ impl Station {
             return actions;
         }
 
+        // While the idle watchdog stands nothing is answered, relayed or delivered: JS8Call
+        // processes no automatic reply while idle (`if(m_tx_watchdog) continue;`,
+        // mainwindow.cpp:8818). Gated here on the trip itself, not on the switches it turned off:
+        // a settings change re-applies those to the station while the trip still stands.
+        let replies = !self.idle_tripped;
+
         // Heartbeat heard → maybe HB-ACK.
         if m.is_heartbeat() && m.cq.is_none() {
-            self.maybe_hb_ack(m, now_ms, &mut actions);
+            if replies {
+                self.maybe_hb_ack(m, now_ms, &mut actions);
+            }
             return actions;
         }
         if m.cq.is_some() {
@@ -433,19 +442,23 @@ impl Station {
         let mine = to_me || to_group;
         if let Some(cmd) = m.cmd {
             if self.cfg.relay && cmd == Command::Relay {
-                if mine {
+                if mine && replies {
                     self.handle_relay(m, now_ms, &mut actions);
                 }
                 return actions;
             }
+            // A `MSG TO:` is stored, and acknowledged, only with relaying on, as JS8Call does it
+            // (`d.cmd == " MSG TO:" && !isAllCall && !m_config.relay_off()`, :9014).
             if cmd == Command::MsgTo {
-                if mine {
+                if mine && self.cfg.relay {
                     self.handle_msg_to(m, now_ms, &mut actions);
                 }
                 return actions;
             }
             if cmd == Command::QueryMsgs || is_query_msg(m) {
-                self.handle_query_msg(m, mine, now_ms, &mut actions);
+                if replies {
+                    self.handle_query_msg(m, mine, now_ms, &mut actions);
+                }
                 return actions;
             }
             // A MSG to me or a group I joined is filed UNREAD (JS8Call's `d.cmd == " MSG" &&
@@ -457,6 +470,7 @@ impl Station {
             // Never an @ALLCALL query: JS8Call's SNR?/INFO?/STATUS?/GRID?/HEARING? replies each
             // carry `!isAllCall` (mainwindow.cpp:8834, :8839, :8849, :8859, :8869).
             if self.cfg.autoreply
+                && replies
                 && cmd.is_autoreply()
                 && (to_me || to_group)
                 && !self.is_me(&m.from)
@@ -612,12 +626,14 @@ impl Station {
         if !(self.hb_on && self.cfg.autoreply && self.cfg.hb_ack && self.outbox.is_empty()) {
             return;
         }
-        let to = split_portable(&m.from).0.to_ascii_uppercase();
+        // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
+        // held for it is found under its base call.
+        let to = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         if self.is_me(&to) {
             return;
         }
         let mut text = format!("{to} HEARTBEAT SNR {}", format_snr(m.snr_db));
-        if let Some(id) = self.stored_for(&to) {
+        if let Some(id) = self.stored_for(split_portable(&to).0) {
             text.push_str(&format!(" MSG ID {id}"));
         }
         // On a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
@@ -634,10 +650,12 @@ impl Station {
         actions: &mut Vec<StationAction>,
     ) {
         if cmd == Command::Msg {
-            self.ack_msg(m, now_ms, actions);
+            self.ack(m, m.text.trim(), now_ms, actions);
             return;
         }
-        let from = split_portable(&m.from).0.to_ascii_uppercase();
+        // The reply names the sender as heard, `/P` included (JS8Call's `d.from`,
+        // mainwindow.cpp:8834-8903).
+        let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let reply = match cmd {
             Command::SnrQuery => Some(format!("{from} SNR {}", format_snr(m.snr_db))),
             // Nothing set, nothing said: JS8Call skips an empty grid or INFO
@@ -666,20 +684,22 @@ impl Station {
         }
     }
 
-    /// JS8Call's answer to a MSG it filed (mainwindow.cpp:9127-9139): `<from> ACK` to the
-    /// sender as it was heard (`d.from`, so a `/P` or compound call stays whole), or `<path>
-    /// ACK` when a relay brought it (`calls.length() > 1 ? d.relayPath : d.from`, the path
-    /// `parseRelayPathCallsigns` reads and the inbox keeps). It waits out the countdown every
-    /// automatic reply does, and it exists only with autoreply on: JS8Call types it into the
-    /// compose box either way but keys it only with AUTO checked (`processTxQueue`, :9674-9685;
-    /// the reply has no trailing space, so the `" ACK "` test there never matches it). A copy
-    /// of the MSG heard while its ACK still waits draws no second one: JS8Call's waiting ACK
-    /// sits in the compose box until it has gone, and no reply is queued while the box holds
-    /// text (:9365). A path over `MAX_PATH_HOPS` is refused, as a relay chain is in
-    /// `handle_relay`: its calls come from the sender's text, and upstream keys all of them.
-    fn ack_msg(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
+    /// JS8Call's answer to a MSG it filed (mainwindow.cpp:9127-9139) or a `MSG TO:` it stored
+    /// (:9027-9051): `<from> ACK` to the sender as it was heard (`d.from`, so a `/P` or compound
+    /// call stays whole), or `<path> ACK` when a relay brought it (`calls.length() > 1 ?
+    /// d.relayPath : d.from`, the path `parseRelayPathCallsigns` reads from `text`: a MSG's
+    /// whole text, a `MSG TO:`'s text after the target, as the inbox keeps them). It waits out
+    /// the countdown every automatic reply does, and it exists only with autoreply on: JS8Call
+    /// types it into the compose box either way but keys it only with AUTO checked
+    /// (`processTxQueue`, :9674-9685; the reply has no trailing space, so the `" ACK "` test
+    /// there never matches it). A copy heard while its ACK still waits draws no second one:
+    /// JS8Call's waiting ACK sits in the compose box until it has gone, and no reply is queued
+    /// while the box holds text (:9365). A path over `MAX_PATH_HOPS` is refused, as a relay
+    /// chain is in `handle_relay`: its calls come from the sender's text, and upstream keys all
+    /// of them.
+    fn ack(&mut self, m: &Message, text: &str, now_ms: u64, actions: &mut Vec<StationAction>) {
         let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        let path = relay_path(&from, &clamp_str(m.text.trim(), MAX_TEXT_LEN));
+        let path = relay_path(&from, &clamp_str(text, MAX_TEXT_LEN));
         if path.len() > MAX_PATH_HOPS {
             actions.push(StationAction::Toast {
                 text: format!("Relay chain over {MAX_PATH_HOPS} hops refused"),
@@ -779,7 +799,9 @@ impl Station {
         self.next_inbox_id += 1;
         self.inbox.push(InboxEntry {
             id,
-            from: clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase(),
+            // Its sender as heard, as JS8Call stores it (`cd.from = d.from`, :9036), so the
+            // delivery names it so too.
+            from: clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase(),
             to: clamp_str(&target, MAX_CALL_LEN),
             text: clamp_str(text, MAX_TEXT_LEN),
             path: Vec::new(),
@@ -790,6 +812,12 @@ impl Station {
         });
         actions.push(StationAction::InboxChanged);
         self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
+        if self.cfg.autoreply && !self.idle_tripped && !self.is_me(&m.from) {
+            // …and acknowledged as JS8Call acknowledges the store (:9027-9051), along the relay
+            // path read from the text after the target's call: an automatic reply, so only
+            // with autoreply on.
+            self.ack(m, text, now_ms, actions);
+        }
     }
 
     /// A MSG to me (or a group I joined) into my inbox as `Unread`: JS8Call's
@@ -824,7 +852,11 @@ impl Station {
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
-        let from = split_portable(&m.from).0.to_ascii_uppercase();
+        // The querier as heard names the reply (`replyPath = d.from`, mainwindow.cpp:9248,
+        // :9270-9285); its base call is what a held message is filed for (`to`, the base, as
+        // JS8Call stores it, :9042, and finds it, :9523).
+        let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
+        let base = split_portable(&from).0.to_string();
         // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it,
         // only when the query was addressed to me (mainwindow.cpp:8601, :9171). Anything else
         // it may be draws no reply at all: JS8Call's buffered QUERY skips every miss
@@ -834,7 +866,7 @@ impl Station {
                 return;
             };
             if let Some(e) = self.inbox.iter_mut().find(|e| {
-                e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&from)
+                e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&base)
             }) {
                 e.state = InboxState::Delivered;
                 let deliver = format!("{from} MSG {} FROM {}", e.text, e.from);
@@ -856,12 +888,12 @@ impl Station {
         // interval (:9377-9379, checked first at :8812).
         if self.cfg.autoreply && self.addressed_to_me(&m.to_text) {
             let to_allcall = m.to_text.eq_ignore_ascii_case("@ALLCALL");
-            let reply = match self.stored_for(&from) {
+            let reply = match self.stored_for(&base) {
                 Some(id) => format!("{from} YES MSG ID {id}"),
                 None if to_allcall => return,
                 None => format!("{from} NO"),
             };
-            if to_allcall && self.allcall_held_off(&from, now_ms, actions) {
+            if to_allcall && self.allcall_held_off(&base, now_ms, actions) {
                 return;
             }
             self.schedule_reply(
@@ -935,10 +967,12 @@ impl Station {
     /// four calls, newest first (:8873-8883), never the station that asked (:8890) and none its
     /// callsign aging has passed (:8894), a setting that ships off.
     fn hearing_reply(&self, from: &str, now_ms: u64) -> String {
+        // The heard list files a station under its base call (`record_heard`).
+        let asker = split_portable(from).0;
         let mut calls: Vec<&Heard> = self
             .heard
             .iter()
-            .filter(|h| h.call != from && !self.aged(h, now_ms))
+            .filter(|h| h.call != asker && !self.aged(h, now_ms))
             .collect();
         calls.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
         let mut words = vec![format!("{from} HEARING")];
@@ -1892,12 +1926,20 @@ mod tests {
         );
     }
 
-    /// Store a `MSG TO:` for `call` at my station (W1AW leaves it, addressed to me).
+    /// Store a `MSG TO:` for `call` at my station (W1AW leaves it, addressed to me). The ACK it
+    /// draws (mainwindow.cpp:9051) is taken out of the countdown here, so a test sees only the
+    /// replies it is about; `a_stored_msg_to_is_acked_as_js8call_acks_it` is the ACK's own.
     fn store_for(s: &mut Station, call: &str, t: u64) {
         let body = format!("{call} FRIDAY CONTACT");
         s.on_event(
             &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, &body, -5),
             t,
+        );
+        let before = s.pending.len();
+        s.pending.retain(|p| p.text != "W1AW ACK");
+        assert!(
+            s.pending.len() + 1 == before || before == MAX_PENDING,
+            "the stored MSG TO: draws its ACK, unless the reply queue is full"
         );
     }
 
@@ -2163,6 +2205,79 @@ mod tests {
                 .any(|d| d.contains("K1ABC MSG FRIDAY CONTACT FROM W1AW")),
             "delivery not transmitted"
         );
+    }
+
+    /// A `MSG TO:` stored for another station is acknowledged as JS8Call acknowledges it
+    /// (mainwindow.cpp:9014-9051): `<from> ACK`, or `<path> ACK` along the relay path read from
+    /// the text AFTER the target's call (`parseRelayPathCallsigns(d.from, text)`, :9027), which
+    /// is why a marker right after the target names no hop.
+    #[test]
+    fn a_stored_msg_to_is_acked_as_js8call_acks_it() {
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC FRIDAY CONTACT",
+                -5,
+            ),
+            1_000,
+        );
+        assert_eq!(s.inbox().len(), 1, "control: the MSG TO: is stored");
+        assert_eq!(waiting(&s), ["W1AW ACK"], "the store is acknowledged");
+        let f = drain(&mut s, 2_000).expect("the ACK after the countdown");
+        assert_eq!(
+            (f.origin, f.display.as_str(), f.word),
+            (
+                Origin::AutoReply,
+                "KD9TAW: W1AW ACK",
+                ack_frame("W1AW", false)
+            )
+        );
+        for (t, text, ack) in [
+            (3_000, "K1ABC HELLO *DE* N0JDS", "OH8STN>N0JDS ACK"),
+            (4_000, "K1ABC *DE* N0JDS", "OH8STN ACK"),
+        ] {
+            s.on_event(
+                &directed("OH8STN", "KD9TAW", Some(Command::MsgTo), None, text, -5),
+                t,
+            );
+            assert_eq!(
+                waiting(&s).last().map(String::as_str),
+                Some(ack),
+                "{text:?}: the relay path is read after the target"
+            );
+        }
+    }
+
+    /// …only with relaying on: JS8Call neither stores nor acknowledges a `MSG TO:` with its relay
+    /// off (`d.cmd == " MSG TO:" && !isAllCall && !m_config.relay_off()`, :9014), as Settings'
+    /// Relay hint says. And its ACK, an automatic reply, needs autoreply on as well (JS8Call keys
+    /// it only with AUTO checked, `processTxQueue`, :9674-9685).
+    #[test]
+    fn a_msg_to_is_stored_only_with_relay_on_and_acked_only_with_autoreply_on() {
+        let msg_to = directed(
+            "W1AW",
+            "KD9TAW",
+            Some(Command::MsgTo),
+            None,
+            "K1ABC FRIDAY CONTACT",
+            -5,
+        );
+        let mut c = cfg();
+        c.relay = false;
+        let mut s = Station::new(c);
+        s.on_event(&msg_to, 1_000);
+        assert!(s.inbox().is_empty(), "relay off: not stored");
+        assert!(waiting(&s).is_empty(), "…and not acknowledged");
+        let mut c = cfg();
+        c.autoreply = false;
+        let mut s = Station::new(c);
+        s.on_event(&msg_to, 1_000);
+        assert_eq!(s.inbox().len(), 1, "control: relay on, it is stored");
+        assert!(waiting(&s).is_empty(), "autoreply off: not acknowledged");
     }
 
     #[test]
@@ -3631,6 +3746,189 @@ mod tests {
             waiting(&s).len(),
             1,
             "control: a path of {MAX_PATH_HOPS} calls is answered"
+        );
+    }
+
+    /// While the idle watchdog stands, nothing is answered, relayed or delivered, as JS8Call
+    /// processes no automatic reply while idle (mainwindow.cpp:8818), even after a settings change
+    /// has put the switches back on in the station (the engine's `js8_apply_station_config`). An
+    /// operator act clears the trip, and the same query is answered again.
+    #[test]
+    fn no_reply_of_any_kind_while_the_idle_watchdog_stands() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 5;
+        c.hb_ack = true;
+        let mut s = Station::new(c.clone());
+        s.mark_active(0);
+        s.tick(5 * 60 * 1000);
+        assert!(s.idle_tripped(), "control: the watchdog tripped");
+        s.set_config(c);
+        assert!(
+            s.config().autoreply && s.config().relay,
+            "precondition: a settings change put the switches back on in the station"
+        );
+        let t = 5 * 60 * 1000 + 1;
+        s.on_event(
+            &directed(
+                "N0XYZ",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC FRIDAY CONTACT",
+                -5,
+            ),
+            t,
+        );
+        let id = s.inbox()[0].id;
+        assert!(waiting(&s).is_empty(), "MSG TO: no ACK while tripped");
+        for (what, ev) in [
+            (
+                "SNR?",
+                directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            ),
+            (
+                "MSG",
+                directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5),
+            ),
+            (
+                "QUERY MSGS",
+                directed("K1ABC", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+            ),
+            (
+                "QUERY MSG",
+                directed(
+                    "K1ABC",
+                    "KD9TAW",
+                    Some(Command::Query),
+                    None,
+                    &format!("MSG {id}"),
+                    -5,
+                ),
+            ),
+            (
+                "relay",
+                directed("W1AW", "KD9TAW", Some(Command::Relay), None, "N0XYZ HI", -5),
+            ),
+        ] {
+            s.on_event(&ev, t);
+            assert!(waiting(&s).is_empty(), "{what}: no reply while tripped");
+        }
+        s.set_hb(true, t);
+        s.on_event(&heartbeat("N0XYZ", -5), t);
+        assert!(waiting(&s).is_empty(), "HB-ACK: no reply while tripped");
+        assert_eq!(
+            s.inbox().iter().find(|e| e.id == id).map(|e| e.state),
+            Some(InboxState::Store),
+            "the held message is not marked delivered"
+        );
+        s.mark_active(t);
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            t,
+        );
+        assert_eq!(
+            waiting(&s),
+            ["W1AW SNR -05"],
+            "control: with the trip cleared it is answered"
+        );
+    }
+
+    /// Every automatic reply names the sender as heard, a `/P` included, as JS8Call answers
+    /// `d.from` (mainwindow.cpp:8834-8903 the queries, :9098 the HB-ACK, :9248 a delivery,
+    /// :9270-9285 QUERY MSGS), and a delivered message names its sender as JS8Call stored it
+    /// (`cd.from = d.from`, :9036). What a station is filed and found under stays its base call
+    /// (`getNextMessageIdForCallsign` matches the base too, :9523), so a message held for W1AW is
+    /// still offered and delivered to W1AW/P.
+    #[test]
+    fn every_automatic_reply_names_the_sender_as_heard() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        c.info = "RIG IC7300".into();
+        c.status = "QRV".into();
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        for cmd in [
+            Command::SnrQuery,
+            Command::GridQuery,
+            Command::InfoQuery,
+            Command::StatusQuery,
+            Command::HearingQuery,
+            Command::QueryMsgs,
+        ] {
+            s.on_event(
+                &directed("W1AW/P", "KD9TAW", Some(cmd), None, "", -5),
+                1_000,
+            );
+        }
+        s.on_event(&heartbeat("W1AW/P", -5), 1_000);
+        assert_eq!(
+            waiting(&s),
+            [
+                "W1AW/P SNR -05",
+                "W1AW/P GRID EN52",
+                "W1AW/P INFO RIG IC7300",
+                "W1AW/P STATUS QRV",
+                "W1AW/P HEARING",
+                "W1AW/P NO",
+                "W1AW/P HEARTBEAT SNR -05",
+            ],
+            "every reply names W1AW/P as heard"
+        );
+        let snr = Frame::Directed {
+            from: CallRef::Base("KD9TAW".into()),
+            to: CallRef::Base("W1AW".into()),
+            cmd: Command::Snr,
+            num: Some(-5),
+            portable_from: false,
+            portable_to: true,
+        };
+        let whole = I3 {
+            first: true,
+            last: true,
+            data: false,
+        };
+        assert_eq!(
+            drain(&mut s, 2_000).map(|f| f.word),
+            Some(encode_frame(&snr, whole, Speed::Normal).unwrap()),
+            "the SNR reply carries the portable flag"
+        );
+
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "N0XYZ/P",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "W1AW FRIDAY CONTACT",
+                -5,
+            ),
+            0,
+        );
+        s.pending.clear(); // its ACK is not what this is about
+        let id = s.inbox()[0].id;
+        s.on_event(
+            &directed("W1AW/P", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+            1_000,
+        );
+        s.on_event(
+            &directed(
+                "W1AW/P",
+                "KD9TAW",
+                Some(Command::Query),
+                None,
+                &format!("MSG {id}"),
+                -5,
+            ),
+            2_000,
+        );
+        assert_eq!(
+            waiting(&s),
+            [
+                format!("W1AW/P YES MSG ID {id}"),
+                "W1AW/P MSG FRIDAY CONTACT FROM N0XYZ/P".to_string(),
+            ],
+            "the message held for W1AW is offered and delivered to W1AW/P, from N0XYZ/P"
         );
     }
 
