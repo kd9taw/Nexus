@@ -241,11 +241,12 @@ them is the moment your hands are in a field. Those are called out below.
 | `PgUp` / `PgDn` | CW — **fire while typing too** | Nudge WPM ±2, with Shift ±4. |
 | `Space` (hold) | Phone | Push-to-talk. The press is ignored in a text field; the release always unkeys, wherever focus has moved. |
 | `F1`–`F6` | Phone, while the Voice keyer pane is on screen | Play that recorded message. Ignored while a recording is in progress. |
-| `Esc` | Phone, while the Voice keyer pane is on screen | Stop playback. |
+| `Esc` | Phone — **fires while typing too** | Halt TX, as the header's **Stop TX** does. With the Voice keyer pane on screen and the cursor outside a text field, it stops playback as well. |
 | `Esc` | RTTY / PSK / JS8 | Stop TX: drops the queue, drops the continuous-TX latch and unkeys. |
+| `Esc` | Tempo, SSTV, APRS, Satellites — **fires while typing too** | Halt TX, as **Stop TX** does (on Tempo, the top bar's). APRS and Satellites draw no Stop TX; this is their stop. |
 | `↑` `↓` `Home` `End` | List | Move between rows. The list is one Tab stop. |
 | `Enter` / `Space` | List | Work the focused row. |
-| `Esc` | Any open dialog, menu or station card | Close it. |
+| `Esc` | Any open dialog, menu or station card | Close it. On a screen where `Esc` halts TX, the same press halts it too. |
 
 **Mac keyboards eat bare F-keys as media keys.** Hold `fn`, or turn on "Use F1,
 F2, etc. as standard function keys" in macOS keyboard settings.
