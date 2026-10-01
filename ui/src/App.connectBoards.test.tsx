@@ -155,8 +155,11 @@ function traffic(): Call[] {
   }
   return out.sort((a, b) => a.order - b.order).map((x) => x.call)
 }
-/** The writes: everything but the reads a mounted screen makes. */
-const writes = (calls: Call[]) => calls.filter(([n]) => !/^(get|ask|read|resolve|preview|cwDecode|cwSkim|uiStateLoad)/.test(n))
+/** The writes: everything but the reads a mounted screen makes. `appVersion` is the top bar's read of
+ *  the app's version, made when the bar mounts: Connect draws no top bar (the operator, 2026-10-01:
+ *  "remove all radio control from connect, reclaim that space"), so a Work from a Connect box that
+ *  opens a cockpit mounts the bar, and its read lands among these calls. */
+const writes = (calls: Call[]) => calls.filter(([n]) => !/^(get|ask|read|resolve|preview|cwDecode|cwSkim|uiStateLoad|appVersion)/.test(n))
 /** The Work itself: the writes up to and including the QSY. */
 const theWork = (calls: Call[]) => {
   const w = writes(calls)
