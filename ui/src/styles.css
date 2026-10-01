@@ -6934,6 +6934,17 @@ select optgroup {
   background: color-mix(in srgb, var(--need-color, var(--accent)) 24%, transparent);
   border: 1px solid var(--need-color, var(--accent));
 }
+/* AT NIGHT A CHIP'S OWN TINT IS 10 % OF ITS NEED COLOUR (operator, 2026-09-30: "10 % fill"). The night ink is dimmer
+   than the bright need colours, so the day's 24 % tint, stacked on a row that is need-tinted, selected or dimmed, took
+   a word as low as 3.31:1 (a POTA chip on a watched station's row); at 10 % every chip reads 4.44:1 or better at night,
+   none worse than it shipped. The border keeps the colour at full strength and the day look is unchanged. No need
+   colour moves, so the night block's contract holds (styles-night-contrast.test.ts). NeedChip.contrast.test.tsx
+   holds it. */
+[data-night='1'] .need-chip,
+[data-night='1'] .need-chip.need-dxped,
+[data-night='1'] .need-chip.need-state {
+  background: color-mix(in srgb, var(--need-color, var(--accent)) 10%, transparent);
+}
 .need-entity {
   --need-color: var(--need-entity);
 }

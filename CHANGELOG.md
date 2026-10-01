@@ -835,9 +835,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in many places in the dark ones; a DXPED chip nearly vanished. The word now takes the theme's
   text colour everywhere, as on Connect, and the need's colour stays on the chip's border. On a
   Band Activity row already in a need's colour, that need's chip is an outline in the colour and
-  the row carries the tint. In the dark themes the POTA and SOTA chips, and their marks on the
-  band strip, the band map and the spot legend, now take the theme's own green and purple, as in
-  the light themes.
+  the row carries the tint. In night mode a chip's own fill is fainter, so its word stays easy to
+  read on the dimmed screen, and its border keeps the full colour. In the dark themes the POTA and
+  SOTA chips, and their marks on the band strip, the band map and the spot legend, now take the
+  theme's own green and purple, as in the light themes.
 - **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
   Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
   source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
