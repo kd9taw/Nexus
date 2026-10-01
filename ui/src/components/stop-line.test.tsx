@@ -759,10 +759,17 @@ describe('the stop line, computed against the real cockpits', () => {
       // Connect has a ⊞ vocabulary (its seven slots) and NO transmit control of any kind, so
       // there is no stop to lose — what is swept is the property that remains meaningful:
       // closing a pane, singly and all at once, leaves every control outside the panes on
-      // screen (the map toolbar, the header). The TopBar's TX cluster is outside the view.
+      // screen (the map toolbar, the header).
+      // ⚠️ CONNECT IS THE STOP LINE'S ONE RULED EXCEPTION. App draws no top bar there, so there is
+      // no Stop TX on Connect at all — the operator, 2026-10-01: "remove all radio control from
+      // connect, reclaim that space". Transmit on Connect is stopped by Esc or by leaving the
+      // screen; stop-control-wiring.test.tsx holds Esc to halt_tx on Connect and every OTHER screen
+      // to the bar. Nothing here is loosened for any other cockpit or screen by it.
       connect:
         'ConnectView.panes.test.tsx — "hiding every pane leaves every control outside the ' +
-        'panes on screen" (Connect renders no transmit control; PRESENCE-ONLY, by name)',
+        'panes on screen" (Connect renders no transmit control; PRESENCE-ONLY, by name); and ' +
+        'the ruled exception ("remove all radio control from connect, reclaim that space"): no top ' +
+        'bar on Connect, Esc sends halt_tx there — stop-control-wiring.test.tsx',
       // The dashboard rail's four slots. The rail is a sibling of the cockpit in App's shell and
       // renders no transmit control; what is swept is that it costs no cockpit a stop control:
       // with the rail on, every control on each cockpit's list below is on screen, no more disabled

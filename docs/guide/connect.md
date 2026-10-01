@@ -12,6 +12,11 @@ band is "open" when stations near *you* are demonstrably heard both ways, not
 when one big station far away has a good morning. Modelled data is always
 labelled "modelled"; the UI never dresses an estimate as a measurement.
 
+Connect has no radio controls. The bar across the top of the other screens (the
+frequency, the band list, TX Off, Tune and Stop TX) is not shown here, so the map
+and its panes get the whole height. To stop a transmission while Connect is on
+screen, press **Esc**, or go to any other screen and press **Stop TX** there.
+
 <!-- TODO: capture screenshot — Connect — the shaded 3-D globe with panes wrapped around it -->
 
 ## The tour
@@ -153,7 +158,8 @@ layout picked there leaves the main window's Connect as it was. On Windows the b
 has a **Stay behind** button: pressed, the window stays behind your other windows even
 when you click on it, so it can fill a screen behind Nexus without covering the cockpit.
 A click on it still moves the keyboard to it: until you click back into Nexus the keyboard
-is the dashboard's, so Esc stops nothing then. The Stop TX button always works.
+is the dashboard's, so Esc stops nothing then. The Stop TX button always works (with
+Connect in the main window there is none: click back into Nexus and press Esc).
 
 **Beside a cockpit: the dashboard rail.** The same boxes can stand in a column at the right of
 an operating cockpit (Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8), so the time, the bands

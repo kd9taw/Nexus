@@ -486,6 +486,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Connect has no radio controls, so its map and panes get the whole height.** The bar across the
+  top of the window, with the frequency, the band list, TX Off, Tune and Stop TX, is no longer shown
+  on Connect; every other screen still has it. To stop a transmission while Connect is on screen,
+  press **Esc**, or go to any other screen and press **Stop TX** there.
 - **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
   in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
   group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.

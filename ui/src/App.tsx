@@ -2619,6 +2619,23 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     prevTxRef.current = txNow
   }, [snap, txNow, settings?.soundTxState])
 
+  // ESC STOPS TRANSMIT ON CONNECT — the operator's ruled exception to the stop line, for this one
+  // screen (2026-10-01): "remove all radio control from connect, reclaim that space". The top bar is
+  // not drawn on Connect (below), so its Stop TX went with it, and the cockpits' own Esc listeners are
+  // bound only while their own view is shown: without this, nothing on Connect could cut an over that
+  // Operate's background sequence is still keying. Transmit on Connect is stopped by Esc, or by leaving
+  // the screen. The same halt as the bar's Stop TX and Operate's Esc (halt_tx). Bound in the CAPTURE
+  // phase and never preventDefault, so nothing inside Connect can swallow the key and every other
+  // meaning of Esc still happens: a menu still closes, the full-screen map is still left.
+  useEffect(() => {
+    if (effectiveView !== 'connect') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleHaltTx()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [effectiveView, handleHaltTx])
+
   if (!snap) {
     return (
       <div className="app loading">
@@ -3299,7 +3316,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={(remote?.staleShown ?? remote?.stale) || undefined}>
       {remote?.status}
       {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
-      <TopBar
+      {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
+          band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
+          then "remove all radio control from connect, reclaim that space". So the whole bar goes on
+          Connect, and Connect's content takes its height; every other screen keeps it exactly as
+          before. Its Stop TX goes with it — the stop line's one ruled exception, which the sweeps
+          name: transmit on Connect is stopped by Esc (the listener above) or by leaving the screen. */}
+      {effectiveView !== 'connect' && <TopBar
         mycall={snap.mycall}
         mygrid={snap.mygrid}
         radio={snap.radio}
@@ -3369,7 +3392,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         onSetOperator={handleSetOperator}
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
-      />
+      />}
 
       <UpdateBanner update={selfUpdate} />
 

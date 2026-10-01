@@ -69,6 +69,8 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AppSnapshot } from './types'
 import App from './App'
+import { allFeatureIds, featureById, sectionFeatures, type View } from './features/registry'
+import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
 // A 30 s budget for every test and hook here, for the machine and not for the checks. Each test mounts the real App, and
 // in three full-suite runs on a loaded box (2026-09-29 and 30) vitest's default budgets ran out with nothing wrong: "Test
@@ -128,6 +130,9 @@ async function fire(action: () => void): Promise<string[]> {
 // keyed into a dummy load until the tune watchdog expires. The two clicks are different code
 // paths — `onTune(!radio.tuning)` — so only a backend that remembers can exercise both.
 let tuning = false
+/** What `get_settings` answers. Null (no settings file) everywhere but the one screen that needs a
+ *  switch in it: Field Day is drawn only with its master switch (`fdActive`) on. */
+let settingsAnswer: unknown = null
 
 const snapshot = {
   mycall: 'KD9TAW',
@@ -246,7 +251,14 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
   if (cmd === 'app_version') return '0.0.0-test'
   if (cmd === 'radio_launch_info') return { showPicker: false }
   if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log)$/.test(cmd)) return []
-  if (/^(get_propagation|get_settings|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update)$/.test(cmd)) return null
+  if (cmd === 'get_settings') return settingsAnswer
+  if (/^(get_propagation|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update)$/.test(cmd)) return null
+  // Connect's own feeds, in the shapes its panes read (ConnectView.panes.test.tsx answers the same
+  // ones): a `{}` takes the view down through its ErrorBoundary, and Connect is never drawn at all.
+  if (cmd === 'get_band_outlook') return { bands: [], asOf: 0 }
+  if (cmd === 'get_space_wx_scales') return [null, []]
+  if (/^(get_kc2g_muf|get_ota_map_spots|get_contests)$/.test(cmd)) return []
+  if (/^(get_getting_out|get_path_outlook|get_aurora|get_declination|get_pca|get_satellites|get_log_stats)$/.test(cmd)) return null
   // The log's questions go unanswered, as the whole-log read (answered `{}`) did: no view here
   // needs the log, and `{}` is no answer to any of them.
   if (cmd === 'ask_log') throw new Error('no log in this test')
@@ -257,6 +269,7 @@ beforeEach(() => {
   localStorage.clear()
   bridgeCalls.length = 0
   tuning = false
+  settingsAnswer = null
   // THE WHOLE POINT OF THIS FILE: the real `./api` module, a fake bridge under it.
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -295,8 +308,8 @@ afterEach(() => {
 
 /** Mount the real App on `view` and wait for the boot snapshot — before it lands App renders
  *  only "Connecting to Nexus…", and every query below would find nothing. */
-async function mountOn(view: string): Promise<void> {
-  localStorage.setItem('nexus.workspace', 'dx')
+async function mountOn(view: string, area: 'dx' | 'msg' = 'dx'): Promise<void> {
+  localStorage.setItem('nexus.workspace', area)
   window.location.hash = `#${view}`
   render(<App />)
   await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull(), { timeout: 10_000 })
@@ -645,6 +658,69 @@ describe('JS8', () => {
 
   it('Esc sends halt_tx (the keyboard-only stop)', async () => {
     expect(await fire(() => fireEvent.keyDown(window, { key: 'Escape' }))).toEqual(['halt_tx'])
+  })
+})
+
+// ── Connect: the stop line's one ruled exception ────────────────────────────────────────────
+//
+// The operator, 2026-10-01, of the bar across the top of the window: "at very top, its the
+// frequency, the band dropdown, tx off, tune, stop tx.  That bar doenst need to live in
+// connect/conditions"; and, asked what Connect should keep so that transmit could always be stopped
+// there: "remove all radio control from connect, reclaim that space". So Connect draws no top bar,
+// and its Stop TX goes with it — the one screen the stop line excepts, by that ruling. Transmit on
+// Connect is stopped by Esc, which App binds while Connect is on show, or by leaving the screen.
+// Both halves are held here, at the wire, and so is the fence around them: every OTHER screen in the
+// app still draws the bar, so the exception cannot quietly grow to a second screen.
+
+/** Every section on, so every screen can be the one on show. */
+function everySectionOn(): void {
+  localStorage.setItem(
+    'nexus.features.v1',
+    JSON.stringify({ profile: 'custom', enabled: Object.fromEntries(allFeatureIds().map((id) => [id, true])) }),
+  )
+}
+
+describe('Connect — no radio controls, and Esc stops (the operator’s ruled exception)', () => {
+  beforeEach(async () => {
+    everySectionOn()
+    await mountOn('connect')
+  })
+  const connectShell = (): HTMLElement | null => document.querySelector('main .connect-shell')
+
+  it('draws no top bar: no frequency, band, TX Off, Tune or Stop TX anywhere on the screen', () => {
+    expect(connectShell(), 'control: Connect is the screen on show').not.toBeNull()
+    expect(document.querySelector('header.topbar'), 'the top bar is drawn on Connect').toBeNull()
+    for (const name of [STOP_TX, TUNE, /^tx (on|off)$/i]) {
+      const shown = screen.queryAllByRole('button', { name, hidden: true }).filter((el) => el.closest('[hidden]') == null)
+      expect(shown, `${name} is on Connect`).toEqual([])
+    }
+  })
+
+  it('Esc sends halt_tx — pressed inside Connect, on a control whose own menu answers Esc too', async () => {
+    const shell = connectShell()
+    expect(shell, 'control: Connect is the screen on show').not.toBeNull()
+    const panels = within(shell!).getByRole('button', { name: /⊞ Panels/ })
+    expect(await fire(() => fireEvent.keyDown(panels, { key: 'Escape' }))).toEqual(['halt_tx'])
+  })
+})
+
+describe('…and every OTHER screen keeps the top bar: the exception is Connect alone', () => {
+  // Read off the registry, not kept here: a section added later is swept by existing.
+  const OTHERS = sectionFeatures()
+    .map((f) => f.id as View)
+    .filter((id) => id !== 'connect')
+
+  it('control: the sweep covers the app’s screens', () => {
+    expect(OTHERS.length).toBeGreaterThan(15)
+  })
+
+  it.each(OTHERS)('%s draws the top bar', async (view) => {
+    everySectionOn()
+    // Field Day is drawn only with its master switch on, and Chat only in the Tempo area.
+    if (view === 'fieldDay') settingsAnswer = { ...defaultSettings, fdActive: true }
+    await mountOn(view, view === 'chat' ? 'msg' : 'dx')
+    expect(document.title, `control: ${view} is the screen on show`).toBe(`${featureById(view)!.label} — Nexus`)
+    expect(document.querySelector('header.topbar'), `${view}: the top bar`).not.toBeNull()
   })
 })
 

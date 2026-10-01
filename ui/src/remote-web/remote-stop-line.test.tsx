@@ -204,8 +204,11 @@ it('every cockpit vocabulary has a Remote stop case, or is declared elsewhere', 
     // Operate's Stop TX is FtStopControl (useStationStopControl) in the QSO strip and the log dialog;
     // FtStopControl, QsoLoggingControls and the hosted browser suite already send it remotely.
     operate: 'FtStopControl',
-    // Connect draws no transmit control.
-    connect: 'no transmit control',
+    // Connect draws no transmit control, and App draws no top bar on Connect: the stop line's one
+    // ruled exception (the operator, 2026-10-01: "remove all radio control from connect, reclaim
+    // that space"). Transmit there is stopped by Esc — App's halt, through the same api haltTx the
+    // header's Stop TX calls — or by leaving the screen.
+    connect: 'no transmit control; the ruled exception: "remove all radio control from connect, reclaim that space" (Esc stops)',
     // The dashboard rail's slots: the rail draws no transmit control, and it is not on the hosted page.
     dashrail: 'no transmit control; not on the hosted page',
   }

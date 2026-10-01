@@ -259,9 +259,11 @@ describe('closing and restoring panes', () => {
 
   it('hiding every pane leaves every control outside the panes on screen', async () => {
     // THE STOP LINE, Connect's half: Connect renders no transmit control at all (its panes'
-    // ▶ Work QSYs and opens a cockpit; the TopBar's TX cluster is outside this view), so there
-    // is no stop control here to lose. What a hide may never do is reach past its own pane —
-    // this computes that against the rendered screen, singly and with everything closed.
+    // ▶ Work QSYs and opens a cockpit), so there is no stop control here to lose — and App draws
+    // no top bar on Connect either, the operator's ruled exception (2026-10-01: "remove all radio
+    // control from connect, reclaim that space"; Esc is the stop there, stop-control-wiring.test.tsx).
+    // What a hide may never do is reach past its own pane — this computes that against the
+    // rendered screen, singly and with everything closed.
     const { container } = await mount()
     const before = controlsOutsidePanes(container)
     expect(before.length, 'control: the map toolbar and the header are on screen').toBeGreaterThan(3)

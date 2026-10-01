@@ -1087,8 +1087,11 @@ export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
  *
  *  THE STOP LINE holds here by the emptiest route there is: Connect renders NO transmit
  *  control, in a pane or out of one (its panes' ▶ Work QSYs and opens a cockpit; it keys
- *  nothing), and the TopBar's TX cluster is outside the view, where no id reaches. There is no
- *  stop control for a hide to cost. What IS swept is that a hide reaches only its own pane —
+ *  nothing). There is no stop control for a hide to cost. And Connect is the stop line's ONE
+ *  RULED EXCEPTION as a screen: App draws no top bar there, so no Stop TX either — the operator,
+ *  2026-10-01: "remove all radio control from connect, reclaim that space". Transmit on Connect
+ *  is stopped by Esc (App binds it while Connect is shown) or by leaving the screen
+ *  (stop-control-wiring.test.tsx holds both). What IS swept is that a hide reaches only its own pane —
  *  ConnectView.panes.test.tsx closes every slot, singly and all at once, and requires every
  *  control outside the panes to still be on screen (declared in stop-line.test.tsx ELSEWHERE).
  *  No hide here ends anything in flight, so no entry carries a note.
