@@ -5276,15 +5276,216 @@ fn journal_assistance(settings: &tempo_app::settings::Settings, note: &str, forc
         let excess = log.len() - ASSISTANCE_JOURNAL_CAP;
         log.drain(..excess);
     }
-    if let Ok(text) = serde_json::to_string(&*log) {
-        let path = assistance_journal_path();
+    write_assistance_journal(&assistance_journal_path(), &log);
+}
+
+/// The assistance journal at `path` for the launch: its rows, or none when there is no file, or
+/// one this build cannot read. That one is kept aside ([`tempo_core::keep_aside`]), because the
+/// launch journals its own row at once and would write over the record.
+fn restore_assistance_journal(path: &Path, now: i64) -> Vec<AssistanceEvent> {
+    tempo_core::keep_aside::read_or_keep("assistance", path, now, |text| {
+        serde_json::from_str::<Vec<AssistanceEvent>>(text).map_err(|e| e.to_string())
+    })
+    .unwrap_or_default()
+}
+
+/// Write the assistance journal to `path` (atomic tmp+rename, best-effort), unless the file there
+/// is one this run could not read and could not move aside: the record in it is never written
+/// over.
+fn write_assistance_journal(path: &Path, log: &[AssistanceEvent]) {
+    if tempo_core::keep_aside::refuses(path) {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(log) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let tmp = path.with_extension("json.tmp");
         if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+            let _ = std::fs::rename(&tmp, path);
         }
+    }
+}
+
+#[cfg(test)]
+mod assistance_journal_tests {
+    //! The assistance journal on the launch's read and the journal's own write, when the file
+    //! there cannot be read: kept, byte for byte, under a dated name and never written over, and
+    //! named for the screen. A journal whose only news is fields, and no journal, read as they
+    //! always have.
+    use super::*;
+    use tempo_core::keep_aside::Kept;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn kept_under(dir: &Path) -> Vec<Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    fn row(note: &str) -> AssistanceEvent {
+        AssistanceEvent {
+            ts_unix: 1_790_000_000,
+            unassisted: true,
+            sources: vec![AssistanceSourceState {
+                name: "DX cluster".into(),
+                active: false,
+            }],
+            note: note.into(),
+        }
+    }
+
+    /// The record as this build writes it: one row.
+    fn a_journal() -> String {
+        serde_json::to_string(&vec![row("UNASSISTED entry declared by the operator")]).unwrap()
+    }
+
+    /// An unreadable record is kept, byte for byte, beside the new one; the launch's own row,
+    /// written the moment it starts, makes a new record and does not touch the kept one.
+    fn assert_kept(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("kept");
+        let path = dir.join("assistance_journal.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut log = restore_assistance_journal(&path, NOW);
+        assert!(log.is_empty(), "{what}: nothing is read out of it");
+        log.push(row("Nexus started"));
+        write_assistance_journal(&path, &log);
+
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable record must survive the launch's own row, byte for byte, moved aside"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "assistance",
+                path: dir.join(ASIDE),
+                kept_in_place: false,
+            }],
+            "{what}: the screen is told where it is"
+        );
+        assert_eq!(
+            restore_assistance_journal(&path, NOW + 1).len(),
+            1,
+            "{what}: the new record is this build's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_assistance_journal_cut_short_is_kept_and_never_written_over() {
+        let whole = a_journal().into_bytes();
+        assert_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a source state a later build could record.
+    #[test]
+    fn an_assistance_journal_with_a_value_this_build_does_not_know_is_kept_and_never_written_over()
+    {
+        let unknown = a_journal().replacen("\"active\":false", "\"active\":\"partly\"", 1);
+        assert!(
+            unknown.contains("partly"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept("an unknown value", unknown.into_bytes());
+    }
+
+    /// A record that cannot be moved aside (every dated name taken, in a folder the writer can
+    /// write to) is never written over.
+    #[test]
+    fn an_assistance_journal_that_cannot_be_moved_is_never_written_over() {
+        let dir = scratch("stuck");
+        let path = dir.join("assistance_journal.json");
+        let bytes = b"[{\"tsUnix\":1790000000,\"unassisted\"".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(dir.join(ASIDE), b"taken").unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!(
+                    "assistance_journal.unreadable-20260930-142233-{n}.json"
+                )),
+                b"taken",
+            )
+            .unwrap();
+        }
+        let mut log = restore_assistance_journal(&path, NOW);
+        log.push(row("Nexus started"));
+        write_assistance_journal(&path, &log);
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable record must never be written over"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "assistance",
+                path: path.clone(),
+                kept_in_place: true,
+            }],
+            "the screen is told it was left in place"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_assistance_journal_whose_only_news_is_fields_reads_as_it_always_has() {
+        let dir = scratch("fields");
+        let path = dir.join("assistance_journal.json");
+        let journal = a_journal().replacen("{", "{\"aNewField\":7,", 1);
+        assert!(journal.contains("aNewField"));
+        std::fs::write(&path, &journal).unwrap();
+        assert_eq!(
+            (
+                restore_assistance_journal(&path, NOW).len(),
+                kept_under(&dir)
+            ),
+            (1, vec![]),
+            "read as it always has, with nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_assistance_journal_is_a_first_run() {
+        let dir = scratch("none");
+        let path = dir.join("assistance_journal.json");
+        assert_eq!(
+            (
+                restore_assistance_journal(&path, NOW).len(),
+                kept_under(&dir)
+            ),
+            (0, vec![]),
+            "no record: nothing read and nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -29229,15 +29430,12 @@ fn start_on_the_logbook(
                 *OPENINGS_LOG.lock().unwrap_or_else(|e| e.into_inner()) = eps;
             }
         }
-        // Assistance journal: restore the record, then stamp the launch. Stamping
-        // unconditionally (force) is deliberate — a restart mid-contest must leave no window
-        // the record is silent about what was running. (The atomic was mirrored earlier, before
-        // any feed could spawn.)
-        if let Ok(text) = std::fs::read_to_string(assistance_journal_path()) {
-            if let Ok(rows) = serde_json::from_str::<Vec<AssistanceEvent>>(&text) {
-                *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = rows;
-            }
-        }
+        // Assistance journal: restore the record (one this build cannot read is kept aside, and
+        // the screen says where), then stamp the launch. Stamping unconditionally (force) is
+        // deliberate — a restart mid-contest must leave no window the record is silent about
+        // what was running. (The atomic was mirrored earlier, before any feed could spawn.)
+        *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) =
+            restore_assistance_journal(&assistance_journal_path(), now_unix());
         journal_assistance(eng.settings(), "Nexus started", true);
         eng.set_grid_rarity_resolver(propagation::gridrarity::effective_tier_u8);
         // FCC callsign→state index: load the cached copy into the resolver, then auto-refresh in
