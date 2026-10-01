@@ -5256,6 +5256,8 @@ export const FR: PartialCatalog = {
   "settings.rigControl.split.label": "Fonctionnement Split",
   "settings.rigControl.split.none": "None",
   "settings.rigControl.split.rig": "Rig",
+  "settings.rigControl.splitDetect.label": "Suivre le split de la radio",
+  "settings.rigControl.splitDetect.hint": "Nexus lit le split de la radio : un split que vous réglez sur la radio est celui sur lequel il vérifie les privilèges de votre licence ; si la radio indique qu’elle est en split sans dire où elle émet, Nexus n’émet pas. Une radio dont le split ne peut être lu qu’en la déplaçant n’est jamais interrogée. Désactivé par défaut.",
   "settings.rigControl.txAudio.label": "Source audio d'émission (PTT par CAT)",
   "settings.rigControl.txAudio.front": "Avant/Micro",
   "settings.rigControl.txAudio.rear": "Arrière/Données",

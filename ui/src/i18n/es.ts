@@ -5256,6 +5256,8 @@ export const ES: PartialCatalog = {
   "settings.rigControl.split.label": "Operación en Split",
   "settings.rigControl.split.none": "None",
   "settings.rigControl.split.rig": "Rig",
+  "settings.rigControl.splitDetect.label": "Seguir el split del equipo",
+  "settings.rigControl.splitDetect.hint": "Nexus lee el split del equipo, de modo que un split que configures en el equipo es el que usa para comprobar los privilegios de tu licencia; si el equipo dice que está en split pero no dónde transmite, Nexus no transmite. Nunca pregunta a un equipo cuyo split solo se puede leer moviéndolo. Desactivado por defecto.",
   "settings.rigControl.txAudio.label": "Fuente de audio de transmisión (PTT por CAT)",
   "settings.rigControl.txAudio.front": "Frontal/Micrófono",
   "settings.rigControl.txAudio.rear": "Trasera/Datos",

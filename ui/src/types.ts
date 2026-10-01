@@ -3933,6 +3933,10 @@ export interface Settings {
   specialOp?: 'none' | 'hound' | 'superhound'
   /** WSJT-X Split Operation: keep TX audio 1500-2000 Hz via dial shifts. */
   splitMode?: 'none' | 'rig' | 'fakeit'
+  /** Follow the radio's OWN split (Rust `split_detect_enabled`): the loop reads the split of a
+   *  radio that can report it without being moved, and the licence gate judges the split TX
+   *  frequency it reads. Station-wide; default off, and absent in a file that predates it. */
+  splitDetectEnabled?: boolean
   /** Operator overrides of the working-frequency table (empty = stock). */
   workingFrequencies?: { band: string; mode: string; mhz: number }[]
   /** FT8/FT4 decode depth: 1=Fast 2=Normal 3=Deep (stock Deep). */

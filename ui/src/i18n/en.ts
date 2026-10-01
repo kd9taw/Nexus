@@ -5358,6 +5358,11 @@ export const EN = {
   'settings.rigControl.split.fakeit': 'Fake It',
   'settings.rigControl.split.hint':
     'Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in 500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.',
+  // "Follow the radio's split" (`splitDetectEnabled`). Split stays the ham word it is across these
+  // catalogs; the help says what the switch does, when it holds transmit, and which radio it never asks.
+  'settings.rigControl.splitDetect.label': "Follow the radio's split",
+  'settings.rigControl.splitDetect.hint':
+    'Nexus reads the radio’s split, so a split you set at the radio is the one it checks your licence privileges against; if the radio says it is split but not where it transmits, Nexus will not transmit. A radio whose split can only be read by moving it is never asked. Off by default.',
 
   // The multiplier beside this label (×1.00) is a number and is rendered by the panel.
   'settings.rigControl.wheel.label': 'Wheel tuning sensitivity',

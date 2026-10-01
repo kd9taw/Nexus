@@ -146,7 +146,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // #381's "Transmit audio source (CAT PTT)", under the words of its symptom and its cure: an
       // interface on the rear jack transmitting nothing when CAT keys the radio.
       'transmit audio source', 'rear/data', 'front/mic', 'signalink', 'acc2', 'data jack',
-      'no tx audio', 'no audio on transmit'],
+      'no tx audio', 'no audio on transmit',
+      // "Follow the radio's split", under what an operator calls it: a split set at the radio's
+      // own front panel, which Nexus reads instead of only trusting one it set itself.
+      'follow split', 'radio split', 'rig split', 'front panel split', 'split detection'],
   },
   {
     id: 'rig-advanced',

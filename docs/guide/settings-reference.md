@@ -337,6 +337,12 @@ Baud continue across to the right.*
   harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B
   split. Fake It = retunes the VFO around each over (works on any CAT rig). None
   = stock WSJT-X default."
+- **Follow the radio's split** — off by default. Turn it on and Nexus reads the
+  radio's own split, so a split you set at the radio is the one it checks your
+  licence privileges against; if the radio says it is split but not where it
+  transmits, Nexus will not transmit. Nexus first asks each radio whether its
+  split can be read without moving it, and never asks one that cannot. Station-wide,
+  like Split operation.
 - **Wheel tuning sensitivity** — how far the dial moves per mouse-wheel notch.
   Lower it if a free-spin mouse tunes too far per flick. Applies to the frequency
   readout and the Phone/CW scope wheel.

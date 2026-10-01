@@ -152,3 +152,16 @@ it('never writes JS8 groups: the field stays read-only holding @APRSIS, and a sa
   expect(h.changes().map(r => r.change.values), 'the save beside it').toEqual([{ autoLog: true }])
   expect(screen.queryByText(/cannot be joined/), "the desktop panel's refusal is not the Remote's").toBeNull()
 })
+
+// Following the radio's split is a transmit-gate input the station denies to every Remote write
+// (`splitDetectEnabled` is in its WRITE_DENIED_KEYS), so the switch stays read-only here even with
+// station control, while a preference the station does offer is editable in the same page.
+it("keeps Follow the radio's split read-only from a browser, even with station control", async () => {
+  fixture(['settingsLogging', 'settingsControl'])
+  await tick()
+  tab('Digital')
+  expect(autoLog().disabled, 'control: this page may change an offered preference').toBe(false)
+  tab('Radio')
+  const follow = screen.getByRole('switch', { name: t('settings.rigControl.splitDetect.label') }) as HTMLButtonElement
+  expect(follow.disabled).toBe(true)
+})

@@ -3380,6 +3380,8 @@ export const JA: PartialCatalog = {
   "settings.rigControl.split.rig": "リグ",
   "settings.rigControl.split.fakeit": "Fake It",
   "settings.rigControl.split.hint": "送信ダイヤルを500 Hzステップでずらして送信オーディオを1500–2000 Hzの範囲に保ち、オーディオ高調波を送信フィルターの外に追い出します（よりクリーンな信号になります）。リグ = VFO Bのスプリットを使用。Fake It = オーバーごとにVFOをずらします（CAT対応のどの無線機でも動作）。なし = WSJT-X標準のデフォルトで、オーディオオフセットのまま送信します。",
+  "settings.rigControl.splitDetect.label": "無線機のスプリットに従う",
+  "settings.rigControl.splitDetect.hint": "Nexusは無線機のスプリットを読み取り、無線機で設定したスプリットの周波数で免許の運用範囲を確認します。無線機がスプリット中だと報告しても送信周波数を返さない場合、Nexusは送信しません。VFOを動かさないとスプリットを読み取れない無線機には問い合わせません。既定はオフです。",
   "settings.rigControl.wheel.label": "ホイール同調感度",
   "settings.rigControl.wheel.aria": "マウスホイールの同調感度",
   "settings.rigControl.wheel.hint": "マウスホイール1ノッチあたりのダイヤル移動量です。高分解能マウスやフリースピンマウスで動きすぎる場合は下げ、速く同調したい場合は上げてください。周波数表示とPhone/CWスコープのホイール操作に適用されます。",
