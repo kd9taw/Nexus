@@ -1131,7 +1131,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the roster's "sort by need"). From the GATED alerts, so a disabled mode never colours a
   // station the board hides.
   const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
-  const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>(remote?.bandPlan ?? [])
   useEffect(() => {
     if (remote) setBandPlan(remote.bandPlan)
@@ -1273,14 +1272,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [activeTier])
 
-  // Periodic re-eval ticker so the unread badges refresh smoothly between snapshot
-  // polls (the unread memos read a ref cursor that a dep change alone won't catch).
-  useEffect(() => {
-    const id = window.setInterval(() => setTypingTick((t) => t + 1), 400)
-    return () => window.clearInterval(id)
-  }, [])
-
-
   const activePeer = remote ? remoteSelection ?? snap?.activePeer ?? null : snap?.activePeer ?? null
 
   // mark the active conversation as read whenever it updates
@@ -1298,6 +1289,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (conv) readCounts.current[activePeer] = conv.messages.length
   }, [snap, activePeer])
 
+  // The unread badges are a function of the snapshot, the active peer and the read cursor, and
+  // they follow the first two. They need no clock: the cursor moves only in the effect above,
+  // after a render that a new snapshot or a new active peer caused, and only for the ACTIVE peer
+  // (which never shows a badge) and for threads that are gone (which have none), so a memo can
+  // never hold a stale count between snapshots. (A 400 ms ticker used to re-run these, and with
+  // them the whole App, 2.5 times a second while nothing changed. It had outlived the mock
+  // typing indicator it was written for.)
   const unreadByPeer = useMemo(() => {
     const out: Record<string, number> = {}
     if (!snap) return out
@@ -1313,7 +1311,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       void inbound
     }
     return out
-  }, [snap, activePeer, typingTick])
+  }, [snap, activePeer])
 
   // Unread on the "*" band feed (CQs/broadcasts from others). Tracked separately
   // from unreadByPeer (which is per-station) and shown on the pinned Band row; the
@@ -1325,7 +1323,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     const read = readCounts.current['*'] ?? 0
     const readInbound = Math.min(read, band.messages.length)
     return band.messages.slice(readInbound).filter((m) => !m.outbound).length
-  }, [snap, activePeer, typingTick])
+  }, [snap, activePeer])
 
   const handleSelect = useCallback((call: string) => {
     if (remote) { setRemoteSelection(call); return }
