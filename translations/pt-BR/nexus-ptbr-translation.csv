@@ -2748,6 +2748,7 @@
 "5","sstv.tx.send.failed","SSTV send refused","","SSTV",""
 "5","sstv.tx.announce.sending","Transmitting SSTV {{mode}}","","{{mode}} | SSTV",""
 "5","sstv.tx.announce.finished","SSTV transmit finished","","SSTV",""
+"5","sstv.tx.announce.stopped","SSTV transmit stopped","","SSTV",""
 "5","sstv.tx.progress","TX — {{mode}} · {{clock}} remaining","","{{mode}} | {{clock}} | TX",""
 "5","sstv.gallery.empty","Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and time.","","FSK",""
 "5","sstv.gallery.thumb.alt","{{mode}} image received {{when}}","","{{mode}} | {{when}}",""

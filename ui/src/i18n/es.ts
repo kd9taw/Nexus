@@ -6016,6 +6016,7 @@ export const ES: PartialCatalog = {
   "sstv.stage.aria": "Imagen SSTV",
   "sstv.stage.splitter.label": "altura de la cascada y la imagen",
   "sstv.tx.announce.finished": "Transmisión de SSTV terminada",
+  "sstv.tx.announce.stopped": "Transmisión de SSTV detenida",
   "sstv.tx.announce.sending": "Transmitiendo SSTV {{mode}}",
   "sstv.tx.drop.hint": "Suelta aquí una imagen, o elige una abajo — de cualquier tamaño, se redimensiona al modo por ti.",
   "sstv.tx.file.change": "Cambiar imagen…",

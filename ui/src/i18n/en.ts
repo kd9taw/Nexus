@@ -8701,6 +8701,7 @@ export const EN = {
   'sstv.tx.send.failed': 'SSTV send refused',
   'sstv.tx.announce.sending': 'Transmitting SSTV {{mode}}',
   'sstv.tx.announce.finished': 'SSTV transmit finished',
+  'sstv.tx.announce.stopped': 'SSTV transmit stopped',
   'sstv.tx.progress': 'TX — {{mode}} · {{clock}} remaining',
 
   // ── SSTV ▸ the gallery ──────────────────────────────────────────────────────────────

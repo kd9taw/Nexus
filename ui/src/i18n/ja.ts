@@ -5384,6 +5384,7 @@ export const JA: PartialCatalog = {
   "sstv.tx.send.failed": "SSTV送信が拒否されました",
   "sstv.tx.announce.sending": "SSTV {{mode}}を送信中",
   "sstv.tx.announce.finished": "SSTV送信が完了しました",
+  "sstv.tx.announce.stopped": "SSTV送信が停止しました",
   "sstv.tx.progress": "TX — {{mode}}・残り{{clock}}",
   "sstv.gallery.empty": "受信した画像はここに集まります — コールサイン (FSK ID)、モード、周波数、時刻と共に自動保存されます。",
   "sstv.gallery.open.aria": "{{when}} に受信した {{mode}} の画像を専用ウィンドウで開く",

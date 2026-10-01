@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,258 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,259 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -34,7 +34,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | ADIF | 49 | The log file format. |
 | WSJT-X | 47 | The program Nexus is compatible with. |
 | DXCC | 44 | The award programme and the entity list. |
-| SSTV | 41 | The mode. |
+| SSTV | 42 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
 | Field Day | 35 | The ARRL/RAC event's official name. |
 | USB / LSB / SSB / FM | 34 / 10 / 27 / 21 | Mode names, as marked on the radio. |
@@ -106,7 +106,7 @@ word in, and use only that word in the CSV.
 | station | 109 | Both your own station and the one you are working. | |
 | port | 98 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 98 / 30 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 99 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 86 | A satellite pass. | |
 | callsign | 79 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
