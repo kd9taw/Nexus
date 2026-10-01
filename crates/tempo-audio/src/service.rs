@@ -9464,11 +9464,41 @@ impl RadioLoop {
         // unconditionally at the precomputed `tx_until_ms` (below), or earlier on
         // Stop/halt/disarm/exit via the abort. One image in flight, no queue.
         {
-            let abort = {
+            let (abort, tx_off) = {
                 let mut eng = engine_lock(engine);
-                eng.take_sstv_abort()
+                (eng.take_sstv_abort(), !eng.tx_enabled())
             };
-            if abort {
+            // ⛔ A PICTURE IS FED ONLY WHILE ITS OVER STANDS (the operator, 2026-09-30: "whenever
+            // the TX-off cut happens (a screen change included), the SSTV audio feed stops too,
+            // as Stop does"). The feed below keeps ~10 s queued ahead of the air and tops it up
+            // every tick, so a stop that ended the over WITHOUT the SSTV abort — the TX-off cut
+            // further down (leaving Phone, or another cockpit's Stop that arms only the slot
+            // abort), a tune superseding the hold, a radio switch's handoff (which consumes the
+            // abort its halt armed) — was undone a tick later. (The context halts of a Test-CAT
+            // hold, an audio rebuild or a teardown arm the abort, so they always ended it.) The
+            // feed refilled the ring, and on a VOX or audio-keyed rig the audio IS the key, so the
+            // rest of the picture went out under "TX off". An over can end under a live feed two
+            // ways, and both end the picture:
+            //
+            //  • the latch goes down with the hold still standing. Leaving Phone lowers it
+            //    directly (`Engine::set_operating_mode`), never through `set_tx_enabled(false)`,
+            //    so nothing arms the abort. Cut HERE, exactly as the abort does and before this
+            //    tick feeds: the TX-off cut would unkey and flush the same tick, but only after
+            //    this block had queued another chunk.
+            //  • the hold is already gone: another stop ended the over and did its own unkey.
+            //    Drop the feed and flush what it queued, never a second unkey — on a radio switch
+            //    that is the double command to the outgoing rig the handoff exists to prevent.
+            //
+            // A picture that plays out meets neither: its feed ends (every sample fed and played)
+            // TX_TAIL_MS before its hold does.
+            let cut = tx_off && self.sstv_feed.is_some() && self.tx_until_ms.is_some();
+            let orphaned = self.sstv_feed.is_some() && self.tx_until_ms.is_none();
+            if cut && !abort {
+                crate::civ::diag::note(
+                    "SSTV: transmit went off mid-picture → drop the feed, unkey",
+                );
+            }
+            if abort || cut {
                 // Stop TX mid-image (Stop button, halt_tx, TX disarm): drop the feed, dump
                 // any queued audio, and unkey immediately. The shared-transmitter cut is
                 // gated on an image actually being in flight (the feed lives until the
@@ -9484,7 +9514,25 @@ impl RadioLoop {
                 }
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_sstv_sending(false);
+                    if abort {
+                        eng.set_sstv_sending(false);
+                    } else {
+                        // Nothing told the engine this picture was stopping: say why.
+                        eng.sstv_tx_cut(true);
+                    }
+                }
+            } else if orphaned {
+                crate::civ::diag::note(
+                    "SSTV: the picture's over was ended elsewhere → drop the feed",
+                );
+                self.sstv_feed = None;
+                backend.flush_output();
+                // A tune that took the transmitter queued its carrier lead behind the picture's
+                // audio, and the flush took that too: its next top-up refills the lead from empty.
+                self.tune_queued_ms = 0.0;
+                {
+                    let mut eng = engine_lock(engine);
+                    eng.sstv_tx_cut(false);
                 }
             }
             // Start a new image ONLY when the transmitter is otherwise idle — SSTV shares
@@ -26027,6 +26075,226 @@ mod tests {
             engine.lock().unwrap().aprs_tx_notice(),
             None,
             "…and the frame that keys clears the notice"
+        );
+    }
+
+    /// ⛔ THE PICTURE STOPS WITH ITS TRANSMITTER (the operator, 2026-09-30: "whenever the TX-off
+    /// cut happens (a screen change included), the SSTV audio feed stops too, as Stop does"), on
+    /// the real loop. Leaving Phone for FT8 lowers the latch without arming the SSTV abort. The
+    /// TX-off cut unkeyed PTT and flushed the ring once, but the image's feed survived it and the
+    /// next tick went on playing the picture. On a VOX or audio-keyed rig the audio IS the key, so
+    /// the rest of the picture went out under "TX off": 144 000 samples fed at the cut and 240 000
+    /// by 9 s, with `sstv_sending` still true, measured before this fix.
+    #[test]
+    fn leaving_phone_mid_picture_stops_its_audio_with_the_transmitter() {
+        // 60 s of picture, so it is still going at every step below.
+        let engine = sstv_ready_engine(vec![0.2f32; 720_000]);
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(
+            rig.keyed && engine.lock().unwrap().sstv_sending(),
+            "the picture is on the air"
+        );
+        let (fed, flushes) = (backend.played.len(), backend.flush_calls);
+        engine.lock().unwrap().set_operating_mode("digital", false);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        assert!(!rig.keyed, "PTT is down");
+        assert!(
+            backend.flush_calls > flushes,
+            "the picture's queued audio was flushed"
+        );
+        assert_eq!(
+            backend.played.len(),
+            fed,
+            "not one sample of the picture is fed after the latch goes down"
+        );
+        assert!(state.sstv_feed.is_none(), "the feed is gone");
+        assert!(
+            !engine.lock().unwrap().sstv_sending(),
+            "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine.lock().unwrap().sstv_tx_notice().is_some_and(
+                |n| n.contains("transmit was turned off while the picture was going out")
+            ),
+            "the SSTV cockpit says transmit went off under the picture"
+        );
+    }
+
+    /// …and a cut that reaches only the shared PTT hold ends the picture too. CW's Stop arms the
+    /// slot-TX abort and nothing SSTV knows about, so the loop's cut drops PTT, flushes and clears
+    /// the hold — and, before this fix, the next tick fed the picture again and re-keyed a VOX rig.
+    /// The rule is the feed's own: a picture is fed only while the hold it keyed under stands.
+    #[test]
+    fn a_cut_that_takes_the_pictures_hold_ends_its_feed_too() {
+        let engine = sstv_ready_engine(vec![0.2f32; 720_000]);
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "the picture is on the air");
+        engine.lock().unwrap().stop_cw();
+        // The tick that takes the abort: the loop's cut runs after the feed in that tick.
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 120.0);
+        assert!(!rig.keyed, "the cut unkeyed");
+        assert!(state.tx_until_ms.is_none(), "the cut cleared the hold");
+        let fed = backend.played.len();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        assert_eq!(
+            backend.played.len(),
+            fed,
+            "not one sample of the picture is fed after its hold is gone"
+        );
+        assert!(!rig.keyed, "nothing re-keyed the rig");
+        assert!(state.sstv_feed.is_none(), "the feed is gone");
+        assert!(
+            !engine.lock().unwrap().sstv_sending(),
+            "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .sstv_tx_notice()
+                .is_some_and(|n| n.contains("ended elsewhere")),
+            "the SSTV cockpit says another stop ended the picture"
+        );
+    }
+
+    /// …and so does a tune pressed over a picture: it supersedes the hold, and before this fix the
+    /// picture went on feeding between the carrier's top-ups, two signals chopped together on the
+    /// air. The picture ends, its queued audio with it, and the carrier stays up. The picture's
+    /// samples are counted by value: the carrier is a full-scale sine that never lands on 0.2.
+    #[test]
+    fn a_tune_over_a_picture_ends_the_picture_and_keeps_the_carrier() {
+        let engine = sstv_ready_engine(vec![0.2f32; 720_000]);
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let picture = |b: &MockBackend| b.played.iter().filter(|&&s| s == 0.2).count();
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "the picture is on the air");
+        engine.lock().unwrap().set_tune(true);
+        // The tick the tune keys: this tick's SSTV block ran first and still saw the hold.
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 120.0);
+        assert!(state.tuning_keyed, "the tune has the transmitter");
+        let (fed, flushes, queued) = (picture(&backend), backend.flush_calls, backend.played.len());
+        // The next tick drops the picture, flushing the carrier's lead with it, and the tune then
+        // tops up: the whole lead again, not the one tick an unreset count would think was gone.
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 140.0);
+        let topped_up = backend.played.len() - queued;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        assert_eq!(
+            picture(&backend),
+            fed,
+            "not one sample of the picture is fed after the tune took the transmitter"
+        );
+        assert!(
+            backend.flush_calls > flushes,
+            "the picture's queued audio was flushed"
+        );
+        assert!(state.sstv_feed.is_none(), "the feed is gone");
+        assert!(
+            !engine.lock().unwrap().sstv_sending(),
+            "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .sstv_tx_notice()
+                .is_some_and(|n| n.contains("ended elsewhere")),
+            "the SSTV cockpit says another stop ended the picture"
+        );
+        assert!(rig.keyed && state.tuning_keyed, "the tune carrier stays up");
+        assert_eq!(
+            topped_up,
+            (tempo_fast::SAMPLE_RATE * (TUNE_LEAD_MS / 1000.0)) as usize,
+            "the carrier's lead is refilled whole after the picture's flush took it"
+        );
+    }
+
+    /// …and so does a radio switch, on the path where step() still holds the radio being left: a
+    /// switch whose handoff waits for the monitor pool. The switch's halt arms the SSTV abort, and
+    /// the handoff consumes it, because its own unkey IS that abort's action and a second one is
+    /// the double command `contended_switch_never_commands_the_old_rig_with_the_new_radios_settings`
+    /// pins. Before this fix that left the picture's feed alive with no abort left to end it,
+    /// playing on for as long as the switch waited. The picture ends, and the rig being left still
+    /// hears exactly one unkey.
+    #[test]
+    fn a_radio_switch_mid_picture_ends_it_and_unkeys_the_radio_being_left_once() {
+        let (engine, pool, _, r1, _) = switch_scene();
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_frequency(14.290, "20m", "USB");
+            e.set_operating_mode("phone", false);
+            e.sstv_send(vec![0.2f32; 720_000], "PD-120".to_string())
+                .unwrap();
+        }
+        let (stub_addr, seen) = recording_rigctld_stub();
+        let (mut backend, mut rig, mut state) = (
+            MockBackend::new(),
+            Rig::with_control(Some(stub_addr), PttMode::Cat),
+            loop_state(),
+        );
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "the picture is on the air");
+        let unkeys = |seen: &Mutex<Vec<String>>| {
+            let lines = seen.lock().unwrap();
+            lines.iter().filter(|l| l.as_str() == "T 0").count()
+        };
+        let (fed, flushes, unkeyed) = (backend.played.len(), backend.flush_calls, unkeys(&seen));
+        let (mut last_active, pending) = (0u32, std::sync::atomic::AtomicBool::new(false));
+        // The monitor thread holds the pool, so the switch waits with the radio being left in hand.
+        let guard = pool.lock().unwrap();
+        engine.lock().unwrap().set_active_radio(r1);
+        while t <= 9_000.0 {
+            handoff_if_switched(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &pending,
+            );
+            assert!(
+                state.handoff_deferred,
+                "premise: the switch is still waiting"
+            );
+            let now = t;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, now);
+        }
+        drop(guard);
+        assert_eq!(
+            backend.played.len(),
+            fed,
+            "not one sample of the picture is fed after the switch took its over"
+        );
+        // The handoff unkeys and never flushes: on a VOX rig only dropping the queued picture
+        // takes the radio being left off the air.
+        assert!(
+            backend.flush_calls > flushes,
+            "the picture's queued audio was flushed"
+        );
+        assert!(state.sstv_feed.is_none(), "the feed is gone");
+        assert!(
+            !engine.lock().unwrap().sstv_sending(),
+            "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .sstv_tx_notice()
+                .is_some_and(|n| n.contains("ended elsewhere")),
+            "the SSTV cockpit says another stop ended the picture"
+        );
+        assert_eq!(
+            unkeys(&seen) - unkeyed,
+            1,
+            "the radio being left is unkeyed exactly once: {:?}",
+            seen.lock().unwrap()
         );
     }
 

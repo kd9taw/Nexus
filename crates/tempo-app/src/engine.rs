@@ -1204,6 +1204,14 @@ const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside 
 const SSTV_LEFT_SECTION: &str = "SSTV stopped: you moved to another mode's screen, so the \
      picture that was waiting was dropped, not held for your return. Send it again when you are \
      ready.";
+/// …and when the radio loop ends a picture already going out ([`Engine::sstv_tx_cut`]): transmit
+/// went off under it, or another stop ended its transmission. Never for SSTV's own Stop, TX Off or
+/// Stop TX, which cut it through the SSTV abort as they always did.
+const SSTV_STOPPED_TX_OFF: &str = "SSTV stopped: transmit was turned off while the picture was \
+     going out, so the rest of it was not sent. Send it again when you are ready.";
+const SSTV_STOPPED_CUT: &str = "SSTV stopped: the transmission was ended elsewhere (a tune, a \
+     radio switch or another stop) while the picture was going out, so the rest of it was not \
+     sent. Send it again when you are ready.";
 /// …and the APRS cockpit's status line, when what was queued (beacons, messages, automatic acks)
 /// is dropped: by TX Off ([`Engine::set_tx_enabled`]), or refused at [`Engine::poll_aprs_tx`].
 const APRS_REFUSED_TX_OFF: &str = "APRS stopped: transmit was turned off, so what was still \
@@ -3428,8 +3436,9 @@ pub struct Engine {
     /// `None` = no image queued or sending.
     sstv_tx_progress: Option<(f64, f64)>,
     /// Why the last picture that waited for the transmitter was DROPPED instead of sent (see
-    /// [`Engine::poll_sstv_tx`]): the SSTV cockpit's warning line. Cleared when the next picture
-    /// keys. `None` = nothing dropped since.
+    /// [`Engine::poll_sstv_tx`]), or why the radio loop cut short the one going out
+    /// ([`Engine::sstv_tx_cut`]): the SSTV cockpit's warning line. Cleared when the next picture
+    /// keys. `None` = nothing to say since.
     sstv_tx_notice: Option<String>,
     /// Parsec presence mode — the state machine the watcher's verdicts drive, and the last
     /// stop it made. See `engine/parsec_presence.rs`.
@@ -19021,10 +19030,31 @@ contact yourself."
         self.sstv_tx.take()
     }
 
-    /// Why the last picture that waited for the transmitter was dropped instead of sent, for
-    /// the SSTV cockpit's warning line; `None` once a picture keys.
+    /// Why the last picture that waited for the transmitter was dropped instead of sent, or why
+    /// the one going out was cut short ([`Self::sstv_tx_cut`]), for the SSTV cockpit's warning
+    /// line; `None` once a picture keys.
     pub fn sstv_tx_notice(&self) -> Option<&str> {
         self.sstv_tx_notice.as_deref()
+    }
+
+    /// The radio loop ended the picture on the air before its end, and not through the SSTV
+    /// abort (loop-only): transmit went off under it (`tx_off`: leaving Phone lowers the latch
+    /// without arming the abort), or another stop ended the transmission it keyed (a tune, a
+    /// radio switch, another cockpit's Stop). The picture is left as [`Self::sstv_stop`] leaves
+    /// it — nothing queued, no mode, no progress, not sending — and the SSTV cockpit's warning
+    /// line says why ([`Self::sstv_tx_notice`]), until the next picture keys.
+    pub fn sstv_tx_cut(&mut self, tx_off: bool) {
+        let (why, notice) = if tx_off {
+            ("transmit went off under it", SSTV_STOPPED_TX_OFF)
+        } else {
+            ("its transmission was ended elsewhere", SSTV_STOPPED_CUT)
+        };
+        tempo_core::applog::info("tx", &format!("SSTV picture stopped before its end: {why}"));
+        self.sstv_tx = None;
+        self.sstv_sending = false;
+        self.sstv_tx_mode = None;
+        self.sstv_tx_progress = None;
+        self.sstv_tx_notice = Some(notice.to_string());
     }
 
     /// Stop SSTV now: drop the queued image and abort the over in progress — the radio loop
@@ -28775,6 +28805,46 @@ mod tests {
             e.sstv_tx_notice(),
             None,
             "leaving said a picture on the air was dropped"
+        );
+    }
+
+    /// ⛔ A picture the radio loop cut short on the air is left as Stop leaves it, and the SSTV
+    /// cockpit is told why, in words that tell the latch going down under it from another stop
+    /// ending its transmission (N57, 2026-09-30). The reason stands until the next picture keys,
+    /// as a drop's does.
+    #[test]
+    fn a_picture_the_loop_cut_short_is_left_as_stop_leaves_it_and_says_why() {
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        // The radio loop takes the picture, keys it and stamps it on the air, as it does.
+        assert!(e.poll_sstv_tx().is_some());
+        e.set_sstv_sending(true);
+        e.set_sstv_tx_progress(36_000.0, 120_000.0);
+        assert_eq!(e.sstv_tx_notice(), None, "nothing to say while it goes out");
+
+        e.sstv_tx_cut(true);
+        assert!(!e.sstv_sending(), "not sending");
+        assert_eq!(e.sstv_tx_mode(), None, "no mode");
+        assert_eq!(e.sstv_tx_progress(), None, "no progress");
+        assert_eq!(e.sstv_tx_notice(), Some(SSTV_STOPPED_TX_OFF));
+        assert!(
+            !e.take_sstv_abort(),
+            "the loop is already cutting: no abort is left for it to take a second time"
+        );
+        e.sstv_tx_cut(false);
+        assert_eq!(
+            e.sstv_tx_notice(),
+            Some(SSTV_STOPPED_CUT),
+            "another stop is named as one"
+        );
+
+        // The next picture that keys clears it.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e.poll_sstv_tx().is_some(), "a new picture keys as before");
+        assert_eq!(
+            e.sstv_tx_notice(),
+            None,
+            "…and the picture that keys clears the reason"
         );
     }
 
