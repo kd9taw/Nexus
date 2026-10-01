@@ -2365,13 +2365,9 @@ body.resizing-row {
 /* DXpedition need chip + board filter + the DXpeditions section */
 .need-chip.need-dxped {
   background: color-mix(in srgb, #38bdf8 22%, transparent);
-  color: #38bdf8;
-  border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent);
 }
 .need-chip.need-state {
   background: color-mix(in srgb, var(--need-state) 20%, transparent);
-  color: var(--need-state);
-  border: 1px solid color-mix(in srgb, var(--need-state) 48%, transparent);
 }
 .np-filter {
   margin-left: 10px;
@@ -6920,15 +6916,23 @@ select optgroup {
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
 }
+/* A NEED CHIP, WHEREVER IT SITS (Band Activity, the Call Roster, the station cards, the WATCH tile, the Needed
+   board, Spots, the Satellites section and Connect), IN EVERY THEME: the word in the theme's ink, the need on the
+   chip's tint and on its border at full strength. Lettered in its need colour on its own tint, the word read
+   mostly under the 4.5:1 floor, as low as 1.37:1 in the light theme (a DXPED chip) and 2.49:1 in the dark one
+   (NEW ONE on a watched station's row), in Chrome; the border, a mix of the colour, as low as 1.4:1. POTA and SOTA
+   take the theme's own colours (a fixed green and purple, set for the Needed board, overrode them in dark). On a
+   Band Activity row in its own need's colour the chip drops its tint (with the rows' rules).
+   NeedChip.contrast.test.tsx holds it on every host. */
 .need-chip {
   font-size: calc(10.5px * var(--text-scale));
   font-weight: 800;
   letter-spacing: 0.04em;
   border-radius: 999px;
   padding: 2px var(--space-2);
-  color: var(--need-color, var(--accent));
+  color: var(--text);
   background: color-mix(in srgb, var(--need-color, var(--accent)) 24%, transparent);
-  border: 1px solid color-mix(in srgb, var(--need-color, var(--accent)) 70%, transparent);
+  border: 1px solid var(--need-color, var(--accent));
 }
 .need-entity {
   --need-color: var(--need-entity);
@@ -6962,32 +6966,6 @@ select optgroup {
 }
 .need-watch {
   --need-color: var(--need-watch);
-}
-/* NEW ONE letters in the theme's text colour in every theme: its magenta on its own tint read 4.27:1 on the dark
-   page and 2.49:1 on a watched station's row in Band Activity. The need stays on the chip's tint and border. */
-.need-chip.need-entity {
-  color: var(--text);
-}
-/* NEED CHIPS IN THE LIGHT THEMES, WHEREVER THEY SIT (Band Activity, the Call Roster, the station cards,
-   the WATCH tile, the Needed board, Spots, the Satellites section and Connect). Lettered in its need
-   colour on a tint of that colour, the word read mostly under the 4.5:1 floor in the standard light
-   theme, as low as 1.37:1 (Chrome: a DXPED chip; a new park 2.15:1). So the word takes the theme's ink,
-   and the border, a mix of the need colour that read as low as 1.4:1, takes it at full strength; the
-   tint stays. The DXpedition and state chips carry colours of their own, so they are named here to
-   outrank them, and the fixed POTA and SOTA colours (the rule further down, set for the Needed board's
-   chips, which also colours their marks on the band strip and the band map) give way to the theme's
-   own. Dark is untouched. NeedChip.contrast.test.tsx holds it on every host. */
-[data-theme='light'] .need-chip,
-[data-theme='light'] .need-chip.need-dxped,
-[data-theme='light'] .need-chip.need-state {
-  color: var(--text);
-  border-color: var(--need-color, var(--accent));
-}
-[data-theme='light'] .need-pota {
-  --need-color: var(--need-pota);
-}
-[data-theme='light'] .need-sota {
-  --need-color: var(--need-sota);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
@@ -14476,6 +14454,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
 }
+/* THE LEAD CHIP ON ITS OWN ROW (operator, 2026-09-30: "Chip drops its tint there"). A row tinted in a need's colour
+   leads with that need's chip. With the word in the ink, the chip's own tint stacked on the row's, and in the night
+   modes, whose ink is dimmer than the bright need colours, WATCH on a watched station's row read 3.12:1 in Chrome. So
+   on its own row the chip is an outline in the need colour, in every theme, and the row carries the tint; every other
+   chip keeps its own. NeedChip.contrast.test.tsx holds it. */
+.decode-row.need-watch .need-chip.need-watch,
+.decode-row.need-entity .need-chip.need-entity,
+.decode-row.need-zone .need-chip.need-zone,
+.decode-row.need-band .need-chip.need-band,
+.decode-row.need-mode .need-chip.need-mode,
+.decode-row.need-grid .need-chip.need-grid,
+.decode-row.need-state .need-chip.need-state,
+.decode-row.need-confirm .need-chip.need-confirm {
+  background: transparent;
+}
 /* Need micro-icon cluster trailing the message text. */
 .decode-needs {
   display: inline-flex;
@@ -19661,14 +19654,6 @@ button.cq-skiptx1.on {
 }
 .pota-hunt-btn:active {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
-}
-
-/* need-chip colors for Pota/Sota NeedTags in the Needed board */
-.need-pota {
-  --need-color: #16a34a; /* forest green — parks */
-}
-.need-sota {
-  --need-color: #9333ea; /* purple — summits */
 }
 
 /* spin animation for the refresh button loading state */

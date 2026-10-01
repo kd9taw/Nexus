@@ -19,6 +19,9 @@
 // when, in the standard DARK theme (which this change does not touch, so the census cannot move with the
 // fix), its ink is anything but the theme's text inks and its accent. The census is then held to 4.5:1 on
 // what it sits on (through any dimming) in every light theme, and to its state colour in every dark theme.
+//
+// A need chip is no longer one: it letters in the ink in every theme, and NeedChip.contrast.test.tsx holds it on
+// Connect and on every other host.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -196,7 +199,7 @@ function nodesOf(node: Element): Element[] {
 /** The state-word kinds this change is about, by the class that names them (nearest first). */
 const KIND_CLASSES = [
   'ba-modeled', 'bbt-band', 'heatmap-band', 'swx-impact', 'cp-work', 'cp-mode', 'swsc-chip', 'go-snr', 'getout-summary', 'chase-open',
-  'cfeed-ends', 'need-chip', 'opening-band', 'opening-new', 'kp-line', 'sat-stale', 'sat-chip', 'rotor-slewing', 'rotor-stop', 'amp-link',
+  'cfeed-ends', 'opening-band', 'opening-new', 'kp-line', 'sat-stale', 'sat-chip', 'rotor-slewing', 'rotor-stop', 'amp-link',
   'amp-fault', 'prop-prov',
 ]
 function kindOf(nodes: Element[]): string {
@@ -522,8 +525,7 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     'cfeed-ends: .cfeed-ends', 'chase-open: .chase-open.o-open', 'cp-mode: .cp-mode.fair', 'cp-mode: .cp-mode.good',
     'cp-work: .cp-work.w-excellent', 'cp-work: .cp-work.w-fair', 'cp-work: .cp-work.w-good', 'getout-summary: strong', 'go-snr: .go-snr',
     'heatmap-band: .heatmap-name [mark]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
-    'need-chip: .need-chip.need-band', 'need-chip: .need-chip.need-dxped', 'need-chip: .need-chip.need-mode',
-    'need-chip: .need-chip.need-state', 'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
+    'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
     'rotor-slewing: .rotor-slewing', 'rotor-stop: .rotor-stop', 'sat-chip: .sat-chip.dead', 'sat-chip: .sat-chip.stale',
     'sat-stale: .sat-stale', 'swsc-chip: .swsc-chip.swsc-major', 'swsc-chip: .swsc-chip.swsc-minor', 'swx-impact: .swx-impact [mark]',
   ]
@@ -586,7 +588,7 @@ describe('every state-coloured word on Connect reads in every light theme', () =
 
   // The chips whose own border says their state: with the word in ink, that border must stand 3:1 off what the
   // chip sits on. (Rows that carry it on their left edge, Chase's and the openings', are measured in the report.)
-  const CHIPS = ['need-chip', 'cp-mode', 'swsc-chip', 'cfeed-ends', 'sat-chip']
+  const CHIPS = ['cp-mode', 'swsc-chip', 'cfeed-ends', 'sat-chip']
   /** A border declaration's colour: the value itself, or a `border` shorthand without its width and style. */
   const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
   it("a chip that carries its state on its own border keeps it 3:1 off the surface in the light themes", () => {

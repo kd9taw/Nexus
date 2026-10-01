@@ -828,13 +828,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
   Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
   as before.
-- **Need chips are easy to read in the light themes, wherever they appear.** The NEW ONE, ZONE,
-  BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the Call
-  Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
-  lettered their word in the need's own colour, which was hard to read in every light theme; a
-  DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
-  Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
-  before.
+- **Need chips are easy to read in the light and dark themes, wherever they appear.** The NEW ONE,
+  ZONE, BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the
+  Call Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
+  lettered their word in the need's own colour, which was hard to read in every light theme and
+  in many places in the dark ones; a DXPED chip nearly vanished. The word now takes the theme's
+  text colour everywhere, as on Connect, and the need's colour stays on the chip's border. On a
+  Band Activity row already in a need's colour, that need's chip is an outline in the colour and
+  the row carries the tint. In the dark themes the POTA and SOTA chips, and their marks on the
+  band strip, the band map and the spot legend, now take the theme's own green and purple, as in
+  the light themes.
 - **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
   Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
   source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
