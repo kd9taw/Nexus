@@ -615,12 +615,14 @@ impl Station {
         if !(self.hb_on && self.cfg.autoreply && self.cfg.hb_ack && self.outbox.is_empty()) {
             return;
         }
-        let to = split_portable(&m.from).0.to_ascii_uppercase();
+        // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
+        // held for it is found under its base call.
+        let to = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         if self.is_me(&to) {
             return;
         }
         let mut text = format!("{to} HEARTBEAT SNR {}", format_snr(m.snr_db));
-        if let Some(id) = self.stored_for(&to) {
+        if let Some(id) = self.stored_for(split_portable(&to).0) {
             text.push_str(&format!(" MSG ID {id}"));
         }
         // On a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
@@ -640,7 +642,9 @@ impl Station {
             self.ack(m, m.text.trim(), now_ms, actions);
             return;
         }
-        let from = split_portable(&m.from).0.to_ascii_uppercase();
+        // The reply names the sender as heard, `/P` included (JS8Call's `d.from`,
+        // mainwindow.cpp:8834-8903).
+        let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let reply = match cmd {
             Command::SnrQuery => Some(format!("{from} SNR {}", format_snr(m.snr_db))),
             // Nothing set, nothing said: JS8Call skips an empty grid or INFO
@@ -784,7 +788,9 @@ impl Station {
         self.next_inbox_id += 1;
         self.inbox.push(InboxEntry {
             id,
-            from: clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase(),
+            // Its sender as heard, as JS8Call stores it (`cd.from = d.from`, :9036), so the
+            // delivery names it so too.
+            from: clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase(),
             to: clamp_str(&target, MAX_CALL_LEN),
             text: clamp_str(text, MAX_TEXT_LEN),
             path: Vec::new(),
@@ -835,7 +841,11 @@ impl Station {
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
-        let from = split_portable(&m.from).0.to_ascii_uppercase();
+        // The querier as heard names the reply (`replyPath = d.from`, mainwindow.cpp:9248,
+        // :9270-9285); its base call is what a held message is filed for (`to`, the base, as
+        // JS8Call stores it, :9042, and finds it, :9523).
+        let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
+        let base = split_portable(&from).0.to_string();
         // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it,
         // only when the query was addressed to me (mainwindow.cpp:8601, :9171). Anything else
         // it may be draws no reply at all: JS8Call's buffered QUERY skips every miss
@@ -845,7 +855,7 @@ impl Station {
                 return;
             };
             if let Some(e) = self.inbox.iter_mut().find(|e| {
-                e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&from)
+                e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&base)
             }) {
                 e.state = InboxState::Delivered;
                 let deliver = format!("{from} MSG {} FROM {}", e.text, e.from);
@@ -867,12 +877,12 @@ impl Station {
         // interval (:9377-9379, checked first at :8812).
         if self.cfg.autoreply && self.addressed_to_me(&m.to_text) {
             let to_allcall = m.to_text.eq_ignore_ascii_case("@ALLCALL");
-            let reply = match self.stored_for(&from) {
+            let reply = match self.stored_for(&base) {
                 Some(id) => format!("{from} YES MSG ID {id}"),
                 None if to_allcall => return,
                 None => format!("{from} NO"),
             };
-            if to_allcall && self.allcall_held_off(&from, now_ms, actions) {
+            if to_allcall && self.allcall_held_off(&base, now_ms, actions) {
                 return;
             }
             self.schedule_reply(
@@ -946,10 +956,12 @@ impl Station {
     /// four calls, newest first (:8873-8883), never the station that asked (:8890) and none its
     /// callsign aging has passed (:8894), a setting that ships off.
     fn hearing_reply(&self, from: &str, now_ms: u64) -> String {
+        // The heard list files a station under its base call (`record_heard`).
+        let asker = split_portable(from).0;
         let mut calls: Vec<&Heard> = self
             .heard
             .iter()
-            .filter(|h| h.call != from && !self.aged(h, now_ms))
+            .filter(|h| h.call != asker && !self.aged(h, now_ms))
             .collect();
         calls.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
         let mut words = vec![format!("{from} HEARING")];
@@ -3723,6 +3735,105 @@ mod tests {
             waiting(&s).len(),
             1,
             "control: a path of {MAX_PATH_HOPS} calls is answered"
+        );
+    }
+
+    /// Every automatic reply names the sender as heard, a `/P` included, as JS8Call answers
+    /// `d.from` (mainwindow.cpp:8834-8903 the queries, :9098 the HB-ACK, :9248 a delivery,
+    /// :9270-9285 QUERY MSGS), and a delivered message names its sender as JS8Call stored it
+    /// (`cd.from = d.from`, :9036). What a station is filed and found under stays its base call
+    /// (`getNextMessageIdForCallsign` matches the base too, :9523), so a message held for W1AW is
+    /// still offered and delivered to W1AW/P.
+    #[test]
+    fn every_automatic_reply_names_the_sender_as_heard() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        c.info = "RIG IC7300".into();
+        c.status = "QRV".into();
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        for cmd in [
+            Command::SnrQuery,
+            Command::GridQuery,
+            Command::InfoQuery,
+            Command::StatusQuery,
+            Command::HearingQuery,
+            Command::QueryMsgs,
+        ] {
+            s.on_event(
+                &directed("W1AW/P", "KD9TAW", Some(cmd), None, "", -5),
+                1_000,
+            );
+        }
+        s.on_event(&heartbeat("W1AW/P", -5), 1_000);
+        assert_eq!(
+            waiting(&s),
+            [
+                "W1AW/P SNR -05",
+                "W1AW/P GRID EN52",
+                "W1AW/P INFO RIG IC7300",
+                "W1AW/P STATUS QRV",
+                "W1AW/P HEARING",
+                "W1AW/P NO",
+                "W1AW/P HEARTBEAT SNR -05",
+            ],
+            "every reply names W1AW/P as heard"
+        );
+        let snr = Frame::Directed {
+            from: CallRef::Base("KD9TAW".into()),
+            to: CallRef::Base("W1AW".into()),
+            cmd: Command::Snr,
+            num: Some(-5),
+            portable_from: false,
+            portable_to: true,
+        };
+        let whole = I3 {
+            first: true,
+            last: true,
+            data: false,
+        };
+        assert_eq!(
+            drain(&mut s, 2_000).map(|f| f.word),
+            Some(encode_frame(&snr, whole, Speed::Normal).unwrap()),
+            "the SNR reply carries the portable flag"
+        );
+
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "N0XYZ/P",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "W1AW FRIDAY CONTACT",
+                -5,
+            ),
+            0,
+        );
+        s.pending.clear(); // its ACK is not what this is about
+        let id = s.inbox()[0].id;
+        s.on_event(
+            &directed("W1AW/P", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+            1_000,
+        );
+        s.on_event(
+            &directed(
+                "W1AW/P",
+                "KD9TAW",
+                Some(Command::Query),
+                None,
+                &format!("MSG {id}"),
+                -5,
+            ),
+            2_000,
+        );
+        assert_eq!(
+            waiting(&s),
+            [
+                format!("W1AW/P YES MSG ID {id}"),
+                "W1AW/P MSG FRIDAY CONTACT FROM N0XYZ/P".to_string(),
+            ],
+            "the message held for W1AW is offered and delivered to W1AW/P, from N0XYZ/P"
         );
     }
 

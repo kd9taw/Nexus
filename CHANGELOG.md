@@ -551,6 +551,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds them only with relaying on; Nexus held them with Relay off too, and offered and delivered
   them later. Holding another station's message is third-party traffic, so with RELAY off it is now
   neither held nor acknowledged.
+- **JS8: replies to a portable station keep its /P, as JS8Call's do.** Every automatic reply
+  (SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS, a message delivered from your store, and the
+  heartbeat acknowledgement) named a station heard as W1AW/P as W1AW. Each now names the station as
+  it was heard, as a JS8Call station's reply does, and a message delivered from your store names
+  its sender as it was heard too. A message held for W1AW is still offered and delivered to W1AW/P.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
