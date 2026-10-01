@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wavelog and Cloudlog on your own network over plain http (#378).** A Wavelog or Cloudlog on your
+  LAN with no certificate can now take uploads at an `http://` address, as long as that address is
+  on your own network: 192.168.x.x, 10.x.x.x, 172.16–31.x.x or 127.x.x.x (or a local IPv6
+  address), or a name whose every address is one of those. The upload goes to the address that was
+  checked and nowhere else. Your API key travels unencrypted on that network, so Settings says so
+  under the Base URL as soon as you type an `http://` address, and the Connections log says where
+  it went, once a session for each address. Any other `http://` address is refused before anything
+  is sent, as before; `https://` is unchanged; and Nexus never follows a redirect with your key.
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
   reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this

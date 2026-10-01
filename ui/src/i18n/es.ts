@@ -4418,6 +4418,7 @@ export const ES: PartialCatalog = {
   "settings.confirmations.cloudlog.upload.hint": "Envía cada QSO a la instancia de arriba según lo anotas.",
   "settings.confirmations.cloudlog.upload.label": "Reenviar QSOs automáticamente",
   "settings.confirmations.cloudlog.url.hint": "La raíz de tu sitio Cloudlog/Wavelog. Déjalo vacío para desactivarlo.",
+  "settings.confirmations.cloudlog.url.plainHttp": "Con http:// simple, tu API key viaja sin cifrar hasta esta dirección. Solo se permite para una dirección de tu propia red ({{ranges}}, o un nombre que solo resuelva a esas direcciones); cualquier otra se rechaza.",
   "settings.confirmations.cloudlog.url.label": "URL base",
   "settings.confirmations.clublog.apiKey.hint": "Esta es la credencial de la <b>aplicación</b>, no la tuya — las builds oficiales del instalador incluyen una y solo hacen falta el email y la contraseña de aplicación de arriba. ¿Compilas desde el código? Pide una clave gratuita en clublog.org/requestapikey.php y pégala aquí (el código abierto no puede incluir una — ClubLog revoca automáticamente las claves publicadas).",
   "settings.confirmations.clublog.apiKey.label": "API key de ClubLog (de la aplicación)",

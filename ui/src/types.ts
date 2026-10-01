@@ -2600,7 +2600,7 @@ export interface FeedStatus {
 export interface ConnEvent {
   tsUnix: number
   connector: string
-  level: 'ok' | 'info' | 'error' | string
+  level: 'ok' | 'info' | 'warn' | 'error' | string
   message: string
 }
 
