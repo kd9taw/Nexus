@@ -43,6 +43,7 @@ const api = vi.hoisted(() => {
       id: callsign.toLowerCase(), name: callsign, rxMhz: outputMhz, duplex: 'minus', offsetMhz: 0.6, toneMode: 'tone', rtoneHz: 100, ctoneHz: 100,
       dtcsCode: 23, mode: 'fm', comment: 'Red Lion', source: { source: 'repeaterbook', sourceId: callsign, callsign },
     },
+    sources: [], disagreements: [],
   })
   const result = { source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false, coverageGap: null, missingStates: [],
     lists: [{ source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false }], rsgbUnavailable: false, rsgbBeyond: [],
@@ -152,10 +153,11 @@ describe("Program's off-air row fades by colour and every word on it reads, in e
 
   it('finds every word an off-air row letters, on both off-air rows (the census cannot silently empty out)', () => {
     const kinds = new Set(offair().map((w) => w.own))
-    for (const k of ['.rp-call.mono', '.rp-freq.mono', '.rp-off.mono', '.rp-tone.mono', '.rp-dist.mono', '.pota-badge.rp-offair-badge', '.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-add', '.pota-hunt-btn.rp-add.added']) {
+    for (const k of ['.rp-src', '.rp-call.mono', '.rp-freq.mono', '.rp-off.mono', '.rp-tone.mono', '.rp-dist.mono', '.pota-badge.rp-offair-badge', '.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-add', '.pota-hunt-btn.rp-add.added']) {
       expect(kinds.has(k), `no ${k} on an off-air row: ${[...kinds].join(' ')}`).toBe(true)
     }
-    expect(offair().length).toBe(16)
+    // 9 words a row since P1 added the row's source and date line (`.rp-src`), on each of the two off-air rows.
+    expect(offair().length).toBe(18)
   })
 
   it('nothing dims an off-air row by opacity: the row and everything on it composites at full strength', () => {
