@@ -1013,6 +1013,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   red in every theme, whatever the theme or the amber colour picked in Settings. They now take the
   theme's warning and critical colours: in the dark themes the amber is a little lighter and the
   storm red becomes the critical orange, and in the light themes the bars are dark enough to see.
+- **The POTA / SOTA board's HUNT button and park reference are easy to read in the light themes.**
+  In the POTA / SOTA view, its pop-out and on the Remote page, HUNT and each spot's park or summit
+  reference were lettered in the accent colour, which was hard to read on the light page, and HUNT
+  on its own tint harder still. They now take the theme's text colour, with the accent kept on
+  HUNT's border and as the reference's underline. So do the board's NEW PARK and BAND OPEN badges,
+  with their colour kept on their border, and its WORKED TODAY badge reads in the dim text colour.
+  The park and call in the Hunting line above the list take the text colour too, underlined in the
+  accent.
+  The dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
