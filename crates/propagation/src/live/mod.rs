@@ -24,6 +24,7 @@ pub mod protons;
 pub mod pskreporter;
 pub mod qrz;
 pub mod repeaterbook;
+pub mod rsgb;
 pub mod satnogs;
 pub mod solar_cycle;
 pub mod solar_wind;

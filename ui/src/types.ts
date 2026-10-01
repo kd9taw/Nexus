@@ -4473,7 +4473,8 @@ export interface LogSaveTrouble {
 
 /** One repeater from a directory search, normalized across sources. */
 export interface RepeaterRecord {
-  source: 'repeaterbook' | 'hearham'
+  /** The directory: 'rsgb' (the UK coordinator's list), 'repeaterbook' or 'hearham'. */
+  source: 'rsgb' | 'repeaterbook' | 'hearham'
   sourceId: string
   callsign: string
   /** Repeater output (you listen here), MHz. */
@@ -4498,23 +4499,55 @@ export interface RepeaterRecord {
   bandwidthKhz?: number | null
   operational: boolean
   openUse: boolean
+  /** The source's own date for this entry, as it writes it (RepeaterBook's "Last Update",
+   * `2026-05-14`). Absent when it gives none: hearham and the RSGB list have no per-machine date. */
+  updated?: string | null
   distanceKm: number
   bearingDeg: number
 }
 
-/** One search row: the directory record (display) + the ready-to-add channel
- * (derived in the tested Rust domain — never re-derived in TS). */
+/** One directory row behind a merged machine (`repeaters::SourceRef`). */
+export interface RepeaterSourceRef {
+  source: RepeaterRecord['source']
+  sourceId: string
+  /** The channel id this row gives, so a channel saved from any of a machine's rows finds it. */
+  channelId: string
+  updated?: string | null
+}
+
+/** A field a machine's sources disagree on (`repeaters::Disagreement`): what each said, as
+ * tokens ("88.5", "D023", "438.525", "FM+DMR", "CC1"). The FIRST is the value the row programs;
+ * the rest are shown beside it, never silently dropped. */
+export interface RepeaterDisagreement {
+  field: 'tone' | 'input' | 'mode' | 'colorCode'
+  said: { source: RepeaterRecord['source']; value: string }[]
+}
+
+/** One search row: one MACHINE after the merge (one row per machine, every source kept) as the
+ * record (display) + the ready-to-add channel (derived in the tested Rust domain — never
+ * re-derived in TS). */
 export interface RepeaterSearchRow {
   record: RepeaterRecord
   channel: ProgChannel
+  /** Every directory row behind this machine, the one it programs from first. */
+  sources: RepeaterSourceRef[]
+  /** Fields those rows disagree on: shown on the row, never silently resolved. */
+  disagreements: RepeaterDisagreement[]
 }
 
-/** A repeater search response: source label + data age + rows (nearest first). */
-export interface RepeaterSearchResult {
-  source: 'repeaterbook' | 'hearham'
+/** One directory a search read, and how old its list is. */
+export interface RepeaterListStamp {
+  source: RepeaterRecord['source']
+  /** The list's fetch time (unix secs): its age stamp, and the date of a row with none. */
   fetchedUtc: number
   /** True when a fetch failed/rate-limited and stale cache was served. */
   stale: boolean
+}
+
+/** A repeater search response: the directories it read + rows (nearest first). */
+export interface RepeaterSearchResult {
+  /** Every directory this search read, in precedence order (RSGB, RepeaterBook, hearham). */
+  lists: RepeaterListStamp[]
   /**
    * A major band ("2 m", "70 cm", "2 m or 70 cm") the source lists nothing on
    * here while listing other machines — hearham has real rural holes, and a
@@ -4530,6 +4563,11 @@ export interface RepeaterSearchResult {
    * global feed, not per-state exports.
    */
   missingStates: string[]
+  /** A UK origin whose RSGB list could not be read (the endpoint is a beta): the rows are
+   * hearham's alone, and the panel says so. */
+  rsgbUnavailable: boolean
+  /** Locator squares the radius reaches that RSGB was not asked about (nine per search are). */
+  rsgbBeyond: string[]
   rows: RepeaterSearchRow[]
 }
 

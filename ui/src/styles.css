@@ -22566,6 +22566,8 @@ button.sat-chip:disabled {
   grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto auto;
   align-items: center;
   gap: var(--space-2);
+  /* The source line (and a disagreement) sit tight under the row they describe. */
+  row-gap: 0;
   padding: 3px var(--space-2);
   font-size: 0.8rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
@@ -22593,6 +22595,39 @@ button.sat-chip:disabled {
 .rp-offair-badge {
   color: var(--state-weak);
   border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+}
+/* A machine its directories disagree about: a caution, in the warning hue. */
+.rp-differ-badge {
+  color: var(--state-warn);
+  border-color: color-mix(in srgb, var(--state-warn) 45%, transparent);
+}
+/* Under each row, across all its columns: the directories it came from with their date, and,
+   on a machine they disagree about, what each listed. */
+.rp-src,
+.rp-differ {
+  grid-column: 1 / -1;
+  font-size: var(--fs-micro);
+  line-height: 1.3;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.rp-differ {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  color: var(--state-warn);
+}
+/* In the light themes the warning hue is under 4.5:1 as small lettering (#a76d00 on the list's
+   #fbfcfe is 4.2:1), so the words take the ink and the badge keeps the hue on its border. */
+[data-theme='light'] .rp-differ,
+[data-theme='light'] .rp-differ-badge {
+  color: var(--text);
+}
+[data-theme='light'] .rp-differ-badge {
+  border-color: var(--state-warn);
+}
+.rp-stamp-list + .rp-stamp-list {
+  margin-left: var(--space-2);
 }
 .rp-actions {
   justify-self: end;

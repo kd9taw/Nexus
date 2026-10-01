@@ -31,6 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check; No sends nothing, and so does no answer: after 89 seconds it is No, JS8Call's 90-second box
   as it counts. A message held for another station is handed over only on Yes. Turn the setting
   off and replies go by themselves, in the next period.
+- **UK repeaters from the coordinator's own list, one row per machine.** For a UK location,
+  Program reads the RSGB's repeater list (ETCC, ukrepeater.net) for the locator squares around
+  it, at most nine per search and each kept on your PC for a week, and merges it with hearham
+  into one row per machine. Where the two differ, the coordinator's values are programmed and
+  the row is flagged with what each listed. Around Manchester that fixes GB3BW's tone (88.5 Hz,
+  where hearham has 82.5) and GB3XN's input (438.525 MHz; hearham lists it as simplex, so a
+  radio programmed from it could not open the machine), and a machine hearham lists only by its
+  DMR side, like GB3XL, becomes one FM channel with its CTCSS tone and colour code. Every row
+  says where it came from and how old that is ("RSGB + hearham · no date · fetched 2d ago",
+  "RepeaterBook · updated 2026-05-14"). With a RepeaterBook token its rows and hearham's merge
+  the same way, and a machine hearham lists once per mode or per linked node is one row. The
+  RSGB list is a beta service: when it cannot be read, Program says so and shows hearham's
+  machines alone. The CSV and CHIRP files credit every directory their rows came from, one
+  comment line each, "Repeater data: RSGB ETCC (ukrepeater.net)" among them.
+
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
   reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this

@@ -4569,6 +4569,13 @@ export const EN = {
   'program.missingStates':
     'RepeaterBook did not answer for <b>{{states}}</b>, so repeaters there are missing from this list. That is a fetch that failed, not an empty area — fetch again in a few minutes.',
 
+  // The UK coordinator's list, a beta endpoint. `{{rsgb}}` and `{{hearham}}` are the two
+  // directories' own names and `{{squares}}` a list of 4-character locator squares: tokens.
+  'program.rsgb.unavailable':
+    "The {{rsgb}} repeater list could not be read just now, so these are <b>{{hearham}}'s machines alone</b>. Fetch again later to add the coordinator's.",
+  'program.rsgb.beyond':
+    "{{rsgb}} is asked about the locator squares nearest you, not every one this radius reaches, so the machines in <b>{{squares}}</b> are {{hearham}}'s alone.",
+
   // The saved-projects file Program could not read. `{{path}}` is a file path on the operator's
   // computer — a token, never translated. "Program" in the second is this section's own name.
   'program.projectsFile.setAside':
@@ -4602,6 +4609,20 @@ export const EN = {
   'program.results.tryWider': 'Try {{radius}}',
   'program.results.showDigital': 'Show digital',
   'program.row.offAir': 'OFF-AIR',
+  // Each machine's directories and date. `{{sources}}` names them ("RSGB + hearham"), `{{date}}`
+  // is a directory's own date as it writes it (2026-05-14) and `{{age}}` the list's age as
+  // program.age.* prints it ("2d ago").
+  'program.row.source.updated': '{{sources}} · updated {{date}}',
+  'program.row.source.noDate': '{{sources}} · no date · fetched {{age}}',
+  // Where the directories disagree. `{{used}}` and `{{others}}` are a directory's name with what
+  // it lists ("RSGB 88.5", "hearham 438.525", "RSGB FM+DMR", "hearham CC9"): tokens.
+  'program.row.differ.label': 'Sources differ',
+  'program.row.differ.title':
+    'The directories disagree about this machine. The row programs the first value shown; check the others before you rely on it.',
+  'program.row.differ.tone': 'Tone {{used}} is programmed (also listed: {{others}})',
+  'program.row.differ.input': 'Input {{used}} is programmed (also listed: {{others}})',
+  'program.row.differ.mode': 'Mode {{used}} is programmed (also listed: {{others}})',
+  'program.row.differ.colorCode': 'Color code {{used}} is programmed (also listed: {{others}})',
   'program.row.star.title':
     'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
   'program.row.unstar.title':

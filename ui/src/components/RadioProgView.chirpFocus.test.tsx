@@ -25,11 +25,11 @@ afterEach(() => {
 /** A search result carrying one machine, plus whatever coverage we want to test. */
 function result(missingStates: string[]): RepeaterSearchResult {
   return {
-    source: 'repeaterbook',
-    fetchedUtc: Math.floor(Date.now() / 1000),
-    stale: false,
+    lists: [{ source: 'repeaterbook', fetchedUtc: Math.floor(Date.now() / 1000), stale: false }],
     coverageGap: null,
     missingStates,
+    rsgbUnavailable: false,
+    rsgbBeyond: [],
     rows: [
       {
         record: {
@@ -71,6 +71,8 @@ function result(missingStates: string[]): RepeaterSearchResult {
           comment: 'Red Lion',
           source: { source: 'repeaterbook', sourceId: '42-1', callsign: 'W3ZGD' },
         },
+        sources: [{ source: 'repeaterbook', sourceId: '42-1', channelId: 'w3zgd', updated: null }],
+        disagreements: [],
       },
     ],
   }

@@ -64,7 +64,7 @@ impl ChanMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSource {
-    /// "repeaterbook" | "hearham".
+    /// "rsgb" | "repeaterbook" | "hearham".
     pub source: String,
     /// The source's repeater id.
     pub source_id: String,
@@ -199,7 +199,8 @@ pub fn sanitize_name(name: &str, max_len: usize) -> String {
 
 /// Generic CSV export — a plain spreadsheet-friendly dump (Anytone CPS / RT
 /// Systems users copy columns from it; it is NOT the CHIRP format, see
-/// [`crate::chirp`]). `attribution` becomes a trailing comment line ("" = none).
+/// [`crate::chirp`]). `attribution` becomes trailing comment lines ("" = none), one per line
+/// of it ([`attribution_lines`]).
 pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
     let mut out = String::from(
         "Channel,Name,RX Frequency (MHz),TX Frequency (MHz),Duplex,Offset (MHz),\
@@ -244,10 +245,21 @@ pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
             csv_field(&c.comment),
         ));
     }
-    if !attribution.is_empty() {
-        out.push_str(&format!("# {attribution}\n"));
-    }
+    out.push_str(&attribution_lines(attribution));
     out
+}
+
+/// The attribution as comment lines, `# ` before each of its lines: the directories a list came
+/// from each require their own ("Repeater data: RSGB ETCC (ukrepeater.net)" beside hearham's),
+/// so it arrives as several lines, and a line written without its `#` would read as a channel.
+/// Blank lines are dropped; "" is no attribution at all.
+pub(crate) fn attribution_lines(attribution: &str) -> String {
+    attribution
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("# {line}\n"))
+        .collect()
 }
 
 /// Quote a CSV field only when it needs it.
@@ -328,6 +340,24 @@ mod tests {
         let row = lines.next().unwrap();
         assert!(row.starts_with("1,TEST,146.940000,146.340000,-,0.600000,Tone,103.5,"));
         assert_eq!(lines.next().unwrap(), "# Data courtesy of RepeaterBook.com");
+    }
+
+    #[test]
+    fn generic_csv_writes_each_attribution_line_as_a_comment() {
+        let csv = to_generic_csv(
+            &[chan(146.94, Duplex::Minus, 0.6)],
+            "Repeater data: RSGB ETCC (ukrepeater.net)\nRepeater data from hearham.com",
+        );
+        let tail: Vec<&str> = csv.lines().skip(2).collect();
+        assert_eq!(
+            tail,
+            [
+                "# Repeater data: RSGB ETCC (ukrepeater.net)",
+                "# Repeater data from hearham.com"
+            ]
+        );
+        assert_eq!(attribution_lines(""), "", "no attribution, no line");
+        assert_eq!(attribution_lines(" \n\n"), "", "blank lines are dropped");
     }
 
     #[test]

@@ -26610,12 +26610,13 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
 
 // ── Radio programming ("Program" section): repeater search, projects, exports ──────────────────
 //
-// Location → repeater directory → picked channels → CHIRP/generic CSV. Pure logic lives in
-// propagation::{repeaters, memchan, chirp}; the live fetchers in propagation::live::{repeaterbook,
-// hearham, geocode}. This shell owns: the RepeaterBook token (OS keychain), the per-user disk
-// cache with TTL (compliance: per-user, on-demand, never bundled/redistributed), per-state fetch
-// throttling, source fallback (no token / non-US / RB failure → hearham), and the saved
-// programming projects in radioprog.json beside settings.json.
+// Location → repeater directories → picked channels → CHIRP/generic CSV. Pure logic lives in
+// propagation::{repeaters, memchan, chirp}; the live fetchers in propagation::live::{rsgb,
+// repeaterbook, hearham, geocode}. This shell owns: the RepeaterBook token (OS keychain), the
+// per-user disk cache with TTL (compliance: per-user, on-demand, never bundled/redistributed),
+// per-query fetch throttling, which directories a search reads (RSGB for a UK origin,
+// RepeaterBook for a US one, hearham always; merged into one row per machine) and their
+// fallbacks, and the saved programming projects in radioprog.json beside settings.json.
 
 /// Saved programming projects (channel lists) — sidecar file so hours of curation survive webview
 /// storage clears and stay reachable for future direct-programming paths.
@@ -26627,8 +26628,9 @@ fn radioprog_path() -> PathBuf {
         .join("radioprog.json")
 }
 
-/// Per-source repeater-directory cache dir (rb_<state_id>.json / hearham.json), beside
-/// settings.json. Losing it is harmless (re-fetch); it is never exported or shipped.
+/// Per-source repeater-directory cache dir (rb_<state_id>.json / rsgb_<square>.json /
+/// hearham.json), beside settings.json. Losing it is harmless (re-fetch); it is never exported
+/// or shipped.
 fn radioprog_cache_dir() -> PathBuf {
     settings_path()
         .parent()
@@ -26677,7 +26679,7 @@ struct RepeaterCacheFile {
 /// well inside RepeaterBook's "minimize load, no offline database" posture (age is shown in the
 /// UI and Refresh is explicit).
 const RADIOPROG_TTL_SECS: i64 = 7 * 24 * 3600;
-/// Manual-refresh throttle per RepeaterBook state export.
+/// Retry throttle per directory query: a RepeaterBook state export, an RSGB square.
 const RB_STATE_THROTTLE_SECS: i64 = 900;
 
 fn read_repeater_cache(name: &str) -> Option<RepeaterCacheFile> {
@@ -26698,69 +26700,102 @@ fn write_repeater_cache(name: &str, body: &str) {
     }
 }
 
-/// Last fetch attempt per RB state (unix secs) — the per-state refresh throttle.
+/// Last fetch attempt per directory query (unix secs) — the refresh throttle. Keyed by the
+/// query: a RepeaterBook state id ("17"), an RSGB square's cache name ("rsgb_IO83.json").
 static RB_LAST_TRY: std::sync::Mutex<Option<std::collections::HashMap<String, i64>>> =
     std::sync::Mutex::new(None);
 
-fn rb_throttle_ok(state_id: &str, now: i64) -> bool {
+fn directory_throttle_ok(query: &str, now: i64) -> bool {
     let mut g = RB_LAST_TRY.lock().unwrap_or_else(|e| e.into_inner());
     let map = g.get_or_insert_with(std::collections::HashMap::new);
-    let ok = now - map.get(state_id).copied().unwrap_or(0) >= RB_STATE_THROTTLE_SECS;
+    let ok = now - map.get(query).copied().unwrap_or(0) >= RB_STATE_THROTTLE_SECS;
     if ok {
-        map.insert(state_id.to_string(), now);
+        map.insert(query.to_string(), now);
     }
     ok
 }
 
-/// One search row: the directory record (display: distance/bearing/mode flags/status) plus the
-/// ready-to-add memory channel derived from it (propagation::repeaters::to_channel — duplex,
-/// offset and tone mapping stay in the tested Rust domain, never re-derived in TS).
+/// One search row: one MACHINE after the merge (propagation::repeaters::merge_nearby), as the
+/// record Program displays (distance/bearing/mode flags/status) plus the ready-to-add memory
+/// channel derived from it (propagation::repeaters::to_channel — duplex, offset and tone mapping
+/// stay in the tested Rust domain, never re-derived in TS).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RepeaterSearchRow {
     record: propagation::repeaters::RepeaterRecord,
     channel: propagation::memchan::Channel,
+    /// Every directory row behind this machine, the one it programs from first, each with its
+    /// channel id, so a channel saved from any of them still finds the machine.
+    sources: Vec<propagation::repeaters::SourceRef>,
+    /// Fields those rows disagree on: shown on the row, never silently resolved.
+    disagreements: Vec<propagation::repeaters::Disagreement>,
 }
 
-/// A repeater search result: which source answered, how old the data is, and the rows inside
-/// the radius (distance/bearing filled, nearest first).
+/// One directory a search read, and how old its list is.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RepeaterSearchResult {
-    /// "repeaterbook" | "hearham".
-    source: String,
-    /// Oldest payload timestamp behind these records (unix secs) — the UI's "as of" stamp.
+struct ListStamp {
+    source: propagation::repeaters::RepeaterSource,
+    /// Oldest payload timestamp behind this directory's rows (unix secs): the "as of" stamp, and
+    /// the date a row with none of its own shows.
     fetched_utc: i64,
     /// True when a fetch failed/was rate-limited and stale cache was served instead.
     stale: bool,
+}
+
+/// A repeater search result: the directories that answered, and the machines inside the radius
+/// (distance/bearing filled, nearest first).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepeaterSearchResult {
+    /// Every directory this search read, in precedence order (RSGB, RepeaterBook, hearham).
+    lists: Vec<ListStamp>,
     /// A major band this source lists nothing on here, when it lists something —
     /// hearham has real holes in rural country (no 2 m at all around Bozeman MT),
     /// and a channel list missing a whole band reads as complete when it isn't.
-    /// Only set on the hearham path, where adding a RepeaterBook token is the fix.
+    /// Only set when the list is hearham's alone, where adding a RepeaterBook token is the fix.
     coverage_gap: Option<&'static str>,
     /// States this search PLANNED to read but heard nothing from (2-letter codes), so
     /// a short list can say which directory is absent instead of reading as "there are
     /// no repeaters near you" (#241). Empty on a complete search and on the hearham
     /// path, which is one global feed rather than per-state exports.
     missing_states: Vec<String>,
+    /// A UK origin whose RSGB list could not be read (a failure, or a payload in a shape this
+    /// build cannot read: the endpoint is a BETA). The rows are hearham's alone, and the panel
+    /// says so in plain words; it is never an empty list.
+    rsgb_unavailable: bool,
+    /// Locator squares the radius reaches that RSGB was not asked about (at most nine are, per
+    /// search), so the rows there are hearham's alone.
+    rsgb_beyond: Vec<String>,
     rows: Vec<RepeaterSearchRow>,
 }
 
-fn search_rows(records: Vec<propagation::repeaters::RepeaterRecord>) -> Vec<RepeaterSearchRow> {
-    records
+fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSearchRow> {
+    machines
         .into_iter()
-        .map(|r| RepeaterSearchRow {
-            channel: propagation::repeaters::to_channel(&r),
-            record: r,
+        .map(|m| RepeaterSearchRow {
+            channel: propagation::repeaters::to_channel(&m.record),
+            record: m.record,
+            sources: m.sources,
+            disagreements: m.disagreements,
         })
         .collect()
 }
 
-/// Search repeaters within `radius_km` of a point. Source resolution for a US origin: RepeaterBook
-/// state exports — through the operator's own token when one is stored, else through the Nexus
-/// proxy (rb.hamradiotools.io, the centralized model: the app token lives server-side only).
-/// Cached TTL 7d, per-state throttle, stale cache on failure/429. When RepeaterBook is
-/// unreachable/dormant with no cache (or the origin is non-US) → hearham, same cache discipline.
+/// Search repeaters within `radius_km` of a point, merged from every directory that covers it
+/// into one row per machine (propagation::repeaters::merge_nearby: field by field the RSGB list,
+/// then RepeaterBook, then hearham; every source id kept; disagreements shown).
+///
+/// - **RSGB** (UK origins): one request per locator square the radius reaches, at most nine,
+///   each cached 7d on this PC behind the per-query retry throttle. Any square that yields
+///   nothing, or a payload in a shape this build cannot read, drops the RSGB list for this
+///   search: the rows are hearham's alone and `rsgb_unavailable` says so.
+/// - **RepeaterBook** (US origins): state exports — through the operator's own token when one
+///   is stored, else through the Nexus proxy (rb.hamradiotools.io, the centralized model: the
+///   app token lives server-side only). Cached TTL 7d, per-state throttle, stale cache on
+///   failure/429. Its rows stay on this PC: they reach this panel and nothing else.
+/// - **hearham**: every search (one global feed, cached 7d), the floor under the others.
+///
 /// All network + parsing off the main thread.
 #[tauri::command]
 async fn repeater_search(
@@ -26769,7 +26804,7 @@ async fn repeater_search(
     radius_km: f64,
 ) -> Result<RepeaterSearchResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        use propagation::repeaters as rpt;
+        use propagation::repeaters::{self as rpt, RepeaterSource};
         let origin = (lat, lon);
         let radius = radius_km.clamp(1.0, 500.0);
         let token = repeaterbook_keychain()
@@ -26778,7 +26813,10 @@ async fn repeater_search(
             .unwrap_or_default();
         let states = rpt::plan_states(origin, radius);
         let now = now_unix();
+        let mut lists: Vec<ListStamp> = Vec::new();
+        let mut missing_states = Vec::new();
 
+        let mut rb_records = Vec::new();
         if !states.is_empty() {
             // One entry per PLANNED state, whether or not it answered — a state that
             // yields nothing has to survive as far as the result, or the search reports
@@ -26795,7 +26833,7 @@ async fn repeater_search(
                     cached
                         .as_ref()
                         .map(|c| (c.body.clone(), c.fetched_utc, false))
-                } else if rb_throttle_ok(st, now) {
+                } else if directory_throttle_ok(st, now) {
                     // A stored personal token goes straight to RepeaterBook; otherwise the
                     // Nexus proxy (which holds the app token server-side + an edge cache).
                     let fetched = if token.is_empty() {
@@ -26834,57 +26872,305 @@ async fn repeater_search(
             }
             let cov = rpt::fold_state_fetches(&fetches);
             if cov.any_served() {
-                return Ok(RepeaterSearchResult {
-                    source: "repeaterbook".into(),
+                lists.push(ListStamp {
+                    source: RepeaterSource::Repeaterbook,
                     fetched_utc: cov.oldest_utc,
                     stale: cov.stale,
-                    coverage_gap: None,
-                    missing_states: cov.missing,
-                    rows: search_rows(rpt::filter_sort(&cov.records, origin, radius)),
                 });
-            }
-            // Every state failed with no cache (e.g. the proxy is dormant pre-approval) — fall
-            // through to hearham, but log the RB reason for the Connections panel.
-            if !last_err.is_empty() {
+                missing_states = cov.missing;
+                rb_records = cov.records;
+            } else if !last_err.is_empty() {
+                // Every state failed with no cache (e.g. the proxy is dormant pre-approval):
+                // hearham carries the search; log the RB reason for the Connections panel.
                 conn_log("RepeaterBook", "info", &last_err);
             }
         }
 
-        // hearham: the no-token default, the non-US path, and the RB fallback.
+        // RSGB: the UK coordinator's list, one square at a time. A payload that does not read
+        // as the RSGB shape is never cached, so it cannot replace a good list with one this
+        // build cannot read; a stale good list is served instead, as for the other sources.
+        let plan = rpt::plan_rsgb_squares(origin, radius);
+        let mut rsgb_records = Vec::new();
+        let mut rsgb_unavailable = false;
+        if !plan.ask.is_empty() {
+            let mut fetches: Vec<rpt::SquareFetch> = Vec::new();
+            let mut last_err = String::new();
+            for sq in &plan.ask {
+                let cache_name = format!("rsgb_{sq}.json");
+                let (fetch, err) = rsgb_square(
+                    sq,
+                    now,
+                    read_repeater_cache(&cache_name),
+                    || directory_throttle_ok(&cache_name, now),
+                    propagation::live::rsgb::fetch_square,
+                    |body| write_repeater_cache(&cache_name, body),
+                );
+                if let Some(e) = err {
+                    last_err = e;
+                }
+                fetches.push(fetch);
+            }
+            if !last_err.is_empty() {
+                conn_log("RSGB", "info", &last_err);
+            }
+            match rpt::fold_rsgb_squares(&fetches) {
+                Ok(layer) => {
+                    lists.push(ListStamp {
+                        source: RepeaterSource::Rsgb,
+                        fetched_utc: layer.oldest_utc,
+                        stale: layer.stale,
+                    });
+                    rsgb_records = layer.records;
+                }
+                Err(why) => {
+                    conn_log(
+                        "RSGB",
+                        "info",
+                        format!("the RSGB list was not used for this search: {why}"),
+                    );
+                    rsgb_unavailable = true;
+                }
+            }
+        }
+
+        // hearham: every search, the no-token default and the floor under the other two.
         let cached = read_repeater_cache("hearham.json");
         let fresh = cached
             .as_ref()
             .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
-        let (body, at, stale) = if fresh {
+        let hearham = if fresh {
             let c = cached.as_ref().unwrap();
-            (c.body.clone(), c.fetched_utc, false)
+            Ok((c.body.clone(), c.fetched_utc, false))
         } else {
             match propagation::live::hearham::fetch_all() {
                 Ok(b) => {
                     write_repeater_cache("hearham.json", &b);
-                    (b, now, false)
+                    Ok((b, now, false))
                 }
                 Err(e) => match cached.as_ref() {
-                    Some(c) => (c.body.clone(), c.fetched_utc, true),
-                    None => return Err(e),
+                    Some(c) => Ok((c.body.clone(), c.fetched_utc, true)),
+                    None => Err(e),
                 },
             }
         };
-        let records = rpt::parse_hearham_json(&body);
-        // Judged on what's inside the radius, not the whole global feed.
-        let in_radius = rpt::filter_sort(&records, origin, radius);
+        let hh_records = match hearham {
+            Ok((body, at, stale)) => {
+                lists.push(ListStamp {
+                    source: RepeaterSource::Hearham,
+                    fetched_utc: at,
+                    stale,
+                });
+                rpt::parse_hearham_json(&body)
+            }
+            // Nothing answered at all: the error is the result, as it always was.
+            Err(e) if lists.is_empty() => return Err(e),
+            Err(e) => {
+                conn_log("hearham", "info", &e);
+                Vec::new()
+            }
+        };
+
+        let machines =
+            rpt::merge_nearby(&[&rsgb_records, &rb_records, &hh_records], origin, radius);
+        // Judged on what's inside the radius, and only for a list that is hearham's alone.
+        let coverage_gap = if lists.iter().all(|l| l.source == RepeaterSource::Hearham) {
+            let records: Vec<rpt::RepeaterRecord> =
+                machines.iter().map(|m| m.record.clone()).collect();
+            rpt::missing_major_band(&records)
+        } else {
+            None
+        };
+        lists.sort_by_key(|l| l.source);
         Ok(RepeaterSearchResult {
-            source: "hearham".into(),
-            fetched_utc: at,
-            stale,
-            coverage_gap: rpt::missing_major_band(&in_radius),
-            // hearham is ONE global feed, not per-state exports — no state can go missing.
-            missing_states: Vec::new(),
-            rows: search_rows(in_radius),
+            lists,
+            coverage_gap,
+            missing_states,
+            rsgb_beyond: if rsgb_unavailable {
+                Vec::new()
+            } else {
+                plan.beyond
+            },
+            rsgb_unavailable,
+            rows: search_rows(machines),
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// One planned RSGB square for a search: the cache while it is fresh; else, when the retry
+/// throttle allows (`may_fetch`, asked only then, since asking records the attempt), a fetch,
+/// whose payload is `store`d only when it reads as the RSGB shape, so a payload this build cannot
+/// read never replaces a good list; else, or when the fetch fails or is unreadable, the stale
+/// cache; else nothing. The `String` says why a fetch was not used, for the connection log.
+fn rsgb_square(
+    square: &str,
+    now: i64,
+    cached: Option<RepeaterCacheFile>,
+    may_fetch: impl FnOnce() -> bool,
+    fetch: impl FnOnce(&str) -> Result<String, String>,
+    store: impl FnOnce(&str),
+) -> (propagation::repeaters::SquareFetch, Option<String>) {
+    let mut err = None;
+    let fresh = cached
+        .as_ref()
+        .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
+    let got = if fresh {
+        cached
+            .as_ref()
+            .map(|c| (c.body.clone(), c.fetched_utc, false))
+    } else {
+        let fetched = if may_fetch() {
+            match fetch(square) {
+                Ok(b) => match propagation::repeaters::parse_rsgb_json(&b) {
+                    Ok(_) => {
+                        store(&b);
+                        Some((b, now, false))
+                    }
+                    Err(e) => {
+                        err = Some(format!("{e} ({square})"));
+                        None
+                    }
+                },
+                Err(e) => {
+                    err = Some(e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        fetched.or_else(|| {
+            cached
+                .as_ref()
+                .map(|c| (c.body.clone(), c.fetched_utc, true))
+        })
+    };
+    let (body, fetched_utc, stale) = match got {
+        Some((b, at, s)) => (Some(b), at, s),
+        None => (None, 0, false),
+    };
+    (
+        propagation::repeaters::SquareFetch {
+            square: square.to_string(),
+            body,
+            fetched_utc,
+            stale,
+        },
+        err,
+    )
+}
+
+#[cfg(test)]
+mod rsgb_square_tests {
+    use super::*;
+
+    const GOOD: &str = r#"{"data":[{"id":1,"type":"AV","status":"OPERATIONAL","repeater":"GB3XX","town":"X","modeCodes":["A"],"tx":145600000,"rx":145000000,"ctcss":77,"txbw":12.5,"locator":"IO83LP"}]}"#;
+    const NOW: i64 = 1_800_000_000;
+    const WEEK: i64 = 7 * 24 * 3600;
+
+    fn cache(body: &str, age_secs: i64) -> Option<RepeaterCacheFile> {
+        Some(RepeaterCacheFile {
+            fetched_utc: NOW - age_secs,
+            body: body.into(),
+        })
+    }
+
+    /// The RSGB endpoint is a BETA. Should it start answering in another shape, the good list
+    /// this PC holds must survive: the unreadable payload is never stored, the old list is served
+    /// (marked stale) and the reason goes to the log.
+    #[test]
+    fn an_unreadable_payload_never_replaces_the_cached_list() {
+        let mut stored = None;
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, WEEK + 1),
+            || true,
+            |_| Ok("<html>502 Bad Gateway</html>".into()),
+            |b| stored = Some(b.to_string()),
+        );
+        assert_eq!(
+            stored, None,
+            "the unreadable payload was cached over the good list"
+        );
+        assert_eq!(f.body.as_deref(), Some(GOOD), "the good list is served");
+        assert!(f.stale);
+        assert!(err.is_some_and(|e| e.contains("IO83")));
+        // With nothing cached there is nothing to serve: the square gives nothing, the RSGB layer
+        // drops (fold_rsgb_squares) and the search shows hearham's rows alone, saying so.
+        let (f, _) = rsgb_square(
+            "IO83",
+            NOW,
+            None,
+            || true,
+            |_| Ok("[]".into()),
+            |_| panic!("stored"),
+        );
+        assert_eq!(f.body, None);
+    }
+
+    #[test]
+    fn a_readable_payload_is_stored_and_served_fresh() {
+        let mut stored = None;
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(r#"{"data":[]}"#, WEEK + 1),
+            || true,
+            |sq| {
+                assert_eq!(sq, "IO83");
+                Ok(GOOD.into())
+            },
+            |b| stored = Some(b.to_string()),
+        );
+        assert_eq!(stored.as_deref(), Some(GOOD));
+        assert_eq!(
+            (f.body.as_deref(), f.fetched_utc, f.stale, err),
+            (Some(GOOD), NOW, false, None)
+        );
+    }
+
+    #[test]
+    fn a_fresh_cache_asks_nothing_and_a_throttled_or_failed_fetch_serves_the_stale_one() {
+        let (f, _) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, 60),
+            || panic!("asked the throttle"),
+            |_| panic!("fetched"),
+            |_| panic!("stored"),
+        );
+        assert_eq!((f.body.as_deref(), f.stale), (Some(GOOD), false));
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, WEEK + 1),
+            || false,
+            |_| panic!("fetched while throttled"),
+            |_| panic!("stored"),
+        );
+        assert_eq!((f.body.as_deref(), f.stale, err), (Some(GOOD), true, None));
+        let (f, err) = rsgb_square(
+            "IO83",
+            NOW,
+            cache(GOOD, WEEK + 1),
+            || true,
+            |_| Err("RSGB: server returned HTTP 503".into()),
+            |_| panic!("stored"),
+        );
+        assert_eq!((f.body.as_deref(), f.stale), (Some(GOOD), true));
+        assert_eq!(err.as_deref(), Some("RSGB: server returned HTTP 503"));
+        let (f, _) = rsgb_square(
+            "IO83",
+            NOW,
+            None,
+            || true,
+            |_| Err("down".into()),
+            |_| panic!("stored"),
+        );
+        assert_eq!(f.body, None, "nothing to serve");
+    }
 }
 
 /// City-name search via OSM Nominatim (explicit Search click only — the UI never queries per
