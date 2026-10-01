@@ -3126,6 +3126,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               : undefined
           }
           onPopOut={() => void openPanelWindow('connect')}
+          // The top bar is not drawn on Connect, so its clock rides in Connect's header, with the local
+          // clock beside it when Settings ▸ Workspace asks for one, as the top bar's did.
+          showLocalClock={localClock}
         />
       )
       break

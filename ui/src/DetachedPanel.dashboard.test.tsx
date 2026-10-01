@@ -10,8 +10,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
+const seen = vi.hoisted(() => ({ props: [] as Array<Record<string, unknown>> }))
 vi.mock('./components/ConnectView', () => ({
-  ConnectView: () => <main className="layout single" data-testid="connect-view" />,
+  ConnectView: (p: Record<string, unknown>) => {
+    seen.props.push(p)
+    return <main className="layout single" data-testid="connect-view" />
+  },
 }))
 vi.mock('./components/NeededPanel', () => ({
   NeededPanel: () => <div className="panel" data-testid="needed" />,
@@ -98,6 +102,8 @@ describe('the Connect pop-out', () => {
     // Above Connect, not beside or under it.
     expect(bar.compareDocumentPosition(connect) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(connect.parentElement).toBe(shell)
+    // …and Connect is told so: its header then draws no clock of its own, the bar's is the one.
+    expect(seen.props[seen.props.length - 1]?.hostBar, 'Connect knows the window draws the bar').toBe(true)
   })
 
   it('shows the station from the shared snapshot and the indices from its own propagation poll', async () => {

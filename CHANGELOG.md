@@ -496,6 +496,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of the window, with the frequency, the band list, TX Off, Tune and Stop TX, is no longer shown
   on Connect; every other screen still has it. To stop a transmission while Connect is on screen,
   press **Esc**, or go to any other screen and press **Stop TX** there.
+- **Connect keeps the clock.** The radio bar's UTC clock is at the end of Connect's own header now,
+  in every layout, with your local time beside it if you turned that on in **Settings ▸ Workspace**.
+  The dashboard window and the TV page keep the big clock in the bar across their top.
 - **Connect's boxes have clearer names, and their menus are grouped by what the boxes are for.**
   The headline box is now **Best band**, the card that floats over the map is **Propagation**, and
   **Best Band → Region** is **Bands by region**, so nothing else on Connect is called "Conditions"

@@ -71,6 +71,7 @@ import type { AppSnapshot } from './types'
 import App from './App'
 import { allFeatureIds, featureById, sectionFeatures, type View } from './features/registry'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
+import { LOCAL_CLOCK_STORAGE_KEY } from './useLocalClock'
 
 // A 30 s budget for every test and hook here, for the machine and not for the checks. Each test mounts the real App, and
 // in three full-suite runs on a loaded box (2026-09-29 and 30) vitest's default budgets ran out with nothing wrong: "Test
@@ -712,6 +713,23 @@ describe('Connect — no radio controls, and Esc stops (the operator’s ruled e
     } finally {
       panels.removeEventListener('keydown', swallow)
     }
+  })
+})
+
+// …BUT CONNECT KEEPS THE TIME (the operator, 2026-10-01: "things like time are very good" on a
+// second monitor or the TV). The bar's other items stay off Connect; its clock rides in Connect's own
+// header, with the local clock beside it when Settings ▸ Workspace asks for one, as in the bar.
+describe('Connect keeps the station clock', () => {
+  it('the top bar’s UTC clock rides in Connect’s header, the local clock beside it when Settings asks', async () => {
+    everySectionOn()
+    localStorage.setItem(LOCAL_CLOCK_STORAGE_KEY, '1')
+    await mountOn('connect')
+    const header = document.querySelector('main .connect-shell .connect-header')
+    expect(header, 'control: Connect is the screen on show').not.toBeNull()
+    expect(document.querySelector('header.topbar'), 'control: the top bar is not drawn').toBeNull()
+    const clocks = [...header!.querySelectorAll('.utc-clock')]
+    expect(clocks.map((c) => c.querySelector('.utc-label')?.textContent)).toEqual(['UTC', 'Local'])
+    expect(clocks[0].querySelector('.utc-time')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
   })
 })
 

@@ -837,3 +837,84 @@ describe('the Layout button — the same picker, beside ⊞ Panels', () => {
     expect(reached, 'Escape stopped short of the window').toEqual(['Escape'])
   })
 })
+
+// A UTC CLOCK ON CONNECT, IN EVERY LAYOUT (the operator, 2026-10-01). The top bar left Connect with
+// its radio controls, and its UTC clock went with it: "some people are gonna use that on a second
+// monitor or we're gonna use it to display the TV so things like time are very good". The alerts, the
+// REC stop, the watchdog alert, Help and Field stay off Connect. So the header carries the clock the bar
+// had (Settings ▸ Workspace's local clock beside it when chosen) — except where the host draws the
+// dashboard bar over the view (the dashboard window, the TV page), whose big clock is the one.
+describe('a UTC clock on Connect, in every layout', () => {
+  const header = (c: HTMLElement) => c.querySelector('.connect-header') as HTMLElement
+  const clocks = (c: HTMLElement) => [...header(c).querySelectorAll('.utc-clock')]
+  const utc = (c: HTMLElement) => header(c).querySelector('.utc-clock:not(.local-clock)')
+  /** The clock's time as seconds into the UTC day, and the real one now. */
+  const daySecs = (hhmmss: string) => hhmmss.split(':').map(Number).reduce((a, n) => a * 60 + n, 0)
+  const nowSecs = () => {
+    const d = new Date()
+    return d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds()
+  }
+  const pickFromButton = (c: HTMLElement, label: string) => {
+    if (!screen.queryByRole('group', { name: 'Layout' }))
+      fireEvent.click(within(header(c)).getByRole('button', { name: 'Layout' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: label }))
+  }
+  const LABELS = ['Map first', 'List first', 'Dashboard', 'Frame']
+
+  it('the header shows the UTC time, to the second, in Standard and in every layout', async () => {
+    const { container } = await mount()
+    for (const label of ['Standard', ...LABELS]) {
+      if (label !== 'Standard') {
+        pickFromButton(container, label)
+        const now = screen.getByRole('group', { name: 'Layout' }).querySelector('.connect-layout-now')?.textContent
+        expect(now, `control: ${label} is on screen`).toBe(label)
+      }
+      const clock = utc(container)
+      expect(clock, `${label}: a UTC clock in the header`).not.toBeNull()
+      expect(clock!.querySelector('.utc-label')?.textContent, label).toBe('UTC')
+      const time = clock!.querySelector('.utc-time')?.textContent ?? ''
+      expect(time, label).toMatch(/^\d\d:\d\d:\d\d$/)
+      const off = Math.abs(daySecs(time) - nowSecs())
+      expect(Math.min(off, 86_400 - off), `${label}: ${time} is UTC now`).toBeLessThanOrEqual(5)
+      expect(clocks(container).length, `${label}: UTC alone unless the local clock is chosen`).toBe(1)
+    }
+  })
+
+  it('Settings ▸ Workspace’s local clock rides beside it, as it did in the top bar', async () => {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<ConnectView {...props} showLocalClock />)
+    })
+    const [first, second] = clocks(r.container)
+    expect(clocks(r.container).length).toBe(2)
+    expect(first.classList.contains('local-clock'), 'UTC keeps its place').toBe(false)
+    expect(second.classList.contains('local-clock')).toBe(true)
+    expect(second.querySelector('.utc-label')?.textContent).toBe('Local')
+  })
+
+  it('where the host draws the dashboard bar over the view, the header has no clock: the bar’s is the one', async () => {
+    window.history.replaceState(null, '', '/?panel=connect')
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<ConnectView {...props} hostBar showLocalClock />)
+    })
+    expect(header(r.container), 'control: the header is drawn').not.toBeNull()
+    expect(clocks(r.container)).toEqual([])
+  })
+
+  it('the Remote Connect page has the clock too', async () => {
+    const source = { client: { supports: () => true } } as unknown as RemoteCollections
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(
+        <StationDataContext.Provider value={false}>
+          <RemoteCollectionsContext.Provider value={source}>
+            <ConnectView {...props} />
+          </RemoteCollectionsContext.Provider>
+        </StationDataContext.Provider>,
+      )
+    })
+    expect(r.container.querySelector('.connect-header [role="status"]'), 'control: this is the Remote page').not.toBeNull()
+    expect(utc(r.container)?.querySelector('.utc-time')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
+  })
+})

@@ -103,6 +103,8 @@ export function ConnectTv() {
           needByCall={emptyNeeds.current}
           // A wall display: a slot's tabs may rotate (⋯ ▸ Rotate the tabs), as in the dashboard window.
           autoRotate
+          // The bar above is this page's clock; Connect's header draws none of its own.
+          hostBar
         />
       )}
     </div>

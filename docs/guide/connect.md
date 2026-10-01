@@ -16,6 +16,10 @@ Connect has no radio controls. The bar across the top of the other screens (the
 frequency, the band list, TX Off, Tune and Stop TX) is not shown here, so the map
 and its panes get the whole height. To stop a transmission while Connect is on
 screen, press **Esc**, or go to any other screen and press **Stop TX** there.
+The bar's UTC clock stays: it sits at the end of Connect's own header in every
+layout, with your local time beside it if you turned that on in **Settings ▸
+Workspace**. In the dashboard window and on the TV page the bar across the top
+carries the big clock instead.
 
 <!-- TODO: capture screenshot — Connect — the shaded 3-D globe with panes wrapped around it -->
 

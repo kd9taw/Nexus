@@ -662,6 +662,7 @@ const PARTIAL = [
   'components/SettingsPanel.tsx',
   'components/CockpitHeader.tsx',
   'components/TopBar.tsx',
+  'components/UtcClock.tsx',
   'components/SetupHealth.tsx',
   'components/AprsCockpit.tsx',
   'components/OperateQsoStrip.tsx',

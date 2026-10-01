@@ -22,6 +22,7 @@ import { setGlobeLayer } from '../features/globeLayers'
 // 3-D mode, so the 2-D default (which runs anywhere) never pays for it.
 const Globe3D = lazy(() => import('./Globe3D'))
 import { PaneFrame } from './connect/PaneFrame'
+import { UtcClock } from './UtcClock'
 import { remoteFeeds, resolveSelection, usePaneContext } from './connect/usePaneContext'
 import { paneById } from './connect/panes'
 import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
@@ -252,6 +253,12 @@ interface Props {
    *  window's Connect (the operator's pick, 2026-09-29: "Auto-rotating boxes on the dashboard/TV").
    *  Without it a stored interval is inert and the menu offers none. */
   autoRotate?: boolean
+  /** Settings ▸ Workspace's local clock (#253): the header's clock shows this computer's time beside
+   *  UTC, as the top bar's did. */
+  showLocalClock?: boolean
+  /** The host draws the dashboard bar over this view (the dashboard window, DetachedPanel; the TV page,
+   *  ConnectTv), so the header draws no clock of its own: the bar's big one is the clock there. */
+  hostBar?: boolean
 }
 
 export function ConnectView({
@@ -272,6 +279,8 @@ export function ConnectView({
   spotsFeed,
   otaBoard,
   autoRotate,
+  showLocalClock,
+  hostBar,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -588,6 +597,17 @@ export function ConnectView({
             >
               {t('connect.popOut.label')}
             </button>
+          )}
+          {/* THE STATION CLOCK, in every layout (the operator, 2026-10-01). The top bar left Connect
+              with its radio controls and took its UTC clock with it, and "things like time are very
+              good" on a second monitor or the TV; the alerts, REC, the watchdog alert, Help and Field
+              stay off. The top bar's own clock, last in the header. Where the host draws the dashboard
+              bar over the view, its big clock is the one. */}
+          {!hostBar && (
+            <div className="connect-clock">
+              <UtcClock />
+              {showLocalClock && <UtcClock local />}
+            </div>
           )}
         </div>
         )}

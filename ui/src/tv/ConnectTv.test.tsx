@@ -109,6 +109,8 @@ describe('the chrome', () => {
     expect(within(bar).getByText('read-only'), 'the TV’s own chip rides in the bar').toBeTruthy()
     expect(document.querySelectorAll('.dash-bar').length, 'one bar, not the old one beside it').toBe(1)
     expect(document.querySelector('.tv-bar')).toBeNull()
+    // …and Connect is told so: its header then draws no clock of its own, the bar's is the one.
+    expect(seen.props[seen.props.length - 1]?.hostBar, 'Connect knows the page draws the bar').toBe(true)
   })
 
   it('the bar’s sunspot number comes over the same LAN read as the Space Wx box’s lines, dated as its day', async () => {
