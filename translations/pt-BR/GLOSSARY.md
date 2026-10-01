@@ -100,10 +100,10 @@ word in, and use only that word in the CSV.
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 141 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 123 | The Settings screen and every reference to it. | |
+| settings | 124 | The Settings screen and every reference to it. | |
 | grid | 117 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 108 | Sound cards, levels, routing. | |
-| station | 111 | Both your own station and the one you are working. | |
+| station | 114 | Both your own station and the one you are working. | |
 | port | 99 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 99 / 30 | The verbs. The abbreviations TX/RX stay English. | |
