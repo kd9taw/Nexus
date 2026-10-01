@@ -535,6 +535,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept only in the window's own storage, which a reinstall or a reset of the webview's data clears.
   They now live with your settings, so an armed alarm, and a pass or a window that already fired,
   survive both.
+- **A notice that names a long file path wraps it instead of pushing its × off the screen.** A
+  path has no spaces to break at, so a notice naming one grew wider than the notice column and its
+  × close button ended up outside the window. The path now wraps inside the notice, and the × stays
+  where you can reach it.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
