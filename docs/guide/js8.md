@@ -86,8 +86,10 @@ autoreply … would you like to send this transmission?" **Yes** sends it in the
 sends nothing, and so does no answer, which is No after 89 seconds. A message you hold for
 someone is handed over only on Yes. Turn **Ask for confirmation before sending automatic replies**
 off in Settings and a reply goes by itself in the period after the query, as JS8Call answers:
-it shows in the queue meanwhile, and **Drop queue** takes it back. After an hour with nothing typed (the idle watchdog; adjustable), heartbeats,
-auto-reply and relay switch themselves off and the dock says so.
+it shows in the queue meanwhile, and **Drop queue** takes it back. As in JS8Call, no reply is made while your message box holds text (you are typing, a reply
+waits there, or a message of yours is going out) or while a message to you is still arriving.
+After an hour with nothing typed (the idle watchdog; adjustable), heartbeats,
+auto-reply and relay switch themselves off, nothing more is filed or held, and the dock says so.
 
 **Stop TX** (header, or **Esc** anywhere in the screen) cuts the frame on the air, empties
 the queue, drops a reply still asking and stops the heartbeat schedule. **Drop queue** only

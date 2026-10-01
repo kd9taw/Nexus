@@ -167,6 +167,26 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     )
   })
 
+  // JS8Call's "Only autoreply to these callsigns", "Never autoreply to these callsigns" and "Never
+  // acknowledge heartbeats from these callsigns" (Configuration.ui:762-807): comma-separated,
+  // empty by default, read upper-cased (`splitWords`, Configuration.cpp:2416-2428).
+  it('the allow and deny lists are comma lists, empty by default, saved upper-cased', async () => {
+    const fs = await openJs8()
+    const allow = control(fs, 'Only auto-reply to these callsigns') as HTMLInputElement
+    const deny = control(fs, 'Never auto-reply to these callsigns') as HTMLInputElement
+    const hb = control(fs, 'Never acknowledge heartbeats from these callsigns') as HTMLInputElement
+    for (const el of [allow, deny, hb]) expect(el.value, 'empty by default').toBe('')
+    fireEvent.change(allow, { target: { value: 'w1aw, k1abc' } })
+    fireEvent.change(deny, { target: { value: 'n0xyz' } })
+    fireEvent.change(hb, { target: { value: ' kd2uwr ,' } })
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(
+        expect.objectContaining({ js8AutoreplyAllow: ['W1AW', 'K1ABC'], js8AutoreplyDeny: ['N0XYZ'], js8HbAckDeny: ['KD2UWR'] }),
+      ),
+    )
+  })
+
   it('the four speed switches edit one bitmask, independently', async () => {
     const fs = await openJs8()
     const sw = (label: string) => control(fs, label)

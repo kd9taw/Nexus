@@ -3501,6 +3501,13 @@ export interface Settings {
   /** JS8Call's AutoreplyConfirmation (default on): every automatic reply waits in the cockpit for
    * the operator's Yes and is not sent after 89 s without one. Off, replies go by themselves. */
   js8AutoreplyConfirmation: boolean
+  /** JS8Call's "Only autoreply to these callsigns" (empty = everyone): anyone else is acted on in
+   * no way. Matched by the call as heard or its base call. */
+  js8AutoreplyAllow: string[]
+  /** JS8Call's "Never autoreply to these callsigns": a station on it is acted on in no way. */
+  js8AutoreplyDeny: string[]
+  /** JS8Call's "Never acknowledge heartbeats from these callsigns". */
+  js8HbAckDeny: string[]
   /** Relay `>` traffic for other stations (third-party traffic; JS8Call default on). */
   js8Relay: boolean
   /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/

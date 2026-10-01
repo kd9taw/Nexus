@@ -4745,6 +4745,9 @@ impl Engine {
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
             autoreply_confirmation: true,
+            autoreply_allow: Vec::new(),
+            autoreply_deny: Vec::new(),
+            hb_ack_deny: Vec::new(),
         };
         Self {
             app,
@@ -45840,12 +45843,14 @@ mod tests {
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        // The query first: no reply is made while a message is going out (JS8Call's box
+        // holds it, mainwindow.cpp:9364), and this wants one waiting beside the queue.
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
         e.js8_send(
             None,
             "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
         )
         .expect("queues");
-        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
         let st = e.js8_state();
         assert!(
             st.hb_on && !st.queue.is_empty() && st.pending_reply.is_some(),

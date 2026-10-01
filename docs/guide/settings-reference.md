@@ -1132,7 +1132,8 @@ nothing until you enable TX in the cockpit, every session.
   free slot between 500 and 1000 Hz. The HB chip itself is session-only.
 - **Answer heartbeats** — off by default, as in JS8Call. On, a heard heartbeat gets your
   signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
-  that station is offered to it.
+  that station is offered to it. **Never acknowledge heartbeats from these callsigns**,
+  comma-separated and empty by default, leaves those stations unanswered.
 - **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
   `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
   or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On
@@ -1143,6 +1144,11 @@ nothing until you enable TX in the cockpit, every session.
   JS8Call. Every automatic reply (to a query, an `ACK`, a relay, a heartbeat
   acknowledgement) waits in the cockpit for your **Yes**; **No**, or no answer within 89
   seconds, sends nothing. Off, each goes by itself in the next period.
+- **Only auto-reply to these callsigns** / **Never auto-reply to these callsigns** —
+  JS8Call's allow and deny lists, comma-separated, empty by default. A station is matched by
+  its call as heard or its base call (`W1AW` covers `W1AW/P`). Empty, the allow list lets
+  everyone in; set, anyone not on it, like anyone on the deny list, is not acted on at all: no
+  reply, no relay, its message not filed, nothing held for it.
 - **Relay for other stations** — on by default, as in JS8Call: a message routed through
   your callsign is passed along (with Auto-reply off it is put in the message box for you
   to send), and `MSG TO:` messages are held in your inbox until the

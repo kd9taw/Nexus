@@ -69,6 +69,15 @@ pub enum Js8Switch {
     Hb,
 }
 
+/// A callsign list from Settings as the station reads it: trimmed, upper-cased, the empties gone
+/// (JS8Call's `splitWords`, Configuration.cpp:2416-2428).
+fn js8_call_list(list: &[String]) -> Vec<String> {
+    list.iter()
+        .map(|c| c.trim().to_ascii_uppercase())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
 /// xorshift32 — a deterministic, dependency-free source for the heartbeat sub-band pick.
 /// Quality is irrelevant (it spreads HBs across 50 Hz slots); having no new crate is what
 /// matters. Never used for anything that could key the radio differently.
@@ -118,6 +127,9 @@ impl Engine {
             status: s.js8_status.clone(),
             allcall_reply_interval_ms: JS8_ALLCALL_INTERVAL_MS,
             autoreply_confirmation: s.js8_autoreply_confirmation,
+            autoreply_allow: js8_call_list(&s.js8_autoreply_allow),
+            autoreply_deny: js8_call_list(&s.js8_autoreply_deny),
+            hb_ack_deny: js8_call_list(&s.js8_hb_ack_deny),
         }
     }
 
@@ -312,6 +324,11 @@ impl Engine {
     pub fn js8_ingest(&mut self, decodes: &[modes::Decode], _slot: u64) {
         let now_ms = now_unix_secs() * 1000;
         self.js8_tick(now_ms);
+        // The whole batch into the buffers first, as JS8Call files a decode pass before
+        // `processCommandActivity` reads it; the station then sees which buffers are still open
+        // (a message still arriving), and its queue runs once the pass is processed, as
+        // `processTxQueue` does (mainwindow.cpp:4734-4737).
+        let mut batch = Vec::new();
         for d in decodes {
             let (Some(raw), Some(modes::ModeKind::Js8 { speed })) = (d.raw, d.mode) else {
                 continue;
@@ -327,9 +344,23 @@ impl Engine {
                 quality: d.qual,
             };
             let low_conf = d.qual < JS8_LOW_CONF;
-            let events = self.js8_reasm.feed(&rx, now_ms);
+            batch.push((self.js8_reasm.feed(&rx, now_ms), low_conf));
+        }
+        self.js8_note_rx_buffers();
+        for (events, low_conf) in batch {
             self.js8_handle_events(events, low_conf, now_ms);
         }
+        let actions = self.js8_station.process_tx_queue();
+        self.js8_handle_actions(actions);
+    }
+
+    /// Tell the station which receive buffers are open, for JS8Call's "a message still arriving"
+    /// rules (mainwindow.cpp:9062-9066, :9369-9374).
+    fn js8_note_rx_buffers(&mut self) {
+        let open = self.js8_reasm.has_open();
+        let to: Vec<String> = self.js8_reasm.open_heads_to().map(str::to_string).collect();
+        self.js8_station
+            .note_rx_buffers(open, to.iter().map(String::as_str));
     }
 
     /// The engine's once-a-second JS8 clock (the radio loop calls it at `Tier::Js8`; ingest
@@ -337,6 +368,7 @@ impl Engine {
     /// minutes — inert in the receive-only build, but the plumbing is the TX batch's).
     pub fn js8_tick(&mut self, now_ms: u64) {
         let aged = self.js8_reasm.age(now_ms);
+        self.js8_note_rx_buffers();
         self.js8_handle_events(aged, false, now_ms);
         // What waits while the TX latch is DOWN is dropped, never carried: arming TX ten
         // minutes later must not fire a reply to a query nobody is waiting for. (A reply asking
@@ -3323,5 +3355,66 @@ mod tests {
             e.js8_composer(false, None).map(|p| p.text).as_deref(),
             Some("W1AW SNR -07")
         );
+    }
+
+    // ===== (F) JS8Call's reply-skipping rules, on the engine =====
+
+    /// The compose box holds replies (mainwindow.cpp:9364-9367): while the cockpit says its box
+    /// holds text, a query to me is not answered, not even asked about; once it is empty, it is.
+    #[test]
+    fn a_js8_reply_is_not_made_while_the_compose_box_holds_text() {
+        let mut e = asking_engine();
+        assert_eq!(e.js8_composer(true, None), None, "the operator types");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none() && st.queue.is_empty(),
+            "no reply made"
+        );
+        e.js8_composer(false, None);
+        e.js8_ingest(&[snr_query_to_me("K1ABC")], 0);
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "the box empty: answered"
+        );
+    }
+
+    /// A message to me still arriving holds replies (mainwindow.cpp:9369-9374): the first frame of
+    /// a MSG to me and a query heard in the same pass draw no reply to the query; the MSG, once it
+    /// has closed, draws its ACK.
+    #[test]
+    fn no_js8_reply_while_a_message_to_me_is_still_arriving() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let msg = msg_to_me("K1ABC", "HELLO FROM OHIO, THE BAND IS OPEN TO EUROPE");
+        assert!(msg.len() > 2, "control: a multi-frame MSG");
+        e.js8_ingest(&[msg[0].clone(), snr_query_to_me("W1AW")], 0);
+        assert!(
+            queued(&e).is_empty(),
+            "no reply while the MSG to me arrives"
+        );
+        for d in &msg[1..] {
+            e.js8_ingest(std::slice::from_ref(d), 0);
+        }
+        assert_eq!(
+            queued(&e),
+            ["KD9TAW: K1ABC ACK"],
+            "the MSG, closed, draws its ACK"
+        );
+    }
+
+    /// The lists reach the station as JS8Call reads them (`splitWords`, Configuration.cpp:
+    /// 2416-2428): trimmed, upper-cased, the empties gone.
+    #[test]
+    fn the_js8_allow_and_deny_lists_reach_the_station() {
+        let s = Settings {
+            js8_autoreply_allow: vec![" w1aw ".into(), "".into(), "K1ABC".into()],
+            js8_autoreply_deny: vec!["n0xyz".into()],
+            js8_hb_ack_deny: vec!["kd2uwr ".into()],
+            ..Settings::default()
+        };
+        let c = Engine::js8_station_config(&s);
+        assert_eq!(c.autoreply_allow, ["W1AW", "K1ABC"]);
+        assert_eq!(c.autoreply_deny, ["N0XYZ"]);
+        assert_eq!(c.hb_ack_deny, ["KD2UWR"]);
     }
 }

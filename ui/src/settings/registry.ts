@@ -341,7 +341,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'digital',
     keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
       'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
-      'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'band activity aging', 'activity aging'],
+      'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
+      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging'],
   },
   {
     id: 'sstv',

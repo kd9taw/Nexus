@@ -36,6 +36,14 @@
 //!   (`Command::is_autoreply`, = upstream `autoreply_cmds {0,2,3,4,6,9,10,11,12,13,14,16,30}`);
 //!   an empty INFO or grid draws no reply (:8841, :8861). `QUERY MSGS` on `@ALLCALL` is answered
 //!   only when a message waits, once per station per `allcall_reply_interval_ms` (:8812, :9275).
+//! - Every automatic reply asks the operator first while `autoreply_confirmation` is on
+//!   (JS8Call's default) and is No by itself after 89 s; off, it is queued as it is made. A
+//!   queued reply waits in JS8Call's message queue until the compose box is free and nothing is
+//!   going out (`process_tx_queue`), then keys at the next period with AUTO on, or is put in the
+//!   compose box with AUTO off, never keyed by itself. No reply is made while the box holds text
+//!   or a message to me is still arriving, and nothing at all is done for a station the
+//!   allow/deny lists keep out or while the idle watchdog stands (mainwindow.cpp:8792-8820,
+//!   :9364-9389, :9627-9690).
 //! - Relay (`>`): retransmit `rest *DE* MYCALL`; at the final hop parse the chain to `A>B>C` and
 //!   answer `A>B>C ACK` (unless the embedded text is itself an autoreply command).
 //! - Store-and-forward: with relay on, `MSG TO:` stores a `Store` inbox row keyed to the base
@@ -101,6 +109,25 @@ const MAX_PENDING: usize = 32;
 /// (`showEvent` → `tick`, SelfDestructMessageBox.cpp:26-31, :39), so it reads "No (89)" and
 /// clicks its default, No (:68), 89 seconds after it opened.
 pub const CONFIRM_NO_AFTER_MS: u64 = 89_000;
+
+/// JS8Call's `Radio::base_callsign` (Radio.cpp:117-133): the longer side of a `/` (the right one
+/// on a tie), upper-cased: `W1AW/P` → `W1AW`, `VE3/W1AW` → `W1AW`.
+fn radio_base_callsign(call: &str) -> String {
+    let call = call.trim();
+    match call.find('/') {
+        Some(slash) if call.len() - slash > slash => call[slash + 1..].to_ascii_uppercase(),
+        Some(slash) => call[..slash].to_ascii_uppercase(),
+        None => call.to_ascii_uppercase(),
+    }
+}
+
+/// Whether `from`, as heard or by its base call, is on `list` (JS8Call's `list.contains(d.from) ||
+/// list.contains(Radio::base_callsign(d.from))`, mainwindow.cpp:8797, :8804, :9073).
+fn on_list(list: &[String], from: &str) -> bool {
+    let base = radio_base_callsign(from);
+    list.iter()
+        .any(|c| c.trim().eq_ignore_ascii_case(from.trim()) || c.trim().eq_ignore_ascii_case(&base))
+}
 
 /// Truncate `s` to at most `max` bytes on a char boundary (air-sourced strings are never large;
 /// see the bounds block above).
@@ -183,6 +210,19 @@ pub struct StationConfig {
     /// HB-ACK's own, :6301-6307). Off, a reply goes into the queue as it is made
     /// (`enqueueMessage`, :9388) and keys in the next period.
     pub autoreply_confirmation: bool,
+    /// JS8Call's "Only autoreply to these callsigns" (`AutoWhitelist`, Configuration.ui:797):
+    /// empty (its default, Configuration.cpp:1847) means everyone. Otherwise a command from a
+    /// station not on it, by its call as heard or its base call, is acted on in no way
+    /// (mainwindow.cpp:8792-8800).
+    pub autoreply_allow: Vec<String>,
+    /// "Never autoreply to these callsigns" (`AutoBlacklist`, Configuration.ui:807, default empty,
+    /// Configuration.cpp:1848): a command from one, as heard or by its base call, is acted on in
+    /// no way (mainwindow.cpp:8802-8807).
+    pub autoreply_deny: Vec<String>,
+    /// "Never acknowledge heartbeats from these callsigns" (`HBBlacklist`, Configuration.ui:762,
+    /// default empty, Configuration.cpp:1849): a heartbeat from one draws no HB-ACK
+    /// (mainwindow.cpp:9073-9077).
+    pub hb_ack_deny: Vec<String>,
 }
 
 impl Default for StationConfig {
@@ -203,6 +243,9 @@ impl Default for StationConfig {
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
             autoreply_confirmation: true,
+            autoreply_allow: Vec::new(),
+            autoreply_deny: Vec::new(),
+            hb_ack_deny: Vec::new(),
         }
     }
 }
@@ -329,10 +372,13 @@ struct Pending {
     delivers: Option<u32>,
 }
 
-/// A reply for the compose box (AUTO off), waiting for it to be free.
+/// A reply made (or confirmed) and waiting in JS8Call's `m_txMessageQueue` for the compose box to
+/// be free (`processTxQueue`, mainwindow.cpp:9627-9690).
 #[derive(Debug, Clone)]
-struct ForComposer {
+struct Queued {
+    origin: Origin,
     text: String,
+    freq_hint: FreqHint,
     delivers: Option<u32>,
 }
 
@@ -340,9 +386,10 @@ pub struct Station {
     cfg: StationConfig,
     outbox: std::collections::VecDeque<OutMsg>,
     pending: Vec<Pending>,
-    /// JS8Call's `m_txMessageQueue` for the replies AUTO off sends to the compose box: each waits
-    /// until the box is free and nothing is going out (`processTxQueue`, mainwindow.cpp:9652-9659).
-    for_composer: std::collections::VecDeque<ForComposer>,
+    /// JS8Call's `m_txMessageQueue`: the replies made or confirmed, each waiting until the compose
+    /// box is free and nothing is going out (`processTxQueue`, mainwindow.cpp:9652-9659), then
+    /// keyed (AUTO on) or put in the box (AUTO off).
+    queued: std::collections::VecDeque<Queued>,
     /// The reply the station has put in the composer (`addMessageText`, :9671), (id, text),
     /// until the cockpit takes it into its compose box.
     composer: Option<(u32, String)>,
@@ -350,6 +397,10 @@ pub struct Station {
     /// The cockpit's compose box holds text, as it last said: JS8Call's `extFreeTextMsgEdit`
     /// not empty (:9657).
     composing: bool,
+    /// The receive buffers as the engine last said: one is open (a message still arriving), and
+    /// one addressed to me is (`hasExistingMessageBufferToMe`, mainwindow.cpp:4176-4190).
+    rx_open: bool,
+    rx_to_me: bool,
     heard: Vec<Heard>,
     inbox: Vec<InboxEntry>,
     allcall_replied: HashMap<String, u64>,
@@ -372,10 +423,12 @@ impl Station {
             cfg,
             outbox: std::collections::VecDeque::new(),
             pending: Vec::new(),
-            for_composer: std::collections::VecDeque::new(),
+            queued: std::collections::VecDeque::new(),
             composer: None,
             composer_seq: 0,
             composing: false,
+            rx_open: false,
+            rx_to_me: false,
             heard: Vec::new(),
             inbox: Vec::new(),
             allcall_replied: HashMap::new(),
@@ -408,10 +461,27 @@ impl Station {
 
     /// Is `to` addressed to me — my base call, `@ALLCALL`, or a joined group?
     fn addressed_to_me(&self, to: &str) -> bool {
-        let to = to.to_ascii_uppercase();
-        to == self.base()
-            || to == "@ALLCALL"
-            || self.cfg.groups.iter().any(|g| g.eq_ignore_ascii_case(&to))
+        self.is_to_me(to)
+            || to.eq_ignore_ascii_case("@ALLCALL")
+            || self.cfg.groups.iter().any(|g| g.eq_ignore_ascii_case(to))
+    }
+
+    /// JS8Call's `toMe` (mainwindow.cpp:8599): my call as set, a `/P` or compound one included,
+    /// or its base call (`Radio::base_callsign`).
+    fn is_to_me(&self, to: &str) -> bool {
+        let mine = self.cfg.mycall.trim();
+        !mine.is_empty()
+            && (to.eq_ignore_ascii_case(mine)
+                || to.eq_ignore_ascii_case(&radio_base_callsign(mine)))
+    }
+
+    /// The allow/deny lists (JS8Call's `auto_whitelist` / `auto_blacklist`, mainwindow.cpp:
+    /// 8792-8807): an empty allow list lets everyone in, a listed station is let in by its call as
+    /// heard or its base call; a denied one, either way, is kept out.
+    fn lists_allow(&self, from: &str) -> bool {
+        let on = |list: &[String]| on_list(list, from);
+        (self.cfg.autoreply_allow.is_empty() || on(&self.cfg.autoreply_allow))
+            && !on(&self.cfg.autoreply_deny)
     }
 
     // ---- the gating chain -------------------------------------------------------------------
@@ -424,7 +494,7 @@ impl Station {
         let mut actions = Vec::new();
         self.record_heard(m, &mut actions);
 
-        let to_me = m.to_text.eq_ignore_ascii_case(&self.base());
+        let to_me = self.is_to_me(&m.to_text);
         let to_group = self
             .cfg
             .groups
@@ -458,11 +528,13 @@ impl Station {
             return actions;
         }
 
-        // While the idle watchdog stands nothing is answered, relayed or delivered: JS8Call
-        // processes no automatic reply while idle (`if(m_tx_watchdog) continue;`,
-        // mainwindow.cpp:8818). Gated here on the trip itself, not on the switches it turned off:
-        // a settings change re-applies those to the station while the trip still stands.
-        let replies = !self.idle_tripped;
+        // While the idle watchdog stands nothing is acted on: nothing answered, relayed or
+        // delivered, and nothing filed or stored. JS8Call's `if(m_tx_watchdog) continue;`
+        // (mainwindow.cpp:8817-8820) comes before every command branch, the MSG and MSG TO: ones
+        // included. Gated here on the trip itself, not on the switches it turned off: a settings
+        // change re-applies those to the station while the trip still stands. Nor is anything
+        // acted on from a station the allow/deny lists keep out (:8792-8807), checked first.
+        let replies = !self.idle_tripped && self.lists_allow(&m.from);
 
         // Heartbeat heard → maybe HB-ACK.
         if m.is_heartbeat() && m.cq.is_none() {
@@ -489,7 +561,7 @@ impl Station {
             // A `MSG TO:` is stored, and acknowledged, only with relaying on, as JS8Call does it
             // (`d.cmd == " MSG TO:" && !isAllCall && !m_config.relay_off()`, :9014).
             if cmd == Command::MsgTo {
-                if mine && self.cfg.relay {
+                if mine && self.cfg.relay && replies {
                     self.handle_msg_to(m, now_ms, &mut actions);
                 }
                 return actions;
@@ -502,8 +574,10 @@ impl Station {
             }
             // A MSG to me or a group I joined is filed UNREAD (JS8Call's `d.cmd == " MSG" &&
             // !isAllCall`, mainwindow.cpp:9121, past the "to me, a group or @ALLCALL" gate at
-            // :8715), whatever the switches say. Its ACK (:9139) is an automatic reply, below.
-            if cmd == Command::Msg && mine {
+            // :8715), whatever the switches say, but not while the idle watchdog stands or from a
+            // station the lists keep out (both `continue` before it). Its ACK (:9139) is an
+            // automatic reply, below.
+            if cmd == Command::Msg && mine && replies {
                 self.file_msg_to_me(m, now_ms, &mut actions);
             }
             // Never an @ALLCALL query: JS8Call's SNR?/INFO?/STATUS?/GRID?/HEARING? replies each
@@ -658,8 +732,14 @@ impl Station {
     }
 
     fn maybe_hb_ack(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
-        // mainwindow.cpp:7748 — HB + autoreply + hb_ack + empty buffer (no in-flight message).
-        if !(self.hb_on && self.cfg.autoreply && self.cfg.hb_ack && self.outbox.is_empty()) {
+        // HB + autoreply + hb_ack (mainwindow.cpp:9059), and no message still arriving: "do not
+        // process HB activity if buffer is not empty, this prevents broken incoming MSG's"
+        // (`!m_messageBuffer.isEmpty()`, the RECEIVE buffers, :9062-9066), nor a station the
+        // heartbeat deny list names (:9073-9077).
+        if !(self.hb_on && self.cfg.autoreply && self.cfg.hb_ack) || self.rx_open {
+            return;
+        }
+        if on_list(&self.cfg.hb_ack_deny, &m.from) {
             return;
         }
         // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
@@ -768,7 +848,7 @@ impl Station {
         let display = format!("{}: {text}", self.base());
         self.pending.iter().any(|p| p.text == text)
             || self.outbox.iter().any(|o| o.display == display)
-            || self.for_composer.iter().any(|r| r.text == text)
+            || self.queued.iter().any(|r| r.text == text)
             || self.composer.as_ref().is_some_and(|c| c.1 == text)
     }
 
@@ -1073,6 +1153,22 @@ impl Station {
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
+        // JS8Call queues no reply while its compose box holds text (:9364-9367) or while a message
+        // to me is still arriving (`hasExistingMessageBufferToMe`, :9369-9374), and both come
+        // before the question is asked. Its HB-ACK takes another path (`sendHeartbeatAck`) that
+        // checks neither: `maybe_hb_ack` has its own rule.
+        if origin != Origin::HbAck && (self.box_busy() || self.rx_to_me) {
+            let why = if self.rx_to_me {
+                "a message to you is still arriving"
+            } else {
+                "the message box holds text"
+            };
+            actions.push(StationAction::Toast {
+                text: format!("Auto-reply not made, {why}: {text}"),
+                directed_to_me: false,
+            });
+            return;
+        }
         // Cap the pending auto-reply queue: under a flood, refuse and toast rather than growing.
         // Refusing an auto-reply is correct — the alternative keys stale traffic for hours.
         if self.pending.len() >= MAX_PENDING {
@@ -1107,12 +1203,9 @@ impl Station {
         });
     }
 
-    /// A reply goes: into the outbox, where the next period keys it, handing over the held
-    /// message it delivers. A full outbox refuses it, said, rather than queue it behind stale
-    /// traffic. With AUTO off it goes to the compose box instead and is never keyed by itself:
-    /// JS8Call's `processTxQueue` puts every dequeued reply in the box (`addMessageText`,
-    /// mainwindow.cpp:9671) and starts TX only with AUTO checked, or for a heartbeat
-    /// acknowledgement (its " HEARTBEAT " text, :9674-9685).
+    /// A reply goes into JS8Call's message queue (`enqueueMessage`, mainwindow.cpp:5232-5238),
+    /// where `process_tx_queue` takes it once the compose box is free. A full queue refuses it,
+    /// said, rather than queue it behind stale traffic.
     fn release(
         &mut self,
         origin: Origin,
@@ -1121,48 +1214,65 @@ impl Station {
         delivers: Option<u32>,
         actions: &mut Vec<StationAction>,
     ) {
-        if !self.cfg.autoreply && origin != Origin::HbAck {
-            if self.for_composer.len() >= MAX_PENDING {
-                actions.push(StationAction::Toast {
-                    text: "Reply queue full: auto-reply dropped".into(),
-                    directed_to_me: false,
-                });
-                return;
-            }
-            self.for_composer.push_back(ForComposer {
-                text: text.to_string(),
-                delivers,
-            });
-            self.fill_composer(actions);
-            return;
-        }
-        let Ok(out) = self.compose_out(origin, text, freq_hint) else {
-            return;
-        };
-        if self.push_outbox(out) {
-            self.mark_delivered(delivers, actions);
-        } else {
+        if self.queued.len() >= MAX_PENDING {
             actions.push(StationAction::Toast {
                 text: "Reply queue full: auto-reply dropped".into(),
                 directed_to_me: false,
             });
+            return;
         }
+        self.queued.push_back(Queued {
+            origin,
+            text: text.to_string(),
+            freq_hint,
+            delivers,
+        });
     }
 
-    /// Put the next reply waiting for the compose box in it, when the box is free and nothing
-    /// is going out: `processTxQueue`'s own preconditions (mainwindow.cpp:9652-9659), and
-    /// `addMessageText` adds nothing while a transmission is queued (:5170-5172). A delivery it
-    /// carries is handed over now, as its callback runs once the reply is dequeued (:9687-9689).
-    fn fill_composer(&mut self, actions: &mut Vec<StationAction>) {
-        if self.composing || self.composer.is_some() || !self.outbox.is_empty() {
-            return;
+    /// The compose box holds text: the operator is typing, a reply the station put there waits
+    /// to be taken, or a message is going out (JS8Call's box holds a message until its last frame
+    /// is sent, `stopTx`, mainwindow.cpp:4826-4833; here until that frame is handed out, which
+    /// keys nothing differently: nothing is heard while it is on the air).
+    fn box_busy(&self) -> bool {
+        self.composing || self.composer.is_some() || !self.outbox.is_empty()
+    }
+
+    /// JS8Call's `processTxQueue` (mainwindow.cpp:9627-9690), run once a second, after each
+    /// batch of decodes, after an answer and when the cockpit's box changes: once the box is free
+    /// and nothing is going out (:9652-9659), the oldest waiting reply is taken. With AUTO on (or
+    /// for a heartbeat acknowledgement, whose " HEARTBEAT " text JS8Call keys whatever AUTO says,
+    /// :9674-9685) it goes to the outbox, where the next period keys it; otherwise it is put in
+    /// the compose box (`addMessageText`, :9671) and never keyed by itself. A delivery it carries
+    /// is handed over then, as its callback runs once the reply is dequeued (:9687-9689). One at
+    /// a time: the box holds one message.
+    pub fn process_tx_queue(&mut self) -> Vec<StationAction> {
+        let mut actions = Vec::new();
+        if self.box_busy() {
+            return actions;
         }
-        let Some(r) = self.for_composer.pop_front() else {
-            return;
+        let Some(r) = self.queued.pop_front() else {
+            return actions;
         };
-        self.mark_delivered(r.delivers, actions);
-        self.composer_seq = self.composer_seq.wrapping_add(1);
-        self.composer = Some((self.composer_seq, r.text));
+        if self.cfg.autoreply || r.origin == Origin::HbAck {
+            let Ok(out) = self.compose_out(r.origin, &r.text, r.freq_hint) else {
+                return actions;
+            };
+            if self.push_outbox(out) {
+                self.mark_delivered(r.delivers, &mut actions);
+            }
+        } else {
+            self.mark_delivered(r.delivers, &mut actions);
+            self.composer_seq = self.composer_seq.wrapping_add(1);
+            self.composer = Some((self.composer_seq, r.text));
+        }
+        actions
+    }
+
+    /// The engine's word on its receive buffers: whether one is open (a message still
+    /// arriving) and the destinations of those that carry a directed command (`buffer.cmd.to`).
+    pub fn note_rx_buffers<'a>(&mut self, open: bool, to: impl IntoIterator<Item = &'a str>) {
+        self.rx_open = open;
+        self.rx_to_me = to.into_iter().any(|t| self.is_to_me(t));
     }
 
     /// The cockpit's word on its compose box: whether it holds text, and the id of the reply it
@@ -1177,8 +1287,7 @@ impl Station {
             self.composer = None;
         }
         self.composing = composing;
-        let mut actions = Vec::new();
-        self.fill_composer(&mut actions);
+        let actions = self.process_tx_queue();
         (actions, self.composer.clone())
     }
 
@@ -1191,7 +1300,7 @@ impl Station {
         self.prune_inbox(now_ms, &mut actions);
         self.prune_allcall(now_ms);
         // JS8Call's processTxQueue runs once a second (mainwindow.cpp:4734-4737).
-        self.fill_composer(&mut actions);
+        actions.extend(self.process_tx_queue());
         // A reply nobody answered is No when its box runs out (SelfDestructMessageBox.cpp:68):
         // nothing is sent and a held message it would have handed over stays held.
         self.pending.retain(|p| {
@@ -1241,7 +1350,7 @@ impl Station {
         self.stop_cq_repeat();
         self.outbox.clear();
         self.pending.clear();
-        self.for_composer.clear();
+        self.queued.clear();
         self.composer = None;
         actions.push(StationAction::IdleTripped);
         actions.push(StationAction::Toast {
@@ -1584,6 +1693,7 @@ impl Station {
         let p = self.pending.remove(i);
         if yes {
             self.release(p.origin, &p.text, p.freq_hint, p.delivers, &mut actions);
+            actions.extend(self.process_tx_queue());
         }
         Some(actions)
     }
@@ -1591,7 +1701,7 @@ impl Station {
     pub fn drop_queue(&mut self) {
         self.outbox.clear();
         self.pending.clear();
-        self.for_composer.clear();
+        self.queued.clear();
         self.composer = None;
     }
 
@@ -1627,7 +1737,7 @@ impl Station {
     pub fn halt(&mut self) {
         self.outbox.clear();
         self.pending.clear();
-        self.for_composer.clear();
+        self.queued.clear();
         self.composer = None;
         self.hb_on = false;
         self.hb_next_ms = None;
@@ -2024,8 +2134,10 @@ mod tests {
         })
     }
 
-    /// Drain the station: run next_frame at `t` and collect the emitted frame, if any.
+    /// Drain the station: JS8Call's once-a-second `processTxQueue` (which the engine runs after
+    /// every batch of decodes and every second), then next_frame at `t`; the emitted frame, if any.
     fn drain(s: &mut Station, t: u64) -> Option<TxFrame> {
+        s.process_tx_queue();
         let mut rng = || 0u32;
         s.next_frame(t, &|_| false, &mut rng)
     }
@@ -2132,13 +2244,14 @@ mod tests {
             &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, &body, -5),
             t,
         );
-        let before = s.pending.len() + s.outbox.len();
+        let before = s.pending.len() + s.queued.len() + s.outbox.len();
         s.pending.retain(|p| p.text != "W1AW ACK");
+        s.queued.retain(|q| q.text != "W1AW ACK");
         s.outbox.retain(|o| o.display != "KD9TAW: W1AW ACK");
         assert!(
-            s.pending.len() + s.outbox.len() + 1 == before
+            s.pending.len() + s.queued.len() + s.outbox.len() + 1 == before
                 || s.pending.len() == MAX_PENDING
-                || s.outbox.len() == MAX_OUTBOX,
+                || s.queued.len() == MAX_PENDING,
             "the stored MSG TO: draws its ACK, unless the reply queue is full"
         );
     }
@@ -2372,6 +2485,7 @@ mod tests {
             let mut ds = Vec::new();
             let mut rng = || 0u32;
             for k in 0..20u64 {
+                s.process_tx_queue();
                 if let Some(f) = s.next_frame(from + k * 15000, &|_| false, &mut rng) {
                     ds.push(f.display);
                 }
@@ -2386,7 +2500,8 @@ mod tests {
         assert!(flush(&mut s, 6000)
             .iter()
             .any(|d| *d == format!("KD9TAW: K1ABC YES MSG ID {id}")));
-        // K1ABC requests message n → delivered, marked Delivered immediately on the event.
+        // K1ABC requests message n → delivered, marked Delivered as the reply leaves the queue
+        // within the second (JS8Call's callback, mainwindow.cpp:9687-9689).
         s.on_event(
             &directed(
                 "K1ABC",
@@ -2398,6 +2513,7 @@ mod tests {
             ),
             300_000,
         );
+        s.process_tx_queue();
         assert_eq!(s.inbox()[0].state, InboxState::Delivered);
         assert!(
             flush(&mut s, 400_000)
@@ -2478,8 +2594,9 @@ mod tests {
         let mut s = Station::new(c);
         s.on_event(&msg_to, 1_000);
         assert_eq!(s.inbox().len(), 1, "control: relay on, it is stored");
+        s.process_tx_queue();
         assert!(
-            waiting(&s).is_empty(),
+            s.queue().is_empty() && s.pending_reply().is_none(),
             "autoreply off: not acknowledged on the air"
         );
         assert_eq!(
@@ -2671,11 +2788,7 @@ mod tests {
             &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -7),
             0,
         );
-        assert_eq!(
-            s.pending_len() + s.outbox_len(),
-            1,
-            "precondition: a reply is waiting"
-        );
+        assert_eq!(waiting(&s).len(), 1, "precondition: a reply is waiting");
         let acts = s.tick(5 * 60 * 1000);
         assert!(acts.iter().any(|a| matches!(a, StationAction::IdleTripped)));
         assert!(s.idle_tripped() && !s.config().autoreply && !s.config().relay && !s.hb_on());
@@ -3352,10 +3465,11 @@ mod tests {
         let mut s = Station::new(c);
         s.set_hb(true, 0);
         s.on_event(&heartbeat("W1AW", -5), 1000);
+        s.process_tx_queue();
         let mut rng = || 3u32; // the first draw: 500 + 50 × 3
         let f = s
             .next_frame(5000, &|_| false, &mut rng)
-            .expect("the HB-ACK after its countdown");
+            .expect("the HB-ACK in the next period");
         assert_eq!(f.origin, Origin::HbAck, "precondition: the HB-ACK");
         assert_eq!(
             f.freq_hint,
@@ -3583,6 +3697,7 @@ mod tests {
         s.pending
             .iter()
             .map(|p| p.text.clone())
+            .chain(s.queued.iter().map(|q| q.text.clone()))
             .chain(
                 s.outbox
                     .iter()
@@ -3850,7 +3965,8 @@ mod tests {
         let mut s = Station::new(c);
         s.on_event(&msg, 1_000);
         assert_eq!(s.inbox().len(), 1, "control: the MSG is filed");
-        assert!(waiting(&s).is_empty(), "autoreply off: no ACK on the air");
+        s.process_tx_queue();
+        assert!(s.queue().is_empty(), "autoreply off: no ACK on the air");
         assert!(drain(&mut s, 60_000).is_none(), "…and nothing goes out");
         assert_eq!(
             s.sync_composer(false, None).1.map(|c| c.1).as_deref(),
@@ -3882,60 +3998,38 @@ mod tests {
         );
     }
 
-    /// A copy of a MSG heard while its ACK still waits, counting down or queued behind other
-    /// traffic, draws no second ACK: JS8Call's waiting ACK sits in its compose box until it has
-    /// gone, and no reply is queued while that box holds text (:9365). Every copy is filed, as
-    /// JS8Call files it, and a MSG from another station meanwhile has its own ACK. A copy heard
-    /// once the ACK has gone is answered again, as JS8Call answers it: its sender sent it again.
+    /// A copy of a MSG heard while its ACK still waits draws no second ACK: queued, or on its way,
+    /// it is in JS8Call's message box, and no reply is queued while the box holds text (:9364).
+    /// Every copy is filed, as JS8Call files it. A MSG from another station heard in the same
+    /// pass has its own ACK (JS8Call queues every reply of one pass before `processTxQueue`
+    /// fills the box); a copy heard once the ACK has gone is answered again, as JS8Call answers
+    /// it: its sender sent it again.
     #[test]
     fn a_copy_of_a_msg_heard_while_its_ack_waits_draws_no_second_ack() {
         let mut s = Station::new(cfg());
         let msg = directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5);
-        s.send(None, "FIRST", 0)
-            .expect("an operator message ahead of the ACK");
+        let other = directed("N0XYZ", "KD9TAW", Some(Command::Msg), None, "HI", -5);
         s.on_event(&msg, 1_000);
-        s.on_event(&msg, 1_500); // a copy while the ACK waits in the queue
-        assert_eq!(waiting(&s), ["W1AW ACK"], "one ACK for two copies");
-        let f = drain(&mut s, 2_000).expect("the operator's message keys first");
-        assert_eq!(f.origin, Origin::Operator);
-        assert_eq!(waiting(&s), ["W1AW ACK"], "the ACK is queued behind it");
-        s.on_event(&msg, 2_500);
-        assert_eq!(
-            waiting(&s),
-            ["W1AW ACK"],
-            "a copy while the ACK is queued draws none"
-        );
-        s.on_event(
-            &directed("N0XYZ", "KD9TAW", Some(Command::Msg), None, "HI", -5),
-            2_500,
-        );
+        s.on_event(&msg, 1_000); // a copy in the same pass
+        s.on_event(&other, 1_000);
         assert_eq!(
             waiting(&s),
             ["W1AW ACK", "N0XYZ ACK"],
-            "another station's MSG has its own ACK"
+            "one ACK for two copies, and the other station's"
         );
-        let mut acks = Vec::new();
-        let mut t = 3_000;
-        while let Some(f) = drain(&mut s, t) {
-            if f.display.ends_with(" ACK") {
-                acks.push(f.display);
-            }
-            t += 15_000;
-        }
-        assert_eq!(
-            acks,
-            ["KD9TAW: W1AW ACK", "KD9TAW: N0XYZ ACK"],
-            "one ACK each"
-        );
-        assert_eq!(s.inbox().len(), 4, "every copy is filed");
-        s.on_event(&msg, t);
+        let f = drain(&mut s, 15_000).expect("the first ACK keys");
+        assert_eq!(f.display, "KD9TAW: W1AW ACK");
+        let f = drain(&mut s, 30_000).expect("the second ACK keys");
+        assert_eq!(f.display, "KD9TAW: N0XYZ ACK");
+        assert!(drain(&mut s, 45_000).is_none(), "one ACK each, no more");
+        assert_eq!(s.inbox().len(), 3, "every copy is filed");
+        s.on_event(&msg, 46_000);
         assert_eq!(
             waiting(&s),
             ["W1AW ACK"],
             "a copy heard once the ACK has gone is answered again"
         );
     }
-
     /// A relay path over the hop cap is not answered: its calls come from the sender's own
     /// text, and upstream, which has no cap, would key every one of them. `handle_relay`'s cap.
     #[test]
@@ -3987,6 +4081,9 @@ mod tests {
         c.hb_ack = true;
         let mut s = Station::new(c.clone());
         s.mark_active(0);
+        // A message held for K1ABC from before the trip (its ACK is not what this is about).
+        store_for(&mut s, "K1ABC", 1000);
+        let id = s.inbox()[0].id;
         s.tick(5 * 60 * 1000);
         assert!(s.idle_tripped(), "control: the watchdog tripped");
         s.set_config(c);
@@ -3995,18 +4092,20 @@ mod tests {
             "precondition: a settings change put the switches back on in the station"
         );
         let t = 5 * 60 * 1000 + 1;
+        // Nothing is stored or filed while it stands either: JS8Call's `continue` at :8817-8820
+        // comes before the MSG TO: and MSG branches (N38's filing difference).
         s.on_event(
             &directed(
                 "N0XYZ",
                 "KD9TAW",
                 Some(Command::MsgTo),
                 None,
-                "K1ABC FRIDAY CONTACT",
+                "K2DEF FRIDAY CONTACT",
                 -5,
             ),
             t,
         );
-        let id = s.inbox()[0].id;
+        assert_eq!(s.inbox().len(), 1, "MSG TO: not stored while tripped");
         assert!(waiting(&s).is_empty(), "MSG TO: no ACK while tripped");
         for (what, ev) in [
             (
@@ -4040,6 +4139,7 @@ mod tests {
             s.on_event(&ev, t);
             assert!(waiting(&s).is_empty(), "{what}: no reply while tripped");
         }
+        assert_eq!(s.inbox().len(), 1, "MSG: not filed while tripped");
         s.set_hb(true, t);
         s.on_event(&heartbeat("N0XYZ", -5), t);
         assert!(waiting(&s).is_empty(), "HB-ACK: no reply while tripped");
@@ -4140,6 +4240,7 @@ mod tests {
         );
         // its ACK is not what this is about
         s.pending.clear();
+        s.queued.clear();
         s.outbox.clear();
         let id = s.inbox()[0].id;
         s.on_event(
@@ -4286,7 +4387,8 @@ mod tests {
 
     /// Both ways a reply waits are bounded under a flood of queries to me, which @ALLCALL's
     /// hold-off does not limit: asking (the questions, `MAX_PENDING`) and, with the confirmation
-    /// off, in the queue (`MAX_OUTBOX`). A refusal is said, never silent.
+    /// off, in JS8Call's message queue (`MAX_PENDING`; the outbox below it, `MAX_OUTBOX`). A
+    /// refusal is said, never silent.
     #[test]
     fn pending_and_outbox_refuse_under_a_direct_to_me_flood() {
         for asks in [true, false] {
@@ -4299,7 +4401,7 @@ mod tests {
             for i in 0..5u32 {
                 s.on_event(&query(&format!("K{i}ABC")), i as u64);
             }
-            assert_eq!(s.pending_len() + s.outbox_len(), 5, "asks: {asks}");
+            assert_eq!(waiting(&s).len(), 5, "asks: {asks}");
             let mut refused = false;
             for i in 0..5000u32 {
                 let acts = s.on_event(&query(&format!("N{i:04}")), 100 + i as u64);
@@ -4312,7 +4414,7 @@ mod tests {
                 "asks: {asks}: the flood exceeded the cap but no refusal was surfaced"
             );
             assert!(
-                s.pending_len() <= MAX_PENDING,
+                s.pending_len() <= MAX_PENDING && s.queued.len() <= MAX_PENDING,
                 "pending unbounded: {}",
                 s.pending_len()
             );
@@ -4795,6 +4897,7 @@ mod tests {
         let mut s = Station::new(cfg());
         s.on_event(&snr_query("W1AW"), 1000);
         assert!(s.pending_reply().is_none(), "nothing counts down");
+        s.process_tx_queue(); // within the second, as JS8Call's processTxQueue
         let q: Vec<String> = s.queue().into_iter().map(|f| f.display).collect();
         assert_eq!(q, ["KD9TAW: W1AW SNR -07"], "queued at once");
         s.drop_queue();
@@ -4878,47 +4981,15 @@ mod tests {
         assert!(s.queue().is_empty() && s.pending_reply().is_none());
     }
 
-    /// The compose box takes one reply at a time, and only while it is empty: while the operator
-    /// types, or a reply sits there, the next waits (:9657-9659); once the cockpit has taken one
-    /// and its box is empty again, the next is offered. Taken, a reply is the cockpit's.
-    #[test]
-    fn the_composer_takes_one_reply_at_a_time_and_only_when_empty() {
-        let mut s = Station::new(auto_off());
-        s.sync_composer(true, None); // the operator is typing
-        s.on_event(&snr_query("W1AW"), 1000);
-        s.on_event(&snr_query("K1ABC"), 1000);
-        assert!(
-            s.sync_composer(true, None).1.is_none(),
-            "typing: nothing offered"
-        );
-        let (id, text) = s.sync_composer(false, None).1.expect("box empty: offered");
-        assert_eq!(text, "W1AW SNR -07", "oldest first");
-        assert_eq!(
-            s.sync_composer(false, None).1,
-            Some((id, text.clone())),
-            "still offered until taken"
-        );
-        assert!(
-            s.sync_composer(true, Some(id)).1.is_none(),
-            "taken: the box holds it"
-        );
-        assert_eq!(
-            offered(&mut s).as_deref(),
-            Some("K1ABC SNR -07"),
-            "box empty again: the next"
-        );
-    }
-
     /// Nothing is put in the box while something is going out (`addMessageText` adds nothing
-    /// while a transmission is queued, :5170-5172; the frame queue must be empty, :9652-9654).
-    /// (The queue empties as its last frame starts; JS8Call's box fills once that frame has
-    /// ended, a period later. Nothing keys either way.)
+    /// while a transmission is queued, :5170-5172; the frame queue must be empty, :9652-9654):
+    /// a reply queued before the operator's message waits for it to go.
     #[test]
     fn the_composer_waits_while_something_is_going_out() {
         let mut s = Station::new(auto_off());
-        s.send(None, "CQ TEST", 0)
-            .expect("an operator message on its way");
         s.on_event(&snr_query("W1AW"), 1000);
+        s.send(None, "CQ TEST", 1000)
+            .expect("an operator message on its way");
         assert!(
             offered(&mut s).is_none(),
             "the operator's message goes first"
@@ -4939,7 +5010,6 @@ mod tests {
             "then the reply"
         );
     }
-
     /// AUTO off with the confirmation on: JS8Call still asks (the box is opened before AUTO is
     /// read, :9385-9389), and the Yes puts the reply in the compose box, not on the air.
     #[test]
@@ -5011,28 +5081,13 @@ mod tests {
     }
 
     /// A `QUERY MSG n` with AUTO off hands the held message over as its reply reaches the box,
-    /// as the callback runs once the reply is dequeued (:9227-9235, :9687-9689).
+    /// as the callback runs once the reply is dequeued (:9227-9235, :9687-9689): not while it
+    /// waits for the box.
     #[test]
     fn with_auto_off_a_delivery_hands_the_message_over_as_it_reaches_the_composer() {
         let mut s = Station::new(auto_off());
-        s.on_event(
-            &directed(
-                "W1AW",
-                "KD9TAW",
-                Some(Command::MsgTo),
-                None,
-                "N0XYZ FRIDAY CONTACT",
-                -5,
-            ),
-            0,
-        );
+        store_for(&mut s, "N0XYZ", 0);
         let id = s.inbox()[0].id;
-        let (ack, text) = s.sync_composer(false, None).1.expect("the store's ACK");
-        assert_eq!(
-            text, "W1AW ACK",
-            "control: the store's ACK is in the composer"
-        );
-        s.sync_composer(true, Some(ack)); // taken, and the operator keeps it
         s.on_event(
             &directed(
                 "N0XYZ",
@@ -5044,11 +5099,11 @@ mod tests {
             ),
             1000,
         );
-        assert_eq!(
-            s.inbox()[0].state,
-            InboxState::Store,
-            "held while the box is busy"
+        assert!(
+            s.sync_composer(true, None).1.is_none(),
+            "the operator typing: it waits"
         );
+        assert_eq!(s.inbox()[0].state, InboxState::Store, "held while it waits");
         let (_, text) = s
             .sync_composer(false, None)
             .1
@@ -5060,7 +5115,6 @@ mod tests {
             "handed over as it got there"
         );
     }
-
     /// Stop TX, Drop queue and the idle watchdog drop the replies waiting for the box, and the one
     /// offered to it.
     #[test]
@@ -5111,5 +5165,303 @@ mod tests {
         assert!(offered(&mut s).is_none(), "not in the box");
         let f = drain(&mut s, 15_000).expect("keyed");
         assert_eq!(f.origin, Origin::HbAck);
+    }
+
+    // ===== (F) JS8Call's reply-skipping rules, its lists and N38's filing differences =====
+
+    /// Everything a station does for a command, in one look: a reply waiting (asked, queued or on
+    /// its way), the inbox size, and what the composer is offered.
+    fn acted(s: &mut Station) -> (Vec<String>, usize) {
+        s.process_tx_queue();
+        (waiting(s), s.inbox().len())
+    }
+
+    /// JS8Call's `Radio::base_callsign` (Radio.cpp:117-133), which its lists and its "to me"
+    /// test match by: the longer side of the first `/`, the right one on a tie.
+    #[test]
+    fn the_base_call_is_js8calls() {
+        for (call, base) in [
+            ("W1AW", "W1AW"),
+            ("W1AW/P", "W1AW"),
+            ("VE3/W1AW", "W1AW"),
+            ("KH6/W1AW/P", "W1AW/P"),
+            ("w1aw/p", "W1AW"),
+            ("AB/CD", "CD"), // a tie takes the right side
+        ] {
+            assert_eq!(radio_base_callsign(call), base, "{call}");
+        }
+    }
+
+    /// ⭐ Text in the compose box holds replies: JS8Call queues no reply while its box holds text
+    /// (`do not queue for reply if there's text in the window`, mainwindow.cpp:9364-9367): the
+    /// operator typing, a reply put there and not yet sent, or a message going out (the box holds
+    /// it until its last frame is sent). Such a reply is not made at all, not even asked about;
+    /// once the box is free the next query is answered.
+    #[test]
+    fn no_reply_is_made_while_the_compose_box_holds_text() {
+        for busy in ["typing", "a reply in the box", "a message going out"] {
+            let mut s = Station::new(StationConfig {
+                autoreply: busy != "a reply in the box",
+                ..asking_cfg()
+            });
+            match busy {
+                "typing" => {
+                    s.sync_composer(true, None);
+                }
+                "a reply in the box" => {
+                    s.set_config(StationConfig {
+                        autoreply: false,
+                        ..cfg()
+                    });
+                    s.on_event(&snr_query("N0XYZ"), 500);
+                    assert!(offered(&mut s).is_some(), "control: a reply in the box");
+                    s.set_config(asking_cfg());
+                }
+                _ => {
+                    s.send(None, "CQ TEST", 500).expect("on its way");
+                }
+            }
+            let before = acted(&mut s);
+            s.on_event(&snr_query("W1AW"), 1000);
+            assert_eq!(
+                acted(&mut s),
+                before,
+                "{busy}: no reply made, nothing asked"
+            );
+            assert!(s.pending_reply().is_none(), "{busy}: not asked");
+        }
+        let mut s = Station::new(asking_cfg());
+        s.sync_composer(true, None);
+        s.sync_composer(false, None);
+        s.on_event(&snr_query("W1AW"), 1000);
+        assert!(s.pending_reply().is_some(), "the box free again: answered");
+    }
+
+    /// …and a reply already queued (confirmed, or made before) waits while the box holds text, as
+    /// `processTxQueue` waits (:9656-9659), going once it is free.
+    #[test]
+    fn a_queued_reply_waits_while_the_box_holds_text() {
+        let mut s = Station::new(asking_cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        let p = s.pending_reply().expect("asks");
+        s.sync_composer(true, None); // the operator starts typing
+        s.answer_reply(&p.display, p.fires_at_ms, true, 2000);
+        assert!(
+            keyed_in(&mut s, 15_000, 3).is_empty(),
+            "held while the box holds text"
+        );
+        s.sync_composer(false, None);
+        assert_eq!(
+            keyed_in(&mut s, 60_000, 2),
+            ["KD9TAW: W1AW SNR -07"],
+            "then it goes"
+        );
+    }
+
+    /// ⭐ A message to me still arriving holds replies: JS8Call queues none while a buffer whose
+    /// directed command is to me is open (`hasExistingMessageBufferToMe`, mainwindow.cpp:
+    /// 4176-4190, :9369-9374). One to another station holds nothing.
+    #[test]
+    fn no_reply_is_made_while_a_message_to_me_is_still_arriving() {
+        let mut s = Station::new(asking_cfg());
+        s.note_rx_buffers(true, ["KD9TAW"]);
+        s.on_event(&snr_query("W1AW"), 1000);
+        assert!(
+            s.pending_reply().is_none(),
+            "a message to me arriving: no reply"
+        );
+        s.note_rx_buffers(true, ["K1ABC"]);
+        s.on_event(&snr_query("W1AW"), 2000);
+        assert!(
+            s.pending_reply().is_some(),
+            "one to another station: answered"
+        );
+    }
+
+    /// The heartbeat acknowledgement keeps JS8Call's own two rules (mainwindow.cpp:9062-9077): no
+    /// message still arriving, any at all, and not a station the heartbeat deny list names. It is
+    /// not held by my own queue (its path, `sendHeartbeatAck`, checks no box): made while my
+    /// message goes out, it waits and keys after it.
+    #[test]
+    fn the_hb_ack_waits_for_no_message_arriving_and_keeps_its_deny_list() {
+        let hb_cfg = || StationConfig {
+            hb_ack: true,
+            hb_ack_deny: vec!["W1AW".into()],
+            ..cfg()
+        };
+        let mut s = Station::new(hb_cfg());
+        s.set_hb(true, 0);
+        s.hb_next_ms = None;
+        s.note_rx_buffers(true, ["K9ZZZ"]);
+        s.on_event(&heartbeat("K1ABC", -5), 1000);
+        assert!(waiting(&s).is_empty(), "a message arriving: no HB-ACK");
+        s.note_rx_buffers(false, []);
+        s.on_event(&heartbeat("W1AW/P", -5), 2000);
+        assert!(
+            waiting(&s).is_empty(),
+            "the deny list: no HB-ACK (W1AW/P by its base call)"
+        );
+        s.send(None, "CQ TEST", 2500)
+            .expect("my message on its way");
+        s.on_event(&heartbeat("K1ABC", -5), 3000);
+        assert_eq!(
+            waiting(&s),
+            ["K1ABC HEARTBEAT SNR -05"],
+            "made while my message goes out"
+        );
+        let keyed: Vec<Origin> = (1..6u64)
+            .filter_map(|k| drain(&mut s, k * 15_000))
+            .map(|f| f.origin)
+            .collect();
+        assert_eq!(
+            keyed.last(),
+            Some(&Origin::HbAck),
+            "it keys after my message"
+        );
+    }
+
+    /// The allow list (JS8Call's "Only autoreply to these callsigns", :8792-8800): with it set,
+    /// a station on it (as heard, or by its base call) is answered and anyone else is acted on in
+    /// no way: no reply, no relay, nothing filed or stored. Empty lets everyone in.
+    #[test]
+    fn the_allow_list_answers_only_its_stations() {
+        let mut s = Station::new(StationConfig {
+            autoreply_allow: vec!["W1AW".into()],
+            ..cfg()
+        });
+        s.on_event(&snr_query("W1AW/P"), 1000);
+        assert_eq!(
+            acted(&mut s).0,
+            ["W1AW/P SNR -07"],
+            "on it by its base call"
+        );
+        let mut s = Station::new(StationConfig {
+            autoreply_allow: vec!["W1AW".into()],
+            ..cfg()
+        });
+        for ev in [
+            snr_query("K1ABC"),
+            directed("K1ABC", "KD9TAW", Some(Command::Msg), None, "HELLO", -5),
+            directed(
+                "K1ABC",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "N0XYZ HI",
+                -5,
+            ),
+            directed(
+                "K1ABC",
+                "KD9TAW",
+                Some(Command::Relay),
+                None,
+                "N0XYZ> HI",
+                -5,
+            ),
+        ] {
+            s.on_event(&ev, 1000);
+        }
+        assert_eq!(
+            acted(&mut s),
+            (Vec::<String>::new(), 0),
+            "kept out: nothing at all"
+        );
+    }
+
+    /// The deny list (JS8Call's "Never autoreply to these callsigns", :8802-8807): a station on it,
+    /// as heard or by its base call, is acted on in no way, its MSG not even filed.
+    #[test]
+    fn the_deny_list_keeps_a_station_out_entirely() {
+        let mut s = Station::new(StationConfig {
+            autoreply_deny: vec!["W1AW".into()],
+            ..cfg()
+        });
+        s.on_event(&snr_query("W1AW/P"), 1000);
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5),
+            1000,
+        );
+        assert_eq!(
+            acted(&mut s),
+            (Vec::<String>::new(), 0),
+            "denied: nothing at all"
+        );
+        s.on_event(&snr_query("K1ABC"), 2000);
+        assert_eq!(acted(&mut s).0, ["K1ABC SNR -07"], "anyone else: answered");
+    }
+
+    /// "To me" as JS8Call tests it (`toMe`, mainwindow.cpp:8599): my call as set, a `/P` or a
+    /// compound one included, or its base call. A MSG to `KD9TAW/P` is mine when I am KD9TAW/P,
+    /// and so is one to `KD9TAW`; set to VE3/KD9TAW, one to KD9TAW is mine too.
+    #[test]
+    fn a_msg_to_my_call_as_set_or_its_base_is_mine() {
+        for (mine, to) in [
+            ("KD9TAW/P", "KD9TAW/P"),
+            ("KD9TAW/P", "KD9TAW"),
+            ("VE3/KD9TAW", "KD9TAW"),
+            ("VE3/KD9TAW", "VE3/KD9TAW"),
+            ("KD9TAW", "KD9TAW"),
+        ] {
+            let mut s = Station::new(StationConfig {
+                mycall: mine.into(),
+                ..cfg()
+            });
+            s.on_event(
+                &directed("W1AW", to, Some(Command::Msg), None, "HELLO", -5),
+                1000,
+            );
+            assert_eq!(s.inbox().len(), 1, "{mine}: a MSG to {to} is filed");
+            // (Its ACK needs my call composed: compose takes a compound call but not a `/P` one
+            // as MYCALL, which is outside this rule.)
+            if !mine.ends_with("/P") {
+                assert_eq!(acted(&mut s).0, ["W1AW ACK"], "{mine}: …and acknowledged");
+            }
+        }
+        let mut s = Station::new(StationConfig {
+            mycall: "KD9TAW/P".into(),
+            ..cfg()
+        });
+        s.on_event(
+            &directed("W1AW", "KD9TAX", Some(Command::Msg), None, "HELLO", -5),
+            1000,
+        );
+        assert_eq!(
+            acted(&mut s),
+            (Vec::<String>::new(), 0),
+            "control: another call is not"
+        );
+    }
+
+    /// N38's other filing difference: nothing is filed or stored while the idle watchdog stands,
+    /// as JS8Call's `if(m_tx_watchdog) continue;` (:8817-8820) comes before the MSG and MSG TO:
+    /// branches. Once an operator act clears the trip, a MSG to me is filed again.
+    #[test]
+    fn nothing_is_filed_or_stored_while_the_idle_watchdog_stands() {
+        let mut s = Station::new(StationConfig {
+            idle_watchdog_min: 5,
+            ..cfg()
+        });
+        s.mark_active(1);
+        s.tick(6 * 60_000);
+        assert!(s.idle_tripped(), "control: tripped");
+        s.set_config(StationConfig {
+            idle_watchdog_min: 5,
+            ..cfg()
+        });
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5),
+            6 * 60_000,
+        );
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, "K1ABC HI", -5),
+            6 * 60_000,
+        );
+        assert_eq!(s.inbox().len(), 0, "tripped: nothing filed or stored");
+        s.mark_active(7 * 60_000);
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5),
+            7 * 60_000,
+        );
+        assert_eq!(s.inbox().len(), 1, "the trip cleared: filed");
     }
 }

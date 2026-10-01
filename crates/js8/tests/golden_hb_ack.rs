@@ -56,6 +56,7 @@ fn hb_ack_keyed_by(acker: &str, target: &str, snr: i32, speed: Speed) -> Vec<TxF
     });
     s.set_hb(true, 0);
     s.on_event(&heartbeat(target, snr, speed), 0);
+    s.process_tx_queue(); // JS8Call's processTxQueue, within the second
     let mut rng = || 0u32;
     (0..2u64)
         .filter_map(|k| s.next_frame(60_000 + k * 15_000, &|_| false, &mut rng))

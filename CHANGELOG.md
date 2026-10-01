@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JS8: JS8Call's allow and deny lists.** Settings ▸ Digital ▸ JS8 has JS8Call's three lists,
+  comma-separated and empty by default as in JS8Call: **Only auto-reply to these callsigns**,
+  **Never auto-reply to these callsigns** and **Never acknowledge heartbeats from these
+  callsigns**. A station is matched by its call as heard or its base call, so W1AW covers
+  W1AW/P. A station the first two keep out is not acted on at all, as in JS8Call: no reply, no
+  relay, its message not filed, nothing held for it.
 - **JS8: each automatic reply asks you first, as JS8Call does.** JS8Call ships with "Ask for
   confirmation before sending autoreply transmissions" on, and so does Nexus now (Settings ▸
   Digital ▸ JS8). An answer to a query, an ACK, a relay or a heartbeat acknowledgement waits in
@@ -348,6 +354,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
+  message box holds text (you are typing, a reply waits there, or a message of yours is going out)
+  or while a message to you is still arriving; a reply already queued waits until the box is
+  free. A heartbeat acknowledgement waits for no message to be arriving, as in JS8Call, rather
+  than for your own queue to be empty. While the idle watchdog stands nothing is filed or held
+  either, and a message to your call as you set it (a /P or a prefixed call) is yours, as JS8Call
+  reads "to me".
 - **JS8: with AUTOREPLY off, a reply goes in your message box for you to send, as in JS8Call.**
   JS8Call still answers a query to you with AUTO unchecked: it types the answer (an SNR, GRID,
   INFO, STATUS or HEARING reply, the ACK for a MSG, a relay) into its message box, and you send it

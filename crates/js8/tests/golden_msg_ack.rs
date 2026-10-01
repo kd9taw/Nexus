@@ -41,6 +41,7 @@ fn ack_keyed_by(acker: &str, speed: Speed, msg: &Message) -> Option<TxFrame> {
         ..StationConfig::default()
     });
     s.on_event(&MessageEvent::Message(msg.clone()), 0);
+    s.process_tx_queue(); // JS8Call's processTxQueue, within the second
     let mut rng = || 0u32;
     s.next_frame(60_000, &|_| false, &mut rng)
 }

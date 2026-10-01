@@ -6346,12 +6346,18 @@ export const EN = {
   'settings.js8.hbAck.label': 'Answer heartbeats',
   'settings.js8.hbAck.hint':
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
+  'settings.js8.hbAckDeny.label': 'Never acknowledge heartbeats from these callsigns',
+  'settings.js8.hbAckDeny.hint': 'Comma-separated, empty by default as in JS8Call. A heartbeat from a station on this list draws no acknowledgement.',
   'settings.js8.autoreply.label': 'Auto-reply to queries',
   'settings.js8.autoreply.hint':
     'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Off, a reply is put in the message box for you to send, as JS8Call does, and QUERY MSGS is not answered. Needs TX on.',
   'settings.js8.autoreplyConfirmation.label': 'Ask for confirmation before sending automatic replies',
   'settings.js8.autoreplyConfirmation.hint':
     'On by default, as in JS8Call: every automatic reply (to a query, an ACK, a relay, a heartbeat acknowledgement) waits in the cockpit for your Yes, and is not sent if you say No or do not answer within 89 seconds. Off, each goes by itself in the next period.',
+  'settings.js8.autoreplyAllow.label': 'Only auto-reply to these callsigns',
+  'settings.js8.autoreplyAllow.hint': 'Comma-separated. Empty, the JS8Call default, answers everyone. Otherwise only a station on this list, by its call as heard or its base call (W1AW covers W1AW/P), is answered; anyone else is not acted on at all: no reply, no relay, nothing filed or held for them.',
+  'settings.js8.autoreplyDeny.label': 'Never auto-reply to these callsigns',
+  'settings.js8.autoreplyDeny.hint': 'Comma-separated, empty by default as in JS8Call. A station on this list (W1AW covers W1AW/P) is not acted on at all: no reply, no relay, its message not filed.',
   'settings.js8.relay.label': 'Relay for other stations',
   'settings.js8.relay.hint':
     'On by default, as in JS8Call: a message routed through your callsign is passed along (with Auto-reply off, it is put in the message box for you to send), and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
