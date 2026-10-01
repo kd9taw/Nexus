@@ -20,6 +20,8 @@ export function keptFileMessage(f: KeptFile): string {
       return t('shell.keptFile.pendingMsgs', { path: f.path })
     case 'assistance':
       return t('shell.keptFile.assistance', { path: f.path })
+    case 'conversations':
+      return t('shell.keptFile.conversations', { path: f.path })
     default:
       return t('shell.keptFile.other', { path: f.path })
   }

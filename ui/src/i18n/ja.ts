@@ -5768,6 +5768,7 @@ export const JA: PartialCatalog = {
   "shell.keptFile.js8Inbox": "JS8の受信箱を読み込めなかったため、そのファイルを変更せずに{{path}}として残し、新しい受信箱を開始しました。削除されたものはありません。",
   "shell.keptFile.pendingMsgs": "送信待ちのTempoメッセージのファイルを読み込めなかったため、そのファイルを変更せずに{{path}}として残しました。削除されたものはありません。",
   "shell.keptFile.assistance": "アシスタンス記録を読み込めなかったため、そのファイルを変更せずに{{path}}として残し、新しい記録を開始しました。削除されたものはありません。",
+  "shell.keptFile.conversations": "Tempoの会話を読み込めなかったため、そのファイルを変更せずに{{path}}として残し、会話なしで開始しました。削除されたものはありません。",
   "shell.keptFile.other": "Nexusのファイルの1つを読み込めなかったため、そのファイルを変更せずに{{path}}として残し、新しいファイルを開始しました。削除されたものはありません。",
   "shell.keptFile.keptInPlace": "{{path}}を読み込めず、退避することもできなかったため、ファイルはそのままの場所に残し、上書きしません。削除されたものはありません。ファイルを移動または修復してから、Nexusを再起動してください。",
   "quit.logbook.saving.title": "ログブックを保存しています…",

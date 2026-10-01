@@ -5819,6 +5819,7 @@ export const DE: PartialCatalog = {
   "shell.keptFile.js8Inbox": "Nexus konnte Ihren JS8-Posteingang nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und ein neuer Posteingang wurde begonnen. Es wurde nichts gelöscht.",
   "shell.keptFile.pendingMsgs": "Nexus konnte die Datei mit den Tempo-Nachrichten, die auf das Senden warten, nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt. Es wurde nichts gelöscht.",
   "shell.keptFile.assistance": "Nexus konnte Ihr Hilfsmittel-Protokoll nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und ein neues Protokoll wurde begonnen. Es wurde nichts gelöscht.",
+  "shell.keptFile.conversations": "Nexus konnte Ihre Tempo-Unterhaltungen nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und Nexus hat ohne sie begonnen. Es wurde nichts gelöscht.",
   "shell.keptFile.other": "Nexus konnte eine seiner Dateien nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und eine neue wurde begonnen. Es wurde nichts gelöscht.",
   "shell.keptFile.keptInPlace": "Nexus konnte {{path}} nicht lesen und die Datei auch nicht beiseitelegen. Sie bleibt, wo sie ist, und Nexus überschreibt sie nicht. Es wurde nichts gelöscht. Verschieben oder reparieren Sie die Datei, und starten Sie Nexus dann neu.",
   "quit.logbook.saving.title": "Dein Logbuch wird gespeichert…",

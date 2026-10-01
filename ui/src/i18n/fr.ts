@@ -5781,6 +5781,7 @@ export const FR: PartialCatalog = {
   "shell.keptFile.js8Inbox": "Nexus n'a pas pu lire votre boîte de réception JS8 : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé une nouvelle. Rien n'a été supprimé.",
   "shell.keptFile.pendingMsgs": "Nexus n'a pas pu lire le fichier des messages Tempo en attente d'envoi : il a donc conservé ce fichier, intact, sous {{path}}. Rien n'a été supprimé.",
   "shell.keptFile.assistance": "Nexus n'a pas pu lire votre registre d'assistance : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé un nouveau. Rien n'a été supprimé.",
+  "shell.keptFile.conversations": "Nexus n'a pas pu lire vos conversations Tempo : il a donc conservé ce fichier, intact, sous {{path}} et a commencé sans elles. Rien n'a été supprimé.",
   "shell.keptFile.other": "Nexus n'a pas pu lire l'un de ses fichiers : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé un nouveau. Rien n'a été supprimé.",
   "shell.keptFile.keptInPlace": "Nexus n'a pas pu lire {{path}} ni le mettre de côté : il a donc laissé le fichier où il est et n'écrira pas par-dessus. Rien n'a été supprimé. Déplacez ou réparez le fichier, puis redémarrez Nexus.",
   "quit.logbook.saving.title": "Enregistrement de votre journal…",

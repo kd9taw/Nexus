@@ -5939,7 +5939,192 @@ fn write_json_atomic(path: &std::path::Path, text: &str) -> bool {
 
 /// Atomically write the conversation JSON (see [`write_json_atomic`]).
 fn write_conversations_atomic(text: &str) -> bool {
-    write_json_atomic(&conversations_path(), text)
+    write_conversations_at(&conversations_path(), text)
+}
+
+/// [`write_conversations_atomic`] at `path`, unless the file there is one this run could not read
+/// and could not move aside: the threads in it are never written over.
+fn write_conversations_at(path: &Path, text: &str) -> bool {
+    !tempo_core::keep_aside::refuses(path) && write_json_atomic(path, text)
+}
+
+/// The Tempo conversation threads at `path` for the launch. `None` when there is no file, and when
+/// there is one this build cannot read, which is kept aside ([`tempo_core::keep_aside`]): the
+/// threads' own saver would otherwise write the empty roster over it moments after the launch.
+fn restore_conversations(path: &Path, now: i64) -> Option<Vec<tempo_app::dto::Conversation>> {
+    tempo_core::keep_aside::read_or_keep("conversations", path, now, |text| {
+        serde_json::from_str::<Vec<tempo_app::dto::Conversation>>(text).map_err(|e| e.to_string())
+    })
+}
+
+#[cfg(test)]
+mod conversations_file_tests {
+    //! The Tempo conversation threads on the launch's read and the threads' own write, when the
+    //! file there cannot be read: kept, byte for byte, under a dated name and never written over,
+    //! and named for the screen. A file whose only news is fields, and no file, read as they
+    //! always have.
+    use super::*;
+    use tempo_core::keep_aside::Kept;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn kept_under(dir: &Path) -> Vec<Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    /// The threads as this build writes them: one thread, one message, from W1ABC.
+    const THREADS: &str = r#"[{"peer":"W1ABC","messages":[{"from":"W1ABC","to":"K2DEF","text":"hello from the shack","slot":5,"directedToMe":true,"outbound":false,"snr":-10,"freqHz":1500.0,"dtSec":0.1,"tier":"TempoFast"}]}]"#;
+
+    fn peers(convs: &Option<Vec<tempo_app::dto::Conversation>>) -> Option<Vec<String>> {
+        convs
+            .as_ref()
+            .map(|c| c.iter().map(|t| t.peer.clone()).collect())
+    }
+
+    /// An unreadable file is kept, byte for byte, beside the new one; the threads' saver,
+    /// whose first pass writes the roster moments after the launch, makes a new file and does
+    /// not touch the kept one.
+    fn assert_kept(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("kept");
+        let path = dir.join("conversations.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let restored = restore_conversations(&path, NOW);
+        assert_eq!(peers(&restored), None, "{what}: nothing is read out of it");
+        assert!(
+            write_conversations_at(&path, "[]"),
+            "{what}: the saver writes a new file"
+        );
+
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable threads must survive the saver's first pass, byte for byte, moved aside"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "conversations",
+                path: dir.join(ASIDE),
+                kept_in_place: false,
+            }],
+            "{what}: the screen is told where it is"
+        );
+        assert_eq!(
+            peers(&restore_conversations(&path, NOW + 1)),
+            Some(vec![]),
+            "{what}: the new file is this build's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_cut_short_are_kept_and_never_written_over() {
+        let whole = THREADS.as_bytes();
+        assert_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a waveform tier from a later build.
+    #[test]
+    fn conversations_with_a_value_this_build_does_not_know_are_kept_and_never_written_over() {
+        let unknown = THREADS.replacen("\"tier\":\"TempoFast\"", "\"tier\":\"TempoUltra\"", 1);
+        assert!(
+            unknown.contains("TempoUltra"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept("an unknown value", unknown.into_bytes());
+    }
+
+    /// A file that cannot be moved aside (every dated name taken, in a folder the saver can write
+    /// to) is never written over.
+    #[test]
+    fn conversations_that_cannot_be_moved_are_never_written_over() {
+        let dir = scratch("stuck");
+        let path = dir.join("conversations.json");
+        let bytes = b"[{\"peer\":\"W1ABC\",\"messages\":[".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(dir.join(ASIDE), b"taken").unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!("conversations.unreadable-20260930-142233-{n}.json")),
+                b"taken",
+            )
+            .unwrap();
+        }
+        assert_eq!(peers(&restore_conversations(&path, NOW)), None);
+        let wrote = write_conversations_at(&path, "[]");
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable threads must never be written over"
+        );
+        assert!(!wrote, "the saver is told its write did not happen");
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "conversations",
+                path: path.clone(),
+                kept_in_place: true,
+            }],
+            "the screen is told it was left in place"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_whose_only_news_is_fields_read_as_they_always_have() {
+        let dir = scratch("fields");
+        let path = dir.join("conversations.json");
+        let threads = THREADS
+            .replacen("{\"peer\"", "{\"aNewField\":7,\"peer\"", 1)
+            .replacen("\"slot\"", "\"aNewMessageField\":true,\"slot\"", 1);
+        assert!(threads.contains("aNewMessageField"));
+        std::fs::write(&path, &threads).unwrap();
+        assert_eq!(
+            (peers(&restore_conversations(&path, NOW)), kept_under(&dir)),
+            (Some(vec!["W1ABC".to_string()]), vec![]),
+            "read as they always have, with nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_conversations_file_is_a_first_run() {
+        let dir = scratch("none");
+        let path = dir.join("conversations.json");
+        assert_eq!(
+            (peers(&restore_conversations(&path, NOW)), kept_under(&dir)),
+            (None, vec![]),
+            "no file: no threads and nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// The durable UI-state store: `ui-state.json`, a SIBLING of settings.json inside the current
@@ -29555,12 +29740,10 @@ fn start_on_the_logbook(
         eng.set_js8_journal_path(js8_station_path());
         eng.restore_js8_journal(now_unix());
         // Restore persisted Tempo conversation threads so chat history (and the `*`
-        // band feed) survives an app restart. Best-effort: a missing/corrupt file
-        // just yields an empty roster of threads.
-        if let Ok(text) = std::fs::read_to_string(conversations_path()) {
-            if let Ok(convs) = serde_json::from_str::<Vec<tempo_app::dto::Conversation>>(&text) {
-                eng.load_conversations(convs);
-            }
+        // band feed) survives an app restart. A missing file is an empty roster of threads;
+        // one this build cannot read is kept aside, and the screen says where.
+        if let Some(convs) = restore_conversations(&conversations_path(), now_unix()) {
+            eng.load_conversations(convs);
         }
         if persisted_source == SourceKind::Companion {
             if let Err(e) = eng.set_source(SourceKind::Companion) {

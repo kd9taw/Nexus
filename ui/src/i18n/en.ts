@@ -9427,6 +9427,8 @@ export const EN = {
     'Nexus could not read the file of Tempo messages waiting to send, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
   'shell.keptFile.assistance':
     'Nexus could not read your Assistance record, so it kept that file, untouched, at {{path}}, and started a new record. Nothing was deleted.',
+  'shell.keptFile.conversations':
+    'Nexus could not read your Tempo conversations, so it kept that file, untouched, at {{path}}, and started with none. Nothing was deleted.',
   'shell.keptFile.other':
     'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
   'shell.keptFile.keptInPlace':

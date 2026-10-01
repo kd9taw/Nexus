@@ -5781,6 +5781,7 @@ export const ES: PartialCatalog = {
   "shell.keptFile.js8Inbox": "Nexus no pudo leer tu bandeja de entrada de JS8, así que conservó ese archivo, intacto, en {{path}} y empezó una bandeja nueva. No se borró nada.",
   "shell.keptFile.pendingMsgs": "Nexus no pudo leer el archivo de los mensajes de Tempo que esperaban para enviarse, así que conservó ese archivo, intacto, en {{path}}. No se borró nada.",
   "shell.keptFile.assistance": "Nexus no pudo leer tu registro de asistencia, así que conservó ese archivo, intacto, en {{path}} y empezó un registro nuevo. No se borró nada.",
+  "shell.keptFile.conversations": "Nexus no pudo leer tus conversaciones de Tempo, así que conservó ese archivo, intacto, en {{path}} y empezó sin ninguna. No se borró nada.",
   "shell.keptFile.other": "Nexus no pudo leer uno de sus archivos, así que conservó ese archivo, intacto, en {{path}} y empezó uno nuevo. No se borró nada.",
   "shell.keptFile.keptInPlace": "Nexus no pudo leer {{path}} ni apartarlo, así que dejó el archivo donde está y no escribirá encima de él. No se borró nada. Mueve o repara el archivo y luego reinicia Nexus.",
   "quit.logbook.saving.title": "Guardando tu libro de guardia…",

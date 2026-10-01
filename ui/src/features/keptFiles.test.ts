@@ -13,6 +13,7 @@ describe('keptFileMessage', () => {
     ['js8Inbox', 'shell.keptFile.js8Inbox'],
     ['pendingMsgs', 'shell.keptFile.pendingMsgs'],
     ['assistance', 'shell.keptFile.assistance'],
+    ['conversations', 'shell.keptFile.conversations'],
   ] as const)(
     'says what a %s file held, and where it is now',
     (store, key) => {
