@@ -1129,7 +1129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with their colour kept on their border, and its WORKED TODAY badge reads in the dim text colour.
   The park and call in the Hunting line above the list take the text colour too, underlined in the
   accent.
-  The dark themes look exactly as before.
+- **The hunted POTA / SOTA row, WORKED TODAY and Program's Tune and Add buttons are easy to read in
+  every theme.** On the hunted row the frequency was hard to read on the paper theme and in the dark
+  themes, and HUNT on the Slate and Lagoon themes and at night; WORKED TODAY was dim in the dark
+  themes. Both words on the hunted row now take the theme's text colour, HUNT with the accent kept
+  on its border, and WORKED TODAY takes the dim text colour. Program's Tune and Add buttons, which
+  look like HUNT, take its light-theme look, and ✓ Added keeps its green on its border.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
