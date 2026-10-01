@@ -86,7 +86,9 @@ auto-reply and relay switch themselves off and the dock says so.
 **Stop TX** (header, or **Esc** anywhere in the screen) cuts the frame on the air, empties
 the queue, cancels a pending reply and stops the heartbeat schedule. **Drop queue** only
 empties the queue — a frame already on the air finishes. Turning **TX Off** lets the
-frame in flight complete, as in the FT8 screen.
+frame in flight complete, as in the FT8 screen; what is still queued, the rest of that message
+included, is dropped, not sent when TX comes back on. So is what waits while the dial is outside
+your license privileges, and the screen says so.
 
 ## Compatibility
 

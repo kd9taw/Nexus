@@ -1384,6 +1384,16 @@ impl Station {
         self.pending.clear();
     }
 
+    /// The outbox alone: what waits to be keyed, the rest of a message already going out
+    /// included. The pending countdowns and every schedule stay as they are. Returns how many
+    /// messages it held and whether one of them was the operator's own.
+    pub fn drop_outbox(&mut self) -> (usize, bool) {
+        let operator = self.outbox.iter().any(|o| o.origin == Origin::Operator);
+        let held = self.outbox.len();
+        self.outbox.clear();
+        (held, operator)
+    }
+
     pub fn note_tx_done(&mut self, f: &TxFrame, now_ms: u64) {
         // Display state, updated for EVERY origin.
         self.last_tx_display = Some(f.display.clone());

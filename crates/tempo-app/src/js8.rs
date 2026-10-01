@@ -44,11 +44,14 @@ const JS8_ALLCALL_INTERVAL_MS: u64 = 15 * 60 * 1000;
 /// the FT gate's (`structured_tx_ready`).
 const JS8_NO_LOCATOR: &str =
     "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
-/// …and what it says when a reply or heartbeat falls due outside the licence's privileges: the
-/// sentence shape of CW's, RTTY's and PSK's own refusals.
+/// …and what it says when a refusal outside the licence's privileges drops what was waiting to
+/// go out: a reply or heartbeat falling due, or the queue. The sentence shape of CW's, RTTY's and
+/// PSK's own refusals.
 const JS8_REFUSED_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
-     privileges, so the automatic reply or heartbeat that came due was dropped, not held for \
-     later.";
+     privileges, so what was waiting to go out was dropped, not held for later.";
+/// …and when transmit going off drops a message the operator queued: RTTY's and PSK's words.
+const JS8_QUEUE_REFUSED_TX_OFF: &str = "JS8 stopped: transmit was turned off, so what was still \
+     queued was dropped, not held for later. Send it again when you are ready.";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
 /// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
@@ -354,12 +357,40 @@ impl Engine {
             // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
             // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
             dropped |= self.js8_station.drop_due_heartbeat(now_ms);
-            if dropped && self.tx_enabled() {
-                let why = if no_locator {
-                    JS8_NO_LOCATOR
-                } else {
-                    JS8_REFUSED_PRIVILEGES
-                };
+            // …and the queue: a message waiting, the rest of one already going out, the CQ
+            // repeat's call. Held, it keyed by itself once TX came back or the dial came back
+            // inside the privileges; it is dropped instead, the rule CW, RTTY and PSK keep, and
+            // JS8Call's when its TX button goes off (`on_monitorTxButton_toggled` →
+            // `on_stopTxButton_clicked` → `resetMessage`, mainwindow.cpp:2855-2861, :7390-7398,
+            // :5383-5391). Not at the locator's refusal: a message on the air finishes there.
+            let operator = if !self.tx_enabled() || outside {
+                let (held, operator) = self.js8_station.drop_outbox();
+                if held > 0 {
+                    let why = if self.tx_enabled() {
+                        "outside the licence's privileges"
+                    } else {
+                        "transmit is off"
+                    };
+                    tempo_core::applog::info(
+                        "tx",
+                        &format!("JS8 not keyed: {why} (queue dropped)"),
+                    );
+                }
+                dropped |= held > 0;
+                operator
+            } else {
+                false
+            };
+            // TX off refuses first, and silently for automatic traffic; an operator's own
+            // message it drops is said, as CW, RTTY and PSK say theirs.
+            let why = if !self.tx_enabled() {
+                operator.then_some(JS8_QUEUE_REFUSED_TX_OFF)
+            } else if no_locator {
+                dropped.then_some(JS8_NO_LOCATOR)
+            } else {
+                dropped.then_some(JS8_REFUSED_PRIVILEGES)
+            };
+            if let Some(why) = why {
                 self.js8_last_error = Some(why.to_string());
             }
         }
@@ -816,6 +847,20 @@ impl Engine {
         self.js8_station.halt();
         self.js8_hb_on = false;
         self.js8_planned_slot = None;
+    }
+
+    /// TX Off, from `set_tx_enabled`: what JS8 still has queued is dropped, the rest of a
+    /// message already going out included, as the other modes' queues are there. The frame on
+    /// the air finishes (the latch's contract); a countdown stays in view and is cancelled when
+    /// it falls due (`js8_tick`); the schedules stay. An operator's own message dropped is said.
+    pub(crate) fn js8_tx_off(&mut self) {
+        let (held, operator) = self.js8_station.drop_outbox();
+        if held > 0 {
+            tempo_core::applog::info("tx", "JS8 not keyed: transmit is off (queue dropped)");
+        }
+        if operator {
+            self.js8_last_error = Some(JS8_QUEUE_REFUSED_TX_OFF.to_string());
+        }
     }
 
     /// Book a JS8 over at PLAN time — the beacon and QSO arms' rule, and for the same
@@ -2182,10 +2227,14 @@ mod tests {
 
     // ===== outside the licence's privileges: dropped, never held =====
 
-    /// What the JS8 cockpit says when a reply or heartbeat falls due outside privileges.
+    /// What the JS8 cockpit says when a refusal outside privileges drops what was waiting to go
+    /// out: a reply or heartbeat falling due, or the queue.
     const OUTSIDE_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
-         privileges, so the automatic reply or heartbeat that came due was dropped, not held for \
-         later.";
+         privileges, so what was waiting to go out was dropped, not held for later.";
+
+    /// …and when transmit going off drops a message the operator queued.
+    const QUEUE_TX_OFF: &str = "JS8 stopped: transmit was turned off, so what was still queued \
+         was dropped, not held for later. Send it again when you are ready.";
 
     /// A reply or heartbeat that falls due while the frequency is outside the licence's
     /// privileges is dropped, as one that falls due with TX off or with no locator is, so a tune
@@ -2434,6 +2483,205 @@ mod tests {
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let overs = run_js8_loop_from(&mut e, t0, 60);
         assert!(overs.is_empty(), "nothing keys: {overs:?}");
+    }
+
+    // ===== the queue at a TX-off or privileges refusal: dropped, never sent later =====
+
+    /// A message queued inside the licence's privileges, then the dial moved out of them before
+    /// it started: the queue is dropped at the refusal, and a tune back inside them sends nothing.
+    #[test]
+    fn a_queued_js8_message_is_dropped_when_the_dial_leaves_privileges_and_never_sent_later() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.set_license_class("general");
+        e.js8_send(None, "TEST".into())
+            .expect("queues inside privileges");
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.020 is outside a General's privileges"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 60);
+        assert!(off.is_empty(), "nothing keys outside privileges: {off:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the queue was dropped at the refusal: {:?}",
+            st.queue
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and the cockpit says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        let on = run_js8_loop_from(&mut e, t0 + 60_000, 60);
+        assert!(
+            on.is_empty(),
+            "a tune back inside them sends nothing old: {on:?}"
+        );
+    }
+
+    /// A message already going out when the dial leaves the privileges: the frame on the air was
+    /// keyed inside them, and the frames after it are dropped at the refusal, so none keys after
+    /// a tune back inside them.
+    #[test]
+    fn the_rest_of_a_js8_message_on_the_air_is_dropped_when_the_dial_leaves_privileges() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.set_license_class("general");
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .expect("queues");
+        let frames = e.js8_state().queue.len();
+        assert!(frames > 1, "control: a multi-frame message: {frames}");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let first = run_js8_loop_from(&mut e, t0, 15); // exactly one period boundary
+        assert_eq!(first.len(), 1, "control: its first frame keyed");
+        e.set_frequency(14.020, "20m", "USB");
+        let off = run_js8_loop_from(&mut e, t0 + 15_000, 5 * 60);
+        assert!(
+            off.is_empty(),
+            "nothing more keys outside privileges: {off:?}"
+        );
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the rest of the message was dropped at the refusal: {:?}",
+            st.queue
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and the cockpit says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        let on = run_js8_loop_from(&mut e, t0 + 15_000 + 5 * 60_000, 2 * 60);
+        assert!(
+            on.is_empty(),
+            "none of its frames keys after a tune back inside them: {on:?}"
+        );
+    }
+
+    /// The CQ repeat's call that comes due outside privileges is dropped with the rest of the
+    /// queue, and the repeat keeps its schedule, as it does at the locator's refusal.
+    #[test]
+    fn a_js8_cq_repeat_call_due_outside_privileges_is_dropped_and_the_repeat_keeps_its_schedule() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.set_license_class("general");
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.set_frequency(14.020, "20m", "USB");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 75); // the repeat queues its call at 60 s
+        assert!(off.is_empty(), "nothing keys outside privileges: {off:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the call it queued was dropped: {:?}",
+            st.queue
+        );
+        assert!(
+            st.cq_on && st.cq_next_at_ms.is_some_and(|next| next > t0 + 75_000),
+            "the CQ repeat keeps its schedule: {:?}",
+            st.cq_next_at_ms
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and the cockpit says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        let on = run_js8_loop_from(&mut e, t0 + 75_000, 20);
+        assert!(
+            on.is_empty(),
+            "a tune back inside them sends nothing old: {on:?}"
+        );
+    }
+
+    /// TX Off lets the frame on the air finish (its contract, as in the FT8 screen) and drops
+    /// what follows it, as JS8Call's TX button does (`on_monitorTxButton_toggled` →
+    /// `on_stopTxButton_clicked` → `resetMessage`, mainwindow.cpp:2855-2861, :7390-7398), so
+    /// turning TX back on sends nothing old.
+    #[test]
+    fn turning_js8_tx_off_drops_the_rest_of_the_queue_and_turning_it_on_sends_nothing_old() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .expect("queues");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let first = run_js8_loop_from(&mut e, t0, 15); // exactly one period boundary
+        assert_eq!(first.len(), 1, "control: its first frame keyed");
+        e.set_tx_enabled(false);
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "TX off drops what was still queued: {:?}",
+            st.queue
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(QUEUE_TX_OFF),
+            "…and the cockpit says why"
+        );
+        e.set_tx_enabled(true);
+        let on = run_js8_loop_from(&mut e, t0 + 15_000, 3 * 60);
+        assert!(
+            on.is_empty(),
+            "turning TX back on sends nothing old: {on:?}"
+        );
+    }
+
+    /// A message sent while TX is off meets the same refusal on the next tick, so turning TX on
+    /// afterwards sends nothing old. (JS8Call's Enter does nothing at all with TX off,
+    /// mainwindow.cpp:748.)
+    #[test]
+    fn a_js8_message_sent_while_tx_is_off_is_dropped_and_not_sent_when_tx_comes_on() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.set_tx_enabled(false);
+        e.js8_send(None, "TEST".into())
+            .expect("a send with TX off is taken");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 5);
+        assert!(off.is_empty(), "nothing keys with TX off: {off:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "dropped at the refusal: {:?}",
+            st.queue
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(QUEUE_TX_OFF),
+            "…and the cockpit says why"
+        );
+        e.set_tx_enabled(true);
+        let on = run_js8_loop_from(&mut e, t0 + 5_000, 60);
+        assert!(on.is_empty(), "turning TX on sends nothing old: {on:?}");
+    }
+
+    /// With TX off the CQ repeat's call that comes due is dropped as the heartbeat is, and
+    /// nothing is said: TX off refuses first, and silently, for automatic traffic. The repeat
+    /// stays armed for its next time.
+    #[test]
+    fn with_tx_off_a_dropped_js8_cq_repeat_call_says_nothing() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.set_tx_enabled(false);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 75); // the repeat queues its call at 60 s
+        assert!(off.is_empty(), "nothing keys with TX off: {off:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the call it queued was dropped: {:?}",
+            st.queue
+        );
+        assert!(st.cq_on, "the CQ repeat stays armed");
+        assert_eq!(
+            st.last_error, None,
+            "TX off drops an automatic call silently"
+        );
     }
 
     // ===== the free heartbeat spot: JS8Call's band activity =====

@@ -14135,6 +14135,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             }
             self.tx_queue.clear();
             self.broadcast_queue.clear();
+            // …and JS8's queue, which this used to leave HELD, to key the moment TX came back,
+            // the rest of a message already going out included (the operator, 2026-09-30: "a
+            // refused JS8 queue is dropped with a notice, never sent later"). JS8Call's TX
+            // button drops it too (mainwindow.cpp:2855-2861).
+            self.js8_tx_off();
             // `transmitting` is deliberately NOT stamped false: the over in flight
             // is still leaving the antenna, and `tx_owner()` must keep reporting
             // Slot while it drains (no other keying source may grab the rig).

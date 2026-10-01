@@ -551,9 +551,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent later.** The rule CW, RTTY and PSK keep. With TX on and the frequency outside your license
   privileges, a reply counting down (to an SNR?, INFO? or other query) or a heartbeat that came due
   was held, and it went out by itself as soon as you tuned back inside them. It is now dropped, as
-  it already was with TX off or with no locator in Settings, and the JS8 screen says why. A message
-  you queued yourself and a repeating CQ still wait while you are outside your privileges and go
-  out when you tune back in, as before.
+  it already was with TX off or with no locator in Settings, and the JS8 screen says why.
+- **JS8: what is queued is dropped when transmit goes off or the dial leaves your privileges, not
+  sent later.** The same rule as CW, RTTY and PSK. A message you sent, the rest of a message
+  already going out and a repeating CQ's call used to wait while TX was off or the frequency was
+  outside your license privileges, and went out by themselves as soon as TX came back on or you
+  tuned back inside them. They are now dropped, and the JS8 screen says why (with TX off, when a
+  message of yours was among them). The frame on the air when you turn TX off still finishes, as
+  before, and a repeating CQ keeps its schedule.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
