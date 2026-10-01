@@ -530,6 +530,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it (such as `settings.unreadable-20260930-142233.json`), never replacing an earlier one, and
   Nexus says where, once, when it starts. If the file cannot be moved aside, Nexus leaves it where
   it is and saves no setting over it, rather than writing the default settings over yours.
+- **Armed satellite and DXpedition alarms survive a reset of Nexus's window storage.** They were
+  meant to be kept with your settings, like the satellites and DXpeditions you chase, but were
+  kept only in the window's own storage, which a reinstall or a reset of the webview's data clears.
+  They now live with your settings, so an armed alarm, and a pass or a window that already fired,
+  survive both.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
