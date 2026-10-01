@@ -15683,7 +15683,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    a bare `.operate-cockpit` (0,1,0) and collapse the flex height chain — leaving
    the waterfall canvas ~0px tall (and its attribute-size feeding the auto-height
    parent → a ResizeObserver re-clear loop = the flicker). Match all three classes
-   (0,3,0) so the cockpit stays a definite-height flex column with no scroll. */
+   (0,3,0) so the cockpit stays a definite-height flex column.
+   THE DEFICIT VALVE (2026-10-01; the other cockpits' shells have had it since 2026-07-31). This was
+   `overflow: hidden`, which left the lower region (`.cockpit-lower`, unfloored) the only
+   box that could give: below md (a pinned 100 % at the 1024×768 floor, 125 % at 1366×768,
+   175 % at 1920×1080) the panes were crushed to their title bars, 0 px of them at
+   1366×768 at 125 %. The region now floors itself, the waterfall yields first, and past
+   the floor this scrolls. It never fires at the auto scale on a 1024×768 or larger window,
+   where the region is taller than its floor. Stop TX sits in the QSO strip directly above
+   the region, so the scroll's end, which shows the floor whole, still shows the strip on
+   any window taller than the floor plus the strip (Chrome: 1024×768 at 100 % and 125 %,
+   1366×768 at 125 % and 150 %, 1920×1080 at 175 %). Where the header alone pushes the strip
+   below the window (1366×768 at 175 %), this is what lets the mouse reach Stop TX at all.
+   cockpit-shells.test.ts computes the valve. */
 .layout.single.operate-cockpit {
   display: flex;
   flex-direction: column;
@@ -15691,7 +15703,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      five vertical gaps in the stack, and every reclaimed px is a decode row. */
   gap: var(--space-2);
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .cockpit-bar {
@@ -16506,7 +16519,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    content and leaves dead space below when the lists are short. */
 .cockpit-lower {
   flex: 1;
-  min-height: 0;
+  /* A FLOOR (2026-10-01), the pane grid's 18em (cockpit-panes.css `.cockpit-panes`) for the same
+     reason: unfloored, the region was the column's only box that could give, so a wrapped
+     header, a pinned scale or a tall waterfall drag crushed every pane toward its title bar
+     while the waterfall, built to yield, kept its height. With the floor the waterfall yields
+     first, and past it the shell's valve scrolls (`.layout.single.operate-cockpit` above). A
+     floor is legal here only because that shell scrolls; operate-classic-grid.test.ts.
+     It YIELDS to a short window, the hosted FT's own floor (`.remote-cockpit-lower`): at its
+     end the valve shows the floor whole, and the QSO strip with Stop TX sits right above it,
+     so a floor taller than the window can spare scrolls Stop TX away. A plain 18em did, at
+     1366×768 at 150 % (Chrome); with the share it stays on screen at every scroll position. */
+  min-height: min(18em, calc(0.35 * var(--vh-eff)));
   display: grid;
   /* Classic two-pane: Band Activity dominant on the left, a wider rail on the
      right now that it also carries the compact Tx1–Tx6 machine. */
@@ -16628,17 +16651,29 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      to), and a bare 1fr carries a min-content floor — a wide child in the
      panel-removed + narrow combination could force horizontal blow-out. */
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
+  /* THE STACK IS ITS OWN SCROLLER, ITS ROWS FLOORED (2026-10-01). The rows were equal
+     minmax(0, 1fr) shares of the region, so at the 1024×768 floor at 100 % two or
+     three panes split 109 px and none showed a row. Now every column group gets at
+     least 26em, room for the two panes Roster's rail and Classic's Rx column hold with
+     a head and three rows each, and shares any surplus, and the region scrolls between
+     them: the cockpit-panes.css column-scroller fate. The QSO strip with Stop TX is
+     outside the region, so this scroll never moves it. No explicit row: the base
+     rule's minmax(0, 1fr) first row would escape the floor. */
+  grid-template-rows: none;
+  grid-auto-rows: minmax(26em, 1fr);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* The classic data-cols overrides above are 3-specific selectors, so the narrow
    stack needs its own 3-specific rule AFTER them or the columns crush at phone /
-   pinned-zoom widths. Source order: BA → qsocol (Rx pane + Tx machine) → roster. */
+   pinned-zoom widths. Source order: BA → qsocol (Rx pane + Tx machine) → roster.
+   Columns only: no data-cols rule sizes rows, so the floored rows and the scroller
+   come from the rule above. A row declaration here would outrank them. */
 [data-viewport='sm'] .cockpit-lower.classic,
 [data-viewport='xs'] .cockpit-lower.classic,
 [data-viewport='sm'] .cockpit-lower.classic[data-rail='left'],
 [data-viewport='xs'] .cockpit-lower.classic[data-rail='left'] {
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
 }
 
 /* THE merged operating strip (decode-first rebuild 2026-08): ONE ~36px row at

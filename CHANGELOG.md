@@ -477,6 +477,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel list, and the channel list covered the search results, so no Tune or Add button in them
   could be clicked. Each half now keeps room for what it holds and Program scrolls instead. At the
   automatic zoom nothing moves.
+- **Operate at a large zoom: Call Roster, Band Activity and Rx Frequency show their rows.** With
+  the app pinned at 100 % on a 1024×768 screen, Operate squeezed the decode panes down to their
+  title bars with nothing to scroll, and at 125 % on 1366×768 they disappeared. Now the waterfall
+  gives way first, each pane keeps a usable box that you scroll between, and past that the cockpit
+  scrolls. The QSO strip with Stop TX and Tune stays on screen while you scroll. At 175 % on
+  1366×768 the strip used to sit below the bottom of the window, where the mouse could not reach
+  it; the cockpit now scrolls to it. At the automatic zoom on a 1024×768 or larger screen nothing
+  moves, except that a very tall waterfall drag now stops short of squeezing the panes below it.
 - **Tempo at a large zoom: the station list, the conversation and the waterfall rail no longer
   sit on top of each other.** With the app pinned at 100 % on a 1024×768 screen (or 125 % on
   1366×768, 175 % on 1920×1080), all of Tempo's panes landed in the same place: the waterfall rail
