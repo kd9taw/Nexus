@@ -42,9 +42,11 @@
 //!   heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and marks it
 //!   `Delivered`.
 //! - A `MSG` to me or a joined group (never `@ALLCALL`) is filed `Unread` in my inbox, as
-//!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133). JS8Call also queues
-//!   `<from> ACK` for it (:9139); this station does NOT, so filing it transmits nothing. My mail
-//!   (`Unread`/`Read`) is bounded apart from mail held for others and never expires.
+//!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133), and answered as JS8Call
+//!   answers it (:9139): `<from> ACK` to the sender as heard, or `<path> ACK` back along the relay
+//!   path that brought it. The ACK is an automatic reply, so only with autoreply on, and one waits
+//!   at a time however many copies arrive. My mail (`Unread`/`Read`) is bounded apart from mail
+//!   held for others and never expires.
 //! - Idle watchdog: on trip, stop TX and turn autoreply/relay/HB OFF, clear the outbox, surface a
 //!   toast — `tx_enabled` (the engine's latch) is NOT touched.
 use crate::phy::{Speed, Word87, I3};
@@ -448,7 +450,7 @@ impl Station {
             }
             // A MSG to me or a group I joined is filed UNREAD (JS8Call's `d.cmd == " MSG" &&
             // !isAllCall`, mainwindow.cpp:9121, past the "to me, a group or @ALLCALL" gate at
-            // :8715). JS8Call then queues `<from> ACK` (:9139); nothing is queued here.
+            // :8715), whatever the switches say. Its ACK (:9139) is an automatic reply, below.
             if cmd == Command::Msg && mine {
                 self.file_msg_to_me(m, now_ms, &mut actions);
             }
@@ -631,6 +633,10 @@ impl Station {
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
+        if cmd == Command::Msg {
+            self.ack_msg(m, now_ms, actions);
+            return;
+        }
         let from = split_portable(&m.from).0.to_ascii_uppercase();
         let reply = match cmd {
             Command::SnrQuery => Some(format!("{from} SNR {}", format_snr(m.snr_db))),
@@ -658,6 +664,54 @@ impl Station {
                 actions,
             );
         }
+    }
+
+    /// JS8Call's answer to a MSG it filed (mainwindow.cpp:9127-9139): `<from> ACK` to the
+    /// sender as it was heard (`d.from`, so a `/P` or compound call stays whole), or `<path>
+    /// ACK` when a relay brought it (`calls.length() > 1 ? d.relayPath : d.from`, the path
+    /// `parseRelayPathCallsigns` reads and the inbox keeps). It waits out the countdown every
+    /// automatic reply does, and it exists only with autoreply on: JS8Call types it into the
+    /// compose box either way but keys it only with AUTO checked (`processTxQueue`, :9674-9685;
+    /// the reply has no trailing space, so the `" ACK "` test there never matches it). A copy
+    /// of the MSG heard while its ACK still waits draws no second one: JS8Call's waiting ACK
+    /// sits in the compose box until it has gone, and no reply is queued while the box holds
+    /// text (:9365). A path over `MAX_PATH_HOPS` is refused, as a relay chain is in
+    /// `handle_relay`: its calls come from the sender's text, and upstream keys all of them.
+    fn ack_msg(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
+        let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
+        let path = relay_path(&from, &clamp_str(m.text.trim(), MAX_TEXT_LEN));
+        if path.len() > MAX_PATH_HOPS {
+            actions.push(StationAction::Toast {
+                text: format!("Relay chain over {MAX_PATH_HOPS} hops refused"),
+                directed_to_me: false,
+            });
+            return;
+        }
+        let who = if path.len() > 1 {
+            path.join(">")
+        } else {
+            from.clone()
+        };
+        let text = format!("{who} ACK");
+        if self.reply_waits(&text) {
+            return;
+        }
+        self.schedule_reply(
+            Origin::AutoReply,
+            &from,
+            &text,
+            FreqHint::Dial,
+            now_ms,
+            actions,
+        );
+    }
+
+    /// A reply with exactly this text still waits: counting down, or queued and not yet wholly
+    /// sent (a queued message's display is `MYCALL: text`, `compose_out`'s).
+    fn reply_waits(&self, text: &str) -> bool {
+        let display = format!("{}: {text}", self.base());
+        self.pending.iter().any(|p| p.text == text)
+            || self.outbox.iter().any(|o| o.display == display)
     }
 
     fn handle_relay(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
@@ -3166,12 +3220,35 @@ mod tests {
         );
     }
 
+    /// The frame JS8Call keys for `to ACK` from KD9TAW: ONE directed frame, first and last.
+    fn ack_frame(to: &str, portable_to: bool) -> Word87 {
+        let ack = Frame::Directed {
+            from: CallRef::Base("KD9TAW".into()),
+            to: CallRef::Base(to.into()),
+            cmd: Command::Ack,
+            num: None,
+            portable_from: false,
+            portable_to,
+        };
+        let whole = I3 {
+            first: true,
+            last: true,
+            data: false,
+        };
+        encode_frame(&ack, whole, Speed::Normal).expect("packs")
+    }
+
+    /// The texts of the automatic replies counting down, oldest first.
+    fn waiting(s: &Station) -> Vec<String> {
+        s.pending.iter().map(|p| p.text.clone()).collect()
+    }
+
     /// ⭐ A MSG TO ME IS FILED UNREAD, as JS8Call's `addCommandToMyInbox` files it
     /// (mainwindow.cpp:9121-9133, :9462-9467): who from, to whom, the text and when, at the
-    /// offset and SNR it was heard. Nothing is sent for it: JS8Call also queues `<from> ACK`
-    /// (:9139) and Nexus does not, so no frame, no pending reply.
+    /// offset and SNR it was heard. And it is answered as JS8Call answers it (:9139): `<from>
+    /// ACK`, an automatic reply after the countdown, one directed frame on my own offset.
     #[test]
-    fn a_msg_to_me_is_filed_unread_and_nothing_is_sent_for_it() {
+    fn a_msg_to_me_is_filed_unread_and_answered_with_an_ack() {
         let mut s = Station::new(cfg());
         let acts = s.on_event(
             &directed(
@@ -3202,16 +3279,36 @@ mod tests {
             "the journal is not told"
         );
         assert!(
-            !acts.iter().any(|a| matches!(
+            acts.iter().any(|a| matches!(
                 a,
-                StationAction::Queued { .. } | StationAction::ReplyPending { .. }
+                StationAction::ReplyPending { origin: Origin::AutoReply, to, display, .. }
+                    if to == "W1AW" && display == "KD9TAW: W1AW ACK"
             )),
-            "something was queued for a MSG: {acts:?}"
+            "no ACK counts down: {acts:?}"
         );
-        assert_eq!((s.outbox_len(), s.pending_len()), (0, 0));
+        assert!(
+            drain(&mut s, 5_500).is_none(),
+            "the ACK waits for its countdown"
+        );
+        let f = drain(&mut s, 6_000).expect("the ACK after the countdown");
+        assert_eq!(
+            (f.origin, f.display.as_str(), f.freq_hint, f.first, f.last),
+            (
+                Origin::AutoReply,
+                "KD9TAW: W1AW ACK",
+                FreqHint::Dial,
+                true,
+                true
+            )
+        );
+        assert_eq!(
+            f.word,
+            ack_frame("W1AW", false),
+            "JS8Call's `W1AW ACK`: KD9TAW to W1AW, ACK"
+        );
         assert!(
             drain(&mut s, 60_000).is_none(),
-            "no ACK, and nothing else, goes out"
+            "one ACK, and nothing after it"
         );
     }
 
@@ -3297,6 +3394,233 @@ mod tests {
                 vec!["OH8STN".to_string()],
             ],
             "the relay paths"
+        );
+    }
+
+    /// …and a MSG to a group I joined is answered to its sender, as the thirteen JS8Call
+    /// stations in the golden log answered KJ5MIW's @SITREP MSG. A MSG on @ALLCALL
+    /// (`!isAllCall`, :9121), to another station or to a group I have not joined is never
+    /// answered.
+    #[test]
+    fn a_msg_to_a_joined_group_is_acked_to_its_sender_and_no_other_msg_is() {
+        let mut c = cfg();
+        c.groups = vec!["@FUN".into()];
+        let mut s = Station::new(c);
+        // A sender each, so no ACK can hide behind another with the same text.
+        for (from, to) in [
+            ("N0FUN", "@FUN"),
+            ("N0ALL", "@ALLCALL"),
+            ("N0DX", "K1ABC"),
+            ("N0GRP", "@OTHER"),
+        ] {
+            s.on_event(
+                &directed(from, to, Some(Command::Msg), None, "HELLO", -5),
+                1_000,
+            );
+        }
+        assert_eq!(waiting(&s), ["N0FUN ACK"], "the joined group's sender only");
+    }
+
+    /// A relayed MSG is answered back along its relay path, as JS8Call answers it
+    /// (`calls.length() > 1 ? d.relayPath : d.from`, :9139, the path the inbox keeps): the ACK
+    /// is a relay request to the station that brought the MSG.
+    #[test]
+    fn a_relayed_msg_is_acked_along_its_relay_path() {
+        let mut s = Station::new(cfg());
+        for (t, text) in [
+            (1_000, "HELLO BRAVE SOUL *DE* N0JDS"),
+            (2_000, "QRV *DE* N0JDS VIA K1ABC"),
+            (3_000, "*DE* N0JDS SAYS VIA NOBODY HERE"),
+        ] {
+            s.on_event(
+                &directed("OH8STN", "KD9TAW", Some(Command::Msg), None, text, -5),
+                t,
+            );
+        }
+        assert_eq!(
+            waiting(&s),
+            ["OH8STN>N0JDS ACK", "OH8STN>K1ABC>N0JDS ACK", "OH8STN ACK"],
+            "back along the relay path"
+        );
+        let sent = frames_with_grid("KD9TAW", "EN52", None, "OH8STN>N0JDS ACK", Speed::Normal)
+            .expect("composes");
+        assert_eq!(
+            sent[0].0,
+            Frame::Directed {
+                from: CallRef::Base("KD9TAW".into()),
+                to: CallRef::Base("OH8STN".into()),
+                cmd: Command::Relay,
+                num: None,
+                portable_from: false,
+                portable_to: false,
+            },
+            "the relayed ACK is a relay request to OH8STN"
+        );
+        let f = drain(&mut s, 10_000).expect("the first ACK");
+        assert_eq!(
+            (f.word, f.first, f.last),
+            (
+                encode_frame(&sent[0].0, sent[0].1, Speed::Normal).unwrap(),
+                true,
+                false
+            ),
+            "…and keys as one"
+        );
+    }
+
+    /// The ACK names the sender as it was heard (`d.from`, :9139): a portable call keeps its
+    /// `/P`, which is the portable flag in the directed frame, and a compound call stays whole.
+    #[test]
+    fn the_ack_names_the_sender_as_heard() {
+        let mut s = Station::new(cfg());
+        for from in ["W1AW/P", "VE3/W1AW"] {
+            s.on_event(
+                &directed(from, "KD9TAW", Some(Command::Msg), None, "HI", -5),
+                1_000,
+            );
+        }
+        assert_eq!(
+            waiting(&s),
+            ["W1AW/P ACK", "VE3/W1AW ACK"],
+            "the sender as heard"
+        );
+        let f = drain(&mut s, 10_000).expect("the first ACK");
+        assert_eq!(
+            f.word,
+            ack_frame("W1AW", true),
+            "W1AW/P ACK: W1AW with the portable flag"
+        );
+    }
+
+    /// The ACK is an automatic reply. With autoreply off the MSG is filed and nothing is sent:
+    /// JS8Call types the ACK into its compose box and keys it only with AUTO checked
+    /// (`processTxQueue`, :9674-9685). Once the idle watchdog trips, which turns autoreply off
+    /// and drops what waits, nothing is sent either (:8818, :11000, :11005).
+    #[test]
+    fn no_ack_with_autoreply_off_or_once_the_idle_watchdog_trips() {
+        let msg = directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5);
+        let mut c = cfg();
+        c.autoreply = false;
+        let mut s = Station::new(c);
+        s.on_event(&msg, 1_000);
+        assert_eq!(s.inbox().len(), 1, "control: the MSG is filed");
+        assert!(waiting(&s).is_empty(), "autoreply off: no ACK");
+        assert!(drain(&mut s, 60_000).is_none(), "…and nothing goes out");
+
+        let mut c = cfg();
+        c.idle_watchdog_min = 5;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.on_event(&msg, 1_000);
+        assert_eq!(
+            waiting(&s),
+            ["W1AW ACK"],
+            "control: before the trip it is answered"
+        );
+        s.tick(5 * 60 * 1000);
+        assert!(s.idle_tripped(), "control: the watchdog tripped");
+        assert!(
+            waiting(&s).is_empty(),
+            "the trip drops the ACK that was waiting"
+        );
+        s.on_event(&msg, 5 * 60 * 1000 + 1);
+        assert!(waiting(&s).is_empty(), "tripped: no ACK");
+        assert!(
+            drain(&mut s, 6 * 60 * 1000).is_none(),
+            "…and nothing goes out"
+        );
+    }
+
+    /// A copy of a MSG heard while its ACK still waits, counting down or queued behind other
+    /// traffic, draws no second ACK: JS8Call's waiting ACK sits in its compose box until it has
+    /// gone, and no reply is queued while that box holds text (:9365). Every copy is filed, as
+    /// JS8Call files it, and a MSG from another station meanwhile has its own ACK. A copy heard
+    /// once the ACK has gone is answered again, as JS8Call answers it: its sender sent it again.
+    #[test]
+    fn a_copy_of_a_msg_heard_while_its_ack_waits_draws_no_second_ack() {
+        let mut s = Station::new(cfg());
+        let msg = directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5);
+        s.send(None, "FIRST", 0)
+            .expect("an operator message ahead of the ACK");
+        s.on_event(&msg, 1_000);
+        s.on_event(&msg, 1_500); // a copy while the ACK counts down
+        assert_eq!(waiting(&s), ["W1AW ACK"], "one ACK for two copies");
+        let f = drain(&mut s, 2_000).expect("the operator's message keys first");
+        assert_eq!(f.origin, Origin::Operator);
+        assert!(waiting(&s).is_empty(), "the ACK is queued behind it");
+        s.on_event(&msg, 2_500);
+        assert!(
+            waiting(&s).is_empty(),
+            "a copy while the ACK is queued draws none"
+        );
+        s.on_event(
+            &directed("N0XYZ", "KD9TAW", Some(Command::Msg), None, "HI", -5),
+            2_500,
+        );
+        assert_eq!(
+            waiting(&s),
+            ["N0XYZ ACK"],
+            "another station's MSG has its own ACK"
+        );
+        let mut acks = Vec::new();
+        let mut t = 3_000;
+        while let Some(f) = drain(&mut s, t) {
+            if f.display.ends_with(" ACK") {
+                acks.push(f.display);
+            }
+            t += 15_000;
+        }
+        assert_eq!(
+            acks,
+            ["KD9TAW: W1AW ACK", "KD9TAW: N0XYZ ACK"],
+            "one ACK each"
+        );
+        assert_eq!(s.inbox().len(), 4, "every copy is filed");
+        s.on_event(&msg, t);
+        assert_eq!(
+            waiting(&s),
+            ["W1AW ACK"],
+            "a copy heard once the ACK has gone is answered again"
+        );
+    }
+
+    /// A relay path over the hop cap is not answered: its calls come from the sender's own
+    /// text, and upstream, which has no cap, would key every one of them. `handle_relay`'s cap.
+    #[test]
+    fn a_msg_whose_relay_path_is_over_the_hop_cap_is_not_acked() {
+        let hops = |n: usize| {
+            (0..n)
+                .map(|i| format!("*DE* K{i}AA"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut s = Station::new(cfg());
+        let text = format!("HI {}", hops(MAX_PATH_HOPS));
+        let acts = s.on_event(
+            &directed("OH8STN", "KD9TAW", Some(Command::Msg), None, &text, -5),
+            1_000,
+        );
+        assert!(
+            waiting(&s).is_empty(),
+            "a path of {} calls is not answered",
+            MAX_PATH_HOPS + 1
+        );
+        assert!(
+            acts.iter().any(|a| matches!(
+                a,
+                StationAction::Toast { text, .. } if text == "Relay chain over 8 hops refused"
+            )),
+            "…and it says so: {acts:?}"
+        );
+        let text = format!("HI {}", hops(MAX_PATH_HOPS - 1));
+        s.on_event(
+            &directed("OH8STN", "KD9TAW", Some(Command::Msg), None, &text, -5),
+            2_000,
+        );
+        assert_eq!(
+            waiting(&s).len(),
+            1,
+            "control: a path of {MAX_PATH_HOPS} calls is answered"
         );
     }
 

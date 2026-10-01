@@ -103,6 +103,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or it has an unread message for you, and your automatic HEARING? replies leave it out. It is
   not saved with the heard list either, so it does not come back when Nexus restarts. Up to 1440
   minutes, a day, as in JS8Call. The Remote's Stations pane follows the station's setting.
+- **JS8: a message sent to you is acknowledged, as JS8Call acknowledges it.** When a MSG addressed
+  to you, or to a group you joined, lands in your Inbox, Nexus answers the sender with an ACK
+  (`W1AW ACK` for a message from W1AW), the reply a JS8Call station sends, so the sender sees that
+  it arrived; a message that came through a relay is acknowledged back along the same relay path.
+  It is an automatic reply like the others: it needs TX on and AUTOREPLY on (the default, as in
+  JS8Call), waits one period in the dock with its countdown and Cancel, and is dropped, not sent
+  later, if TX is off, your locator is missing or the frequency is outside your privileges when it
+  comes due. A message to @ALLCALL, to another station or to a group you have not joined is never
+  acknowledged, and a copy that arrives while the ACK is still waiting does not get a second one.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -468,10 +477,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of
   the list, just under any station you pinned with ★, and a notice says a new message arrived.
   Mark it read or delete it in the Inbox. Before, a message to you went by in the activity list
-  and was kept nowhere, although the Inbox said such messages appear there. Nothing is sent back:
-  JS8Call also answers such a message with an ACK, and Nexus does not. Messages to you stay until
-  you delete them (the newest 100 are kept); messages held for other stations still go after 48
-  hours, and a flood of messages to you can never push one of those out.
+  and was kept nowhere, although the Inbox said such messages appear there. Nexus now also answers
+  it with an ACK, as JS8Call does (see Added). Messages to you stay until you delete them (the
+  newest 100 are kept); messages held for other stations still go after 48 hours, and a flood of
+  messages to you can never push one of those out.
 - **JS8: the Stations pane shows each station's offset the way JS8Call does.** The offset is whole
   hertz with the fraction dropped, so a station at 1508.9 Hz reads 1508 Hz, where it used to be
   rounded up to 1509. It now matches the Band activity pane and JS8Call's own call list.
@@ -531,6 +540,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before it started) or when the dial left your privileges used to be held, and it played by
   itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
   transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
+- **JS8: an automatic reply or heartbeat that comes due outside your privileges is dropped, not
+  sent later.** The rule CW, RTTY and PSK keep. With TX on and the frequency outside your license
+  privileges, a reply counting down (to an SNR?, INFO? or other query) or a heartbeat that came due
+  was held, and it went out by itself as soon as you tuned back inside them. It is now dropped, as
+  it already was with TX off or with no locator in Settings, and the JS8 screen says why. A message
+  you queued yourself and a repeating CQ still wait while you are outside your privileges and go
+  out when you tune back in, as before.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such

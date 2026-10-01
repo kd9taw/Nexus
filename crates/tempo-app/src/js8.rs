@@ -44,6 +44,11 @@ const JS8_ALLCALL_INTERVAL_MS: u64 = 15 * 60 * 1000;
 /// the FT gate's (`structured_tx_ready`).
 const JS8_NO_LOCATOR: &str =
     "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
+/// …and what it says when a reply or heartbeat falls due outside the licence's privileges: the
+/// sentence shape of CW's, RTTY's and PSK's own refusals.
+const JS8_REFUSED_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
+     privileges, so the automatic reply or heartbeat that came due was dropped, not held for \
+     later.";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
 /// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
@@ -332,9 +337,12 @@ impl Engine {
         // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
         // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
         // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
-        // (:5310), and with TX on it says why (the alert at :5265).
+        // (:5310), and with TX on it says why (the alert at :5265). So is a frequency outside
+        // the licence's privileges, which `plan_tx` refuses before this mode's planner runs:
+        // held, the reply or heartbeat would key after a tune back inside them.
         let no_locator = self.js8_no_usable_locator();
-        if !self.tx_enabled() || no_locator {
+        let outside = !self.tx_allowed();
+        if !self.tx_enabled() || no_locator || outside {
             let mut dropped = false;
             if let Some(p) = self.js8_station.pending_reply() {
                 if p.fires_at_ms <= now_ms {
@@ -346,8 +354,13 @@ impl Engine {
             // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
             // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
             dropped |= self.js8_station.drop_due_heartbeat(now_ms);
-            if dropped && no_locator && self.tx_enabled() {
-                self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
+            if dropped && self.tx_enabled() {
+                let why = if no_locator {
+                    JS8_NO_LOCATOR
+                } else {
+                    JS8_REFUSED_PRIVILEGES
+                };
+                self.js8_last_error = Some(why.to_string());
             }
         }
         let actions = self.js8_station.tick(now_ms);
@@ -2144,6 +2157,262 @@ mod tests {
             Some(NO_LOCATOR),
             "…and the cockpit says why"
         );
+    }
+
+    // ===== outside the licence's privileges: dropped, never held =====
+
+    /// What the JS8 cockpit says when a reply or heartbeat falls due outside privileges.
+    const OUTSIDE_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
+         privileges, so the automatic reply or heartbeat that came due was dropped, not held for \
+         later.";
+
+    /// A reply or heartbeat that falls due while the frequency is outside the licence's
+    /// privileges is dropped, as one that falls due with TX off or with no locator is, so a tune
+    /// back inside them sends nothing stale: the rule CW, RTTY, PSK and the voice keyer keep.
+    #[test]
+    fn outside_privileges_js8_keys_nothing_and_drops_what_falls_due() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.set_license_class("general");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.078 is inside a General's data"
+        );
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: autoreply is on, and a reply counts down"
+        );
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.020 is Extra-only, outside a General's privileges"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 6 * 60); // through the reply and the heartbeat
+        assert!(
+            overs.is_empty(),
+            "nothing keys outside privileges: {overs:?}"
+        );
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none(),
+            "the reply was dropped when it fell due"
+        );
+        assert_eq!(
+            st.hb_next_at_ms,
+            Some(due + 315_000),
+            "the heartbeat was dropped and re-based to the next cycle + the interval"
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and the cockpit says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        let after = run_js8_loop_from(&mut e, t0 + 6 * 60 * 1000, 2 * 60);
+        assert!(
+            after.is_empty(),
+            "a tune back inside them sends nothing stale: {after:?}"
+        );
+    }
+
+    // ===== the ACK for a MSG to me, as JS8Call sends it (mainwindow.cpp:9139) =====
+
+    /// A MSG from `from` to my call, as it decodes: its directed frame and data frames, a row
+    /// each, at 1750 Hz.
+    fn msg_to_me(from: &str, text: &str) -> Vec<modes::Decode> {
+        ::js8::proto::compose::frames(
+            from,
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            &format!("MSG {text}"),
+            Js8Speed::Normal,
+        )
+        .expect("composes")
+        .iter()
+        .map(|(f, i3)| row(f, *i3, Js8Speed::Normal, 1750.0))
+        .collect()
+    }
+
+    /// The frame JS8Call keys for `W1AW ACK` from KD9TAW. That the station's ACK is JS8Call's
+    /// own frame bit for bit is `js8`'s golden `every_logged_msg_ack_is_the_frame_the_station_keys`.
+    fn w1aw_ack() -> Word87 {
+        let ack = Frame::Directed {
+            from: CallRef::Base("KD9TAW".to_string()),
+            to: CallRef::Base("W1AW".to_string()),
+            cmd: Command::Ack,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        encode_frame(&ack, whole(), Js8Speed::Normal).expect("packs")
+    }
+
+    /// ⭐ THE ACK ON THE AIR. A MSG to me with TX on and autoreply at its default (on) is filed
+    /// and answered `W1AW ACK`, after the countdown every automatic reply shows: one frame, on
+    /// my own offset, booked where it keyed, and nothing after it.
+    #[test]
+    fn a_js8_msg_to_me_is_acked_on_the_air_after_the_countdown() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        for d in msg_to_me("W1AW", "HELLO FROM OHIO") {
+            e.js8_ingest(&[d], 0);
+        }
+        let st = e.js8_state();
+        assert_eq!(st.inbox.len(), 1, "control: the MSG is filed");
+        let p = st.pending_reply.expect("the ACK counts down");
+        assert_eq!(
+            (p.origin, p.to.as_str(), p.display.as_str()),
+            (Origin::AutoReply, "W1AW", "KD9TAW: W1AW ACK")
+        );
+        assert!(st.armed.autoreply, "…armed: TX on, autoreply on");
+        // The first period that starts once the countdown is over.
+        let slot = p.fires_at_ms.div_ceil(15_000);
+        e.js8_tick(slot * 15_000 - 1_000);
+        assert!(
+            e.plan_tx(slot - 1).is_none(),
+            "nothing keys before the countdown is over"
+        );
+        let plan = e.plan_tx(slot).expect("the ACK keys in that period");
+        let TxWaveform::Js8 { word, f0, .. } = &plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(*word, w1aw_ack(), "JS8Call's `W1AW ACK`, one frame");
+        assert_eq!(*f0, 1500.0, "on my own offset: a reply never moves");
+        let wave = plan.waveform.build();
+        assert!(!e.commit_tx(&plan, wave, slot).is_empty(), "…and it keys");
+        let row = e.js8_state().activity.last().cloned().expect("its row");
+        assert_eq!(
+            (row.mine, row.text.as_str(), row.freq_hz),
+            (true, "KD9TAW: W1AW ACK", 1500.0),
+            "booked where it keyed"
+        );
+        let after = run_js8_loop_from(&mut e, (slot + 1) * 15_000, 60);
+        assert!(after.is_empty(), "one ACK, and nothing after it: {after:?}");
+    }
+
+    /// With TX off the ACK counts down in view and is dropped when it falls due, as every
+    /// automatic reply is, so turning TX on later sends nothing old.
+    #[test]
+    fn a_js8_msg_ack_due_while_tx_is_off_is_dropped_and_never_sent_later() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.set_tx_enabled(false);
+        for d in msg_to_me("W1AW", "HELLO") {
+            e.js8_ingest(&[d], 0);
+        }
+        let shown = e.js8_state().pending_reply.map(|p| p.display);
+        assert_eq!(
+            shown.as_deref(),
+            Some("KD9TAW: W1AW ACK"),
+            "control: the ACK counts down in view"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 60);
+        assert!(off.is_empty(), "nothing keys with TX off: {off:?}");
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "the ACK was dropped when it fell due"
+        );
+        e.set_tx_enabled(true);
+        let on = run_js8_loop_from(&mut e, t0 + 60_000, 60);
+        assert!(on.is_empty(), "turning TX on sends nothing old: {on:?}");
+    }
+
+    /// Outside the licence's privileges the ACK is dropped when it falls due, and says so, and a
+    /// tune back inside them sends nothing old.
+    #[test]
+    fn a_js8_msg_ack_due_outside_privileges_is_dropped_and_never_sent_later() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.set_license_class("general");
+        for d in msg_to_me("W1AW", "HELLO") {
+            e.js8_ingest(&[d], 0);
+        }
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: the ACK counts down"
+        );
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.020 is outside a General's privileges"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 60);
+        assert!(off.is_empty(), "nothing keys outside privileges: {off:?}");
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none(),
+            "the ACK was dropped when it fell due"
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and the cockpit says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        let on = run_js8_loop_from(&mut e, t0 + 60_000, 60);
+        assert!(
+            on.is_empty(),
+            "a tune back inside them sends nothing old: {on:?}"
+        );
+    }
+
+    /// The multi-speed pass and then the boundary pass decode each frame; the row dedupe drops
+    /// the copy, so the MSG is filed once and draws one ACK. The MSG spans several data frames:
+    /// a two-frame one would pass without the dedupe, its doubled last frame finding its buffer
+    /// already closed.
+    #[test]
+    fn a_js8_msg_decoded_by_both_passes_is_filed_once_and_acked_once() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let rows = msg_to_me("W1AW", "HELLO FROM OHIO, THE BAND IS OPEN TO EUROPE");
+        assert!(rows.len() > 3, "control: several data frames");
+        for d in rows {
+            for _pass in 0..2 {
+                let kept = e.js8_dedupe(vec![d.clone()]);
+                e.js8_ingest(&kept, 0);
+            }
+        }
+        assert_eq!(e.js8_state().inbox.len(), 1, "filed once");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        assert_eq!(overs.len(), 1, "one ACK: {overs:?}");
+    }
+
+    /// Stop TX cancels a waiting ACK with everything else waiting (the JS8 halt is total), so
+    /// turning TX back on sends nothing.
+    #[test]
+    fn stop_tx_cancels_a_waiting_js8_msg_ack() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        for d in msg_to_me("W1AW", "HELLO") {
+            e.js8_ingest(&[d], 0);
+        }
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: the ACK counts down"
+        );
+        e.halt_tx();
+        assert!(e.js8_state().pending_reply.is_none(), "Stop TX cancels it");
+        e.set_tx_enabled(true);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        assert!(overs.is_empty(), "nothing old keys: {overs:?}");
+    }
+
+    /// With autoreply off, JS8Call's AUTO unchecked, the MSG is filed and nothing keys.
+    #[test]
+    fn with_autoreply_off_a_js8_msg_is_filed_and_nothing_keys() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_arm(Js8Switch::Autoreply, false)
+            .expect("autoreply off");
+        for d in msg_to_me("W1AW", "HELLO") {
+            e.js8_ingest(&[d], 0);
+        }
+        let st = e.js8_state();
+        assert_eq!(st.inbox.len(), 1, "control: the MSG is filed");
+        assert!(st.pending_reply.is_none(), "no ACK counts down");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        assert!(overs.is_empty(), "nothing keys: {overs:?}");
     }
 
     // ===== the free heartbeat spot: JS8Call's band activity =====
