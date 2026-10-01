@@ -38,9 +38,10 @@
 //!   only when a message waits, once per station per `allcall_reply_interval_ms` (:8812, :9275).
 //! - Relay (`>`): retransmit `rest *DE* MYCALL`; at the final hop parse the chain to `A>B>C` and
 //!   answer `A>B>C ACK` (unless the embedded text is itself an autoreply command).
-//! - Store-and-forward: `MSG TO:` stores a `Store` inbox row keyed to the base callsign; the next
-//!   heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and marks it
-//!   `Delivered`.
+//! - Store-and-forward: with relay on, `MSG TO:` stores a `Store` inbox row keyed to the base
+//!   callsign and is answered `<from> ACK`, as JS8Call answers it (mainwindow.cpp:9014-9051); the
+//!   next heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and
+//!   marks it `Delivered`.
 //! - A `MSG` to me or a joined group (never `@ALLCALL`) is filed `Unread` in my inbox, as
 //!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133), and answered as JS8Call
 //!   answers it (:9139): `<from> ACK` to the sender as heard, or `<path> ACK` back along the relay
@@ -438,8 +439,10 @@ impl Station {
                 }
                 return actions;
             }
+            // A `MSG TO:` is stored, and acknowledged, only with relaying on, as JS8Call does it
+            // (`d.cmd == " MSG TO:" && !isAllCall && !m_config.relay_off()`, :9014).
             if cmd == Command::MsgTo {
-                if mine {
+                if mine && self.cfg.relay {
                     self.handle_msg_to(m, now_ms, &mut actions);
                 }
                 return actions;
@@ -634,7 +637,7 @@ impl Station {
         actions: &mut Vec<StationAction>,
     ) {
         if cmd == Command::Msg {
-            self.ack_msg(m, now_ms, actions);
+            self.ack(m, m.text.trim(), now_ms, actions);
             return;
         }
         let from = split_portable(&m.from).0.to_ascii_uppercase();
@@ -666,20 +669,22 @@ impl Station {
         }
     }
 
-    /// JS8Call's answer to a MSG it filed (mainwindow.cpp:9127-9139): `<from> ACK` to the
-    /// sender as it was heard (`d.from`, so a `/P` or compound call stays whole), or `<path>
-    /// ACK` when a relay brought it (`calls.length() > 1 ? d.relayPath : d.from`, the path
-    /// `parseRelayPathCallsigns` reads and the inbox keeps). It waits out the countdown every
-    /// automatic reply does, and it exists only with autoreply on: JS8Call types it into the
-    /// compose box either way but keys it only with AUTO checked (`processTxQueue`, :9674-9685;
-    /// the reply has no trailing space, so the `" ACK "` test there never matches it). A copy
-    /// of the MSG heard while its ACK still waits draws no second one: JS8Call's waiting ACK
-    /// sits in the compose box until it has gone, and no reply is queued while the box holds
-    /// text (:9365). A path over `MAX_PATH_HOPS` is refused, as a relay chain is in
-    /// `handle_relay`: its calls come from the sender's text, and upstream keys all of them.
-    fn ack_msg(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
+    /// JS8Call's answer to a MSG it filed (mainwindow.cpp:9127-9139) or a `MSG TO:` it stored
+    /// (:9027-9051): `<from> ACK` to the sender as it was heard (`d.from`, so a `/P` or compound
+    /// call stays whole), or `<path> ACK` when a relay brought it (`calls.length() > 1 ?
+    /// d.relayPath : d.from`, the path `parseRelayPathCallsigns` reads from `text`: a MSG's
+    /// whole text, a `MSG TO:`'s text after the target, as the inbox keeps them). It waits out
+    /// the countdown every automatic reply does, and it exists only with autoreply on: JS8Call
+    /// types it into the compose box either way but keys it only with AUTO checked
+    /// (`processTxQueue`, :9674-9685; the reply has no trailing space, so the `" ACK "` test
+    /// there never matches it). A copy heard while its ACK still waits draws no second one:
+    /// JS8Call's waiting ACK sits in the compose box until it has gone, and no reply is queued
+    /// while the box holds text (:9365). A path over `MAX_PATH_HOPS` is refused, as a relay
+    /// chain is in `handle_relay`: its calls come from the sender's text, and upstream keys all
+    /// of them.
+    fn ack(&mut self, m: &Message, text: &str, now_ms: u64, actions: &mut Vec<StationAction>) {
         let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        let path = relay_path(&from, &clamp_str(m.text.trim(), MAX_TEXT_LEN));
+        let path = relay_path(&from, &clamp_str(text, MAX_TEXT_LEN));
         if path.len() > MAX_PATH_HOPS {
             actions.push(StationAction::Toast {
                 text: format!("Relay chain over {MAX_PATH_HOPS} hops refused"),
@@ -790,6 +795,12 @@ impl Station {
         });
         actions.push(StationAction::InboxChanged);
         self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
+        if self.cfg.autoreply && !self.is_me(&m.from) {
+            // …and acknowledged as JS8Call acknowledges the store (:9027-9051), along the relay
+            // path read from the text after the target's call: an automatic reply, so only
+            // with autoreply on.
+            self.ack(m, text, now_ms, actions);
+        }
     }
 
     /// A MSG to me (or a group I joined) into my inbox as `Unread`: JS8Call's
@@ -1892,12 +1903,20 @@ mod tests {
         );
     }
 
-    /// Store a `MSG TO:` for `call` at my station (W1AW leaves it, addressed to me).
+    /// Store a `MSG TO:` for `call` at my station (W1AW leaves it, addressed to me). The ACK it
+    /// draws (mainwindow.cpp:9051) is taken out of the countdown here, so a test sees only the
+    /// replies it is about; `a_stored_msg_to_is_acked_as_js8call_acks_it` is the ACK's own.
     fn store_for(s: &mut Station, call: &str, t: u64) {
         let body = format!("{call} FRIDAY CONTACT");
         s.on_event(
             &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, &body, -5),
             t,
+        );
+        let before = s.pending.len();
+        s.pending.retain(|p| p.text != "W1AW ACK");
+        assert!(
+            s.pending.len() + 1 == before || before == MAX_PENDING,
+            "the stored MSG TO: draws its ACK, unless the reply queue is full"
         );
     }
 
@@ -2163,6 +2182,79 @@ mod tests {
                 .any(|d| d.contains("K1ABC MSG FRIDAY CONTACT FROM W1AW")),
             "delivery not transmitted"
         );
+    }
+
+    /// A `MSG TO:` stored for another station is acknowledged as JS8Call acknowledges it
+    /// (mainwindow.cpp:9014-9051): `<from> ACK`, or `<path> ACK` along the relay path read from
+    /// the text AFTER the target's call (`parseRelayPathCallsigns(d.from, text)`, :9027), which
+    /// is why a marker right after the target names no hop.
+    #[test]
+    fn a_stored_msg_to_is_acked_as_js8call_acks_it() {
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC FRIDAY CONTACT",
+                -5,
+            ),
+            1_000,
+        );
+        assert_eq!(s.inbox().len(), 1, "control: the MSG TO: is stored");
+        assert_eq!(waiting(&s), ["W1AW ACK"], "the store is acknowledged");
+        let f = drain(&mut s, 2_000).expect("the ACK after the countdown");
+        assert_eq!(
+            (f.origin, f.display.as_str(), f.word),
+            (
+                Origin::AutoReply,
+                "KD9TAW: W1AW ACK",
+                ack_frame("W1AW", false)
+            )
+        );
+        for (t, text, ack) in [
+            (3_000, "K1ABC HELLO *DE* N0JDS", "OH8STN>N0JDS ACK"),
+            (4_000, "K1ABC *DE* N0JDS", "OH8STN ACK"),
+        ] {
+            s.on_event(
+                &directed("OH8STN", "KD9TAW", Some(Command::MsgTo), None, text, -5),
+                t,
+            );
+            assert_eq!(
+                waiting(&s).last().map(String::as_str),
+                Some(ack),
+                "{text:?}: the relay path is read after the target"
+            );
+        }
+    }
+
+    /// …only with relaying on: JS8Call neither stores nor acknowledges a `MSG TO:` with its relay
+    /// off (`d.cmd == " MSG TO:" && !isAllCall && !m_config.relay_off()`, :9014), as Settings'
+    /// Relay hint says. And its ACK, an automatic reply, needs autoreply on as well (JS8Call keys
+    /// it only with AUTO checked, `processTxQueue`, :9674-9685).
+    #[test]
+    fn a_msg_to_is_stored_only_with_relay_on_and_acked_only_with_autoreply_on() {
+        let msg_to = directed(
+            "W1AW",
+            "KD9TAW",
+            Some(Command::MsgTo),
+            None,
+            "K1ABC FRIDAY CONTACT",
+            -5,
+        );
+        let mut c = cfg();
+        c.relay = false;
+        let mut s = Station::new(c);
+        s.on_event(&msg_to, 1_000);
+        assert!(s.inbox().is_empty(), "relay off: not stored");
+        assert!(waiting(&s).is_empty(), "…and not acknowledged");
+        let mut c = cfg();
+        c.autoreply = false;
+        let mut s = Station::new(c);
+        s.on_event(&msg_to, 1_000);
+        assert_eq!(s.inbox().len(), 1, "control: relay on, it is stored");
+        assert!(waiting(&s).is_empty(), "autoreply off: not acknowledged");
     }
 
     #[test]

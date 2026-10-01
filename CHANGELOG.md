@@ -112,6 +112,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later, if TX is off, your locator is missing or the frequency is outside your privileges when it
   comes due. A message to @ALLCALL, to another station or to a group you have not joined is never
   acknowledged, and a copy that arrives while the ACK is still waiting does not get a second one.
+- **JS8: a message you hold for another station is acknowledged, as JS8Call acknowledges it.** When a
+  station leaves a MSG TO: with you for someone else, Nexus now answers the sender with an ACK
+  (`W1AW ACK`), the reply a JS8Call station sends, so the sender knows you have it; one that came
+  through a relay is acknowledged back along that relay path. It is an automatic reply like the
+  acknowledgement of a message to you: it needs TX on and AUTOREPLY on, and waits in the dock with
+  its countdown and Cancel.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -540,6 +546,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tuned back inside them. They are now dropped, and the JS8 screen says why (with TX off, when a
   message of yours was among them). The frame on the air when you turn TX off still finishes, as
   before, and a repeating CQ keeps its schedule.
+- **JS8: with RELAY off, a message left for another station is no longer held.** Holding MSG TO:
+  messages for the stations they are addressed to is what Settings lists under Relay, and JS8Call
+  holds them only with relaying on; Nexus held them with Relay off too, and offered and delivered
+  them later. Holding another station's message is third-party traffic, so with RELAY off it is now
+  neither held nor acknowledged.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
