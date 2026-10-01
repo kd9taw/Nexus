@@ -14,6 +14,7 @@ describe('keptFileMessage', () => {
     ['pendingMsgs', 'shell.keptFile.pendingMsgs'],
     ['assistance', 'shell.keptFile.assistance'],
     ['conversations', 'shell.keptFile.conversations'],
+    ['settings', 'shell.keptFile.settings'],
   ] as const)(
     'says what a %s file held, and where it is now',
     (store, key) => {
@@ -36,5 +37,11 @@ describe('keptFileMessage', () => {
         t('shell.keptFile.keptInPlace', { path: PATH }),
       )
     }
+  })
+
+  it('says settings left in place mean no setting is saved this run', () => {
+    expect(keptFileMessage({ store: 'settings', path: PATH, keptInPlace: true })).toBe(
+      t('shell.keptFile.settingsKeptInPlace', { path: PATH }),
+    )
   })
 })

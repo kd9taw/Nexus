@@ -8,7 +8,12 @@ import { t } from '../i18n'
 import type { KeptFile } from '../types'
 
 export function keptFileMessage(f: KeptFile): string {
-  if (f.keptInPlace) return t('shell.keptFile.keptInPlace', { path: f.path })
+  if (f.keptInPlace) {
+    // Settings left in place means no setting is saved this run, which the operator must hear.
+    return f.store === 'settings'
+      ? t('shell.keptFile.settingsKeptInPlace', { path: f.path })
+      : t('shell.keptFile.keptInPlace', { path: f.path })
+  }
   switch (f.store) {
     case 'pendingQso':
       return t('shell.keptFile.pendingQso', { path: f.path })
@@ -22,6 +27,8 @@ export function keptFileMessage(f: KeptFile): string {
       return t('shell.keptFile.assistance', { path: f.path })
     case 'conversations':
       return t('shell.keptFile.conversations', { path: f.path })
+    case 'settings':
+      return t('shell.keptFile.settings', { path: f.path })
     default:
       return t('shell.keptFile.other', { path: f.path })
   }

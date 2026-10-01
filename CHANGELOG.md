@@ -523,6 +523,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the file a few seconds later. Now Nexus keeps that file, untouched, under a new dated name
   beside it, and says where. If it cannot be moved aside, Nexus leaves it where it is and does not
   write over it.
+- **A settings file Nexus cannot read is kept under a name of its own, and Nexus says so.** Nexus
+  already set an unreadable `settings.json` aside as `settings.json.corrupt` before starting from
+  the default settings, but always under that one name, so a second set-aside replaced the first,
+  and nothing on screen said it had happened. Now each one is kept under a new dated name beside
+  it (such as `settings.unreadable-20260930-142233.json`), never replacing an earlier one, and
+  Nexus says where, once, when it starts. If the file cannot be moved aside, Nexus leaves it where
+  it is and saves no setting over it, rather than writing the default settings over yours.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read

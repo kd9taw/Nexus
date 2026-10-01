@@ -9429,10 +9429,14 @@ export const EN = {
     'Nexus could not read your Assistance record, so it kept that file, untouched, at {{path}}, and started a new record. Nothing was deleted.',
   'shell.keptFile.conversations':
     'Nexus could not read your Tempo conversations, so it kept that file, untouched, at {{path}}, and started with none. Nothing was deleted.',
+  'shell.keptFile.settings':
+    'Nexus could not read your settings, so it kept that file, untouched, at {{path}}, and started from the default settings. Nothing was deleted.',
   'shell.keptFile.other':
     'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
   'shell.keptFile.keptInPlace':
     'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
+  'shell.keptFile.settingsKeptInPlace':
+    'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
   // window open until they are saved (components/LogbookSaving.tsx). `{{count}}` is a number of
   // changes; `{{reason}}` is the station's diagnostic wording, passed through untranslated. The
