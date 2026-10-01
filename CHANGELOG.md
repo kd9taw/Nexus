@@ -562,6 +562,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counted down a reply, and the reply went out after your next send. Now nothing is answered,
   relayed or delivered while the watchdog stands, as JS8Call does, and nothing heard meanwhile goes
   out later.
+- **JS8: the Auto-reply hint and tooltip say what is answered.** Settings' Auto-reply hint now
+  names the ACK for a message to you or a group you joined and for a MSG TO: you hold, and says
+  that on @ALLCALL only QUERY MSGS is answered; the cockpit's AUTOREPLY tooltip no longer says
+  @ALLCALL queries are answered, which stopped being true when JS8 stopped answering them, as
+  JS8Call does. In all five languages.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
