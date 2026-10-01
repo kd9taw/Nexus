@@ -702,6 +702,17 @@ describe('Connect — no radio controls, and Esc stops (the operator’s ruled e
     const panels = within(shell!).getByRole('button', { name: /⊞ Panels/ })
     expect(await fire(() => fireEvent.keyDown(panels, { key: 'Escape' }))).toEqual(['halt_tx'])
   })
+
+  it('…and a control inside Connect that stops the key cannot swallow the stop (App listens in the capture phase)', async () => {
+    const panels = within(connectShell()!).getByRole('button', { name: /⊞ Panels/ })
+    const swallow = (e: Event): void => e.stopPropagation()
+    panels.addEventListener('keydown', swallow)
+    try {
+      expect(await fire(() => fireEvent.keyDown(panels, { key: 'Escape' }))).toEqual(['halt_tx'])
+    } finally {
+      panels.removeEventListener('keydown', swallow)
+    }
+  })
 })
 
 describe('…and every OTHER screen keeps the top bar: the exception is Connect alone', () => {
