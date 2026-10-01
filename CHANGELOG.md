@@ -561,6 +561,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read. Its call, frequency and buttons are now in the dimmer text colour, Tune and Add lose their
   tint, and the OFF-AIR tag is in the normal text colour with its warning colour as an outline, so
   the row reads clearly in every theme and still stands out as off the air.
+- **On the Globe map, an opening's wedge no longer shows through the planet.** The Opening sectors
+  layer drew each opening's wedge from its corners, so a part of it behind the planet was drawn on
+  the side facing you, where a line from it straight through the Earth comes out. On a globe
+  centred on the US Midwest, a 20 m F2 opening 15,000 km long toward Southeast Asia ended over the
+  Arctic, tagged "20m F2" there, and with the globe turned to Australia a 2 m tropo opening at home
+  still showed, tag and all, over the western Pacific. Now the wedge stops at the edge of the
+  globe, as range rings and satellite footprints do, and its band and mode tag shows only while the
+  wedge's far end is on your side of the planet. On the Flat map a long wedge now follows its
+  bearings as well: that F2 wedge, which runs over the pole, was drawn as a thin sliver straight
+  across the Atlantic and Africa. The Beam map and the 3D globe are unchanged.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
