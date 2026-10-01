@@ -20,6 +20,12 @@
 //     no-data rule (propViz `windSpeedKms`). DashboardBar.seams.test.tsx holds the bar and the
 //     box to the same numbers.
 //
+// A STORM (the operator's pick, 2026-09-30: "Warning colour on the bar"): Kp, X-ray and the solar-wind
+// speed are marked (`data-warn`) while their Space Wx gauge is at its warning level, by the gauge's own
+// rule (propViz kpImpact / xrayImpact / windSpeedImpact), so the bar and the box cannot disagree about a
+// storm. The sheet letters a mark in the gauges' warning colour, amber and never the transmit red, and
+// in the light themes keeps the ink and underlines it instead (styles.css `.dash-index[data-warn]`).
+//
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
 // LIVE DATA. A cached or partial one keeps its last real numbers and says so, in the panes' words
@@ -27,7 +33,7 @@
 // colour that reads under 4.5:1 on this bar in the light theme).
 import { useEffect, useState, type ReactNode } from 'react'
 import type { DailySolarIndices, PropagationSnapshot, SpaceWxView } from '../types'
-import { aImpact, kpImpact, sfiImpact, windSpeedKms, xrayImpact } from '../propViz'
+import { aImpact, kpImpact, sfiImpact, windSpeedImpact, windSpeedKms, xrayImpact } from '../propViz'
 import { provLabel } from './connect/paneFormat'
 import { dayLabel, newest, trendsCaption, useSolarIndices } from './prop/SolarTrends'
 import { getWindowBehind, setWindowBehind, type WindowBehind } from '../api'
@@ -47,6 +53,8 @@ export interface BarIndex {
   /** The day a daily count is from (SSN), drawn after its value; absent for the snapshot's own. */
   day?: string
   title: string
+  /** Its Space Wx gauge is at the warning level (Kp, X-ray and the solar wind only). */
+  warn?: boolean
 }
 
 /**
@@ -62,13 +70,18 @@ export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): B
   const windKms = windSpeedKms(wx, Date.now())
   return [
     { key: NAME.sfi, value: wx.sfi.toFixed(0), title: sfiImpact(wx.sfi).text },
-    { key: NAME.kp, value: wx.kp.toFixed(0), title: kpImpact(wx.kp).text },
+    { key: NAME.kp, value: wx.kp.toFixed(0), title: kpImpact(wx.kp).text, warn: kpImpact(wx.kp).sev === 'warn' },
     daily && ssn
       ? { key: NAME.ssn, value: ssn.value.toFixed(0), day: dayLabel(ssn.dayUnix), title: trendsCaption(daily.days).text }
       : { key: NAME.ssn, value: DASH, title: '' },
     { key: NAME.a, value: wx.aIndex.toFixed(0), title: aImpact(wx.aIndex).text },
-    { key: NAME.xray, value: wx.xrayClass.replace('-class', ''), title: xrayImpact(wx.xrayClass).text },
-    { key: NAME.sw, value: windKms != null ? windKms.toFixed(0) : DASH, title: t('dash.index.sw.title') },
+    { key: NAME.xray, value: wx.xrayClass.replace('-class', ''), title: xrayImpact(wx.xrayClass).text, warn: xrayImpact(wx.xrayClass).sev === 'warn' },
+    {
+      key: NAME.sw,
+      value: windKms != null ? windKms.toFixed(0) : DASH,
+      title: t('dash.index.sw.title'),
+      warn: windKms != null && windSpeedImpact(windKms).sev === 'warn',
+    },
   ]
 }
 
@@ -133,7 +146,7 @@ export function DashboardBar({ call, grid, prop, clock, children }: Props) {
       {clock ?? <DashClock />}
       <ul className="dash-indices" aria-label={t('prop.spaceWx.aria')}>
         {indices.map((i) => (
-          <li key={i.key} className="dash-index" title={i.title || undefined}>
+          <li key={i.key} className="dash-index" data-warn={i.warn ? '' : undefined} title={i.title || undefined}>
             <span className="dash-index-k">{i.key}</span>
             <span className="dash-index-v">{i.value}</span>
             {i.day && <span className="dash-index-d">{i.day}</span>}

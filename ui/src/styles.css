@@ -27864,7 +27864,7 @@ tr.sel .aprs-sym {
    420 px); the UTC digits follow the window through --fs-display, a clamp on --vw-eff with no
    media query; every size rides --text-scale. PLAIN INK: no number is painted in a band colour —
    lettering in those colours fails the readability floor in the light themes, and the Space Wx
-   box keeps the coloured gauges. */
+   box keeps the coloured gauges. The one exception is a storm (below). */
 .dash-bar {
   flex: none;
   display: flex;
@@ -27934,6 +27934,22 @@ tr.sel .aprs-sym {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* A STORM (the operator's pick, 2026-09-30: "Warning colour on the bar"): Kp, X-ray and the solar
+   wind while their Space Wx gauge warns (DashboardBar `data-warn`), in the gauges' warning colour —
+   amber, never the transmit red. In the light themes amber lettering reads under 4.5:1, so there the
+   number keeps the bar's ink and the warning is an underline in it: the rule every state word on
+   Connect follows (STATE WORDS ON CONNECT, above). DashboardBar.contrast.test.tsx holds both halves
+   in every theme and mode. */
+.dash-index[data-warn] .dash-index-v {
+  color: var(--alert-warning);
+}
+[data-theme='light'] .dash-index[data-warn] .dash-index-v {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--alert-warning);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
 }
 /* The provenance chip (cached, partial, no live data): the warning on its EDGE, the word in the
    bar's ink. Not the panes' `.prop-prov`, which letters its warning in the warning colour: that

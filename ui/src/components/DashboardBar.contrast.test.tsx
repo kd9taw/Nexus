@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   MODES,
+  baseTheme,
   chainOf,
   contrast,
   expandWith,
@@ -75,13 +76,13 @@ interface Word {
 }
 
 /** Render the bar in `host` (its toggle pressed or not, `extra` inside it) and read every word. */
-async function wordsOn(host: string, pressed: boolean, extra?: React.ReactNode): Promise<Word[]> {
+async function wordsOn(host: string, pressed: boolean, extra?: React.ReactNode, prop: PropagationSnapshot = PROP): Promise<Word[]> {
   vi.mocked(getWindowBehind).mockResolvedValue({ supported: true, on: pressed })
   let r!: ReturnType<typeof render>
   await act(async () => {
     r = render(
       <div className={host}>
-        <DashboardBar call="KD9TAW" grid="EN52" prop={PROP}>
+        <DashboardBar call="KD9TAW" grid="EN52" prop={prop}>
           <StayBehindToggle />
           {extra}
         </DashboardBar>
@@ -186,6 +187,50 @@ describe('the dashboard bar reads in every theme and mode', () => {
     }
     expect(low).toEqual([])
   })
+
+  // A STORM (the operator's pick: "Warning colour on the bar" — amber, never the transmit red). The
+  // warning lettering that the FIRES case below catches in the light theme is exactly what a storm
+  // mark must not be there: in the light themes the number keeps the ink and the warning is an
+  // underline in it, the app's rule for every state word on Connect.
+  it('a storm: Kp, X-ray and the wind are amber on a dark bar, inked and underlined in amber on a light one, readable, never the transmit red', async () => {
+    const storm = { ...PROP, source: 'live', spaceWx: { ...PROP.spaceWx, kp: 5, xrayClass: 'M1.2-class', solarWind: { bzNt: -6.1, btNt: 9.4, speedKms: 612, density: 7.2 } } } as PropagationSnapshot
+    const words: Word[] = []
+    for (const host of HOSTS) words.push(...(await wordsOn(host, false, undefined, storm)))
+    const marked = words.filter((w) => w.what.endsWith('.dash-index-v') && 'data-warn' in (w.chain[w.chain.length - 2]?.attrs ?? {}))
+    expect(marked.length, 'control: Kp, X-ray and SW are marked in both hosts').toBe(6)
+    const wrong: string[] = []
+    for (const w of distinct(marked))
+      for (const mode of MODES) {
+        const face = nearest(RULES, mode, w.chain, 'background', 'background-color')!
+        const bg = colourOf(RULES, mode, face.at, face.value, pageOf(RULES, mode, w.chain))
+        const ink = nearest(RULES, mode, w.chain, 'color')!
+        const fg = hex(colourOf(RULES, mode, ink.at, ink.value, bg))
+        const tx = hex(colourOf(RULES, mode, w.chain, 'var(--tx)', bg))
+        const warning = hex(colourOf(RULES, mode, w.chain, 'var(--alert-warning)', bg))
+        const line = winnerAt(RULES, mode, w.chain, 'text-decoration-line')?.value ?? 'none'
+        const under = winnerAt(RULES, mode, w.chain, 'text-decoration-color')?.value
+        if (fg === tx) wrong.push(`${w.what} ${mode}: lettered in the transmit red`)
+        if (baseTheme(mode) === 'dark') {
+          if (fg !== warning) wrong.push(`${w.what} ${mode}: ${fg}, not the warning colour ${warning}`)
+        } else {
+          const plain = hex(colourOf(RULES, mode, w.chain, 'var(--text)', bg))
+          if (fg !== plain) wrong.push(`${w.what} ${mode}: ${fg}, not the ink ${plain}`)
+          if (line !== 'underline' || !under) {
+            wrong.push(`${w.what} ${mode}: no underline (${line})`)
+            continue
+          }
+          const mark = colourOf(RULES, mode, w.chain, under, bg)
+          if (hex(mark) !== warning) wrong.push(`${w.what} ${mode}: underlined in ${hex(mark)}, not the warning colour`)
+          if (contrast(mark, bg) < EDGE_MIN) wrong.push(`${w.what} ${mode}: the underline ${hex(mark)} on ${hex(bg)} = ${contrast(mark, bg).toFixed(2)}:1`)
+        }
+      }
+    expect(wrong, 'the warning colour, never the transmit red; in the light themes the ink and an underline').toEqual([])
+    expect(unreadable(RULES, distinct(marked)), 'every marked number reads at 4.5:1').toEqual([])
+    // The quiet bar's numbers are untouched: plain ink, no underline (the census above reads them).
+    const quiet = (await wordsOn('app detached', false)).filter((w) => w.what.endsWith('.dash-index-v'))
+    expect(quiet.some((w) => 'data-warn' in (w.chain[w.chain.length - 2]?.attrs ?? {})), 'control: nothing is marked on a quiet day').toBe(false)
+    for (const mode of MODES) expect(winnerAt(RULES, mode, quiet[0].chain, 'text-decoration-line')?.value ?? 'none', mode).not.toBe('underline')
+  }, 60_000)
 
   it('FIRES: a word lettered in the warning colour is caught on this bar in the light theme', async () => {
     // The planted rule above, owned by this test: the style the bar first reused.

@@ -258,6 +258,54 @@ describe('the bar', () => {
   })
 })
 
+// A STORM ON THE BAR (the operator's pick, 2026-09-30: "Warning colour on the bar" — "The bar's Kp,
+// X-ray and wind take the Space Wx gauges' warning colour: amber, never the transmit red"). Each index
+// is marked exactly when its own gauge is at its warning level, by the gauge's own rule, so the bar and
+// the Space Wx box can never disagree about a storm. The colour itself is the contrast test's.
+describe('a storm on the bar', () => {
+  /** The storm the Connect box tests use (Kp 5, A 18, a 612 km/s wind), with an M-class flare. */
+  const STORM = { ...WX, kp: 5, aIndex: 18, xrayClass: 'M1.2-class', flare: true, solarWind: { bzNt: -6.1, btNt: 9.4, speedKms: 612, density: 7.2 } }
+  const marked = () =>
+    [...document.querySelectorAll('.dash-index[data-warn]')].map((li) => li.querySelector('.dash-index-k')?.textContent)
+
+  it('Kp, X-ray and the solar wind are marked while their gauges warn, and nothing else is', () => {
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: STORM })} />)
+    expect(indexValue('Kp'), 'control: the storm is on the bar').toBe('5')
+    expect(marked()).toEqual(['Kp', 'X-ray', 'SW'])
+  })
+
+  it('a quiet day marks nothing', () => {
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot()} />)
+    expect(indexValue('Kp'), 'control: the indices are drawn').toBe('2')
+    expect(marked()).toEqual([])
+  })
+
+  it('each by its own gauge’s rule: Kp 4 is already a warning; a C-class flare and a 599 km/s wind are not', () => {
+    const edge = { ...WX, kp: 4, xrayClass: 'C9.9-class', solarWind: { ...WX.solarWind, speedKms: 599 } }
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: edge })} />)
+    expect(marked()).toEqual(['Kp'])
+    cleanup()
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: { ...edge, kp: 3.9, xrayClass: 'X1.0-class', solarWind: { ...WX.solarWind, speedKms: 600 } } })} />)
+    expect(marked()).toEqual(['X-ray', 'SW'])
+  })
+
+  it('the A index is not marked: the operator named Kp, X-ray and the wind', () => {
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: { ...WX, aIndex: 40 } })} />)
+    expect(indexValue('A'), 'control: a storm-level A is on the bar').toBe('40')
+    expect(marked()).toEqual([])
+  })
+
+  it('no reading, no mark: a wind the feed did not send, and every index while there is no live data', () => {
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: { ...STORM, solarWind: { ...STORM.solarWind, speedKms: 0 } } })} />)
+    expect(indexValue('SW'), 'control: the wind is a dash').toBe('—')
+    expect(marked()).toEqual(['Kp', 'X-ray'])
+    cleanup()
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: STORM, source: 'offline' })} />)
+    expect(indexValue('Kp'), 'control: offline draws dashes').toBe('—')
+    expect(marked()).toEqual([])
+  })
+})
+
 describe('barIndices — the list the bar draws', () => {
   it('is the day’s indices, SFI first and the solar wind last, as a wall-display clock reads them', () => {
     expect(barIndices(WX as never).map((i) => i.key)).toEqual(['SFI', 'Kp', 'SSN', 'A', 'X-ray', 'SW'])
