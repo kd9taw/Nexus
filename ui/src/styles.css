@@ -19632,8 +19632,9 @@ button.cq-skiptx1.on {
 }
 /* The row's badges in the light themes, as HUNT and the reference: NEW PARK (the accent on its own tint, 3.36:1) and
    BAND OPEN (a fixed green on its own, 1.66:1, in Chrome) take the ink with their colour on their border at full
-   strength, BAND OPEN's being the theme's open-band colour; WORKED TODAY, a fact about the log and not a mark, takes the
-   dim ink (the faint one read 3.93:1 on its tint). Dark is untouched. PotaSotaView.contrast.test.tsx holds them. */
+   strength, BAND OPEN's being the theme's open-band colour. WORKED TODAY, a fact about the log and not a mark, takes the
+   dim ink in every theme (the faint one read 3.93:1 on its tint in the light theme, 4.47:1 in the dark one). Dark is
+   otherwise untouched. PotaSotaView.contrast.test.tsx holds them. */
 [data-theme='light'] .pota-view .pota-badge-new {
   color: var(--text);
   border-color: var(--accent);
@@ -19642,7 +19643,7 @@ button.cq-skiptx1.on {
   color: var(--text);
   border-color: var(--band-open);
 }
-[data-theme='light'] .pota-view .pota-badge-worked {
+.pota-view .pota-badge-worked {
   color: var(--text-dim);
 }
 .pota-spot-line2 {
@@ -19709,10 +19710,11 @@ button.cq-skiptx1.on {
    are lettered in the accent, which was tuned as a mark: as lettering the HUNT read 3.45:1 on its own tint (3.21:1 on
    the hunted row) and the reference 4.25:1 on the row, in Chrome. In the light themes each takes the theme's ink and
    keeps the accent: HUNT on its tint and on its border, now at full strength, and the reference as its underline. The
-   board is the same in the POTA / SOTA view, its pop-out and the Remote page; Program's Tune and Add buttons borrow the
-   HUNT look and are not part of this. The Hunting line above the list letters the hunted park and call in the accent
-   too (4.12:1 on its tint); they take the reference's look. Dark is untouched. PotaSotaView.contrast.test.tsx holds it. */
-[data-theme='light'] .pota-view .pota-hunt-btn {
+   board is the same in the POTA / SOTA view, its pop-out and the Remote page. Program's Tune and Add buttons borrow the
+   HUNT look and take its rule too (4.01:1 on their tint, Chrome; ADDED's own is with Program's). The Hunting line above
+   the list letters the hunted park and call in the accent too (4.12:1 on its tint); they take the reference's look. Dark
+   is untouched, but for the hunted row (below). PotaSotaView.contrast.test.tsx holds it. */
+[data-theme='light'] .pota-hunt-btn {
   color: var(--text);
   border-color: var(--accent);
 }
@@ -19723,6 +19725,17 @@ button.cq-skiptx1.on {
   text-decoration-color: var(--accent);
   text-decoration-thickness: 0.15em;
   text-underline-offset: 0.25em;
+}
+/* THE HUNTED ROW, IN EVERY THEME (operator, 2026-09-30, "Fix both"). On the row's accent tint the frequency line, in the
+   faint ink, read 3.64:1 in the dark theme and 4.40:1 on the paper one, and HUNT, the accent on its own tint over the
+   row's, 4.20:1 on Slate (Chrome). Both take the theme's ink; HUNT keeps the accent on its border at full strength, as
+   in the light themes. The rest of the board's dark look is unchanged. */
+.pota-view .pota-spot-v2.selected .pota-hunt-btn {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.pota-view .pota-spot-v2.selected .pota-spot-meta {
+  color: var(--text);
 }
 
 /* need-chip colors for Pota/Sota NeedTags in the Needed board */
@@ -22587,6 +22600,13 @@ button.sat-chip:disabled {
 .rp-add.added {
   color: var(--state-good);
   border-color: color-mix(in srgb, var(--state-good) 50%, transparent);
+}
+/* In the light themes ADDED takes the HUNT look's rule (its green on the accent tint read 3.90:1 on the paper theme and
+   4.01:1 on the standard one, Chrome), with its green kept on its border at full strength. PotaSotaView.contrast.test.tsx
+   holds it. */
+[data-theme='light'] .rp-add.added {
+  color: var(--text);
+  border-color: var(--state-good);
 }
 /* ★ a machine straight into Memories favorites — same affordance as the
    Memories row star (.mv-star), so one star means one thing app-wide. */
