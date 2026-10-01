@@ -26,6 +26,7 @@ import { confirmDialog } from '../confirm'
 import type {
   GeoCandidate,
   ProgChannel,
+  RadioProgFileNotice,
   RadioProgProject,
   RepeaterSearchResult,
   RepeaterSearchRow,
@@ -33,6 +34,7 @@ import type {
 import {
   exportChannels,
   geocodeCity,
+  radioprogFileNotice,
   radioprogListProjects,
   radioprogSaveProject,
   repeaterSearch,
@@ -202,6 +204,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     setRows(project?.channels.map(channel=>({channel,nameEdited:true}))??[])
   },[remote,configuration.value?.revision])
 
+  // The saved-projects file this run could not read, when that happened: said out loud with where
+  // the file is kept, because the channel list would otherwise just read as empty.
+  const [fileNotice, setFileNotice] = useState<RadioProgFileNotice | null>(null)
+  const readFileNotice = useCallback(() => {
+    radioprogFileNotice()
+      .then(setFileNotice)
+      .catch(() => {})
+  }, [])
+
   // Load the persisted working list once; save (debounced) on every change after.
   useEffect(() => {
     if(remote)return
@@ -214,6 +225,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       .catch(() => {
         loaded.current = true
       })
+      .finally(readFileNotice)
   }, [])
   const saveTimer = useRef<number | null>(null)
   useEffect(() => {
@@ -229,7 +241,9 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         radiusKm: 0,
         channels: rows.map((r) => r.channel),
       }
-      void radioprogSaveProject(project).catch(() => {})
+      // A refused save is the file Program could not read and could not move aside: the notice
+      // says so, instead of the list silently not saving.
+      void radioprogSaveProject(project).catch(readFileNotice)
     }, 800)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows])
@@ -683,6 +697,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       </div>
 
       {remote && <p className="settings-note" role="status">{configuration.value ? t('remote.programmingObserver') : configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')}</p>}
+      {/* Above the body, not inside it: .rp-body is a two-column grid, and a note as its first
+          child would take the source column's cell. */}
+      {fileNotice && (
+        <p className="settings-note" role="status">
+          {fileNotice.keptInPlace ? (
+            <T k="program.projectsFile.keptInPlace" tags={{ code: <code /> }} vals={{ path: fileNotice.path }} />
+          ) : (
+            <T k="program.projectsFile.setAside" tags={{ code: <code /> }} vals={{ path: fileNotice.path }} />
+          )}
+        </p>
+      )}
       <div className="rp-body" hidden={remote&&!configuration.value}>
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">

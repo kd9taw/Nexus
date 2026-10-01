@@ -4580,6 +4580,13 @@ export const EN = {
   'program.missingStates':
     'RepeaterBook did not answer for <b>{{states}}</b>, so repeaters there are missing from this list. That is a fetch that failed, not an empty area — fetch again in a few minutes.',
 
+  // The saved-projects file Program could not read. `{{path}}` is a file path on the operator's
+  // computer — a token, never translated. "Program" in the second is this section's own name.
+  'program.projectsFile.setAside':
+    'Nexus could not read your saved channel lists, so it kept that file, untouched, at <code>{{path}}</code> and started a new list. Nothing was deleted.',
+  'program.projectsFile.keptInPlace':
+    'Nexus could not read your saved channel lists at <code>{{path}}</code> and could not move that file aside, so Program will not save until it is moved or repaired. Nothing was deleted.',
+
   // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
   'program.filters.aria': 'Result filters',
   'program.filters.allBands': 'All',

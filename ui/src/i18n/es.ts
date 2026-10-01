@@ -3311,6 +3311,8 @@ export const ES: PartialCatalog = {
   "program.clear.confirm.title": "¿Vaciar toda la lista de canales?",
   "program.count": "{{shown}} de {{total}} · más cercanos primero",
   "program.missingStates": "RepeaterBook no respondió para <b>{{states}}</b>, así que faltan en esta lista los repetidores de esa zona. Es una consulta que falló, no una zona vacía — vuelve a consultar en unos minutos.",
+  "program.projectsFile.setAside": "Nexus no pudo leer tus listas de canales guardadas, así que conservó ese archivo, intacto, en <code>{{path}}</code> y empezó una lista nueva. No se borró nada.",
+  "program.projectsFile.keptInPlace": "Nexus no pudo leer tus listas de canales guardadas en <code>{{path}}</code> ni apartar ese archivo, así que Programar no guardará hasta que se mueva o se repare. No se borró nada.",
   "program.coverageGap": "{{source}} no lista repetidores de <b>{{band}}</b> aquí, algo poco habitual en una zona que tiene alguno — su cobertura rural es irregular, así que seguramente falten equipos. Añadir un token de API de RepeaterBook en <b>Ajustes ▸ Integraciones</b> cubre el hueco.",
   "program.deliver.byHand.label": "Añadir a mano…",
   "program.deliver.byHand.title": "Escribir un repetidor o canal simplex que el directorio no tiene (o tiene mal)",

@@ -70,6 +70,7 @@ vi.mock('./api', () => {
     saveTextToDownloads: fn(),
     exportChannels: fn(), geocodeCity: fn(), repeaterSearch: fn(), repeaterTune: fn(),
     radioprogListProjects: vi.fn().mockResolvedValue([]),
+    radioprogFileNotice: vi.fn().mockResolvedValue(null),
     radioprogSaveProject: fn(), radioprogDeleteProject: fn(),
   }
 })

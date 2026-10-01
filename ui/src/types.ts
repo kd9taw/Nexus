@@ -1920,6 +1920,10 @@ export interface SstvState {
   /** Seconds of key-down elapsed / total for the in-flight image. */
   txElapsedSecs: number
   txTotalSecs: number
+  /** Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
+   * or outside the licence privileges) — the cockpit's warning line. Absent when nothing was
+   * dropped since a picture last keyed, and always absent on the Remote (the station strips it). */
+  txNotice?: string
 }
 
 /** Where the station's data + log folder is, and where it came from (#289). */
@@ -4535,6 +4539,16 @@ export interface ProgChannel {
   dstarRpt1?: string | null
   dstarRpt2?: string | null
   source?: { source: string; sourceId: string; callsign: string } | null
+}
+
+/** Program could not read its saved-projects file this run (mirror of src-tauri's
+ * `RadioProgFileNotice`). The file is never deleted or saved over. */
+export interface RadioProgFileNotice {
+  /** Where the file is now: the timestamped name it was moved aside to, or its own path when it
+   * could not be moved. */
+  path: string
+  /** It could not be moved, so it is still radioprog.json and Program refuses to save over it. */
+  keptInPlace: boolean
 }
 
 /** Where a programming project's repeaters were searched from. */

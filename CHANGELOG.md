@@ -682,9 +682,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be sent because transmit was off (for example after leaving the CW screen part-way through a
   message) or the frequency was outside your license privileges, what was still waiting used to be
   held, and it went out by itself as soon as transmitting was allowed again: TX back on, or a tune
-  back inside your privileges. It is now dropped, and the CW screen's warning line says why. A
-  message you send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer
-  and its speed work as they did.
+  back inside your privileges. It is now dropped, and the CW screen's warning line says why.
+  Moving from the CW screen to another mode's screen (Phone, RTTY, PSK or a digital mode) drops
+  what was still to go too, and the CW screen's warning line says so when you come back: send it
+  again. Before, the rest of a message kept keying from Phone, RTTY or PSK, or was dropped under a
+  note blaming your privileges. The word already being keyed finishes, since the keyer is handed
+  one word at a time; on the soundcard keyer a move to a digital mode, which turns transmit off,
+  still cuts it, as before. Screens that are not a mode's own, such as the map or the logbook, do
+  not count, and the CW ID after an FT8 73 is sent from the FT8 screen as before. A message you
+  send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer and its
+  speed work as they did.
 - **The Globe map no longer shows what is behind the planet on its face.** On Connect's Globe map, a
   spot, a decoded station, a park, a DXpedition, an APRS station or a satellite on the far side of
   the planet was drawn on the side facing you, where a line from it straight through the Earth
@@ -702,10 +709,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   license privileges, what was still waiting used to be held, and it went out by itself as soon as
   transmitting was allowed again. It is now dropped, and that screen's warning line says why. If
   one of those RTTY overs belonged to an auto-sequencer QSO, the auto QSO stops and says so, as it
-  already did when an over could not be queued. An over left waiting when you move to another
-  screen where transmit stays on (Phone, CW, RTTY or PSK) is still held for your return, as
-  before. Overs you send once transmitting is allowed go out exactly as before, and Stop TX, the
-  watchdog and continuous TX work as they did.
+  already did when an over could not be queued. Moving from the RTTY or PSK screen to another
+  mode's screen (Phone, CW, the other of the two, or a digital mode such as FT8) drops what was
+  still typed ahead too, and that screen's warning line says so when you come back, so nothing
+  keys on your return: send it again. Screens that are not a mode's own, such as the map or the
+  logbook, do not count: what you typed ahead keeps going out. An RTTY auto QSO ends when you
+  leave the RTTY screen, and says so. An over already going out is treated as before: it finishes
+  if you move to Phone, CW, RTTY or PSK, and stops if you move to a digital mode, which turns
+  transmit off. Overs you send once transmitting is allowed go out exactly as before, and Stop
+  TX, the watchdog and continuous TX work as they did.
 - **Voice keyer: a message that could not go out is dropped, and a refused one says why.** A
   message you played on a frequency outside your license privileges did nothing and said nothing;
   the keyer's "Could not play F1" note now says why, and so do its other failures. A message
@@ -744,6 +756,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ways, and the 4 hearham machines that list a tone or a different code on their output, which got
   no code before, now go out the same send-only way. CHIRP files from Program and Memories carry two
   more columns at the end, `RxDtcsCode` and `CrossMode`.
+- **Program no longer loses your saved channel lists to a file it cannot read.** When the file
+  that holds them was damaged, cut short, or written by a newer Nexus with a setting this one does
+  not know, Program opened on an empty list and saved that over the file moments later, and every
+  saved list was gone. Now Program keeps that file, untouched, under a new dated name in the same
+  folder (such as `radioprog.unreadable-20260930-142233.json`), starts a new list, and says at the
+  top of Program where the kept file is. If the file cannot be moved aside, it stays where it is
+  and Program saves nothing until it is moved or repaired. A file from a newer Nexus that only adds
+  new fields opens as it always has.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
@@ -751,6 +771,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes the FM tone and the DMR colour code from such an entry: 40 machines get their tone, most
   of them FM machines that Program has only just started listing. An entry that holds two
   different tones still gets no tone, rather than a guess.
+- **SSTV: a picture that could not go out is dropped, not sent later on its own.** After Send, a
+  picture waits until the radio is free to key it: a moment, or longer while another
+  transmission ends or the radio is being switched. If transmit went off in that time, or the
+  frequency left your license privileges, the picture used to be held, and it went out by itself
+  as soon as transmitting was allowed again. It is now dropped, and a warning line beside Send
+  says why until the next picture goes out. Moving to another mode's screen (CW, RTTY, PSK or a
+  digital mode) while a picture waits drops it too, and the warning line says so; before, CW, RTTY
+  and PSK held it, and it went out when you came back to Phone. A picture already going out is
+  untouched, and Stop, Stop TX and the TX switch work as they did.
+- **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
+  beacon, a message or an automatic ack waits a moment until the radio is free to key it.
+  Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was
+  waiting in place, and it went out by itself as soon as transmit came back on; so did one
+  waiting when the frequency left your license privileges. It is now dropped, and the APRS
+  screen's status line says why. A frame waiting only because something else is on the air
+  still goes out when the radio is free, a beacon already going out is handled as before, and
+  there is still no automatic beaconing: every beacon is one you send.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched

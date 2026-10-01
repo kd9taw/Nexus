@@ -176,6 +176,8 @@ export function appApiAnswers(): Record<string, unknown> {
       uplinkEnabled: false, uploaded: 0, gateRejected: 0, lastReject: null,
     })),
     getAprsStations: vi.fn(async () => ({ stations: [], ttlMin: 60, fadeAfterMin: 20 })),
+    // No frame dropped: the status line letters what this read answers, and the catch-all `{}` is no string.
+    getAprsTxNotice: vi.fn(async () => null),
   }
 }
 

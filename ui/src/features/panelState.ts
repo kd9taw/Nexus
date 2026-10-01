@@ -75,11 +75,12 @@
 //                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
 //                into feed dropped + output flushed + unkey while an image is in flight.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
-//                the rule holds there by construction. Say what that does and does not buy:
-//                APRS renders NO stop control. Its TX On/Off is an arm latch —
-//                set_tx_enabled does not clear aprs_tx_queue (only halt_tx does, engine.rs
-//                ~6856) and arms no APRS abort; poll_aprs_tx merely HOLDS the queue while the
-//                latch is down. Nothing on that screen cuts a beacon already keying.
+//                the rule holds there by construction. Its one stop control is the TX On/Off
+//                latch. set_tx_enabled(false) arms no APRS abort, but the radio loop's TX-off
+//                cut (service.rs `tx_off_cut`) unkeys and flushes a beacon on the air once the
+//                latch is down (measured 2026-09-30), and set_tx_enabled(false) also drops
+//                what aprs_tx_queue still holds, with a notice (poll_aprs_tx drops it the same
+//                way on a refusal; halt_tx clears it).
 //   The app-wide TopBar TX cluster is NOT a backstop for any of them: App hides it in Operate
 //   (hideTxControls) and in Phone/CW/RTTY/SSTV/APRS (hideDigitalChrome). Every cockpit stands
 //   on its own controls.

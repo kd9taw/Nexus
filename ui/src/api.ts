@@ -61,7 +61,7 @@ import type {
 } from './types'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
-import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
+import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
@@ -2524,6 +2524,13 @@ export async function getAprsHealth(): Promise<AprsHealth> {
   return invoke<AprsHealth>('get_aprs_health')
 }
 
+/** Why what was queued for APRS was last dropped instead of sent (TX off, or outside the licence
+ *  privileges): the engine's own sentence for the cockpit's status line, or null once a frame
+ *  keys. The desktop's alone — the Remote has no such read. */
+export async function getAprsTxNotice(): Promise<string | null> {
+  return invoke<string | null>('get_aprs_tx_notice')
+}
+
 /** What the APRS-IS internet feed is doing (from `get_aprs_is_status`) — the counterpart to
  * `AprsHealth` for the other inlet. The two fail independently, and that is the point: internet
  * stations arriving while the RF chip stays silent proves the fault is in the radio chain. */
@@ -3456,6 +3463,12 @@ export async function setRepeaterbookToken(token: string): Promise<void> {
 /** All saved programming projects (radioprog.json beside settings.json). */
 export async function radioprogListProjects(): Promise<RadioProgProject[]> {
   return invoke<RadioProgProject[]>('radioprog_list_projects')
+}
+
+/** This run's notice about the saved-projects file, when Program could not read it: where the
+ * file is kept, and whether it could be moved aside (if not, saving is refused). */
+export async function radioprogFileNotice(): Promise<RadioProgFileNotice | null> {
+  return invoke<RadioProgFileNotice | null>('radioprog_file_notice')
 }
 
 /** Create/update one programming project (upsert by id). */

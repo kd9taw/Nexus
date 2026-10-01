@@ -80,10 +80,11 @@ fn working_channels(
 /// `radioprog.json` as the Remote service reads it, or `None` when there is no file yet. Shared
 /// with the curation path (`program_edit`), so both halves of Program see one file the same way.
 ///
-/// ⚠️ NOT `crate::load_radioprog`: that one turns an unreadable or half-written file into an empty
-/// default. Exporting that would hand the operator a blank CSV as though their channels were gone,
-/// and writing through it would then SAVE the blank list over them. A file that cannot be read is
-/// an error here, and the browser is told so rather than handed nothing.
+/// ⚠️ Never an empty default for a file that is there: the desktop's old loader turned an
+/// unreadable or half-written file into one, and writing through it SAVED the blank list over
+/// every project (the desktop now keeps such a file aside instead, `crate::radioprog_open`).
+/// Exporting that would hand the operator a blank CSV as though their channels were gone. A file
+/// that cannot be read is an error here, and the browser is told so rather than handed nothing.
 pub(super) fn radioprog(path: &Path) -> Result<Option<crate::RadioProgFile>, &'static str> {
     // Refuse special files before opening — a FIFO can block in `open` itself.
     match std::fs::metadata(path) {
