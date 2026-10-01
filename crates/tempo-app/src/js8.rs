@@ -2852,6 +2852,78 @@ mod tests {
         );
     }
 
+    /// A `MSG TO:` for a compound call, on the air: held for its base call, as JS8Call holds it
+    /// (`Radio::base_callsign`, mainwindow.cpp:9042), and offered to the compound station when it
+    /// asks, its query decoded from the compound frames it sends (`getNextMessageIdForCallsign`,
+    /// :9508-9533): VE3/K1ABC's QUERY MSGS is answered `VE3/K1ABC YES MSG ID 1` on the air.
+    #[test]
+    fn a_js8_msg_to_for_a_compound_call_is_held_for_its_base_call_and_offered_on_the_air() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let store = ::js8::proto::compose::frames(
+            "W1AW",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "MSG TO:VE3/K1ABC FRIDAY CONTACT",
+            Js8Speed::Normal,
+        )
+        .expect("composes");
+        for (f, i3) in store {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+        }
+        let held: Vec<(String, InboxState)> = e
+            .js8_state()
+            .inbox
+            .into_iter()
+            .map(|m| (m.to, m.state))
+            .collect();
+        assert_eq!(
+            held,
+            [("K1ABC".to_string(), InboxState::Store)],
+            "held for K1ABC"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        run_js8_loop_from(&mut e, t0, 60); // the store's ACK goes out
+        let ask = ::js8::proto::compose::frames(
+            "VE3/K1ABC",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "QUERY MSGS",
+            Js8Speed::Normal,
+        )
+        .expect("a compound station's query composes");
+        assert!(
+            ask.len() > 1,
+            "control: a compound sender's query is more than one frame"
+        );
+        for (f, i3) in ask {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1210.0)], 0);
+        }
+        let overs = run_js8_loop_from(&mut e, t0 + 61_000, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        // Each frame books its message's row, and a reply to a compound call is several frames:
+        // the reply's own composition says how many one message is.
+        let reply = "VE3/K1ABC YES MSG ID 1";
+        let frames = ::js8::proto::compose::frames_with_grid(
+            "KD9TAW",
+            "EN52",
+            None,
+            reply,
+            Js8Speed::Normal,
+        )
+        .expect("the reply composes")
+        .len();
+        let mut expected = vec!["KD9TAW: W1AW ACK".to_string()];
+        expected.extend(std::iter::repeat_n(format!("KD9TAW: {reply}"), frames));
+        assert_eq!(
+            booked, expected,
+            "the message held for K1ABC is offered to VE3/K1ABC on the air, once: {overs:?}"
+        );
+    }
+
     // ===== the queue at a TX-off or privileges refusal: dropped, never sent later =====
 
     /// A message queued inside the licence's privileges, then the dial moved out of them before

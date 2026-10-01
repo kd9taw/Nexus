@@ -631,6 +631,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat acknowledgement) named a station heard as W1AW/P as W1AW. Each now names the station as
   it was heard, as a JS8Call station's reply does, and a message delivered from your store names
   its sender as it was heard too. A message held for W1AW is still offered and delivered to W1AW/P.
+- **JS8: a message left for a station with a prefix or suffix is held for its base call, as in
+  JS8Call.** A MSG TO: for VE3/W1AW or W1AW/MM was held under that whole call, so W1AW asking
+  QUERY MSGS was told NO, and a message held for W1AW was never offered to VE3/W1AW. JS8Call holds
+  every such message under the base call, W1AW, and offers it to a station by the call it is heard
+  under or by its base call; Nexus now does the same, in the heartbeat acknowledgement's MSG ID,
+  the answer to QUERY MSGS, QUERY MSG and the count in the Stations list. A message already held
+  is still found under the call it was held for.
 - **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
   When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
   put those switches back on underneath while the watchdog still stood, so a query heard then
