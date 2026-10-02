@@ -270,10 +270,10 @@ export class StreamLink {
     this.set({ ...OFF, phase: 'connecting' })
     this.watchPage()
     // The relay first, when there is one to ask for: a peer takes its servers when it is built. A
-    // stream ended, or started again, while it was asked for goes no further.
+    // stream ended, or started again, while it was asked for goes no further (its phase read fresh).
     const attempt = ++this.attempts
     const relay = this.env.relayServers ? await this.relay(this.env.relayServers) : []
-    if (this.closed || attempt !== this.attempts || this.view.phase !== 'connecting') return
+    if (this.closed || attempt !== this.attempts || this.getSnapshot().phase !== 'connecting') return
     const build = (servers: IceServerLike[]) => { try { return this.env.peer(servers) } catch { return null } }
     // A browser that will not build a peer with the relay's entries still streams direct.
     const peer = (relay.length ? build([...STREAM_ICE_SERVERS, ...relay]) : null) ?? build([...STREAM_ICE_SERVERS])
