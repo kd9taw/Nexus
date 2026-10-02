@@ -268,6 +268,9 @@ const OPERATE_TIERS: Tier[] = [
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. */
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats'])
+/** On the hosted page only, App binds these four to the same halt: in a browser each one's Stop TX
+ *  is the TX strip's remote stop, which is this halt, and their own Esc needs local control. */
+const HOSTED_ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['cw', 'rtty', 'psk', 'js8'])
 
 export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; /** The stale DISPLAY, after hysteresis; defaults to `stale`. */ staleShown?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
@@ -2664,7 +2667,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // capture phase, never preventDefault, stop authority only). So on the same press a menu or dialog
   // still closes, Satellites still closes the bird detail, the voice keyer still stops itself, and
   // an observer's Esc on the hosted page is no halt at all.
-  useEscStop(ESC_HALT_VIEWS.has(effectiveView), handleHaltTx)
+  // ON THE HOSTED PAGE, CW, RTTY, PSK AND JS8 TOO (2026-10-02). Their own Esc binds only with local
+  // control, which a browser never has, so it did nothing there while their Stop TX stopped the
+  // station: in a browser that button is the TX strip's remote stop, this same haltTx (their own
+  // verbs have no remote route). App sends it while one of them, with its Stop TX, is on show. The
+  // desktop is unchanged: there `remote` is unset and each binds its own.
+  useEscStop(
+    ESC_HALT_VIEWS.has(effectiveView) ||
+      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)),
+    handleHaltTx,
+  )
 
   if (!snap) {
     return (
