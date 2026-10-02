@@ -4550,11 +4550,26 @@ export const EN = {
   'program.radius.auto.hint': '= {{radius}} ({{bands}})',
   'program.radius.auto.allBands': 'all bands',
 
+  // Or a route: from one place to another, the machines within a corridor either side of the
+  // straight line between them. The two places are given as the origin is.
+  'program.route.add': 'Route to…',
+  'program.route.add.title':
+    'List the repeaters along a trip from here to another place, in the order you pass them',
+  'program.route.remove.title': 'Back to the repeaters around one place',
+  'program.route.from': 'From',
+  'program.route.to': 'To',
+  'program.route.to.aria': 'Route destination',
+  'program.corridor.aria': 'Route corridor',
+  'program.corridor.label': 'Corridor',
+  'program.corridor.hint': 'either side of a straight line between the two places',
+
   // The fetch, and what the directory answered with.
   'program.fetch.label': '⟳ Fetch repeaters',
   'program.fetch.busy': '⟳ Fetching…',
   'program.fetch.title': 'Fetch repeaters within {{radius}}',
   'program.fetch.title.noOrigin': 'Pick a valid origin first (grid or city)',
+  'program.fetch.title.route': 'Fetch repeaters within {{radius}} of the route',
+  'program.fetch.title.noRoute': 'Pick both ends of the route first (grid or city)',
   'program.fetch.retry': 'Retry',
   'program.stamp.title': 'Directory data age (cached per source, weekly)',
   'program.stamp.stale': ' · stale (fetch failed, cached data shown)',
@@ -4575,6 +4590,12 @@ export const EN = {
     "The {{rsgb}} repeater list could not be read just now, so these are <b>{{hearham}}'s machines alone</b>. Fetch again later to add the coordinator's.",
   'program.rsgb.beyond':
     "{{rsgb}} is asked about the locator squares nearest you, not every one this radius reaches, so the machines in <b>{{squares}}</b> are {{hearham}}'s alone.",
+  'program.rsgb.beyond.route':
+    "{{rsgb}} is asked about the locator squares at the start of this route, not every one it crosses, so the machines in <b>{{squares}}</b> are {{hearham}}'s alone.",
+  // A route asks RepeaterBook about nine states at most. `{{rb}}` and `{{hearham}}` are the two
+  // directories' own names and `{{states}}` a list of 2-letter state codes: tokens.
+  'program.route.rbBeyond':
+    "{{rb}} is asked about the states at the start of this route, not every one it crosses, so the machines in <b>{{states}}</b> are {{hearham}}'s alone. Search the rest of the trip as a route of its own.",
 
   // The saved-projects file Program could not read. `{{path}}` is a file path on the operator's
   // computer — a token, never translated. "Program" in the second is this section's own name.
@@ -4597,6 +4618,9 @@ export const EN = {
   'program.filters.search.title': 'A callsign or town filters the list. A frequency in MHz (147.18, 438.5125) shows every repeater on it, whatever the filters.',
   'program.count': '{{shown}} of {{total}} shown · nearest first',
   'program.count.freq': '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · nearest first',
+  'program.count.route': '{{shown}} of {{total}} shown · in order along the route',
+  'program.count.freq.route':
+    '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · in order along the route',
   'program.addAll.label': '＋ Add all shown',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',
@@ -4609,6 +4633,16 @@ export const EN = {
   'program.results.none': 'No repeaters within {{radius}}.',
   'program.results.none.fm': 'No FM repeaters within {{radius}}.',
   'program.results.none.freq': 'No repeater on {{freq}} MHz (±{{tol}} kHz) within {{radius}}.',
+  'program.results.prompt.route':
+    'Pick both ends of the route and press <b>Fetch repeaters</b> — the machines along it land here in order; ADD the ones you want on your radio.',
+  'program.results.none.route': 'No repeaters within {{radius}} of the route.',
+  'program.results.none.fm.route': 'No FM repeaters within {{radius}} of the route.',
+  'program.results.none.freq.route':
+    'No repeater on {{freq}} MHz (±{{tol}} kHz) within {{radius}} of the route.',
+  // On a route, where a machine is: `{{along}}` and `{{off}}` are distances (120 mi, 3 mi) and
+  // `{{dir}}` a compass point (NE): tokens.
+  'program.row.route.title': '{{along}} along the route, {{off}} {{dir}} of it',
+  'program.row.route.off': '{{off}} {{dir}} of the route',
   'program.results.tryWider': 'Try {{radius}}',
   'program.results.showDigital': 'Show digital',
   'program.row.offAir': 'OFF-AIR',

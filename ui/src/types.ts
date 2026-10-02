@@ -4543,6 +4543,9 @@ export interface RepeaterSearchRow {
   sources: RepeaterSourceRef[]
   /** Fields those rows disagree on: shown on the row, never silently resolved. */
   disagreements: RepeaterDisagreement[]
+  /** On a route search: how far along the route the machine is, km from the start. The record's
+   * distance and bearing are then from its nearest point of the route. */
+  alongKm?: number | null
 }
 
 /** One directory a search read, and how old its list is. */
@@ -4554,8 +4557,12 @@ export interface RepeaterListStamp {
   stale: boolean
 }
 
-/** A repeater search response: the directories it read + rows (nearest first). */
+/** A repeater search response: the directories it read + rows (nearest first, or in order along
+ * the route). */
 export interface RepeaterSearchResult {
+  /** A route search: the rows are the corridor's, in order along the route. Absent = a radius
+   * search. */
+  route?: boolean
   /** Every directory this search read, in precedence order (RSGB, RepeaterBook, hearham). */
   lists: RepeaterListStamp[]
   /**
@@ -4578,6 +4585,9 @@ export interface RepeaterSearchResult {
   rsgbUnavailable: boolean
   /** Locator squares the radius reaches that RSGB was not asked about (nine per search are). */
   rsgbBeyond: string[]
+  /** States a route's corridor crosses that RepeaterBook was not asked about (2-letter codes): a
+   * route asks about the nine it reaches first, no more than a radius search can. */
+  rbBeyond?: string[]
   rows: RepeaterSearchRow[]
 }
 

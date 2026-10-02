@@ -47,6 +47,16 @@ select — then you press Fetch, which is always yours to press.
 selected, and 50 with no band chip lit. Auto prints the number it resolved to
 beside the chips, so it never moves the search without telling you.
 
+**Route to…**, at the end of the Near row, makes the search a route: Near
+becomes **From**, and a **To** row offers the same three ways to give the other
+end (My station, Grid, City); its **✕** goes back to the search around one
+place. **Corridor** takes the place of Radius: chips at 10, 25 and 50 mi, 25 to
+start with, measured either side of a straight line between the two places and
+past either end. The list then holds the machines inside that strip, in the
+order the trip passes them. Each row's distance reads how far along the route
+the machine is ("120 mi"), and the line under it how far off the route ("3 mi
+NE of the route").
+
 **Fetch repeaters** is the one filled accent button on the screen and the only
 control that pulls repeater data; the City **Search** click is the section's
 only other network call, so nothing here reaches out unless you pressed
@@ -229,6 +239,28 @@ renumber the exported CSV yourself before you import it.
 
 <!-- TODO: capture screenshot — the "Flash with CHIRP" dialog open over a built channel list, showing the three numbered steps, the Get CHIRP link, the "Don't show this again" tick and the Save the CSV button -->
 
+### Program the repeaters along a drive
+
+1. Press **Route to…** at the end of the Near row. Leave **From** on **My
+   station** (or give the place you leave from), and set **To** to where you are
+   going: **City** and **Search**, or a **Grid**.
+2. Leave the **Corridor** at 25 mi, the 70 cm reach Auto uses (2 m reaches
+   farther), or take 10 mi through dense country and 50 mi across empty
+   country. Press **Fetch repeaters**.
+3. The list is in the order you will pass the machines, from where you leave.
+   **＋ Add all shown** adds them to the channel list in that order, so the
+   export is one channel list you can step through as you drive. Narrow it first
+   with the band and FM chips if your radio holds fewer channels than the drive
+   has machines.
+4. Set **Max name** and export as for a trip: **Export for CHIRP…** or
+   **Export CSV**.
+
+A long drive in the US asks RepeaterBook about the first nine states it
+reaches, no more than a radius search can, and names the others ("the machines
+in CO, NM, CA are hearham's alone"); search the rest of the drive as a second
+route that starts where the first one's states end. A long drive in the UK does
+the same with RSGB's locator squares.
+
 ### Star one machine onto the cockpit strip
 
 1. Press ☆ on the result row of the machine you actually want on the radio in
@@ -271,6 +303,11 @@ handheld; ☆ on a result row is the one-machine version.
 
 ## Honest limits
 
+- **A route is a straight line, not the road.** Nexus has no road map, so the
+  corridor is measured either side of the straight line between the two places.
+  A road that bends far from that line can leave machines along it outside a
+  narrow corridor; a wider corridor, or two shorter routes that meet at the
+  bend, keeps them in.
 - **Start at renumbers the screen, not the file.** It moves the slot numbers in
   the builder so you can plan around channels a radio already holds, but both
   exports number their rows from 1 regardless. Importing into a radio image

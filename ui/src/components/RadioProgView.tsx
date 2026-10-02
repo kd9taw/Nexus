@@ -59,6 +59,8 @@ import {
   autoRadiusMi,
   BAND_CHIPS,
   bandOfMhz,
+  CORRIDOR_CHIPS_MI,
+  DEFAULT_CORRIDOR_MI,
   deriveNames,
   favoriteName,
   FREQ_MATCH_MHZ,
@@ -228,6 +230,18 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [onAirOnly, setOnAirOnly] = useState(true)
   const [search, setSearch] = useState('')
   const [recents, setRecents] = useState<Recent[]>(loadRecents)
+  // Or a route (the operator's pick, 2026-09-30: a route list for a trip): from the origin above to
+  // a second place given the same three ways, the machines within a corridor either side of the
+  // straight line between them, in the order the route passes them.
+  const [area, setArea] = useState<'around' | 'route'>('around')
+  const routing = area === 'route'
+  const [toKind, setToKind] = useState<'station' | 'grid' | 'city'>('city')
+  const [toGrid, setToGrid] = useState('')
+  const [toCity, setToCity] = useState('')
+  const [toPick, setToPick] = useState<GeoCandidate | null>(null)
+  const [toCands, setToCands] = useState<GeoCandidate[]>([])
+  const [toBusy, setToBusy] = useState(false)
+  const [corridorMi, setCorridorMi] = useState<number>(DEFAULT_CORRIDOR_MI)
 
   // ── results ──
   const [result, setResult] = useState<RepeaterSearchResult | null>(null)
@@ -307,13 +321,24 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     return gridToLatLon(g)
   }, [originKind, myGrid, gridInput, cityPick])
 
+  /** The route's other end, resolved the same way. */
+  const dest = useMemo((): { lat: number; lon: number } | null => {
+    if (toKind === 'city') return toPick ? { lat: toPick.lat, lon: toPick.lon } : null
+    const g = (toKind === 'station' ? myGrid : toGrid).trim()
+    if (!isValidGrid(g)) return null
+    return gridToLatLon(g)
+  }, [toKind, myGrid, toGrid, toPick])
+
   const effRadiusMi = radiusMi === 'auto' ? autoRadiusMi(bands) : radiusMi
 
   const doFetch = useCallback(() => {
-    if (!origin || fetching) return
+    if (!origin || fetching || (routing && !dest)) return
     setFetching(true)
     setFetchErr('')
-    repeaterSearch(origin.lat, origin.lon, miToKm(effRadiusMi))
+    const query = routing && dest
+      ? repeaterSearch(origin.lat, origin.lon, miToKm(corridorMi), dest)
+      : repeaterSearch(origin.lat, origin.lon, miToKm(effRadiusMi))
+    query
       .then((res) => {
         setResult(res)
         const label = originLabel()
@@ -329,7 +354,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       })
       .catch((e) => setFetchErr(String(e)))
       .finally(() => setFetching(false))
-  }, [origin, fetching, effRadiusMi, originKind, originLabel])
+  }, [origin, fetching, routing, dest, corridorMi, effRadiusMi, originKind, originLabel])
 
   const searchCity = useCallback(() => {
     const q = cityInput.trim()
@@ -345,6 +370,21 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       .catch((e) => pushToast(String(e), 'error'))
       .finally(() => setGeoBusy(false))
   }, [cityInput, geoBusy])
+
+  const searchToCity = useCallback(() => {
+    const q = toCity.trim()
+    if (!q || toBusy) return
+    setToBusy(true)
+    setToCands([])
+    geocodeCity(q)
+      .then((cands) => {
+        setToCands(cands)
+        if (cands.length === 0) pushToast(t('program.city.noMatch'), 'info', 3000)
+        if (cands.length === 1) setToPick(cands[0])
+      })
+      .catch((e) => pushToast(String(e), 'error'))
+      .finally(() => setToBusy(false))
+  }, [toCity, toBusy])
 
   const useRecent = (r: Recent) => {
     // Recents carry resolved coordinates — re-fetch immediately from them.
@@ -791,6 +831,42 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     ...(r.dmrColorCode != null ? [`CC${r.dmrColorCode}`] : []),
   ]
 
+  /** Where a machine is: from the origin ("12 mi NE"), or on a route how far along it ("120 mi"),
+   * with how far off it on the line under the row (`routeOff`) and its town in the tooltip. Both
+   * figures in the cell wrapped it at 1366×768 (Chrome, 2026-10-02). */
+  const distLabel = (row: RepeaterSearchRow): string => {
+    const r = row.record
+    if (row.alongKm != null) return fmtDistanceKm(row.alongKm, units)
+    return `${fmtDistanceKm(r.distanceKm, units)} ${octant(r.bearingDeg)}`
+  }
+  const routeOff = (row: RepeaterSearchRow): string =>
+    t('program.row.route.off', {
+      off: fmtDistanceKm(row.record.distanceKm, units),
+      dir: octant(row.record.bearingDeg),
+    })
+  const distTitle = (row: RepeaterSearchRow): string => {
+    const r = row.record
+    const town = `${r.city}${r.state ? `, ${r.state}` : ''}`
+    if (row.alongKm == null) return town
+    const place = t('program.row.route.title', {
+      along: fmtDistanceKm(row.alongKm, units),
+      off: fmtDistanceKm(r.distanceKm, units),
+      dir: octant(r.bearingDeg),
+    })
+    return town ? `${place} · ${town}` : place
+  }
+  /** The next wider reach an empty list offers, miles: the next corridor on a route; else 100 mi
+   * from Auto and 200 mi from any chip. None from the widest. */
+  const widerMi = result?.route
+    ? (CORRIDOR_CHIPS_MI.find((mi) => mi > corridorMi) ?? null)
+    : radiusMi === 200
+      ? null
+      : radiusMi === 'auto'
+        ? 100
+        : 200
+  /** The reach the shown list was searched with, as the empty list words it. */
+  const reachMi = result?.route ? corridorMi : effRadiusMi
+
   const toneLabel = (c: ProgChannel): string => {
     if (c.toneMode === 'none') return '—'
     if (c.toneMode === 'dtcs') return `D${String(c.dtcsCode).padStart(3, '0')}`
@@ -820,7 +896,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">
           <div className="rp-origin" role="group" aria-label={t('program.origin.aria')}>
-            <span className="rp-lbl">{t('program.origin.label')}</span>
+            <span className="rp-lbl">{routing ? t('program.route.from') : t('program.origin.label')}</span>
             <button disabled={remote}
               type="button"
               className={`filter-chip${originKind === 'station' ? ' active' : ''}`}
@@ -882,6 +958,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 </button>
               </span>
             )}
+            {!routing && <span className="rp-filter-gap" />}
+            {!routing && (
+              <button disabled={remote}
+                type="button"
+                className="filter-chip rp-route-add"
+                onClick={() => setArea('route')}
+                title={t('program.route.add.title')}
+              >
+                {t('program.route.add')}
+              </button>
+            )}
           </div>
           {originKind === 'city' && cityCands.length > 1 && !cityPick && (
             <div className="rp-city-cands" role="listbox" aria-label={t('program.city.matches.aria')}>
@@ -891,6 +978,95 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   type="button"
                   className="filter-chip"
                   onClick={() => setCityPick(c)}
+                >
+                  {c.displayName}
+                </button>
+              ))}
+            </div>
+          )}
+          {routing && (
+            <div className="rp-origin rp-dest" role="group" aria-label={t('program.route.to.aria')}>
+              <span className="rp-lbl">{t('program.route.to')}</span>
+              <button disabled={remote}
+                type="button"
+                className={`filter-chip${toKind === 'station' ? ' active' : ''}`}
+                onClick={() => setToKind('station')}
+                title={t('program.origin.station.title')}
+              >
+                {t('program.origin.station.label', {
+                  grid: myGrid ? `· ${myGrid.toUpperCase()}` : '',
+                })}
+              </button>
+              <button disabled={remote}
+                type="button"
+                className={`filter-chip${toKind === 'grid' ? ' active' : ''}`}
+                onClick={() => setToKind('grid')}
+              >
+                {t('program.origin.grid.label')}
+              </button>
+              <button disabled={remote}
+                type="button"
+                className={`filter-chip${toKind === 'city' ? ' active' : ''}`}
+                onClick={() => setToKind('city')}
+              >
+                {t('program.origin.city.label')}
+              </button>
+              {toKind === 'grid' && (
+                <input disabled={remote}
+                  type="text"
+                  className={`settings-input mono rp-grid${toGrid && !isValidGrid(toGrid.trim()) ? ' invalid' : ''}`}
+                  value={toGrid}
+                  maxLength={6}
+                  placeholder={EXAMPLE_GRID}
+                  aria-label={t('program.origin.grid.aria')}
+                  onChange={(e) => setToGrid(e.target.value.toUpperCase())}
+                />
+              )}
+              {toKind === 'city' && (
+                <span className="rp-city">
+                  <input disabled={remote}
+                    type="text"
+                    className="settings-input rp-city-input"
+                    value={toCity}
+                    placeholder={t('program.origin.city.placeholder')}
+                    aria-label={t('program.origin.city.aria')}
+                    onChange={(e) => {
+                      setToCity(e.target.value)
+                      setToPick(null)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') searchToCity()
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="filter-chip"
+                    onClick={searchToCity}
+                    disabled={remote || (toBusy || !toCity.trim())}
+                  >
+                    {toBusy ? t('program.city.searching') : t('program.city.search')}
+                  </button>
+                </span>
+              )}
+              <button disabled={remote}
+                type="button"
+                className="filter-chip rp-route-remove"
+                onClick={() => setArea('around')}
+                title={t('program.route.remove.title')}
+                aria-label={t('program.route.remove.title')}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {routing && toKind === 'city' && toCands.length > 1 && !toPick && (
+            <div className="rp-city-cands" role="listbox" aria-label={t('program.city.matches.aria')}>
+              {toCands.map((c) => (
+                <button disabled={remote}
+                  key={c.displayName}
+                  type="button"
+                  className="filter-chip"
+                  onClick={() => setToPick(c)}
                 >
                   {c.displayName}
                 </button>
@@ -914,48 +1090,71 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </div>
           )}
 
-          <div className="rp-radius" role="group" aria-label={t('program.radius.aria')}>
-            <span className="rp-lbl">{t('program.radius.label')}</span>
-            {RADIUS_CHIPS_MI.map((mi) => (
+          {routing ? (
+            <div className="rp-radius rp-corridor" role="group" aria-label={t('program.corridor.aria')}>
+              <span className="rp-lbl">{t('program.corridor.label')}</span>
+              {CORRIDOR_CHIPS_MI.map((mi) => (
+                <button disabled={remote}
+                  key={mi}
+                  type="button"
+                  className={`filter-chip${corridorMi === mi ? ' active' : ''}`}
+                  onClick={() => setCorridorMi(mi)}
+                >
+                  {fmtDistanceKm(mi * 1.609344, units)}
+                </button>
+              ))}
+              <span className="rp-hint">{t('program.corridor.hint')}</span>
+            </div>
+          ) : (
+            <div className="rp-radius" role="group" aria-label={t('program.radius.aria')}>
+              <span className="rp-lbl">{t('program.radius.label')}</span>
+              {RADIUS_CHIPS_MI.map((mi) => (
+                <button disabled={remote}
+                  key={mi}
+                  type="button"
+                  className={`filter-chip${radiusMi === mi ? ' active' : ''}`}
+                  onClick={() => setRadiusMi(mi)}
+                >
+                  {fmtDistanceKm(mi * 1.609344, units)}
+                </button>
+              ))}
               <button disabled={remote}
-                key={mi}
                 type="button"
-                className={`filter-chip${radiusMi === mi ? ' active' : ''}`}
-                onClick={() => setRadiusMi(mi)}
+                className={`filter-chip${radiusMi === 'auto' ? ' active' : ''}`}
+                onClick={() => setRadiusMi('auto')}
+                title={t('program.radius.auto.title')}
               >
-                {fmtDistanceKm(mi * 1.609344, units)}
+                {t('program.radius.auto.label')}
               </button>
-            ))}
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${radiusMi === 'auto' ? ' active' : ''}`}
-              onClick={() => setRadiusMi('auto')}
-              title={t('program.radius.auto.title')}
-            >
-              {t('program.radius.auto.label')}
-            </button>
-            {radiusMi === 'auto' && (
-              <span className="rp-hint">
-                {t('program.radius.auto.hint', {
-                  radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
-                  bands: bands.length ? bands.join('+') : t('program.radius.auto.allBands'),
-                })}
-              </span>
-            )}
-          </div>
+              {radiusMi === 'auto' && (
+                <span className="rp-hint">
+                  {t('program.radius.auto.hint', {
+                    radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                    bands: bands.length ? bands.join('+') : t('program.radius.auto.allBands'),
+                  })}
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="rp-fetch-row">
             <button
               type="button"
               className="filter-chip pota-refresh-btn rp-fetch"
               onClick={doFetch}
-              disabled={remote || (!origin || fetching)}
+              disabled={remote || (!origin || fetching || (routing && !dest))}
               title={
-                origin
-                  ? t('program.fetch.title', {
-                      radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
-                    })
-                  : t('program.fetch.title.noOrigin')
+                routing
+                  ? origin && dest
+                    ? t('program.fetch.title.route', {
+                        radius: fmtDistanceKm(corridorMi * 1.609344, units),
+                      })
+                    : t('program.fetch.title.noRoute')
+                  : origin
+                    ? t('program.fetch.title', {
+                        radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                      })
+                    : t('program.fetch.title.noOrigin')
               }
             >
               {fetching ? t('program.fetch.busy') : t('program.fetch.label')}
@@ -1011,17 +1210,44 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               />
             </div>
           )}
-          {result && result.rsgbBeyond.length > 0 && (
+          {/* A route asks RepeaterBook about the nine states it reaches first, no more than a radius
+              search can, so the states past them are named rather than left to read as empty. */}
+          {result?.rbBeyond && result.rbBeyond.length > 0 && (
             <div className="rp-note" role="status">
               <T
-                k="program.rsgb.beyond"
+                k="program.route.rbBeyond"
                 tags={{ b: <strong /> }}
                 vals={{
-                  rsgb: SOURCE_RSGB,
+                  rb: SOURCE_REPEATERBOOK,
                   hearham: SOURCE_HEARHAM,
-                  squares: result.rsgbBeyond.join(', '),
+                  states: result.rbBeyond.join(', '),
                 }}
               />
+            </div>
+          )}
+          {result && result.rsgbBeyond.length > 0 && (
+            <div className="rp-note" role="status">
+              {result.route ? (
+                <T
+                  k="program.rsgb.beyond.route"
+                  tags={{ b: <strong /> }}
+                  vals={{
+                    rsgb: SOURCE_RSGB,
+                    hearham: SOURCE_HEARHAM,
+                    squares: result.rsgbBeyond.join(', '),
+                  }}
+                />
+              ) : (
+                <T
+                  k="program.rsgb.beyond"
+                  tags={{ b: <strong /> }}
+                  vals={{
+                    rsgb: SOURCE_RSGB,
+                    hearham: SOURCE_HEARHAM,
+                    squares: result.rsgbBeyond.join(', '),
+                  }}
+                />
+              )}
             </div>
           )}
 
@@ -1084,12 +1310,20 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           {result && (
             <div className="rp-count">
               {searchMhz !== null
-                ? t('program.count.freq', {
-                    shown: shown.length,
-                    freq: mhzLabel(searchMhz),
-                    tol: FREQ_TOL_KHZ,
-                  })
-                : t('program.count', { shown: shown.length, total: result.rows.length })}
+                ? result.route
+                  ? t('program.count.freq.route', {
+                      shown: shown.length,
+                      freq: mhzLabel(searchMhz),
+                      tol: FREQ_TOL_KHZ,
+                    })
+                  : t('program.count.freq', {
+                      shown: shown.length,
+                      freq: mhzLabel(searchMhz),
+                      tol: FREQ_TOL_KHZ,
+                    })
+                : result.route
+                  ? t('program.count.route', { shown: shown.length, total: result.rows.length })
+                  : t('program.count', { shown: shown.length, total: result.rows.length })}
               {shown.some((r) => isProgrammable(r.record) && !isAdded(r)) && (
                 <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
                   {t('program.addAll.label')}
@@ -1101,7 +1335,11 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           <div className="rp-results" role="table" aria-label={t('program.results.aria')}>
             {!result && !fetching && (
               <p className="aw-empty">
-                <T k="program.results.prompt" tags={{ b: <strong /> }} />
+                {routing ? (
+                  <T k="program.results.prompt.route" tags={{ b: <strong /> }} />
+                ) : (
+                  <T k="program.results.prompt" tags={{ b: <strong /> }} />
+                )}
               </p>
             )}
             {result && shown.length === 0 && (
@@ -1109,26 +1347,32 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 {/* Two whole sentences, not one with an "FM " fragment spliced in: where the
                     mode word sits in the sentence is the translator's to decide. */}
                 {searchMhz !== null
-                  ? t('program.results.none.freq', {
-                      freq: mhzLabel(searchMhz),
-                      tol: FREQ_TOL_KHZ,
-                      radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
-                    })
-                  : showDigital
-                    ? t('program.results.none', {
-                        radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                  ? result.route
+                    ? t('program.results.none.freq.route', {
+                        freq: mhzLabel(searchMhz),
+                        tol: FREQ_TOL_KHZ,
+                        radius: fmtDistanceKm(reachMi * 1.609344, units),
                       })
-                    : t('program.results.none.fm', {
-                        radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
-                      })}
-                {radiusMi !== 200 && (
+                    : t('program.results.none.freq', {
+                        freq: mhzLabel(searchMhz),
+                        tol: FREQ_TOL_KHZ,
+                        radius: fmtDistanceKm(reachMi * 1.609344, units),
+                      })
+                  : showDigital
+                    ? result.route
+                      ? t('program.results.none.route', { radius: fmtDistanceKm(reachMi * 1.609344, units) })
+                      : t('program.results.none', { radius: fmtDistanceKm(reachMi * 1.609344, units) })
+                    : result.route
+                      ? t('program.results.none.fm.route', { radius: fmtDistanceKm(reachMi * 1.609344, units) })
+                      : t('program.results.none.fm', { radius: fmtDistanceKm(reachMi * 1.609344, units) })}
+                {widerMi !== null && (
                   <button disabled={remote}
                     type="button"
                     className="filter-chip"
-                    onClick={() => setRadiusMi(radiusMi === 'auto' ? 100 : 200)}
+                    onClick={() => (result.route ? setCorridorMi(widerMi) : setRadiusMi(widerMi))}
                   >
                     {t('program.results.tryWider', {
-                      radius: fmtDistanceKm((radiusMi === 'auto' ? 100 : 200) * 1.609344, units),
+                      radius: fmtDistanceKm(widerMi * 1.609344, units),
                     })}
                   </button>
                 )}
@@ -1164,8 +1408,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   <span className="rp-tone mono" role="cell">
                     {toneLabel(c)}
                   </span>
-                  <span className="rp-dist mono" role="cell" title={`${r.city}${r.state ? `, ${r.state}` : ''}`}>
-                    {fmtDistanceKm(r.distanceKm, units)} {octant(r.bearingDeg)}
+                  <span className="rp-dist mono" role="cell" title={distTitle(row)}>
+                    {distLabel(row)}
                   </span>
                   <span className="rp-badges" role="cell">
                     {badge && <span className="pota-badge rp-mode-badge">{badge}</span>}
@@ -1221,7 +1465,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     </span>
                   )}
                   <span className="rp-src" role="cell">
-                    {sourceLine(row)}
+                    {row.alongKm != null ? `${routeOff(row)} · ${sourceLine(row)}` : sourceLine(row)}
                   </span>
                   {/* The flag leads its own line, under the row: in the badge column it widened
                       the row past the list at 1024 (48 px, measured). */}
@@ -1251,7 +1495,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 </span>
               ),
             )}
-            {originKind === 'city' && <span> · {ATTRIB_OSM}</span>}
+            {(originKind === 'city' || (routing && toKind === 'city')) && <span> · {ATTRIB_OSM}</span>}
           </div>
         </div>
 

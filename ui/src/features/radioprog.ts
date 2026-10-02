@@ -152,6 +152,12 @@ export function autoRadiusMi(bands: string[]): number {
 
 export const RADIUS_CHIPS_MI = [10, 25, 50, 100, 200] as const
 
+/** A route's corridor (miles): how far either side of the line between its two places a machine
+ * may be. 25 mi by default, the 70 cm reach `autoRadiusMi` uses (2 m reaches farther), so a machine
+ * inside it can be worked from the road on either band. */
+export const CORRIDOR_CHIPS_MI = [10, 25, 50] as const
+export const DEFAULT_CORRIDOR_MI = 25
+
 export function miToKm(mi: number): number {
   return mi * 1.609344
 }
