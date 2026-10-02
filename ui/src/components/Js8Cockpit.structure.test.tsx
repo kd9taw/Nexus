@@ -173,7 +173,7 @@ describe('Js8Cockpit pane shell', () => {
     const shell = document.querySelector('main.layout.single.js8-cockpit')!
     expect(shell).not.toBeNull()
     // The waterfall's divider (layout L2) is the scope divider's shell-child kind in Phone and CW.
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.pane-splitter', '.cw-keyer-warn', '.cockpit-panes', '.cockpit-txdock']
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.pane-splitter', '.cw-keyer-warn', '.cockpit-txstrip', '.cockpit-panes', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -183,6 +183,15 @@ describe('Js8Cockpit pane shell', () => {
     expect(document.querySelector('.cw-keyer-warn'), 'error banner did not render — census untested').not.toBeNull()
     expect(shell.querySelectorAll(':scope > .cockpit-panes').length).toBe(1)
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
+    // THE TX STRIP (operator batch 60): exactly one, a shell child directly under the scope (after
+    // its divider), holding the stop controls the header used to hold — and the header none.
+    const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
+    expect(strips.length, 'no TX strip in the shell').toBe(1)
+    expect(strips[0].previousElementSibling?.matches('.pane-splitter'), 'the TX strip is not directly under the scope').toBe(true)
+    const named = (root: Element, re: RegExp) => [...root.querySelectorAll('button')].filter((b) => re.test(b.textContent!.trim()))
+    expect(named(strips[0], /^stop tx$/i).length, 'Stop TX is not in the TX strip').toBe(1)
+    expect(named(strips[0], /^tune$/i).length, 'Tune is not in the TX strip').toBe(1)
+    expect(named(shell.querySelector('.cockpit-header')!, /^stop tx$|^tune$|^tuning…$|^atu$|tx (on|off)$/i), 'the header still draws a transmit control').toEqual([])
   })
 
   it('renders exactly one .cockpit-panes region, tier-stamped by useRegionCols', async () => {

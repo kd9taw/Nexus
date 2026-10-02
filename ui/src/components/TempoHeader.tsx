@@ -1,12 +1,13 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The tier NAMES
-// (TempoFast / TempoDeep, and their Fast / Deep slots) are the modes' own and stay here; the
-// ▲ TX indicator is the transmit-state token. Everything else is prose in the catalog.
+// (TempoFast / TempoDeep, and their Fast / Deep slots) are the modes' own and stay here.
+// Everything else is prose in the catalog; the transmit controls' words are CockpitTxStrip's.
 import { useState } from 'react'
 import { t, type MessageKey } from '../i18n'
 import { useStationCapability, useStationControl, useStationTierControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel, Tier } from '../types'
 import { bandLabelForMhz } from '../band'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
 
@@ -40,15 +41,22 @@ interface Props {
   onToggleCqRun: () => void
   /** Resume a paused run immediately. */
   onResumeCqRun: () => void
+  /** The TX strip's controls (FT's cluster: TX On/Off · Tune · ATU · Stop TX · Hold Tx). */
+  onSetTxEnabled: (on: boolean) => void
+  onSetTune: (on: boolean) => void
+  onAtuTune: () => void
+  onHaltTx: () => void
+  onSetHoldTxFreq: (on: boolean) => void
 }
 
 /**
  * Tempo (TempoFast/TempoDeep chat) cockpit header — the same shared CockpitHeader the CW /
  * Phone / FT8 cockpits use, giving Tempo the base rig controls (tier · frequency
  * readout + the FT8-style frequency dropdown · drive power · CAT) in the
- * consistent position. Tune / Stop / Enable-Tx stay in the TopBar transmit
- * cluster (Tempo's existing model), like FT8 keeps its TX cluster in the QSO
- * strip. Rendered full-width above the three-pane Tempo workspace.
+ * consistent position. Rendered full-width above the three-pane Tempo workspace, with
+ * the TX strip directly under it — FT's cluster in FT's order (operator batch 60): it used to
+ * be the TopBar's, which wrapped with the TopBar and had no ATU. Tempo has no scope in that
+ * column (its waterfall is the right rail), so the strip sits right under the header.
  */
 export function TempoHeader({
   snap,
@@ -61,6 +69,11 @@ export function TempoHeader({
   wheelSensitivity,
   onToggleCqRun,
   onResumeCqRun,
+  onSetTxEnabled,
+  onSetTune,
+  onAtuTune,
+  onHaltTx,
+  onSetHoldTxFreq,
 }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl()
@@ -75,6 +88,7 @@ export function TempoHeader({
     onSetFrequency(mhz, bandLabelForMhz(mhz), snap.radio.sideband || 'USB')
   }
   return (
+    <>
     <CockpitHeader
       snap={snap}
       onSnap={onSnap}
@@ -136,7 +150,6 @@ export function TempoHeader({
         label: t('tempo.header.power.label'),
         title: t('tempo.header.power.title'),
       }}
-      txActiveLabel="▲ TX"
     >
       {/* CQ RUN — the persistent keep-calling control (the one-shot Call CQ button's
           dead-end fix): reachable from the header in every chat view, with the run
@@ -175,5 +188,15 @@ export function TempoHeader({
         )}
       </div>
     </CockpitHeader>
+    <CockpitTxStrip
+      radio={snap.radio}
+      onSnap={onSnap}
+      onSetTxEnabled={onSetTxEnabled}
+      onTune={onSetTune}
+      onAtuTune={onAtuTune}
+      onStopTx={onHaltTx}
+      hold={{ on: snap.radio.holdTxFreq, onChange: onSetHoldTxFreq, disabled: !control }}
+    />
+    </>
   )
 }

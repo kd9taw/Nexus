@@ -1194,7 +1194,6 @@ export function OperateCockpit({
           label: t('operate.header.power.label'),
           title: t('operate.header.power.title'),
         }}
-        txState={false}
       >
         {/* HOUND — ONE CLICK, in the cockpit header, always visible in both layouts.
             Operator ask: "so users can click it on and off without having to go into the

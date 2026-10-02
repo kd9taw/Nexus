@@ -288,6 +288,11 @@ const COCKPITS: { name: string; mount: () => { container: HTMLElement; qsy: () =
           onSetTxLevel={noop}
           onToggleCqRun={noop}
           onResumeCqRun={noop}
+          onSetTxEnabled={noop}
+          onSetTune={noop}
+          onAtuTune={noop}
+          onHaltTx={noop}
+          onSetHoldTxFreq={noop}
         />,
       )
       return { container, qsy: () => onSetFrequency.mock.calls }

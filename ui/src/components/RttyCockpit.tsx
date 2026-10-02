@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -812,9 +813,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
-          txActiveLabel="▲ RTTY"
-          onStopTx={stop}
-          onSetTxEnabled={control ? onSetTxEnabled : undefined}
           power={{
             value: control ? power : dataAvailable && snap.radio.rfPower != null ? Math.round(snap.radio.rfPower * 100) : null,
             unit: '%',
@@ -832,16 +830,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               powerDrag.current = false
             },
           }}
-          // TUNE — the steady carrier you set power and load the antenna against. It is a
-          // stop control (it stops the carrier it started) and is on this cockpit's
-          // stop-line census and its sweep; MAX_TUNE_MS bounds it regardless.
-          onTune={(on) => { if (control) void setTune(on).then((s) => onSnap?.(s)) }}
-          // The RIG's own ATU, rendered by the header only when the rig reports a tuner.
-          onAtuTune={() =>
-            control && void atuTune()
-              .then((s) => onSnap?.(s))
-              .catch((e) => pushToast(String(e), 'error'))
-          }
           modeIndicator={
             <>
               <span className="cw-mode-badge" title={t('rtty.header.mode.title')}>
@@ -923,8 +911,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           pane frames below, the shell's growers, and the stored height stays for its return.
 
           It hosts no stop control — the cursors and click-to-net are the decoder's tuning aid,
-          and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch stay in
-          the header, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
+          and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch are in
+          the TX strip below it, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
           With this and `stream` both unticked the cockpit still holds all four. */}
       {rtty && shown('scope') && (
         <>
@@ -969,6 +957,27 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </>
       )}
 
+      {/* THE TX STRIP — FT's cluster under the waterfall (operator batch 60): the TX-enable
+          latch, Tune, the rig's ATU and Stop TX, sticky so they never leave the window. A shell
+          child with no ⊞ id, so hiding the waterfall leaves it directly under the header.
+          TUNE is a stop control (it stops the carrier it started) and is on this cockpit's
+          stop-line census and its sweep; MAX_TUNE_MS bounds it regardless. The latch is a STOP
+          here (set_tx_enabled(false) arms rtty_abort). */}
+      {snap && (
+        <CockpitTxStrip
+          radio={snap.radio}
+          onSnap={onSnap}
+          onStopTx={stop}
+          onSetTxEnabled={control ? onSetTxEnabled : undefined}
+          onTune={(on) => { if (control) void setTune(on).then((s) => onSnap?.(s)) }}
+          onAtuTune={() =>
+            control && void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+        />
+      )}
+
       {rtty?.keyerError && (
         <div className="cw-keyer-warn" role="alert">
           ⚠ {rtty.keyerError}
@@ -985,7 +994,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           clicked off, is rttySetAuto(false) → seq.abort() + Engine::rtty_stop(): the queue is
           cleared and rtty_abort + slot_tx_abort unkey the rig. Hiding `stream` takes it away —
           fine under THE STOP LINE (features/panelState.ts), because Stop TX and the TX-enable
-          latch are in the header and the Esc/Stop macro and the sequencer's Abort are in the
+          latch are in the TX strip and the Esc/Stop macro and the sequencer's Abort are in the
           dock, none of them with a ⊞ id. A pane's own stop is a convenience; those four are
           what hold the guarantee up — and while an over is actually keying outside an auto
           sequence, THREE of the four are live: Stop TX (never disabled), the Esc/Stop macro
@@ -1205,7 +1214,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           continuous-TX latch, Stop and the compose bar, pinned OUTSIDE any pane so nothing
           can scroll them out of reach. None of these has an id in the RTTY panel vocabulary
           ('stream' is the only entry). For the sequencer's Abort, the Esc/Stop macro and the
-          header's Stop TX / TX-arm that is THE STOP LINE — those four render outside every
+          TX strip's Stop TX / TX-arm that is THE STOP LINE — those four render outside every
           ⊞-removable pane, so unticking 'stream' (which takes its own Auto-toggle stop with
           it) cannot take any of them away. FOUR IS THE LIST, NOT THE LIVE COUNT: mid-over
           outside an auto sequence three are operable (Stop TX, the Esc/Stop macro, the latch)
@@ -1368,7 +1377,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       </div>
 
       {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so it
-          moves and covers no control in the dock; non-modal, so Stop TX in the header stays one
+          moves and covers no control in the dock; non-modal, so Stop TX in the TX strip stays one
           click away. Esc is decided by the cockpit's keyboard handler above, never here. */}
       {control && editing && (
         <RttyMacroEditor

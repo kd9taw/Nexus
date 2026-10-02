@@ -144,7 +144,7 @@ describe('RttyCockpit pane shell', () => {
     // `.pane-splitter`: the divider between the transcript and the log strip (layout L6), a shell
     // child between the two frames when there is a record to keep the split in — the census with a
     // record is in the divider's own block below.
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txdock']
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txstrip', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -156,6 +156,15 @@ describe('RttyCockpit pane shell', () => {
     const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame'))
     expect(frames.map((f) => f.getAttribute('data-pane'))).toEqual(['stream', 'log'])
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
+    // THE TX STRIP (operator batch 60): exactly one, a shell child directly under the scope (after
+    // its divider), holding the stop controls the header used to hold — and the header none.
+    const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
+    expect(strips.length, 'no TX strip in the shell').toBe(1)
+    expect(strips[0].previousElementSibling?.matches('.pane-splitter'), 'the TX strip is not directly under the scope').toBe(true)
+    const named = (root: Element, re: RegExp) => [...root.querySelectorAll('button')].filter((b) => re.test(b.textContent!.trim()))
+    expect(named(strips[0], /^stop tx$/i).length, 'Stop TX is not in the TX strip').toBe(1)
+    expect(named(strips[0], /^tune$/i).length, 'Tune is not in the TX strip').toBe(1)
+    expect(named(shell.querySelector('.cockpit-header')!, /^stop tx$|^tune$|^tuning…$|^atu$|tx (on|off)$/i), 'the header still draws a transmit control').toEqual([])
   })
 
   it('the waterfall polls at the live-instrument cadence (50 ms), not the FT default', async () => {

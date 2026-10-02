@@ -1,17 +1,11 @@
 import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
 import { useRadioLevels } from '../remote-web/useRadioLevels'
-import { useStationControl, useStationStopControl, useStationStopProgress } from '../stationAccess'
-import { haltTx } from '../api'
-import { withErrorToast } from '../toast'
+import { useStationControl } from '../stationAccess'
 import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
-// ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
-// deferred is the whole reason this batch exists: THE TX-ENABLE LATCH, TUNE, ATU AND STOP TX
-// stay written here. This one header draws them for SIX cockpits — Phone, CW, RTTY, PSK, SSTV
-// and Operate — so a typo in any of the four labels below is a six-cockpit safety regression,
-// and three of them are what `components/stop-line.test.tsx` matches by accessible name
-// (/^stop tx$/i, /^tune$|^tuning…$/i, /^▼ tx on$|^■ tx off$/i). ATU keys the rig's own tuning
-// carrier exactly as SetupHealth's Prove TX does. Transmit-path controls and their accessible
-// names move in their own batch, with the stop-line sweeps re-run.
+// ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts) for the CAT
+// pill's two plates alone. The TX-enable latch, Tune, ATU and Stop TX it used to draw for six
+// cockpits — and their deferred labels — moved to the TX strip under the scope
+// (`CockpitTxStrip`, operator batch 60); nothing in this header starts or stops a transmission.
 //
 // Everything else in the header is migrated under `cockpit.header.*`: the wheel-tune tooltips,
 // the band-edge toast, the power slider (a CONFIGURATION control on the transmit path, which
@@ -29,30 +23,27 @@ import { useWheelTune } from '../useWheelTune'
 import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 import { t } from '../i18n'
 
-/** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill and the three
- *  readings of the TX/RX pill. The pill is the PASSIVE rendering of the TX-enable latch below,
- *  which this batch defers, so its words stay here with the button's for the same reason: the
- *  two must never read as different controls. */
+/** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill. */
 const CAT_OK = 'CAT ✓'
 const CAT_BAD = 'CAT ✗'
-const TX_KEYING = '▲ KEYING'
-const TX_RX = '▼ RX'
-const TX_OFF = '■ TX off'
 
 /**
  * Shared cockpit header for the Phone, Digital (FT8/FT4) and CW cockpits.
  *
  * The design goal (operator request): the BASE cross-mode controls — the big frequency readout,
- * power, Tune, Stop TX, and the CAT status — render in the SAME screen position in every cockpit,
+ * power and the CAT status — render in the SAME screen position in every cockpit,
  * so an operator switching modes finds them where they left them. The MODE-SPECIFIC controls stay
  * unique per mode and are injected through slots (`modeIndicator`, `bandControl`, `frequencyExtras`,
  * and `children` for the rest) — never forced to look identical, only positioned consistently.
  *
- * Layout regions (left→right, wrapping): identity · frequency(+extras+band+Tune/ATU) ·
- * mode-extras(elastic) · actions(power·TX/RX·Stop·CAT, pinned right). Tune sits directly after
- * the band control (#287) so it is in one place in every cockpit, not wherever the actions
- * cluster happens to end. Every region wraps + has min-width:0 so
+ * Layout regions (left→right, wrapping): identity · frequency(+extras+band) ·
+ * mode-extras(elastic) · actions(power·CAT, pinned right). Every region wraps + has min-width:0 so
  * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
+ *
+ * NO TRANSMIT CONTROLS (operator batch 60, 2026-10-01). The TX-enable latch, Tune, the rig's ATU
+ * and Stop TX left this header for the TX strip under the scope (`CockpitTxStrip`), FT's cluster
+ * in FT's order on every screen: a header that wraps put Stop TX at four different places, Tune at
+ * seven, and under the dock at the 150–175 % pins.
  */
 export interface CockpitHeaderPower {
   /** 0..1 for drive, 0..100 for RF power; null means the station has not reported it. */
@@ -97,31 +88,12 @@ export interface CockpitHeaderProps {
   frequencyExtras?: ReactNode
   /** Mode-specific control cluster (consistent middle / second-row location). */
   children?: ReactNode
-  /** Extra controls pinned into the actions cluster, BEFORE the power/TX/Tune/Stop
-   *  group — the cluster is `margin-left:auto`, so adding at the front never moves the
-   *  base controls out from under the operator. */
+  /** Extra controls pinned into the actions cluster, BEFORE the power slider — the cluster is
+   *  `margin-left:auto`, so adding at the front never moves the base controls out from under
+   *  the operator. */
   actions?: ReactNode
   /** RF/drive power — OMIT for CW (no RF power); the region collapses. */
   power?: CockpitHeaderPower
-  /** Show the compact TX/RX pill in the actions cluster. Default true. */
-  txState?: boolean
-  /** Label shown on the pill while transmitting (default '▲ KEYING'; Phone passes '▲ TX'). */
-  txActiveLabel?: string
-  /** Tune (key a steady carrier). */
-  onTune?: (on: boolean) => void
-  /** Run the RADIO's own built-in ATU (discussion #19 — WSJT-X fires it from a right-click on
-   * Tune). Belongs HERE, beside Tune, and not in a cockpit's DSP row: NB/NR/Notch are receive
-   * filters, while an ATU tune-up keys the transmitter — so it sits with the other TX controls,
-   * carries the same `txAllowed` lockout, and reports the backend's refusal instead of going
-   * quiet. Rendered only when the rig actually reports a tuner (`radio.atu != null`). */
-  onAtuTune?: () => void
-  /** Stop TX / abort (CW passes its combined stopCw()+haltTx()). */
-  onStopTx?: () => void
-  /** Arm/disarm TX (WSJT-X "Enable Tx"). When provided, the TX/RX pill becomes a clickable
-   * arm control — the RTTY/SSTV cockpits have no other Enable-Tx affordance (the TopBar's is
-   * hidden with the digital chrome), so the send gate would sit at "TX is off" with no way to
-   * arm from those screens. Omit ⇒ display-only pill (Phone/CW/FT8 arm elsewhere). */
-  onSetTxEnabled?: (on: boolean) => void
   /** Override the derived CAT ✓/✗ pill. */
   catStatus?: ReactNode
 }
@@ -169,19 +141,9 @@ export function CockpitHeader({
   children,
   actions,
   power,
-  txState = true,
-  txActiveLabel = TX_KEYING,
-  onTune,
-  onAtuTune,
-  onStopTx,
-  onSetTxEnabled,
   catStatus,
 }: CockpitHeaderProps) {
   const control = useStationControl()
-  // Stop's own authority, never ordinary control freshness — see the Stop TX button below.
-  const remoteStop = useStationStopControl()
-  // How far a remote Stop has got. ACCEPTANCE IS NOT RF: see `useStationStopProgress`.
-  const stopProgress = useStationStopProgress(snap.radio)
   const levels = useRadioLevels(snap)
   const remotePower = power?.unit === '%' && levels.can('power')
   const powerInput = levels.input('power'), powerDraft = levels.draft('power')
@@ -263,7 +225,6 @@ export function CockpitHeader({
   // TX). `txBusyReason` ships whenever ANY of the seven owners holds the transmitter; the
   // same rule the wheel-tune gate above already follows.
   const onAir = isOnAir(radio)
-  const txPill = onAir ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (
     <div className={`cockpit-header${quick ? ' cockpit-header--quick' : ''}${brief ? ' cockpit-header--brief' : ''}`}>
@@ -308,84 +269,7 @@ export function CockpitHeader({
           />
         </div>
         {frequencyExtras && <div className="ch-freq-extras">{frequencyExtras}</div>}
-        {/* The band control and Tune are ONE wrapping unit (.ch-bandtune): when this cluster wraps
-            at 110-125% zoom they move to the next line together, so Tune never separates from
-            the band control (measured in the layout harness — wrapped individually, Tune landed
-            at the far left of the next line). */}
-        <div className="ch-bandtune">
         <div className="ch-band">{bandControl}</div>
-        {/* #287 — TUNE HAS ONE FIXED PLACE: directly after the band control, in every cockpit that
-            uses this header. It used to sit at the end of the right-pinned actions cluster and
-            slide sideways with whatever each mode put in front of it (depth chips, ⊞ Panels, the
-            power slider, the TX pill, the amplifier strip). A band change is when you tune, so it
-            lives beside the band picker, as WSJT-X has it. Still outside every ⊞-removable pane —
-            this header is not a pane — so the stop line is unchanged; only its position moved. */}
-        {(onTune || (onAtuTune && radio.atu != null)) && (
-          <div className="ch-tune">
-            {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW, Operate, RTTY and
-                PSK stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
-            {onTune && (
-              <button
-                type="button"
-                className={`cockpit-tune${radio.tuning ? ' keyed' : ''}`}
-                aria-pressed={radio.tuning}
-                onClick={() => onTune(!radio.tuning)}
-                disabled={!control || (!radio.txAllowed)}
-                title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
-              >
-                {radio.tuning ? 'TUNING…' : 'Tune'}
-              </button>
-            )}
-
-            {/* The RADIO's own ATU, beside the carrier Tune it is so often confused with.
-                Disabled on the licence lockout exactly like Tune; every other refusal (TX off,
-                transmitter busy) comes back from the backend WITH ITS REASON and is shown,
-                because a control that keys the transmitter must never fail silently.
-
-                ⭐ DISABLED, NOT HIDDEN, in BOTH the ways this button can be unavailable —
-                and the second of those is new on 2026-09-20.
-
-                (1) This CAT path cannot START a tune (Hamlib's Icom and Kenwood backends clamp
-                `set_func TUNER 2` to "tuner in line" — `icom.c:7085`). The rig's tuner and its
-                in-line state are REAL, which is what `radio.atu` means and what this button's
-                title reports; hiding it would take that away and answer the operator's "where
-                did my ATU go?" with nothing. It is the ACTION that is unavailable.
-
-                ⛔ (2) BUT NOT WHEN THE RADIO REPORTS NO TUNER AT ALL (`radio.atu` null): the
-                button is ABSENT, and that is a deliberate EXCEPTION to the 2026-09-20
-                disabled-with-reason ruling rather than a site nobody got to. The ruling's
-                home ground is "the rig can do it, this path cannot" — a control Nexus built,
-                unreachable through the operator's transport, which is case (1) above. Absent
-                HARDWARE is not a path problem, and this particular control KEYS THE
-                TRANSMITTER: the precaution against a rig with no tuner growing a tune-up
-                button outranks the discoverability the mark would buy. A rig that HAS a
-                tuner it cannot be asked to start keeps its button and its reason, which is
-                the case the operator actually hits.
-
-                This exception was ruled on 2026-09-20 alongside the rest, and it was briefly
-                implemented the other way before that. If you are here to "finish" the sweep,
-                this is the one that stays.
-
-                ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as
-                SetupHealth's Prove TX does, so its words stay here with Tune's and Stop TX's. */}
-            {onAtuTune && radio.atu != null && (
-              <button
-                type="button"
-                className="cockpit-tune"
-                onClick={onAtuTune}
-                disabled={!control || !radio.txAllowed || !!radio.atuStartTuneUnsupported}
-                title={`${
-                  radio.atuStartTuneUnsupported
-                    ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
-                    : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-                } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`}
-              >
-                ATU
-              </button>
-            )}
-          </div>
-        )}
-        </div>
       </div>
 
       {children != null && <div className="ch-mode-extras">{children}</div>}
@@ -455,72 +339,6 @@ export function CockpitHeader({
               {powerValue == null ? '—' : power.unit === '%' ? `${Math.round(powerValue)}%` : `${Math.round(powerValue * 100)}%`}
             </span>
           </label>
-        )}
-
-        {/* ⚠️ THE BRANCH CONDITION IS THE SLOT FLAG ON PURPOSE — stop line. In RTTY/SSTV
-            the TX-enable latch is a STOP control and must stay a BUTTON through an over
-            (`radio.transmitting` is the slot-TX indicator alone, so a soundcard over never
-            flips this branch). Gating it on the arbiter's `onAir` would replace the latch
-            with a passive pill exactly while an over is keying — removing a stop control.
-            Only the PASSIVE pill below (Phone/CW, which pass no onSetTxEnabled) reads the
-            arbiter.
-
-            ⚠️ DEFERRED (i18n): the latch's two labels are the accessible name
-            `stop-line.test.tsx` matches for RTTY and SSTV, where this button IS a stop
-            control. It moves in the transmit-path batch — see this file's header. */}
-        {txState &&
-          (onSetTxEnabled && !radio.transmitting ? (
-            <button disabled={!control}
-              type="button"
-              className={`cockpit-txstate cockpit-txarm${radio.txEnabled ? ' armed' : ''}`}
-              aria-pressed={radio.txEnabled}
-              onClick={() => onSetTxEnabled(!radio.txEnabled)}
-              title={
-                radio.txEnabled
-                  ? 'Transmit ARMED (WSJT-X "Enable Tx") — sends will key the rig. Click to disable.'
-                  : 'Transmit is OFF — click to ARM so RTTY/SSTV sends can key the rig (WSJT-X "Enable Tx").'
-              }
-            >
-              {radio.txEnabled ? '▼ TX On' : '■ TX Off'}
-            </button>
-          ) : (
-            <span
-              className={`cockpit-txstate${onAir ? ' on' : ''}`}
-              title={!radio.transmitting && radio.txBusyReason ? radio.txBusyReason : undefined}
-            >
-              {txPill}
-            </span>
-          ))}
-
-        {/* ⚠️ DEFERRED (i18n): THE stop control of six cockpits. Its label is the accessible
-            name every stop-line sweep looks for (/^stop tx$/i).
-
-            REMOTE (operator decision 2026-09-14): in the browser this is the station's one remote
-            stop, the same path Operate's FtStopControl uses — halt_tx → the hosted control
-            transport → the operation client's `stopTransmit`. Its authority is
-            useStationStopControl (connected + a station-issued stop token), so stale readings, a
-            pending command or the busy banner never disable it. The cockpit's own handler is
-            local-only: its extra verbs (stop_cw, rtty_stop, psk_stop) have no remote route. One
-            click, one request. The station stops ANY transmission for it, however it started
-            (operator decision 2026-09-14): it runs every local stop verb (stop_cw, rtty_stop,
-            psk_stop, sstv_stop, stop_voice, then halt_tx), for any browser holding station
-            control, with or without transmit permission. */}
-        {onStopTx && (
-          <button disabled={!(control || remoteStop)} type="button" className="cockpit-stoptx"
-            data-remote-stop={(!control && remoteStop) || undefined}
-            onClick={control ? onStopTx : () => void withErrorToast(() => haltTx(), t('shell.halt.failed')).then(s => { if (s) onSnap?.(s) })}
-            title="Stop TX (Esc)">
-            Stop TX
-          </button>
-        )}
-        {/* ⚠️ NEVER "stopped" on acceptance. The station answers an accepted Stop before the halt
-            has run — when its Engine is held it runs afterwards on its own thread — so this reads
-            SENT until the station's own transmitter reading goes free, and STOPPED only then. */}
-        {onStopTx && stopProgress !== 'idle' && (
-          <span className={`cockpit-stopstate${stopProgress === 'stopped' ? ' done' : ''}`} role="status"
-            title={stopProgress === 'stopped' ? t('remote.stop.stopped.title') : stopProgress === 'sent' ? t('remote.stop.sent.title') : undefined}>
-            {stopProgress === 'stopped' ? t('remote.stop.stopped') : stopProgress === 'sent' ? t('remote.stop.sent') : t('remote.stop.sending')}
-          </span>
         )}
 
         {catStatus ?? (

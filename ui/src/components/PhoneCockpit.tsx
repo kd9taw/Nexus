@@ -32,6 +32,7 @@ import { ArrangePanes } from './panes/ArrangePanes'
 import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { PaneCloseButton } from './panes/PaneCloseButton'
@@ -1177,7 +1178,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // pane transmits (F1–F6 key the rig) and hosts a ■ Stop of its own, and it renders inside
   // .cockpit-panes with a ⊞ id. What is true is THE STOP LINE (features/panelState.ts): the
   // controls this cockpit's census rests on stay out of the region — the PTT row lives in the
-  // pinned .cockpit-txdock, Stop TX and Tune in the header — and none of them has an id in the
+  // pinned .cockpit-txdock, Stop TX and Tune in the TX strip — and none of them has an id in the
   // pane vocabulary, so moving or hiding one is unrepresentable. Whether a pane transmits has
   // no bearing on whether it may be hidden.
   //
@@ -2270,6 +2271,25 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     </Fragment>
   )
 
+  // THE TX STRIP — FT's cluster (operator batch 60): the TX-enable latch READ-ONLY (Phone arms TX
+  // itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
+  // (→ halt_tx), sticky so they never leave the window. A shell child with no ⊞ id: under the
+  // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
+  // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
+  // which calls preventDefault, so the focused button does not click.
+  const txStrip = (
+    <CockpitTxStrip
+      radio={snap.radio}
+      onSnap={onSnap}
+      onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+      onAtuTune={() =>
+        void atuTune()
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
+      onStopTx={() => void haltTx()}
+    />
+  )
   return (
     <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`}>
       <CockpitHeader
@@ -2372,14 +2392,6 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             dragging.current = false
           },
         }}
-        txActiveLabel="▲ TX"
-        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
-        onAtuTune={() =>
-          void atuTune()
-            .then((s) => onSnap?.(s))
-            .catch((e) => pushToast(String(e), 'error'))
-        }
-        onStopTx={() => void haltTx()}
       >
         {micOffForDax && (
           <span className="ph-mode-mismatch" title={t('phone.micDax.title')}>
@@ -2482,7 +2494,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           dragged to rather than the 22% default.
 
           Nothing on this strip stops a transmission (THE STOP LINE, features/panelState.ts):
-          it is a display plus click-to-tune, and Stop TX / Tune are in the header above, PTT in
+          it is a display plus click-to-tune, and Stop TX / Tune are in the TX strip below it, PTT in
           the dock below, none of them reachable from the ⊞ menu. */}
       {shown('scope') && (
         <>
@@ -2621,6 +2633,9 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         </>
       )}
 
+      {/* THE TX STRIP (`txStrip` above), under the scope. */}
+      {!quick && txStrip}
+
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped
           imperatively — never rendered here); the JSX renders exactly as many
@@ -2690,6 +2705,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           />
         )}
       </div>
+
+      {/* THE HOSTED QUICK PRESENTATION puts the contact first (`.cockpit-col--contact`), so there
+          the strip follows the contact column instead of preceding it, right above the dock: a
+          strip under the header pushed the call field below the quick navigation on a phone. Still
+          a shell child with no id, still sticky above the dock. */}
+      {quick && txStrip}
 
       {/* TX DOCK — the transmit chrome, pinned OUTSIDE the pane region so no pane
           layout, stored or hand-edited, can move, hide or scroll it away. PTT and Lock

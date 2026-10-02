@@ -5245,7 +5245,10 @@ h2 {
   grid-area: header;
   min-width: 0;
   display: flex;
-  align-items: center;
+  /* A COLUMN since the TX strip moved under Tempo's header (operator batch 60): header, then the
+     strip, each the cell's full width. */
+  flex-direction: column;
+  align-items: stretch;
 }
 .grid-header > .cockpit-header {
   flex: 1;
@@ -16812,23 +16815,60 @@ button.cq-skiptx1.on {
   min-width: 0;
   overflow: hidden;
 }
-/* TX cluster density — SCOPED to the strip: .op-btn/.op-controls are shared with
-   the TopBar and RoamPanel, an unscoped shrink would bleed there. Shrinking only:
-   same place, same handlers, always visible (dock law allows styling, forbids
-   hiding/relocating). ~24px tall vs the old 32px. */
-.cockpit-qso .op-controls {
+/* THE TX CLUSTER, ONE SIZE ON EVERY SCREEN — FT's strip and every other screen's TX strip
+   (CockpitTxStrip) draw it, so it is SCOPED to `.cq-txctl`: .op-btn/.op-controls are shared with
+   the TopBar and RoamPanel, and an unscoped rule would bleed there. THE HEADER'S SIZE (operator
+   batch 60): the cockpit headers' Stop TX was 93×29 at 100 %, FT's 66×24, and the cluster moved
+   out of those headers, so no Stop TX may come out smaller than the header's was — it inherits the
+   cockpit's text size and the header buttons' padding. Same place, same handlers, always visible
+   (the dock law allows styling, forbids hiding or relocating). inline-flex so the read-only latch
+   (a span, Phone and CW) takes the same box as the buttons. */
+.op-controls.cq-txctl {
   padding: 2px;
+  /* WRAPS rather than clips. At header size the cluster is ~400 px wide at 100 %; on a phone, or
+     a narrow window at a large pin, a one-row pill ran past its strip and the frame clipped Stop TX
+     in half (the hosted Quick layout at 390 px, 175 %). It keeps one row wherever it fits — a
+     flex line breaks on the cluster's one-row width — and only a strip narrower than that wraps
+     it. */
+  flex-wrap: wrap;
+  max-width: 100%;
 }
-.cockpit-qso .op-btn {
-  min-height: 24px;
-  padding: 3px var(--space-2);
-  font-size: calc(11px * var(--text-scale));
+/* A SHELL WITH A STICKY TX STRIP keeps what it scrolls to clear of it. Parked at the top, the strip
+   covers the scrollport's first rows, so anything scrolled to the START — `scrollIntoView`, a focus
+   moving into the log form — would land under it (the hosted RTTY call field at 1024×768, 175 %).
+   The strip writes its own height on its shell (`--cockpit-txstrip-h`); a shell without one pads
+   nothing. */
+.layout.single {
+  scroll-padding-top: var(--cockpit-txstrip-h, 0px);
+}
+.cq-txctl .op-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 6px var(--space-4);
+  font-size: inherit;
+  line-height: normal;
 }
 /* The toggle's label flips TX On ↔ TX Off (incl. the automatic disable after 73):
    a fixed floor keeps Tune / Stop TX / Hold Tx from shifting with it. em at the
-   button's own 11px font — sized to 'TX Off' plus padding. */
-.cockpit-qso .op-btn.monitor {
-  min-width: 5.4em;
+   button's own font — sized to 'TX Off' plus the padding. */
+.cq-txctl .op-btn.monitor {
+  min-width: 6.2em;
+}
+/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press. */
+.cq-txctl .op-btn.readonly {
+  cursor: default;
+}
+/* The TX state after the cluster on the other screens' strips: Operate's colours, carried by the
+   cap itself because those strips wear no rx/tx wash of their own. */
+.cq-statecap.rx {
+  color: var(--state-good, #29c281);
+}
+.cq-statecap.tx {
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border-color: var(--on-air-rim);
 }
 /* WSJT-X Tx1–Tx6 standard-message panel (Classic layout): DX Call/Grid +
    Generate on the left, the six message rows (next-dot · text · Tx button)

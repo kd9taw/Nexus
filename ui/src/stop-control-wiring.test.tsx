@@ -355,7 +355,8 @@ async function expectTuneKeysAndUnkeys(find: () => HTMLButtonElement): Promise<v
 
 const STOP_TX = /^stop tx$/i
 const TUNE = /^tune$|^tuning…$/i
-const TX_LATCH = /^▼ tx on$|^■ tx off$/i
+// The TX strip's latch, in FT's words since operator batch 60 (the header's read "▼ TX On" / "■ TX Off").
+const TX_LATCH = /^tx on$|^tx off$/i
 
 // ── Space and the ⊞ menu (Phone) ────────────────────────────────────────────────────────────
 const SPACE = { code: 'Space', key: ' ' }

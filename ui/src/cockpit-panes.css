@@ -11,8 +11,9 @@
    so much as names one of these classes. Content styling (colors, type, the insides of a
    pane) stays in styles.css; SIZE lives here and only here.
 
-   THE MODEL. A cockpit shell has four child kinds — header chrome, the scope, ONE pane
-   region, and the TX dock. The region is a grid of columns; each column is itself a flex
+   THE MODEL. A cockpit shell has five child kinds — header chrome, the scope, the TX strip
+   right under it (FT's cluster: TX On/Off · Tune · ATU · Stop TX, sticky; `.cockpit-txstrip`
+   below), ONE pane region, and the TX dock. The region is a grid of columns; each column is itself a flex
    stack of pane frames. Vertical deficit has exactly three legal fates, in order: a
    scrollbar inside the pane that overflowed; a scrollbar inside the COLUMN that overflowed
    (the only fate available to a stack of fit="content" frames, which are `flex: 0 0 auto`
@@ -51,17 +52,19 @@
 
      THE CONTROLS THAT HOLD IT UP, re-verified against the code 2026-08-03, each with WHAT it
      stops (only halt_tx is universal; everything else has a scope):
-       Phone — PTT (dock; drops the mic key it holds), Stop TX (header → halt_tx), Tune
-         (header; the tune carrier only), the Space bar (window keyup → the same unkey as
+       (Since operator batch 60, 2026-10-01, every "TX strip" below was "header": the latch,
+       Tune, the ATU and Stop TX left the cockpit header for the strip under the scope.)
+       Phone — PTT (dock; drops the mic key it holds), Stop TX (TX strip → halt_tx), Tune
+         (TX strip; the tune carrier only), the Space bar (window keyup → the same unkey as
          PTT-release, and only while Lock is off).
-       CW — Stop TX (header → stopCw + haltTx), Tune (the carrier only), Esc (the same abort).
+       CW — Stop TX (TX strip → stopCw + haltTx), Tune (the carrier only), Esc (the same abort).
        Operate — Stop TX (.op-btn.stop in the merged .cockpit-qso strip → halt_tx; the ONLY
          control here that cuts an over in flight), Tune (the carrier only), Esc (the same
          halt). TX On/Off and S&P WERE ON THIS LIST AND ARE NOT STOP CONTROLS: set_tx_enabled
          deliberately does not arm slot_tx_abort (operator 2026-07-31 — the FT over in flight
          completes), and onSetMode('qso-monitor') ends the CQ RUN and drops the queue without
          arming anything.
-       RTTY — Stop TX (header, never disabled), the dock's Esc/Stop macro (disabled={!sending},
+       RTTY — Stop TX (TX strip, never disabled), the dock's Esc/Stop macro (disabled={!sending},
          so live exactly while an over is on the air), the TX-enable latch (a real stop HERE:
          set_tx_enabled(false) arms rtty_abort, which the audio loop turns into flush + unkey
          while an over is keying; it stays a BUTTON through RTTY overs because
@@ -69,12 +72,12 @@
          rendered only while auto is on and the sequence is not idle).
        SSTV — Stop (.sstv-tx-bar, disabled={!sending}) and the TX-enable latch (same mechanism
          as RTTY, via sstv_abort).
-       APRS — no vocabulary at all, so the rule holds by construction; its stop control is
-         the TX-enable latch (TX On/Off). It arms no abort, but turning it off stops a beacon on
+       APRS — no vocabulary at all, so the rule holds by construction; its stop controls are
+         the TX strip's Stop TX (halt_tx) and the TX-enable latch (TX On/Off). It arms no abort, but turning it off stops a beacon on
          the air through the loop's TX-off cut (unkey + flush of a non-slot over; measured
          2026-09-30) and drops what is still queued.
-     The TopBar's TX cluster backstops none of them: App hides it in Operate and in
-     Phone/CW/RTTY/SSTV/APRS, so every cockpit stands on its own controls.
+     The TopBar's TX cluster backstops none of them: App hides it in Operate, Tempo and
+     Phone/CW/RTTY/PSK/SSTV/APRS/JS8, so every cockpit stands on its own controls.
 
      THE SWEEPS DO NOT MATCH THAT CENSUS ONE FOR ONE, and the claim that they did was false
      for four of the five swept cockpits. Swept: Phone — PTT, Stop TX, Tune. CW — Stop TX,
@@ -419,6 +422,44 @@
   background: var(--panel);
 }
 
+/* THE TX STRIP — the fifth shell child kind (operator batch 60, 2026-10-01: "FT's strip under the
+   scope in every mode, FT's order, staying in view"). FT's transmit cluster — TX On/Off · Tune ·
+   ATU · Stop TX (· Hold Tx) — and the TX state, drawn by components/CockpitTxStrip directly under
+   the scope on every operating screen but FT, whose `.cockpit-qso` is the same cluster with its
+   QSO controls around it. It is where Stop TX, Tune and the latch live now, so it is a STOP
+   surface like the dock: never a pane, no id in any vocabulary, nothing in the ⊞ menu can reach it.
+   STICKY ON BOTH EDGES, and that is what it is for. When the shell's deficit valve scrolls (a
+   150–175 % pin on a laptop), the strip parks at the top of the scrollport, or just above the
+   sticky dock, instead of leaving the window: the header Stop TX it replaced sat UNDER the dock at
+   those pins — present, enabled and unclickable (N66, measured). The bottom offset is the dock's
+   height, written by the strip as a placement input (`--cockpit-txstrip-bottom`), because CSS
+   cannot read a sibling's box. It must be a DIRECT shell child: a sticky box never leaves its
+   containing block, so inside a wrapper it could not leave that wrapper's box. `flex: 0 0 auto`
+   for the dock's reason (neither a grower nor a shrink victim), and opaque because a parked strip
+   covers the scope. */
+.cockpit-txstrip {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  bottom: var(--cockpit-txstrip-bottom, 0px);
+  z-index: 2;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px var(--space-2);
+  padding: 3px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+/* The hosted observer's TX strip scrolls with its cockpit, for its dock's reason below: its
+   controls are disabled, and at a phone width a parked strip of disabled buttons covered the decode
+   text and the contact the observer was reading (compiled-browser v5, DX work). With station
+   control the strip is pinned like the dock. After `.cockpit-txstrip`, which it overrides. */
+.remote-observer-strip {
+  position: static;
+}
 /* The keyboard observer's disabled controls can fill the entire remaining
    viewport at 175% zoom, covering both text and recall at every scroll position.
    Let that inactive dock scroll with its cockpit. Only observers attach this

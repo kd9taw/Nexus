@@ -239,7 +239,7 @@ describe('every selector is flat (uniform specificity ⇒ no cascade war is poss
 describe('the fence: styles.css never names a structural class', () => {
   // The 19k-line sheet is where every previous override crept in. If it cannot name these
   // classes it cannot fight them — the isolation is the guarantee, not a convention.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -597,6 +597,29 @@ describe('panes are sized by the grid, never by themselves', () => {
       r!.body.replace(/\s+/g, ' '),
       'the dock carries PTT/send: it must never be a flex grower or a shrink victim.',
     ).toMatch(/flex: 0 0 auto/)
+  })
+
+  // THE TX STRIP (operator batch 60) carries Stop TX, Tune and the latch on every screen but
+  // FT's. The fence above is what makes this one rule the whole cascade for it: styles.css may
+  // not name the class, so no later or heavier rule can unpin it.
+  it('the TX strip is unshrinkable and sticky on BOTH edges, the bottom clearing the dock', () => {
+    const r = RULES.filter((x) => x.selector === '.cockpit-txstrip')
+    expect(r.length, 'exactly one .cockpit-txstrip rule').toBe(1)
+    const decl = (prop: string) => {
+      let v: string | null = null
+      for (const d of r[0].body.split(';')) {
+        const m = new RegExp(`^\\s*${prop}\\s*:\\s*([^]*?)\\s*$`).exec(d)
+        if (m) v = m[1].replace(/\s+/g, ' ')
+      }
+      return v
+    }
+    expect(decl('flex'), 'a grower or a shrink victim').toBe('0 0 auto')
+    expect(decl('position'), 'not sticky: at a large pin it scrolls out of the window').toBe('sticky')
+    expect(decl('top'), 'scrolled down, it would leave through the top').toBe('0')
+    expect(decl('bottom'), 'parked at the bottom, it must clear the sticky dock').toBe('var(--cockpit-txstrip-bottom, 0px)')
+    // A sticky box over scrolled content must be opaque and stack above the panes it covers.
+    expect(decl('background')).toBe('var(--panel)')
+    expect(Number(decl('z-index'))).toBeGreaterThanOrEqual(1)
   })
 })
 

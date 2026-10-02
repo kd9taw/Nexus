@@ -11,14 +11,16 @@
 //  2. it lives with the TRANSMIT controls, beside Tune, and carries Tune's licence lockout. An
 //     ATU tune-up keys the transmitter; it is not a receive filter like NB/NR/Notch, and it must
 //     not be reachable when transmitting here is not permitted.
+//
+// Since operator batch 60 (2026-10-01) the button is the TX strip's (CockpitTxStrip, FT's cluster
+// under the scope on every screen), no longer the cockpit header's; these cases moved with it.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
-import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import type { AppSnapshot } from '../types'
 
-vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)) }))
-vi.mock('../toast', () => ({ pushToast: vi.fn() }))
-vi.mock('../useWheelTune', () => ({ useWheelTune: () => undefined }))
+vi.mock('../api', () => ({ haltTx: vi.fn(() => Promise.resolve(null)) }))
+vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn() }))
 
 const snapWith = (over: Record<string, unknown> = {}) =>
   ({
@@ -36,10 +38,8 @@ const snapWith = (over: Record<string, unknown> = {}) =>
 
 function mount(snap: AppSnapshot, onAtuTune: (() => void) | undefined = () => {}) {
   return render(
-    <CockpitHeader
-      snap={snap}
-      modeIndicator={<span>Phone</span>}
-      bandControl={<span>20m</span>}
+    <CockpitTxStrip
+      radio={snap.radio}
       onTune={() => {}}
       onAtuTune={onAtuTune}
     />,
@@ -81,11 +81,11 @@ describe("the rig's own ATU control", () => {
     // BOTH rigs, because "no mark" on one that has a tuner would pass against a header that
     // marks the barefoot one.
     mount(snapWith({ atu: null }))
-    expect(document.querySelector('.ch-tune .ph-unavail'), 'the reverted ⊘ mark came back').toBeNull()
+    expect(document.querySelector('.cq-txctl .ph-unavail'), 'the reverted ⊘ mark came back').toBeNull()
     cleanup()
     mount(snapWith({ atu: false }))
     expect(atuButton()!.hasAttribute('disabled')).toBe(false)
-    expect(document.querySelector('.ch-tune .ph-unavail')).toBeNull()
+    expect(document.querySelector('.cq-txctl .ph-unavail')).toBeNull()
   })
 
   it('appears once the radio reports one, bypassed or in-line', () => {
@@ -96,16 +96,10 @@ describe("the rig's own ATU control", () => {
     expect(atuButton()).toBeTruthy()
   })
 
-  it('is not offered at all in a cockpit that has no Tune control either', () => {
-    // Operate/RTTY pass no `onAtuTune` (they carry no Tune button in the header). The ATU is a
-    // sibling of Tune, so it appears exactly where Tune does and nowhere else.
-    render(
-      <CockpitHeader
-        snap={snapWith({ atu: true })}
-        modeIndicator={<span>FT8</span>}
-        bandControl={<span>20m</span>}
-      />,
-    )
+  it('is not offered at all on a strip that has no Tune control either', () => {
+    // A screen that passes no `onAtuTune` gets no ATU, even over a radio with a tuner. The ATU is
+    // a sibling of Tune, so it appears exactly where Tune does and nowhere else.
+    render(<CockpitTxStrip radio={snapWith({ atu: true }).radio} />)
     expect(atuButton()).toBeNull()
   })
 

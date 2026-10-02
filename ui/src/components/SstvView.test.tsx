@@ -137,9 +137,9 @@ describe('SstvView RX wiring', () => {
 
   it('arms the receiver through sstv_arm and shows the armed waiting state', async () => {
     render(<SstvView snap={snap} />)
-    // The header now shows the TX-state pill (display-only here — the arm handler is
+    // The TX strip shows the TX state (the latch is read-only here — the arm handler is
     // supplied by App in the real app; the dedicated arm test below covers the toggle).
-    expect(document.querySelector('.cockpit-txstate')).not.toBeNull()
+    expect(document.querySelector('.cockpit-txstrip .cq-statecap')).not.toBeNull()
     const arm = await screen.findByText('Arm')
     fireEvent.click(arm)
     expect(sstvArm).toHaveBeenCalledWith(true)

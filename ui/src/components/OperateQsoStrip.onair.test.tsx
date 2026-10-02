@@ -15,9 +15,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { t } from '../i18n'
-import type { AppSnapshot, RadioStatus } from '../types'
+import type { RadioStatus } from '../types'
 
 afterEach(cleanup)
 
@@ -86,9 +86,10 @@ describe("Operate's strip follows the transmitter", () => {
   it.each([...KEYED, ...IDLE.map(([w, o]) => [w, o] as [string, Partial<RadioStatus>])])(
     "agrees with the cockpit header's ON AIR sign: %s",
     (_what, over) => {
-      const snap = { radio: radio(over) } as unknown as AppSnapshot
-      const { container } = render(<CockpitHeader snap={snap} modeIndicator={<span>FT8</span>} bandControl={<span>—</span>} />)
-      const header = container.querySelector('.cockpit-txstate')!.classList.contains('on')
+      // Every other screen's sign is its TX strip's caption since operator batch 60 (the header's
+      // pill moved there with the latch).
+      const { container } = render(<CockpitTxStrip radio={radio(over)} onStopTx={() => {}} />)
+      const header = container.querySelector('.cq-statecap')!.classList.contains('tx')
       cleanup()
       const onAir = strip(over).section.classList.contains('tx')
       expect(onAir, `the header says ${header ? 'ON AIR' : 'not on the air'}, the strip says ${onAir ? 'TRANSMITTING' : 'not'}`).toBe(header)

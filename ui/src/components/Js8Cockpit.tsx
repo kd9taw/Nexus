@@ -14,6 +14,7 @@ import { js8DisplayNow } from '../remote-web/js8'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch } from '../types'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { PaneSeam } from './PaneSeam'
@@ -1046,9 +1047,6 @@ export function Js8Cockpit({
           snap={snap}
           onSnap={onSnap}
           remoteWorkspace="js8"
-          txActiveLabel="▲ JS8"
-          onStopTx={stop}
-          onSetTxEnabled={onSetTxEnabled ? (on) => { if (canControl) onSetTxEnabled(on) } : undefined}
           // TX DRIVE, the FT8 header's control: a configuration control on the transmit
           // path, not a transmit control.
           power={{
@@ -1063,14 +1061,6 @@ export function Js8Cockpit({
             label: t('js8.header.power.label'),
             title: t('js8.header.power.title'),
           }}
-          // TUNE — a steady carrier; also a stop control (it stops the carrier it started),
-          // so it is on this cockpit's stop-line census and its sweep.
-          onTune={(on) => { if (canControl) void setTune(on).then((s) => onSnap?.(s)) }}
-          onAtuTune={() =>
-            canControl && void atuTune()
-              .then((s) => onSnap?.(s))
-              .catch((e) => pushToast(String(e), 'error'))
-          }
           modeIndicator={
             <>
               <span className="cw-mode-badge" title={t('js8.header.speed.title')}>
@@ -1212,6 +1202,26 @@ export function Js8Cockpit({
         </>
       )}
 
+      {/* THE TX STRIP — FT's cluster under the waterfall (operator batch 60): the TX-enable
+          latch, Tune, the rig's ATU and Stop TX, sticky so they never leave the window. A shell
+          child with no ⊞ id, so hiding the waterfall leaves it directly under the header.
+          TUNE — a steady carrier; also a stop control (it stops the carrier it started), so it
+          is on this cockpit's stop-line census and its sweep. */}
+      {snap && (
+        <CockpitTxStrip
+          radio={snap.radio}
+          onSnap={onSnap}
+          onStopTx={stop}
+          onSetTxEnabled={onSetTxEnabled ? (on) => { if (canControl) onSetTxEnabled(on) } : undefined}
+          onTune={(on) => { if (canControl) void setTune(on).then((s) => onSnap?.(s)) }}
+          onAtuTune={() =>
+            canControl && void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+        />
+      )}
+
       {js8?.lastError && (
         <div className="cw-keyer-warn" role="alert">
           ⚠ {js8.lastError}
@@ -1269,9 +1279,9 @@ export function Js8Cockpit({
       </div>
 
       {/* TX DOCK — every transmit control, pinned OUTSIDE the pane region. None has a ⊞ id.
-          Stop TX and Tune are up in the header: THE STOP LINE. Everything down here is a
+          Stop TX and Tune are up in the TX strip: THE STOP LINE. Everything down here is a
           SENDER (Send, CQ), a second-act arm (HB / AUTOREPLY / RELAY / HB ACK — each is only
-          the SECOND act; the session TX latch in the header is the first, and the chip shows
+          the SECOND act; the session TX latch in the TX strip is the first, and the chip shows
           "armed" only when both agree), a cancel for a reply that has not fired, or Drop
           queue — a SENDER-class control (it empties the queue; a frame already keyed
           finishes) that must never enter the stop-line sweep. */}
@@ -1425,7 +1435,7 @@ export function Js8Cockpit({
         )}
 
         {/* THE QUEUE — one frame leaves per period once TX is on. F/L are the i3 First/Last
-            flags (tokens). Drop queue is NOT a stop; Stop TX is in the header. */}
+            flags (tokens). Drop queue is NOT a stop; Stop TX is in the TX strip. */}
         {js8 && js8.queue.length > 0 && (
           <div className="js8-dock-row js8-queue-row" title={t('js8.dock.queue.title')}>
             {js8.queue.map((r, i) => (

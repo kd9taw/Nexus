@@ -41,6 +41,7 @@ import {
   setActiveRadio as apiSetActiveRadio,
   setPegLock as apiSetPegLock,
   setTune as apiSetTune,
+  atuTune as apiAtuTune,
   haltTx as apiHaltTx,
   setTxEven as apiSetTxEven,
   setTxCycleAuto as apiSetTxCycleAuto,
@@ -93,6 +94,7 @@ import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
 import { TempoHeader } from './components/TempoHeader'
+import { CockpitTxStrip } from './components/CockpitTxStrip'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { markerWidthHz } from './waterfall'
@@ -1743,6 +1745,15 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     })
   }, [])
 
+  // The rig's own ATU, from the TX strips App draws the handlers for (Tempo, APRS). A control that
+  // keys the transmitter never fails silently: the backend returns every refusal (TX off, busy,
+  // lockout, no tuner) WITH ITS REASON, and the toast shows it.
+  const handleAtuTune = useCallback(() => {
+    void apiAtuTune()
+      .then((s) => setSnap(s))
+      .catch((e) => pushToast(String(e), 'error'))
+  }, [])
+
   // Prove-TX-path: key the tune carrier for ~2.5 s then auto-drop — a BOUNDED transmit that lets the
   // operator verify CAT→PTT→RF (forward power registers). Always invoked from behind a confirm
   // dialog (operator's TX-approval condition); the TX watchdog backs up the auto-unkey.
@@ -2646,7 +2657,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // PSK and JS8 each bind their own Esc while shown, to the function their Stop TX calls. These five
   // bound none: Esc did nothing on Tempo, SSTV and APRS, stopped only the voice keyer on Phone, and
   // Satellites had no stop at all. On all five the stop is halt_tx — Tempo's Stop TX is the top
-  // bar's, which is this handleHaltTx; Phone's and SSTV's header Stop TX call haltTx alone; APRS and
+  // bar's, which is this handleHaltTx; Phone's and SSTV's TX-strip Stop TX call haltTx alone; APRS and
   // Satellites draw no stop control (the top bar's is hidden there) — so one listener here sends
   // that halt while one of them is on show. CAPTURE phase, so nothing on the screen can swallow the
   // key; never preventDefault, so every other meaning of Esc still happens on the same press: a menu
@@ -3286,6 +3297,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               onToggleCqRun={handleToggleCqRun}
               onResumeCqRun={handleResumeCqRun}
+              onSetTxEnabled={handleSetTxEnabled}
+              onSetTune={handleSetTune}
+              onAtuTune={handleAtuTune}
+              onHaltTx={handleHaltTx}
+              onSetHoldTxFreq={handleSetHoldTxFreq}
             />,
           )}
           {roamOpen && (
@@ -3352,7 +3368,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onSetTxCycleAuto={handleSetTxCycleAuto}
         onSetHoldTxFreq={handleSetHoldTxFreq}
         onStopRecording={handleStopRecording}
-        hideTxControls={effectiveView === 'operate'}
+        // Tempo's cluster moved into its TX strip under the Tempo header (operator batch 60), so
+        // the top bar hides it there exactly as on Operate.
+        hideTxControls={effectiveView === 'operate' || effectiveView === 'chat'}
         hideFrequencyControl={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
@@ -3636,7 +3654,19 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 active={effectiveView === 'aprs'}
                 onTune={handleAprsTune}
                 radio={snap.radio}
-                onSetTxEnabled={handleSetTxEnabled}
+                // FT's TX cluster (operator batch 60): APRS's TX On/Off moved into it, and it gained
+                // Stop TX (halt_tx, the stop its Esc sends). Tune and ATU only when the rig reports a
+                // tuner — there is nothing to tune a 2 m FM antenna against otherwise.
+                txStrip={
+                  <CockpitTxStrip
+                    radio={snap.radio}
+                    onSnap={setSnap}
+                    onSetTxEnabled={handleSetTxEnabled}
+                    onTune={snap.radio.atu != null ? handleSetTune : undefined}
+                    onAtuTune={handleAtuTune}
+                    onStopTx={handleHaltTx}
+                  />
+                }
                 onOpenSettings={openSettingsAt}
               />
             </div>

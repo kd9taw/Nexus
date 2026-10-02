@@ -191,6 +191,7 @@ describe('CwCockpit pane-grid shell', () => {
       '.cw-keyer-warn',
       '.ph-scope-panel',
       '.pane-splitter',
+      '.cockpit-txstrip',
       '.cockpit-panes',
       '.cockpit-txdock',
       '.logconfirm-backdrop',
@@ -203,6 +204,15 @@ describe('CwCockpit pane-grid shell', () => {
     }
     expect(shell.querySelectorAll(':scope > .cockpit-panes').length).toBe(1)
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
+    // THE TX STRIP (operator batch 60): exactly one, a shell child directly under the scope (after
+    // its divider), holding the stop controls the header used to hold — and the header none.
+    const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
+    expect(strips.length, 'no TX strip in the shell').toBe(1)
+    expect(strips[0].previousElementSibling?.matches('.pane-splitter'), 'the TX strip is not directly under the scope').toBe(true)
+    const named = (root: Element, re: RegExp) => [...root.querySelectorAll('button')].filter((b) => re.test(b.textContent!.trim()))
+    expect(named(strips[0], /^stop tx$/i).length, 'Stop TX is not in the TX strip').toBe(1)
+    expect(named(strips[0], /^tune$/i).length, 'Tune is not in the TX strip').toBe(1)
+    expect(named(shell.querySelector('.cockpit-header')!, /^stop tx$|^tune$|^tuning…$|^atu$|tx (on|off)$/i), 'the header still draws a transmit control').toEqual([])
     expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
   })
 
