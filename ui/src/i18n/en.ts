@@ -10487,7 +10487,8 @@ export const EN = {
   'features.chat.label': 'Chat',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
-  'features.connect.label': 'Conditions (formerly Connect)',
+  'features.connect.label': 'Conditions',
+  'features.connect.windowTitle': 'Conditions (formerly Connect)',
   'features.connect.oneLine':
     'Situational awareness — the grayline map + live propagation in one view.',
   'features.needed.label': 'Needed',

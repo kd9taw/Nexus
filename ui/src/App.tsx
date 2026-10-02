@@ -2621,7 +2621,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // otherwise silent to a screen reader).
   useEffect(() => {
     const label = featureById(effectiveView)?.label ?? t('features.settings.label')
-    document.title = t('shell.windowTitle', { section: label })
+    // Conditions' title still says "(formerly Connect)"; its label, which Settings, this
+    // announcement and the website's feature list read, is the plain name (operator, 2026-10-02).
+    const section = effectiveView === 'connect' ? t('features.connect.windowTitle') : label
+    document.title = t('shell.windowTitle', { section })
     announce(label)
   }, [effectiveView])
   // TX state → assertive announce + opt-in earcon. Snap-safe (null pre-connect). The arbiter the
