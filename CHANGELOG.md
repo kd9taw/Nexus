@@ -853,6 +853,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their own), from anywhere on the screen, a text field included, as it already did on FT, CW,
   RTTY, PSK and JS8. A menu or dialog that Esc closes still closes on the same press. Phone's
   space bar is unchanged.
+- **On the hosted page, Esc on FT follows the same rule as Stop TX.** For an observer it does
+  nothing, where it used to show "Could not stop transmit"; for the browser in control it stops
+  the station as before. On FT, CW, RTTY, PSK and JS8 Esc is now heard the way it is on the other
+  operating screens, before anything else on the screen, so no control there can ever keep it from
+  stopping. What Esc does is unchanged: on FT it is still the WSJT-X halt, the same as **Stop TX**.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,

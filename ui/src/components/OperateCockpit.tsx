@@ -1,5 +1,6 @@
 import { RemoteRecall } from '../remote-web/RemoteRecall'
 import { useStationControl, useStationTierControl, useStationCapability } from '../stationAccess'
+import { useEscStop } from '../useEscStop'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
@@ -940,17 +941,21 @@ export function OperateCockpit({
   // Alt+1…6 = the Tx buttons. Window-level and active-view only. F6 and Alt+1–6 stay behind
   // the typing guard; Esc and F4 are hoisted above it. Handlers ride a ref so the listener
   // binds once per activation without re-subscribing on every keystroke of state.
-  const keyRef = useRef({ doTx, clearDx, halt: onHaltTx, redecode: handleRedecode })
-  keyRef.current = { doTx, clearDx, halt: onHaltTx, redecode: handleRedecode }
+  //
+  // Esc's HALT rides the shared capture listener (useEscStop, operator 2026-10-01): the same
+  // onHaltTx, WSJT-X's Esc, but heard before any control on the screen can swallow the key, and
+  // only with stop authority, so an observer's Esc on the hosted page attempts no halt.
+  useEscStop(active, onHaltTx)
+  const keyRef = useRef({ doTx, clearDx, redecode: handleRedecode })
+  keyRef.current = { doTx, clearDx, redecode: handleRedecode }
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      // Escape is an ABORT key, not an editing key — it must halt TX even while the
-      // operator is typing in the Tx5 free-text field. It is checked BEFORE the
-      // typing guard; F4 / F6 / Alt+1–6 stay behind it.
+      // Escape is an ABORT key, not an editing key — it halts TX even while the operator is
+      // typing in the Tx5 free-text field (above). Here its default is cancelled, as it always
+      // was, BEFORE the typing guard; F4 / F6 / Alt+1–6 stay behind it.
       if (e.key === 'Escape') {
         e.preventDefault()
-        keyRef.current.halt()
         return
       }
       // F4 IS ALSO ABOVE THE GUARD (#204). WSJT-X handles it in `MainWindow::keyPressEvent`
