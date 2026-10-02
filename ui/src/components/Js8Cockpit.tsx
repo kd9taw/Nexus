@@ -7,6 +7,7 @@
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
+import { useEscStop } from '../useEscStop'
 import { useJs8Context } from '../remote-web/useJs8Context'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { useReceiverSettings } from '../remote-web/useReceiverSettings'
@@ -305,14 +306,14 @@ export function Js8Cockpit({
   }
   // Esc stops from anywhere in the cockpit — bound only while this is the VISIBLE view (the
   // cockpit stays mounted in the keep-alive host, so an unconditional listener would fire
-  // Stop TX from inside another section).
+  // Stop TX from inside another section). The stop rides the shared capture listener
+  // (useEscStop, operator 2026-10-01), so no control on the screen can swallow it; this listener
+  // still cancels the key's default, as it always did.
+  useEscStop(active && canControl, stop)
   useEffect(() => {
     if (!active || !canControl) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        stop()
-      }
+      if (e.key === 'Escape') e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

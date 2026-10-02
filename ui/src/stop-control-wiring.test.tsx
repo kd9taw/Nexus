@@ -801,6 +801,9 @@ describe('a menu or panel that Esc closes still closes, and the halt is sent on 
   it.each([
     ['operate (the reference)', 'operate', ['halt_tx']],
     ['cw (the reference)', 'cw', ['stop_cw', 'halt_tx']],
+    ['rtty', 'rtty', ['rtty_stop', 'halt_tx']],
+    ['psk', 'psk', ['psk_stop', 'halt_tx']],
+    ['js8', 'js8', ['halt_tx']],
     ['phone', 'phone', ['halt_tx', 'stop_voice']],
     ['sstv', 'sstv', ['halt_tx']],
   ] as const)('%s: the ⊞ Panels menu closes and the stop is sent', async (_name, view, esc) => {
@@ -852,21 +855,83 @@ describe('a menu or panel that Esc closes still closes, and the halt is sent on 
   })
 })
 
-describe('Esc on every screen in the registry: the five above gained the halt, and nothing else changed', () => {
-  // Each cockpit that binds its own Esc, with what it sends in this fixture (RTTY and PSK are on the
-  // air in it, so their own stop goes first). Any other section sends nothing: it has no Esc stop.
-  const OWN_ESC: Partial<Record<View, string[]>> = {
-    operate: ['halt_tx'],
-    cw: ['stop_cw', 'halt_tx'],
-    rtty: ['rtty_stop', 'halt_tx'],
-    psk: ['psk_stop', 'halt_tx'],
-    js8: ['halt_tx'],
-  }
+// ── FT, CW, RTTY, PSK and JS8: their own stop, on the same capture listener ────────────────────
+//
+// These five bound their own Esc in the BUBBLE phase, so a control that stopped the key on its way
+// up would have kept the stop from hearing it (measured in real Chrome with a planted one). The
+// operator's ruling (2026-10-01): all five move onto the shared capture listener App's five use
+// (useEscStop). Only the listener moves: each screen's Esc still sends its own stop, the same call
+// as before (on FT, WSJT-X's halt), and the key's default is still cancelled.
+//
+// NOT A SWALLOWER, though it looks like one: the Band Activity chip bar's Hide calls and Countries
+// fields stop every keydown in their capture handler. In a browser a real Esc closes their Radix
+// menu first (Radix listens on the document), React commits that between listeners, and the field
+// is gone before its handler runs, so the stop is heard either way. fireEvent dispatches the whole
+// event inside one script call, so here the field WOULD stop the key: a test of it would show a
+// swallow no browser shows (measured both ways, 2026-10-02).
+const OWN_ESC_SCREENS: EscScreen[] = [
+  { view: 'operate', area: 'dx', drawn: () => shown('main.operate-cockpit'), esc: ['halt_tx'] },
+  { view: 'cw', area: 'dx', drawn: () => shown('main.cw-cockpit'), esc: ['stop_cw', 'halt_tx'] },
+  // RTTY and PSK are on the air in this fixture, so their own stop goes first.
+  { view: 'rtty', area: 'dx', drawn: () => shown('main.rtty-cockpit'), esc: ['rtty_stop', 'halt_tx'] },
+  { view: 'psk', area: 'dx', drawn: () => shown('main.psk-cockpit'), esc: ['psk_stop', 'halt_tx'] },
+  { view: 'js8', area: 'dx', drawn: () => shown('main.js8-cockpit'), esc: ['halt_tx'] },
+]
+
+describe("FT's, CW's, RTTY's, PSK's and JS8's own Esc cannot be swallowed either", () => {
+  it.each(OWN_ESC_SCREENS.map((s) => [s.view, s] as const))(
+    '%s: a control that stops the key on its way cannot swallow the stop',
+    async (_view, s) => {
+      await mountScreen(s)
+      const button = s.drawn()!.querySelector<HTMLButtonElement>('button:not([disabled])')
+      expect(button, `${s.view}: no enabled button inside the screen`).not.toBeNull()
+      const swallow = (e: Event): void => e.stopPropagation()
+      button!.addEventListener('keydown', swallow)
+      try {
+        expect(await fire(() => pressEsc(button!))).toEqual(s.esc)
+      } finally {
+        button!.removeEventListener('keydown', swallow)
+      }
+    },
+  )
+
+  it.each(OWN_ESC_SCREENS.map((s) => [s.view, s] as const))('%s: Esc from inside a field sends the same stop', async (_view, s) => {
+    await mountScreen(s)
+    const field = [...s.drawn()!.querySelectorAll<HTMLInputElement>('input:not([type]), input[type="text"], input[type="search"], textarea')].find(
+      (el) => el.closest('[hidden]') == null && !el.readOnly && !el.disabled,
+    )
+    expect(field, `${s.view}: no field on screen, so this test would press Esc in nothing`).toBeDefined()
+    field!.focus()
+    expect(document.activeElement).toBe(field)
+    expect(await fire(() => pressEsc(field!))).toEqual(s.esc)
+  })
+
+  it.each(OWN_ESC_SCREENS.map((s) => [s.view, s] as const))("%s: Esc's default is still cancelled, as it always was", async (_view, s) => {
+    await mountScreen(s)
+    const m = mark()
+    expect(fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' }), `${s.view}: Esc's default went through`).toBe(false)
+    await waitFor(() => expect(firedSince(m)).toEqual(s.esc))
+  })
+
+  it("operate: Esc sends exactly what Stop TX sends — WSJT-X's halt, the same call as before", async () => {
+    await mountScreen(OWN_ESC_SCREENS[0])
+    const stop = shown('.cockpit-qso .op-btn.stop') as HTMLButtonElement | null
+    expect(stop, 'control: Operate Stop TX is on screen').not.toBeNull()
+    const stopTx = await fire(() => fireEvent.click(stop!))
+    expect(stopTx, 'control: Stop TX is the halt').toEqual(['halt_tx'])
+    expect(await fire(() => pressEsc())).toEqual(stopTx)
+  })
+})
+
+describe('Esc on every screen in the registry: the ten above send their stop, and nothing else changed', () => {
+  // App's five send the halt, and each cockpit with its own Esc sends its own stop. Any other section
+  // sends nothing: it has no Esc stop.
+  const STOP_SCREENS = [...ESC_SCREENS, ...OWN_ESC_SCREENS]
   const SECTIONS = sectionFeatures().map((f) => f.id as View)
 
-  it('control: the census covers the app’s screens, and the five', () => {
+  it('control: the census covers the app’s screens, and the ten', () => {
     expect(SECTIONS.length).toBeGreaterThan(15)
-    for (const s of ESC_SCREENS) expect(SECTIONS).toContain(s.view)
+    for (const s of STOP_SCREENS) expect(SECTIONS).toContain(s.view)
   })
 
   it.each(SECTIONS)('%s', async (view) => {
@@ -876,7 +941,7 @@ describe('Esc on every screen in the registry: the five above gained the halt, a
     await mountOn(view, view === 'chat' ? 'msg' : 'dx')
     expect(document.title, `control: ${view} is the screen on show`).toBe(`${featureById(view)!.label} — Nexus`)
     ;(document.activeElement as HTMLElement | null)?.blur()
-    const expected = ESC_SCREENS.find((s) => s.view === view)?.esc ?? OWN_ESC[view] ?? []
+    const expected = STOP_SCREENS.find((s) => s.view === view)?.esc ?? []
     expect(await sentBy(() => pressEsc()), `${view}: what Esc sent`).toEqual(expected)
   })
 })

@@ -48,6 +48,7 @@ import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
+import { useEscStop } from '../useEscStop'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
 import {
@@ -525,14 +526,20 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     closeEditor,
     sendMacro,
   }
+  // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
+  // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
+  // the key's default, as it always did.
+  useEscStop(control && active, () => {
+    const k = keys.current
+    if (k.editorOpen && !k.live) k.closeEditor()
+    else stop()
+  })
   useEffect(() => {
     if (!control || !active) return
     const onKey = (e: KeyboardEvent) => {
       const k = keys.current
       if (e.key === 'Escape') {
         e.preventDefault()
-        if (k.editorOpen && !k.live) k.closeEditor()
-        else stop()
         return
       }
       if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return

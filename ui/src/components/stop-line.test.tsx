@@ -958,11 +958,11 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
 // remote-web/remote-stop-line.test.tsx.
 describe('Esc is a stop on every operating screen and on Satellites', () => {
   const ESC: Record<string, string> = {
-    operate: 'OperateCockpit, its own listener while on show → App handleHaltTx (halt_tx)',
-    cw: 'CwCockpit, its own listener → the abort() its Stop TX calls (stop_cw, halt_tx)',
-    rtty: 'RttyCockpit, its own listener → stop() (rtty_stop, halt_tx); an open F-key editor closes instead while nothing is on the air',
+    operate: 'OperateCockpit, on the shared capture listener (useEscStop) while on show → App handleHaltTx (halt_tx)',
+    cw: 'CwCockpit, on the shared capture listener → the abort() its Stop TX calls (stop_cw, halt_tx)',
+    rtty: 'RttyCockpit, on the shared capture listener → stop() (rtty_stop, halt_tx); an open F-key editor closes instead while nothing is on the air',
     psk: 'PskCockpit, as RTTY (psk_stop, halt_tx)',
-    js8: 'Js8Cockpit, its own listener → stop() (halt_tx)',
+    js8: 'Js8Cockpit, on the shared capture listener → stop() (halt_tx)',
     chat: 'App, while Tempo is on show → handleHaltTx, the top bar Stop TX on this screen (halt_tx)',
     phone: 'App, while Phone is on show → handleHaltTx (halt_tx, as its header Stop TX); the voice keyer also stops itself',
     sstv: 'App, while SSTV is on show → handleHaltTx (halt_tx, as its header Stop TX)',
@@ -986,7 +986,7 @@ describe('Esc is a stop on every operating screen and on Satellites', () => {
     expect(census.length, 'control: the census is in the wiring suite').toBeLessThan(wiring.length)
     for (const view of Object.keys(ESC)) {
       expect(
-        census.includes(`view: '${view}'`) || census.includes(`\n    ${view}: ['`),
+        census.includes(`view: '${view}'`),
         `${view}: the wiring census does not press Esc on it`,
       ).toBe(true)
     }

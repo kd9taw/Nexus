@@ -6,6 +6,7 @@ import { useRemoteScopeClick } from '../remote-web/useRemoteScopeClick'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationCapability, useStationControl } from '../stationAccess'
+import { useEscStop } from '../useEscStop'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
 // operator-visible string in it is in the catalog under `cw.*`. Nothing was deferred —
 // CW's stop line is Stop TX (→ stopCw + haltTx) and Tune, both drawn by CockpitHeader, plus
@@ -983,18 +984,21 @@ export function CwCockpit({
 
   // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4).
   // Live ref so the document listener (bound once) always reads current state.
+  // Esc's ABORT rides the shared capture listener (useEscStop, operator 2026-10-01), so no
+  // control on the screen can swallow it; here its default is cancelled, as it always was, and it
+  // is checked first so the stop key can never also fire a macro.
+  useEscStop(control, abort)
   const stateRef = useRef({ wpm, text })
   stateRef.current = { wpm, text }
   useEffect(() => {
     if (!control) return
     const onKey = (e: KeyboardEvent) => {
       const macro = macrosRef.current.find((m) => m.key === e.key)
-      if (macro) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+      } else if (macro) {
         e.preventDefault()
         send(macro.text)
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        abort()
       } else if (e.key === 'PageUp') {
         e.preventDefault()
         wpmTouched.current = true

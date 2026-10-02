@@ -43,6 +43,8 @@ import settings from '../components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot, Settings } from '../types'
 import App from '../App'
 import { allFeatureIds, featureById, type View } from '../features/registry'
+import { dismissToast, subscribeToasts, withErrorToast } from '../toast'
+import { EN } from '../i18n'
 
 vi.mock('../components/PhoneScope', () => ({ PhoneScope: () => <div/> }))
 vi.mock('../components/BandStrip', () => ({ BandStrip: () => <div/> }))
@@ -93,8 +95,9 @@ afterEach(() => { cleanup(); uninstall?.(); uninstall = undefined; clients.splic
 // station, not this file, decides that case; it is 'control' here.
 type Authority = 'control' | 'noControl' | 'loggingOnly'
 /** A browser session wired exactly as BrowserApplication wires it: a real operation client behind the
- * real hosted control transport, installed under the application API the cockpits call. */
-function session(authority: Authority, capabilities: string[] = [], answer?: (command: string) => unknown) {
+ * real hosted control transport, installed under the application API the cockpits call. With
+ * `attempted`, every command the page hands the transport is recorded there first, refused or not. */
+function session(authority: Authority, capabilities: string[] = [], answer?: (command: string) => unknown, attempted?: string[]) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const wire: any[] = []
   const values = new Map<string, string>()
@@ -117,7 +120,11 @@ function session(authority: Authority, capabilities: string[] = [], answer?: (co
       : command.includes('sstv') ? sstv : command.startsWith('cw') || command.includes('_cw') ? cw : {}
     return structuredClone(value) as T
   } }
-  uninstall = installApplicationTransport(controlTransport(reads, { age: () => 0 } as unknown as ApplicationClient, client))
+  const transport = controlTransport(reads, { age: () => 0 } as unknown as ApplicationClient, client)
+  uninstall = installApplicationTransport(!attempted ? transport : { kind: 'remote', invoke: <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    attempted.push(command)
+    return transport.invoke<T>(command, args)
+  } })
   return { client, state, wire, stops: () => wire.filter(r => r.type === 'stopTransmit'), commands: () => wire.filter(r => r.type === 'stationControl') }
 }
 
@@ -294,6 +301,39 @@ it('the hosted page: an observer’s Esc on those screens does not even attempt 
   }
   expect(attempted.length, 'control: the transport recorded the page’s reads').toBeGreaterThan(0)
   expect(attempted.filter(c => c === 'halt_tx')).toEqual([])
+})
+
+// FT's Esc rides the same listener, with the same authority (operator, 2026-10-01). It used to call
+// the halt whoever pressed it, so on the hosted Operate page an observer's Esc reached the transport,
+// which refused it before the wire, and the page toasted "Could not stop transmit:
+// localPermissionRequired". Recorded at the transport, refused or not, with the page's real toast.
+it('the hosted page: an observer’s Esc on FT sends no halt and shows no refusal toast', async () => {
+  const real = await vi.importActual<typeof import('../toast')>('../toast')
+  const toast = vi.mocked(withErrorToast), stubbed = toast.getMockImplementation()!
+  toast.mockImplementation(real.withErrorToast)
+  const raised: number[] = []
+  const off = subscribeToasts(all => { for (const t of all) if (!raised.includes(t.id)) raised.push(t.id) })
+  const before = [...raised]
+  try {
+    const attempted: string[] = []
+    hosted(session('noControl', [], hostedAnswer, attempted).client)
+    await settle()
+    expect(document.title, 'control: the hosted page opens on Operate').toBe(`${featureById('operate')!.label} — Nexus`)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    escOn()
+    await settle()
+    expect(attempted.length, 'control: the transport recorded the page’s reads').toBeGreaterThan(0)
+    expect(attempted.filter(c => c === 'halt_tx'), 'an observer’s Esc attempted a halt').toEqual([])
+    expect(document.body.textContent, 'an observer’s Esc toasted a refusal').not.toContain(EN['shell.halt.failed'])
+    // POSITIVE CONTROL: the halt Esc used to make, made the same way, is recorded and toasts its refusal.
+    await act(async () => { await withErrorToast(() => haltTx(), EN['shell.halt.failed']) })
+    expect(attempted.filter(c => c === 'halt_tx'), 'control: a halt attempt is recorded').toEqual(['halt_tx'])
+    expect(document.body.textContent, 'control: a refusal toasts on this page').toContain(`${EN['shell.halt.failed']}: localPermissionRequired`)
+  } finally {
+    off()
+    act(() => { for (const id of raised) if (!before.includes(id)) dismissToast(id) })
+    toast.mockImplementation(stubbed)
+  }
 })
 
 it('every cockpit vocabulary has a Remote stop case, or is declared elsewhere', () => {
