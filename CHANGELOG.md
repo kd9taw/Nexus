@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RSGB list is a beta service: when it cannot be read, Program says so and shows hearham's
   machines alone. The CSV and CHIRP files credit every directory their rows came from, one
   comment line each, "Repeater data: RSGB ETCC (ukrepeater.net)" among them.
+- **Program lists the repeaters along a route.** Press **Route to…** at the end of the Near row,
+  give the place you leave from and the place you are going (My station, a grid or a city, as for
+  Near), and Program lists the repeaters within a corridor of the straight line between them, in
+  the order the trip passes them; each row reads how far along the route the machine is ("120 mi"),
+  and the line under it how far off the route. The corridor is 25 mi either side to start with,
+  with 10 and 50 mi chips. **＋ Add all shown** adds them to the channel list in that order, so the CHIRP or CSV
+  export is one list for the drive. A long US route asks RepeaterBook about the first nine states
+  it reaches, no more than a radius search can, each through the same weekly cache and 15-minute
+  retry limit, and names the states it did not ask about, whose machines are then hearham's alone;
+  a long UK route does the same with the RSGB list's locator squares.
 - **Program finds the repeaters on a frequency.** Type a frequency into Program's search box
   (147.18, 147.180, 438.5125, or 438,5125 with a decimal comma) and the list shows every repeater
   on it, within 2.5 kHz, whatever the band, digital and on-air filters are set to: a DMR or

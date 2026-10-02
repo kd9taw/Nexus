@@ -3431,8 +3431,14 @@ export async function repeaterSearch(
   lat: number,
   lon: number,
   radiusKm: number,
+  /** A route's other end: the search is then the machines within `radiusKm` of the line from
+   * (lat, lon) to it, in order along it. */
+  to?: { lat: number; lon: number },
 ): Promise<RepeaterSearchResult> {
-  return invoke<RepeaterSearchResult>('repeater_search', { lat, lon, radiusKm })
+  return invoke<RepeaterSearchResult>(
+    'repeater_search',
+    to ? { lat, lon, radiusKm, toLat: to.lat, toLon: to.lon } : { lat, lon, radiusKm },
+  )
 }
 
 /** City-name → candidates via OSM Nominatim (explicit Search click only). */

@@ -26729,6 +26729,10 @@ struct RepeaterSearchRow {
     sources: Vec<propagation::repeaters::SourceRef>,
     /// Fields those rows disagree on: shown on the row, never silently resolved.
     disagreements: Vec<propagation::repeaters::Disagreement>,
+    /// On a route search: how far along the route the machine is, km from the start. Its record's
+    /// distance and bearing are then from its nearest point of the route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    along_km: Option<f64>,
 }
 
 /// One directory a search read, and how old its list is.
@@ -26744,10 +26748,12 @@ struct ListStamp {
 }
 
 /// A repeater search result: the directories that answered, and the machines inside the radius
-/// (distance/bearing filled, nearest first).
+/// (distance/bearing filled, nearest first), or along the route (in route order).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RepeaterSearchResult {
+    /// A route search: the rows are the corridor's, in order along the route.
+    route: bool,
     /// Every directory this search read, in precedence order (RSGB, RepeaterBook, hearham).
     lists: Vec<ListStamp>,
     /// A major band this source lists nothing on here, when it lists something —
@@ -26767,6 +26773,10 @@ struct RepeaterSearchResult {
     /// Locator squares the radius reaches that RSGB was not asked about (at most nine are, per
     /// search), so the rows there are hearham's alone.
     rsgb_beyond: Vec<String>,
+    /// States a route's corridor crosses that RepeaterBook was not asked about (2-letter codes):
+    /// a route asks about the nine it reaches first, no more than a radius search can. Empty on a
+    /// radius search, and when RepeaterBook answered nothing.
+    rb_beyond: Vec<String>,
     rows: Vec<RepeaterSearchRow>,
 }
 
@@ -26778,6 +26788,7 @@ fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSe
             record: m.record,
             sources: m.sources,
             disagreements: m.disagreements,
+            along_km: m.along_km,
         })
         .collect()
 }
@@ -26796,22 +26807,42 @@ fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSe
 ///   failure/429. Its rows stay on this PC: they reach this panel and nothing else.
 /// - **hearham**: every search (one global feed, cached 7d), the floor under the others.
 ///
+/// **A route** (`to_lat`/`to_lon` given): the machines within `radius_km` of the line from the
+/// origin to there, in order along it (propagation::repeaters::merge_route). It asks each
+/// directory about what the corridor crosses, in route order and under the same caps and cache
+/// as a radius search: the nine RepeaterBook states it reaches first (no more than a radius search
+/// can plan), each through the same per-state cache and retry throttle below, and the nine RSGB
+/// squares it reaches first; the rest are named in the result.
+///
 /// All network + parsing off the main thread.
 #[tauri::command]
 async fn repeater_search(
     lat: f64,
     lon: f64,
     radius_km: f64,
+    to_lat: Option<f64>,
+    to_lon: Option<f64>,
 ) -> Result<RepeaterSearchResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use propagation::repeaters::{self as rpt, RepeaterSource};
         let origin = (lat, lon);
         let radius = radius_km.clamp(1.0, 500.0);
+        let route = to_lat.zip(to_lon).map(|to| rpt::Route {
+            from: origin,
+            to,
+            corridor_km: radius,
+        });
         let token = repeaterbook_keychain()
             .ok()
             .and_then(|e| e.get_password().ok())
             .unwrap_or_default();
-        let states = rpt::plan_states(origin, radius);
+        let (states, mut rb_beyond) = match &route {
+            Some(r) => {
+                let plan = rpt::plan_route_states(r);
+                (plan.ask, plan.beyond)
+            }
+            None => (rpt::plan_states(origin, radius), Vec::new()),
+        };
         let now = now_unix();
         let mut lists: Vec<ListStamp> = Vec::new();
         let mut missing_states = Vec::new();
@@ -26879,17 +26910,25 @@ async fn repeater_search(
                 });
                 missing_states = cov.missing;
                 rb_records = cov.records;
-            } else if !last_err.is_empty() {
-                // Every state failed with no cache (e.g. the proxy is dormant pre-approval):
-                // hearham carries the search; log the RB reason for the Connections panel.
-                conn_log("RepeaterBook", "info", &last_err);
+            } else {
+                // No RepeaterBook list at all, so nothing to say about the states it was not
+                // asked about.
+                rb_beyond.clear();
+                if !last_err.is_empty() {
+                    // Every state failed with no cache (e.g. the proxy is dormant pre-approval):
+                    // hearham carries the search; log the RB reason for the Connections panel.
+                    conn_log("RepeaterBook", "info", &last_err);
+                }
             }
         }
 
         // RSGB: the UK coordinator's list, one square at a time. A payload that does not read
         // as the RSGB shape is never cached, so it cannot replace a good list with one this
         // build cannot read; a stale good list is served instead, as for the other sources.
-        let plan = rpt::plan_rsgb_squares(origin, radius);
+        let plan = match &route {
+            Some(r) => rpt::plan_rsgb_route(r),
+            None => rpt::plan_rsgb_squares(origin, radius),
+        };
         let mut rsgb_records = Vec::new();
         let mut rsgb_unavailable = false;
         if !plan.ask.is_empty() {
@@ -26970,8 +27009,11 @@ async fn repeater_search(
             }
         };
 
-        let machines =
-            rpt::merge_nearby(&[&rsgb_records, &rb_records, &hh_records], origin, radius);
+        let layers: [&[rpt::RepeaterRecord]; 3] = [&rsgb_records, &rb_records, &hh_records];
+        let machines = match &route {
+            Some(r) => rpt::merge_route(&layers, r),
+            None => rpt::merge_nearby(&layers, origin, radius),
+        };
         // Judged on what's inside the radius, and only for a list that is hearham's alone.
         let coverage_gap = if lists.iter().all(|l| l.source == RepeaterSource::Hearham) {
             let records: Vec<rpt::RepeaterRecord> =
@@ -26982,6 +27024,7 @@ async fn repeater_search(
         };
         lists.sort_by_key(|l| l.source);
         Ok(RepeaterSearchResult {
+            route: route.is_some(),
             lists,
             coverage_gap,
             missing_states,
@@ -26991,6 +27034,7 @@ async fn repeater_search(
                 plan.beyond
             },
             rsgb_unavailable,
+            rb_beyond,
             rows: search_rows(machines),
         })
     })
