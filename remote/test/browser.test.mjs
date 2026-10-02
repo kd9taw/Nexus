@@ -2310,18 +2310,23 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }
         }
       }
+      // At the small size (sm/xs) the top bar folds its eleven pills into one mode button with a menu (2026-10-01):
+      // there the reachable tier selector is that button, and the gesture picks the menu item, which keeps the pill's place.
+      const smallBar=`['xs','sm'].includes(document.documentElement.dataset.viewport)`
       let tierGeometry=0
       for(const [tab,root,index,tier] of [
         ['FT','.operate-cockpit .cockpit-modes',2,'FT4'],['FT','.operate-cockpit .cockpit-modes',3,'FT2'],['FT','.operate-cockpit .cockpit-modes',1,'FT8'],
         ...[[6,'WSPR'],[7,'Q65'],[8,'MSK144'],[9,'JT65'],[10,'FST4'],[11,'FST4W']].map(([index,tier])=>['FT','.topbar-group.tier-toggle:not(.tx-period)',index,tier]),
         ['Tempo','.grid-header .cockpit-modes',2,'TempoDeep'],['Tempo','.grid-header .cockpit-modes',1,'TempoFast']
       ]){
-        const before=stationRequests.length,selector=`${root} > button:nth-child(${index})`
+        const before=stationRequests.length,pill=`${root} > button:nth-child(${index})`,inBar=root.startsWith('.topbar-group')
+        let selector=pill
         await click(button(tab));await settledLayout()
         assert.equal(stationRequests.length,before,'visiting a tier selector cannot select a decoder')
         for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
           await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+          selector=inBar&&await evaluate(smallBar)?'.topbar .tier-menu-btn':pill
           await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
           await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
           const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
@@ -2332,9 +2337,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await writeFile(join(artifacts,`tier-${tier}-390-175.png`),Buffer.from(shot.data,'base64'))
           }
         }
-        await gesture(selector,'radio.tier')
-        assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier})
-        await until(`document.querySelector('${selector}').getAttribute('aria-pressed')==='true'`)
+        if(selector!==pill){
+          await click(`document.querySelector('.topbar .tier-menu-btn')`);await gesture(`.ui-menu .ui-menu-item:nth-child(${index})`,'radio.tier')
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier})
+          await until(`document.querySelector('.topbar .tier-menu-btn').textContent.endsWith('${tier}')`)
+        }else{
+          await gesture(selector,'radio.tier')
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier})
+          await until(`document.querySelector('${selector}').getAttribute('aria-pressed')==='true'`)
+        }
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       }
       let decoderGeometry=0
@@ -2362,7 +2373,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.deepEqual(stationRequests.at(-1).action,{action:'decoder.js8Speed',expectedSpeed,speed})
         await until(`document.querySelector('${selector}').getAttribute('aria-pressed')==='true'`)
       }
-      await click(button('FT'));await gesture('.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(8)','radio.tier')
+      await click(button('FT'))
+      if(await evaluate(smallBar)){await click(`document.querySelector('.topbar .tier-menu-btn')`);await gesture('.ui-menu .ui-menu-item:nth-child(8)','radio.tier')}
+      else await gesture('.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(8)','radio.tier')
       await until(`!!document.querySelector('.operate-cockpit .cm-trperiod')`)
       await until(`document.querySelector('.operate-cockpit .cm-trperiod').value==='15'`)
       const periodSelector='.operate-cockpit .cm-trperiod'

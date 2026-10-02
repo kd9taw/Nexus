@@ -3409,6 +3409,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           effectiveView === 'js8' ||
           effectiveView === 'sats'
         }
+        // The FT screens. At the small size every other screen drops the FT-only items from the
+        // bar, which takes it from four lines to two, and these two fold their mode pills into one
+        // button (operator, 2026-10-01). Not a widening of the list above: that flag also hides the
+        // TX cluster, the only Stop TX on Field Day and the other screens without a cockpit.
+        ftScreen={effectiveView === 'operate' || effectiveView === 'chat'}
         tier={tier}
         onTierChange={handleTier}
         onOpenGuide={() => setShowGuide(true)}

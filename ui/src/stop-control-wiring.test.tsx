@@ -920,3 +920,51 @@ describe('every command this file sends exists in the Rust command surface', () 
     })
   }
 })
+
+// ── the top bar's Stop TX, where it is the only one ─────────────────────────────────────────
+//
+// Twelve screens have no cockpit and so no TX strip: Connect, Needed, Spots, DXped, Logbook,
+// Awards, Stats, Field Day, POTA/SOTA, Memories, Program and Settings. Their Stop TX is the top
+// bar's cluster. At the small size they drop the FT-only items from the bar (operator,
+// 2026-10-01), keyed on the bar's `topbar--ft` class, and keep the cluster; App's
+// `hideDigitalChrome` would have taken both, which is why Field Day is not on that list. Here,
+// with the real App: each of the twelve draws the bar's Stop TX, enabled, and the press sends
+// halt_tx, and its bar is not marked an FT screen; Operate and Tempo, the two that are, carry
+// the mark. The CSS half (no rule in either sheet hides the cluster at any size) is
+// TopBar.small.test.tsx; the geometry is the real-browser sweep's.
+describe("the top bar's Stop TX on every screen without a cockpit", () => {
+  const COCKPITS: View[] = ['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'sstv', 'aprs', 'js8', 'sats']
+  const BAR_STOP = sectionFeatures()
+    .map((f) => f.id as View)
+    .filter((v) => !COCKPITS.includes(v))
+
+  it('control: the census is the twelve screens without a cockpit, Field Day among them', () => {
+    expect([...BAR_STOP].sort()).toEqual([
+      'awards', 'connect', 'dxped', 'fieldDay', 'logbook', 'memories', 'needed', 'pota', 'program', 'settings', 'spots', 'stats',
+    ])
+  })
+
+  it.each(BAR_STOP)('%s: on screen, enabled, and it sends halt_tx', async (view) => {
+    everySectionOn()
+    // Field Day is drawn only with its master switch on.
+    if (view === 'fieldDay') settingsAnswer = { ...defaultSettings, fdActive: true }
+    await mountOn(view)
+    expect(document.title, `control: ${view} is the screen on show`).toBe(`${featureById(view)!.label} — Nexus`)
+    const bar = document.querySelector<HTMLElement>('header.topbar')!
+    expect(bar.classList.contains('topbar--ft'), `${view} is not an FT screen`).toBe(false)
+    const stop = within(bar).getByRole('button', { name: STOP_TX }) as HTMLButtonElement
+    expect(stop.disabled, `${view}: the bar's Stop TX is enabled`).toBe(false)
+    expect(await fire(() => fireEvent.click(stop))).toEqual(['halt_tx'])
+  })
+
+  it.each([
+    ['operate', 'dx'],
+    ['chat', 'msg'],
+  ] as const)('%s is an FT screen: its bar is marked, and its stop is its own strip, not the bar', async (view, area) => {
+    everySectionOn()
+    await mountOn(view, area)
+    const bar = document.querySelector<HTMLElement>('header.topbar')!
+    expect(bar.classList.contains('topbar--ft')).toBe(true)
+    expect(within(bar).queryByRole('button', { name: STOP_TX })).toBeNull()
+  })
+})
