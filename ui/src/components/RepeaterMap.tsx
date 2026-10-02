@@ -16,7 +16,7 @@
 // `placeHoverCard`, the dark marker halo), not MapView itself: that component is Connect's, with
 // its own layers, picker and stored setup, none of which a channel list needs.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { geoDistance, geoInterpolate, geoPath, type GeoProjection } from 'd3-geo'
+import { geoInterpolate, geoPath, type GeoProjection } from 'd3-geo'
 import { basemap, destinationPoint, greatCircle, makeProjection, project, rangeRing, usStateBorders } from '../mapGeo'
 import type { LatLon } from '../grid'
 import { markerScaleFor, placeHoverCard } from './MapView'
@@ -54,10 +54,8 @@ interface Props {
 }
 
 const R_EARTH_KM = 6371
-/** How much of the half-box the searched area reaches, leaving the edge for a label. */
+/** How much of the box the searched area spans, either way, leaving the edge for a label. */
 const FIT = 0.84
-/** makeProjection's AEQD disc: radius = half the short side × this × zoom. */
-const AEQD_DISC = 0.94
 
 /** The machines: amber reads on the basemap's dark land and sea, which are dark in both themes
  *  (styles.css "MAP BASEMAP"), and on every built-in theme's own basemap. */
@@ -70,17 +68,11 @@ const INK = '#eef3f6'
 /** MapView's MARKER_HALO: a dark edge that lifts a marker or a label off whatever it lands on. */
 const HALO = 'rgba(2, 7, 12, 0.9)'
 
-/** Where the map is centred and how far it must reach: the place, or the middle of the route. */
-function frame(from: LatLon, to: LatLon | null | undefined, reachKm: number): { center: LatLon; fitKm: number } {
-  if (!to) return { center: from, fitKm: reachKm }
-  const a: [number, number] = [from.lon, from.lat]
-  const b: [number, number] = [to.lon, to.lat]
-  const [lon, lat] = geoInterpolate(a, b)(0.5)
-  return { center: { lat, lon }, fitKm: (geoDistance(a, b) * R_EARTH_KM) / 2 + reachKm }
-}
-
-/** The projection that fits the searched area to a `w`×`h` box: the 2-D map's AEQD, zoomed so
- *  the area's reach lands at FIT of the half short side. Distances from the centre are true. */
+/** The projection that fits the searched area to a `w`×`h` box: the 2-D map's AEQD, centred on
+ *  the place (or the middle of the route), zoomed so the area spans FIT of the box the way it
+ *  binds. The area is the radius ring, or the corridor along the route, traced as rings around
+ *  points along it: a long route in a wide box fills its width, not just its height, which is
+ *  all a fit to the box's short side gave it (a 132 km route 88 px long in a 603 px box). */
 export function programProjection(
   from: LatLon,
   to: LatLon | null | undefined,
@@ -88,8 +80,25 @@ export function programProjection(
   w: number,
   h: number,
 ): GeoProjection {
-  const { center, fitKm } = frame(from, to, reachKm)
-  const zoom = (FIT * Math.PI * R_EARTH_KM) / (AEQD_DISC * Math.max(1, fitKm))
+  const along = to ? geoInterpolate([from.lon, from.lat], [to.lon, to.lat]) : null
+  const mid = along ? along(0.5) : null
+  const center: LatLon = mid ? { lat: mid[1], lon: mid[0] } : from
+  // At zoom 1 an offset from the centre is linear in the zoom, so the widest the area reaches
+  // either way sets it.
+  const unit = makeProjection('aeqd', center, w, h, { zoom: 1, rotate: null, panX: 0, panY: 0 })
+  let dx = 0
+  let dy = 0
+  const steps = along ? 16 : 0
+  for (let i = 0; i <= steps; i++) {
+    const at = along ? along(i / steps) : [from.lon, from.lat]
+    for (let b = 0; b < 360; b += 15) {
+      const p = project(unit, destinationPoint({ lat: at[1], lon: at[0] }, b, reachKm))
+      if (!p) continue
+      dx = Math.max(dx, Math.abs(p[0] - w / 2))
+      dy = Math.max(dy, Math.abs(p[1] - h / 2))
+    }
+  }
+  const zoom = Math.min((FIT * w) / 2 / Math.max(dx, 1e-9), (FIT * h) / 2 / Math.max(dy, 1e-9))
   return makeProjection('aeqd', center, w, h, { zoom, rotate: null, panX: 0, panY: 0 })
 }
 
