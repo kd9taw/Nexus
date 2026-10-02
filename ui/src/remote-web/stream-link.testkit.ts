@@ -4,7 +4,7 @@
 import { vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { StreamLink, type ChannelLike, type PeerLike, type StreamEnvironment, type VideoLike } from './stream-link'
+import { StreamLink, STREAM_ICE_SERVERS, type ChannelLike, type IceServerLike, type PeerLike, type StreamEnvironment, type VideoLike } from './stream-link'
 import type { AudioEnvironment } from './audio-listen'
 import type { BrowserStreamPayload } from './stream-protocol'
 
@@ -56,6 +56,8 @@ export class FakeMicTrack {
   getSettings() { return this.settings }
 }
 export class FakePeer implements PeerLike {
+  /** The ICE servers the page built this peer with. */
+  constructor(readonly iceServers: readonly IceServerLike[] = []) {}
   transceivers: { kind: string; direction: string }[] = []
   preferences: unknown = null
   micPreferences: unknown = null
@@ -97,7 +99,11 @@ export const silentAudio: AudioEnvironment = {
   context: () => Promise.resolve({ sampleRate: 48000, push: () => {}, reset: () => {}, close: () => Promise.resolve() }),
   decoder: () => ({ configure: () => {}, decode: () => {}, close: () => {} }),
 }
-export function harness(options: { codecs?: boolean; peerThrows?: boolean; microphone?: 'granted' | 'denied' | 'none'; micSettings?: Record<string, unknown>; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>) } = {}) {
+/** A relay as the service hands it over: synthetic names, never a minted credential. */
+export const RELAY = { urls: ['turn:turn.example.invalid:3478?transport=udp', 'turns:turn.example.invalid:443?transport=tcp'], username: 'synthetic-username', credential: 'synthetic-credential' }
+export function harness(options: { codecs?: boolean; peerThrows?: boolean; microphone?: 'granted' | 'denied' | 'none'; micSettings?: Record<string, unknown>; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>);
+  /** The service's relay (W2), when the page has one to ask; `refuseRelay` is a browser that will not build a peer with it. */
+  relay?: () => Promise<unknown>; refuseRelay?: boolean } = {}) {
   let clock = 1000
   const peers: FakePeer[] = []
   const signals: { payload: BrowserStreamPayload; leaseId: string }[] = []
@@ -107,7 +113,12 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
   let ids = 0
   const env: StreamEnvironment = {
     now: () => clock,
-    peer: () => { if (options.peerThrows) throw Error('no WebRTC'); const p = new FakePeer(); peers.push(p); return p },
+    peer: iceServers => {
+      if (options.peerThrows) throw Error('no WebRTC')
+      if (options.refuseRelay && iceServers.length > STREAM_ICE_SERVERS.length) throw Error('InvalidAccessError')
+      const p = new FakePeer(iceServers); peers.push(p); return p
+    },
+    relayServers: options.relay,
     videoCodecs: () => options.codecs === false ? null : [{ mimeType: 'video/VP8', clockRate: 90000 }],
     audioCodecs: () => options.codecs === false ? null : [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2, sdpFmtpLine: 'minptime=10;useinbandfec=1' }],
     microphone: options.microphone === 'none' ? undefined : constraints => {

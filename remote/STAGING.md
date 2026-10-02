@@ -156,6 +156,20 @@ All three paths write `source='manual'` and UPDATE rather than DELETE. The trial
 proof an account consumed its trial; removing it re-opens the reinstall and re-pair abuse the
 one-trial rule exists to refuse.
 
+## The stream's relay key
+
+A stream whose direct connection fails can fall back to a relay: the `turn` route mints Cloudflare
+Realtime TURN credentials for that one stream, with a TURN key the service holds as two Worker
+secrets, `TURN_KEY_ID` and `TURN_KEY_TOKEN` (the key's id and its API token). Create the key in the
+Cloudflare dashboard's Realtime section, then add both to the GitHub `production` environment as
+`REMOTE_TURN_KEY_ID` and `REMOTE_TURN_KEY_TOKEN`. Every deploy applies them as encrypted secrets, the
+way it applies `ADMIN_SUBJECT`, and neither ever reaches the browser.
+
+**Until both are set, the deploy refuses** before it migrates or uploads anything: `wrangler.jsonc`
+declares them under `secrets.required`, and the preflight names each one that is missing. A Worker
+running without them (locally, in the tests) refuses the route as `relayNotConfigured`, and the page
+then streams direct, as it did before the relay.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` uses the **production** environment's

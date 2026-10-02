@@ -112,8 +112,12 @@ export async function verifyLive({ manifest, config }, fetcher = fetch, row = ta
     count++
   }
   requireValue(count >= 3, 'No complete browser artifact was checked')
+  // The session, and the stream's relay (W2): that route hands out a credential, so a live Worker that
+  // minted one for a caller nobody signed in is refused here. Its station id is any well-formed one,
+  // because the sign-in is checked before any station is looked up.
+  for (const path of ['session', 'stations/00000000-0000-4000-8000-000000000000/turn'])
   for (const [originHeader, status, error] of [[origin, 401, 'signInRequired'], ['https://other.invalid', 403, 'originDenied']]) {
-    const response = await requestBytes(`${origin}/api/remote/session`, {
+    const response = await requestBytes(`${origin}/api/remote/${path}`, {
       method: 'POST', headers: { origin: originHeader, 'content-type': 'application/json' }, body: '{}',
     }, fetcher, 'Unauthenticated admission check')
     let value

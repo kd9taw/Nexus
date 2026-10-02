@@ -15,6 +15,10 @@ export interface RemoteEnv {
    *  the only safe default: this gates a write to the entitlement table, so a check that fails
    *  OPEN would let anyone grant themselves the trial the one-trial-ever rule exists to refuse. */
   ADMIN_SUBJECT?: string
+  /** The stream's relay (W2): a Cloudflare Realtime TURN key's id and its API token, both Worker
+   *  secrets. Unset, the relay route refuses `relayNotConfigured` and every stream stays direct. */
+  TURN_KEY_ID?: string
+  TURN_KEY_TOKEN?: string
   REMOTE_BUILD_REVISION?: string
 }
 
@@ -210,7 +214,7 @@ export async function trial(env: RemoteEnv, accountId: string, now: number): Pro
 }
 
 // The strict gate: is the service usable right now? ONE call site, index.ts:222, and it is
-// reached only by `device`, `ticket` and `renew` - the `observe` route returns before it.
+// reached only by `device`, `ticket`, `renew` and `turn` - the `observe` route returns before it.
 // Observe IS entitlement-gated, but by observerDeadline inside connectObserver (relay.ts:41),
 // which is also what expires a session already in flight. Do not read this function as the
 // whole entitlement story; an audit that does will conclude observe is unguarded here, or that

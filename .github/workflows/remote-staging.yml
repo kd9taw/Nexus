@@ -168,8 +168,10 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
-          # Presence only ('true'/'false'). The value goes to the upload step and nowhere else.
+          # Presence only ('true'/'false'). The values go to the upload step and nowhere else.
           REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
+          REMOTE_TURN_KEY_ID_PRESENT: ${{ secrets.REMOTE_TURN_KEY_ID != '' }}
+          REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
         run: node remote/scripts/cloudflare-staging.mjs preflight
 
       - name: Run the canonical local Remote gates before packaging
@@ -230,6 +232,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
           REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
+          REMOTE_TURN_KEY_ID_PRESENT: ${{ secrets.REMOTE_TURN_KEY_ID != '' }}
+          REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
         run: node remote/scripts/deploy-staging.mjs migrate
 
       # The only step that holds a Worker secret's value. It is applied as an encrypted secret on every
@@ -242,6 +246,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
           REMOTE_ADMIN_SUBJECT: ${{ secrets.REMOTE_ADMIN_SUBJECT }}
+          REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
+          REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
         run: node remote/scripts/deploy-staging.mjs deploy
 
       # These two run whenever the upload step RAN, passed or failed. Once wrangler has uploaded, the

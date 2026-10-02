@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, so you can see it and pick from it. Switching to another tab ends the stream; press
   **Start the stream** again when you are back. If Remote access is switched off for your account
   while you stream, the stream ends within about two seconds and the page says why.
+- **Remote stream: a relay for networks where a direct connection fails.** Where the browser and
+  the shack cannot reach each other directly, as on some mobile and office networks, the stream can
+  now pass through Cloudflare's relay instead. A direct connection is always tried and preferred: the
+  relay carries the stream only when nothing direct works, and it carries the stream still
+  encrypted, unable to read it. The relay needs the service's relay key set up first. Until it is,
+  and whenever the relay cannot be reached, the stream works direct exactly as before.
 - **Remote as a stream: talk on the rig with your browser's microphone (Windows).** A streamed
   operator's own voice reaches the rig in Phone, played into the rig's USB audio.
   **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig

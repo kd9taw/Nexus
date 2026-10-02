@@ -29,7 +29,11 @@ async function freePortOutsideEphemeralRange() {
   throw new Error(`no free port found in ${floor}-${ceiling - 1}`)
 }
 
-export async function runtime({ bindings = {}, port: requestedPort } = {}) {
+/** Cloudflare Realtime's API, which mints the stream's relay credentials. A runtime reaches it only
+ *  through the fake its test passes as `relay`; nothing in a test ever reaches the real one. */
+export const RELAY_API = 'https://rtc.live.cloudflare.com/'
+
+export async function runtime({ bindings = {}, port: requestedPort, relay } = {}) {
   const port = requestedPort ?? await freePortOutsideEphemeralRange()
   const origin = `http://127.0.0.1:${port}`, issuer = 'https://identity.remote-test.invalid/'
   const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true })
@@ -48,6 +52,7 @@ export async function runtime({ bindings = {}, port: requestedPort } = {}) {
       assetConfig: { html_handling: 'none', not_found_handling: 'none' },
     },
     outboundService: async request => {
+      if (relay && request.url.startsWith(RELAY_API)) return relay(request)
       assert.equal(request.url, `${issuer}.well-known/jwks.json`, 'only the pinned JWKS endpoint may be fetched')
       jwksReads++
       return Response.json({ keys: [publicJwk] })
