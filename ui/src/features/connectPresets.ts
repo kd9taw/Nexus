@@ -73,8 +73,8 @@ export interface ConnectLayoutState {
   bar?: boolean
 }
 
-/** The operator-approved default, and what ⊞ Reset layout restores. It is DEFAULT_SLOTS itself,
- *  not a copy, so it cannot drift from it. */
+/** The operator-approved default, what ⊞ Reset layout restores, and what the picker's Standard applies
+ *  (ConnectView). It is DEFAULT_SLOTS itself, not a copy, so it cannot drift from it. */
 export const STANDARD_LAYOUT: ConnectLayout = {
   slots: DEFAULT_SLOTS,
   hidden: [],

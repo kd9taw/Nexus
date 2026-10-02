@@ -7296,6 +7296,7 @@ export const EN = {
   // anything. `replaces` quotes the Undo button by its own name (`panels.undo`).
   'connect.layout.heading': 'Layout',
   'connect.layout.standard': 'Standard',
+  'connect.layout.standard.title': 'Connect as it first opens: two panes down each side of the map and three along the bottom, all open, at the usual widths',
   'connect.layout.custom': 'Custom',
   'connect.layout.mapFirst.label': 'Map first',
   'connect.layout.mapFirst.title': 'The map as big as it goes: both side columns at their narrowest and the bottom row closed',
@@ -7315,7 +7316,7 @@ export const EN = {
   // ⊞ Panels menu's Layout section, beside ⊞ Panels in Connect's header. The title names the five
   // layouts by their own labels above.
   'connect.layout.button': 'Layout',
-  'connect.layout.button.title': 'Choose a layout for this screen: Map first, List first, Dashboard, Frame or Frame + bar',
+  'connect.layout.button.title': 'Choose a layout for this screen: Standard, Map first, List first, Dashboard, Frame or Frame + bar',
 
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Best band',

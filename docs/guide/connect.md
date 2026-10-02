@@ -129,6 +129,9 @@ operate never changes by itself.
 five ready-made arrangements of the same panes (the Panels menu shows the same
 choices at its top), and names the layout on screen: **Standard** (how Connect first
 opens), one of the five, or **Custom** once you have moved or resized anything yourself.
+**Standard** is the first choice in the list, so going back from a layout you are trying
+is one tap, and **Undo** takes that tap back like any other. Unlike **Reset layout**, it
+keeps your panes' text sizes.
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|

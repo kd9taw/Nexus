@@ -483,6 +483,7 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
   it('nothing picked: the picker reads Standard, the approved default is on screen, and nothing is written', async () => {
     const { container } = await mount()
     expect(layoutNow()).toBe('Standard')
+    expect(chip('Standard').getAttribute('aria-pressed'), 'Standard is a choice too, and the one on screen').toBe('true')
     for (const id of CONNECT_PRESET_IDS) expect(chip(LABEL[id]).getAttribute('aria-pressed'), id).toBe('false')
     for (const s of SLOT_IDS) expect(paneIn(container, s), s).toBe(DEFAULT_SLOTS[s])
     expect(localStorage.getItem(CONFIG), 'opening the menu must not write a layout').toBeNull()
@@ -791,7 +792,7 @@ describe('the Layout button — the same picker, beside ⊞ Panels', () => {
   const picker = () => screen.getByRole('group', { name: 'Layout' })
   const now = () => picker().querySelector('.connect-layout-now')?.textContent
 
-  it('stands beside ⊞ Panels and opens the picker: the five layouts, and the one on screen', async () => {
+  it('stands beside ⊞ Panels and opens the picker: Standard and the five layouts, and the one on screen', async () => {
     const { container } = await mount()
     const button = layoutButton(container)
     const panels = screen.getByRole('button', { name: /⊞ Panels/ })
@@ -800,7 +801,7 @@ describe('the Layout button — the same picker, beside ⊞ Panels', () => {
     expect(button.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(picker()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Map first', 'List first', 'Dashboard', 'Frame', 'Frame + bar'])
+    expect(within(picker()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Standard', 'Map first', 'List first', 'Dashboard', 'Frame', 'Frame + bar'])
     expect(now()).toBe('Standard')
     expect((screen.getByRole('button', { name: 'Undo last change' }) as HTMLButtonElement).disabled, 'nothing to undo yet').toBe(true)
   })
@@ -1093,5 +1094,111 @@ describe('Frame + bar — the default view to try', () => {
     pick(r.container, 'Frame + bar')
     expect(bar(r.container)).not.toBeNull()
     expect(headerOf(r.container).querySelector('.utc-clock')).toBeNull()
+  })
+})
+
+// STANDARD IS A CHOICE (the operator's batch 63). It used to only read back, so the way from a layout
+// being tried back to Standard was Undo or Reset layout. Now it is the picker's first choice, behind
+// both doors, and a tap applies it the way any layout applies: one undoable step, so trying Frame + bar
+// and going back is one tap each way. It is not a Reset: like every layout it keeps the panes' own text
+// sizes, and its Undo puts back the widths it replaced, which a Reset's does not.
+describe('Standard — one tap back from a layout you are trying', () => {
+  const BAR = 'nexus.connect.bar'
+  const CONFIG = 'nexus.connect.config'
+  const headerOf = (c: HTMLElement) => c.querySelector('.connect-header') as HTMLElement
+  const openPicker = (c: HTMLElement) => {
+    if (!screen.queryByRole('group', { name: 'Layout' })) fireEvent.click(within(headerOf(c)).getByRole('button', { name: 'Layout' }))
+    return screen.getByRole('group', { name: 'Layout' })
+  }
+  const choice = (c: HTMLElement, label: string) => within(openPicker(c)).getByRole('button', { name: label })
+  const pick = (c: HTMLElement, label: string) => fireEvent.click(choice(c, label))
+  const now = (c: HTMLElement) => openPicker(c).querySelector('.connect-layout-now')?.textContent
+  const bar = (c: HTMLElement) => c.querySelector('.connect-shell > .dash-bar')
+  const undoButton = () => screen.getByRole('button', { name: 'Undo last change' }) as HTMLButtonElement
+  const stored = (key: string) => JSON.parse(localStorage.getItem(key) ?? 'null')
+  const paneIn = (c: HTMLElement, s: SlotId) => c.querySelector(`.pane-frame[data-slot="${s}"]`)?.getAttribute('data-pane')
+
+  it('from Frame + bar, a tap on Standard puts Connect as it first opens back, and Undo is one tap back to Frame + bar', async () => {
+    const restore = fakeBoxes(1920)
+    try {
+      const { container } = await mount()
+      pick(container, 'Frame + bar')
+      expect(now(container), 'control: Frame + bar is on screen').toBe('Frame + bar')
+      expect(bar(container), 'control: its bar is drawn').not.toBeNull()
+
+      pick(container, 'Standard')
+      expect(now(container)).toBe('Standard')
+      expect(choice(container, 'Standard').getAttribute('aria-pressed')).toBe('true')
+      expect(slotsOn(container).sort(), 'every pane open').toEqual([...SLOT_IDS].sort())
+      for (const s of SLOT_IDS) expect(paneIn(container, s), s).toBe(DEFAULT_SLOTS[s])
+      expect(container.querySelectorAll('.pane-frame [role="tab"]').length, 'one pane per slot, no tabs').toBe(0)
+      expect(stored(CONFIG).tabs).toEqual({})
+      // The default widths: no preference stored for either rail, and no width set on the grid.
+      expect([stored(WIDTHS)?.left ?? null, stored(WIDTHS)?.right ?? null], 'no width preference').toEqual([null, null])
+      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe('')
+      expect(grid(container).style.getPropertyValue('--cn-rail-r')).toBe('')
+      expect(bar(container), 'no bar').toBeNull()
+      expect(localStorage.getItem(BAR)).toBe('0')
+      expect(headerOf(container).querySelector('.utc-clock'), 'the header’s clock is back').not.toBeNull()
+      expect(undoButton().disabled, 'the tap is a step Undo can take back').toBe(false)
+
+      fireEvent.click(undoButton())
+      expect(now(container), 'Undo: one tap back to the layout being tried').toBe('Frame + bar')
+      expect(bar(container)).not.toBeNull()
+      expect(slotsOn(container).sort()).toEqual(['left1', 'left2', 'right1', 'right2'])
+      expect(stored(CONFIG).tabs, 'its tabs').toEqual(CONNECT_PRESETS.frameBar.tabs)
+      expect(stored(WIDTHS), 'its widths').toEqual(CONNECT_PRESETS.frameBar.rails)
+    } finally {
+      restore()
+    }
+  })
+
+  it('over the operator’s own arrangement it is a layout, not a Reset: the text sizes stay, and Undo puts everything back, widths included', async () => {
+    const restore = fakeBoxes(1920)
+    try {
+      localStorage.setItem(RECORD, JSON.stringify({ v: 2, state: {}, share: {}, scale: { left1: 1.4 } }))
+      const { container } = await mount()
+      fireEvent.change(container.querySelector('.pane-frame[data-slot="left1"] select')!, { target: { value: 'greyline' } })
+      closeSlot(container, 'right2')
+      fireEvent.keyDown(screen.getByRole('separator', { name: 'Left panel column width' }), { key: 'ArrowRight' })
+      const before = { slots: stored(CONFIG).slots, record: stored(RECORD), widths: stored(WIDTHS) }
+      expect(now(container), 'control: the operator’s own arrangement').toBe('Custom')
+      expect(before.widths.left, 'control: the width step took').not.toBeNull()
+
+      pick(container, 'Standard')
+      expect(now(container)).toBe('Standard')
+      for (const s of SLOT_IDS) expect(paneIn(container, s), s).toBe(DEFAULT_SLOTS[s])
+      expect(stored(RECORD).scale, 'the panes’ own text sizes ride through, as through every layout').toEqual({ left1: 1.4 })
+
+      fireEvent.click(undoButton())
+      expect(stored(CONFIG).slots).toEqual(before.slots)
+      expect(stored(RECORD)).toEqual(before.record)
+      expect(stored(WIDTHS), 'the width it replaced').toEqual(before.widths)
+      expect(paneIn(container, 'left1')).toBe('greyline')
+      expect(paneIn(container, 'right2'), 'the pane closed before the tap is closed again').toBeUndefined()
+      expect(now(container)).toBe('Custom')
+    } finally {
+      restore()
+    }
+  })
+
+  it('a tap on Standard while it is on screen changes nothing: nothing is written, and the one Undo is not spent', async () => {
+    const { container } = await mount()
+    expect(now(container), 'control: Standard is on screen').toBe('Standard')
+    pick(container, 'Standard')
+    expect(undoButton().disabled, 'nothing to undo').toBe(true)
+    for (const key of [CONFIG, RECORD, WIDTHS, BAR]) expect(localStorage.getItem(key), key).toBeNull()
+  })
+
+  it('⊞ Panels’ copy of the picker has it too, and a tap there is the same step', async () => {
+    const { container } = await mount()
+    pick(container, 'Frame + bar')
+    fireEvent.pointerDown(document.body)
+    fireEvent.click(within(headerOf(container)).getByRole('button', { name: /⊞ Panels/ }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Standard' }))
+    expect(screen.getByRole('group', { name: 'Layout' }).querySelector('.connect-layout-now')?.textContent).toBe('Standard')
+    expect(bar(container)).toBeNull()
+    fireEvent.click(undoButton())
+    expect(bar(container), 'its Undo takes the tap back').not.toBeNull()
   })
 })

@@ -35,6 +35,7 @@ import { SLOT_IDS, addableTo, slotBoxes, useConnectConfig, type PaneId, type Slo
 import {
   CONNECT_PRESET_IDS,
   CONNECT_PRESETS,
+  STANDARD_LAYOUT,
   connectLayoutNow,
   layoutPanels,
   type ConnectPresetId,
@@ -108,9 +109,16 @@ const SLOT_WHERE: Record<SlotId, () => string> = {
   bottom3: () => t('connect.slot.where.bottom3'),
 }
 
+/** What the Layout picker offers: Standard first — Connect as it first opens, applied by a tap like any
+ * layout's and undone the same way (the operator's batch 63), so trying a layout and going back is one
+ * tap each way — then the presets (features/connectPresets). */
+type LayoutChoice = ConnectPresetId | 'standard'
+const LAYOUT_CHOICES: readonly LayoutChoice[] = ['standard', ...CONNECT_PRESET_IDS]
+
 /** The ⊞ Layout picker's words (features/connectPresets). Literal keys, resolved lazily at render
  * (the INTENTS treatment). */
-const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => string }> = {
+const LAYOUT_WORDS: Record<LayoutChoice, { label: () => string; title: () => string }> = {
+  standard: { label: () => t('connect.layout.standard'), title: () => t('connect.layout.standard.title') },
   mapFirst: { label: () => t('connect.layout.mapFirst.label'), title: () => t('connect.layout.mapFirst.title') },
   listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
   dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
@@ -124,21 +132,17 @@ const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => 
  * choices, not a chip row: the popover is 220 px wide, where three chips side by side wrap at Large
  * text or in German. The words over the operator's own arrangement say what a tap costs before it is
  * made. Its ids are its own (`useId`), so the two doors never share one. */
-function LayoutPicker({ now, onPick }: { now: ConnectPresetId | 'standard' | 'custom'; onPick: (id: ConnectPresetId) => void }) {
+function LayoutPicker({ now, onPick }: { now: LayoutChoice | 'custom'; onPick: (id: LayoutChoice) => void }) {
   const id = useId()
   return (
     <div className="connect-layouts" role="group" aria-labelledby={`${id}-head`}>
       <div className="connect-layouts-head">
         <span id={`${id}-head`}>{t('connect.layout.heading')}</span>
         <span className="connect-layout-now">
-          {now === 'standard'
-            ? t('connect.layout.standard')
-            : now === 'custom'
-              ? t('connect.layout.custom')
-              : LAYOUT_WORDS[now].label()}
+          {now === 'custom' ? t('connect.layout.custom') : LAYOUT_WORDS[now].label()}
         </span>
       </div>
-      {CONNECT_PRESET_IDS.map((p) => (
+      {LAYOUT_CHOICES.map((p) => (
         <button
           key={p}
           type="button"
@@ -462,16 +466,19 @@ export function ConnectView({
     ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
   } as React.CSSProperties
 
-  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame · Frame + bar.
+  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame · Frame + bar,
+  // and Standard, which a tap applies the same way.
   // Which one is on screen is READ BACK from the placement (its tabs included), the panel record, the
   // stored rail widths and the bar's record — never stored — so a pane moved or resized after a pick
   // reads Custom and nothing can snap back.
   const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref, bar: barOn })
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
-  const pickLayout = (id: ConnectPresetId) => {
+  const pickLayout = (id: LayoutChoice) => {
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
-    const p = CONNECT_PRESETS[id]
+    // Standard is a layout here like the others: no closed slots, the default widths, no tabs, no bar,
+    // no map layers. Only Reset layout also puts the text sizes and the bottom row's height back.
+    const p = id === 'standard' ? STANDARD_LAYOUT : CONNECT_PRESETS[id]
     const turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> = []
     for (const layer of p.mapLayers ?? []) {
       if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })

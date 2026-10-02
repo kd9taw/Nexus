@@ -213,6 +213,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   away as a tab behind those four. Connect still opens on Standard; pick Frame + bar to try it, and
   **Undo last change**, another layout or **Reset layout** takes the bar away again. In the dashboard
   window and on the TV page, which have the bar already, it is the one bar.
+- **Connect: Standard is a choice in Layout.** **Layout** (and the top of **⊞ Panels**) lists
+  **Standard** first: Connect as it first opens, every pane open in its usual place at the usual
+  widths, with no bar. Trying Frame + bar or another layout and going back is one tap each way, and
+  **Undo last change** takes the Standard tap back like any other. Unlike **Reset layout**, it leaves
+  your panes' text sizes as they are, as every layout does.
 - **The dashboard bar shows a storm.** Kp, X-ray and the solar-wind speed turn amber when the Space
   Wx box's gauges are at their warning level (Kp 4 and up, an M or X flare, a wind of 600 km/s or
   more), in the dashboard window, on the TV page and in Frame + bar. In the light theme the number
