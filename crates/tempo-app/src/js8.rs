@@ -3118,6 +3118,72 @@ mod tests {
         );
     }
 
+    /// A `MSG TO:` with nothing after the call, on the air: held and acknowledged, and K1ABC's
+    /// QUERY MSGS is answered `K1ABC NO`, as JS8Call answers it: its lookup skips a held message
+    /// whose text is empty (`getNextMessageIdForCallsign`, mainwindow.cpp:9516-9529). Nexus
+    /// answered `K1ABC YES MSG ID 1`, for a message with nothing to deliver.
+    #[test]
+    fn a_js8_msg_to_with_no_text_is_held_and_acked_but_not_offered_on_the_air() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let store = ::js8::proto::compose::frames(
+            "W1AW",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "MSG TO:K1ABC",
+            Js8Speed::Normal,
+        )
+        .expect("composes");
+        for (f, i3) in store {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+        }
+        let held: Vec<(String, String, InboxState)> = e
+            .js8_state()
+            .inbox
+            .into_iter()
+            .map(|m| (m.to, m.text, m.state))
+            .collect();
+        assert_eq!(
+            held,
+            [("K1ABC".to_string(), String::new(), InboxState::Store)],
+            "held for K1ABC, with no text"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        run_js8_loop_from(&mut e, t0, 60); // the store's ACK goes out
+        let ask = ::js8::proto::compose::frames(
+            "K1ABC",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "QUERY MSGS",
+            Js8Speed::Normal,
+        )
+        .expect("the query composes");
+        for (f, i3) in ask {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1210.0)], 0);
+        }
+        let overs = run_js8_loop_from(&mut e, t0 + 61_000, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        let reply = "K1ABC NO";
+        let frames = ::js8::proto::compose::frames_with_grid(
+            "KD9TAW",
+            "EN52",
+            None,
+            reply,
+            Js8Speed::Normal,
+        )
+        .expect("the reply composes")
+        .len();
+        let mut expected = vec!["KD9TAW: W1AW ACK".to_string()];
+        expected.extend(std::iter::repeat_n(format!("KD9TAW: {reply}"), frames));
+        assert_eq!(
+            booked, expected,
+            "acknowledged, then K1ABC is told NO on the air: {overs:?}"
+        );
+    }
+
     // ===== the queue at a TX-off or privileges refusal: dropped, never sent later =====
 
     /// A message queued inside the licence's privileges, then the dial moved out of them before

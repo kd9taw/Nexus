@@ -686,6 +686,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under or by its base call; Nexus now does the same, in the heartbeat acknowledgement's MSG ID,
   the answer to QUERY MSGS, QUERY MSG and the count in the Stations list. A message already held
   is still found under the call it was held for.
+- **JS8: a message left with no text is held but never offered, as in JS8Call.** A MSG TO:W1AW
+  with nothing after the call was held and acknowledged, then offered to W1AW: its QUERY MSGS was
+  answered YES MSG ID 1, its heartbeat acknowledgement carried that ID, and QUERY MSG 1 delivered
+  a message with nothing in it. JS8Call holds and acknowledges such a message but passes over it
+  whenever it looks for one to offer, and Nexus now does the same: W1AW is offered the next
+  message held for it that has text, or told NO, and a QUERY MSG for the empty one draws no
+  reply. It stays in the Inbox, held.
 - **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
   When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
   put those switches back on underneath while the watchdog still stood, so a query heard then
