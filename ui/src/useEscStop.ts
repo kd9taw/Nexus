@@ -1,5 +1,7 @@
 // ESC IS A STOP. The one listener every screen's Esc stop rides: App's, for Tempo, Phone, SSTV, APRS
 // and Satellites (2026-10-01), and FT's, CW's, RTTY's, PSK's and JS8's own (operator, 2026-10-01).
+// On the hosted page CW's, RTTY's, PSK's and JS8's Esc is App's too (2026-10-02): their own needs
+// local control, which a browser never has.
 // What a screen's Esc does is the screen's own `stop`; only where the key is heard is decided here.
 //
 //   · CAPTURE phase on `window`, so nothing on the screen can swallow the key. The cockpits used to

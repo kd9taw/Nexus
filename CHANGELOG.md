@@ -869,6 +869,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the station as before. On FT, CW, RTTY, PSK and JS8 Esc is now heard the way it is on the other
   operating screens, before anything else on the screen, so no control there can ever keep it from
   stopping. What Esc does is unchanged: on FT it is still the WSJT-X halt, the same as **Stop TX**.
+- **On the hosted page, Esc stops transmit on CW, RTTY, PSK and JS8 for the browser in control.**
+  It did nothing there, while **Stop TX** on the same screen stopped the station. Now Esc sends the
+  same stop as that Stop TX, from anywhere on the screen, stale readings included. For an observer
+  it still does nothing and shows nothing. The desktop is unchanged.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,

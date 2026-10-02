@@ -270,6 +270,9 @@ const OPERATE_TIERS: Tier[] = [
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
  *  no top bar, so no Stop TX of its own (N65, the operator's 2026-10-01 ruling). */
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats', 'connect'])
+/** On the hosted page only, App binds these four to the same halt: in a browser each one's Stop TX
+ *  is the TX strip's remote stop, which is this halt, and their own Esc needs local control. */
+const HOSTED_ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['cw', 'rtty', 'psk', 'js8'])
 
 export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; /** The stale DISPLAY, after hysteresis; defaults to `stale`. */ staleShown?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
@@ -2666,7 +2669,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // CONNECT TOO (N65, the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
   // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
   // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same call, stop authority included.
-  useEscStop(ESC_HALT_VIEWS.has(effectiveView), handleHaltTx)
+  // ON THE HOSTED PAGE, CW, RTTY, PSK AND JS8 TOO (2026-10-02). Their own Esc binds only with local
+  // control, which a browser never has, so it did nothing there while their Stop TX stopped the
+  // station: in a browser that button is the TX strip's remote stop, this same haltTx (their own
+  // verbs have no remote route). App sends it while one of them, with its Stop TX, is on show. The
+  // desktop is unchanged: there `remote` is unset and each binds its own.
+  useEscStop(
+    ESC_HALT_VIEWS.has(effectiveView) ||
+      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)),
+    handleHaltTx,
+  )
 
   if (!snap) {
     return (
