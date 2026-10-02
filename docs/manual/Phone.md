@@ -31,7 +31,7 @@ The rig model and port are set in Settings; the default rigctld port is **4532**
 
 ## Band selection
 
-A prominent **band picker** in the cockpit header shows your current band. It is a large, bold control colored by the active band (matching the per-band colors on the Connect map), so what band you're on reads at a glance across the room. Picking a band parks the VFO at the **start of your licensed phone segment** on that band; it lists only the bands your license class permits in phone. If the current frequency/mode is outside your privileges, a **🔒 TX locked** chip appears next to it.
+A prominent **band picker** in the cockpit header shows your current band. It is a large, bold control colored by the active band (matching the per-band colors on the Conditions map), so what band you're on reads at a glance across the room. Picking a band parks the VFO at the **start of your licensed phone segment** on that band; it lists only the bands your license class permits in phone. If the current frequency/mode is outside your privileges, a **🔒 TX locked** chip appears next to it.
 
 ## Bandscope
 

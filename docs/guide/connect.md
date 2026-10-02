@@ -1,6 +1,6 @@
-# Connect — map + propagation
+# Conditions (formerly Connect) — map + propagation
 
-Connect is Nexus's situational-awareness surface: one screen that fuses live
+Conditions is Nexus's situational-awareness surface: one screen that fuses live
 spots (PSK Reporter and RBN/DX-cluster) with NOAA space weather, draws them on a
 map, and reasons about them with an honest opening detector and a native ITU-R
 P.533 propagation engine. It answers three questions all the time — *is the band
@@ -12,7 +12,16 @@ band is "open" when stations near *you* are demonstrably heard both ways, not
 when one big station far away has a good morning. Modelled data is always
 labelled "modelled"; the UI never dresses an estimate as a measurement.
 
-<!-- TODO: capture screenshot — Connect — the shaded 3-D globe with panes wrapped around it -->
+Conditions has no radio controls. The bar across the top of the other screens (the
+frequency, the band list, TX Off, Tune and Stop TX) is not shown here, so the map
+and its panes get the whole height. To stop a transmission while Conditions is on
+screen, press **Esc**, or go to any other screen and press **Stop TX** there.
+The bar's UTC clock stays: it sits at the end of Conditions' own header in every
+layout, with your local time beside it if you turned that on in **Settings ▸
+Workspace**. In the dashboard window and on the TV page the bar across the top
+carries the big clock instead.
+
+<!-- TODO: capture screenshot — Conditions — the shaded 3-D globe with panes wrapped around it -->
 
 ## The tour
 
@@ -28,11 +37,15 @@ One **map picker** at the top of the map chooses the view:
   from your QTH.
 
 Each intent preset remembers its own pick. **Layers** sits in the top-left
-corner of every view and folds away to a pill, the same way Conditions does.
+corner of every view and folds away to a pill, the same way the Propagation card does.
 
 The **Layers** menu toggles what's drawn on top:
 
 - **Greyline** with graded civil / nautical / astronomical twilight,
+- **Sun and moon** — the sun where it is overhead, at the centre of the day side, and the moon
+  where it is overhead, lit as much as the real one and on the side you see lit from your
+  hemisphere (on by default; during an M-class flare the flare layer's animated sun takes the
+  sun's place),
 - **shaded relief** (bundled offline),
 - **band-heat auras**,
 - **live spot dots** — grid-placed, age-faded, and colored by what they're worth
@@ -72,25 +85,61 @@ offline, or has nothing to report, not a density setting. (There was a
 2026-07-26 and there is no such control now.)
 
 You don't have to keep all seven. Each pane has a **✕** on its header to close it,
-and the **Panels** menu in the Connect header lists what's closed so you can bring
+and the **Panels** menu in the Conditions header lists what's closed so you can bring
 it back, with **Undo** and **Reset layout**. When a pane closes, its neighbour
 takes the space; close both panes on a side and the map takes the width. Drag the
 edge of a side column to make it wider or narrower (200–720 px; the map never goes
 below 280 px), or drag between its two panes. Both handles also work from the
 keyboard, and a double-click puts the default back. What you close and how wide
 you make things is remembered per window, and a saved width is trimmed to fit a
-smaller screen. **Reset layout** returns Connect to exactly how it first opened,
-including which pane sits in each slot.
+smaller screen. **Reset layout** puts every pane back open at the usual widths, the
+**Standard** layout, including which pane sits in each slot.
 
-**Layouts.** The Panels menu opens with three ready-made arrangements of the same
-panes, and names the layout on screen: **Standard** (how Connect first opens), one
-of the three, or **Custom** once you have moved or resized anything yourself.
+**A pane's own menu.** Each pane's header has a **⋯** button beside the ✕ (the
+picker next to it is a little narrower to make room, and in the narrowest columns a
+long pane title can end in "…"). Its
+**A+ Larger text** and **A− Smaller text** make that pane's words bigger or smaller,
+from 80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a
+press; the menu stays open and shows the size, so you can press again. Only the
+words change: the pane keeps its place and size, its header stays as it was, and a
+pane whose text no longer fits scrolls. Each pane keeps its own size in each
+window. A layout from the Panels menu keeps the sizes; **Reset layout** puts every
+pane back at 100%. The same menu has **? … in the manual**, which opens this
+manual in your browser at the part about that pane; a pane this manual does not
+describe yet has no link.
+
+**Tabs.** A slot can hold more than one pane. **⋯ ▸ Add a tab** lists the panes it
+can take; pick one and it joins the slot, shown, and the slot's title becomes a row
+of tabs (in a narrow column, a row of its own under the picker, ⋯ and ✕). Click a
+tab to switch, or use ← →, Home and End on it. The picker changes
+the pane on the tab that is showing, and **⋯ ▸ Remove … from this slot** takes it
+out. A pane is only ever in one slot: adding one from another slot moves it, and a
+slot's only pane is not offered, since that slot would be empty. Each slot reopens
+on the tab it was showing. A layout from the Panels menu, or **Reset layout**, puts
+one pane back in each slot; **Undo** brings the tabs back.
+
+In the dashboard window and on the TV page, a slot with tabs can also show them in
+turn: **⋯ ▸ Rotate the tabs** and pick 10 s, 15 s, 30 s, 1 min or 2 min. It is off
+until you pick one. It waits while the mouse is over the slot, while you are in it
+with the keyboard and while its menu is open, and starts the interval again after.
+The main window's Conditions never rotates, so what you are looking at while you
+operate never changes by itself.
+
+**Layouts.** The **Layout** button in the Conditions header, beside **⊞ Panels**, opens
+five ready-made arrangements of the same panes (the Panels menu shows the same
+choices at its top), and names the layout on screen: **Standard** (every pane open, as
+Conditions opened before Frame + bar became the default), one of the five, **Your earlier
+layout** (below), or **Custom** once you have moved or resized anything yourself.
+**Standard** is the first choice in the list, so going back to it is one tap, and **Undo**
+takes that tap back like any other. Unlike **Reset layout**, it keeps your panes' text sizes.
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|
-| Map first | Conditions, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
+| Map first | Best band, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
 | List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
 | Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
+| Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height (and Satellites turns on) | 400 px |
+| Frame + bar (default) | Bands for you, Openings | Chase, Getting Out | closed, so the map runs the full height | 400 px |
 
 A layout applies only when you pick it, and nothing snaps back afterwards: change a
 pane or a width and the menu reads Custom. Over an arrangement of your own the menu
@@ -98,22 +147,92 @@ says that a pick replaces it, and **Undo** puts it back, widths included. The pa
 layout closes stay in their slots, so ticking one in the menu brings back what the
 layout parked there. On a smaller window the columns narrow to fit (the map keeps
 its 280 px minimum). With a large zoom on a smaller screen every pane keeps its title
-bar, with its picker and ✕, in view, and when even that does not fit, Connect scrolls.
+bar, with its picker and ✕, in view, and when even that does not fit, Conditions scrolls.
 A layout never changes the map's own settings: the Globe, 3D,
 Flat or Beam pick, the layers and the colouring stay as you left them for each intent.
+The one exception is **Frame**, which also turns on **Satellites** on the map and the 3-D
+globe. It never turns a layer off, if you untick Satellites afterwards it stays off, and
+**Undo** turns it back off with the rest of the layout.
+
+**Frame + bar (default)** is how Conditions opens. It puts the dashboard window's bar
+across the top of Conditions: your
+callsign and grid, a big UTC clock beside your local time, and the day's SFI, Kp,
+sunspot number, A, X-ray and solar-wind speed. Its four boxes keep the others one
+click away as tabs: Band Advisor, Bands by region, Activity Matrix and Best band
+behind Bands for you; Sporadic-E, Openings Log, Insights and 24h Band×Hour behind
+Openings; Chase Feed, Selection, Contests and Satellite Passes behind Chase; Space Wx,
+Kp outlook, Measured MUF, NCDXF Beacons and Greyline behind Getting Out. The closed
+bottom row keeps Band Outlook and the Clock, Rotor and Amplifier, and Band Scope.
+Clicking a tab is not a change of layout. The bar stays while you change things
+yourself; another layout, **Undo** or **Reset layout** takes it away. The map is left
+as you had it, its Propagation card included.
+
+**The switch to Frame + bar, once.** After the update Conditions opens in Frame + bar
+once, in the main window, the dashboard window and on the TV page, whatever layout it
+had. If you had arranged it yourself, your arrangement is kept: **Layout ▸ Your earlier
+layout** brings it back exactly, with its boxes, tabs, widths and splits, in one tap, and
+it stays in the list. If you were on Standard or one of the five layouts, pick it again.
+The switch happens once and never again, even after a reinstall or a restore from a
+backup. A dashboard window you never arranged follows the main window, as it always
+has. The TV page opens in its own Frame + bar, without the boxes it can never fill
+there: Space Wx and the Kp outlook take Chase's place, and the closed row keeps Band
+Outlook, Satellite Passes and the Clock.
+
+**Conditions in its own window.** **⧉ Pop out** in the Conditions header opens Conditions as a
+dashboard window for a second monitor or a screen of its own. It opens at 1600 × 1000,
+or your whole screen if that is smaller, with the full layout, and a bar across the top
+shows your callsign and grid, a big UTC clock beside your local time, and the day's SFI,
+Kp, sunspot number, A, X-ray and solar-wind speed (a dash for each when there is no live
+data, and a note when the numbers are old). In a storm Kp, X-ray and the solar wind turn
+amber when the Space Wx box's gauges reach their warning level (in the light theme the
+number stays dark, underlined in amber). The sunspot number is NOAA's daily count,
+shown with the day it is from, as in the Space Wx box. Close it and it comes back on the
+same monitor, in the same place and at the same size; if that monitor is gone it opens
+in the middle of your main screen, sized to fit. The window keeps its own layout, so a
+layout picked there leaves the main window's Conditions as it was. On Windows the bar also
+has a **Stay behind** button: pressed, the window stays behind your other windows even
+when you click on it, so it can fill a screen behind Nexus without covering the cockpit.
+A click on it still moves the keyboard to it: until you click back into Nexus the keyboard
+is the dashboard's, so Esc stops nothing then. The Stop TX button always works (with
+Conditions in the main window there is none: click back into Nexus and press Esc).
+
+**Beside a cockpit: the dashboard rail.** The same boxes can stand in a column at the right of
+an operating cockpit (Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8), so the time, the bands
+and who hears you stay in view while you operate. It is off until you turn it on: tick
+**Dashboard rail** in the cockpit's **⊞ Panels** menu, or press **Dashboard** at the right end
+of the Now-Bar. Each cockpit remembers its own choice. The rail opens with the **Clock**,
+**Bands for you**, **Space Wx** and **Getting Out**; each box has the same picker as a Conditions
+slot, so any pane can take its place, its **✕** closes it, and the **⊞ Panels** menu in the
+rail's head brings a closed box back or resets the rail. A box's **⋯** sets its own text size
+there as on Conditions (tabs stay Conditions'), and the rail's Reset puts every box back at 100%.
+Drag the rail's left edge to make it wider or narrower (200–720 px), or the line between two
+boxes to share the height between them; both also work from the keyboard, and a double-click
+puts the default back. The rail shows only
+on a large window, about 1600 px wide at your zoom (a 1366×768 laptop at its usual 85 %
+qualifies), and the cockpit beside it is never narrower than it is on a 1024×768 screen, so a
+saved width is trimmed to fit. On a smaller window the rail stays hidden, and the ⊞ Panels entry
+keeps your choice and says why. The rail has no transmit control, and clicking a station in it
+selects that station in the rail only, never the station your cockpit is working. A **Spots** or
+**POTA / SOTA** box works a spot there as it does on Conditions: a click on a spot, or on **HUNT**,
+moves the radio to the station and opens its screen. Nothing transmits. The rail reads the
+same live data Conditions does, and within a window the two share each request, so nothing is
+fetched twice.
 
 The panes you can assign:
 
 | Pane | Shows |
 |---|---|
-| Conditions | the propagation headline + any warning banners |
+| Best band | the propagation headline (which band is best now) + any warning banners |
 | Band Advisor | every HF band ranked best-first, with plain reasoning |
+| Bands for you | each band as a tile saying Open, Marginal or Closed for you now, with a dot when the band is being heard, ★ on the best band and a ring on your radio's band; click a tile to show that band on the map |
 | Selection | detail on the station/spot you clicked, with a ▶ Work button |
 | Band Outlook | modelled workable bands to DX (or the path to a selected call) |
 | Openings | detected band openings around you |
-| Space Wx | solar/geomagnetic gauges + the NOAA scales annunciator |
-| Getting Out | who is hearing you right now, on a compass |
-| Best Band → Region | the best band to reach each region |
+| Openings Log | every band opening Nexus has detected (6 m and 2 m tropo, sporadic-E, aurora), with its band, kind, start, length, longest path and the most stations heard, kept from one session to the next |
+| Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
+| Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
+| Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
+| Bands by region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
 | NCDXF Beacons | the NCDXF beacon schedule, with heard badges |
 | Insights | notable propagation events, narrated |
@@ -125,7 +244,20 @@ The panes you can assign:
 | Measured MUF | real ionosonde MUF measurements |
 | Satellite Passes | next amateur-satellite passes over your grid |
 | Rotor | rotator control + compass, and the elevation on an az/el rotator (appears once a rotctld is configured) |
+| Contests | upcoming HF and VHF contests from the WA7BNM calendar, grouped as on now, soon, this week and later |
+| Band Scope | a live spectrum of your radio's passband, band noise and signals at a glance; flat while the radio's audio is not reaching Nexus |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
+| Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
+| Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |
+| POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
+
+The **Spots** and **POTA / SOTA** boxes are those screens' own lists, so a click on a spot or on
+**HUNT** does what it does there, and nothing transmits. In Conditions' own window (**⧉ Pop out**)
+they work the same way, through that window's own Needed and POTA/SOTA boards, and the main
+window follows to the screen the station needs. Each box keeps its own filters, apart from
+the screen's. In a narrow box the Spots list shows the call, the frequency and the mode, adds the
+age, the country and the comment as the box widens, and shows every column from about 640 px;
+the list scrolls inside the box. The wall display (the TV page) shows no spot list, and each box says so there.
 
 The default layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,
@@ -195,9 +327,10 @@ controllers disagreeing about where the amplifier should be.
 
 ![A pane picker open: the closed control reads "24h Band×Hour", and the list below is grouped — Panels (Conditions, Band Advisor, Selection, Band Outlook, Openings, Openings Log, Space Wx, Getting Out), B2 (Kp outlook, Best Band → Region, Activity Matrix, NCDXF Beacons, Insights, Chase) and B3 (Greyline, 24h Band×Hour highlighted as the current choice, Sporadic-E).](../img/manual/connect-pane-picker.webp)
 
-*A pane picker open in Nexus 1.10.3. The **Panels** / **B2** / **B3** headings
-are the picker's own grouping of the pane list — any pane in any group can go
-in any slot.*
+*A pane picker open in Nexus 1.10.3, when its headings were Panels, B2 and B3.
+They now say what the boxes under them are for: **Bands**, **Space weather**,
+**Activity** and **Station**, in the picker and in **⋯ ▸ Add a tab** alike. Any
+pane in any group can go in any slot.*
 
 1. Click the picker in any pane frame's corner.
 2. Choose a pane from the list. If that pane already lives in another slot, the
@@ -247,10 +380,12 @@ and antenna gain). **Live spots always win over any model.**
 
 ## The Now-Bar
 
-The persistent **Now-Bar** carries the Connect intelligence into every section of
+The persistent **Now-Bar** carries the Conditions intelligence into every section of
 the app: is the band open, am I getting out, what do I need — with feed-health
 pills that distinguish "connected but quiet" from "down," so a silent band never
 looks like a dead feed.
+Beside an operating cockpit on a large window, its last button, **Dashboard**, shows or
+hides the dashboard rail (above).
 
 ## Honest limits
 

@@ -31,8 +31,12 @@
 //! for the torn-off band map, and the coordinate reasoning below is lifted from its
 //! header (tao resolves a logical position by hit-testing each candidate monitor
 //! scaled by THAT monitor's DPI, first match wins). The two are separate on purpose:
-//! that one lives behind Tauri types, this one is testable. If a third window ever
-//! needs it, that is the moment to unify them here.
+//! that one lives behind Tauri types, this one is testable.
+//!
+//! **The third window takes this policy, not the band map's**: the Connect dashboard
+//! pop-out (`src-tauri/src/window_state.rs`) is restored and captured by these same two
+//! functions, with its own minimum passed to [`restore`]. The band map keeps its own path
+//! because it is entangled with its dock state.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;

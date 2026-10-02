@@ -485,6 +485,9 @@ type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStati
 type ProtonCache = Arc<Mutex<Option<(std::time::Instant, propagation::live::protons::ProtonFlux)>>>;
 /// TTL cache for the NOAA planetary-K outlook (the three-day forecast).
 type KpForecastCache = Arc<Mutex<Option<(std::time::Instant, propagation::KpForecast)>>>;
+/// TTL cache for NOAA's daily solar indices (thirty days of SFI + sunspot number). Distinct
+/// payload type → distinct TypeId for `.manage()`.
+type SolarIndicesCache = Arc<Mutex<Option<(std::time::Instant, propagation::DailySolarIndices)>>>;
 /// TTL cache for the NOAA R/S/G scales + recent SWPC alerts (one fetch pair).
 /// Distinct payload type → distinct TypeId for `.manage()`.
 type ScalesCache = Arc<
@@ -12534,6 +12537,46 @@ async fn get_kp_forecast(
     }
 }
 
+/// NOAA's daily solar indices — thirty days of solar flux and sunspot number, for the Space Wx
+/// box's SSN and its trend lines. Display only: nothing here reaches the propagation model,
+/// whose sunspot input is the smoothed R12 (`LAST_SSN`), a different quantity.
+///
+/// Cached an hour: SWPC issues the file about once a day, and an hourly read picks up a new day
+/// within the hour for ~3 KB. Serves the last good copy on a failed fetch and an EMPTY one if
+/// there never was one — never fabricated. The copy stays honest however long the fetch keeps
+/// failing, because every row carries its own date: the box says how old the newest day is.
+#[tauri::command]
+async fn get_solar_indices(
+    cache: State<'_, SolarIndicesCache>,
+) -> Result<propagation::DailySolarIndices, String> {
+    const SOLAR_INDICES_TTL_SECS: u64 = 3600;
+    {
+        let g = cache.lock().map_err(|e| e.to_string())?;
+        if let Some((when, v)) = g.as_ref() {
+            if when.elapsed().as_secs() < SOLAR_INDICES_TTL_SECS {
+                return Ok(v.clone());
+            }
+        }
+    }
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched =
+        tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_daily_solar_indices)
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
+        Ok(v) => {
+            if let Ok(mut g) = cache.lock() {
+                *g = Some((std::time::Instant::now(), v.clone()));
+            }
+            Ok(v)
+        }
+        Err(_) => {
+            let g = cache.lock().map_err(|e| e.to_string())?;
+            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+        }
+    }
+}
+
 /// Real-time KC2G ionosonde MUF/foF2 station fixes for the Connect map's MUF
 /// overlay. Cached `KC2G_TTL_SECS`; serves the last-good set on a fetch failure,
 /// empty if we never had one (never fabricated).
@@ -18561,6 +18604,13 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // The POTA map pop-out: a bare MapView needs the same room the Operate cockpit
         // does, not the generic 760×660 — a cramped globe is the whole feature undersold.
         "operatemap" => (1140.0, 760.0),
+        // The Connect dashboard window. The generic 760 wide is under Connect's 768 px
+        // `xs` line, so it opened as the phone-style stack; 1600 is the `lg` class, where two
+        // 400 px side columns (the Dashboard layout's) leave the map 728 px (measured in
+        // Chrome; the grid's padding and gaps take the rest). 1000 tall fits a 1920×1080
+        // screen with its taskbar; a smaller screen gets the work area instead (the open path
+        // fits it with `prevent_overflow`). After the first close it reopens as it was left.
+        "connect" => (1600.0, 1000.0),
         "bandmapPhone" | "bandmapCw" => (420.0, 780.0),
         "fieldday" => (560.0, 760.0), // the scoreboard: operator + tiles + sections board
         // The club band board is set in glance type (it is watched across the tent, not
@@ -18625,14 +18675,17 @@ async fn open_panel_window(
     chains::openable(inst)?;
     let label = panel_label(&slug, inst);
     // Already open → just focus it (one window per SURFACE — distinct instances of the same
-    // panel are distinct windows).
+    // panel are distinct windows). Not one the operator asked to stay behind other windows:
+    // focus would move the keyboard to a window drawn underneath the one they are looking at.
     if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.set_focus();
+        if !window_state::stays_behind(&w) {
+            let _ = w.set_focus();
+        }
         return Ok(());
     }
     // Friendly window title so multi-monitor users can tell torn-off windows apart.
     let title = match slug.as_str() {
-        "connect" => "Nexus — Connect".to_string(),
+        "connect" => "Nexus — Conditions (formerly Connect)".to_string(),
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
         "operate" => "Nexus — Operate".to_string(),
@@ -18648,12 +18701,16 @@ async fn open_panel_window(
     };
     let is_bandmap = slug == "bandmapPhone" || slug == "bandmapCw";
     // The band map reopens where the operator left it (size + position), so a Windows-snapped
-    // vertical strip on the side survives restarts. Other pop-outs keep their fixed defaults.
+    // vertical strip on the side survives restarts. The Connect dashboard does too, through the
+    // main window's policy (`window_state`), not this dock-aware path. Other pop-outs keep their
+    // fixed defaults.
     let saved = if is_bandmap {
         load_bandmap_window(&slug, inst)
     } else {
         None
     };
+    let (min_w, min_h) = panel_min_inner(&slug);
+    let remembered = window_state::restore_panel(&app, &slug, inst, (min_w, min_h));
     // A docked window re-snaps to the CURRENT monitor work area AFTER build (so a resolution
     // change since last session can't strand it off-screen); a FREE window's rect is validated
     // against the live monitor list below. (It used to be replayed verbatim — un-docking was
@@ -18673,10 +18730,11 @@ async fn open_panel_window(
         (w, h)
     } else if let Some(g) = &saved {
         (g.w, g.h)
+    } else if let Some(r) = remembered.and_then(|p| p.rect) {
+        (r.w, r.h)
     } else {
         panel_default_inner(&slug)
     };
-    let (min_w, min_h) = panel_min_inner(&slug);
     // `instance` is a SEPARATE query parameter, never baked into the slug — the slug filter
     // would strip the separator and alias it. Appended only above `main`, so every window that
     // is openable today keeps the exact URL it has always had.
@@ -18703,6 +18761,24 @@ async fn open_panel_window(
             builder = builder.position(g.x, g.y);
         }
     }
+    if let Some(p) = remembered {
+        // `prevent_overflow` fits the OUTER window, title bar included, to the work area of the
+        // monitor it opens on: the restore above caps only the content box, and `center` does
+        // not clamp, so a box as tall as the screen would centre with its title bar above it.
+        builder = builder.prevent_overflow();
+        builder = match p.rect.and_then(|r| r.position) {
+            Some((x, y)) => builder.position(x, y),
+            // A first open, or a saved place on a monitor that is gone.
+            None => builder.center(),
+        };
+        if p.rect.is_some_and(|r| r.maximized) {
+            builder = builder.maximized(true);
+        }
+        if p.behind && window_state::behind_supported() {
+            // Opened behind, it does not take the keyboard either (see the focus note above).
+            builder = builder.always_on_bottom(true).focused(false);
+        }
+    }
     // Pop-outs are ordinary windows — the operator must be able to send them behind the
     // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
     // future "pin" toggle can call `window.set_always_on_top(true)` on demand.
@@ -18711,6 +18787,9 @@ async fn open_panel_window(
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
         // resolution change since last session can't strand it off-screen.
         let _ = snap_bandmap_to_edge(&win, &side);
+    }
+    if remembered.is_some() {
+        window_state::arm_panel_capture(&win);
     }
     Ok(())
 }
@@ -25943,6 +26022,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_satellites" => ok(get_satellites(app.state()).await),
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
+            "get_solar_indices" => ok(get_solar_indices(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
@@ -28913,10 +28993,11 @@ fn stop_the_radio() {
     }
 }
 
-/// Snapshot the main window's box and every band-map pop-out's, while they still exist.
+/// Snapshot the main window's box, every band-map pop-out's and the Connect dashboard's,
+/// while they still exist.
 ///
 /// On the Cmd+Q path (the reason this exists) every window is alive; on a window-close quit
-/// they are already destroyed and both captures no-op — `CloseRequested` snapshotted them
+/// they are already destroyed and the captures no-op — `CloseRequested` snapshotted them
 /// before the teardown.
 fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
     if QUIT_SKIP_GEOMETRY.load(std::sync::atomic::Ordering::SeqCst) {
@@ -28925,9 +29006,10 @@ fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
     window_state::capture_now(app_handle);
     for (label, w) in app_handle.webview_windows() {
         if label != "main" {
-            // No-op for anything that is not a band-map window, and skips minimized windows
+            // Each is a no-op for any window it does not own, and skips a minimized window
             // itself — safe to sweep the whole map.
             capture_bandmap_window(&w);
+            window_state::capture_panel(&w);
         }
     }
 }
@@ -31513,6 +31595,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.connect_web)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
+        .manage(SolarIndicesCache::default())
         .manage(LogTallies::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
@@ -31807,6 +31890,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             open_panel_window,
             close_panel_window,
             dock_bandmap_window,
+            window_state::get_window_behind,
+            window_state::set_window_behind,
             set_area,
             qso_resend,
             qso_freetext,
@@ -31873,6 +31958,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_ota_spots,
             get_ota_map_spots,
             get_kp_forecast,
+            get_solar_indices,
             connect_web_status,
             search_parks,
             parks_count,
@@ -33512,6 +33598,59 @@ mod tests {
         assert!(
             !body.contains("unwrap_or_default"),
             "a defaulted name would turn the removal into a refused empty name"
+        );
+    }
+
+    /// THE CONNECT DASHBOARD'S WINDOW IS WIRED END TO END. What makes the pop-out
+    /// reopen where it was left, and stay behind when asked, runs through wiring no type sees:
+    /// the dashboard bar's two commands must be REGISTERED (an unregistered name fails only at
+    /// runtime, and the toggle would do nothing), the open path must ask `window_state` how a
+    /// remembered pop-out opens and arm its save-on-close, and the quit sweep must capture it
+    /// (macOS's Cmd+Q sends no close). Source-scanned, like the auto-arm test above.
+    #[test]
+    fn the_connect_dashboard_window_is_wired_end_to_end() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for name in [
+            "window_state::get_window_behind",
+            "window_state::set_window_behind",
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered — the Stay behind toggle would fail at runtime"
+            );
+        }
+        // The body of the top-level `sig`. The leading newline is the column-zero match: this
+        // test's own string literals are never at the start of a line.
+        let body = |sig: &str| {
+            let start = src
+                .find(&format!("\n{sig}"))
+                .unwrap_or_else(|| panic!("{sig} is defined"));
+            let rest = &src[start + 1..];
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("async fn open_panel_window(");
+        assert!(
+            open.contains("window_state::restore_panel(&app, &slug, inst,"),
+            "the open path must ask how a remembered pop-out opens"
+        );
+        assert!(
+            open.contains("window_state::arm_panel_capture(&win);"),
+            "…and arm its save-on-close"
+        );
+        assert!(
+            open.contains(".prevent_overflow()"),
+            "a remembered box is fitted to the work area, title bar included"
+        );
+        assert!(
+            body("fn capture_all_window_geometry(").contains("window_state::capture_panel(&w);"),
+            "the quit sweep captures the dashboard too"
         );
     }
 
@@ -36496,6 +36635,32 @@ mod tests {
             matches!(on_the_pool, Ok(Ok(Ok(())))),
             "the same client on the blocking pool starts cleanly"
         );
+    }
+
+    /// Every command the TV page's allowlist admits has its hand-written arm in `tv_rpc`. An
+    /// allowlisted name with no arm compiles, passes every other test, and reaches the TV as a
+    /// 500 ("allowlisted but has no dispatch arm") — found only by opening the page and noticing
+    /// a pane that never fills.
+    #[test]
+    fn every_tv_allowlisted_command_has_a_dispatch_arm() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn tv_rpc(")
+            .expect("tv_rpc is defined in this file");
+        let body = &src[start..];
+        // The function ends at the first closing brace in column 0.
+        let body = &body[..body.find("\n}\n").expect("tv_rpc has a closing brace")];
+        let missing: Vec<&str> = tempo_app::connect_web::RPC_ALLOWLIST
+            .iter()
+            .copied()
+            .filter(|name| !body.contains(&format!("\"{name}\" =>")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "allowlisted for the TV page with no arm in tv_rpc: {missing:?}"
+        );
+        // Control: the scan reads the real body, where the first arm lives.
+        assert!(body.contains("\"get_propagation\" =>"));
     }
 
     /// Each command body and each `async fn` in `src` that waits for a logbook change to reach

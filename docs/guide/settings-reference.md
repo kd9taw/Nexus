@@ -514,7 +514,7 @@ right.*
 
 - **Rotator model** — pick yours and "Nexus runs the control daemon (rotctld)
   for you, the same way it does CAT." Then use the Rotor pane in
-  [Connect](connect.md), the ↗ on [Needed](needed-dx.md) rows, or the compass
+  [Conditions](connect.md), the ↗ on [Needed](needed-dx.md) rows, or the compass
   anywhere. **Dummy (testing — no hardware)** lets you try the whole path with no
   rotator attached; **Other Hamlib model #…** takes any model number `rotctl -l`
   knows. Entries say **(az)** or **(az/el)** where the backend declares it, so
@@ -562,7 +562,7 @@ right.*
 ### Amplifier
 
 Reads a linear's own status — power out, SWR, temperature, supply volts and amps,
-and any alarm it is raising — and shows it in the **Amplifier** pane in Connect.
+and any alarm it is raising — and shows it in the **Amplifier** pane in Conditions.
 Nothing on this settings page changes how the radio transmits.
 
 **Reading is most of it, but Nexus does command the amplifier — three things,
@@ -578,7 +578,7 @@ built not to have.
 **Where the three controls are.** Not here. They are a compact strip in every
 cockpit header once an amplifier is configured — Standby/Operate, band ◀ ▶ and
 power out — described under
-[Connect ▸ The Amplifier pane](connect.md#the-amplifier-pane). The only control
+[Conditions ▸ The Amplifier pane](connect.md#the-amplifier-pane). The only control
 on *this* page that moves the amplifier is **Follow the radio's band** below,
 and it is the only one that acts without being asked.
 
@@ -1480,7 +1480,7 @@ Nexus connects to all of them and merges what they report.*
 
 - **PSK Reporter** — "upload spots to the global map."
 - **DX Cluster / RBN spots** — "Surface 'new ones' from the Reverse Beacon
-  Network on the Needed board + Connect." Takes effect on restart.
+  Network on the Needed board + Conditions." Takes effect on restart.
 - **Phone/SSB cluster nodes** — human DX-cluster nodes for SSB/phone spots, since
   RBN only carries CW and digital. Two choices:
   - **Pick working nodes automatically (recommended)**, the default. "Nexus keeps
@@ -1515,7 +1515,7 @@ Nexus connects to all of them and merges what they report.*
 - **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
   physics). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots
-  always win over any model.**" See [Connect](connect.md).
+  always win over any model.**" See [Conditions](connect.md).
 - **Antenna gain (dBi) — TX / RX** (under *Antenna gain (advanced)*) — "Used by
   the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a
   3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or
@@ -1948,7 +1948,7 @@ everywhere.
 
 Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
 port on the site LAN, and only while the toggle is on — the spectator scoreboard
-below and [Connect on a TV](#connect-on-a-tv) are the other two things that
+below and [Conditions on a TV](#conditions-on-a-tv) are the other two things that
 listen beyond the local computer); every other position joins it with **Find
 club events** or by typing the host's `host:port` into **Join event at**. Each
 position's contacts stream to the host as they're logged, and the host pushes
@@ -2111,8 +2111,8 @@ computer.
   default). Turn it off and the table starts at the top. Computers whose
   graphics cannot draw the globe never show it, whatever this says.
 
-The Connect map's own choices — the view (Globe, Flat or Beam), its layers and its
-colours — are made on the map itself, and Connect keeps a separate set for each
+The Conditions map's own choices — the view (Globe, Flat or Beam), its layers and its
+colours — are made on the map itself, and Conditions keeps a separate set for each
 activity you pick there.
 
 ### Performance
@@ -2123,9 +2123,9 @@ activity you pick there.
   Follow the computer uses your system's own reduce-motion setting. Remembered per
   computer.
 
-### Connect on a TV
+### Conditions on a TV
 
-Serves the [Connect](connect.md) view — the map with every layer, the panes,
+Serves the [Conditions](connect.md) view — the map with every layer, the panes,
 live openings — as a plain web page to any browser on your own network. A shack
 TV, a tablet on the bench, a phone in the garage. Nothing is installed on the
 TV and nothing can be changed from it: the page is read-only, and the server
@@ -2133,9 +2133,9 @@ answers GET and HEAD only. The page also loads no script, font or image from the
 internet, so it renders fully on a shack network with no route out — which is
 where a wall display usually lives.
 
-![The Connect on a TV settings block: a "Serve Connect on this network" switch turned on, with the hints "Serves the full Connect view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it." and "While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent."](../img/manual/settings-connect-tv.webp)
+![The Conditions on a TV settings block: a "Serve Conditions on this network" switch turned on, with the hints "Serves the full Conditions view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it." and "While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent."](../img/manual/settings-connect-tv.webp)
 
-*Connect on a TV in Settings ▸ Appearance, Nexus 1.10.3, switched on.*
+*Conditions on a TV in Settings ▸ Appearance, Nexus 1.10.3, switched on.*
 
 ⚠️ **This puts your station on the LAN, so read what it exposes.** The page
 carries your callsign, your grid square and the propagation picture, including
@@ -2148,7 +2148,7 @@ password.
 
 **Put it on the TV:**
 
-1. Turn on **Serve Connect on this network** and press **Save**.
+1. Turn on **Serve Conditions on this network** and press **Save**.
 2. Leave **Port** alone unless something else on the machine wants 7374. It is
    deliberately not the [Field Day scoreboard's](contesting-pota.md#field-day)
    port, so a club host can serve both at once.
@@ -2193,7 +2193,7 @@ sections cannot be turned off.*
   switching away from Custom asks first because it discards your hand-tuned set.
   A **Re-run setup…** link reopens the first-run wizard.
 - **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar, Chat,
-  Connect, Needed) shows an "always on" badge instead of a toggle: a locked
+  Conditions, Needed) shows an "always on" badge instead of a toggle: a locked
   switch beside real ones just reads as broken.
 - **Optional features**, grouped by category in this order: Operate, DX & Awards,
   Propagation, Contesting, POTA/SOTA, Logging, System. Each row is a toggle with
@@ -2329,7 +2329,7 @@ renamed one. Run one, or keep one machine's Nexus closed.
 ## Related guides
 
 - [Operate — FT8/FT4 digital](operate-digital.md)
-- [Connect — map + propagation](connect.md)
+- [Conditions — map + propagation](connect.md)
 - [Logbook & QSL](logbook-qsl.md)
 - [Contesting & POTA/SOTA](contesting-pota.md)
 - Back to the [guide index](index.md)

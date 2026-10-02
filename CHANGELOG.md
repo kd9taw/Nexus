@@ -103,6 +103,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmitter. Only the slider under the pointer moves, never one you clicked earlier, and a scroll
   that starts elsewhere and passes over a slider keeps scrolling. On the Remote page a run of
   notches is sent as one change once the wheel stops, as a drag is.
+- **Connect: "Bands for you", the band advice as tiles.** A new Connect box shows one tile per
+  band, big enough to read from across the desk. The tiles run in band-stack order, 160 m up to
+  6 m, plus 4 m and 2 m when there is an opening there. Each tile gives the band and its word,
+  with the same word and colour as the map's Band conditions list and the band menu:
+  - Open: green, with a solid outline.
+  - Marginal: amber, with a dashed outline.
+  - Closed: no colour, dimmer letters.
+
+  On each tile:
+  - A dot shows what you are hearing now.
+  - ★ marks the Band Advisor's best band, and a ring marks the band your radio is on.
+  - On 6 m, 4 m and 2 m, the mode of an opening is named (Es, Tropo, Aurora, F2, MS).
+  - Hover for why: who hears you, the best direction, and when the model expects the band to
+    open or close next.
+  - Click a tile to show that band on the map.
+
+  With no fresh data the tiles are hollow and grey, never green. The box takes the Band Advisor's
+  place in the default Connect layout (and on the wall display). The Band Advisor's ranked list
+  is one pick away in the box's menu. A layout you have already arranged keeps what it has, and
+  Reset layout brings in the tiles.
+
+- **A Clock box for Connect.** Pick **Clock** from any Connect box's menu: it shows UTC in large
+  digits with your computer's local time under it, today's date, your grid, and today's sunrise and
+  sunset there in UTC (point at that line for the times on your own clock). The digits grow with
+  the box, so a wide box reads from across the room and the narrowest one still fits them. Where the
+  Sun stays up or down all day it says so, and with no grid in Settings it asks for one instead of
+  guessing a place. It needs no network, so it keeps time when every feed is down.
+- **Space Wx shows the sunspot number, the solar-wind speed and 30-day trends.** Beside Bz, the
+  Space Wx box now shows the solar wind's speed in km/s, in the warning colour from 600 km/s, the
+  speed at which the Insights feed says a fast stream is arriving. Under the gauges are two lines
+  for the last 30 days from NOAA's daily solar indices, the solar flux and the sunspot number, each
+  with its newest value and the day it is from. When the newest day in NOAA's file is three or more
+  days old, the box says it has not been updated since that day; if the file has never arrived, the
+  box says the trend is unavailable rather than drawing a line. A day NOAA has no value for is a gap in the line, not a drop to zero. The
+  Connect TV page shows the same.
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2
@@ -187,7 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is outside your licence privileges, whatever colour you pick for them.
 - **Three ready-made layouts for Connect: Map first, List first and Dashboard.** **⊞ Panels** on
   Connect now opens with a **Layout** section. **Map first** gives the map the full height and all
-  but two narrow side columns (Conditions and Band Advisor, Chase and Space Wx). **List first**
+  but two narrow side columns (Best band and Band Advisor, Chase and Space Wx). **List first**
   puts Chase, Chase Feed, Getting Out and Openings in two wide columns with a small map between
   them. **Dashboard** opens seven panes around a smaller map: Space Wx and Band Advisor on the
   left, Chase and Getting Out on the right, Openings, Band Outlook and Greyline along the bottom.
@@ -199,6 +234,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimum size it always had. Each window keeps its own layout, the Remote Connect page and the
   TV page have the same menu, and the map's own choices (globe or flat, layers, colours) are left
   alone.
+- **Connect's pop-out is a dashboard window.** **⧉ Pop out** on Connect now opens a large window,
+  1600 × 1000 or your whole screen if it is smaller, showing Connect's full layout instead of the
+  narrow stacked one. A bar across its top shows your callsign and grid, a big UTC clock beside
+  your local time, and the day's SFI, Kp, sunspot number, A, X-ray and solar-wind speed. The
+  sunspot number is NOAA's daily count, shown with the day it is from, the same one the Space Wx
+  box shows. With no live data each number is a dash, and old data says how old it is. Close the
+  window and it comes back on the same monitor, in the same place and at the same size, maximized
+  if you left it maximized. If that monitor is gone it opens in the middle of your main screen,
+  sized to fit it. The TV page has the same bar.
+- **Connect: a Frame layout.** **⊞ Panels ▸ Layout** has a fourth choice, **Frame**: two panes down
+  each side of a map that runs the full height, Band Advisor over Space Wx on the left and Getting
+  Out over Chase on the right, in 400 px columns. Like the other layouts it changes nothing until
+  you pick it.
+- **Frame shows the satellites.** Picking the **Frame** layout also ticks **Satellites** on the map
+  and on the 3-D globe, so a wall display shows the birds moving. It is the only layout that
+  touches the map, and it only ever turns Satellites on: every other layer stays as you had it,
+  untick Satellites afterwards and it stays off, and **Undo last change** turns it back off along
+  with the rest of the layout (unless you had it on before you picked Frame).
+- **Connect: a Layout button.** The layouts are one click away now: **Layout** in Connect's header,
+  beside **⊞ Panels**, opens **Map first**, **List first**, **Dashboard** and **Frame**, says which
+  layout is on screen (**Standard**, one of the four, or **Custom**) and has **Undo last change**.
+  It is the same picker that opens at the top of **⊞ Panels**, so a pick made in either shows in
+  both, and either Undo takes it back. The dashboard window, the TV page and the Remote Connect
+  page have the button too.
+- **Connect: Frame + bar, the new default view.** **Layout** has a fifth choice, **Frame +
+  bar**: Bands for you over Openings on the left and Chase over Getting Out on the right, in 400 px
+  columns around a full-height map, with the dashboard window's bar across the top (your callsign
+  and grid, a big UTC clock and your local time, and the day's indices). Every other box is one click
+  away as a tab behind those four. Conditions (formerly Connect) opens in it now (see Changed), and
+  **Undo last change**, another layout or **Reset layout** takes the bar away again. In the dashboard
+  window and on the TV page, which have the bar already, it is the one bar.
+- **Connect: Standard is a choice in Layout.** **Layout** (and the top of **⊞ Panels**) lists
+  **Standard** first: every pane open in its usual place at the usual widths, with no bar, as Connect
+  opened before Frame + bar. Trying Frame + bar or another layout and going back is one tap each way, and
+  **Undo last change** takes the Standard tap back like any other. Unlike **Reset layout**, it leaves
+  your panes' text sizes as they are, as every layout does.
+- **The dashboard bar shows a storm.** Kp, X-ray and the solar-wind speed turn amber when the Space
+  Wx box's gauges are at their warning level (Kp 4 and up, an M or X flare, a wind of 600 km/s or
+  more), in the dashboard window, on the TV page and in Frame + bar. In the light theme the number
+  stays dark with an amber underline, so it stays easy to read.
+- **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
+  **Stay behind** button. Pressed, the window stays behind your other windows even when you click
+  on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
+  it. A click on it still moves the keyboard to it: until you click back into Nexus the keyboard
+  is the dashboard's, so Esc stops nothing then. The Stop TX button always works. On macOS and
+  Linux the button does not appear yet.
+- **A dashboard rail beside the cockpits.** Tick **Dashboard rail** in a cockpit's **⊞ Panels**
+  menu, or press **Dashboard** at the right end of the NOW bar, and a column of Connect boxes
+  stands at the right of the cockpit: the Clock, Bands for you, Space Wx and Getting Out, so the
+  time, the bands and who hears you stay in view while you operate. It is off until you turn it
+  on, and Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8 each remember their own choice. Each
+  box has the same menu as a Connect box, so any Connect box can take its place; its **✕** closes
+  it, and the rail's own **⊞ Panels** brings it back or resets the rail. A box's **⋯** sets its own
+  text size there too, and the rail's Reset puts every box back at 100%. Drag the rail's left edge
+  to make it wider or narrower, and the line between two boxes to share the height between them;
+  both work from the keyboard too. The rail appears only on a large window (about 1600 px wide at
+  your zoom, which includes a 1366×768 laptop at its usual 85 %), and the cockpit beside it is
+  never narrower than it is on a 1024×768 screen. Clicking a station in the rail selects it in the
+  rail only, never the station your cockpit is working, and the rail has no transmit control. A
+  **Spots** or **POTA / SOTA** box in the rail works a spot as it does on Connect: a click on a
+  spot, or on **HUNT**, moves the radio to the station and opens its screen. Nothing transmits.
+  Within a window, Connect's boxes, the rail's and the alerts share one request per feed: the rail
+  asks for what the same boxes on Connect ask for, and opening Connect no longer asks for the
+  X-ray reading and the DXpedition windows twice. On a window 2400 px wide or wider, Operate's QSO strip keeps its two rows while
+  the rail is shown, as it does on a smaller screen.
+- **Connect: a Spots box and a POTA / SOTA box.** Pick **Spots** or **POTA / SOTA** from any
+  Connect box's menu. Each is the list from its own screen, in a box:
+  - **Spots** lists every spot on the air, as the Spots screen does, with the same search and
+    Filter chips; Heard on my continent and Hide worked start on, as they do there.
+  - **POTA / SOTA** lists the activators on the air, with the POTA, SOTA and Both tabs, Hide
+    worked today, Refresh and **HUNT**. Its band, mode and sort choices open on its Filter button.
+
+  A click on a spot, or on **HUNT**, does what it does on those screens: the radio goes to the
+  station and the right screen opens. Nothing transmits. Each box keeps its own filters, so a chip
+  in a box never changes the Spots or POTA / SOTA screen, or the other way round. A narrow box
+  shows fewer columns (call, frequency and mode at its narrowest; the age, country and comment
+  from about 530 px, where their headings fit whole in every language; every column from about
+  640 px), and the list scrolls inside the box. Neither box is in the
+  default layout or a ready-made one, so nobody's Connect changes on the update. The wall display
+  (the TV page) shows no spot list, and each box says so there.
+- **The Spots and POTA / SOTA boxes work in Connect's own window too.** In the window **⧉ Pop
+  out** opens, the two boxes show the same lists as in the main window, and a click on a spot or
+  on **HUNT** moves the radio exactly as that window's own Needed and POTA/SOTA boards do; the
+  main window then follows to the matching screen (on CW and Phone with the call ready in the
+  log). Nothing transmits. The wall display still has neither list, and nothing on it can move
+  the radio.
+- **Getting Out lists everyone who hears you.** The Getting Out box on Connect lists every station
+  that has decoded you in the last half hour, not only the first six, most distant first: the
+  call, the direction and distance, the band, the SNR they heard you at and how long ago. The list
+  scrolls inside the box, one line per station where the box has room, and a click still shows the
+  station on the map.
+- **Spots and Needed on the CW screen.** ⊞ Panels on the CW cockpit has the Phone screen's two
+  entries, **Spots** and **Needed**, and both start unticked, so nobody's CW screen changes on the
+  update. Tick one and it joins the screen. On a wide window Spots goes under CW Decode and the
+  Sent echo, and the transcript keeps three quarters of that column; Needed goes under Band
+  Activity and the copilot. On a narrower window both go at the bottom of the left-hand column,
+  below the rig controls, Band Activity and the copilot, with a divider between them that you drag
+  to share the height (the split is remembered). On a small window the column scrolls, so hide a
+  pane you do not need to give them more room. **Spots** opens on the CW spots on the band your
+  radio is on (a skimmer's RTTY or FT8 decode in the CW part of the band stays out) and moves with
+  the radio when you change band; its Filter chips widen it to other modes and bands. **Needed**
+  opens on the CW needs, and its chips widen it the same way. Each pane keeps its own filters, so a
+  chip on the CW screen never changes the Spots or Needed screen, or the Phone screen's panes. A
+  click on a row does exactly what it does on those screens: the radio goes to the station and the
+  call goes into the log; a phone or digital spot, once you have widened the list to it, opens its
+  own screen. Nothing transmits. **Reset layout** unticks both again. On the Remote page the panes
+  show the spots and needs the station already shares, and say so when it does not.
+- **The sun is always on the map.** The map and the 3-D globe show the sun where it is overhead,
+  at the centre of the day side, all the time and not only during a solar flare. It moves with the
+  greyline. On the Globe view it is hidden while it is on the far side of the planet. A new **Sun
+  and moon** layer in the Layers menu turns it off. During an M-class flare the flare layer's own
+  animated sun takes its place, so there is only ever one sun on the map. On a quiet sun the map
+  does no extra drawing for it: it moves once a minute, with the greyline.
+- **The moon is on the map too, in its phase.** The map and the 3-D globe show the moon where it
+  is overhead, drawn as much lit as the real one: a thin crescent, a half, a gibbous moon or a full
+  one, and a new moon as a dark disc with a faint rim. It is lit on the side you see lit from where
+  you are: in the northern hemisphere a waxing moon is lit on the right and a waning one on the
+  left, and the other way round in the southern hemisphere. It shares the **Sun and moon** layer
+  and moves once a minute, like the sun. Its place is worked out in Nexus itself, with no download,
+  to within about a third of a degree.
+- **Connect: make one pane's text bigger or smaller.** Every Connect pane has a **⋯** button in its
+  header, beside the ✕. Its **A+ Larger text** and **A− Smaller text** step that pane's words from
+  80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a press. The menu stays
+  open and shows the size, so you can press again. Only the words change: the pane keeps its place
+  and its size, its header stays as it was, and a pane whose text no longer fits scrolls. To make
+  room for the ⋯, the pane picker beside the title is a little narrower, and in the narrowest
+  columns a long title can end in "…" rather than push ✕ out of view. Each pane
+  keeps its own size in each window, a layout picked from ⊞ Panels keeps the sizes, and **Reset
+  layout** puts every pane back at 100%. Layouts saved before this open with every pane at 100%.
+- **Connect: each pane links to its part of the manual.** A pane's **⋯** menu names the pane in
+  the manual, such as **? Space Wx in the manual**, and opens the part of the Nexus manual
+  (hamradiotools.io/manual) that describes it, in your browser. Every Connect pane has one: the
+  manual's table of Connect's panes now also describes Bands for you, Openings Log, Kp outlook,
+  Band Scope and Contests.
+- **Connect: several panes in one slot, as tabs.** A pane's **⋯** menu has **Add a tab**: pick a
+  pane and it joins that slot, shown, and the slot's title becomes a row of tabs, one per pane; in a
+  narrow column the tabs get a row of their own, under the pane's buttons. Click a tab to switch, or
+  use the arrow keys, Home and End on it. The picker changes the pane on the tab
+  that is showing, and **⋯ ▸ Remove … from this slot** takes that pane out. A pane is only ever in
+  one slot, so adding one from another slot moves it; a slot's only pane is not offered. Each slot
+  reopens on the tab it was showing. The ready-made layouts are one pane per slot: picking one, or
+  **Reset layout**, takes the tabs away, and **Undo** brings them back. Layouts saved before this open
+  exactly as they were.
+- **Connect in the dashboard window and on the TV page: a slot's tabs can take turns.** In a slot
+  with tabs, **⋯ ▸ Rotate the tabs** shows them one after another, every 10 s, 15 s, 30 s, 1 min or
+  2 min. It is off until you pick an interval, and it waits while the mouse is over the slot, while
+  you are in it with the keyboard and while its menu is open. The main window's Connect never
+  rotates.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the
@@ -377,6 +560,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
+  **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
+  the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After
+  the update Conditions opens in **Frame + bar (default)** once, in the main window, the dashboard
+  window and on the TV page, whatever layout it had. If you had arranged it yourself, your
+  arrangement is kept: **Layout ▸ Your earlier layout** brings it back exactly, boxes, tabs, widths
+  and splits, in one tap. **Standard** is still the first choice in **Layout**, and **Reset layout**
+  still puts every pane back. The switch happens once and never again, even after a reinstall or a
+  restore from a backup, and a dashboard window you never arranged follows the main window, as it
+  always has. On the TV page Frame + bar leaves out the boxes the page can never fill (Chase and its
+  tabs, the rotor, the amplifier and the band scope): Space Wx and the Kp outlook take Chase's
+  place. In all five languages, and in the Portuguese translation kit.
+- **Connect has no radio controls, so its map and panes get the whole height.** The bar across the
+  top of the window, with the frequency, the band list, TX Off, Tune and Stop TX, is no longer shown
+  on Connect; every other screen still has it. To stop a transmission while Connect is on screen,
+  press **Esc**, or go to any other screen and press **Stop TX** there.
+- **Connect keeps the clock.** The radio bar's UTC clock is at the end of Connect's own header now,
+  in every layout, with your local time beside it if you turned that on in **Settings ▸ Workspace**.
+  The dashboard window and the TV page keep the big clock in the bar across their top.
+- **Connect's boxes have clearer names, and their menus are grouped by what the boxes are for.**
+  The headline box is now **Best band**, the card that floats over the map is **Propagation**, and
+  **Best Band → Region** is **Bands by region**, so nothing else on Connect is called "Conditions"
+  and the two band boxes no longer read alike. A box's picker and **⋯ ▸ Add a tab** list the boxes
+  under **Bands**, **Space weather**, **Activity** and **Station** instead of Panels, B2 and B3.
 - **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
   message box holds text (you are typing, a reply waits there, or a message of yours is going out)
   or while a message to you is still arriving; a reply already queued waits until the box is
@@ -412,6 +619,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   who you hear used to find its own call in your reply, usually first, taking one of the four
   places. The reply now lists the four stations you heard most recently, not counting the one
   asking.
+
+- **A band says the same thing everywhere.** The map's Band conditions list, the Band Advisor,
+  the band menu and the NOW bar now show the same word and the same colour for each band.
+  - A band you are hearing now is Open and green, even when the propagation model calls it
+    closed. A summer Es opening on 10 m or 6 m used to show a grey "Open".
+  - The NOW bar says what the band menu says, in the same word. For a band the model calls open
+    but nobody has heard yet it now says "20m Open" (it used to say "quiet"), and "20m Marginal"
+    where the list says Marginal. A closed band shows in grey instead of red.
+  - Open, Marginal and Closed are shown in English in every language, like the band names, on
+    the list, the Band Advisor, the band menu, the NOW bar and the band tiles. The NOW bar used
+    to put them in the interface's language.
+  - The Band Advisor's word is the same outlined word as the list's. A closed band's row is no
+    longer faded to half strength, which made its text too faint to read; its band name and word
+    are dimmer instead.
 
 - **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
   do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
@@ -537,6 +758,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect, is unchanged.
 
 ### Fixed
+
+- **Connect: the Space Wx gauges sit two to a row.** They were meant to, but stood one per row,
+  so the box ran six gauges deep and its 30-day lines were out of sight below them. Now the
+  gauges take three rows, and at 1920 × 1080 and larger the lines show in the box's usual place
+  along the bottom without scrolling; on smaller windows the box still scrolls to them. In the
+  narrowest column the solar-wind speed's km/s drops under the number so it stays inside the
+  gauge.
+
+- **Connect: a Chase row's country moves under the call when there is no room beside it.** In a
+  narrow Chase or Chase Feed box the country and its beam heading were cut short ("South Orkney
+  Is." showed as a few letters), and with the box's text at its largest they were not shown at
+  all. Now, where the call, its need chip, the point button and the age leave them no room, they
+  go on the line under the call, whole; those four stay where they were. Where even those four
+  do not fit on one line (the largest text, or the narrowest column), they take the lines they
+  need instead of running under the ▶ Work button beside them.
+
+- **Connect: the Chase DX button says which map it opens.** Its tooltip said "Beam map,
+  need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
+  map picker arrived. It now says "Globe, need-colored, live openings", in every language.
 
 - **Program at a large zoom: Tune and Add can be clicked again.** With the app pinned at 100 % on
   a 1024×768 screen (or 125 % on 1366×768, 175 % on 1920×1080), Program puts the search above the
@@ -870,8 +1110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus keeps its last good reading, and the Bz gauge used to show that reading as if it were
   current. Each reading now carries the time it was made. Past 30 minutes the gauge says when that
   was ("last reading 45m ago") instead of how the field looks now, and with no reading at all it
-  says "no solar-wind reading" instead of leaving Bz off the box. The Insights feed no longer raises
-  a solar-wind warning ("turned stormy", "fast stream") from a reading more than 30 minutes old.
+  says "no solar-wind reading" instead of leaving Bz off the box. The solar-wind speed is not shown
+  from a reading that old, in the Wind gauge or on the dashboard bar. The Insights feed no longer
+  raises a solar-wind warning ("turned stormy", "fast stream") from a reading more than 30 minutes
+  old.
 - **No more "wind 0 km/s" when NOAA's plasma data is missing.** When DSCOVR's plasma product does
   not answer, or its newest reading is not from the same half hour as the magnetic field's, the
   solar wind's speed and density are now sent as not known, instead of 0. So is the field's total
@@ -937,6 +1179,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station's grid, its callbook position, or the centre of its country when nothing closer is known.
   The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
   aims at the country centre.
+- **Connect at 1024×768: the Layers panel no longer covers the band list.** When the map is too
+  narrow for both, the Layers panel now starts folded, so it no longer hides the band names in
+  the Conditions panel on the map's right. It opens again by itself on a wider window. Once you
+  fold or unfold it yourself, your choice is kept. The 2-D map and the 3-D globe both work this
+  way.
+
 - **The S-meter and the receive controls come back on a radio that answers slowly (#385,
   #376).** Nexus reads the radio's settings back a few at a time and stops when a poll has used
   its time. Each poll started again at the top of the list, so on a radio that takes a while to
@@ -1253,6 +1501,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
   Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
   as before.
+- **The NOW bar's coloured words are easy to read in the light themes.** The band's condition,
+  who hears you, the top need, the Cluster, Phone and PSKR pills and PROP LIVE / PARTIAL / CACHED
+  were lettered in green, amber or red, and some were hard to read on the light page colour. In
+  every light theme they now take the theme's text colour, with the colour kept on the chip's
+  border. The same goes for Connect's boxes in the dashboard rail beside the cockpits, and for the
+  BAND OPEN and NEW PARK badges in the POTA/SOTA box. The dark themes look exactly as before.
 - **Need chips are easy to read in the light and dark themes, wherever they appear.** The NEW ONE,
   ZONE, BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the
   Call Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
@@ -1311,6 +1565,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panels now always leave it at least 360 pixels, about a phone's width. When they have to
   give way, the panel you moved last keeps its width. A double-click on one of these dividers
   now resets only that panel; Reset layout still resets both.
+- **Connect's Getting Out box in a narrow column.** At a Connect rail's narrowest (200 pixels),
+  the line beside the compass that says where you are heard strongest ran past the box's edge and
+  was cut off. It now moves under the compass when there is no room beside it.
 
 ### Corrections to 1.15.0
 

@@ -152,7 +152,7 @@ Thirteen panels tear off into their own OS window — see
   band, mode, year, hour, entity and confirmation.
 
 ### Propagation & satellites
-- **[Connect — map + propagation](connect.md)** — the shaded 3-D globe, greyline,
+- **[Conditions — map + propagation](connect.md)** — the shaded 3-D globe, greyline,
   live spots, aurora, MUF, moving satellites, the opening detector, and the
   assignable pane grid.
 - **[Satellites](satellites.md)** — pass predictions for your grid, favorites,
@@ -269,8 +269,8 @@ SSTV, APRS and JS8 cockpits.
 |---|---|---|
 | Operate cockpit | ⧉ in the cockpit header | The full cockpit, keyboard shortcuts included. |
 | Waterfall | ⧉ on the waterfall pane head, in Operate | The only pop-out that vacates its slot in the main window; closing it re-docks the pane. There is also a manual re-dock control if it does not. |
-| Map | **Map** in the Operate header | Opens with the Parks layer on, independent of the Connect map's layer picks. |
-| Connect | ⧉ Pop out, Connect header | The globe with its own pane grid. |
+| Map | **Map** in the Operate header | Opens with the Parks layer on, independent of the Conditions map's layer picks. |
+| Conditions | ⧉ Pop out, Conditions header | The globe with its own pane grid. |
 | Needed board | ⧉ Pop out, Needed header | A header checkbox, **open at launch**, force-opens it every start. |
 | DXpeditions | ⧉ Pop out, DXpeditions header | |
 | Satellites | ⧉ in the Satellites header | |

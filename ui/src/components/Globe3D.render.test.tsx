@@ -404,6 +404,16 @@ describe('the 3-D Layers panel', () => {
     expect(panel()).toBeNull()
     expect(screen.getByRole('button', { name: 'Layers' })).toBeTruthy()
   })
+
+  it('starts folded on a globe too narrow for it and the Conditions rail, as the 2-D map does', async () => {
+    // MapLayersPanel.narrow.test.tsx has the reason and the operator's-choice cases.
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(445)
+    await act(async () => {
+      render(<Globe3D {...props(snapshot([]), ROSTER)} />)
+    })
+    expect(panel(), 'the Layers panel is open over the Conditions rail at 445 px').toBeNull()
+    expect(screen.getByRole('button', { name: 'Layers' })).toBeTruthy()
+  })
 })
 
 // 4. A SPOT KEEPS ITS DOM NODE UNTIL THE DOT ITSELF CHANGES.

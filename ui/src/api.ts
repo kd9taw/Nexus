@@ -58,6 +58,7 @@ import type {
   VoiceMessage,
   OtaMapSpot,
   KpForecast,
+  DailySolarIndices,
 } from './types'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
@@ -944,6 +945,23 @@ export async function closePanelWindow(panel: string): Promise<void> {
  *  vertical strip (or 'none' to un-dock). The dock + geometry persist across launches. */
 export async function dockBandmapWindow(side: 'left' | 'right' | 'none'): Promise<void> {
   await invoke('dock_bandmap_window', { side })
+}
+
+/** Whether the CALLING window can stay behind other windows (the Connect dashboard, on a
+ *  platform that offers it), and whether it does. */
+export interface WindowBehind {
+  supported: boolean
+  on: boolean
+}
+
+export async function getWindowBehind(): Promise<WindowBehind> {
+  return invoke<WindowBehind>('get_window_behind')
+}
+
+/** Keep the calling window behind other windows (or let it come forward): applied now and
+ *  remembered for its next open. Rejects where the window or the platform cannot. */
+export async function setWindowBehind(on: boolean): Promise<WindowBehind> {
+  return invoke<WindowBehind>('set_window_behind', { on })
 }
 
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
@@ -3199,6 +3217,13 @@ export async function getOtaSpots(program: string, cached = false): Promise<OtaS
  *  draw as a quiet sky. */
 export async function getKpForecast(): Promise<KpForecast> {
   return invoke<KpForecast>('get_kp_forecast')
+}
+
+/** NOAA's daily solar indices: the last thirty days of SFI and sunspot number. Cached an hour
+ *  server-side, and the last good copy is served when a fetch fails — every row carries its own
+ *  date, so the caller can say how old the newest day is. EMPTY = never had the file. */
+export async function getSolarIndices(): Promise<DailySolarIndices> {
+  return invoke<DailySolarIndices>('get_solar_indices')
 }
 
 /** Activators placed for the Connect map's parks layer. Served from a shared cache

@@ -39,7 +39,9 @@
 // RTTY and SSTV the latch was never in the document and the sweep proved nothing about the
 // one control the rule names BY NAME (gating it on a panel id in either cockpit was green).
 // Phone and CW arm elsewhere and legitimately have no latch on screen; their `stopControls`
-// say so by not listing one.
+// say so by not listing one. The same holds for their two feeds (`spots`, `needed`): each
+// renders only with the board App lends it, so both cases lend one — without it the two ids
+// were in the sweep and their panes never on screen, and hiding them proved nothing.
 //
 // WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Six can —
 // Operate's Tx messages, its two decode panes and its two rosters, Phone's voice keyer — and
@@ -420,6 +422,10 @@ const fdStatus = {
   log: [{ call: 'W1AW', band: '20m', mode: 'PH', class: '3A', section: 'EMA', whenUnix: 100 }],
 } as unknown as FieldDayStatus
 
+/** The Spots and Needed boards as App lends them to Phone and CW (#345, plan H8), empty. */
+const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }
+const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
+
 /**
  * One cockpit's stop-line case. `stopControls` are accessible-name matchers for the controls
  * that END a transmission AND RENDER OUTSIDE EVERY ⊞-REMOVABLE PANE — the set the guarantee
@@ -468,6 +474,8 @@ const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
         spots={[]}
         panels={panels}
         fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
       />,
     ),
 }
@@ -491,6 +499,8 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
         spots={[]}
         panels={panels}
         fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
       />,
     ),
 }
@@ -621,7 +631,16 @@ const phoneDual: Case<(typeof PHONE_PANEL_IDS)[number]> = {
   cockpit: 'Phone with a Sub receiver',
   render: (panels) =>
     render(
-      <PhoneCockpit snap={dualSnap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} fieldDay={fdStatus} />,
+      <PhoneCockpit
+        snap={dualSnap}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={panels}
+        fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
+      />,
     ),
 }
 const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
@@ -629,7 +648,16 @@ const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
   cockpit: 'CW with a Sub receiver',
   render: (panels) =>
     render(
-      <CwCockpit snap={dualSnap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} fieldDay={fdStatus} />,
+      <CwCockpit
+        snap={dualSnap}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={panels}
+        fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
+      />,
     ),
 }
 
@@ -704,6 +732,18 @@ describe('the stop line, computed against the real cockpits', () => {
     }
   })
 
+  it('Phone’s and CW’s two feeds are on screen with nothing hidden — else hiding them would sweep nothing', async () => {
+    for (const c of [phone, cw, phoneDual, cwDual] as Array<Case<any>>) {
+      c.render(panelsWith<string>([]))
+      await settle()
+      for (const id of ['spots', 'needed']) {
+        expect(c.ids, `${c.cockpit}: "${id}" left the vocabulary`).toContain(id)
+        expect(document.querySelector(`[data-pane="${id}"]`), `${c.cockpit}: the ${id} pane is not on screen`).not.toBeNull()
+      }
+      cleanup()
+    }
+  })
+
   it('EVERY vocabulary in the app is swept — here, or in a file named here', () => {
     // A sweep is worth only what it covers, and the failure this whole batch came from was
     // a guard that looked exhaustive and silently skipped a cockpit. So the coverage is
@@ -723,10 +763,25 @@ describe('the stop line, computed against the real cockpits', () => {
       // Connect has a ⊞ vocabulary (its seven slots) and NO transmit control of any kind, so
       // there is no stop to lose — what is swept is the property that remains meaningful:
       // closing a pane, singly and all at once, leaves every control outside the panes on
-      // screen (the map toolbar, the header). The TopBar's TX cluster is outside the view.
+      // screen (the map toolbar, the header).
+      // ⚠️ CONNECT IS THE STOP LINE'S ONE RULED EXCEPTION. App draws no top bar there, so there is
+      // no Stop TX on Connect at all — the operator, 2026-10-01: "remove all radio control from
+      // connect, reclaim that space". Transmit on Connect is stopped by Esc or by leaving the
+      // screen; stop-control-wiring.test.tsx holds Esc to halt_tx on Connect and every OTHER screen
+      // to the bar. Nothing here is loosened for any other cockpit or screen by it.
       connect:
         'ConnectView.panes.test.tsx — "hiding every pane leaves every control outside the ' +
-        'panes on screen" (Connect renders no transmit control; PRESENCE-ONLY, by name)',
+        'panes on screen" (Connect renders no transmit control; PRESENCE-ONLY, by name); and ' +
+        'the ruled exception ("remove all radio control from connect, reclaim that space"): no top ' +
+        'bar on Connect, Esc sends halt_tx there — stop-control-wiring.test.tsx',
+      // The dashboard rail's four slots. The rail is a sibling of the cockpit in App's shell and
+      // renders no transmit control; what is swept is that it costs no cockpit a stop control:
+      // with the rail on, every control on each cockpit's list below is on screen, no more disabled
+      // than with it off, and not inside the rail — in the real App, every operating cockpit.
+      dashrail:
+        'DashRail.stopLine.test.tsx — every operating cockpit\'s stop-line list, rail off vs on ' +
+        '(PRESENCE + DISABLED, by name, not layout); DashRail.test.tsx — no transmit control in the ' +
+        'rail, every box in the registry placed in it',
     }
     const here = new Set(CASES.map((c) => c.view))
     for (const vocab of ALL_PANEL_VOCABULARIES) {

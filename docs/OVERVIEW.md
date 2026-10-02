@@ -224,7 +224,7 @@ official awards, collections, and personal bests. No accounts, no network, no de
 it credits an imported logbook immediately and exists to carry a new operator through the
 motivational dead zone between QSO 1 and QSO 100.
 
-## Connect — the map and propagation intelligence
+## Conditions (formerly Connect) — the map and propagation intelligence
 
 One situational-awareness surface fusing three live feeds (PSK Reporter MQTT firehose, PSK
 Reporter HTTP, RBN/DX-cluster telnet) and NOAA SWPC space weather into the same spot window.
@@ -322,7 +322,7 @@ load while this layer earns its stripes.
 ## Status and roadmap
 
 **Production-grade today:** FT8/FT4 operating, logbook/awards/connectors, Needed board,
-POTA/SOTA hunter, Field Day mode, Connect map, setup/CAT.
+POTA/SOTA hunter, Field Day mode, Conditions map, setup/CAT.
 
 **Casual-grade by design:** CW and Phone cockpits (no contests).
 

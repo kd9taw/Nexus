@@ -139,9 +139,12 @@ describe('the boundary is actually mounted', () => {
     expect(body).toContain('className="operate-host"')
     // The rail must stay OUTSIDE — it is the operator's only way out of a crash.
     expect(body).not.toContain('<ModeNav')
+    // The dashboard rail beside the cockpit is outside it too: it carries a boundary of its own
+    // (components/DashRail), so a crashing box costs the rail and never the cockpit, and back.
+    expect(body).not.toContain('<DashRail')
     // Inside `.shell`: everything between the shell's opening tag and the boundary
-    // is the rail, nothing else.
-    const shell = app.indexOf('<div className="shell">')
+    // is the rail, nothing else. (The shell's tag carries the dashboard rail's marker.)
+    const shell = app.search(/<div className="shell"[\s>]/)
     expect(shell).toBeGreaterThan(-1)
     expect(app.indexOf('<ErrorBoundary')).toBeGreaterThan(shell)
   })

@@ -11,6 +11,8 @@ import {
   aImpact,
   xrayImpact,
   bzImpact,
+  windSpeedImpact,
+  windSpeedKms,
   solarWindAgeSecs,
   SOLAR_WIND_STALE_SECS,
   type Impact,
@@ -36,6 +38,9 @@ const INDEX = {
   bz: 'Bz',
 } as const
 
+/** The unit printed after the solar-wind speed — a unit symbol, the same in every language. */
+const KMS_UNIT = 'km/s'
+
 /** The value a gauge shows when there is no reading — a mark, not a word. */
 const NO_VALUE = '—'
 
@@ -51,12 +56,15 @@ const GLOSS: Record<string, { glossKey: MessageKey }> = {
 function Gauge({
   label,
   value,
+  unit,
   impact,
   dim,
   gloss,
 }: {
   label: string
   value: string
+  /** A unit symbol after the value, smaller, so the number itself stays short in a narrow rail. */
+  unit?: string
   impact: Impact
   /** No severity to show: the reading is old or missing, so the bar stays empty and the line is
    *  dim — an interpretation in green or amber would read as the field now. */
@@ -78,7 +86,14 @@ function Gauge({
     <div className="swx-gauge">
       <div className="swx-head">
         {key}
-        <span className="swx-v">{value}</span>
+        {unit ? (
+          <span className="swx-vu">
+            <span className="swx-v">{value}</span>
+            <span className="swx-u">{unit}</span>
+          </span>
+        ) : (
+          <span className="swx-v">{value}</span>
+        )}
       </div>
       <div className="swx-bar" aria-hidden="true">
         <span className="swx-bar-fill" style={{ background: dim ? 'transparent' : SEV_VAR[impact.sev] }} />
@@ -124,6 +139,7 @@ function BzGauge({ sw, gloss }: { sw: SolarWind | null; gloss?: boolean }) {
 }
 
 export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean }) {
+  const windKms = windSpeedKms(wx, Date.now())
   const body = (
     <section className="swx-strip panel" aria-label={t('prop.spaceWx.aria')}>
       <Gauge
@@ -151,6 +167,18 @@ export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean 
         gloss={gloss}
       />
       <BzGauge sw={wx.solarWind ?? null} gloss={gloss} />
+      {/* No speed is drawn rather than a solar wind that has stopped or an old one: `windSpeedKms`
+          is null for a speed the station does not know and for a stale sample (Bz above says how
+          old it is), the rule the dashboard bar reads too. */}
+      {windKms != null && (
+        <Gauge
+          label={t('prop.spaceWx.wind')}
+          value={windKms.toFixed(0)}
+          unit={KMS_UNIT}
+          impact={windSpeedImpact(windKms)}
+          gloss={gloss}
+        />
+      )}
     </section>
   )
   // The tooltip primitive needs a provider in scope; only mount it when glossing.

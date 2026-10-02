@@ -102,7 +102,9 @@ afterEach(() => {
 
 /** Only the layers a test names are on, besides the basemap: nothing else can land on the points. */
 function layers(on: string[]): void {
-  const off = ['daynight', 'rings', 'txPaths', 'heat', 'openings', 'muf', 'pca', 'flare', 'liveSpots', 'stations', 'paths']
+  // Every layer that is on by default and draws on the globe's face, so `on` is all there is: the Sun and Moon
+  // layer (on by default) strokes the sun's rays wherever the subsolar point faces the viewer.
+  const off = ['daynight', 'rings', 'txPaths', 'heat', 'openings', 'muf', 'pca', 'flare', 'liveSpots', 'stations', 'paths', 'sunMoon']
   const table: Record<string, { visible: boolean }> = {}
   for (const k of off) table[k] = { visible: false }
   for (const k of on) table[k] = { visible: true }

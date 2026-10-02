@@ -8,7 +8,7 @@
 // between workable-for-me and merely-busy-somewhere.
 import { useState, type CSSProperties } from 'react'
 import type { BandReport } from '../../types'
-import { tierVar, modeledVar, dualStateLabel, stateInkKind } from '../../propViz'
+import { tierVar, bandConditionCell } from '../../propViz'
 import { t } from '../../i18n'
 
 export function BandAdvisor({
@@ -79,12 +79,10 @@ export function BandAdvisor({
           // Dual state: MODELED openness (physics) is the dominant word; the OBSERVED
           // tier rides as a sub-note. An open-but-unheard band reads "Open · none heard",
           // never a dead "Quiet" — the core fix. Only genuinely modeled-closed bands recede.
-          const ds = dualStateLabel(b.modeled, b.tier)
-          const stateColor = b.modeled ? modeledVar(b.modeled) : tierVar(b.tier)
-          // A state colour rides as `--state-ink` so the sheet can letter it per theme (in the light
-          // themes: the ink, underlined in the colour, or the dim ink for a closed band); a receding
-          // neutral stays a plain colour.
-          const stateInk = stateInkKind(stateColor)
+          // The word and its colour are the Band conditions list's own cell, so the two never
+          // disagree, and the word is its pill: the theme's letters on the band colour's tint
+          // and edge (a word lettered in the band colour fails the 4.5:1 lettering floor).
+          const { color: stateColor, ...ds } = bandConditionCell(b)
           return (
             <div
               className={`ba-row${ds.word === 'Closed' ? ' is-closed' : ''}${onBandClick ? ' is-clickable' : ''}${activeBand === b.band ? ' is-active' : ''}`}
@@ -108,9 +106,8 @@ export function BandAdvisor({
               </span>
               <span className="ba-state">
                 <span
-                  className="ba-modeled"
-                  data-state-ink={stateInk ?? undefined}
-                  style={(stateInk ? { '--state-ink': stateColor } : { color: stateColor }) as CSSProperties}
+                  className={`ba-modeled bc-state${ds.word === 'Closed' ? ' is-closed' : ''}`}
+                  style={{ '--bc-color': stateColor } as CSSProperties}
                 >
                   {ds.word}
                 </span>

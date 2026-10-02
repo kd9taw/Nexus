@@ -137,7 +137,7 @@ The split lookup uses a wider 1800-second (30-minute) window so a slightly aged 
 The board's gated alert set propagates to three other surfaces from a shared `needByCall` map:
 
 - **FT8/FT4 live roster** — decode rows for needed stations are highlighted
-- **Connect map dots** — needed stations are flagged on the propagation map
+- **Conditions map dots** — needed stations are flagged on the propagation map
 - **StationList** — the `needed` filter in the station list derives from the same gated set
 
 All three surfaces apply the same admission gates. A station that fails the VHF corroboration check is not highlighted anywhere.

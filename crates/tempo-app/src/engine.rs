@@ -30768,6 +30768,90 @@ mod tests {
         );
     }
 
+    /// A WORK FROM A SPOT BOARD — or from Connect's Spots and POTA/SOTA boxes, which are those
+    /// boards and make the same call (ui/src/App.connectBoards.test.tsx) — is `work_spot`. Into a
+    /// band the licence does not cover it still QSYs, because listening is legal anywhere; what it
+    /// must never do is make transmitting there possible. Every transmit path refuses, as
+    /// `tx_lockout_blocks_all_paths_outside_license_privileges` requires of a dial set any other
+    /// way — and with the manual latch armed, as entering CW or Phone arms it, or the refusals would
+    /// be the latch's and prove nothing about the licence.
+    #[test]
+    fn work_spot_outside_the_licence_moves_the_dial_and_every_transmit_path_refuses() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("technician");
+        // A 20 m CW spot: a Technician has no 20 m privileges at all.
+        e.work_spot("cw", 14.025, "20m");
+        assert!(
+            (e.settings().dial_mhz - 14.025).abs() < 1e-9,
+            "the Work QSYs: listening is legal anywhere, got {}",
+            e.settings().dial_mhz
+        );
+        assert!(
+            e.tx_enabled(),
+            "entering CW arms the manual latch, so the refusals below are the licence's"
+        );
+        assert!(!e.tx_allowed(), "a Technician has no 20 m");
+        e.send_cw("CQ TEST");
+        assert_eq!(e.poll_cw_one(), None, "CW refused outside the licence");
+        e.set_tune(true);
+        assert!(!e.tuning(), "Tune refused outside the licence");
+        // A phone spot on the same band: the microphone is refused too.
+        e.work_spot("phone", 14.25, "20m");
+        assert!(e.tx_enabled() && !e.tx_allowed());
+        e.set_ptt(true);
+        assert!(!e.manual_ptt(), "PTT refused outside the licence");
+        e.set_ptt(false);
+        // CONTROL — the same Work into the licence (a Technician's 40 m CW, 7.030) opens the gate,
+        // so each refusal above was the licence's and not the fixture's. The band change drops what
+        // was queued while refused (`halt_tx_for_context_change`); a fresh send keys.
+        e.work_spot("cw", 7.030, "40m");
+        assert!(e.tx_allowed(), "Technician CW on 40 m is allowed");
+        assert_eq!(
+            e.poll_cw_one(),
+            None,
+            "the band change dropped the refused send"
+        );
+        e.send_cw("CQ TEST");
+        assert_eq!(
+            e.poll_cw_one().as_deref(),
+            Some("CQ"),
+            "inside the licence a CW send keys"
+        );
+    }
+
+    /// …and inside the licence a Work still keys NOTHING. It tunes and sets the section's mode, and
+    /// for CW and Phone arms the manual latch as entering that section always does; but no over is
+    /// queued, no PTT is held, no carrier is keyed and no FT period is planned — the operator's own
+    /// key, macro or Call does that, afterwards. A Digital Work arms nothing at all: the FT latch is
+    /// the operator's (Monitor, Call CQ, a double-click). This is what "a Work from a Connect box
+    /// keys nothing" rests on, the box's Work being this very call.
+    #[test]
+    fn work_spot_keys_nothing() {
+        for (mode, mhz, band) in [
+            ("cw", 14.030, "20m"),
+            ("phone", 14.25, "20m"),
+            ("digital", 14.074, "20m"),
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("extra");
+            e.work_spot(mode, mhz, band);
+            assert!(
+                e.tx_allowed(),
+                "{mode}: the fixture must sit inside the licence, or this proves nothing"
+            );
+            assert_eq!(e.poll_cw_one(), None, "{mode}: a Work queued CW");
+            assert!(!e.manual_ptt(), "{mode}: a Work keyed PTT");
+            assert!(!e.tuning(), "{mode}: a Work keyed a tune carrier");
+            assert!(
+                e.poll_tx(0).is_empty() && e.poll_tx(1).is_empty(),
+                "{mode}: a Work planned an FT over"
+            );
+            if mode == "digital" {
+                assert!(!e.tx_enabled(), "digital: a Work armed the FT latch");
+            }
+        }
+    }
+
     #[test]
     fn working_a_station_moves_rx_to_its_audio_freq() {
         // Double-click-to-work with the decode's audio freq → RX moves onto it, and TX

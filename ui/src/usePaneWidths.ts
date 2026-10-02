@@ -27,8 +27,9 @@ const KEY_LAST = 'tempo-rail-last'
 /** Effective (zoom-adjusted) content width in CSS px. The rails live inside the
  * zoomed `.app`, so their share of the screen must be measured against
  * `innerWidth / --ui-zoom`, not the raw window width — otherwise the drag ceiling
- * (and proportional defaults) are off by the zoom factor. */
-function effWidth(): number {
+ * (and proportional defaults) are off by the zoom factor. The dashboard rail measures its window
+ * with it too (features/dashRail). */
+export function effWidth(): number {
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')
   const z = parseFloat(raw)
   const zoom = Number.isFinite(z) && z > 0 ? z : 1

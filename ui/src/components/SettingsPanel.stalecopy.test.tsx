@@ -372,7 +372,7 @@ describe('an edit made in any section of Settings is saved', () => {
         fireEvent.change(input, { target: { value: 'Nexus FD' } })
       },
     },
-    { section: 'connect-web', ...field('connectWeb', false, false, true), edit: clickIn('connect-web', 'switch', 'Serve Connect on the local network') },
+    { section: 'connect-web', ...field('connectWeb', false, false, true), edit: clickIn('connect-web', 'switch', 'Serve Conditions on the local network') },
     { section: 'features', ...field('fdActive', false, false, true), edit: clickIn('features', 'switch', 'Enable Field Day mode') },
   ]
 

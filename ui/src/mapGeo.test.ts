@@ -7,6 +7,7 @@ import {
   terminator,
   solarElevationDeg,
   nextTerminatorMs,
+  sunDay,
   mufMhz,
   flareHafMhz,
   flareHafAt,
@@ -216,5 +217,58 @@ describe('mapGeo (D-RAP flare absorption)', () => {
       expect(s.haf).toBeGreaterThanOrEqual(2)
     }
     expect(flareField(ms, 1e-7)).toEqual([]) // quiet sun → nothing
+  })
+})
+
+// TODAY's sunrise and sunset for the Clock box. "Today" is the location's own solar day (local
+// mean midnight to midnight at that longitude), so late in the evening the box still shows the
+// sunrise that happened this morning, not tomorrow's — which is the difference between this and
+// the Greyline pane's "next terminator" countdown, and the thing most worth pinning.
+describe('sunDay (today\'s sunrise and sunset)', () => {
+  const lat = 41.7
+  const lon = -87.6 // Chicago, UTC−5 in September
+  const noon = Date.UTC(2026, 8, 29, 17, 0, 0) // about 12:00 local
+
+  it("finds this morning's sunrise and this evening's sunset, both on the horizon", () => {
+    const d = sunDay(lat, lon, noon)
+    expect(d.polar).toBeNull()
+    expect(d.riseMs).not.toBeNull()
+    expect(d.setMs).not.toBeNull()
+    expect(d.riseMs!).toBeLessThan(noon)
+    expect(d.setMs!).toBeGreaterThan(noon)
+    // The map's terminator and the Greyline pane use this elevation model; so must the clock.
+    expect(Math.abs(solarElevationDeg(lat, lon, d.riseMs!))).toBeLessThan(0.5)
+    expect(Math.abs(solarElevationDeg(lat, lon, d.setMs!))).toBeLessThan(0.5)
+    // Chicago on 29 Sep 2026: sunrise ~11:50Z, sunset ~23:35Z (the 0° horizon, a few minutes
+    // off the almanac's refracted one). Twenty minutes is slack for the model, and still far
+    // tighter than the day-boundary mistake this guards against.
+    expect(Math.abs(d.riseMs! - Date.UTC(2026, 8, 29, 11, 50))).toBeLessThan(20 * 60_000)
+    expect(Math.abs(d.setMs! - Date.UTC(2026, 8, 29, 23, 35))).toBeLessThan(20 * 60_000)
+  })
+
+  it("late in the evening it still shows today's pair, not tomorrow's sunrise", () => {
+    const late = Date.UTC(2026, 8, 30, 3, 0, 0) // 22:00 local on the 29th
+    const d = sunDay(lat, lon, late)
+    expect(d.riseMs!).toBeLessThan(late)
+    expect(d.setMs!).toBeLessThan(late)
+    expect(d).toEqual(sunDay(lat, lon, noon))
+  })
+
+  it("before dawn, today's sunrise is the Greyline pane's next terminator", () => {
+    const early = Date.UTC(2026, 8, 29, 9, 0, 0) // 04:00 local
+    const next = nextTerminatorMs(lat, lon, early)
+    expect(next.kind).toBe('rise')
+    expect(Math.abs(sunDay(lat, lon, early).riseMs! - next.atMs)).toBeLessThanOrEqual(60_000)
+  })
+
+  it('says so when the sun never sets, or never rises', () => {
+    // Tromsø (69.65 N): the midnight sun at the June solstice, the polar night at December's.
+    const june = sunDay(69.65, 18.96, Date.UTC(2026, 5, 21, 12, 0, 0))
+    expect(june.polar).toBe('up')
+    expect(june.riseMs).toBeNull()
+    expect(june.setMs).toBeNull()
+    expect(sunDay(69.65, 18.96, Date.UTC(2026, 11, 21, 12, 0, 0)).polar).toBe('down')
+    // Control: the same place in September has an ordinary day.
+    expect(sunDay(69.65, 18.96, Date.UTC(2026, 8, 29, 12, 0, 0)).polar).toBeNull()
   })
 })

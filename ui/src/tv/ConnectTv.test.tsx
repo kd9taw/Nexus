@@ -13,7 +13,7 @@
 //      What must not regress HERE is what the TV hands it: an EMPTY roster and an
 //      EMPTY needs map — operating state stays off the LAN.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 
 const seen = vi.hoisted(() => ({ props: [] as Array<Record<string, unknown>> }))
 vi.mock('../components/ConnectView', () => ({
@@ -24,6 +24,7 @@ vi.mock('../components/ConnectView', () => ({
 }))
 
 import { ConnectTv } from './ConnectTv'
+import { TV_PRESETS } from '../features/connectPresets'
 import { getKpForecast } from '../api'
 
 const PROP = { advisory: { headline: 'h', bands: [], banners: [] }, openings: [], source: 'live' }
@@ -84,6 +85,57 @@ describe('the chrome', () => {
     expect((p.needByCall as Map<string, unknown>).size).toBe(0)
     // …and no work handler exists for ConnectView to render an affordance from.
     expect(p.onWorkSpot).toBeUndefined()
+    // …nor any board to lend the Spots and POTA/SOTA boxes: no list, no Work, no HUNT. With
+    // neither, each box is its one line (ConnectView.boards.test.tsx renders that with the real
+    // view), and the server serves neither list nor any command (connect_web.rs's allowlist).
+    expect(p.spotsFeed).toBeUndefined()
+    expect(p.otaBoard).toBeUndefined()
+    // …and its own layout table, whose Frame + bar (the default the page opens in) holds only the boxes
+    // that fill from what the page is served (features/connectPresets TV_FRAME_BAR).
+    expect(p.presets, 'the page’s own layout table').toBeDefined()
+    expect(p.presets).toBe(TV_PRESETS)
+  })
+
+  it('wears the same dashboard bar as the Connect pop-out: the station, the clocks, the indices, its own chips last', async () => {
+    const spaceWx = { sfi: 97, kp: 2, aIndex: 7, xrayClass: 'B3.1-class', flare: false, solarWind: null }
+    mockFetch({
+      get_propagation: { ...PROP, spaceWx, asOf: Math.floor(Date.now() / 1000) },
+      tv_station: { call: 'KD9TAW', grid: 'EN52' },
+    })
+    render(<ConnectTv />)
+    await waitFor(() => expect(document.querySelector('.dash-bar .dash-call')?.textContent).toBe('KD9TAW'))
+    const bar = document.querySelector('.dash-bar') as HTMLElement
+    expect(bar.querySelector('.dash-grid')?.textContent).toBe('EN52')
+    expect(bar.querySelector('.dash-utc .dash-time-v')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
+    await waitFor(() => {
+      const sfi = [...bar.querySelectorAll('.dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === 'SFI')
+      expect(sfi?.querySelector('.dash-index-v')?.textContent).toBe('97')
+    })
+    expect(within(bar).getByText('read-only'), 'the TV’s own chip rides in the bar').toBeTruthy()
+    expect(document.querySelectorAll('.dash-bar').length, 'one bar, not the old one beside it').toBe(1)
+    expect(document.querySelector('.tv-bar')).toBeNull()
+    // …and Connect is told so: its header then draws no clock of its own, the bar's is the one.
+    expect(seen.props[seen.props.length - 1]?.hostBar, 'Connect knows the page draws the bar').toBe(true)
+  })
+
+  it('the bar’s sunspot number comes over the same LAN read as the Space Wx box’s lines, dated as its day', async () => {
+    // get_solar_indices is on the TV page's read list (crates/tempo-app/src/connect_web.rs): public
+    // weather, like the Kp outlook. The bar asks for it itself; the snapshot carries no SSN.
+    const spaceWx = { sfi: 97, kp: 2, aIndex: 7, xrayClass: 'B3.1-class', flare: false, solarWind: null }
+    const day = Date.UTC(2026, 8, 28) / 1000
+    const calls = mockFetch({
+      get_propagation: { ...PROP, spaceWx, asOf: Math.floor(Date.now() / 1000) },
+      tv_station: { call: 'KD9TAW', grid: 'EN52' },
+      get_solar_indices: { days: [{ dayUnix: day - 86_400, sfi: 94, ssn: 51 }, { dayUnix: day, sfi: 95, ssn: 46 }] },
+    })
+    render(<ConnectTv />)
+    const ssn = () =>
+      [...document.querySelectorAll('.dash-bar .dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === 'SSN')
+    await waitFor(() => expect(ssn()?.querySelector('.dash-index-v')?.textContent).toBe('46'))
+    expect(ssn()?.querySelector('.dash-index-d')?.textContent).toBe(
+      new Date(day * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }),
+    )
+    expect(calls, 'control: it came over the LAN read').toContain('/connect/rpc/get_solar_indices')
   })
 
   it('says "no link" instead of freezing on a stale screen', async () => {

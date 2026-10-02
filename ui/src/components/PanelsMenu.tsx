@@ -58,14 +58,22 @@
 // — the change made to keep the entry keyboard-reachable is what made its focus indicator
 // hard to see. Both problems are deleted, not worked around, by leaving the box alone.
 //
+// THE DASHBOARD RAIL'S ROW. Where App publishes a rail switch (components/dashRailSwitch — for the
+// operating cockpit on screen), the menu draws a "Dashboard rail" row above the entries: the rail
+// beside this cockpit, on or off, remembered for this section. It is not one of the cockpit's panes, so
+// it is not counted as hidden, and Undo / Reset never touch it. A window too small for the rail keeps
+// the row operable and says why nothing appears — the note explains, it never refuses. The rail's OWN
+// menu (its four slots) says `offersRail={false}`: its ✕ is the rail's off switch there.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The ENTRIES are not
 // its words: each cockpit names its own panels and supplies the `label` and the `note`, so
 // those move with the cockpit. What is here is the menu itself — the ⊞ button, the popover,
-// the popped-out tag, and Undo / Reset. No vocabulary ID passes through this file as prose,
-// so nothing here can rename one.
+// the popped-out tag, the dashboard rail's row, and Undo / Reset. No vocabulary ID passes
+// through this file as prose, so nothing here can rename one.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import type { PanelState } from '../features/panelState'
+import { useDashRailSwitch } from './dashRailSwitch'
 
 export interface PanelsMenuItem {
   id: string
@@ -116,10 +124,15 @@ interface Props {
    *  (layout L5). The view owns their words and their effect; this menu only gives them the place
    *  the operator already looks. Neither reaches a transmitter, so no stop-line census changes. */
   lead?: ReactNode
+  /** False for the dashboard rail's OWN menu, which never offers the rail's switch. Default true: a
+   *  cockpit's menu draws the row wherever App publishes one. */
+  offersRail?: boolean
 }
 
-export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset, lead }: Props) {
+export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset, lead, offersRail = true }: Props) {
   const [open, setOpen] = useState(false)
+  const published = useDashRailSwitch()
+  const rail = offersRail ? published : null
   const rootRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   // Note / state-tag ids for aria-describedby. BOTH sit OUTSIDE the <label>: text inside a
@@ -175,6 +188,26 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
           }}
         >
           {lead}
+          {rail && (
+            <div className="panels-menu-item panels-menu-rail">
+              <div className="panels-menu-row">
+                <label className="panels-menu-check">
+                  <input
+                    type="checkbox"
+                    checked={rail.on}
+                    aria-describedby={rail.on && !rail.fits ? `${uid}-rail-why` : undefined}
+                    onChange={(e) => rail.set(e.target.checked)}
+                  />
+                  <span>{t('dashRail.name')}</span>
+                </label>
+              </div>
+              {rail.on && !rail.fits && (
+                <span className="panels-menu-why" id={`${uid}-rail-why`}>
+                  {t('dashRail.menu.small')}
+                </span>
+              )}
+            </div>
+          )}
           {items.map((it) => {
             // A note explains why this panel has NOTHING ON SCREEN right now. Once the
             // operator has unticked the entry, that question has a different answer —

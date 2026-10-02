@@ -30,6 +30,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { fitScale, naturalFor, MAIN_NATURAL, type Natural } from './useScale'
+import { classifyViewport } from './useViewport'
 
 const SRC = fileURLToPath(new URL('.', import.meta.url))
 const lib = readFileSync(fileURLToPath(new URL('../../src-tauri/src/lib.rs', import.meta.url)), 'utf8')
@@ -93,6 +94,18 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
       'sats',
       'waterfall',
     ])
+  })
+
+  // Connect's pop-out is a dashboard window. At the generic 760 px it sat under the
+  // 768 px `xs` line and rendered the phone-style stack (the analysis measured it: map on top,
+  // the seven panes stacked under it); it must open where Connect lays out its full grid.
+  it('Connect opens as a dashboard: its first box lays out in the lg class, not the xs phone stack', () => {
+    const [w, h] = sizeFor(DEFAULT_INNER, 'connect')
+    const zoom = fitScale(w, h, 100, undefined, naturalFor('connect')) / 100
+    expect(classifyViewport(w / zoom)).toBe('lg')
+    // Control: the generic pop-out box this replaces really is the xs stack.
+    const [gw, gh] = sizeFor(DEFAULT_INNER, '')
+    expect(classifyViewport(gw / (fitScale(gw, gh, 100, undefined, naturalFor('connect')) / 100))).toBe('xs')
   })
 
   // `operate` hosts the SAME dense cockpit as the main window, so 1200×900 is genuinely

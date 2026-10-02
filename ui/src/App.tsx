@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { StationDataContext, useStationCapability, useStationStopControl } from './stationAccess'
 import { publishBandConditions } from './bandConditions'
@@ -71,7 +71,7 @@ import { useSkin } from './useSkin'
 import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
-import { useViewport } from './useViewport'
+import { useViewport, useViewportClass } from './useViewport'
 import { useDensity } from './useDensity'
 import { useTextSize } from './useTextSize'
 import { useLocalClock } from './useLocalClock'
@@ -87,6 +87,10 @@ import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alert
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
+import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
+import { isDashRailSection, useDashRailSections, type DashRailSection } from './features/dashRail'
+import { DashRail } from './components/DashRail'
+import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
 import { TopBar } from './components/TopBar'
@@ -121,8 +125,6 @@ import {
   getNeedAlerts,
   setWatchList,
   getAllSpots,
-  getXrayNow,
-  getDxpedWindows,
   getSatSchedule,
   getSatTrackStatus,
   getIssPass,
@@ -146,7 +148,6 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
-  getKpForecast,
   getOtaMapSpots,
 } from './api'
 import {
@@ -263,8 +264,9 @@ const OPERATE_TIERS: Tier[] = [
 
 /** The screens whose Esc App binds to the top bar's halt while one is on show (see the listener in
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
- *  on every section in the registry and holds each to what it sends. */
-const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats'])
+ *  on every section in the registry and holds each to what it sends. Connect is here because it draws
+ *  no top bar, so no Stop TX of its own (N65, the operator's 2026-10-01 ruling). */
+const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats', 'connect'])
 
 export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; /** The stale DISPLAY, after hysteresis; defaults to `stale`. */ staleShown?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
@@ -307,6 +309,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
+  // THE DASHBOARD RAIL beside the operating cockpits (components/DashRail): the published class says
+  // whether this window can show it (`lg` and up — never a size query), and each section remembers
+  // whether it does. Off everywhere until the operator turns it on.
+  const viewportClass = useViewportClass()
+  const dashRail = useDashRailSections()
+  const railFits = viewportClass === 'lg' || viewportClass === 'xl'
   // Density (row heights / padding) and text size (#215) — both chosen in Settings ▸ Workspace.
   const [density, setDensity] = useDensity()
   const [textSize, setTextSize] = useTextSize()
@@ -936,62 +944,36 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       clearInterval(id)
     }
   }, [])
-  // Storm FORECAST heads-up, app-wide. The Kp outlook pane fetches this too, but an
-  // alert that only fires while its own pane is open is not an alert — and the
-  // backend serves both from one 15-minute cache, so the second caller is free.
-  // stormAlert.ts dedups by the predicted onset time, so this announces once per
-  // forecast event however often it is polled.
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getKpForecast()
-        .then((f) => live && processStormForecast(f, kpNowRef.current))
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 900_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [])
+  // These three alerts WATCH the window's one poll of their feeds (features/connectFeeds): the Kp
+  // outlook box, Connect's map and its chase boxes read the same feeds, so a box on screen adds no
+  // request of its own (each used to be polled twice while one was open). Each watcher runs for the
+  // whole session, so its feed is asked for on arrival and every cycle, as before.
+  //
+  // Storm FORECAST heads-up, app-wide: an alert that only fired while the Kp box is open would not
+  // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
+  // forecast event however often it is asked.
+  useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getXrayNow()
-        .then((x) => {
-          if (!live) return
-          xrayFastRef.current = x.flux
-          processFlare(effectiveXray(x.flux, null))
-        })
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 60_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [])
+  useEffect(
+    () =>
+      watchFeed(XRAY_NOW, (x) => {
+        xrayFastRef.current = x.flux
+        processFlare(effectiveXray(x.flux, null))
+      }),
+    [],
+  )
   // DXpedition best-shot windows for the chase alerts (server-cached climatology;
   // 10 min is generous). Best-effort — without it the loud spotted-alert still
   // works from the snapshot's cards; only the quiet modelled-only toast needs it.
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getDxpedWindows()
-        .then((list) => {
-          if (live) dxpedWindowsRef.current = new Map(list.map((w) => [w.call.toUpperCase(), w]))
-        })
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 600_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [])
+  useEffect(
+    () =>
+      watchFeed(DXPED_WINDOWS, (list) => {
+        dxpedWindowsRef.current = new Map(list.map((w) => [w.call.toUpperCase(), w]))
+      }),
+    [],
+  )
   // Live-feed liveness for the Now-Bar connector pills (same cadence as prop).
   const [feedHealth, setFeedHealth] = useState<FeedHealth | null>(null)
   useEffect(() => {
@@ -2619,6 +2601,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // landing view is the one that just crashed (a vhf profile lands on Connect), in which
   // case Operate: it is a core section, so it can never be the disabled one.
   const crashEscape: View = fallbackView === effectiveView ? 'operate' : fallbackView
+  // The section the dashboard rail stands beside, when the view on screen is an operating cockpit.
+  // Never on the hosted Remote page: the rail's feeds are not on its read list, and its boxes are the
+  // Connect page's there.
+  const { isOn: railIsOn, setOn: setRailOn } = dashRail
+  const railSection: DashRailSection | null = !remote && isDashRailSection(effectiveView) ? effectiveView : null
+  const railShown = railSection != null && railFits && railIsOn(railSection)
+  // Its switch for the cockpit's ⊞ Panels menu, published before paint (components/dashRailSwitch) and
+  // withdrawn when App goes: null where the rail does not stand.
+  const railSwitch = useMemo<DashRailSwitch | null>(
+    () => (railSection ? { on: railIsOn(railSection), fits: railFits, set: (on: boolean) => setRailOn(railSection, on) } : null),
+    [railSection, railIsOn, setRailOn, railFits],
+  )
+  useLayoutEffect(() => publishDashRailSwitch(railSwitch), [railSwitch])
+  useLayoutEffect(() => () => publishDashRailSwitch(null), [])
 
   // ── Eyes-free operating (a11y Phase A) — hooks BEFORE the `!snap` return ──
   // Per-view window title + a polite "now on X" announcement (navigation is
@@ -2654,6 +2650,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // closes the bird detail, the voice keyer still stops itself. Bound only with STOP AUTHORITY, the
   // one every Stop TX button follows (useStationStopControl: always on the desktop; in a browser,
   // the station's stop token): an observer's Esc is no halt at all, as the cockpits' own Esc is not.
+  // CONNECT TOO (N65, the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
+  // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
+  // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same listener, stop authority included.
   const stopAllowed = useStationStopControl()
   useEffect(() => {
     if (!stopAllowed || !ESC_HALT_VIEWS.has(effectiveView)) return
@@ -2833,31 +2832,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     </main>
   )
 
-  const cwWorkspace = (
-    <CwCockpit
-      active={!remote || (effectiveView === 'cw' && !remote.stale)}
-      onOpenLogbook={openLogbookFor}
-      pitchHz={settings?.cwPitchHz ?? 600}
-      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-      snap={snap}
-      theme={theme}
-      pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
-      onConsumeWork={() => setPendingWork(null)}
-      onSnap={setSnap}
-      fieldDay={snap.fieldDay}
-      spots={allSpots}
-      needByCall={needByCall}
-      typeByCall={typeByCall}
-      onWorkSpot={workSpotHereCw}
-      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-      onOpenSettings={openSettingsAt}
-      panels={cwPanels}
-    />
-  )
-  // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below and by
-  // the Phone cockpit's Spots and Needed panes (#345) — so a pane can never be wired differently
-  // from its view, and working a row from a pane is the view's own act.
+  // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below, by the
+  // Phone and CW cockpits' Spots and Needed panes (#345) and by Connect's Spots box — so a pane or
+  // a box can never be wired differently from its view, and working a row from one is the view's
+  // own act.
   const spotsBoard = {
     bandPlan,
     selectedCall: activePeer,
@@ -2896,6 +2874,30 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       : null,
   }
+  const cwWorkspace = (
+    <CwCockpit
+      active={!remote || (effectiveView === 'cw' && !remote.stale)}
+      onOpenLogbook={openLogbookFor}
+      pitchHz={settings?.cwPitchHz ?? 600}
+      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+      snap={snap}
+      theme={theme}
+      pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
+      onConsumeWork={() => setPendingWork(null)}
+      onSnap={setSnap}
+      fieldDay={snap.fieldDay}
+      spots={allSpots}
+      needByCall={needByCall}
+      typeByCall={typeByCall}
+      onWorkSpot={workSpotHereCw}
+      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+      onOpenSettings={openSettingsAt}
+      panels={cwPanels}
+      spotsBoard={spotsBoard}
+      neededBoard={neededBoard}
+    />
+  )
   const phoneWorkspace = (
     <PhoneCockpit
       active={!remote || (effectiveView === 'phone' && !remote.stale)}
@@ -3127,6 +3129,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
+          rigBand={snap?.radio.band ?? null}
+          // The Spots and POTA/SOTA boxes are the two boards themselves: the Spots view's own
+          // `spotsBoard` and feed, and the POTA/SOTA view's own hunt wiring, handed over whole so
+          // a Work or a HUNT from a box is the view's act. A browser's POTA/SOTA board is
+          // RemoteOta, a different surface, so a browser's box gets no hunt wiring (its one line).
+          spotsFeed={{ rows: allSpots, board: spotsBoard }}
+          otaBoard={remote ? undefined : { snap, onHunt: handleHuntSpot, onSnap: setSnap }}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
@@ -3144,6 +3153,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               : undefined
           }
           onPopOut={() => void openPanelWindow('connect')}
+          // The top bar is not drawn on Connect, so its clock rides in Connect's header, with the local
+          // clock beside it when Settings ▸ Workspace asks for one, as the top bar's did.
+          showLocalClock={localClock}
+          // Frame + bar's bar shows the station as the dashboard window's bar does: the snapshot's.
+          station={{ call: snap?.mycall ?? '', grid: snap?.mygrid ?? '' }}
         />
       )
       break
@@ -3334,7 +3348,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={(remote?.staleShown ?? remote?.stale) || undefined}>
       {remote?.status}
       {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
-      <TopBar
+      {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
+          band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
+          then "remove all radio control from connect, reclaim that space". So the whole bar goes on
+          Connect, and Connect's content takes its height; every other screen keeps it exactly as
+          before. Its Stop TX goes with it — the stop line's one ruled exception, which the sweeps
+          name: transmit on Connect is stopped by Esc (the listener above) or by leaving the screen. */}
+      {effectiveView !== 'connect' && <TopBar
         mycall={snap.mycall}
         mygrid={snap.mygrid}
         radio={snap.radio}
@@ -3404,7 +3424,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         onSetOperator={handleSetOperator}
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
-      />
+      />}
 
       <UpdateBanner update={selfUpdate} />
 
@@ -3450,9 +3470,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         // Profile-declared chip emphasis (dangling since the profiles landed).
         // A hand-blended feature set is tagged 'custom' (no profile) → default order.
         emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
+        // The dashboard rail's switch: beside an operating cockpit, and only where the window can
+        // show the rail, so the bar never offers a press that changes nothing.
+        rail={railSection && railFits ? { on: railShown, onToggle: () => setRailOn(railSection, !railShown) } : undefined}
       />
 
-      <div className="shell">
+      {/* `data-dash-rail` while the dashboard rail takes width beside the cockpit: Operate's QSO strip
+          keeps its two-row arrangement then (styles.css `.cq-break`). */}
+      <div className="shell" data-dash-rail={railShown ? 'on' : undefined}>
         <ModeNav
           view={effectiveView}
           mode={snap.mode}
@@ -3666,6 +3691,31 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           )}
           {workspace}
         </ErrorBoundary>
+        {/* THE DASHBOARD RAIL: the third child of the shell, after the cockpit — never inside a cockpit
+            shell (components/DashRail). Only where the window can show it and the operator turned it
+            on for this section; its switches are in the cockpit's ⊞ Panels and on the NOW bar. */}
+        {railShown && railSection && (
+          <DashRail
+            section={railSection}
+            myGrid={settings?.mygrid ?? ''}
+            theme={theme}
+            stations={snap.stations ?? []}
+            prop={prop}
+            needByCall={needByCall}
+            needAlerts={visibleAlerts}
+            // The amplifier and the band ride the snapshot App already polls, as on Connect.
+            amp={snap.radio.amp ?? null}
+            rigBand={snap.radio.band ?? null}
+            onWorkSpot={handleWorkMapSpot}
+            onPoint={(settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
+            // The Spots and POTA/SOTA boxes are the two boards themselves, lent as they are to
+            // Connect (the rail never stands on the Remote page, so the hunt wiring is always native).
+            spotsFeed={{ rows: allSpots, board: spotsBoard }}
+            otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
+            onHide={() => setRailOn(railSection, false)}
+            scale={scale}
+          />
+        )}
       </div>
 
       {remote && <QuickNavigation view={effectiveView} onSelect={handleView} available={(v) => isViewEnabled(v) && isRemoteViewAvailable(v)} />}

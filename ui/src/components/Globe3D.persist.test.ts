@@ -6,7 +6,7 @@
 // each time. The fix reuses the 2-D map's per-surface store. This pins the parser that guards the
 // restore — a malformed or foreign store must never poison the defaults it merges onto.
 import { describe, it, expect } from 'vitest'
-import { globeLayersFromStored } from './Globe3D'
+import { globeLayersFromStored } from '../features/globeLayers'
 
 describe('globeLayersFromStored', () => {
   it('returns nothing for an empty or unusable store', () => {

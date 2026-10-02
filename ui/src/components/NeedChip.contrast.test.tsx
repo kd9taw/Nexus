@@ -15,9 +15,11 @@
 // THE HOSTS. Nine components letter a need chip, and each is rendered here in its host's own chain: Band Activity
 // (OperateDecodes: Operate's Band Activity and Rx Frequency panes, and the Tempo rail), the Call Roster (OperateRoster), the
 // station cards (StationCard, via StationList: Tempo's Stations rail and Operate's Stations pane), the WATCH tile
-// (WatchTile: on the roster, the cards and Spots, in the view and in Phone's pane), the Needed board (NeededPanel: the view,
+// (WatchTile: on the roster, the cards and Spots, in the view, in Phone's pane and in Connect's Spots box, in Connect and in
+// the dashboard rail beside the cockpits), the Needed board (NeededPanel: the view,
 // Phone's pane and the pop-out), the Satellites section's earn chips (the schedule, the Next-up strip and the pass timeline,
-// in the view and the pop-out), and Connect's Selection, Chase and Chase-tonight panes. Every chip that letters a need
+// in the view and the pop-out), and Connect's Selection, Chase and Chase-tonight panes, in Connect and in the dashboard
+// rail. Every chip that letters a need
 // by its tag is then swept through all eleven need classes (a row that letters one need can letter any of them), and
 // each is measured on what it sits on in its host.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
@@ -225,6 +227,8 @@ const connectCtx = (): PaneContext =>
     selectedCall: 'VP8XYZ', selStation: null, selSpot: null, selDxped: null, selDxpedWindow: null, dxpedWindows: new Map(), selGrid: null,
     pathPred: OUTLOOK, bandOutlook: OUTLOOK, pathOpen: OUTLOOK_BANDS, outlookOpen: OUTLOOK_BANDS,
     getout: null, focusBand: null, amp: null, scales: null, alerts: [], muf: [],
+    // The Spots box is the Spots board itself, with the Spots view's rows (a watched station's WATCH tile).
+    spotsFeed: { rows: SPOTS, board: { bandPlan: [], selectedCall: 'VP8PJ', onSelect: () => {}, onWork: () => {} } },
     onSelectCall: () => {}, toggleFocusBand: () => {},
   }) as unknown as PaneContext
 
@@ -280,6 +284,19 @@ const connectPane = (host: 'rail' | 'strip', paneId: PaneId) => {
     </div>
   )
 }
+
+/** Connect's boxes in the dashboard rail beside a cockpit (components/DashRail): App's shell, the rail, its column. */
+const dashPane = (paneId: PaneId) => (
+  <div className="app">
+    <div className="shell" data-dash-rail="on">
+      <aside className="dash-rail">
+        <div className="dash-rail-col dash-boxes">
+          <PaneFrame slotId="rail1" slotName="rail1" paneId={paneId} ctx={connectCtx()} onAssign={noop} onHide={noop} share={1} />
+        </div>
+      </aside>
+    </div>
+  </div>
+)
 
 /** Each host, and whether a chip there can letter any need (a chip drawn from the need it names), or only its own (the
  *  WATCH tile alone in a Spots row; the Satellites section's NEW ONE and GRID). */
@@ -337,6 +354,11 @@ const HOSTS: Array<[string, () => ReactNode, 'any' | 'own']> = [
   ['Connect Chase (rail)', () => connectPane('rail', 'chase'), 'any'],
   ['Connect Chase tonight (rail)', () => connectPane('rail', 'chaseFeed'), 'any'],
   ['Connect Chase tonight (strip)', () => connectPane('strip', 'chaseFeed'), 'any'],
+  ['Connect Spots box (rail)', () => connectPane('rail', 'spots'), 'own'],
+  ['Connect Selection (dashboard rail)', () => dashPane('selection'), 'any'],
+  ['Connect Chase (dashboard rail)', () => dashPane('chase'), 'any'],
+  ['Connect Chase tonight (dashboard rail)', () => dashPane('chaseFeed'), 'any'],
+  ['Connect Spots box (dashboard rail)', () => dashPane('spots'), 'own'],
 ]
 
 /** Every need class the sheet colours a chip with (`.need-<cls> { --need-color }`), and the eleven NEED_CHIP draws. */
@@ -648,6 +670,11 @@ describe('a need chip reads in every theme, wherever it sits', () => {
     'Connect Chase (rail)': ['band', 'entity', 'mode', 'state'],
     'Connect Chase tonight (rail)': ['band', 'dxped', 'entity', 'mode', 'state'],
     'Connect Chase tonight (strip)': ['band', 'dxped', 'entity', 'mode', 'state'],
+    'Connect Spots box (rail)': ['watch'],
+    'Connect Selection (dashboard rail)': ['entity'],
+    'Connect Chase (dashboard rail)': ['band', 'entity', 'mode', 'state'],
+    'Connect Chase tonight (dashboard rail)': ['band', 'dxped', 'entity', 'mode', 'state'],
+    'Connect Spots box (dashboard rail)': ['watch'],
   }
   it('renders need chips on every host, in each need its data letters (the census cannot silently empty out)', () => {
     const seen: Record<string, string[]> = {}

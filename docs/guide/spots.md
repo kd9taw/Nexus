@@ -218,7 +218,7 @@ arrive."
   coming back, and they are gone at exit — unlike the Needed board's, which persist
   across restarts.
 - **Spots doesn't tear off.** There is no ⧉ pop-out for this board; the Needed
-  board, Connect and the cockpit band maps detach, this one doesn't.
+  board, Conditions and the cockpit band maps detach, this one doesn't.
 - **Twenty minutes, and nothing before that.** No history, no export, no "what did
   I miss while I was away".
 - **Declaring an unassisted entry empties the board.** The switch stops cluster/RBN
@@ -229,6 +229,6 @@ arrive."
 ## Related guides
 
 - [Needed — DX that's on the air now](needed-dx.md)
-- [Connect — map + propagation](connect.md)
+- [Conditions — map + propagation](connect.md)
 - [DXpeditions](dxpeditions.md)
 - [Settings reference](settings-reference.md)

@@ -411,9 +411,9 @@ describe('the deliberate wrap point engages on the EFFECTIVE-width vocabulary', 
   // auto-fit → effective 1607), where the one-row minimum plus the HOUND badge
   // or rotor strip overflowed and wrapped at an arbitrary member — measured
   // 38→70 px mid-QSO. So the break is hidden at xl only.
-  const breakChain = (vp: string): El[] => [
+  const breakChain = (vp: string, dashRail = false): El[] => [
     { classes: new Set(['app']), attrs: { 'data-viewport': vp } },
-    { classes: new Set(['shell']) },
+    { classes: new Set(['shell']), attrs: dashRail ? { 'data-dash-rail': 'on' } : {} },
     { classes: new Set(['layout', 'single', 'operate-cockpit']) },
     { classes: new Set(['cockpit-body']) },
     { classes: new Set(['cockpit-qso', 'panel']) },
@@ -425,6 +425,19 @@ describe('the deliberate wrap point engages on the EFFECTIVE-width vocabulary', 
     expect(win, 'no display rule hides the break at xl').not.toBeNull()
     expect(win!.value, `\`${win!.selector}\``).toBe('none')
   })
+
+  // BESIDE THE DASHBOARD RAIL the strip is narrower than the xl window its one-row decision was
+  // measured for (the rail takes up to 720 px: 2560×1440 leaves ~2172), so it keeps the lg arrangement
+  // at every width while the shell says the rail is taking width.
+  for (const vp of ['xl', 'lg']) {
+    it(`${vp} beside the dashboard rail: .cq-break engages (the stable two-row wrap)`, () => {
+      const win = winner(breakChain(vp, true), 'display')
+      expect(
+        win?.value ?? null,
+        win ? `\`${win.selector}\` hides the break beside the rail — the strip is no longer xl-wide` : '',
+      ).not.toBe('none')
+    })
+  }
 
   for (const vp of ['lg', 'md', 'sm', 'xs']) {
     it(`${vp}: .cq-break engages (stable two-row wrap, never a mid-QSO content wrap)`, () => {

@@ -14,7 +14,8 @@
 // distances, SNR, CQ zones, grids, the `P.533` recommendation number, and every word the
 // BACKEND sends (the advisory headline and its banners, the workability, the window text).
 // No transmit control renders on any of these panes — ▶ Work moves the rig and opens a
-// cockpit; it keys nothing.
+// cockpit; it keys nothing. The Spots and POTA/SOTA boxes are the two boards themselves, and
+// their Work and HUNT are the boards' own (the window lends its wiring through the context).
 import type { ReactNode } from 'react'
 import { t } from '../../i18n'
 import { T } from '../../i18n/T'
@@ -25,6 +26,7 @@ import { bandTiming } from '../../propViz'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
+import { BandTiles } from '../prop/BandTiles'
 import { OpeningStrip } from '../prop/OpeningStrip'
 import { LikelihoodHeatmap } from '../prop/LikelihoodHeatmap'
 import { BestBandTable } from '../prop/BestBandTable'
@@ -36,6 +38,8 @@ import { ChaseFeedPane } from '../prop/ChaseFeedPane'
 import { SatPassesPane } from '../prop/SatPassesPane'
 import { OpeningsLogPane } from '../prop/OpeningsLogPane'
 import { KpOutlookPane } from '../prop/KpOutlookPane'
+import { SolarTrends } from '../prop/SolarTrends'
+import { ClockPane } from '../prop/ClockPane'
 import { RotorPane } from '../prop/RotorPane'
 import { AmpPane } from '../prop/AmpPane'
 import { MiniSpectrum } from '../MiniSpectrum'
@@ -46,6 +50,9 @@ import { getoutSummary } from '../../features/getout'
 import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
 import { MeasuredMuf } from '../prop/MeasuredMuf'
+import { PotaSotaView } from '../PotaSotaView'
+import { ageLabel } from '../SpotsPanel'
+import { SpotsBox } from './SpotsBox'
 import {
   NEED_CHIP,
   dxpedWorkMode,
@@ -70,10 +77,26 @@ import {
   measuredMufLine,
 } from './paneFormat'
 
-export type PaneCategory = 'core' | 'b2' | 'b3' // picker optgroups; extension seam
+/** What a box is FOR — the groups its picker and ⋯ ▸ Add a tab list it under, in this order (the
+ *  operator's pick, 2026-09-30: "Name by purpose"). They were the build tiers that added the boxes
+ *  ("Panels", "B2", "B3"), which put Chase, the flagship, under "B2". */
+export const PANE_CATEGORIES = ['bands', 'spaceWx', 'activity', 'station'] as const
+export type PaneCategory = (typeof PANE_CATEGORIES)[number]
+
+/** Each group's heading. Literal keys, resolved lazily at render (the registry's getter treatment). */
+export const PANE_CATEGORY_LABEL: Record<PaneCategory, () => string> = {
+  bands: () => t('connect.slot.group.bands'),
+  spaceWx: () => t('connect.slot.group.spaceWx'),
+  activity: () => t('connect.slot.group.activity'),
+  station: () => t('connect.slot.group.station'),
+}
 
 /** The ITU recommendation's number — a document name, the same in every language. */
 const ENGINE_P533 = 'P.533'
+
+/** The POTA/SOTA box's name: the two programmes' own names, as the POTA/SOTA view's title prints
+ *  them — tokens, never a catalog entry. */
+const OTA_BOX_TITLE = 'POTA / SOTA'
 
 /** Unit symbols printed beside a reading. A unit is a token — MHz is MHz, dB is dB and km is
  * km in every language — and the guard is told so by these constants. */
@@ -337,8 +360,11 @@ function renderGetout(c: PaneContext): ReactNode {
             <GetoutCompass reports={g.reports} maxKm={g.maxKm} />
             <p className="getout-dir">{getoutSummary(g.reports)}</p>
           </div>
+          {/* THE FULL LIST: every receiver the station reports (`propagation::getting_out` — the
+              latest report per receiver over its window, most distant first), not the first six.
+              It scrolls inside the box's body; each row gains how long ago it heard you. */}
           <ul className="getout-list">
-            {g.reports.slice(0, 6).map((r) => (
+            {g.reports.map((r) => (
               <li
                 key={r.call}
                 className="go-clickable"
@@ -351,6 +377,7 @@ function renderGetout(c: PaneContext): ReactNode {
                 </span>
                 <span className="go-band">{r.band}</span>
                 <span className="go-snr">{r.snr != null ? `${r.snr} ${DB_UNIT}` : ''}</span>
+                <span className="go-age">{ageLabel(r.ageSecs)}</span>
               </li>
             ))}
           </ul>
@@ -366,7 +393,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.advisory.title')
     },
-    category: 'core',
+    category: 'bands',
     basic: advisoryLine,
     // Offline → null → Basic's honest "No live propagation data" (never the modelled
     // headline/banners as if live). Ternary, not &&, so offline yields null not false.
@@ -394,7 +421,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.bandAdvisor.title')
     },
-    category: 'core',
+    category: 'bands',
     basic: bandAdvisorLine,
     expert: (c) =>
       c.prop && c.prop.source !== 'offline' ? (
@@ -407,11 +434,32 @@ export const PANES: PaneDef[] = [
       ) : null,
   },
   {
+    // BANDS FOR YOU — the band advice as tiles, one per band, in the Band Advisor's default slot.
+    // With a snapshot it always draws: offline or stale data gives hollow neutral tiles, never green
+    // (features/bandTiles). Before the first snapshot it returns null, and Basic says so.
+    id: 'bandTiles',
+    get title() {
+      return t('connect.pane.bandTiles.title')
+    },
+    category: 'bands',
+    basic: bandAdvisorLine,
+    expert: (c) =>
+      c.prop ? (
+        <BandTiles
+          prop={c.prop}
+          outlook={c.bandOutlook?.bands}
+          rigBand={c.rigBand}
+          focusBand={c.focusBand}
+          onBandClick={c.toggleFocusBand}
+        />
+      ) : null,
+  },
+  {
     id: 'selection',
     get title() {
       return t('connect.pane.selection.title')
     },
-    category: 'core',
+    category: 'activity',
     basic: selectionLine,
     expert: (c) => renderSelection(c),
   },
@@ -420,7 +468,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.outlook.title')
     },
-    category: 'core',
+    category: 'bands',
     basic: outlookLine,
     // Selection-aware: path-to-the-selected-call, else band-outlook-to-DX (same JSX shape).
     expert: (c) => (c.selectedCall ? renderPath(c) : renderOutlook(c)),
@@ -430,7 +478,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.openings.title')
     },
-    category: 'core',
+    category: 'bands',
     basic: openingsLine,
     expert: (c) =>
       c.prop && c.prop.source !== 'offline' ? (
@@ -442,7 +490,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.openingsLog.title')
     },
-    category: 'core',
+    category: 'bands',
     // Self-fetching pane (get_openings_log) — the Basic line stays a static
     // honest hint because the history lives inside the component.
     basic: () => t('connect.pane.openingsLog.basic'),
@@ -453,7 +501,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.kpOutlook.title')
     },
-    category: 'b2',
+    category: 'spaceWx',
     // Self-fetching (get_kp_forecast, cached 15 min server-side), so the Basic line
     // is a static honest hint rather than a value this context does not carry.
     basic: () => t('connect.pane.kpOutlook.basic'),
@@ -464,12 +512,15 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.spacewx.title')
     },
-    category: 'core',
+    category: 'spaceWx',
     basic: spaceWxLine,
     expert: (c) =>
       c.prop && c.prop.source !== 'offline' ? (
         <>
           <SpaceWxGauges wx={c.prop.spaceWx} gloss={false} />
+          {/* Self-fetching (get_solar_indices, cached an hour server-side): SSN and the 30-day
+              SFI/SSN lines, stale-honest by the file's own dates. */}
+          <SolarTrends />
           <ScalesAnnunciator scales={c.scales} alerts={c.alerts} />
         </>
       ) : null,
@@ -479,7 +530,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.getout.title')
     },
-    category: 'core',
+    category: 'activity',
     basic: getoutLine,
     expert: (c) => renderGetout(c),
   },
@@ -489,7 +540,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.bestband.title')
     },
-    category: 'b2',
+    category: 'bands',
     basic: bestbandLine,
     expert: (c) => {
       const rows = c.prop && c.prop.source !== 'offline' ? c.prop.bestToRegion : undefined
@@ -503,7 +554,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.activity.title')
     },
-    category: 'b2',
+    category: 'activity',
     basic: activityLine,
     expert: (c) => {
       const cells = c.prop && c.prop.source !== 'offline' ? c.prop.regionBand : undefined
@@ -517,7 +568,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.beacons.title')
     },
-    category: 'b2',
+    category: 'bands',
     basic: beaconsLine,
     // Clock-derived — never gates on offline; only the heard badges need spots.
     expert: (c) => <BeaconMonitor spots={c.prop?.spots ?? null} />,
@@ -527,7 +578,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.insights.title')
     },
-    category: 'b2',
+    category: 'spaceWx',
     basic: insightsLine,
     expert: (c) => {
       const ins = c.prop && c.prop.source !== 'offline' ? c.prop.insights : undefined
@@ -541,7 +592,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.chase.title')
     },
-    category: 'b2',
+    category: 'activity',
     basic: chaseLine,
     // "Work THIS now": needed stations fused with band openness + window. Returns null
     // when nothing's needed-and-heard → PaneFrame falls back to the (identical) Basic line.
@@ -553,7 +604,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.greyline.title')
     },
-    category: 'b3',
+    category: 'spaceWx',
     basic: greylineLine,
     // Clock-derived; GreylineWindow handles the no-grid case itself (never null).
     expert: (c) => <GreylineWindow ctx={c} />,
@@ -563,7 +614,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.bandHours.title')
     },
-    category: 'b3',
+    category: 'bands',
     basic: bandHoursLine,
     expert: (c) =>
       c.bandOutlook?.bands.length ? <LikelihoodHeatmap outlook={c.bandOutlook.bands} /> : null,
@@ -573,7 +624,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.esNowcast.title')
     },
-    category: 'b3',
+    category: 'bands',
     basic: esNowcastLine,
     expert: (c) => {
       // VHF openings → the cards; otherwise null so PaneFrame falls back to the (identical)
@@ -587,7 +638,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.measuredMuf.title')
     },
-    category: 'b3',
+    category: 'spaceWx',
     basic: measuredMufLine,
     expert: (c) => {
       const m = c.muf ?? []
@@ -599,7 +650,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.chaseFeed.title')
     },
-    category: 'b3',
+    category: 'activity',
     basic: chaseFeedLine,
     // The ranked "chase tonight" board: heard needs + on-air expeditions fused and
     // scored (need × openness × rarity × time-remaining). Basic = top-3 plain rows;
@@ -611,7 +662,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.satPasses.title')
     },
-    category: 'b3',
+    category: 'activity',
     // Self-fetching pane (get_satellites) — the Basic line stays a static honest
     // hint because the data lives inside the component, not PaneContext.
     basic: () => t('connect.pane.satPasses.basic'),
@@ -622,7 +673,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.rotor.title')
     },
-    category: 'b3',
+    category: 'station',
     basic: () => t('connect.pane.rotor.basic'),
     // Self-contained control surface — polls read_rotator while mounted and hides itself
     // (→ this Basic hint) only when NO rotator is configured. A configured rotator that cannot
@@ -635,7 +686,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.amp.title')
     },
-    category: 'b3',
+    category: 'station',
     // Read-only station-device readout, the rotor's site-for-site shape. The Basic hint is
     // STATIC and names where the amplifier is configured, because the pane hides itself only
     // when none is — a configured amplifier that has gone quiet keeps the pane, with '—'.
@@ -651,7 +702,7 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.scope.title')
     },
-    category: 'b3',
+    category: 'station',
     basic: () => t('connect.pane.scope.basic'),
     expert: () => (
       <MiniSpectrum
@@ -665,11 +716,45 @@ export const PANES: PaneDef[] = [
     get title() {
       return t('connect.pane.contests.title')
     },
-    category: 'b3',
+    category: 'activity',
     // Self-fetching (get_contests) — Basic stays a static hint since the data
     // lives in the component, not PaneContext (same pattern as Satellite Passes).
     basic: () => t('connect.pane.contests.basic'),
     expert: () => <ContestCalendarPane load={getContests} />,
+  },
+  {
+    id: 'clock',
+    get title() {
+      return t('connect.pane.clock.title')
+    },
+    category: 'station',
+    // Clock-derived, like the beacons: never gates on a feed and never returns null, so the
+    // Basic line is only a description.
+    basic: () => t('connect.pane.clock.basic'),
+    expert: (c) => <ClockPane myGrid={c.myGrid} />,
+  },
+  {
+    // THE SPOTS BOX — the Spots board itself, with the window's own Spots wiring (SpotsBox). A
+    // window with no Spots board to lend (the wall display) gets the Basic line, and no Work.
+    id: 'spots',
+    get title() {
+      return t('connect.pane.spots.title')
+    },
+    category: 'activity',
+    basic: () => t('connect.pane.spots.basic'),
+    expert: (c) => (c.spotsFeed ? <SpotsBox feed={c.spotsFeed} /> : null),
+  },
+  {
+    // THE POTA/SOTA BOX — the POTA/SOTA board itself as a box (`pane`): its list, filters, sort and
+    // HUNT, with the window's own hunt wiring. Self-fetching, as the view is. No wiring ⇒ Basic.
+    id: 'pota',
+    title: OTA_BOX_TITLE,
+    category: 'activity',
+    basic: () => t('connect.pane.pota.basic'),
+    expert: (c) =>
+      c.otaBoard ? (
+        <PotaSotaView snap={c.otaBoard.snap} onHunt={c.otaBoard.onHunt} onSnap={c.otaBoard.onSnap} pane />
+      ) : null,
   },
 ]
 

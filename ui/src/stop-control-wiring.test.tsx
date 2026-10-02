@@ -74,6 +74,8 @@ import type { AppSnapshot } from './types'
 import App from './App'
 import { allFeatureIds, featureById, sectionFeatures, type View } from './features/registry'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
+import { LOCAL_CLOCK_STORAGE_KEY } from './useLocalClock'
+import { pastTheSwitch } from './components/ConnectView.testkit'
 
 // A 30 s budget for every test and hook here, for the machine and not for the checks. Each test mounts the real App, and
 // in three full-suite runs on a loaded box (2026-09-29 and 30) vitest's default budgets ran out with nothing wrong: "Test
@@ -284,6 +286,7 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   bridgeCalls.length = 0
   tuning = false
   settingsAnswer = null
@@ -732,6 +735,8 @@ const ESC_SCREENS: EscScreen[] = [
   { view: 'sstv', area: 'dx', drawn: () => shown('.sstv-tx-bar'), esc: ['halt_tx'] },
   { view: 'aprs', area: 'dx', drawn: () => shown('main.aprs-cockpit'), esc: ['halt_tx'] },
   { view: 'sats', area: 'dx', drawn: () => shown('.sats-view'), esc: ['halt_tx'] },
+  // Connect draws no top bar, so no Stop TX of its own (N65): App's halt is its stop.
+  { view: 'connect', area: 'dx', drawn: () => shown('main .connect-shell'), esc: ['halt_tx'] },
 ]
 
 async function mountScreen(s: EscScreen): Promise<void> {
@@ -748,7 +753,7 @@ describe('Esc on Tempo, Phone, SSTV, APRS and Satellites sends the same halt as 
     expect(await fire(() => pressEsc())).toEqual(s.esc)
   })
 
-  it.each(ESC_SCREENS.filter((s) => s.view !== 'aprs' && s.view !== 'sats').map((s) => [s.view, s] as const))(
+  it.each(ESC_SCREENS.filter((s) => s.view !== 'aprs' && s.view !== 'sats' && s.view !== 'connect').map((s) => [s.view, s] as const))(
     "%s: Esc sends what the screen's own Stop TX sends",
     async (_view, s) => {
       await mountScreen(s)
@@ -761,7 +766,8 @@ describe('Esc on Tempo, Phone, SSTV, APRS and Satellites sends the same halt as 
 
   // A text field where the screen has one in this fixture; SSTV's only text field is a picture's
   // caption editor, drawn once a picture is loaded, so there it is the transmit-mode picker.
-  it.each(ESC_SCREENS.map((s) => [s.view, s] as const))('%s: Esc from inside a field halts', async (_view, s) => {
+  // Connect draws no text field to type in; its Esc through a control that stops the key is held below.
+  it.each(ESC_SCREENS.filter((s) => s.view !== 'connect').map((s) => [s.view, s] as const))('%s: Esc from inside a field halts', async (_view, s) => {
     await mountScreen(s)
     const live = (el: HTMLElement): boolean =>
       el.closest('[hidden]') == null && !(el as HTMLInputElement).readOnly && !(el as HTMLInputElement).disabled
@@ -863,7 +869,7 @@ describe('Esc on every screen in the registry: the five above gained the halt, a
   }
   const SECTIONS = sectionFeatures().map((f) => f.id as View)
 
-  it('control: the census covers the app’s screens, and the five', () => {
+  it('control: the census covers the app’s screens, and the six', () => {
     expect(SECTIONS.length).toBeGreaterThan(15)
     for (const s of ESC_SCREENS) expect(SECTIONS).toContain(s.view)
   })
@@ -877,6 +883,104 @@ describe('Esc on every screen in the registry: the five above gained the halt, a
     ;(document.activeElement as HTMLElement | null)?.blur()
     const expected = ESC_SCREENS.find((s) => s.view === view)?.esc ?? OWN_ESC[view] ?? []
     expect(await sentBy(() => pressEsc()), `${view}: what Esc sent`).toEqual(expected)
+  })
+})
+
+// ── Connect: the stop line's one ruled exception ────────────────────────────────────────────
+//
+// The operator, 2026-10-01, of the bar across the top of the window: "at very top, its the
+// frequency, the band dropdown, tx off, tune, stop tx.  That bar doenst need to live in
+// connect/conditions"; and, asked what Connect should keep so that transmit could always be stopped
+// there: "remove all radio control from connect, reclaim that space". So Connect draws no top bar,
+// and its Stop TX goes with it — the one screen the stop line excepts, by that ruling. Transmit on
+// Connect is stopped by Esc, which App binds while Connect is on show, or by leaving the screen.
+// Both halves are held here, at the wire, and so is the fence around them: every OTHER screen in the
+// app still draws the bar, so the exception cannot quietly grow to a second screen.
+
+describe('Connect — no radio controls, and Esc stops (the operator’s ruled exception)', () => {
+  beforeEach(async () => {
+    everySectionOn()
+    await mountOn('connect')
+  })
+  const connectShell = (): HTMLElement | null => document.querySelector('main .connect-shell')
+
+  it('draws no top bar: no frequency, band, TX Off, Tune or Stop TX anywhere on the screen', () => {
+    expect(connectShell(), 'control: Connect is the screen on show').not.toBeNull()
+    expect(document.querySelector('header.topbar'), 'the top bar is drawn on Connect').toBeNull()
+    for (const name of [STOP_TX, TUNE, /^tx (on|off)$/i]) {
+      const shown = screen.queryAllByRole('button', { name, hidden: true }).filter((el) => el.closest('[hidden]') == null)
+      expect(shown, `${name} is on Connect`).toEqual([])
+    }
+  })
+
+  it('Esc sends halt_tx — pressed inside Connect, on a control whose own menu answers Esc too', async () => {
+    const shell = connectShell()
+    expect(shell, 'control: Connect is the screen on show').not.toBeNull()
+    const panels = within(shell!).getByRole('button', { name: /⊞ Panels/ })
+    expect(await fire(() => fireEvent.keyDown(panels, { key: 'Escape' }))).toEqual(['halt_tx'])
+  })
+
+  it('…and a control inside Connect that stops the key cannot swallow the stop (App listens in the capture phase)', async () => {
+    const panels = within(connectShell()!).getByRole('button', { name: /⊞ Panels/ })
+    const swallow = (e: Event): void => e.stopPropagation()
+    panels.addEventListener('keydown', swallow)
+    try {
+      expect(await fire(() => fireEvent.keyDown(panels, { key: 'Escape' }))).toEqual(['halt_tx'])
+    } finally {
+      panels.removeEventListener('keydown', swallow)
+    }
+  })
+})
+
+// …BUT CONNECT KEEPS THE TIME (the operator, 2026-10-01: "things like time are very good" on a
+// second monitor or the TV). The bar's other items stay off Connect; its clock rides in Connect's own
+// header, with the local clock beside it when Settings ▸ Workspace asks for one, as in the bar.
+describe('Connect keeps the station clock', () => {
+  it('the top bar’s UTC clock rides in Connect’s header, the local clock beside it when Settings asks', async () => {
+    everySectionOn()
+    localStorage.setItem(LOCAL_CLOCK_STORAGE_KEY, '1')
+    await mountOn('connect')
+    const header = document.querySelector('main .connect-shell .connect-header')
+    expect(header, 'control: Connect is the screen on show').not.toBeNull()
+    expect(document.querySelector('header.topbar'), 'control: the top bar is not drawn').toBeNull()
+    const clocks = [...header!.querySelectorAll('.utc-clock')]
+    expect(clocks.map((c) => c.querySelector('.utc-label')?.textContent)).toEqual(['UTC', 'Local'])
+    expect(clocks[0].querySelector('.utc-time')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
+  })
+
+  it('Frame + bar puts the dashboard bar over Connect, with the station from the snapshot, and its clock stands for the header’s', async () => {
+    everySectionOn()
+    await mountOn('connect')
+    const shell = document.querySelector('main .connect-shell') as HTMLElement
+    expect(shell, 'control: Connect is the screen on show').not.toBeNull()
+    expect(shell.querySelector(':scope > .dash-bar'), 'control: no bar before the tap').toBeNull()
+    fireEvent.click(within(shell.querySelector('.connect-header') as HTMLElement).getByRole('button', { name: 'Layout' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Frame + bar (default)' }))
+    const bar = shell.querySelector(':scope > .dash-bar') as HTMLElement
+    expect(bar, 'the bar is over the view').not.toBeNull()
+    expect([bar.querySelector('.dash-call')?.textContent, bar.querySelector('.dash-grid')?.textContent]).toEqual(['KD9TAW', 'EN52'])
+    expect(shell.querySelector('.connect-header .utc-clock'), 'one clock: the bar’s').toBeNull()
+    expect(document.querySelector('header.topbar'), 'and still no top bar').toBeNull()
+  })
+})
+
+describe('…and every OTHER screen keeps the top bar: the exception is Connect alone', () => {
+  // Read off the registry, not kept here: a section added later is swept by existing.
+  const OTHERS = sectionFeatures()
+    .map((f) => f.id as View)
+    .filter((id) => id !== 'connect')
+
+  it('control: the sweep covers the app’s screens', () => {
+    expect(OTHERS.length).toBeGreaterThan(15)
+  })
+
+  it.each(OTHERS)('%s draws the top bar', async (view) => {
+    everySectionOn()
+    // Field Day is drawn only with its master switch on, and Chat only in the Tempo area.
+    if (view === 'fieldDay') settingsAnswer = { ...defaultSettings, fdActive: true }
+    await mountOn(view, view === 'chat' ? 'msg' : 'dx')
+    expect(document.title, `control: ${view} is the screen on show`).toBe(`${featureById(view)!.label} — Nexus`)
+    expect(document.querySelector('header.topbar'), `${view}: the top bar`).not.toBeNull()
   })
 })
 
