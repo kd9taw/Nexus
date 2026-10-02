@@ -659,9 +659,10 @@ mod tests {
         let source: Arc<dyn BoardSource> = Arc::new(FullConnect::new(
             || Some(data()),
             Arc::new(|p: &str| match p {
-                "connect-tv.html" => {
-                    Some((b"<title>Nexus Connect</title>".to_vec(), "text/html".into()))
-                }
+                "connect-tv.html" => Some((
+                    b"<title>Nexus Conditions (formerly Connect)</title>".to_vec(),
+                    "text/html".into(),
+                )),
                 "assets/tv-abc.js" => Some((b"console.log(1)".to_vec(), "text/javascript".into())),
                 _ => None,
             }),
@@ -685,7 +686,11 @@ mod tests {
         // The TV entry at the bare host:port — what someone types into a browser.
         let root = talk("GET / HTTP/1.1\r\nHost: tv\r\n\r\n");
         assert!(root.starts_with("HTTP/1.1 200"), "root: {root:.60}");
-        assert!(root.contains("Nexus Connect"));
+        // The TV entry's own title, which the summary page's does not carry.
+        assert!(
+            root.contains("<title>Nexus Conditions (formerly Connect)</title>"),
+            "root served the summary page, not the TV entry"
+        );
 
         // Assets, at both spellings a browser can produce.
         assert!(talk("GET /assets/tv-abc.js HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 200"));
@@ -742,8 +747,14 @@ mod tests {
             "GET / did not answer: {root:.60}"
         );
         assert!(
-            root.contains("Nexus Connect"),
+            root.contains("<title>Nexus Conditions</title>"),
             "GET / served something else"
+        );
+        // The view is Conditions now (operator, 2026-10-02: "so no screen anywhere still says
+        // Connect"): the footer line names it too, and nothing on the page says the old name.
+        assert!(
+            root.contains("'Nexus Conditions · data '") && !root.contains("Nexus Connect"),
+            "the page still names the view by its old name"
         );
 
         // The named path, and the JSON the page actually fetches.
