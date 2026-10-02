@@ -1,8 +1,11 @@
 // CONNECT IS NOW "CONDITIONS" (step 5). The operator's scope: "Display strings only (nav label, titles,
 // manual/docs, the TV-mode setting's wording); code identifiers, settings keys and saved layouts
 // unchanged; all five languages + the pt-BR kit". And: "The nav button reads "Conditions"; its tooltip and
-// the view's title say "(formerly Connect)"". The view's title is the window's (App: `shell.windowTitle`
-// over the feature's label), so the feature's label carries the "(formerly …)".
+// the view's title say "(formerly Connect)"", there and nowhere else (2026-10-02): "Tooltip, window title,
+// CHANGELOG and release notes only. … Settings and the website just say "Conditions"." So the feature's
+// label, which Settings, the "now on" announcement, a crash message and the website's feature list read,
+// is the plain name, and the window's title has a key of its own (App: `shell.windowTitle` over
+// `features.connect.windowTitle` while Conditions is open; App.conditionsName.test.tsx mounts it).
 //
 // Read off the catalogs and the kit's CSV themselves: a key renamed, a language missed, a mention of the
 // old name left in a hint, or a kit row left on the old English all fail here.
@@ -36,6 +39,7 @@ const CHANGED = [
   'nav.connect.label',
   'nav.connect.title',
   'features.connect.label',
+  'features.connect.windowTitle',
   'settings.connectWeb.legend',
   'settings.connectWeb.label',
   'settings.connectWeb.hint',
@@ -59,10 +63,11 @@ const CHANGED = [
 
 describe('Connect reads "Conditions" in all five languages', () => {
   for (const [loc, l] of Object.entries(LOCALES)) {
-    it(`${loc}: the nav button reads ${l.name}; its tooltip and the view's title say ${l.formerly}`, () => {
+    it(`${loc}: the nav button and the feature's label read ${l.name}; its tooltip and the window's title say ${l.formerly}`, () => {
       expect(l.cat['nav.connect.label']).toBe(l.name)
+      expect(l.cat['features.connect.label']).toBe(l.name)
       expect(text(l.cat['nav.connect.title']).startsWith(l.title)).toBe(true)
-      expect(l.cat['features.connect.label']).toBe(l.title)
+      expect(l.cat['features.connect.windowTitle']).toBe(l.title)
     })
 
     it(`${loc}: no other string calls the view by its old name`, () => {
@@ -79,6 +84,11 @@ describe('Connect reads "Conditions" in all five languages', () => {
       expect(typeof l.cat['connect.layout.kept.title']).toBe('string')
     })
   }
+
+  it("the TV page's tab says it too, as the main and dashboard windows' titles do", () => {
+    const page = readFileSync(fileURLToPath(new URL('../../connect-tv.html', import.meta.url)), 'utf8')
+    expect(page).toContain(`<title>Nexus ${LOCALES.en.title}</title>`)
+  })
 
   it('POSITIVE CONTROL — the scan sees the old name in the forms it took, and passes over the verb and its kin', () => {
     for (const s of ['Open Connect in its own window', 'テレビでConnect', 'コネクトを開く', 'eine Spalte mit Connect-Bereichen'])

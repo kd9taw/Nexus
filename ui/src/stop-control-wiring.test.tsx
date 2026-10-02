@@ -740,10 +740,13 @@ const ESC_SCREENS: EscScreen[] = [
   { view: 'connect', area: 'dx', drawn: () => shown('main .connect-shell'), esc: ['halt_tx'] },
 ]
 
+/** The window's title on `view`: its label, but Conditions' title still says "(formerly Connect)". */
+const titleOn = (view: View) => `${view === 'connect' ? EN['features.connect.windowTitle'] : featureById(view)!.label} — Nexus`
+
 async function mountScreen(s: EscScreen): Promise<void> {
   everySectionOn()
   await mountOn(s.view, s.area)
-  expect(document.title, `control: ${s.view} is the screen on show`).toBe(`${featureById(s.view)!.label} — Nexus`)
+  expect(document.title, `control: ${s.view} is the screen on show`).toBe(titleOn(s.view))
   await waitFor(() => expect(s.drawn(), `control: ${s.view} drew its own content`).not.toBeNull())
   ;(document.activeElement as HTMLElement | null)?.blur()
 }
@@ -945,7 +948,7 @@ describe('Esc on every screen in the registry: the ten above send their stop, an
     // Field Day is drawn only with its master switch on.
     if (view === 'fieldDay') settingsAnswer = { ...defaultSettings, fdActive: true }
     await mountOn(view, view === 'chat' ? 'msg' : 'dx')
-    expect(document.title, `control: ${view} is the screen on show`).toBe(`${featureById(view)!.label} — Nexus`)
+    expect(document.title, `control: ${view} is the screen on show`).toBe(titleOn(view))
     ;(document.activeElement as HTMLElement | null)?.blur()
     const expected = STOP_SCREENS.find((s) => s.view === view)?.esc ?? []
     expect(await sentBy(() => pressEsc()), `${view}: what Esc sent`).toEqual(expected)

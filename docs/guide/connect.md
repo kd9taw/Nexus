@@ -1,4 +1,4 @@
-# Conditions (formerly Connect) — map + propagation
+# Conditions — map + propagation
 
 Conditions is Nexus's situational-awareness surface: one screen that fuses live
 spots (PSK Reporter and RBN/DX-cluster) with NOAA space weather, draws them on a
