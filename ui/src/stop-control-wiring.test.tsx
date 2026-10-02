@@ -779,6 +779,17 @@ describe('Phone, over the stream', () => {
     expect(await fire(click)).toEqual(['set_tune {"on":false}'])
   })
 
+  // An Esc typed in the browser over the picture comes here like any other key: the dispatcher
+  // fires it on whatever has focus in this window, so App's capture-phase Esc (useEscStop) hears it
+  // as it hears the shack's own keyboard. It is therefore this screen's Esc, sent exactly as the
+  // local Esc below sends it ('Esc on Tempo, Phone, …'): the halt Stop TX sends, then the voice
+  // keyer's stop. The station's halt_tx also ends a microphone over the stream armed
+  // (engine/remote_mic.rs, `halt_tx_and_tx_off_end_a_live_mic_over`).
+  it("a streamed Esc is the shack's Esc: the halt Stop TX sends, then the voice keyer's stop", async () => {
+    const esc = (action: 'down' | 'up') => send({ type: 'key', action, key: 'Escape', code: 'Escape', modifiers: 0, repeat: false })
+    expect(await fire(() => { esc('down'); esc('up') })).toEqual(['halt_tx', 'stop_voice'])
+  })
+
   it('the PTT button held over the stream arms the microphone over, never set_ptt, stays armed while re-asserted, and is released within 200 ms of the page going quiet; reset releases it too', async () => {
     at(document.querySelector('.ph-ptt')!)
     const m = mark()
