@@ -8521,7 +8521,7 @@ export const EN = {
     'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
   'js8.toast.idleTripped':
-    'JS8 idle watchdog: no operator activity for {{min}} min — heartbeat, autoreply and relay are off. TX stays as you left it; any send or switch re-arms them.',
+    'JS8 idle watchdog: no operator activity for {{min}} min — HB, AUTOREPLY, RELAY, HB ACK and the repeating CQ are off. TX stays as you left it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings back AUTOREPLY, RELAY and HB ACK as Settings has them; HB and the repeating CQ stay off until you switch them on.',
   // JS8Call's AutoreplyConfirmation box, its own words (mainwindow.cpp:5211-5212): Yes / No, with
   // the seconds to No on the No button, as JS8Call counts them on its default button.
   'js8.dock.confirm': 'A transmission is queued for autoreply: {{text}} — would you like to send this transmission?',
@@ -8540,7 +8540,8 @@ export const EN = {
   'js8.dock.origin.cqRepeat': 'repeating CQ',
   'js8.dock.idle': 'Idle {{min}}/{{limit}} min',
   'js8.dock.idle.off': 'Idle watchdog off',
-  'js8.dock.idle.tripped': 'Idle watchdog tripped — heartbeats, auto-reply and relay are off until you send something',
+  'js8.dock.idle.tripped':
+    'Idle watchdog tripped — your next send or switch brings back AUTOREPLY, RELAY and HB ACK; HB and the repeating CQ stay off until you switch them on',
 
   // ── JS8 ▸ the toasts ─────────────────────────────────────────────────────────────────
   'js8.toast.noCallsign': 'Set your callsign in Settings before transmitting',

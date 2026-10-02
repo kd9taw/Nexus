@@ -2825,6 +2825,200 @@ mod tests {
         }
     }
 
+    /// The five catalogs the cockpit speaks, as the UI ships them.
+    const CATALOGS: [(&str, &str); 5] = [
+        ("en", include_str!("../../../ui/src/i18n/en.ts")),
+        ("de", include_str!("../../../ui/src/i18n/de.ts")),
+        ("es", include_str!("../../../ui/src/i18n/es.ts")),
+        ("fr", include_str!("../../../ui/src/i18n/fr.ts")),
+        ("ja", include_str!("../../../ui/src/i18n/ja.ts")),
+    ];
+
+    /// The text a catalog gives `key`: the string literal after `'key':` (en.ts quotes its keys
+    /// singly, the translations doubly), each backslash escape taken as the character it escapes.
+    fn catalog_value(src: &str, key: &str) -> String {
+        let at = [format!("'{key}':"), format!("\"{key}\":")]
+            .iter()
+            .find_map(|k| src.find(k.as_str()).map(|i| i + k.len()))
+            .unwrap_or_else(|| panic!("the catalog has no {key}"));
+        let rest = src[at..].trim_start();
+        let mut chars = rest.chars();
+        let quote = chars.next().expect("a value after the key");
+        assert!(
+            quote == '\'' || quote == '"',
+            "{key}: a string literal, not {quote}"
+        );
+        let mut out = String::new();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => out.push(chars.next().expect("a character after the backslash")),
+                c if c == quote => return out,
+                c => out.push(c),
+            }
+        }
+        panic!("{key}: the string literal never closes")
+    }
+
+    /// `text`'s clauses, cut at each sentence or clause stop of the five languages.
+    fn clauses(text: &str) -> Vec<&str> {
+        text.split(['.', ';', '。', '；'])
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect()
+    }
+
+    /// The dock switches `clause` names, by their own labels (`CQ` for the repeating CQ), which
+    /// no catalog translates.
+    fn switches_named(clause: &str) -> std::collections::BTreeSet<&'static str> {
+        let words: Vec<&str> = clause
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        let mut named = std::collections::BTreeSet::new();
+        for (i, w) in words.iter().enumerate() {
+            match *w {
+                "HB" if words.get(i + 1) == Some(&"ACK") => named.insert("HB ACK"),
+                "HB" => named.insert("HB"),
+                "AUTOREPLY" => named.insert("AUTOREPLY"),
+                "RELAY" => named.insert("RELAY"),
+                "CQ" => named.insert("CQ"),
+                _ => false,
+            };
+        }
+        named
+    }
+
+    /// The idle notice and the dock's idle line say what the next act gives back, and it is what
+    /// the station does. With every automatic switch on, the watchdog trips; then one act the
+    /// notice names (a send, a switch, a speed, Read or Delete in the Inbox) ends it. Measured on
+    /// the station, which is what keys, and on the dock, which must agree: AUTOREPLY, RELAY and HB
+    /// ACK come back as Settings has them, HB and the repeating CQ stay off until their own switch
+    /// (N68's (1a)). In every catalog the notice opens with the switches the trip turned off, and
+    /// in both strings the last clause names exactly the ones still off and the clause before it
+    /// exactly the ones back. The words said "any send or switch re-arms them", the heartbeat
+    /// included, and "off until you send something".
+    #[test]
+    fn the_idle_notice_and_the_dock_line_say_what_the_next_act_gives_back() {
+        type Act = fn(&mut Engine);
+        let acts: [(&str, Act); 9] = [
+            ("AUTOREPLY on", |e| {
+                e.js8_arm(Js8Switch::Autoreply, true).unwrap()
+            }),
+            ("RELAY on", |e| e.js8_arm(Js8Switch::Relay, true).unwrap()),
+            ("HB ACK on", |e| e.js8_arm(Js8Switch::HbAck, true).unwrap()),
+            ("Read", |e| {
+                let id = e.js8_state().inbox[0].id;
+                e.js8_inbox_mark(id, InboxState::Read).unwrap()
+            }),
+            ("Delete", |e| {
+                let id = e.js8_state().inbox[0].id;
+                e.js8_inbox_delete(id).unwrap()
+            }),
+            ("speed", |e| e.js8_set_speed(2).unwrap()),
+            ("RX speeds", |e| e.js8_set_rx_speeds(0x03).unwrap()),
+            ("send", |e| e.js8_send(None, "TEST".into()).unwrap()),
+            ("command", |e| {
+                e.js8_send_command("W1AW".into(), Command::SnrQuery.id(), String::new())
+                    .unwrap()
+            }),
+        ];
+        // Each switch by the dock's label: on the station, and as the dock shows it.
+        let switches = |e: &Engine| -> [(&'static str, bool, bool); 5] {
+            let s = &e.js8_station;
+            let live = !s.idle_tripped();
+            let a = e.js8_state().armed;
+            [
+                ("AUTOREPLY", s.config().autoreply && live, a.autoreply),
+                ("RELAY", s.config().relay && live, a.relay),
+                ("HB ACK", s.config().hb_ack && live, a.hb_ack),
+                ("HB", s.hb_on(), a.hb),
+                ("CQ", s.cq_on(), a.cq),
+            ]
+        };
+        let set = |sw: &[(&'static str, bool, bool); 5], on: bool| {
+            sw.iter()
+                .filter(|(_, station, _)| *station == on)
+                .map(|(label, _, _)| *label)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let mut measured = None;
+        for (name, act) in acts {
+            let mut e = hb_engine("EN52", 10, 1500.0);
+            e.settings.js8_idle_watchdog_min = 5;
+            e.settings.js8_hb_ack = true;
+            e.settings.js8_cq_interval_min = 10;
+            e.js8_apply_station_config();
+            let msg = ::js8::proto::compose::frames(
+                "W1AW",
+                Some(&CallRef::Base("KD9TAW".to_string())),
+                "MSG HELLO",
+                Js8Speed::Normal,
+            )
+            .expect("composes");
+            for (f, i3) in msg {
+                e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+            }
+            // After the MSG: traffic to me stops a repeating CQ (somebody answered).
+            e.js8_arm(Js8Switch::Hb, true).unwrap();
+            e.js8_set_cq_repeat(true, 0).unwrap();
+            let before = switches(&e);
+            assert!(
+                before.iter().all(|&(_, station, dock)| station && dock),
+                "control: every switch is on before the trip: {before:?}"
+            );
+            let t0 = tempo_core::timing::now_unix_ms() as u64;
+            e.js8_station.mark_active(t0 - 6 * 60_000);
+            e.js8_tick(t0);
+            assert!(e.js8_state().idle_tripped, "control: the watchdog tripped");
+            let turned_off = set(&switches(&e), false);
+            act(&mut e);
+            e.js8_tick(t0 + 1_000);
+            assert!(
+                !e.js8_state().idle_tripped,
+                "{name}: control: the act ended the trip"
+            );
+            let after = switches(&e);
+            for (label, station, dock) in after {
+                assert_eq!(
+                    station, dock,
+                    "{name}: the dock shows {label} as the station has it"
+                );
+            }
+            let now = (turned_off, set(&after, true), set(&after, false));
+            match &measured {
+                None => measured = Some(now),
+                Some(first) => assert_eq!(&now, first, "{name}: the same as every other act"),
+            }
+        }
+        let (turned_off, back, still_off) = measured.expect("measured");
+        for (lang, src) in CATALOGS {
+            let notice = catalog_value(src, "js8.toast.idleTripped");
+            assert_eq!(
+                switches_named(clauses(&notice)[0]),
+                turned_off,
+                "{lang} notice: it opens with the switches the trip turned off: {notice}"
+            );
+            let line = catalog_value(src, "js8.dock.idle.tripped");
+            for (what, text) in [("notice", &notice), ("dock line", &line)] {
+                let c = clauses(text);
+                assert!(
+                    c.len() >= 2,
+                    "{lang} {what}: what comes back, then what does not: {text}"
+                );
+                assert_eq!(
+                    switches_named(c[c.len() - 2]),
+                    back,
+                    "{lang} {what}: the clause before the last names what the act gives back: {text}"
+                );
+                assert_eq!(
+                    switches_named(c[c.len() - 1]),
+                    still_off,
+                    "{lang} {what}: the last clause names what stays off until its own switch: {text}"
+                );
+            }
+        }
+    }
+
     /// A `MSG TO:` I hold for another station, on the air: stored, then answered `W1AW ACK`
     /// after the countdown, as JS8Call answers it (mainwindow.cpp:9051), one frame on my offset.
     #[test]
@@ -2921,6 +3115,72 @@ mod tests {
         assert_eq!(
             booked, expected,
             "the message held for K1ABC is offered to VE3/K1ABC on the air, once: {overs:?}"
+        );
+    }
+
+    /// A `MSG TO:` with nothing after the call, on the air: held and acknowledged, and K1ABC's
+    /// QUERY MSGS is answered `K1ABC NO`, as JS8Call answers it: its lookup skips a held message
+    /// whose text is empty (`getNextMessageIdForCallsign`, mainwindow.cpp:9516-9529). Nexus
+    /// answered `K1ABC YES MSG ID 1`, for a message with nothing to deliver.
+    #[test]
+    fn a_js8_msg_to_with_no_text_is_held_and_acked_but_not_offered_on_the_air() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let store = ::js8::proto::compose::frames(
+            "W1AW",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "MSG TO:K1ABC",
+            Js8Speed::Normal,
+        )
+        .expect("composes");
+        for (f, i3) in store {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+        }
+        let held: Vec<(String, String, InboxState)> = e
+            .js8_state()
+            .inbox
+            .into_iter()
+            .map(|m| (m.to, m.text, m.state))
+            .collect();
+        assert_eq!(
+            held,
+            [("K1ABC".to_string(), String::new(), InboxState::Store)],
+            "held for K1ABC, with no text"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        run_js8_loop_from(&mut e, t0, 60); // the store's ACK goes out
+        let ask = ::js8::proto::compose::frames(
+            "K1ABC",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "QUERY MSGS",
+            Js8Speed::Normal,
+        )
+        .expect("the query composes");
+        for (f, i3) in ask {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1210.0)], 0);
+        }
+        let overs = run_js8_loop_from(&mut e, t0 + 61_000, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        let reply = "K1ABC NO";
+        let frames = ::js8::proto::compose::frames_with_grid(
+            "KD9TAW",
+            "EN52",
+            None,
+            reply,
+            Js8Speed::Normal,
+        )
+        .expect("the reply composes")
+        .len();
+        let mut expected = vec!["KD9TAW: W1AW ACK".to_string()];
+        expected.extend(std::iter::repeat_n(format!("KD9TAW: {reply}"), frames));
+        assert_eq!(
+            booked, expected,
+            "acknowledged, then K1ABC is told NO on the air: {overs:?}"
         );
     }
 

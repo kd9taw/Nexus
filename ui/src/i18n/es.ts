@@ -1752,7 +1752,7 @@ export const ES: PartialCatalog = {
   "js8.dock.arm.differs": "Dos pasos, donde JS8Call tiene uno: este interruptor es el segundo, la píldora TX de la cabecera es el primero, y el chip marca ARMADO solo mientras ambos están activos.",
   "js8.dock.pending.txOff": "Respondería a {{to}} — TX está apagado, nada transmite: {{text}}",
   "js8.toast.idleTripped":
-    "Vigilante de inactividad JS8: {{min}} min sin actividad del operador; heartbeat, autoreply y relay están apagados. TX queda como estaba; cualquier envío o interruptor los vuelve a activar.",
+    "Vigilante de inactividad JS8: {{min}} min sin actividad del operador — HB, AUTOREPLY, RELAY, HB ACK y la repetición de CQ están apagados. TX queda como estaba. Al enviar, pulsar un interruptor, elegir la velocidad o pulsar Leído o Borrar en la bandeja de entrada, vuelven AUTOREPLY, RELAY y HB ACK tal como están en Ajustes; HB y la repetición de CQ siguen apagados hasta que los vuelvas a encender.",
   "js8.dock.confirm": "Hay una transmisión en cola para respuesta automática: {{text}} — ¿quieres enviar esta transmisión?",
   "js8.dock.confirm.yes.label": "Sí",
   "js8.dock.confirm.yes.title": "Enviarla: sale en el siguiente periodo, pasando todas las comprobaciones de TX.",
@@ -1769,7 +1769,7 @@ export const ES: PartialCatalog = {
   "js8.dock.origin.cqRepeat": "CQ repetido",
   "js8.dock.idle": "Inactivo {{min}}/{{limit}} min",
   "js8.dock.idle.off": "Vigilante de inactividad desactivado",
-  "js8.dock.idle.tripped": "Vigilante de inactividad disparado — heartbeats, respuesta automática y relay quedan desactivados hasta que envíes algo",
+  "js8.dock.idle.tripped": "Vigilante de inactividad disparado — al enviar o pulsar un interruptor vuelven AUTOREPLY, RELAY y HB ACK; HB y la repetición de CQ siguen apagados hasta que los enciendas",
   "js8.toast.noAddressee": "Un comando necesita una estación — pon un indicativo, @ALLCALL o un grupo en Para",
   "js8.toast.answer.failed": "No se pudo responder a la pregunta",
   "js8.toast.drop.failed": "No se pudo vaciar la cola",

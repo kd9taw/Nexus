@@ -695,6 +695,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under or by its base call; Nexus now does the same, in the heartbeat acknowledgement's MSG ID,
   the answer to QUERY MSGS, QUERY MSG and the count in the Stations list. A message already held
   is still found under the call it was held for.
+- **JS8: a message left with no text is held but never offered, as in JS8Call.** A MSG TO:W1AW
+  with nothing after the call was held and acknowledged, then offered to W1AW: its QUERY MSGS was
+  answered YES MSG ID 1, its heartbeat acknowledgement carried that ID, and QUERY MSG 1 delivered
+  a message with nothing in it. JS8Call holds and acknowledges such a message but passes over it
+  whenever it looks for one to offer, and Nexus now does the same: W1AW is offered the next
+  message held for it that has text, or told NO, and a QUERY MSG for the empty one draws no
+  reply. It stays in the Inbox, held.
 - **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
   When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
   put those switches back on underneath while the watchdog still stood, so a query heard then
@@ -710,6 +717,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   showed them on: a query heard afterwards waited in your message box instead of being answered,
   and a MSG TO: for another station was not held. They now come back on, as the dock shows them.
   The heartbeat and the repeating CQ stay off until you turn them on.
+- **JS8: the idle watchdog's notice and the dock's line say what comes back.** The notice said any
+  send or switch re-arms the heartbeat, auto-reply and relay, and the dock's line said they were
+  off until you send something. Now both say what happens: your next send, switch, speed choice,
+  or Read or Delete in the Inbox brings back AUTOREPLY, RELAY and HB ACK as Settings has them, and
+  HB and the repeating CQ stay off until you switch them on. In all five languages.
 - **JS8: the Auto-reply hint and tooltip say what is answered.** Settings' Auto-reply hint now
   names the ACK for a message to you or a group you joined and for a MSG TO: you hold, and says
   that on @ALLCALL only QUERY MSGS is answered; the cockpit's AUTOREPLY tooltip no longer says

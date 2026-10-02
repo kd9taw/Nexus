@@ -50,7 +50,8 @@
 //!   base call (JS8Call's `Radio::base_callsign`: VE3/W1AW and W1AW/P are held for W1AW) and is
 //!   answered `<from> ACK`, as JS8Call answers it (mainwindow.cpp:9014-9051); the next
 //!   heartbeat/query from that station, as heard or by its base call, is offered `MSG ID n`;
-//!   `QUERY MSG n` delivers it and marks it `Delivered`.
+//!   `QUERY MSG n` delivers it and marks it `Delivered`. One with no text is held and answered
+//!   but never offered or delivered, as JS8Call skips it (:9516-9529, :9223-9226).
 //! - A `MSG` to me or a joined group (never `@ALLCALL`) is filed `Unread` in my inbox, as
 //!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133), and answered as JS8Call
 //!   answers it (:9139): `<from> ACK` to the sender as heard, or `<path> ACK` back along the relay
@@ -136,6 +137,14 @@ fn on_list(list: &[String], from: &str) -> bool {
 fn held_for(e: &InboxEntry, who: &str) -> bool {
     e.state == InboxState::Store
         && (e.to.eq_ignore_ascii_case(who) || e.to.eq_ignore_ascii_case(&radio_base_callsign(who)))
+}
+
+/// Whether a held message has something to deliver. A `MSG TO:` with nothing after the call is
+/// held and acknowledged, but JS8Call never offers it: its lookup skips a held message whose
+/// TEXT is empty, trimmed (`getNextMessageIdForCallsign`, mainwindow.cpp:9516-9520, :9525-9529),
+/// and so does QUERY MSG n (:9223-9226).
+fn has_text(e: &InboxEntry) -> bool {
+    !e.text.trim().is_empty()
 }
 
 /// Truncate `s` to at most `max` bytes on a char boundary (air-sourced strings are never large;
@@ -985,15 +994,19 @@ impl Station {
         // the @ALLCALL hold-off alone.
         let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let base = split_portable(&from).0.to_string();
-        // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it,
-        // only when the query was addressed to me (mainwindow.cpp:8601, :9171). Anything else
-        // it may be draws no reply at all: JS8Call's buffered QUERY skips every miss
-        // (:9194-9233) and never answers it as a QUERY MSGS.
+        // `QUERY MSG n` delivers the stored message n (if it is for the querier and has text,
+        // :9223-9226) and marks it, only when the query was addressed to me (mainwindow.cpp:8601,
+        // :9171). Anything else it may be draws no reply at all: JS8Call's buffered QUERY skips
+        // every miss (:9194-9233) and never answers it as a QUERY MSGS.
         if m.cmd != Some(Command::QueryMsgs) {
             let Some(id) = query_msg_id(m).filter(|_| mine) else {
                 return;
             };
-            if let Some(e) = self.inbox.iter().find(|e| e.id == id && held_for(e, &from)) {
+            if let Some(e) = self
+                .inbox
+                .iter()
+                .find(|e| e.id == id && held_for(e, &from) && has_text(e))
+            {
                 let deliver = format!("{from} MSG {} FROM {}", e.text, e.from);
                 // Marked Delivered as the reply is released, not here: JS8Call marks it in the
                 // reply's callback (mainwindow.cpp:9227-9235), so a No leaves it held. A delivery
@@ -1076,12 +1089,14 @@ impl Station {
     /// The message held for `who` (the station as heard) that is offered first, as JS8Call's
     /// `getNextMessageIdForCallsign` finds it (mainwindow.cpp:9508-9533): one held under the
     /// call as heard, else one held under its base call (`Radio::base_callsign`), the oldest
-    /// first in each.
+    /// first in each, skipping any with no text (:9516-9520, :9525-9529).
     fn stored_for(&self, who: &str) -> Option<u32> {
         let held_under = |call: &str| {
             self.inbox
                 .iter()
-                .find(|e| e.state == InboxState::Store && e.to.eq_ignore_ascii_case(call))
+                .find(|e| {
+                    e.state == InboxState::Store && e.to.eq_ignore_ascii_case(call) && has_text(e)
+                })
                 .map(|e| e.id)
         };
         held_under(who).or_else(|| held_under(&radio_base_callsign(who)))
@@ -4371,6 +4386,129 @@ mod tests {
                 "K1ABC NO".to_string(),
             ],
             "held for VE3/K1ABC/P: found under the call as heard, K1ABC/P"
+        );
+    }
+
+    /// A `MSG TO:` with nothing after the call is held and acknowledged, as JS8Call holds it (its
+    /// store keeps no TEXT, `addCommandToStorage`, mainwindow.cpp:9499-9501; the ACK, :9051), and
+    /// never offered: JS8Call's lookup skips a held message whose text is empty
+    /// (`getNextMessageIdForCallsign`, :9516-9520), so the heartbeat's acknowledgement carries no
+    /// MSG ID and QUERY MSGS is answered NO, and a QUERY MSG n for it draws no reply at all
+    /// (:9223-9226). Nexus offered it, `K1ABC YES MSG ID 1`, and delivered it with nothing in it.
+    #[test]
+    fn a_msg_to_with_no_text_is_held_and_acked_but_never_offered_as_js8call_does() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, "K1ABC", -5),
+            0,
+        );
+        let held: Vec<(&str, &str, InboxState)> = s
+            .inbox()
+            .iter()
+            .map(|e| (e.to.as_str(), e.text.as_str(), e.state))
+            .collect();
+        assert_eq!(
+            held,
+            [("K1ABC", "", InboxState::Store)],
+            "held for K1ABC, with no text"
+        );
+        assert_eq!(
+            waiting(&s),
+            ["W1AW ACK"],
+            "acknowledged, as JS8Call acknowledges it"
+        );
+        s.pending.clear();
+        s.queued.clear();
+        s.outbox.clear();
+        let id = s.inbox()[0].id;
+        s.on_event(&heartbeat("K1ABC", -5), 1_000);
+        s.on_event(
+            &directed("K1ABC", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+            1_000,
+        );
+        s.on_event(
+            &directed(
+                "K1ABC",
+                "KD9TAW",
+                Some(Command::Query),
+                None,
+                &format!("MSG {id}"),
+                -5,
+            ),
+            2_000,
+        );
+        assert_eq!(
+            waiting(&s),
+            ["K1ABC HEARTBEAT SNR -05", "K1ABC NO"],
+            "never offered: no MSG ID, NO to QUERY MSGS, and nothing for QUERY MSG {id}"
+        );
+    }
+
+    /// …and skipped, not a stop: JS8Call's lookup goes on to the next message held for the
+    /// station (mainwindow.cpp:9516-9520), and on to its base call when each one held under the
+    /// call as heard is empty (:9525-9529). With empty ones held for K1ABC and for K1ABC/P, then
+    /// FRIDAY CONTACT for K1ABC, K1ABC is offered FRIDAY CONTACT, and so is K1ABC/P, under its base
+    /// call; neither empty one is delivered (:9223-9226).
+    #[test]
+    fn a_held_message_with_no_text_is_skipped_for_the_next_one_as_js8call_skips_it() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        for target in ["K1ABC", "VE3/K1ABC/P"] {
+            s.on_event(
+                &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, target, -5),
+                0,
+            );
+        }
+        s.pending.clear();
+        s.queued.clear();
+        s.outbox.clear(); // their ACKs, the test above's own
+        store_for(&mut s, "K1ABC", 0);
+        let held: Vec<(&str, &str)> = s
+            .inbox()
+            .iter()
+            .map(|e| (e.to.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            held,
+            [("K1ABC", ""), ("K1ABC/P", ""), ("K1ABC", "FRIDAY CONTACT")],
+            "control: the empty ones are held first"
+        );
+        let ids: Vec<u32> = s.inbox().iter().map(|e| e.id).collect();
+        let (empty, empty_p, friday) = (ids[0], ids[1], ids[2]);
+        s.on_event(&heartbeat("K1ABC", -5), 1_000);
+        for who in ["K1ABC", "K1ABC/P"] {
+            s.on_event(
+                &directed(who, "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+                1_000,
+            );
+        }
+        for (who, id) in [("K1ABC", empty), ("K1ABC/P", empty_p), ("K1ABC", friday)] {
+            s.on_event(
+                &directed(
+                    who,
+                    "KD9TAW",
+                    Some(Command::Query),
+                    None,
+                    &format!("MSG {id}"),
+                    -5,
+                ),
+                2_000,
+            );
+        }
+        assert_eq!(
+            waiting(&s),
+            [
+                format!("K1ABC HEARTBEAT SNR -05 MSG ID {friday}"),
+                format!("K1ABC YES MSG ID {friday}"),
+                format!("K1ABC/P YES MSG ID {friday}"),
+                "K1ABC MSG FRIDAY CONTACT FROM W1AW".to_string(),
+            ],
+            "FRIDAY CONTACT offered past the empty ones, as heard and by base; neither empty one delivered"
         );
     }
 
