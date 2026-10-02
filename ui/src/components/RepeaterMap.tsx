@@ -93,6 +93,33 @@ export function programProjection(
   return makeProjection('aeqd', center, w, h, { zoom, rotate: null, panX: 0, panY: 0 })
 }
 
+/** How far a site's machines stand from it on the screen, px at marker scale 1. */
+export const SITE_SPREAD_PX = 6
+
+/** Machines on one site (a 2 m and a 70 cm machine on one tower, the commonest case) project to
+ *  one point, where they would stack into one dot that only one of them could answer. So each
+ *  site's machines are spread on a ring of `spread` px around it, in list order from the top,
+ *  each still a dot, a hover and a click of its own. */
+export function spreadSites<P extends { x: number; y: number }>(placed: P[], spread: number): P[] {
+  const out = placed.slice()
+  const done = new Set<number>()
+  for (let i = 0; i < out.length; i++) {
+    if (done.has(i)) continue
+    const site = [i]
+    for (let j = i + 1; j < out.length; j++) {
+      if (!done.has(j) && Math.hypot(out[j].x - out[i].x, out[j].y - out[i].y) < 1) site.push(j)
+    }
+    if (site.length < 2) continue
+    const { x, y } = out[i]
+    site.forEach((k, n) => {
+      done.add(k)
+      const a = (2 * Math.PI * n) / site.length - Math.PI / 2
+      out[k] = { ...out[k], x: x + spread * Math.cos(a), y: y + spread * Math.sin(a) }
+    })
+  }
+  return out
+}
+
 const cssVar = (name: string, fallback: string): string =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
 
@@ -148,8 +175,8 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
       const p = project(proj, { lat: m.lat, lon: m.lon })
       if (p) out.push({ m, x: p[0], y: p[1] })
     }
-    return out
-  }, [proj, markers])
+    return spreadSites(out, SITE_SPREAD_PX * markerScaleFor(size.w, size.h))
+  }, [proj, markers, size.w, size.h])
 
   useEffect(() => {
     const canvas = canvasRef.current

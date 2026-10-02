@@ -25,6 +25,8 @@ vi.mock('../api', async (importOriginal) => ({
 }))
 
 import { RadioProgView } from './RadioProgView'
+import { SITE_SPREAD_PX } from './RepeaterMap'
+import { markerScaleFor } from './MapView'
 
 const NOW = Math.floor(Date.now() / 1000)
 const HOME = gridToLatLon('EN52')!
@@ -209,6 +211,24 @@ describe("Program's map: hearham's listings only", () => {
     await waitFor(() => expect(chanRows()).toBe(1))
     fireEvent.click(canvas, { clientX: W / 2, clientY: H / 2 })
     await waitFor(() => expect(chanRows()).toBe(0))
+  })
+
+  it('spreads the machines on one site, so each is a click of its own', async () => {
+    // A second machine on W9AAA's tower, at the station's grid: the map's centre.
+    const twin = machine('W9DDD', 443.5, ['hearham'], 'Rockford', {
+      lat: HOME.lat, lon: HOME.lon, callsign: 'W9DDD', outputMhz: 443.5, city: 'Rockford',
+    })
+    await fetched(result([HH, twin], ['hearham']))
+    fireEvent.click(mapChip())
+    const canvas = screen.getByRole('img', { name: t('program.map.aria', { count: 2 }) })
+    const chanRows = () => document.querySelectorAll('.rp-chan-row').length
+    const d = SITE_SPREAD_PX * markerScaleFor(W, H)
+    // The first stands above the site and the second below it; stacked, both clicks would reach
+    // the first, adding it and taking it off again.
+    fireEvent.click(canvas, { clientX: W / 2, clientY: H / 2 - d })
+    await waitFor(() => expect(chanRows()).toBe(1))
+    fireEvent.click(canvas, { clientX: W / 2, clientY: H / 2 + d })
+    await waitFor(() => expect(chanRows()).toBe(2))
   })
 
   it('gives way to the list’s own words when nothing is shown', async () => {
