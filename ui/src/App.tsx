@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StationDataContext, useStationCapability } from './stationAccess'
+import { StationDataContext, useStationCapability, useStationStopControl } from './stationAccess'
 import { publishBandConditions } from './bandConditions'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
@@ -260,6 +260,11 @@ const OPERATE_TIERS: Tier[] = [
   'JT65',
   'WSPR',
 ]
+
+/** The screens whose Esc App binds to the top bar's halt while one is on show (see the listener in
+ *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
+ *  on every section in the registry and holds each to what it sends. */
+const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats'])
 
 export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; /** The stale DISPLAY, after hysteresis; defaults to `stale`. */ staleShown?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
@@ -2636,6 +2641,28 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
     prevTxRef.current = txNow
   }, [snap, txNow, settings?.soundTxState])
+
+  // ESC STOPS TRANSMIT ON TEMPO, PHONE, SSTV, APRS AND SATELLITES (N71, 2026-10-01). FT, CW, RTTY,
+  // PSK and JS8 each bind their own Esc while shown, to the function their Stop TX calls. These five
+  // bound none: Esc did nothing on Tempo, SSTV and APRS, stopped only the voice keyer on Phone, and
+  // Satellites had no stop at all. On all five the stop is halt_tx — Tempo's Stop TX is the top
+  // bar's, which is this handleHaltTx; Phone's and SSTV's header Stop TX call haltTx alone; APRS and
+  // Satellites draw no stop control (the top bar's is hidden there) — so one listener here sends
+  // that halt while one of them is on show. CAPTURE phase, so nothing on the screen can swallow the
+  // key; never preventDefault, so every other meaning of Esc still happens on the same press: a menu
+  // or dialog still closes (Radix dismisses only an Esc nobody has prevented), Satellites still
+  // closes the bird detail, the voice keyer still stops itself. Bound only with STOP AUTHORITY, the
+  // one every Stop TX button follows (useStationStopControl: always on the desktop; in a browser,
+  // the station's stop token): an observer's Esc is no halt at all, as the cockpits' own Esc is not.
+  const stopAllowed = useStationStopControl()
+  useEffect(() => {
+    if (!stopAllowed || !ESC_HALT_VIEWS.has(effectiveView)) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleHaltTx()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [effectiveView, handleHaltTx, stopAllowed])
 
   if (!snap) {
     return (

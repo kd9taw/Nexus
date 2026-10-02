@@ -40,7 +40,9 @@ import { controlTransport } from './control-transport'
 import type { ApplicationClient } from './application-client'
 import type { OperationState } from './operation-protocol'
 import settings from '../components/__fixtures__/defaultSettings.json'
-import type { AppSnapshot } from '../types'
+import type { AppSnapshot, Settings } from '../types'
+import App from '../App'
+import { allFeatureIds, featureById, type View } from '../features/registry'
 
 vi.mock('../components/PhoneScope', () => ({ PhoneScope: () => <div/> }))
 vi.mock('../components/BandStrip', () => ({ BandStrip: () => <div/> }))
@@ -49,7 +51,9 @@ vi.mock('../components/SpotDialog', () => ({ SpotDialog: () => null }))
 vi.mock('../components/Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap"/> }))
 vi.mock('../components/VoiceKeyer', () => ({ VoiceKeyer: () => <div/> }))
 vi.mock('./useJs8Context', () => ({ useJs8Context: () => ({ remote: true, value: null, loading: false, refresh: () => {} }) }))
-vi.mock('../toast', () => ({
+// The rest of the module is the real one: the hosted App below subscribes to its popups.
+vi.mock('../toast', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (run: () => Promise<unknown>) => { try { return await run() } catch { return null } }),
 }))
@@ -90,7 +94,7 @@ afterEach(() => { cleanup(); uninstall?.(); uninstall = undefined; clients.splic
 type Authority = 'control' | 'noControl' | 'loggingOnly'
 /** A browser session wired exactly as BrowserApplication wires it: a real operation client behind the
  * real hosted control transport, installed under the application API the cockpits call. */
-function session(authority: Authority, capabilities: string[] = []) {
+function session(authority: Authority, capabilities: string[] = [], answer?: (command: string) => unknown) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const wire: any[] = []
   const values = new Map<string, string>()
@@ -107,7 +111,7 @@ function session(authority: Authority, capabilities: string[] = []) {
   client.open()
   client.receive({ type: 'operationResponse', requestId: wire[wire.length - 1].requestId, value: state })
   const reads = { kind: 'remote' as const, invoke: async <T,>(command: string): Promise<T> => {
-    const value = command === 'get_snapshot' ? snap : command.includes('settings') ? settings
+    const value = answer ? answer(command) : command === 'get_snapshot' ? snap : command.includes('settings') ? settings
       : /licensed_band_plan|band_plan|get_log|unproven|voice_messages|memories/.test(command) ? []
       : command.includes('rtty') ? rtty : command.includes('psk') ? psk : command.includes('js8') ? js8
       : command.includes('sstv') ? sstv : command.startsWith('cw') || command.includes('_cw') ? cw : {}
@@ -197,6 +201,99 @@ it.each(['noControl', 'loggingOnly'] as const)('a browser %s gets the existing r
     expect(h.stops()).toHaveLength(0)
     cleanup(); uninstall?.(); uninstall = undefined
   }
+})
+
+// ── Esc on the hosted page ──────────────────────────────────────────────────────────────────────
+// The hosted page is App. While Tempo, Phone, SSTV, APRS or Satellites is on show, App binds Esc to
+// the shell's halt: the api haltTx that the cockpits' Stop TX uses above. So a browser holding
+// control sends exactly one stopTransmit for an Esc on each of those screens, and a browser without
+// control sends none. Operate's own Esc is the reference; it reaches the same halt through App.
+const ESC_RAIL: Array<[view: string, rail: string]> = [['chat', 'Tempo'], ['phone', 'Phone'], ['sstv', 'SSTV'], ['aprs', 'APRS'], ['sats', 'Satellites']]
+/** What the hosted App reads, served as stale-actionability.test.tsx serves it: the snapshot and the
+ * settings, and every other read failing as an unsupported one does, which the screens catch. */
+const digital = { ...snap, radio: { ...snap.radio, operatingMode: 'digital' } } as AppSnapshot
+function hostedAnswer(command: string): unknown {
+  if (command === 'get_snapshot') return digital
+  if (command.includes('settings')) return settings
+  if (command.includes('band_plan')) return []
+  if (command.startsWith('get_')) throw new Error('applicationUnsupported')
+  return undefined
+}
+function hosted(client: OperationClient) {
+  localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: Object.fromEntries(allFeatureIds().map(id => [id, true])) }))
+  return render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={client}>
+      <App remote={{ snapshot: digital, settings: settings as unknown as Settings, bandPlan: [], stale: false, status: <div/>, cwPhone: true, stationModes: true, navigation: true }}/>
+    </RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+}
+/** Go to `view` by its rail button, as the operator does, and check it is the screen on show. */
+async function railTo(view: string, rail: string) {
+  const button = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav button')].find(b => b.querySelector('.mode-label')?.textContent === rail)
+  expect(button, `no rail button for ${rail}`).toBeDefined()
+  fireEvent.click(button!)
+  await settle()
+  expect(document.title, `control: ${view} is the screen on show`).toBe(`${featureById(view as View)!.label} — Nexus`)
+}
+function escOn() {
+  const on = document.activeElement ?? document.body
+  fireEvent.keyDown(on, { key: 'Escape', code: 'Escape' })
+  fireEvent.keyUp(on, { key: 'Escape', code: 'Escape' })
+}
+
+// A fresh session per screen: the operation client refuses a second stop while the first is unanswered
+// ('remoteBusy'), and nothing answers here.
+it.each([['operate (the reference)', 'operate', 'FT'], ...ESC_RAIL.map(([view, rail]) => [view, view, rail])] as Array<[string, string, string]>)(
+  'the hosted page, %s: Esc sends exactly one stopTransmit and no station command', async (_name, view, rail) => {
+    const h = session('control', [], hostedAnswer)
+    hosted(h.client)
+    await settle()
+    expect(document.title, 'control: the hosted page opens on Operate').toBe(`${featureById('operate')!.label} — Nexus`)
+    if (view !== 'operate') await railTo(view, rail)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(h.stops()).toHaveLength(0)
+    escOn()
+    await settle()
+    expect(h.stops(), `${view}: one Esc, one stopTransmit`).toHaveLength(1)
+    expect(h.stops()[0]).toMatchObject({ stationBootId: h.state.stationBootId, leaseId: h.state.leaseId, transmitEpoch: '000000000000002a' })
+    expect(h.commands(), 'an Esc sent an ordinary station command').toHaveLength(0)
+  })
+
+it('the hosted page: a browser without control sends nothing for Esc on any of those screens', async () => {
+  const h = session('noControl', [], hostedAnswer)
+  hosted(h.client)
+  await settle()
+  for (const [view, rail] of [['operate', 'FT'], ...ESC_RAIL] as Array<[string, string]>) {
+    if (view !== 'operate') await railTo(view, rail)
+    escOn()
+    await settle()
+  }
+  expect(h.stops()).toHaveLength(0)
+  expect(h.commands()).toHaveLength(0)
+})
+
+// Stop authority is what every Stop TX button follows (useStationStopControl), and App's Esc follows
+// it too: an observer's Esc is not a refused halt, it is no halt at all, so it never reaches the
+// transport and never toasts a refusal. Recorded at the transport, as BrowserApplication.test.tsx's
+// observer cockpits are, so a refused attempt would show here even though nothing left the browser.
+it('the hosted page: an observer’s Esc on those screens does not even attempt a halt', async () => {
+  const attempted: string[] = []
+  uninstall = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string): Promise<T> => {
+    attempted.push(command)
+    return hostedAnswer(command) as T
+  } })
+  localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: Object.fromEntries(allFeatureIds().map(id => [id, true])) }))
+  render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <App remote={{ snapshot: digital, settings: settings as unknown as Settings, bandPlan: [], stale: false, status: <div/>, cwPhone: true, stationModes: true, navigation: true }}/>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+  await settle()
+  for (const [view, rail] of ESC_RAIL) {
+    await railTo(view, rail)
+    escOn()
+    await settle()
+  }
+  expect(attempted.length, 'control: the transport recorded the page’s reads').toBeGreaterThan(0)
+  expect(attempted.filter(c => c === 'halt_tx')).toEqual([])
 })
 
 it('every cockpit vocabulary has a Remote stop case, or is declared elsewhere', () => {
