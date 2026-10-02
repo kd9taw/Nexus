@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, PskState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -565,9 +566,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
-          txActiveLabel="▲ PSK"
-          onStopTx={stop}
-          onSetTxEnabled={control ? onSetTxEnabled : undefined}
           power={{
             value: control ? power : dataAvailable && snap.radio.rfPower != null ? Math.round(snap.radio.rfPower * 100) : null,
             unit: '%',
@@ -585,19 +583,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               powerDrag.current = false
             },
           }}
-          // TUNE — a steady carrier, which in PSK is how you set the drive above: key it,
-          // wind the power up until ALC just starts to move, back off. It is also a stop
-          // control (it stops the carrier it started), so it is on this cockpit's stop-line
-          // census and its sweep. The engine's MAX_TUNE_MS ceiling bounds it either way.
-          onTune={(on) => { if (control) void setTune(on).then((s) => onSnap?.(s)) }}
-          // The RIG's own ATU. Beside Tune because it keys the transmitter too — and the
-          // header renders it only when the rig actually reports a tuner. A refusal (TX off,
-          // outside privileges, no tuner) comes back as the backend's reason, not silence.
-          onAtuTune={() =>
-            control && void atuTune()
-              .then((s) => onSnap?.(s))
-              .catch((e) => pushToast(String(e), 'error'))
-          }
           modeIndicator={
             <>
               {/* The sub-mode NAME and its one-line hint come from `pskModes.ts` and move
@@ -738,6 +723,29 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           label={t('psk.waterfall.splitter.label')}
         />
         </>
+      )}
+
+      {/* THE TX STRIP — FT's cluster under the waterfall (operator batch 60): the TX-enable
+          latch, Tune, the rig's ATU and Stop TX, sticky so they never leave the window. A shell
+          child with no ⊞ id, so hiding the waterfall leaves it directly under the header.
+          TUNE — a steady carrier, which in PSK is how you set the drive in the header: key it,
+          wind the power up until ALC just starts to move, back off. It is also a stop control
+          (it stops the carrier it started), so it is on this cockpit's stop-line census and its
+          sweep; the engine's MAX_TUNE_MS ceiling bounds it either way. The rig's ATU renders
+          only when the rig reports a tuner, and a refusal comes back as the backend's reason. */}
+      {snap && (
+        <CockpitTxStrip
+          radio={snap.radio}
+          onSnap={onSnap}
+          onStopTx={stop}
+          onSetTxEnabled={control ? onSetTxEnabled : undefined}
+          onTune={(on) => { if (control) void setTune(on).then((s) => onSnap?.(s)) }}
+          onAtuTune={() =>
+            control && void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+        />
       )}
 
       {psk?.keyerError && (
@@ -937,7 +945,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       {/* TX DOCK — the macros (each a one-click transmit), the continuous-TX latch, Stop
           and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
           reach. None of these has an id in the PSK panel vocabulary — for the Esc/Stop
-          macro and the header's Stop TX / TX-arm that is THE STOP LINE (they render
+          macro and the TX strip's Stop TX / TX-arm that is THE STOP LINE (they render
           outside every ⊞-removable pane; the sweep in stop-line.test.tsx drives it); for
           the macros and the compose bar it is this cockpit's own choice.
 
@@ -1032,7 +1040,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       </div>
 
       {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so it
-          moves and covers no control in the dock; non-modal, so Stop TX in the header stays one
+          moves and covers no control in the dock; non-modal, so Stop TX in the TX strip stays one
           click away. Esc is decided by the cockpit's keyboard handler above, never here. */}
       {control && editing && (
         <PskMacroEditor

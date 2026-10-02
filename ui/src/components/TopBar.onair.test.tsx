@@ -13,8 +13,8 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { TopBar } from './TopBar'
-import { CockpitHeader } from './CockpitHeader'
-import type { AppSnapshot, RadioStatus } from '../types'
+import { CockpitTxStrip } from './CockpitTxStrip'
+import type { RadioStatus } from '../types'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -69,12 +69,14 @@ function plate(over: Partial<RadioStatus>): Element {
   return el!
 }
 
-/** The cockpit header's sign as Phone and CW render it: no TX-enable latch, so the passive pill. */
+/** The cockpit's ON AIR sign as Phone and CW render it — the TX strip's caption since operator
+ *  batch 60 (it was the header's passive pill, which moved into the strip with the latch).
+ *  `tx` on the caption is the strip's ON AIR state; the helper answers in the old pill's terms. */
 function headerSign(over: Partial<RadioStatus>): Element {
-  const snap = { radio: radio(over) } as unknown as AppSnapshot
-  const { container } = render(<CockpitHeader snap={snap} modeIndicator={<span>SSB</span>} bandControl={<span>—</span>} />)
-  const el = container.querySelector('.cockpit-txstate')
-  expect(el, 'the header sign did not render').not.toBeNull()
+  const { container } = render(<CockpitTxStrip radio={radio(over)} onStopTx={() => {}} />)
+  const el = container.querySelector('.cq-statecap')
+  expect(el, 'the strip sign did not render').not.toBeNull()
+  if (el!.classList.contains('tx')) el!.classList.add('on')
   return el!
 }
 

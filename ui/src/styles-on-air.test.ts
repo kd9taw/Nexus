@@ -38,7 +38,7 @@ import { render, cleanup } from '@testing-library/react'
 import { createElement } from 'react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { CockpitHeader } from './components/CockpitHeader'
+import { CockpitTxStrip } from './components/CockpitTxStrip'
 import { OperateQsoStrip } from './components/OperateQsoStrip'
 import { TopBar } from './components/TopBar'
 import {
@@ -58,7 +58,7 @@ import {
   type Rgb,
   type Rule,
 } from './cssCascade'
-import type { AppSnapshot, QsoStatus, RadioStatus } from './types'
+import type { QsoStatus, RadioStatus } from './types'
 
 vi.mock('./api', () => ({
   appVersion: vi.fn(() => Promise.resolve('0.0.0')),
@@ -103,12 +103,11 @@ const RADIO = {
 /** The radio, keyed or not. REQUIRED, never defaulted: the keyed state is what is under test. */
 const radioKeyed = (keyed: boolean) => ({ ...RADIO, transmitting: keyed }) as unknown as RadioStatus
 
-function headerPill(keyed: boolean): Element {
-  const snap = { radio: radioKeyed(keyed) } as unknown as AppSnapshot
-  const { container } = render(
-    createElement(CockpitHeader, { snap, modeIndicator: 'FT8', bandControl: '—' }),
-  )
-  return container.querySelector('.cockpit-txstate')!
+/** The TX strip's state caption — the ON AIR sign of every screen but FT's since operator
+ *  batch 60 (it was the cockpit header's TX pill, which moved into the strip with the latch). */
+function txStripCaption(keyed: boolean): Element {
+  const { container } = render(createElement(CockpitTxStrip, { radio: radioKeyed(keyed), onStopTx: () => {} }))
+  return container.querySelector('.cq-statecap')!
 }
 
 function operateCaption(keyed: boolean): Element {
@@ -182,7 +181,7 @@ const capture = (make: (keyed: boolean) => Element) => {
 }
 
 const SIGNS: Sign[] = [
-  { name: 'the cockpit header pill', chain: capture(headerPill), quietWhenIdle: true },
+  { name: "the TX strip's caption", chain: capture(txStripCaption), quietWhenIdle: true },
   { name: "Operate's strip caption", chain: capture(operateCaption), quietWhenIdle: true },
   { name: "the TopBar's TX plate", chain: capture(topBarPlate), quietWhenIdle: false },
 ]
@@ -408,7 +407,7 @@ describe('ON AIR is steady, and keying repaints without moving anything', () => 
   it.each(SIGNS.map((s) => [s.name, s] as const))('%s keeps one box through the key-down', (_n, s) => {
     // Padding and border width are what a state change can use to move its neighbours. The
     // keyed and unkeyed states must win the SAME values, so keying repaints and never re-lays
-    // out the row it sits in (Stop TX sits beside the header pill).
+    // out the row it sits in (Stop TX sits just before the TX strip's caption).
     const keyed = s.chain(true)
     const idle = s.chain(false)
     for (const mode of MODES) {
@@ -452,7 +451,10 @@ describe('the measurement covers every rule that could reach these signs', () =>
       (r) =>
         r.decls.some((d) => WATCHED.test(d.prop)) &&
         (names(subject(r.selector), keyed[keyed.length - 1]) || names(subject(r.selector), idle[idle.length - 1])) &&
-        !MODES.some((m) => reachesChain(r.selector, keyed, m) || reachesChain(r.selector, idle, m)),
+        // Placed by ANY rendered sign: Operate's caption and the TX strip's share `.cq-statecap`,
+        // so `.cockpit-qso.tx .cq-statecap` names the strip's caption too — and is measured on
+        // Operate's, the only host it can reach. A rule no rendered sign reaches is still flagged.
+        !MODES.some((m) => SIGNS.some((o) => reachesChain(r.selector, o.chain(true), m) || reachesChain(r.selector, o.chain(false), m))),
     ).map((r) => r.selector)
     expect(unplaced, `rules this guard cannot place:\n${unplaced.join('\n')}`).toEqual([])
   })

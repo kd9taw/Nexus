@@ -2646,7 +2646,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // PSK and JS8 each bind their own Esc while shown, to the function their Stop TX calls. These five
   // bound none: Esc did nothing on Tempo, SSTV and APRS, stopped only the voice keyer on Phone, and
   // Satellites had no stop at all. On all five the stop is halt_tx — Tempo's Stop TX is the top
-  // bar's, which is this handleHaltTx; Phone's and SSTV's header Stop TX call haltTx alone; APRS and
+  // bar's, which is this handleHaltTx; Phone's and SSTV's TX-strip Stop TX call haltTx alone; APRS and
   // Satellites draw no stop control (the top bar's is hidden there) — so one listener here sends
   // that halt while one of them is on show. CAPTURE phase, so nothing on the screen can swallow the
   // key; never preventDefault, so every other meaning of Esc still happens on the same press: a menu

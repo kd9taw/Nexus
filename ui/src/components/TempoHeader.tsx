@@ -1,6 +1,6 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The tier NAMES
-// (TempoFast / TempoDeep, and their Fast / Deep slots) are the modes' own and stay here; the
-// ▲ TX indicator is the transmit-state token. Everything else is prose in the catalog.
+// (TempoFast / TempoDeep, and their Fast / Deep slots) are the modes' own and stay here.
+// Everything else is prose in the catalog; the transmit controls' words are CockpitTxStrip's.
 import { useState } from 'react'
 import { t, type MessageKey } from '../i18n'
 import { useStationCapability, useStationControl, useStationTierControl } from '../stationAccess'
@@ -136,7 +136,6 @@ export function TempoHeader({
         label: t('tempo.header.power.label'),
         title: t('tempo.header.power.title'),
       }}
-      txActiveLabel="▲ TX"
     >
       {/* CQ RUN — the persistent keep-calling control (the one-shot Call CQ button's
           dead-end fix): reachable from the header in every chat view, with the run

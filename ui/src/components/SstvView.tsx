@@ -16,6 +16,7 @@ import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { FrequencyControl } from './FrequencyControl'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -1685,14 +1686,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
-          onSetTxEnabled={onSetTxEnabled}
-          // THE CORE RADIO CONTROLS. SSTV shipped with only the TX-enable latch, so an
-          // operator had no drive control, no Tune to set it against, and no Stop TX in the
-          // place every other cockpit puts one (operator, 2026-08-04). Drive matters more
-          // here than anywhere: SSTV carries the picture in the AUDIO, so overdriving past
-          // ALC does not just splatter, it visibly wrecks the image at the far end.
-          // The view's own pinned Stop stays — it is the TX-locked one the stop-line census
-          // pins (stop-line.test.tsx) — this adds the familiar header one beside it.
+          // DRIVE. SSTV shipped with only the TX-enable latch, so an operator had no drive
+          // control, no Tune to set it against, and no Stop TX in the place every other
+          // cockpit puts one (operator, 2026-08-04). Drive matters more here than anywhere:
+          // SSTV carries the picture in the AUDIO, so overdriving past ALC does not just
+          // splatter, it visibly wrecks the image at the far end. The latch, Tune, the ATU
+          // and Stop TX are in the TX strip under the stage.
           power={{
             value: txPower,
             unit: '%',
@@ -1707,13 +1706,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             label: t('sstv.header.power.label'),
             title: t('sstv.header.power.title'),
           }}
-          onTune={(on) => { if(canControl) void setTune(on).then((st) => onSnap?.(st)) }}
-          onAtuTune={() =>
-            canControl && void atuTune()
-              .then((st) => onSnap?.(st))
-              .catch((e) => pushToast(String(e), 'error'))
-          }
-          onStopTx={() => { if(canControl) void haltTx() }}
           modeIndicator={
             <span className="cw-mode-badge" title={t('sstv.header.mode.title')}>
               {modeBadge}
@@ -1969,6 +1961,26 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         label={t('sstv.stage.splitter.label')}
       />
       </>
+      )}
+
+      {/* THE TX STRIP — FT's cluster under the RX stage (operator batch 60): the TX-enable
+          latch (a STOP here: set_tx_enabled(false) arms sstv_abort), Tune, the rig's ATU and
+          Stop TX, sticky so they never leave the window. A shell child with no ⊞ id. The view's
+          own pinned Stop in `.sstv-tx-bar` stays — it is the TX-locked one the stop-line census
+          pins (stop-line.test.tsx) — and this is the familiar Stop TX every screen has. */}
+      {snap && (
+        <CockpitTxStrip
+          radio={snap.radio}
+          onSnap={onSnap}
+          onSetTxEnabled={onSetTxEnabled}
+          onTune={(on) => { if(canControl) void setTune(on).then((st) => onSnap?.(st)) }}
+          onAtuTune={() =>
+            canControl && void atuTune()
+              .then((st) => onSnap?.(st))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onStopTx={() => { if(canControl) void haltTx() }}
+        />
       )}
 
       {/* THE LOWER PANES — CockpitPaneFrame with ROLES, and deliberately NO

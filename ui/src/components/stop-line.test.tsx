@@ -31,8 +31,9 @@
 // whether the control you added belongs on the list at all.
 //
 // EACH COCKPIT IS RENDERED WITH THE PROPS APP GIVES IT, and that is load-bearing rather than
-// tidiness: CockpitHeader draws the TX-enable latch (▼ TX On / ■ TX Off) only when it is
-// handed `onSetTxEnabled`, which App passes to RTTY, PSK, SSTV and JS8 — in JS8 the latch is
+// tidiness: the TX strip (CockpitTxStrip) draws the TX-enable latch as a button (TX On / TX Off)
+// only when it is handed `onSetTxEnabled`, which App passes to RTTY, PSK, SSTV and JS8 — in JS8
+// the latch is
 // NOT a stop (slotted mode), so the JS8 case passes the prop for parity with App and lists
 // Stop TX + Tune only. RTTY and SSTV have no other Enable-Tx affordance, the TopBar's being
 // hidden with the digital chrome. The first version of this file omitted the prop, so for
@@ -495,8 +496,9 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
     ),
 }
 
-/** The TX-enable latch as CockpitHeader labels it. `radio.txEnabled` is true and
- *  `transmitting` false in this fixture, so it reads "▼ TX On"; the disarmed face is matched
+/** The TX-enable latch as the TX strip labels it — FT's words since operator batch 60 (it was
+ *  "▼ TX On" / "■ TX Off" in the cockpit header). `radio.txEnabled` is true and `transmitting`
+ *  false in this fixture, so it reads "TX On"; the disarmed face is matched
  *  too, so a fixture flip cannot make the sweep silently stop finding the control.
  *
  *  IT IS A STOP CONTROL IN THESE TWO COCKPITS AND NOWHERE ELSE, which is why it appears only
@@ -505,10 +507,10 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
  *  either into flush + rig.ptt(false) while an over is in flight. It deliberately does NOT arm
  *  `slot_tx_abort`, so in Operate the same handler lets the FT over complete — that is the
  *  operator's 2026-07-31 ruling, and it is why Operate's TX On/Off is NOT on any stop list.
- *  CockpitHeader draws the latch as a BUTTON only while `radio.transmitting` is false; that
+ *  The strip draws the latch as a BUTTON only while `radio.transmitting` is false; that
  *  flag is the slot-TX indicator alone (RTTY/SSTV report through rtty_sending/sstv_sending),
  *  so it is still a button through every RTTY and SSTV over. */
-const TX_LATCH: [string, RegExp] = ['TX-enable latch', /^▼ tx on$|^■ tx off$/i]
+const TX_LATCH: [string, RegExp] = ['TX-enable latch', /^tx on$|^tx off$/i]
 
 const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   cockpit: 'RTTY',

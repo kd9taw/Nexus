@@ -77,7 +77,7 @@
 //                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
 //                into feed dropped + output flushed + unkey while an image is in flight.
 //                · Esc (App's window keydown while SSTV is shown, N71) → halt_tx, the halt the
-//                header's Stop TX sends.
+//                TX strip's Stop TX sends.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
 //                the rule holds there by construction. Its one stop control is the TX On/Off
 //                latch, and from N71 Esc (App's window keydown while APRS is shown → halt_tx)
@@ -200,7 +200,7 @@
 //
 // WHAT HAS NO ID HERE, and therefore cannot be hidden: the dial, the band/mode pickers, the
 // Rx/Tx offset spinners, the QSO strip's TX On / Tune / Stop TX / Hold Tx, Phone's PTT row,
-// CW's F-key macros and send bar, RTTY's header Stop TX + TX latch and both dock aborts,
+// CW's F-key macros and send bar, RTTY's TX-strip Stop TX + TX latch and both dock aborts,
 // SSTV's Send/Stop bar. Recounted 2026-08-16: 28 entries across five vocabularies (20
 // distinct ids), of which six can start a transmission, TWO host a stop control of their own
 // (voiceKeyer, stream) and exactly one — voiceKeyer — has a hide that stops anything. The
@@ -788,7 +788,7 @@ const SCOPE_PANEL_ID = 'scope'
 
 /** SSTV view's removable panels (Phase 3). The RX image stage and the TX bar
  *  (mode/Send/Stop/progress) and all header chrome are NOT panels — so SSTV's two stop
- *  controls, the TX bar's Stop and the header's TX-enable latch, are outside every
+ *  controls, the TX bar's Stop and the TX strip's TX-enable latch, are outside every
  *  ⊞-removable pane, which is THE STOP LINE. `txcompose` is the image chooser only; Send
  *  does not live in it.
  *
@@ -943,14 +943,14 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  click-to-net are the decoder's tuning aid, not a stop. `stream` is unchanged and is still
  *  the pane that hosts a stop control of its own. With both ticked off this cockpit renders
  *  no ⊞-reachable content at all, and THE STOP LINE holds exactly as before: Stop TX and the
- *  TX-enable latch are in the header, the Esc/Stop macro and the sequencer's Abort in the
+ *  TX-enable latch are in the TX strip, the Esc/Stop macro and the sequencer's Abort in the
  *  dock, none of them with an id.
  *
  *  `stream` IS THE SECOND PANE IN THE APP THAT HOSTS A STOP CONTROL, and it is admitted for
  *  the same reason the voice keyer is. Its "Auto on" toggle, clicked off, is
  *  rttySetAuto(false) → seq.abort() + Engine::rtty_stop(): the queue is cleared and
  *  rtty_abort + slot_tx_abort unkey the rig. Hide `stream` and that toggle goes with it —
- *  allowed, because Stop TX and the TX-enable latch are in the header and the Esc/Stop macro
+ *  allowed, because Stop TX and the TX-enable latch are in the TX strip and the Esc/Stop macro
  *  and the sequencer's Abort are in the dock, none of them with an id. Its hide ENDS nothing
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
  *  that falsified the FOURTH wording a second time — see the header. */
@@ -968,9 +968,9 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
  *
  *  THE STOP LINE holds here the RTTY way (the Phase 1 "by construction" census is gone,
  *  as its own comment demanded when TX arrived). The census — every holder OUTSIDE every
- *  ⊞-removable pane, none with an id in this vocabulary: Stop TX (header, never
+ *  ⊞-removable pane, none with an id in this vocabulary: Stop TX (TX strip, never
  *  disabled), the dock's Esc/Stop macro (`disabled={!(sending || latched)}`, live from
- *  the instant the continuous-TX latch goes up), the TX-enable latch (header arm —
+ *  the instant the continuous-TX latch goes up), the TX-enable latch (TX strip arm —
  *  `set_tx_enabled(false)` arms `psk_abort`, so it is a real stop here exactly as in
  *  RTTY/SSTV), and Esc (keyboard-only ⇒ census-only, outside both sweeps by
  *  construction). Swept in stop-line.test.tsx's PSK case, rendered with App's props
@@ -1001,8 +1001,8 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
  *  case in the census below.
  *
  *  THE STOP LINE holds here the Operate way (a slotted mode): the census — every holder
- *  OUTSIDE every ⊞-removable pane, none with an id in this vocabulary: Stop TX (header →
- *  halt_tx, never disabled), Tune (header; the carrier it started), and Esc (window keydown
+ *  OUTSIDE every ⊞-removable pane, none with an id in this vocabulary: Stop TX (TX strip →
+ *  halt_tx, never disabled), Tune (TX strip; the carrier it started), and Esc (window keydown
  *  bound only while JS8 is the visible view → the same halt; keyboard-only ⇒ census-only).
  *  The TX-enable latch is NOT a stop control here: `set_tx_enabled(false)` deliberately does
  *  not arm `slot_tx_abort` (the operator's 2026-07-31 Operate ruling — a frame in flight

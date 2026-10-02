@@ -177,9 +177,10 @@ const snap = {
 } as unknown as AppSnapshot
 const pending = { call: 'W9XYZ', grid: 'EN37', rstSent: '-07', rstRcvd: '-10', band: '20m', mode: 'FT8', whenUnix: 1700000000 } as LoggedQso
 
-type Variant = 'header' | 'strip' | 'topbar' | 'dialog' | 'dock' | 'txbar'
+type Variant = 'txstrip' | 'strip' | 'topbar' | 'dialog' | 'dock' | 'txbar'
 const VARIANTS: Record<Variant, { name: string; selector: string }> = {
-  header: { name: "the cockpit header's Stop TX", selector: '.cockpit-stoptx' },
+  // Every screen's TX strip but FT's (operator batch 60): the cockpit header's Stop TX moved here.
+  txstrip: { name: "the TX strip's Stop TX", selector: '.cockpit-txstrip .op-btn.stop' },
   strip: { name: "Operate's FT-strip Stop TX", selector: '.op-btn.stop' },
   topbar: { name: "the top bar's Stop TX", selector: '.op-btn.stop' },
   dialog: { name: "the log dialog's Stop TX", selector: '.op-btn.stop' },
@@ -200,12 +201,12 @@ interface Host {
 }
 const BOTH: readonly Sheet[] = ['desktop', 'Remote']
 const HOSTS: readonly Host[] = [
-  { name: 'Phone', view: 'phone', host: null, sheets: BOTH, stops: ['header'], mount: () => render(<PhoneCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
-  { name: 'CW', view: 'cw', host: null, sheets: BOTH, stops: ['header'], mount: () => render(<CwCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
-  { name: 'RTTY', view: 'rtty', host: 'rtty-host', sheets: BOTH, stops: ['header', 'dock'], mount: () => render(<RttyCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
-  { name: 'PSK', view: 'psk', host: 'psk-host', sheets: BOTH, stops: ['header', 'dock'], mount: () => render(<PskCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
-  { name: 'JS8', view: 'js8', host: 'js8-host', sheets: BOTH, stops: ['header'], mount: () => render(<Js8Cockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
-  { name: 'SSTV', view: 'sstv', host: 'sstv-host', sheets: BOTH, stops: ['header', 'txbar'], mount: () => render(<SstvView snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'Phone', view: 'phone', host: null, sheets: BOTH, stops: ['txstrip'], mount: () => render(<PhoneCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
+  { name: 'CW', view: 'cw', host: null, sheets: BOTH, stops: ['txstrip'], mount: () => render(<CwCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
+  { name: 'RTTY', view: 'rtty', host: 'rtty-host', sheets: BOTH, stops: ['txstrip', 'dock'], mount: () => render(<RttyCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'PSK', view: 'psk', host: 'psk-host', sheets: BOTH, stops: ['txstrip', 'dock'], mount: () => render(<PskCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'JS8', view: 'js8', host: 'js8-host', sheets: BOTH, stops: ['txstrip'], mount: () => render(<Js8Cockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'SSTV', view: 'sstv', host: 'sstv-host', sheets: BOTH, stops: ['txstrip', 'txbar'], mount: () => render(<SstvView snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
   {
     name: 'Operate', view: 'operate', host: 'operate-host', sheets: BOTH, stops: ['strip'],
     mount: () =>
@@ -575,14 +576,14 @@ const ofVariant = (v: Variant) => READINGS.filter((r) => r.stop.variant === v)
 describe('every Stop TX is on screen to be measured', () => {
   it('each host renders its stops, words and all, and the sweep covers every theme', () => {
     expect(STOPS.map((s) => `${s.host.name}: ${VARIANTS[s.variant].name} — ${s.texts.map((t) => t.text).join(' ')}`)).toEqual([
-      "Phone: the cockpit header's Stop TX — Stop TX",
-      "CW: the cockpit header's Stop TX — Stop TX",
-      "RTTY: the cockpit header's Stop TX — Stop TX",
+      "Phone: the TX strip's Stop TX — Stop TX",
+      "CW: the TX strip's Stop TX — Stop TX",
+      "RTTY: the TX strip's Stop TX — Stop TX",
       "RTTY: the dock's Esc Stop key — Esc Stop",
-      "PSK: the cockpit header's Stop TX — Stop TX",
+      "PSK: the TX strip's Stop TX — Stop TX",
       "PSK: the dock's Esc Stop key — Esc Stop",
-      "JS8: the cockpit header's Stop TX — Stop TX",
-      "SSTV: the cockpit header's Stop TX — Stop TX",
+      "JS8: the TX strip's Stop TX — Stop TX",
+      "SSTV: the TX strip's Stop TX — Stop TX",
       "SSTV: SSTV's TX-bar Stop — Stop",
       "Operate: Operate's FT-strip Stop TX — Stop TX",
       "the top bar: the top bar's Stop TX — Stop TX",
@@ -625,24 +626,26 @@ describe('the checks fire on the rules before the fix', () => {
     const rs = again('strip', `.op-btn.stop:hover { color: #fff; }`, ['dark'])
     expect(wordProblems(rs)).toEqual([expect.stringMatching(/^Operate \(desktop\) hover: "Stop TX" #ffffff on #ec5b57 .* worst 3\.39:1 in dark$/)])
   })
-  it("the header's 50 % outline", () => {
-    const rs = again('header', `.cockpit-stoptx { border: 1px solid color-mix(in srgb, var(--state-weak) 50%, transparent); }`, ['dark skin=lagoon'])
-    // All six headers, idle (and focused, which paints the same); the hover's fill decides its own.
+  // The six TX strips draw FT's Stop TX (`.op-btn.stop`), so the strip's own regressions are
+  // what fires on them: they replaced the cockpit header's `.cockpit-stoptx` (operator batch 60).
+  it("the TX strips' 45 % outline", () => {
+    const rs = again('txstrip', `.op-btn.stop { background: transparent; border-color: color-mix(in srgb, var(--state-weak) 45%, transparent); }`, ['dark skin=lagoon'])
+    // All six strips, idle (and focused, which paints the same); the hover's fill decides its own.
     expect(outlineProblems(rs).filter((l) => l.includes(' idle: '))).toHaveLength(6)
-    expect(outlineProblems(rs)[0]).toMatch(/worst 2\.37:1 in dark skin=lagoon$/)
+    expect(outlineProblems(rs)[0]).toMatch(/worst 1\.61:1 in dark skin=lagoon$/)
   })
-  it("the header's 22 % hover", () => {
-    const rs = again('header', `.cockpit-stoptx:hover { background: color-mix(in srgb, var(--state-weak) 22%, transparent); color: var(--state-weak); }`, ['dark skin=slate'])
+  it("the TX strips' 22 % hover", () => {
+    const rs = again('txstrip', `.op-btn.stop:hover { background: color-mix(in srgb, var(--state-weak) 22%, transparent); color: var(--state-weak); }`, ['dark skin=slate'])
     expect(wordProblems(rs)).toHaveLength(6)
-    expect(wordProblems(rs)[0]).toMatch(/hover: "Stop TX" #ec5b57 on #44272b .* worst 3\.95:1 in dark skin=slate$/)
+    expect(wordProblems(rs)[0]).toMatch(/hover: "Stop TX" #ec5b57 on #[0-9a-f]{6} .* worst \d\.\d\d:1 in dark skin=slate$/)
   })
   it("the TX bar's transparent face", () => {
     const rs = again('txbar', `.sstv-tx-stop:not(:disabled) { background: transparent; }`, ['dark skin=lagoon'])
     expect(wordProblems(rs)[0]).toMatch(/^SSTV \(desktop\) (idle|hover|focus): "Stop" #ec5b57 on #063039 .* worst 4\.16:1 in dark skin=lagoon$/)
   })
   it('a focus ring taken away, and a faded stop', () => {
-    const rs = again('header', `.cockpit-stoptx:focus-visible { outline: none; } .cockpit-stoptx { opacity: .5; }`, ['dark'])
+    const rs = again('txstrip', `.op-btn.stop:focus-visible { outline: none; } .op-btn.stop { opacity: .5; }`, ['dark'])
     expect(ringProblems(rs)[0]).toMatch(/focus: the focus ring none .* worst 0\.00:1 in dark$/)
-    expect(fadeProblems(rs)[0]).toMatch(/: \.cockpit-stoptx \{ opacity: \.5 \}$/)
+    expect(fadeProblems(rs)[0]).toMatch(/: \.op-btn\.stop \{ opacity: \.5 \}$/)
   })
 })

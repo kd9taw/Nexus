@@ -24,6 +24,7 @@ import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -1013,7 +1014,7 @@ export function CwCockpit({
   // Every operator-content block under the scope renders through a CockpitPaneFrame in ONE
   // .cockpit-panes grid; the ⊞ Panels 'removed' gating is unchanged (shown()). TX chrome
   // never enters the region — the F-key macros and the type-ahead send bar live in the
-  // pinned .cockpit-txdock, and Tune and Stop TX up in the header.
+  // pinned .cockpit-txdock, and Tune and Stop TX up in the TX strip.
   //
   // ONLY THE HEADER PAIR IS THE STOP LINE. Stop TX (→ stopCw + haltTx) and Tune render
   // OUTSIDE every ⊞-removable pane and have no id, so no tick can take CW's way to stop off
@@ -1526,13 +1527,6 @@ export function CwCockpit({
             showReadout={false}
           />
         }
-        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
-        onAtuTune={() =>
-          void atuTune()
-            .then((s) => onSnap?.(s))
-            .catch((e) => pushToast(String(e), 'error'))
-        }
-        onStopTx={abort}
       >
         <label
           className="cw-wpm"
@@ -1722,7 +1716,7 @@ export function CwCockpit({
           `.cockpit-panes { flex: 1 1 0 }` takes the freed height with no rule change.
 
           Nothing here stops a transmission: the strip is a display plus click- and scroll-to-tune,
-          and Stop TX / Tune sit in the header, outside every ⊞ id (THE STOP LINE). Scroll-to-tune
+          and Stop TX / Tune sit in the TX strip, outside every ⊞ id (THE STOP LINE). Scroll-to-tune
           survives a hide/show because useWheelTune re-attaches on the TARGET's identity, not the
           hook's mount — which it did not do until this change; see the note there. */}
       {shown('scope') && (
@@ -1848,6 +1842,22 @@ export function CwCockpit({
       />}
         </>
       )}
+
+      {/* THE TX STRIP — FT's cluster under the scope (operator batch 60): the TX-enable latch
+          READ-ONLY (the mode change arms TX here), Tune, the rig's ATU and Stop TX (→ stopCw +
+          haltTx, the same abort Esc runs), sticky so they never leave the window. A shell child
+          with no ⊞ id, so hiding the scope leaves it directly under the header. */}
+      <CockpitTxStrip
+        radio={snap.radio}
+        onSnap={onSnap}
+        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+        onAtuTune={() =>
+          void atuTune()
+            .then((s) => onSnap?.(s))
+            .catch((e) => pushToast(String(e), 'error'))
+        }
+        onStopTx={abort}
+      />
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped

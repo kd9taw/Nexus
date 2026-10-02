@@ -221,7 +221,9 @@ add a regex-presence CSS test, that is how dead fixes shipped twice). **None of 
 read the cascade, not the screen, so geometry, stacking and hit-testing are checked only by
 `scripts/browser-probe` and CI's `remote-browser` job.
 
-- A cockpit shell has four child kinds only: header, scope, ONE pane region, one TX dock.
+- A cockpit shell has five child kinds only: header, scope, the TX strip under it (FT's cluster —
+  TX On/Off · Tune · ATU · Stop TX — sticky on both edges, `.cockpit-txstrip`), ONE pane region,
+  one TX dock.
   Every operator-content block renders through `CockpitPaneFrame` with a **role**:
   `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size
@@ -232,8 +234,9 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   Hide every id in that cockpit's vocabulary, singly and all at once, and those controls are still on
   screen and no more disabled than they were — no vocabulary id reaches them, so hiding one is
   unrepresentable rather than guarded. **The controls that hold it up** (re-verified against the code
-  2026-08-03; only `halt_tx` is universal, so each names what it stops): Phone — PTT (dock; the mic
-  key it holds), Stop TX (header → `halt_tx`), Tune (the tune carrier only), Space (window keyup =
+  2026-08-03, and since operator batch 60 Stop TX, Tune and the latch live in the TX strip; only
+  `halt_tx` is universal, so each names what it stops): Phone — PTT (dock; the mic
+  key it holds), Stop TX (TX strip → `halt_tx`), Tune (the tune carrier only), Space (window keyup =
   PTT-release, and only while Lock is off); CW — Stop TX (→ `stopCw`+`haltTx`), Tune, Esc; Operate —
   Stop TX (`.op-btn.stop` in `.cockpit-qso` → `halt_tx`, the only control here that cuts an over in
   flight), Tune, Esc; RTTY — Stop TX (never disabled), the dock's Esc/Stop macro
@@ -267,7 +270,7 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   2026-09-30), and drops what is still queued. APRS is a seventh cockpit with no vocabulary at all, so
   the rule holds by construction, and that latch is its stop control.
   The TopBar's TX cluster backstops none of them — App hides it in Operate and in
-  Phone/CW/RTTY/PSK/SSTV/APRS — so each cockpit stands on
+  Phone/CW/RTTY/PSK/SSTV/APRS/JS8 — so each cockpit stands on
   its own. **The sweeps do not match this census one for one** (the claim that they did was false for
   four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop
   TX/Esc-Stop macro/Tune/latch, PSK's Stop TX/Esc-Stop macro/Tune/latch and SSTV's Stop/latch (the one

@@ -391,7 +391,9 @@ describe('TX-cluster position stability: row neighbours resolve state-independen
   })
 
   it('the TX On/Off toggle carries a fixed em min-width (label flips with txEnabled)', () => {
-    const chain = [...STRIP_CHAIN, { classes: new Set(['op-btn', 'monitor']) }]
+    // The toggle sits in the TX cluster's group, as rendered: the sizing rule is scoped to that
+    // group since every screen's TX strip draws the same cluster (operator batch 60).
+    const chain = [...STRIP_CHAIN, { classes: new Set(['op-controls', 'cq-txctl']) }, { classes: new Set(['op-btn', 'monitor']) }]
     const win = winner(chain, 'min-width')
     expect(win, '.op-btn.monitor: no min-width — Tune/Stop TX shift when TX On becomes TX Off').not.toBeNull()
     expect(/^\d+(\.\d+)?em$/.test(win!.value), `min-width is \`${win!.value}\` — must be a fixed em`).toBe(true)

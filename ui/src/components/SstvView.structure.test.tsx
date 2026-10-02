@@ -127,7 +127,7 @@ describe('SstvView pane shell', () => {
     const shell = document.querySelector('main.layout.single.sstv-view')!
     expect(shell).not.toBeNull()
     // The stage's divider (layout L6) is a shell child, as the scope dividers are in Phone/CW/JS8.
-    const ALLOWED = ['.cockpit-header', '.sstv-canvas', '.pane-splitter', '.sstv-tx-bar', '.pane-frame']
+    const ALLOWED = ['.cockpit-header', '.sstv-canvas', '.pane-splitter', '.cockpit-txstrip', '.sstv-tx-bar', '.pane-frame']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -135,6 +135,15 @@ describe('SstvView pane shell', () => {
       ).toBe(true)
     }
     expect(shell.querySelectorAll(':scope > .pane-frame').length).toBe(2)
+    // THE TX STRIP (operator batch 60): exactly one, a shell child directly under the scope (after
+    // its divider), holding the stop controls the header used to hold — and the header none.
+    const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
+    expect(strips.length, 'no TX strip in the shell').toBe(1)
+    expect(strips[0].previousElementSibling?.matches('.pane-splitter'), 'the TX strip is not directly under the scope').toBe(true)
+    const named = (root: Element, re: RegExp) => [...root.querySelectorAll('button')].filter((b) => re.test(b.textContent!.trim()))
+    expect(named(strips[0], /^stop tx$/i).length, 'Stop TX is not in the TX strip').toBe(1)
+    expect(named(strips[0], /^tune$/i).length, 'Tune is not in the TX strip').toBe(1)
+    expect(named(shell.querySelector('.cockpit-header')!, /^stop tx$|^tune$|^tuning…$|^atu$|tx (on|off)$/i), 'the header still draws a transmit control').toEqual([])
   })
 
   it('the Transmit composer renders through a frame with fit="content" (a drop zone cannot stretch)', async () => {
