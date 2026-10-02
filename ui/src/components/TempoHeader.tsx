@@ -7,6 +7,7 @@ import { useStationCapability, useStationControl, useStationTierControl } from '
 import type { AppSnapshot, BandChannel, Tier } from '../types'
 import { bandLabelForMhz } from '../band'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
 
@@ -40,15 +41,22 @@ interface Props {
   onToggleCqRun: () => void
   /** Resume a paused run immediately. */
   onResumeCqRun: () => void
+  /** The TX strip's controls (FT's cluster: TX On/Off · Tune · ATU · Stop TX · Hold Tx). */
+  onSetTxEnabled: (on: boolean) => void
+  onSetTune: (on: boolean) => void
+  onAtuTune: () => void
+  onHaltTx: () => void
+  onSetHoldTxFreq: (on: boolean) => void
 }
 
 /**
  * Tempo (TempoFast/TempoDeep chat) cockpit header — the same shared CockpitHeader the CW /
  * Phone / FT8 cockpits use, giving Tempo the base rig controls (tier · frequency
  * readout + the FT8-style frequency dropdown · drive power · CAT) in the
- * consistent position. Tune / Stop / Enable-Tx stay in the TopBar transmit
- * cluster (Tempo's existing model), like FT8 keeps its TX cluster in the QSO
- * strip. Rendered full-width above the three-pane Tempo workspace.
+ * consistent position. Rendered full-width above the three-pane Tempo workspace, with
+ * the TX strip directly under it — FT's cluster in FT's order (operator batch 60): it used to
+ * be the TopBar's, which wrapped with the TopBar and had no ATU. Tempo has no scope in that
+ * column (its waterfall is the right rail), so the strip sits right under the header.
  */
 export function TempoHeader({
   snap,
@@ -61,6 +69,11 @@ export function TempoHeader({
   wheelSensitivity,
   onToggleCqRun,
   onResumeCqRun,
+  onSetTxEnabled,
+  onSetTune,
+  onAtuTune,
+  onHaltTx,
+  onSetHoldTxFreq,
 }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl()
@@ -75,6 +88,7 @@ export function TempoHeader({
     onSetFrequency(mhz, bandLabelForMhz(mhz), snap.radio.sideband || 'USB')
   }
   return (
+    <>
     <CockpitHeader
       snap={snap}
       onSnap={onSnap}
@@ -174,5 +188,15 @@ export function TempoHeader({
         )}
       </div>
     </CockpitHeader>
+    <CockpitTxStrip
+      radio={snap.radio}
+      onSnap={onSnap}
+      onSetTxEnabled={onSetTxEnabled}
+      onTune={onSetTune}
+      onAtuTune={onAtuTune}
+      onStopTx={onHaltTx}
+      hold={{ on: snap.radio.holdTxFreq, onChange: onSetHoldTxFreq, disabled: !control }}
+    />
+    </>
   )
 }

@@ -34,7 +34,7 @@ function content(kind: 'advanced' | 'tempo', onTierChange: (tier: Tier) => void,
   const snap = snapshot(radio), shared = { onTierChange, bandPlan: [], onSetFrequency: noop }
   return kind === 'advanced' ? <TopBar {...shared} tier="FT8" mycall={snap.mycall} mygrid={snap.mygrid} radio={snap.radio} link={snap.link}
     onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop} onSetTxEven={noop} onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} onOpenGuide={noop} />
-    : <TempoHeader {...shared} snap={snap} tier="TempoFast" onSetTxLevel={noop} onToggleCqRun={noop} onResumeCqRun={noop} />
+    : <TempoHeader {...shared} snap={snap} tier="TempoFast" onSetTxLevel={noop} onToggleCqRun={noop} onResumeCqRun={noop} onSetTxEnabled={noop} onSetTune={noop} onAtuTune={noop} onHaltTx={noop} onSetHoldTxFreq={noop} />
 }
 function wrapped(kind: 'advanced' | 'tempo', onTierChange: (tier: Tier) => void, client: OperationClient | null, radio = {}, available = true, local = false) {
   return <StationControlContext.Provider value={local}><StationDataContext.Provider value={available}>

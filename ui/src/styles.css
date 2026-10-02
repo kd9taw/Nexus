@@ -5245,7 +5245,10 @@ h2 {
   grid-area: header;
   min-width: 0;
   display: flex;
-  align-items: center;
+  /* A COLUMN since the TX strip moved under Tempo's header (operator batch 60): header, then the
+     strip, each the cell's full width. */
+  flex-direction: column;
+  align-items: stretch;
 }
 .grid-header > .cockpit-header {
   flex: 1;

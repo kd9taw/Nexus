@@ -41,6 +41,7 @@ import {
   setActiveRadio as apiSetActiveRadio,
   setPegLock as apiSetPegLock,
   setTune as apiSetTune,
+  atuTune as apiAtuTune,
   haltTx as apiHaltTx,
   setTxEven as apiSetTxEven,
   setTxCycleAuto as apiSetTxCycleAuto,
@@ -1743,6 +1744,15 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     })
   }, [])
 
+  // The rig's own ATU, from the TX strips App draws the handlers for (Tempo, APRS). A control that
+  // keys the transmitter never fails silently: the backend returns every refusal (TX off, busy,
+  // lockout, no tuner) WITH ITS REASON, and the toast shows it.
+  const handleAtuTune = useCallback(() => {
+    void apiAtuTune()
+      .then((s) => setSnap(s))
+      .catch((e) => pushToast(String(e), 'error'))
+  }, [])
+
   // Prove-TX-path: key the tune carrier for ~2.5 s then auto-drop — a BOUNDED transmit that lets the
   // operator verify CAT→PTT→RF (forward power registers). Always invoked from behind a confirm
   // dialog (operator's TX-approval condition); the TX watchdog backs up the auto-unkey.
@@ -3286,6 +3296,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
               onToggleCqRun={handleToggleCqRun}
               onResumeCqRun={handleResumeCqRun}
+              onSetTxEnabled={handleSetTxEnabled}
+              onSetTune={handleSetTune}
+              onAtuTune={handleAtuTune}
+              onHaltTx={handleHaltTx}
+              onSetHoldTxFreq={handleSetHoldTxFreq}
             />,
           )}
           {roamOpen && (
@@ -3352,7 +3367,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onSetTxCycleAuto={handleSetTxCycleAuto}
         onSetHoldTxFreq={handleSetHoldTxFreq}
         onStopRecording={handleStopRecording}
-        hideTxControls={effectiveView === 'operate'}
+        // Tempo's cluster moved into its TX strip under the Tempo header (operator batch 60), so
+        // the top bar hides it there exactly as on Operate.
+        hideTxControls={effectiveView === 'operate' || effectiveView === 'chat'}
         hideFrequencyControl={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||

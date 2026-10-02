@@ -269,7 +269,7 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   cut (`tx_off_cut`, the unkey + flush of a non-slot over when the latch goes down; measured
   2026-09-30), and drops what is still queued. APRS is a seventh cockpit with no vocabulary at all, so
   the rule holds by construction, and that latch is its stop control.
-  The TopBar's TX cluster backstops none of them — App hides it in Operate and in
+  The TopBar's TX cluster backstops none of them — App hides it in Operate, Tempo and
   Phone/CW/RTTY/PSK/SSTV/APRS/JS8 — so each cockpit stands on
   its own. **The sweeps do not match this census one for one** (the claim that they did was false for
   four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop

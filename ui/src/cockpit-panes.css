@@ -76,7 +76,7 @@
          the TX-enable latch (TX On/Off). It arms no abort, but turning it off stops a beacon on
          the air through the loop's TX-off cut (unkey + flush of a non-slot over; measured
          2026-09-30) and drops what is still queued.
-     The TopBar's TX cluster backstops none of them: App hides it in Operate and in
+     The TopBar's TX cluster backstops none of them: App hides it in Operate, Tempo and
      Phone/CW/RTTY/PSK/SSTV/APRS/JS8, so every cockpit stands on its own controls.
 
      THE SWEEPS DO NOT MATCH THAT CENSUS ONE FOR ONE, and the claim that they did was false

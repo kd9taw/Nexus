@@ -61,6 +61,11 @@ function mount(props: Record<string, unknown> = {}) {
       onSetTxLevel={() => {}}
       onToggleCqRun={() => {}}
       onResumeCqRun={() => {}}
+      onSetTxEnabled={() => {}}
+      onSetTune={() => {}}
+      onAtuTune={() => {}}
+      onHaltTx={() => {}}
+      onSetHoldTxFreq={() => {}}
       {...props}
     />,
   )
