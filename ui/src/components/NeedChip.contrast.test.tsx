@@ -48,6 +48,7 @@ import {
   isNight,
   chainOf,
   cmpSpec,
+  compoundMatches,
   contrast,
   expandWith,
   parseRules,
@@ -520,8 +521,23 @@ function rulesWith(rules: Rule[], props: string[]): Rule[] {
   if (!out) byProps.set(key, (out = rules.filter((r) => r.decls.some((d) => props.includes(d.prop)))))
   return out
 }
+/** The compound a rule puts on the element itself, split off its selector the way reachesChain splits it. */
+const SUBJECT = new WeakMap<Rule, string | undefined>()
+function subjectOf(rule: Rule): string | undefined {
+  if (!SUBJECT.has(rule)) SUBJECT.set(rule, rule.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop())
+  return SUBJECT.get(rule)
+}
+/** And of those, only the rules whose subject matches the element can reach it (reachesChain gives up on any other before it
+ *  reads an ancestor or the mode). So the cut is made once per element, not once per theme, and the winner is the same. */
+const rulesAt = (rules: Rule[], props: string[], el: El): Rule[] =>
+  once(rules, `a|${props.join()}|${JSON.stringify([el.tag, el.classes, el.attrs])}`, () =>
+    rulesWith(rules, props).filter((r) => {
+      const subject = subjectOf(r)
+      return !!subject && compoundMatches(subject, el)
+    }),
+  )
 const winAt = (rules: Rule[], mode: Mode, w: Chip, i: number, ...props: string[]) =>
-  once(rules, `w|${winnerMode(mode)}|${keysOf(w).shape[i]}|${props.join()}`, () => winnerAt(rulesWith(rules, props), winnerMode(mode), w.chain.slice(0, i + 1), ...props))
+  once(rules, `w|${winnerMode(mode)}|${keysOf(w).shape[i]}|${props.join()}`, () => winnerAt(rulesAt(rules, props, w.chain[i]), winnerMode(mode), w.chain.slice(0, i + 1), ...props))
 const TOKEN_DECLS = new WeakMap<Rule[], Rule[]>()
 function rulesWithTokens(rules: Rule[]): Rule[] {
   let out = TOKEN_DECLS.get(rules)
