@@ -599,7 +599,7 @@ describe('panes are sized by the grid, never by themselves', () => {
     ).toMatch(/flex: 0 0 auto/)
   })
 
-  // THE TX STRIP (operator batch 60) carries Stop TX, Tune and the latch on every screen but
+  // THE TX STRIP (2026-10-01) carries Stop TX, Tune and the latch on every screen but
   // FT's. The fence above is what makes this one rule the whole cascade for it: styles.css may
   // not name the class, so no later or heavier rule can unpin it.
   it('the TX strip is unshrinkable and sticky on BOTH edges, the bottom clearing the dock', () => {

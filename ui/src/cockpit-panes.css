@@ -52,7 +52,7 @@
 
      THE CONTROLS THAT HOLD IT UP, re-verified against the code 2026-08-03, each with WHAT it
      stops (only halt_tx is universal; everything else has a scope):
-       (Since operator batch 60, 2026-10-01, every "TX strip" below was "header": the latch,
+       (Since 2026-10-01, every "TX strip" below was "header": the latch,
        Tune, the ATU and Stop TX left the cockpit header for the strip under the scope.)
        Phone — PTT (dock; drops the mic key it holds), Stop TX (TX strip → halt_tx), Tune
          (TX strip; the tune carrier only), the Space bar (window keyup → the same unkey as
@@ -422,7 +422,7 @@
   background: var(--panel);
 }
 
-/* THE TX STRIP — the fifth shell child kind (operator batch 60, 2026-10-01: "FT's strip under the
+/* THE TX STRIP — the fifth shell child kind (2026-10-01: "FT's strip under the
    scope in every mode, FT's order, staying in view"). FT's transmit cluster — TX On/Off · Tune ·
    ATU · Stop TX (· Hold Tx) — and the TX state, drawn by components/CockpitTxStrip directly under
    the scope on every operating screen but FT, whose `.cockpit-qso` is the same cluster with its

@@ -179,7 +179,7 @@ const pending = { call: 'W9XYZ', grid: 'EN37', rstSent: '-07', rstRcvd: '-10', b
 
 type Variant = 'txstrip' | 'strip' | 'topbar' | 'dialog' | 'dock' | 'txbar'
 const VARIANTS: Record<Variant, { name: string; selector: string }> = {
-  // Every screen's TX strip but FT's (operator batch 60): the cockpit header's Stop TX moved here.
+  // Every screen's TX strip but FT's (2026-10-01): the cockpit header's Stop TX moved here.
   txstrip: { name: "the TX strip's Stop TX", selector: '.cockpit-txstrip .op-btn.stop' },
   strip: { name: "Operate's FT-strip Stop TX", selector: '.op-btn.stop' },
   topbar: { name: "the top bar's Stop TX", selector: '.op-btn.stop' },
@@ -627,7 +627,7 @@ describe('the checks fire on the rules before the fix', () => {
     expect(wordProblems(rs)).toEqual([expect.stringMatching(/^Operate \(desktop\) hover: "Stop TX" #ffffff on #ec5b57 .* worst 3\.39:1 in dark$/)])
   })
   // The six TX strips draw FT's Stop TX (`.op-btn.stop`), so the strip's own regressions are
-  // what fires on them: they replaced the cockpit header's `.cockpit-stoptx` (operator batch 60).
+  // what fires on them: they replaced the cockpit header's `.cockpit-stoptx` (2026-10-01).
   it("the TX strips' 45 % outline", () => {
     const rs = again('txstrip', `.op-btn.stop { background: transparent; border-color: color-mix(in srgb, var(--state-weak) 45%, transparent); }`, ['dark skin=lagoon'])
     // All six strips, idle (and focused, which paints the same); the hover's fill decides its own.

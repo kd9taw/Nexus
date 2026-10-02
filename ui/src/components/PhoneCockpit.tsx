@@ -2271,7 +2271,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     </Fragment>
   )
 
-  // THE TX STRIP — FT's cluster (operator batch 60): the TX-enable latch READ-ONLY (Phone arms TX
+  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY (Phone arms TX
   // itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
   // (→ halt_tx), sticky so they never leave the window. A shell child with no ⊞ id: under the
   // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW

@@ -725,7 +725,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         </>
       )}
 
-      {/* THE TX STRIP — FT's cluster under the waterfall (operator batch 60): the TX-enable
+      {/* THE TX STRIP — FT's cluster under the waterfall (2026-10-01): the TX-enable
           latch, Tune, the rig's ATU and Stop TX, sticky so they never leave the window. A shell
           child with no ⊞ id, so hiding the waterfall leaves it directly under the header.
           TUNE — a steady carrier, which in PSK is how you set the drive in the header: key it,

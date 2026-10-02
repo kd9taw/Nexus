@@ -1202,7 +1202,7 @@ export function Js8Cockpit({
         </>
       )}
 
-      {/* THE TX STRIP — FT's cluster under the waterfall (operator batch 60): the TX-enable
+      {/* THE TX STRIP — FT's cluster under the waterfall (2026-10-01): the TX-enable
           latch, Tune, the rig's ATU and Stop TX, sticky so they never leave the window. A shell
           child with no ⊞ id, so hiding the waterfall leaves it directly under the header.
           TUNE — a steady carrier; also a stop control (it stops the carrier it started), so it

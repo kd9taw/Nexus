@@ -1476,7 +1476,7 @@ export function CwCockpit({
   const rigCtlSlot = <Fragment key="rigctl">{rigCtlPane}</Fragment>
   const logSlot = <Fragment key="log-form">{logPane}</Fragment>
 
-  // THE TX STRIP — FT's cluster (operator batch 60): the TX-enable latch READ-ONLY (the mode change
+  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY (the mode change
   // arms TX here), Tune, the rig's ATU and Stop TX (→ stopCw + haltTx, the same abort Esc runs),
   // sticky so they never leave the window. A shell child with no ⊞ id: under the scope, or after
   // the contact in the hosted Quick presentation (below).

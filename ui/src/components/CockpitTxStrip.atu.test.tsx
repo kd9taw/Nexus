@@ -12,7 +12,7 @@
 //     ATU tune-up keys the transmitter; it is not a receive filter like NB/NR/Notch, and it must
 //     not be reachable when transmitting here is not permitted.
 //
-// Since operator batch 60 (2026-10-01) the button is the TX strip's (CockpitTxStrip, FT's cluster
+// Since 2026-10-01 the button is the TX strip's (CockpitTxStrip, FT's cluster
 // under the scope on every screen), no longer the cockpit header's; these cases moved with it.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'

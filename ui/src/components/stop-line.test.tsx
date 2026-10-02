@@ -496,7 +496,7 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
     ),
 }
 
-/** The TX-enable latch as the TX strip labels it — FT's words since operator batch 60 (it was
+/** The TX-enable latch as the TX strip labels it — FT's words since 2026-10-01 (it was
  *  "▼ TX On" / "■ TX Off" in the cockpit header). `radio.txEnabled` is true and `transmitting`
  *  false in this fixture, so it reads "TX On"; the disarmed face is matched
  *  too, so a fixture flip cannot make the sweep silently stop finding the control.

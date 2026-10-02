@@ -1963,7 +1963,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       </>
       )}
 
-      {/* THE TX STRIP — FT's cluster under the RX stage (operator batch 60): the TX-enable
+      {/* THE TX STRIP — FT's cluster under the RX stage (2026-10-01): the TX-enable
           latch (a STOP here: set_tx_enabled(false) arms sstv_abort), Tune, the rig's ATU and
           Stop TX, sticky so they never leave the window. A shell child with no ⊞ id. The view's
           own pinned Stop in `.sstv-tx-bar` stays — it is the TX-locked one the stop-line census

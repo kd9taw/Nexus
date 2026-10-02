@@ -5245,7 +5245,7 @@ h2 {
   grid-area: header;
   min-width: 0;
   display: flex;
-  /* A COLUMN since the TX strip moved under Tempo's header (operator batch 60): header, then the
+  /* A COLUMN since the TX strip moved under Tempo's header (2026-10-01): header, then the
      strip, each the cell's full width. */
   flex-direction: column;
   align-items: stretch;

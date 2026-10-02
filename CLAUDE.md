@@ -234,7 +234,7 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   Hide every id in that cockpit's vocabulary, singly and all at once, and those controls are still on
   screen and no more disabled than they were — no vocabulary id reaches them, so hiding one is
   unrepresentable rather than guarded. **The controls that hold it up** (re-verified against the code
-  2026-08-03, and since operator batch 60 Stop TX, Tune and the latch live in the TX strip; only
+  2026-08-03, and since 2026-10-01 Stop TX, Tune and the latch live in the TX strip; only
   `halt_tx` is universal, so each names what it stops): Phone — PTT (dock; the mic
   key it holds), Stop TX (TX strip → `halt_tx`), Tune (the tune carrier only), Space (window keyup =
   PTT-release, and only while Lock is off); CW — Stop TX (→ `stopCw`+`haltTx`), Tune, Esc; Operate —

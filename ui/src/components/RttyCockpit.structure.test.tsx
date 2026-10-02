@@ -156,7 +156,7 @@ describe('RttyCockpit pane shell', () => {
     const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame'))
     expect(frames.map((f) => f.getAttribute('data-pane'))).toEqual(['stream', 'log'])
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
-    // THE TX STRIP (operator batch 60): exactly one, a shell child directly under the scope (after
+    // THE TX STRIP (2026-10-01): exactly one, a shell child directly under the scope (after
     // its divider), holding the stop controls the header used to hold — and the header none.
     const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
     expect(strips.length, 'no TX strip in the shell').toBe(1)

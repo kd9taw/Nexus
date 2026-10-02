@@ -5,7 +5,7 @@ import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../re
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts) for the CAT
 // pill's two plates alone. The TX-enable latch, Tune, ATU and Stop TX it used to draw for six
 // cockpits — and their deferred labels — moved to the TX strip under the scope
-// (`CockpitTxStrip`, operator batch 60); nothing in this header starts or stops a transmission.
+// (`CockpitTxStrip`, 2026-10-01); nothing in this header starts or stops a transmission.
 //
 // Everything else in the header is migrated under `cockpit.header.*`: the wheel-tune tooltips,
 // the band-edge toast, the power slider (a CONFIGURATION control on the transmit path, which
@@ -40,7 +40,7 @@ const CAT_BAD = 'CAT ✗'
  * mode-extras(elastic) · actions(power·CAT, pinned right). Every region wraps + has min-width:0 so
  * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
  *
- * NO TRANSMIT CONTROLS (operator batch 60, 2026-10-01). The TX-enable latch, Tune, the rig's ATU
+ * NO TRANSMIT CONTROLS (2026-10-01). The TX-enable latch, Tune, the rig's ATU
  * and Stop TX left this header for the TX strip under the scope (`CockpitTxStrip`), FT's cluster
  * in FT's order on every screen: a header that wraps put Stop TX at four different places, Tune at
  * seven, and under the dock at the 150–175 % pins.

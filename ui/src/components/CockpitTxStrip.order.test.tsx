@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// FT'S TX CLUSTER, IN FT'S ORDER, ON EVERY SCREEN (operator batch 60, 2026-10-01: "FT's strip
+// FT'S TX CLUSTER, IN FT'S ORDER, ON EVERY SCREEN (2026-10-01: "FT's strip
 // under the scope in every mode, FT's order, staying in view; Stop TX at the same spot on all 8
 // screens").
 //

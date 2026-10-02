@@ -86,7 +86,7 @@ describe("Operate's strip follows the transmitter", () => {
   it.each([...KEYED, ...IDLE.map(([w, o]) => [w, o] as [string, Partial<RadioStatus>])])(
     "agrees with the cockpit header's ON AIR sign: %s",
     (_what, over) => {
-      // Every other screen's sign is its TX strip's caption since operator batch 60 (the header's
+      // Every other screen's sign is its TX strip's caption since 2026-10-01 (the header's
       // pill moved there with the latch).
       const { container } = render(<CockpitTxStrip radio={radio(over)} onStopTx={() => {}} />)
       const header = container.querySelector('.cq-statecap')!.classList.contains('tx')

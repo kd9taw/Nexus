@@ -3368,7 +3368,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onSetTxCycleAuto={handleSetTxCycleAuto}
         onSetHoldTxFreq={handleSetHoldTxFreq}
         onStopRecording={handleStopRecording}
-        // Tempo's cluster moved into its TX strip under the Tempo header (operator batch 60), so
+        // Tempo's cluster moved into its TX strip under the Tempo header (2026-10-01), so
         // the top bar hides it there exactly as on Operate.
         hideTxControls={effectiveView === 'operate' || effectiveView === 'chat'}
         hideFrequencyControl={
@@ -3654,7 +3654,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 active={effectiveView === 'aprs'}
                 onTune={handleAprsTune}
                 radio={snap.radio}
-                // FT's TX cluster (operator batch 60): APRS's TX On/Off moved into it, and it gained
+                // FT's TX cluster (2026-10-01): APRS's TX On/Off moved into it, and it gained
                 // Stop TX (halt_tx, the stop its Esc sends). Tune and ATU only when the rig reports a
                 // tuner — there is nothing to tune a 2 m FM antenna against otherwise.
                 txStrip={

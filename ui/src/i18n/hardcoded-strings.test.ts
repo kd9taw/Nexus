@@ -370,7 +370,7 @@ const MIGRATED = [
   'components/ModeNav.tsx',
   'components/NowBar.tsx',
   'components/TempoHeader.tsx',
-  // CockpitHeader.tsx (graduated 2026-10-02, operator batch 60). It sat on PARTIAL for the four
+  // CockpitHeader.tsx (graduated 2026-10-02). It sat on PARTIAL for the four
   // transmit controls it drew for six cockpits — the latch, Tune, ATU and Stop TX — and for the
   // passive TX pill that rendered the latch. All five left it for the TX strip under the scope
   // (`CockpitTxStrip.tsx`, which takes its place on PARTIAL for exactly that deferral), so what
@@ -658,7 +658,7 @@ const MIGRATED = [
  */
 const PARTIAL = [
   'components/SettingsPanel.tsx',
-  // CockpitTxStrip.tsx (2026-10-02, operator batch 60) — FT's TX cluster on every operating
+  // CockpitTxStrip.tsx (2026-10-02) — FT's TX cluster on every operating
   // screen, the controls `CockpitHeader.tsx` was on this list for, moved and not created: the
   // TX-ENABLE LATCH and its read-only twin, TUNE, ATU and STOP TX keep their written labels and
   // tooltips until the transmit-path batch, with the stop-line sweeps re-run. Everything else it

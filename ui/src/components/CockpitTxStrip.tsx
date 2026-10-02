@@ -33,7 +33,7 @@ export interface CockpitTxStripProps {
 
 /**
  * THE TRANSMIT STRIP — FT's transmit cluster, in FT's order and FT's look, on every operating
- * screen (operator batch 60, 2026-10-01: "FT's strip under the scope in every mode, FT's order,
+ * screen (2026-10-01: "FT's strip under the scope in every mode, FT's order,
  * staying in view; Stop TX at the same spot on all 8 screens"). TX On/Off · Tune · ATU · Stop TX
  * (· Hold Tx), then the TX state. Each screen keeps its own send area in its dock.
  *

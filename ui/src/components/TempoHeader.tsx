@@ -54,7 +54,7 @@ interface Props {
  * Phone / FT8 cockpits use, giving Tempo the base rig controls (tier · frequency
  * readout + the FT8-style frequency dropdown · drive power · CAT) in the
  * consistent position. Rendered full-width above the three-pane Tempo workspace, with
- * the TX strip directly under it — FT's cluster in FT's order (operator batch 60): it used to
+ * the TX strip directly under it — FT's cluster in FT's order (2026-10-01): it used to
  * be the TopBar's, which wrapped with the TopBar and had no ATU. Tempo has no scope in that
  * column (its waterfall is the right rail), so the strip sits right under the header.
  */
