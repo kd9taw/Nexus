@@ -120,7 +120,7 @@ On VHF bands (6 m / 4 m / 2 m), Nexus applies a locality gate: a cluster spot is
 
 The cluster feed is used by:
 - The **Needed board** (CW and Phone rows; digital rows come from PSK Reporter decodes)
-- The **Connect map** live spot dots
+- The **Conditions map** live spot dots
 - **Click-to-work** split detection — if the spot comment contains `UP N`, `DN N`, `UP N.N`, or `QSX <freq>`, Nexus parses the pile-up offset and applies it atomically at click-to-work time so your TX lands where the DX is listening
 
 Cluster feed status appears in the **Now-Bar** liveness pill (Live / Connected / Connecting / Reconnecting / Idle), distinguishing a normal quiet-band lull from an actual connection problem.

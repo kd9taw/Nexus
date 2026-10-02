@@ -21,16 +21,16 @@ import { appVersion } from '../api'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
+import { UtcClock } from './UtcClock'
 
 /** The bar's own plates: the product name, the two directions of the TX/RX indicator, the
- *  operator prefix, the recording badge and the UTC label. Tokens, named so the catalog guard
- *  reads them as the deliberate constants they are. */
+ *  operator prefix and the recording badge. Tokens, named so the catalog guard reads them as the
+ *  deliberate constants they are. (The clock's UTC label is the clock's own, `UtcClock`.) */
 const NEXUS = 'Nexus'
 const TX = 'TX'
 const RX = 'RX'
 const OP = 'OP'
 const REC = 'REC'
-const UTC = 'UTC'
 
 /** The tier pills in the top bar. FT8/FT4 transmit; the six WSJT-X modes below
  *  them are DECODE-ONLY (modes::tx_mode refuses them in the engine) and carry a
@@ -282,30 +282,6 @@ function ClockChip({ radio }: { radio: RadioStatus }) {
       <span className="dot" />
       {radio.timeSyncOk ? t('topbar.sync.ok.label') : t('topbar.sync.bad.label')}
     </span>
-  )
-}
-
-/** Live clock (HH:MM:SS), ticking once a second. UTC by default; `local` shows this computer's
- *  local time instead (#253, the optional second clock) with the same look, so the two read as a
- *  pair and UTC keeps its place. */
-function UtcClock({ local = false }: { local?: boolean }) {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 1000)
-    return () => window.clearInterval(id)
-  }, [])
-  const p = (n: number) => String(n).padStart(2, '0')
-  const hhmmss = local
-    ? `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`
-    : `${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`
-  return (
-    <div
-      className={`utc-clock${local ? ' local-clock' : ''}`}
-      title={local ? t('topbar.localClock.title') : t('topbar.utc.title')}
-    >
-      <span className="utc-time">{hhmmss}</span>
-      <span className="utc-label">{local ? t('topbar.localClock.label') : UTC}</span>
-    </div>
   )
 }
 

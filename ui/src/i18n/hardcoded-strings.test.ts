@@ -169,6 +169,10 @@ const MIGRATED = [
   'openingAlert.ts',
   'stormAlert.ts',
   'tv/ConnectTv.tsx',
+  // The dashboard bar over the Connect pop-out and the TV page: the index names, `UTC` and the
+  // clock digits are tokens; its prose (the Stay behind toggle, the hover words) is the catalog's.
+  'components/DashboardBar.tsx',
+  'components/DashRail.tsx',
   'components/DxpeditionsView.tsx',
   'features/dxpedChase.ts',
   'features/dxpedAlarm.ts',
@@ -177,10 +181,12 @@ const MIGRATED = [
   'components/prop/ActivityMatrix.tsx',
   'components/prop/BandAdvisor.tsx',
   'components/prop/BandConditionStrip.tsx',
+  'components/prop/BandTiles.tsx',
   'components/prop/BeaconMonitor.tsx',
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
   'components/prop/ChasePane.tsx',
+  'components/prop/ClockPane.tsx',
   'components/prop/KpOutlookPane.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
@@ -195,6 +201,7 @@ const MIGRATED = [
   'components/prop/OpeningStrip.tsx',
   'components/prop/OpeningsLogPane.tsx',
   'components/prop/ScalesAnnunciator.tsx',
+  'components/prop/SolarTrends.tsx',
   'components/prop/SpaceWxGauges.tsx',
   'components/prop/WorkNowCard.tsx',
   // Batch 5 (2026-08-18) — spots, the watch list, the display filters and the Settings
@@ -328,9 +335,13 @@ const MIGRATED = [
   // chip, and the two intent chips named for a programme and a band (POTA/SOTA, 6m/VHF).
   'components/ConnectView.tsx',
   'components/connect/PaneFrame.tsx',
+  // A pane's ⋯ menu (2026-09-29) — born migrated: its A− / A+ are glyphs, every word a catalog key.
+  'components/connect/BoxMenu.tsx',
   'components/connect/RailHandles.tsx',
   'components/connect/panes.tsx',
   'components/connect/paneFormat.ts',
+  // Connect's Spots box (plan H8), born migrated: its one status line is the Phone pane's own.
+  'components/connect/SpotsBox.tsx',
   'components/Conversation.tsx',
   'components/Composer.tsx',
   'components/MessageBubble.tsx',
@@ -665,6 +676,7 @@ const PARTIAL = [
   // draws (the group's name, the TX state, Hold Tx, a remote stop's progress) is catalogued.
   'components/CockpitTxStrip.tsx',
   'components/TopBar.tsx',
+  'components/UtcClock.tsx',
   'components/SetupHealth.tsx',
   'components/AprsCockpit.tsx',
   'components/OperateQsoStrip.tsx',

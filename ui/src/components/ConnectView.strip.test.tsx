@@ -29,6 +29,7 @@ vi.mock('../api', async (importOriginal) => ({
 }))
 import { ConnectView } from './ConnectView'
 import type { SlotId } from '../features/connectConfig'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 const KEY = 'nexus.split.connect.strip'
 const GRID_H = 700
@@ -68,6 +69,7 @@ function closeSlot(c: HTMLElement, slot: SlotId) {
 const realRect = HTMLElement.prototype.getBoundingClientRect
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   window.history.replaceState(null, '', '/')
   globalThis.ResizeObserver = class {
     observe() {}

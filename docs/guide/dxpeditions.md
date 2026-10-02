@@ -42,7 +42,7 @@ cached badge means you are reading the last good fetch, not the present.
 - **open now**, or **best HHMM–HHMMZ** when the window is later;
 - what to expect on the air (`Standard FT8 — call at your offset`, or a SuperFox warning);
 - **▶ Work *band*** — jump the rig to that band and open the right cockpit;
-- **◎ show on map** — open Connect with that expedition selected.
+- **◎ show on map** — open Conditions with that expedition selected.
 
 **▸ details** on a card opens the full 24-hour × band reliability grid for that path, which is
 where a "Marginal" turns back into numbers you can argue with.
@@ -96,7 +96,7 @@ To plan a chase:
    ([Settings ▸ Digital](settings-reference.md#digital-ft8ft4), or the
    DXpedition chip selector in the Operate cockpit). Active expeditions also
    surface on the [Needed board](needed-dx.md) and the
-   [Connect map](connect.md) when heard.
+   [Conditions map](connect.md) when heard.
 
 ### Set a wake-me alarm
 
@@ -142,5 +142,5 @@ within the hour and set a 5-minute lead.
 
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Operate — FT8/FT4 digital](operate-digital.md) (Hound mode)
-- [Connect — map + propagation](connect.md)
+- [Conditions — map + propagation](connect.md)
 - [Awards & Journey](awards-journey.md)

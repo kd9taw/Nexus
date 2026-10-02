@@ -80,11 +80,13 @@ describe('connect layout invariants', () => {
     expect(css).toMatch(/\.connect-map\s*\{[^}]*min-width:\s*0/)
   })
 
-  it('a CONNECT pane body scopes the wide gauge grid to 2 columns (no horizontal clip)', () => {
-    // .connect-scoped deliberately: the pane-frame family is shared with the cockpit
-    // pane grids, and this narrow-rail column-strip must not leak onto them.
-    expect(css).toMatch(/\.connect\s+\.pane-body\s+\.swx-strip\s*\{[^}]*grid-template-columns:\s*repeat\(2/)
-  })
+  // ('a CONNECT pane body scopes the wide gauge grid to 2 columns' lived here — a regex-PRESENCE
+  //  match on the text of the `.connect .pane-body .swx-strip` rule. It passed while the gauges
+  //  stood one per row, because the `.panel` rule's flex display beat the grid it matched. The
+  //  winners of both `display` and `grid-template-columns` are now COMPUTED on the rendered box:
+  //  in a Connect box and outside one (the cockpit pane grids share the frame family) in
+  //  components/prop/SpaceWxGauges.layout.test.tsx, and in the dashboard rail beside the cockpits,
+  //  which shares the rule, in components/DashRail.fit.test.tsx.)
 
   // ('a pane body declares a visible scrollbar affordance' lived here — a regex-PRESENCE
   //  match on `scrollbar-width: thin`, the exact form CLAUDE.md forbids: a dead selector

@@ -45,6 +45,7 @@ import {
 } from '../cssCascade'
 import type { PropagationSnapshot } from '../types'
 import FIXTURE from '../remote-web/__fixtures__/navigation-connect.json'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
@@ -121,6 +122,7 @@ async function renderChips(): Promise<Chip[]> {
       out.push({ host, state, chain: [{ tag: 'body', classes: [], attrs: {} }, ...chainOf(el)] })
     }
   }
+  pastTheSwitch()
   for (const source of [...STATES, null]) {
     let r!: ReturnType<typeof render>
     await act(async () => {

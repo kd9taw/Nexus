@@ -3,11 +3,12 @@
 // the likelihood and the bearing, the backend's own advisory `reason`, and the three FEED
 // NAMES (Cluster, Phone, PSKR — the services' own). What moved is the prose around them.
 import type { ReactNode } from 'react'
-import { Activity, Radio, SignalHigh, Target } from 'lucide-react'
-import { t, type MessageKey } from '../i18n'
+import { Activity, PanelRight, Radio, SignalHigh, Target } from 'lucide-react'
+import { t } from '../i18n'
 import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
 import { azimuthLabel, backendAzimuth } from '../grid'
+import { useBandConditions } from '../bandConditions'
 
 interface Props {
   snap: AppSnapshot
@@ -27,6 +28,10 @@ interface Props {
    * 'qso'/'openings' → Band first, 'rate' → Out first, 'needs'/'activation' →
    * Need first. Omitted = default order. */
   emphasis?: 'qso' | 'needs' | 'rate' | 'openings' | 'activation'
+  /** The dashboard rail's switch for the cockpit on screen (components/DashRail): App passes it only
+   *  beside an operating cockpit and only where the window can show the rail (`lg` and up), so the
+   *  bar never offers a button that changes nothing. Omitted = no button. */
+  rail?: { on: boolean; onToggle: () => void }
 }
 
 /** Compact relative age, e.g. "12s" / "4m" / "2h". The unit letter rides inside the message
@@ -130,18 +135,20 @@ function NbChip({
  * band or need chip drills into the propagation nowcast.
  */
 
-// ActivityTier → the verdict word + its status class. The word resolves when it is READ, so
-// the table is not frozen to whichever locale loaded this module first.
-const BAND_WORD: Record<string, { wordKey: MessageKey; cls: string }> = {
-  Active: { wordKey: 'nowbar.band.open', cls: 'good' },
-  Moderate: { wordKey: 'nowbar.band.fair', cls: 'ok' },
-  Quiet: { wordKey: 'nowbar.band.quiet', cls: 'weak' },
-  Closed: { wordKey: 'nowbar.band.closed', cls: 'bad' },
-}
+// THE BAND CHIP SAYS WHAT THE BAND MENU AND THE MAP'S LIST SAY: the band's condition comes from
+// the one cell they draw (bandConditions.ts over propViz `bandConditionCell`), in the cell's own
+// word, and the chip's class comes from the cell's colour. It used to say what the activity tier
+// said: "quiet" for a band the model calls open and nobody has heard yet (the list: "Open · none
+// heard"), and a closed band in the alert red. Now a band is green, amber or grey here exactly
+// where it is there, and a closed band recedes. Unknown or stale data prints an ellipsis, never a
+// word. Open, Marginal and Closed are TOKENS, like the band name beside them: the backend's
+// English word in every language (operator, 2026-09-29), so there is no catalog entry for them.
+const BAND_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok' }
 
-export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true }: Props) {
+export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true, rail }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
+  const condition = useBandConditions()(band)
   // Skip NotOpen cards: the chip must never advertise an unworkable slot as the
   // top need (the tracker keeps NotOpen cards for the board, filtered here).
   const need = prop?.dxpeditions.workableNow.find((c) => c.status !== 'NotOpen') ?? null
@@ -170,11 +177,9 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
       })()
     : ''
 
-  // Band open? An unrecognised tier prints an em dash and no data prints an ellipsis —
-  // glyphs, not words.
-  const verdict = report ? BAND_WORD[report.tier] : undefined
-  const bandWord = report ? (verdict ? t(verdict.wordKey) : '—') : '…'
-  const bandCls = report ? (verdict?.cls ?? 'weak') : 'weak'
+  // Band open? No data, stale data or an offline snapshot prints an ellipsis — a glyph, not a word.
+  const bandWord = condition.state === 'unknown' ? '…' : condition.word
+  const bandCls = condition.state === 'unknown' ? 'weak' : (BAND_CLASS[condition.color ?? ''] ?? 'weak')
 
   // Getting out? — PSK Reporter spots OF me on this band.
   const hearMe = report?.nHearMe ?? 0
@@ -284,6 +289,21 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
           />
           <FeedPill name="PSKR" status={feedHealth.pskr} />
         </>
+      )}
+
+      {rail && (
+        // The bar's last chip, so it sits over the column it opens. A toggle, not a status: it says
+        // whether the rail is on, and the press is the whole of it.
+        <button
+          type="button"
+          className="nb-chip nb-rail"
+          aria-pressed={rail.on}
+          onClick={rail.onToggle}
+          title={rail.on ? t('nowbar.rail.on.title') : t('nowbar.rail.off.title')}
+        >
+          <PanelRight size={13} aria-hidden="true" />
+          <span className="nb-k">{t('dashRail.title')}</span>
+        </button>
       )}
     </div>
   )

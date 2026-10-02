@@ -10,44 +10,62 @@
 // The panes are an assignable wrap-the-globe grid: every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
-import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense } from 'react'
-import type {
-  GettingOut,
-  MapSpot,
-  NeedAlert,
-  NeedTag,
-  PathPrediction,
-  PropagationSnapshot,
-  Station,
-  WorkableCard,
-} from '../types'
-import type { AlertView, AmpStatus, MufStation, NoaaScalesView } from '../types'
+import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense, type ReactNode } from 'react'
+import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
+import type { AmpStatus } from '../types'
 import type { Theme } from '../useTheme'
-import { getPathOutlook, getBandOutlook, getGettingOut, getSpaceWxScales, getKc2gMuf, getXrayNow, getDxpedWindows } from '../api'
-import type { DxpedWindow } from '../types'
 import { effectiveXray } from '../flareAlert'
-import { latLonToGrid } from '../grid'
 import { gpuCapableForGlobe } from '../gpu'
-import { MapView, type MapIntent } from './MapView'
+import { MapView, setIntentMapLayer, type MapIntent } from './MapView'
+import { setGlobeLayer } from '../features/globeLayers'
 // The 3-D WebGL globe is LAZY-loaded: three.js only downloads when an operator turns on
 // 3-D mode, so the 2-D default (which runs anywhere) never pays for it.
 const Globe3D = lazy(() => import('./Globe3D'))
-import { provLabel } from './connect/paneFormat'
 import { PaneFrame } from './connect/PaneFrame'
+import { UtcClock } from './UtcClock'
+import { DashboardBar } from './DashboardBar'
+import { remoteFeeds, resolveSelection, usePaneContext } from './connect/usePaneContext'
 import { paneById } from './connect/panes'
 import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
 import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
-import type { PaneContext } from './connect/paneContext'
-import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
-import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
-import type { RailWidths } from '../features/connectRails'
-import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
-import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
+import type { OtaBoard, SpotsFeed } from './connect/paneContext'
+import {
+  SLOT_IDS,
+  addableTo,
+  loadConnectConfig,
+  normalizeConfig,
+  saveConnectConfig,
+  slotBoxes,
+  useConnectConfig,
+  type PaneId,
+  type SlotId,
+} from '../features/connectConfig'
+import {
+  CONNECT_PRESET_IDS,
+  CONNECT_PRESETS,
+  STANDARD_LAYOUT,
+  connectLayoutNow,
+  layoutOf,
+  layoutPanels,
+  type ConnectLayout,
+  type ConnectPresetId,
+  type PresetMapLayer,
+} from '../features/connectPresets'
+import { loadRailWidths, parseRailWidths, saveRailWidths, type RailWidths } from '../features/connectRails'
+import { durableGet, durableSet } from '../features/durableStore'
+import {
+  CONNECT_PANELS,
+  coercePanelLayout,
+  loadPanelLayout,
+  panelStorageKey,
+  savePanelLayout,
+  usePanelLayout,
+} from '../features/panelState'
+import { surfaceGet, surfaceHasOwn, surfaceId, surfaceSet } from '../features/windowScope'
 import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
 import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
-import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
 import { useStationCapability } from '../stationAccess'
@@ -111,12 +129,224 @@ const SLOT_WHERE: Record<SlotId, () => string> = {
   bottom3: () => t('connect.slot.where.bottom3'),
 }
 
+/** What the Layout picker offers: Standard first — every pane open at the usual widths, applied by a tap
+ * like any layout's and undone the same way (the operator's batch 63), so trying a layout and going back
+ * is one tap each way — then, when the one-time switch to Frame + bar kept one, the operator's own
+ * earlier layout (`kept`, below), then the presets (features/connectPresets). */
+type LayoutChoice = ConnectPresetId | 'standard' | 'kept'
+const LAYOUT_CHOICES: readonly LayoutChoice[] = ['standard', ...CONNECT_PRESET_IDS]
+const LAYOUT_CHOICES_KEPT: readonly LayoutChoice[] = ['standard', 'kept', ...CONNECT_PRESET_IDS]
+
 /** The ⊞ Layout picker's words (features/connectPresets). Literal keys, resolved lazily at render
  * (the INTENTS treatment). */
-const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => string }> = {
+const LAYOUT_WORDS: Record<LayoutChoice, { label: () => string; title: () => string }> = {
+  standard: { label: () => t('connect.layout.standard'), title: () => t('connect.layout.standard.title') },
+  kept: { label: () => t('connect.layout.kept.label'), title: () => t('connect.layout.kept.title') },
   mapFirst: { label: () => t('connect.layout.mapFirst.label'), title: () => t('connect.layout.mapFirst.title') },
   listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
   dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
+  frame: { label: () => t('connect.layout.frame.label'), title: () => t('connect.layout.frame.title') },
+  frameBar: { label: () => t('connect.layout.frameBar.label'), title: () => t('connect.layout.frameBar.title') },
+}
+
+/** THE LAYOUT PICKER. ONE component, drawn behind two doors: Connect's own Layout button
+ * (LayoutMenu, below) and the top of ⊞ Panels, where it has always been. Both are handed the same
+ * read-back and the same pick, so the two can never disagree about what is on screen. A column of
+ * choices, not a chip row: the popover is 220 px wide, where three chips side by side wrap at Large
+ * text or in German. The words over the operator's own arrangement say what a tap costs before it is
+ * made. Its ids are its own (`useId`), so the two doors never share one. */
+function LayoutPicker({
+  now,
+  onPick,
+  kept,
+}: {
+  now: LayoutChoice | 'custom'
+  onPick: (id: LayoutChoice) => void
+  /** The one-time switch kept this surface's earlier layout: offer it. */
+  kept: boolean
+}) {
+  const id = useId()
+  return (
+    <div className="connect-layouts" role="group" aria-labelledby={`${id}-head`}>
+      <div className="connect-layouts-head">
+        <span id={`${id}-head`}>{t('connect.layout.heading')}</span>
+        <span className="connect-layout-now">
+          {now === 'custom' ? t('connect.layout.custom') : LAYOUT_WORDS[now].label()}
+        </span>
+      </div>
+      {(kept ? LAYOUT_CHOICES_KEPT : LAYOUT_CHOICES).map((p) => (
+        <button
+          key={p}
+          type="button"
+          className={`connect-layout-opt${now === p ? ' active' : ''}`}
+          aria-pressed={now === p}
+          aria-describedby={now === 'custom' ? `${id}-cost` : undefined}
+          title={LAYOUT_WORDS[p].title()}
+          onClick={() => onPick(p)}
+        >
+          {LAYOUT_WORDS[p].label()}
+        </button>
+      ))}
+      {now === 'custom' && (
+        <span className="connect-layout-note" id={`${id}-cost`}>
+          {t('connect.layout.replaces')}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** CONNECT'S LAYOUT BUTTON (the operator's pick, 2026-10-01: "A visible Layout button"). The layouts
+ * sat only at the top of ⊞ Panels, and the operator went looking for them on Connect and did not find
+ * them. This opens the same LayoutPicker with the same Undo — the panel record's one history, so an
+ * Undo pressed here or in ⊞ Panels takes back the same step (the picker's own words name that button).
+ * It closes as ⊞ Panels does: a click anywhere else, or Escape, which goes back to the button and does
+ * NOT stop propagating — on Connect Escape is also the stop (App), and it has to get there. */
+function LayoutMenu({ picker, onUndo, canUndo }: { picker: ReactNode; onUndo: () => void; canUndo: boolean }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [open])
+  return (
+    <div className="connect-layout-menu" ref={rootRef}>
+      <button
+        type="button"
+        ref={btnRef}
+        className={`connect-layout-btn${open ? ' active' : ''}`}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        title={t('connect.layout.button.title')}
+      >
+        {t('connect.layout.button')}
+      </button>
+      {open && (
+        <div
+          className="connect-layout-pop"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setOpen(false)
+              btnRef.current?.focus({ preventScroll: true })
+            }
+          }}
+        >
+          {picker}
+          <div className="connect-layout-actions">
+            <button type="button" onClick={onUndo} disabled={!canUndo} title={t('panels.undo.title')}>
+              {t('panels.undo')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** PER-SURFACE: whether this window's view draws the clock-and-indices bar across its top (a layout
+ *  writes it: Frame + bar on, every other layout and Reset layout off). '1' is on; anything else, off. */
+const BAR_KEY = 'nexus.connect.bar'
+
+// THE ONE-TIME SWITCH TO THE DEFAULT (step 5, the operator's "Everyone, once", 2026-10-01: "All users
+// switch to Frame + bar on update, with Standard one click away. This overrides layouts people chose.")
+// With the condition the operator was told: what each surface had is KEPT, so one tap brings back
+// exactly that, not just Standard, and the switch runs once per surface, never again.
+//
+// ONE RECORD PER SURFACE, `nexus.connect.switch.<surface>`: present once the switch has run there, and
+// holding the arrangement it replaced when that was the operator's own (the screen read Custom). When it
+// was Standard or a layout, that choice in the picker is already the way back, so nothing is kept. The
+// MAIN window's record is durable (features/durableStore): it rides in the profile's ui-state.json, and
+// so in a backup, so neither a reinstall nor a restore runs the switch a second time, and the kept
+// layout is as safe as the panel record it replaced. A pop-out's is per-surface chrome, the panel
+// record's own split, which is why the key carries its surface itself instead of windowScope's bare key.
+//
+// It runs in the view's first render, before the records are read, so nothing paints the old layout
+// first, and it writes what a tap on Frame + bar writes: the placement and its tabs, the panel record
+// (the text sizes kept), the widths and the bar. Never the map. A fresh install starts in Frame + bar
+// the same way, with nothing kept.
+//
+// A SURFACE THAT HAS NO LAYOUT OF ITS OWN is not switched: a dashboard window that never made a change
+// reads the main window's records (windowScope inheritance), before the switch and after it, so it
+// switches when the main window does and goes back when the main window goes back. Switching it on its
+// own would override, a second time, a layout the operator may already have chosen to keep. It records
+// that it has been past this point (so a later change of its own does not set the switch off), with the
+// main window's earlier layout, which is what it showed too, for its own one tap back.
+const SWITCH_V = 1
+const switchKey = (surface: string) => `nexus.connect.switch.${surface}`
+
+/** A surface's switch record: absent until the switch has run there. */
+function switchRecord(surface: string): { kept?: unknown } | null {
+  try {
+    const raw = durableGet(switchKey(surface))
+    return raw == null ? null : ((JSON.parse(raw) as { kept?: unknown }) ?? {})
+  } catch {
+    return {}
+  }
+}
+
+/** Whether a pop-out surface has written any of the records a layout is made of (connectConfig's
+ *  placement, panelState's record, connectRails' widths, the bar) — or still reads the main window's. */
+function hasOwnLayout(surface: string): boolean {
+  return (
+    surfaceHasOwn('nexus.connect.config') ||
+    surfaceHasOwn('nexus.connect.railWidths') ||
+    surfaceHasOwn(BAR_KEY) ||
+    durableGet(panelStorageKey(CONNECT_PANELS.view, surface)) != null
+  )
+}
+
+function switchToDefaultOnce(presets: Readonly<Record<ConnectPresetId, ConnectLayout>>): void {
+  const surface = surfaceId()
+  const key = switchKey(surface)
+  if (switchRecord(surface)) return
+  if (surface !== 'main' && !hasOwnLayout(surface)) {
+    durableSet(key, JSON.stringify({ v: SWITCH_V, kept: switchRecord('main')?.kept ?? null }))
+    return
+  }
+  const cfg = loadConnectConfig()
+  const panels = loadPanelLayout(CONNECT_PANELS, surface, 'main')
+  const rails = loadRailWidths()
+  const now = { slots: cfg.slots, tabs: cfg.tabs, panels, rails, bar: surfaceGet(BAR_KEY) === '1' }
+  const reads = connectLayoutNow(now, presets)
+  const def = presets.frameBar
+  if (reads !== 'frameBar') {
+    saveConnectConfig(normalizeConfig({ ...cfg, slots: def.slots, tabs: def.tabs, rotate: {} }))
+    savePanelLayout(panelStorageKey(CONNECT_PANELS.view, surface), { ...layoutPanels(def), scale: panels.scale })
+    saveRailWidths({ left: def.rails.left, right: def.rails.right })
+    surfaceSet(BAR_KEY, def.bar ? '1' : '0')
+  }
+  durableSet(key, JSON.stringify({ v: SWITCH_V, kept: reads === 'custom' ? layoutOf(now, cfg.rotate) : null }))
+}
+
+/** The layout this surface's switch kept, each part coerced as the record it came from is on load;
+ *  null when it kept none, and for anything unreadable. */
+function loadKeptLayout(): ConnectLayout | null {
+  try {
+    const k = switchRecord(surfaceId())?.kept
+    if (!k || typeof k !== 'object') return null
+    const o = k as Record<string, unknown>
+    const cfg = normalizeConfig({ slots: o.slots, tabs: o.tabs, rotate: o.rotate })
+    const hidden = Array.isArray(o.hidden) ? SLOT_IDS.filter((s) => (o.hidden as unknown[]).includes(s)) : []
+    const { share } = coercePanelLayout(CONNECT_PANELS, { v: 1, state: {}, share: o.share })
+    const rails = parseRailWidths(JSON.stringify(o.rails ?? null))
+    return {
+      slots: cfg.slots,
+      tabs: cfg.tabs,
+      rotate: cfg.rotate,
+      hidden,
+      share,
+      rails: { left: rails.left, right: rails.right },
+      bar: o.bar === true,
+    }
+  } catch {
+    return null
+  }
 }
 
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
@@ -128,6 +358,10 @@ function persisted<T extends string>(key: string, allow: readonly T[], fallback:
 
 interface Props {
   myGrid: string
+  /** The station as the dashboard bar a layout puts over the view shows it — the main window's snapshot's
+   *  call and grid, as the dashboard window's bar shows them. The Remote page reads the station's own;
+   *  the hosts that draw their own bar need not pass it. */
+  station?: { call: string; grid: string }
   theme: Theme
   stations: Station[]
   prop: PropagationSnapshot | null
@@ -148,10 +382,34 @@ interface Props {
   amp?: AmpStatus | null
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
+  /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
+  rigBand?: string | null
+  /** The Spots box's list and wiring: this window's Spots board, lent whole (paneContext
+   *  SpotsFeed). Omitted ⇒ the box shows its one-line state and offers no Work. */
+  spotsFeed?: SpotsFeed
+  /** The POTA/SOTA box's wiring: this window's POTA/SOTA board's (paneContext OtaBoard). Omitted ⇒
+   *  its one-line state and no HUNT. */
+  otaBoard?: OtaBoard
+  /** AUTO-ROTATE a slot's tabs (⋯ ▸ Rotate the tabs), offered and run only where the host says so:
+   *  the dashboard window (DetachedPanel's Connect) and the TV page (ConnectTv), never the main
+   *  window's Connect (the operator's pick, 2026-09-29: "Auto-rotating boxes on the dashboard/TV").
+   *  Without it a stored interval is inert and the menu offers none. */
+  autoRotate?: boolean
+  /** Settings ▸ Workspace's local clock (#253): the header's clock shows this computer's time beside
+   *  UTC, as the top bar's did. */
+  showLocalClock?: boolean
+  /** The host draws the dashboard bar over this view (the dashboard window, DetachedPanel; the TV page,
+   *  ConnectTv), so the header draws no clock of its own: the bar's big one is the clock there. */
+  hostBar?: boolean
+  /** This host's layout table, when it is not the app's: the TV page's (features/connectPresets
+   *  TV_PRESETS) has its own Frame + bar, the default it opens in, without the boxes the page can never
+   *  fill. Omitted ⇒ CONNECT_PRESETS. */
+  presets?: Readonly<Record<ConnectPresetId, ConnectLayout>>
 }
 
 export function ConnectView({
   myGrid: nativeMyGrid,
+  station: nativeStation,
   theme,
   stations,
   prop: nativeProp,
@@ -164,6 +422,13 @@ export function ConnectView({
   onPoint,
   onSelectSat,
   onPopOut,
+  rigBand,
+  spotsFeed,
+  otaBoard,
+  autoRotate,
+  showLocalClock,
+  hostBar,
+  presets,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -176,10 +441,7 @@ export function ConnectView({
   const onSelectCall=remote?setRemoteSelection:nativeOnSelectCall
   const prop=remote?remoteConnect.value?.prop??null:nativeProp
   const myGrid=remote?remoteConnect.value?.mygrid??'':nativeMyGrid
-  const prov = prop ? provLabel(prop.source, prop.asOf) : null
-  // Fetched here, once, and handed to every pane through the context — the panes that
-  // need it include plain render functions that cannot hold a hook of their own.
-  const entityCentroids = useEntityCentroids()
+  const station=remote?{call:remoteConnect.value?.mycall??'',grid:remoteConnect.value?.mygrid??''}:nativeStation??{call:'',grid:''}
   const [intent, setIntent] = useState<MapIntent>(() =>
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
@@ -217,8 +479,16 @@ export function ConnectView({
   // full-screen flag left standing while the 3-D globe is mounted would hide the header and the
   // panes with nothing on screen able to bring them back.
   const [mapFull, setMapFull] = useState(false)
+  // THE ONE-TIME SWITCH TO FRAME + BAR (switchToDefaultOnce, above): here, in the first render, so the
+  // placement, the panel record, the widths and the bar below are all read after it. Then the layout
+  // it kept, if it kept one, for the picker's "Your earlier layout".
+  const table = presets ?? CONNECT_PRESETS
+  const [kept] = useState(() => {
+    switchToDefaultOnce(table)
+    return loadKeptLayout()
+  })
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, assignPane, resetSlots, restoreSlots } = useConnectConfig()
+  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -226,226 +496,45 @@ export function ConnectView({
   // NOTE: focus is a deliberate user action and STICKS until toggled — a modeled-open-
   // but-unheard band is a legitimate focus target; the map just doesn't dim when a
   // focused band has no spots (MapView), so focusing it can't black out the map.
-  // Resolve the selection against EVERYTHING plotted: my decoded stations, the
-  // live cluster/RBN/PSKR spots, and the DXpedition cards — so clicking ANY map
-  // pixel populates the selection pane (the map's "so what").
-  const selStation = useMemo(
-    () => (selectedCall ? (stations.find((s) => s.call === selectedCall) ?? null) : null),
-    [selectedCall, stations],
-  )
-  const selSpot = useMemo<MapSpot | null>(
-    () =>
-      selectedCall && !selStation
-        ? (prop?.spots?.find((sp) => sp.call === selectedCall) ?? null)
-        : null,
-    [selectedCall, selStation, prop],
-  )
-  // Gated on !selStation: a DXpedition call we ALSO decoded locally renders as the
-  // decoded station (worked from the cockpit) — the dxped card's advertised band may
-  // differ from the band it was actually heard on, and the Work button must never
-  // route the rig off what the operator is looking at.
-  const selDxped = useMemo<WorkableCard | null>(
-    () =>
-      selectedCall && !selStation
-        ? (prop?.dxpeditions.workableNow.find((c) => c.call === selectedCall) ?? null)
-        : null,
-    [selectedCall, selStation, prop],
-  )
-  // Per-path outlook for the selection (the PathPredictor seam): a station's
-  // reported grid when we have one, else the spot's coordinates as a Maidenhead
-  // square (centroid-placed spots = the entity's grid — approximate, labeled).
-  const selGrid = useMemo(() => {
-    if (!selectedCall) return null
-    if (selStation?.grid) return selStation.grid
-    if (selSpot) return latLonToGrid(selSpot.lat, selSpot.lon)
-    return null
-  }, [selectedCall, selStation, selSpot])
+  // WHAT THE BOXES READ: the selection resolved against everything plotted (a click on ANY map pixel
+  // fills the selection box), the window's one poll of Connect's feeds, and the path outlook for the
+  // selection — built by the code the dashboard rail beside the cockpits uses too
+  // (connect/usePaneContext), so a box reads the same in both places and nothing is polled twice.
+  // The hosted Remote page polls nothing: its copies come from the station's `connect` and `path`
+  // collections (`remoteFeeds` is the mapping this view's own effect used to make).
+  const selection = useMemo(() => resolveSelection(selectedCall, stations, prop), [selectedCall, stations, prop])
+  const selGrid = selection.selGrid
   const remotePath=useNavigation<PathData>('path',selGrid??'',!!selGrid)
-  const [nativePathPred, setPathPred] = useState<PathPrediction | null>(null)
-  const pathPred=remote?(remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null):nativePathPred
-  useEffect(() => {
-    if(remote)return
-    if (!selGrid) {
-      setPathPred(null)
-      return
-    }
-    let live = true
-    getPathOutlook(selGrid)
-      .then((p) => live && setPathPred(p))
-      .catch(() => {})
-    return () => {
-      live = false
-    }
-  }, [selGrid,remote])
-  const pathOpen = pathPred?.bands.filter((b) => b.workability !== 'Closed') ?? []
-
-  // The no-selection general "Band outlook (modelled)": modeled per-band workability
-  // + MUF to a long-haul DX ring. Fetched only when no station is selected; refreshed
-  // on the prop cadence so the modeled day tracks the current space weather.
-  const [bandOutlook, setBandOutlook] = useState<PathPrediction | null>(null)
-  // ⭐ KEPT WARM UNCONDITIONALLY, on its own cadence — like `getout` below.
-  //
-  // This used to early-return `if (selectedCall) return` and hang off `prop?.asOf`. Both
-  // were written for the ONE consumer visible from here: the map/outlook strip, which
-  // shows `pathPred` instead whenever a station is selected (:419/:441), so it genuinely
-  // does not need this value then. But `bandOutlook` is also read UNCONDITIONALLY by three
-  // panes — Chase (ChasePane.tsx:44), the Chase feed (ChaseFeedPane.tsx:25) and the
-  // band-outlook heatmap (connect/panes.tsx:274/:569) — and for them the guard was
-  // starvation: selecting a station froze their openness/"best window" column at whatever
-  // it last held, indefinitely, while every sibling pane kept updating off its own poll.
-  // That is the operator report ("the Chase section stays stuck on old information"), and it
-  // was never pop-out-specific — the detached window only made it obvious, because it sits
-  // on a second monitor for hours with a selection active.
-  //
-  // The `prop?.asOf` dep was the second half: `asOf` is stamped only on a real SWPC fetch
-  // and served from a 300 s cache (PROP_TTL_SECS, src-tauri/src/lib.rs:1239), so even with
-  // nothing selected this refreshed at most every five minutes rather than on any poll.
-  // A plain interval is both simpler and honest about the cadence.
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getBandOutlook()
-        .then((p) => live && setBandOutlook(p))
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 60_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  const outlookOpen = bandOutlook?.bands.filter((b) => b.workability !== 'Closed') ?? []
-  // "Am I getting out?" — who is hearing me now (observed). Polled on the prop
-  // cadence; the backend reads the live PSK Reporter / RBN firehose each call.
-  const [getout, setGetout] = useState<GettingOut | null>(null)
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getGettingOut()
-        .then((g) => live && setGetout(g))
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 30_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  // B3 live external feeds (desktop-only; cached server-side, polled on the TTL cadence).
-  // Graceful: any failure leaves the last value, never throws — the panes degrade honestly.
-  const [scales, setScales] = useState<NoaaScalesView | null>(null)
-  const [alerts, setAlerts] = useState<AlertView[]>([])
-  const [muf, setMuf] = useState<MufStation[]>([])
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () => {
-      getSpaceWxScales()
-        .then((s) => {
-          if (live) {
-            setScales(s.scales)
-            setAlerts(s.alerts)
-          }
-        })
-        .catch(() => {})
-      getKc2gMuf()
-        .then((m) => live && setMuf(m))
-        .catch(() => {})
-    }
-    load()
-    // 5 min = the kc2g MUF cache TTL; the 15-min SWPC scales cache is intentionally
-    // over-polled (harmless — the server serves cached, so it's a cheap freshness check).
-    const id = window.setInterval(load, 300_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  // X-ray fast lane (60 s) so the map's D-RAP flare layer moves at ~1 min cadence
-  // during an event instead of the 5-min prop snapshot. Best-effort: a failed
-  // fetch just leaves the snapshot's value driving the layer.
-  const [xrayNow, setXrayNow] = useState<number | null>(null)
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getXrayNow()
-        .then((x) => live && setXrayNow(x.flux))
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 60_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  // The one flux value the map renders (dev-override > fast lane > snapshot).
-  const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
-  // DXpedition best-shot windows (server-cached climatology) — the selection
-  // pane shows the selected expedition's line. 10-min poll is generous.
-  const [dxpedWindows, setDxpedWindows] = useState<Map<string, DxpedWindow>>(new Map())
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getDxpedWindows()
-        .then((list) => {
-          if (live) setDxpedWindows(new Map(list.map((w) => [w.call.toUpperCase(), w])))
-        })
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 600_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-
-  useEffect(()=>{
-    if(!remote)return
-    const d=remoteConnect.value,age=remoteConnect.ageMs
-    setBandOutlook(d?.bandOutlook??null);setGetout(d?.gettingOut??null)
-    const scales=d?.scales&&d.scales.ageMs+age<d.scales.validForMs?d.scales.value:null
-    setScales(scales?.[0]??null);setAlerts(scales?.[1]??[])
-    setMuf(d?.muf&&d.muf.ageMs+age<d.muf.validForMs?d.muf.value:[])
-    setXrayNow(d?.xray&&d.prop.asOf+Math.floor((d.sourceAgeMs+age)/1000)-d.xray.asOf<120?d.xray.flux:null)
-    setDxpedWindows(new Map())
-  },[remote,remoteConnect.value,remoteConnect.ageMs])
-
-  // One context handed to every pane (built from the already-lifted state above).
-  const ctx: PaneContext = {
+  const remoteFeedValues = useMemo(
+    () => (remote ? remoteFeeds(remoteConnect.value, remoteConnect.ageMs) : null),
+    [remote, remoteConnect.value, remoteConnect.ageMs],
+  )
+  const { ctx, xrayNow } = usePaneContext({
     myGrid,
-    entityCentroids,
     theme,
     intent,
     prop,
-    prov,
     needByCall,
-    needAlerts: needAlerts ?? [],
-    amp: amp ?? null,
+    needAlerts,
+    amp,
+    // The Remote browser's copy carries no radio band of its own here.
+    rigBand: remote ? null : (rigBand ?? null),
     selectedCall,
-    selStation,
-    selSpot,
-    selDxped,
-    selDxpedWindow: selDxped ? (dxpedWindows.get(selDxped.call.toUpperCase()) ?? null) : null,
-    dxpedWindows,
-    selGrid,
-    pathPred,
-    bandOutlook,
-    pathOpen,
-    outlookOpen,
-    getout,
-    focusBand,
-    scales,
-    alerts,
-    muf,
+    selection,
     onSelectCall,
     onWorkSpot,
     onPoint: remote&&!remoteRotator?undefined:onPoint,
+    focusBand,
     toggleFocusBand,
-  }
+    remote: remoteFeedValues
+      ? { feeds: remoteFeedValues, pathPred: remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null }
+      : null,
+    spotsFeed,
+    otaBoard,
+  })
+  const { pathPred, bandOutlook, muf } = ctx
+  // The one flux value the map renders (dev-override > fast lane > snapshot).
+  const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
   const chromeHidden = mapFull && !map3d
 
   // CLOSE + RESIZE (operator-approved 2026-09-13). Visibility is per SLOT, in the shared
@@ -455,8 +544,19 @@ export function ConnectView({
   // until it makes a change of its own.
   const surface = useMemo(() => surfaceId(), [])
   const panels = usePanelLayout(CONNECT_PANELS, surface, 'main')
+  // THE BAR (a layout's, features/connectPresets `bar`): this surface's record of whether the view draws
+  // the dashboard bar over its header. Where the host draws the bar itself (`hostBar`) the record is
+  // still kept, and read back, but the view draws no second bar.
+  const [barOn, setBarOn] = useState(() => surfaceGet(BAR_KEY) === '1')
+  const writeBar = (on: boolean) => {
+    setBarOn(on)
+    surfaceSet(BAR_KEY, on ? '1' : '0')
+  }
+  const barShown = barOn && !hostBar
   // RESET LAYOUT IS THE OUT-OF-BOX STATE (operator 2026-09-13): default pane in every slot, every
-  // pane open, default widths and splits. The panel record's one-level Undo already covers the
+  // pane open, default widths and splits — Standard, the install's layout until step 5 made a first run
+  // open in Frame + bar (switchToDefaultOnce); the picker's Frame + bar (default) is the way to that one.
+  // The panel record's one-level Undo already covers the
   // visibility + split half of a Reset; the slot placement lives in the config, so the placement
   // Reset replaced is held here and put back by the SAME Undo press. It is dropped by the next
   // change of any kind, so Undo only ever reverts the last change. Widths are not undo steps
@@ -466,7 +566,21 @@ export function ConnectView({
   // A preset sets the whole board in one tap and its widths are most of what it changes, so an
   // Undo that left them would not put the operator's arrangement back — and a saved arrangement
   // is never overwritten silently. A width drag is still no undo step of its own.
-  const beforeSwitch = useRef<{ slots: typeof slots; rails?: RailWidths } | null>(null)
+  // …and the map layers a layout turned on (Frame: the satellites), exactly those and on exactly the
+  // map whose record the tap changed, so its Undo turns off what the tap turned on and nothing the
+  // operator already had on.
+  const beforeSwitch = useRef<{
+    slots: typeof slots
+    tabs: typeof tabs
+    rotate: typeof rotate
+    rails?: RailWidths
+    mapLayers?: { intent: MapIntent; turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> }
+    bar?: boolean
+  } | null>(null)
+  // A LAYOUT'S REACH INTO THE MAP (features/connectPresets `mapLayers`): the layers it turns on are
+  // written into both maps' records on this surface — the 2-D map's for the intent in use, and the
+  // 3-D globe's — and this revision tells whichever map is on screen to read its layers again.
+  const [mapLayersRev, setMapLayersRev] = useState(0)
   const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
     beforeSwitch.current = null
     fn(...a)
@@ -495,22 +609,65 @@ export function ConnectView({
     ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
   } as React.CSSProperties
 
-  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard. Which one is on
-  // screen is READ BACK from the placement, the panel record and the stored rail widths — never
-  // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
-  const layoutNow = connectLayoutNow({ slots, panels: panels.layout, rails: widths.pref })
-  const layoutsId = useId()
+  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame · Frame + bar,
+  // and Standard and the kept layout, which a tap applies the same way.
+  // Which one is on screen is READ BACK from the placement (its tabs included), the panel record, the
+  // stored rail widths and the bar's record — never stored — so a pane moved or resized after a pick
+  // reads Custom and nothing can snap back.
+  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref, bar: barOn }, table, kept)
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
-  const pickLayout = (id: ConnectPresetId) => {
+  const pickLayout = (id: LayoutChoice) => {
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
-    const p = CONNECT_PRESETS[id]
-    beforeSwitch.current = { slots, rails: widths.pref }
-    panels.setLayout(layoutPanels(p))
-    restoreSlots(p.slots)
+    // Standard is a layout here like the others: no closed slots, the default widths, no tabs, no bar,
+    // no map layers. Only Reset layout also puts the text sizes and the bottom row's height back. The
+    // kept layout is one too, with its own splits and its tabs' rotation.
+    const p = id === 'standard' ? STANDARD_LAYOUT : id === 'kept' ? kept : table[id]
+    if (!p) return
+    const turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> = []
+    for (const layer of p.mapLayers ?? []) {
+      if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })
+      if (setGlobeLayer(layer, true)) turnedOn.push({ layer, map: '3d' })
+    }
+    beforeSwitch.current = { slots, tabs, rotate, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined, bar: barOn }
+    // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes
+    // go and how much room each gets, never how big their words are — the rule it already keeps for
+    // the map's own settings. Reset layout is what puts every pane back at the app's size.
+    panels.setLayout({ ...layoutPanels(p), scale: panels.layout.scale })
+    // Its tab plan, or one pane per slot (Frame + bar is the one preset with tabs; the kept layout has
+    // the operator's own, and their rotation).
+    restoreSlots(
+      p.slots,
+      p.tabs ? Object.fromEntries(Object.entries(p.tabs).map(([s, l]) => [s, [...l]])) : undefined,
+      p.rotate ? { ...p.rotate } : undefined,
+    )
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
+    writeBar(!!p.bar)
+    if (turnedOn.length) setMapLayersRev((n) => n + 1)
   }
+  // The ONE Undo, behind both doors (⊞ Panels and the Layout button): the panel record steps back,
+  // and the placement, widths and map layers a layout replaced come back with it.
+  const undoLayout = () => {
+    const before = beforeSwitch.current
+    beforeSwitch.current = null
+    panels.undo()
+    if (before) {
+      restoreSlots(before.slots, before.tabs, before.rotate)
+      if (before.rails) widths.setPrefs(before.rails)
+      if (before.bar !== undefined) writeBar(before.bar)
+      if (before.mapLayers) {
+        for (const { layer, map } of before.mapLayers.turnedOn) {
+          if (map === '2d') setIntentMapLayer(before.mapLayers.intent, layer, false)
+          else setGlobeLayer(layer, false)
+        }
+        setMapLayersRev((n) => n + 1)
+      }
+    }
+  }
+  const picker = <LayoutPicker now={layoutNow} onPick={pickLayout} kept={kept != null} />
 
+  // TABS (features/connectConfig): a slot holds one or more panes and shows one. Showing a tab is not
+  // an arrangement change, so it leaves the one Undo alone; adding or removing one is, like a pick.
   const frame = (s: SlotId, share?: number) => (
     <PaneFrame
       key={s}
@@ -520,6 +677,15 @@ export function ConnectView({
       onAssign={change(assignPane)}
       share={share}
       onHide={change(() => panels.setPanelState(s, 'removed'))}
+      textScale={panels.scaleOf(s)}
+      onTextScale={change((f: number) => panels.setScale(s, f))}
+      tabs={slotBoxes({ slots, tabs }, s)}
+      onShowTab={(p: PaneId) => showTab(s, p)}
+      addable={addableTo({ slots, tabs }, s)}
+      onAddTab={change((p: PaneId) => addTab(s, p))}
+      onRemoveTab={change(() => removeTab(s))}
+      rotateSecs={autoRotate ? rotate[s] : undefined}
+      onRotate={autoRotate ? change((secs: number | null) => setRotate(s, secs)) : undefined}
     />
   )
   const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {
@@ -558,6 +724,10 @@ export function ConnectView({
     <NavigationMapContext.Provider value={remote?{connect:remoteConnect.value,satellites:remoteSats.value?.mygrid===myGrid?remoteSats.value.view:null,track:remoteTrack?.track??null,ageMs:remoteConnect.ageMs}:null}>
     <main className="layout single">
       <div className={`connect-shell${chromeHidden ? ' map-full' : ''}`}>
+        {/* FRAME + BAR's bar (the operator's pick: "Yes, the full bar" — the dashboard window's, call
+            and grid included) across the top of the view, over the header. It goes with the header in
+            full screen. */}
+        {!chromeHidden && barShown && <DashboardBar call={station.call} grid={station.grid} prop={prop} />}
         {!chromeHidden && (
         <div className="connect-header">
           {remote&&<span role="status" className="dim">{remoteConnect.value?t('remote.collectionObserver'):remoteConnect.loading?t('remote.collectionLoading'):t('remote.collectionUnavailable')}</span>}
@@ -577,71 +747,36 @@ export function ConnectView({
               </button>
             ))}
           </div>
-          {/* The restore surface for a closed pane, and Reset layout. Always in the header, so
-              with every pane closed the way back is still one click away. */}
-          <PanelsMenu
-            items={SLOT_IDS.map((s) => ({
-              id: s,
-              label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
-              state: panels.stateOf(s),
-            }))}
-            onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
-            onUndo={() => {
-              const before = beforeSwitch.current
-              beforeSwitch.current = null
-              panels.undo()
-              if (before) {
-                restoreSlots(before.slots)
-                if (before.rails) widths.setPrefs(before.rails)
-              }
-            }}
-            canUndo={panels.canUndo}
-            onReset={() => {
-              beforeSwitch.current = { slots }
-              panels.reset()
-              resetSlots()
-              widths.resetAll()
-              // '' reads back as "never set": the strip's own height (a height is not an undo step,
-              // like the widths).
-              surfaceSet('nexus.split.connect.strip', '')
-              setStripEpoch((n) => n + 1)
-            }}
-            lead={
-              // THE LAYOUT PICKER. A column of choices, not a chip row: the popover is 220 px wide,
-              // where three chips side by side wrap at Large text or in German. The words over
-              // the operator's own arrangement say what a tap costs before it is made.
-              <div className="connect-layouts" role="group" aria-labelledby={`${layoutsId}-head`}>
-                <div className="connect-layouts-head">
-                  <span id={`${layoutsId}-head`}>{t('connect.layout.heading')}</span>
-                  <span className="connect-layout-now">
-                    {layoutNow === 'standard'
-                      ? t('connect.layout.standard')
-                      : layoutNow === 'custom'
-                        ? t('connect.layout.custom')
-                        : LAYOUT_WORDS[layoutNow].label()}
-                  </span>
-                </div>
-                {CONNECT_PRESET_IDS.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`connect-layout-opt${layoutNow === id ? ' active' : ''}`}
-                    aria-pressed={layoutNow === id}
-                    aria-describedby={layoutNow === 'custom' ? `${layoutsId}-cost` : undefined}
-                    title={LAYOUT_WORDS[id].title()}
-                    onClick={() => pickLayout(id)}
-                  >
-                    {LAYOUT_WORDS[id].label()}
-                  </button>
-                ))}
-                {layoutNow === 'custom' && (
-                  <span className="connect-layout-note" id={`${layoutsId}-cost`}>
-                    {t('connect.layout.replaces')}
-                  </span>
-                )}
-              </div>
-            }
-          />
+          {/* The Layout button and ⊞ Panels stand together, whatever else the header holds (the
+              pop-out and the TV page have no Pop out to pack them against). */}
+          <div className="connect-header-menus">
+            <LayoutMenu picker={picker} onUndo={undoLayout} canUndo={panels.canUndo} />
+            {/* The restore surface for a closed pane, and Reset layout. Always in the header, so
+                with every pane closed the way back is still one click away. */}
+            <PanelsMenu
+              items={SLOT_IDS.map((s) => ({
+                id: s,
+                label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
+                state: panels.stateOf(s),
+              }))}
+              onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
+              onUndo={undoLayout}
+              canUndo={panels.canUndo}
+              onReset={() => {
+                beforeSwitch.current = { slots, tabs, rotate, bar: barOn }
+                panels.reset()
+                resetSlots()
+                widths.resetAll()
+                // The out-of-box state has no bar.
+                writeBar(false)
+                // '' reads back as "never set": the strip's own height (a height is not an undo step,
+                // like the widths).
+                surfaceSet('nexus.split.connect.strip', '')
+                setStripEpoch((n) => n + 1)
+              }}
+              lead={picker}
+            />
+          </div>
           {onPopOut && !remote && (
             <button
               type="button"
@@ -651,6 +786,17 @@ export function ConnectView({
             >
               {t('connect.popOut.label')}
             </button>
+          )}
+          {/* THE STATION CLOCK, in every layout (the operator, 2026-10-01). The top bar left Connect
+              with its radio controls and took its UTC clock with it, and "things like time are very
+              good" on a second monitor or the TV; the alerts, REC, the watchdog alert, Help and Field
+              stay off. The top bar's own clock, last in the header. Where a dashboard bar is drawn over
+              the view (Frame + bar's, or the host's), its big clock is the one. */}
+          {!hostBar && !barShown && (
+            <div className="connect-clock">
+              <UtcClock />
+              {showLocalClock && <UtcClock local />}
+            </div>
           )}
         </div>
         )}
@@ -684,6 +830,7 @@ export function ConnectView({
                   muf={muf}
                   xrayLong={xrayLong}
                   stations={stations}
+                  layersRev={mapLayersRev}
                 />
               </Suspense>
             ) : (
@@ -705,6 +852,7 @@ export function ConnectView({
               muf={muf}
               xrayLong={xrayLong}
               onFullChange={setMapFull}
+              layersRev={mapLayersRev}
             />
             )}
           </div>

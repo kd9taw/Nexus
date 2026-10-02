@@ -64,6 +64,13 @@ export const DURABLE_KEYS: readonly string[] = [
   // 2026-08-21 against 1.7.5, alongside the panel layout below: settings.json survived and
   // these did not, which is exactly the split this file exists to correct.
   'nexus.features.v1',
+  // THE ONE-TIME SWITCH TO FRAME + BAR (Conditions, step 5) — the main window's record that it ran, and
+  // the layout it kept for one tap back. Durable so a reinstall or a restore from a backup can never run
+  // the switch a second time, and so the kept layout is as safe as the panel record it replaced. The
+  // MAIN window's only, the panel record's split: it carries its surface in the key (ConnectView
+  // `switchKey`), so a pop-out's `nexus.connect.switch.<surface>` is not on this list and stays in
+  // localStorage, per-surface chrome.
+  'nexus.connect.switch.main',
 ]
 
 /** The MAIN window's pane layout is durable; a detached panel's is not.

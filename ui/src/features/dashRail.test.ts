@@ -1,0 +1,126 @@
+// @vitest-environment jsdom
+//
+// The dashboard rail's records (features/dashRail): off until the operator turns it on, remembered
+// per section, the stock boxes, and a width that never leaves the cockpit narrower than on the
+// 1024×768 floor window. Pure apart from storage.
+import { describe, it, expect, beforeEach } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import {
+  DASH_DEFAULT_SLOTS,
+  DASH_RAIL_SECTIONS,
+  DASH_RAIL_DEFAULT_PX,
+  FLOOR_EFFECTIVE_W,
+  coerceDashSlots,
+  coerceRailSections,
+  fitRailWidth,
+  loadDashSlots,
+  loadRailSections,
+  parseRailWidth,
+  railWidthMax,
+  stepRailWidth,
+  useDashRailSections,
+  useDashSlots,
+} from './dashRail'
+import { RAIL_MAX, RAIL_MIN } from './connectRails'
+import { pickInitialZoom } from '../useScale'
+
+beforeEach(() => localStorage.clear())
+
+describe('off until the operator turns it on, remembered per section', () => {
+  it('every section is OFF with nothing stored — nobody’s cockpit narrows on update', () => {
+    const { result } = renderHook(() => useDashRailSections())
+    for (const s of DASH_RAIL_SECTIONS) expect(result.current.isOn(s), s).toBe(false)
+  })
+
+  it('turning it on for one section leaves every other section off, and survives a reload', () => {
+    const { result } = renderHook(() => useDashRailSections())
+    act(() => result.current.setOn('cw', true))
+    expect(result.current.isOn('cw')).toBe(true)
+    for (const s of DASH_RAIL_SECTIONS.filter((x) => x !== 'cw')) expect(result.current.isOn(s), s).toBe(false)
+    // A fresh read of storage is the next launch.
+    expect(loadRailSections()).toEqual({ cw: true })
+    const again = renderHook(() => useDashRailSections())
+    expect(again.result.current.isOn('cw')).toBe(true)
+    act(() => again.result.current.setOn('cw', false))
+    expect(loadRailSections()).toEqual({ cw: false })
+  })
+
+  it('a section that is not an operating cockpit is never on, whatever is stored', () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ connect: true, chat: true, settings: true }))
+    const { result } = renderHook(() => useDashRailSections())
+    for (const v of ['connect', 'chat', 'settings', 'logbook']) expect(result.current.isOn(v), v).toBe(false)
+  })
+
+  it('a junk or foreign record reads as OFF, never as a surprise rail', () => {
+    expect(coerceRailSections(null)).toEqual({})
+    expect(coerceRailSections('on')).toEqual({})
+    expect(coerceRailSections([true])).toEqual({})
+    expect(coerceRailSections({ operate: 'yes', phone: 1, cw: true, bogus: true })).toEqual({ cw: true })
+    localStorage.setItem('nexus.dashrail.sections', '{not json')
+    expect(loadRailSections()).toEqual({})
+  })
+})
+
+describe('the stock boxes, and a column that stays a permutation', () => {
+  it('opens on the operator’s four: Clock, Bands for you, Space Wx, Getting Out', () => {
+    expect(DASH_DEFAULT_SLOTS).toEqual({ rail1: 'clock', rail2: 'bandTiles', rail3: 'spacewx', rail4: 'getout' })
+    expect(loadDashSlots()).toEqual(DASH_DEFAULT_SLOTS)
+  })
+
+  it('an unknown box or a duplicate is repaired on load, never a gap', () => {
+    const c = coerceDashSlots({ rail1: 'nope', rail2: 'getout', rail3: 'getout' })
+    expect(c.rail1).toBe('clock')
+    expect(new Set(Object.values(c)).size).toBe(4)
+  })
+
+  it('picking a box already in another slot swaps the two, and the pick is stored', () => {
+    const { result } = renderHook(() => useDashSlots())
+    act(() => result.current.assignPane('rail1', 'getout'))
+    expect(result.current.slots).toEqual({ rail1: 'getout', rail2: 'bandTiles', rail3: 'spacewx', rail4: 'clock' })
+    expect(loadDashSlots()).toEqual(result.current.slots)
+    act(() => result.current.resetSlots())
+    expect(loadDashSlots()).toEqual(DASH_DEFAULT_SLOTS)
+  })
+})
+
+describe('the width: a stored preference fitted into the window, the cockpit keeping its floor', () => {
+  it('the floor window is 1024 px at the zoom Nexus opens 1024×768 at (85 %)', () => {
+    expect(pickInitialZoom(1024, 768)).toBe(85)
+    expect(FLOOR_EFFECTIVE_W).toBeCloseTo(1024 / 0.85, 6)
+  })
+
+  it('whatever is stored, the cockpit is never narrower than on the 1024×768 floor window', () => {
+    // Every lg/xl effective width, every stored preference, 1 px apart around the edges.
+    const widths = [1600, 1607, 1700, 1920, 2048, 2290, 2399, 2400, 2560, 3440, 5120]
+    const prefs = [null, 1, 150, 200, 250, 300, 402, 403, 600, 700, 720, 721, 5000]
+    for (const ew of widths) {
+      for (const pref of prefs) {
+        const w = fitRailWidth(pref, ew)
+        expect(ew - w, `ew ${ew}, stored ${pref}: rail ${w}`).toBeGreaterThanOrEqual(FLOOR_EFFECTIVE_W)
+        expect(w).toBeGreaterThanOrEqual(RAIL_MIN)
+        expect(w).toBeLessThanOrEqual(RAIL_MAX)
+      }
+    }
+  })
+
+  it('a width stored on a big monitor is fitted on a laptop and comes back on the monitor', () => {
+    // 1366×768 opens at 85 %: 1607 effective px, so the rail may take 402.
+    expect(fitRailWidth(700, 1366 / 0.85)).toBe(402)
+    expect(fitRailWidth(700, 1920)).toBe(700)
+    expect(fitRailWidth(null, 1920)).toBe(DASH_RAIL_DEFAULT_PX)
+    expect(fitRailWidth(900, 3440)).toBe(RAIL_MAX)
+    expect(fitRailWidth(120, 3440)).toBe(RAIL_MIN)
+  })
+
+  it('a move is clamped against the window as it is now', () => {
+    expect(stepRailWidth(9999, 1607)).toBe(402)
+    expect(stepRailWidth(10, 1607)).toBe(RAIL_MIN)
+    expect(railWidthMax(1607)).toBe(402)
+    expect(railWidthMax(3440)).toBe(RAIL_MAX)
+  })
+
+  it('a junk stored width is "never sized"', () => {
+    for (const raw of [null, '', 'wide', '-3', '0', 'NaN', 'Infinity']) expect(parseRailWidth(raw), String(raw)).toBeNull()
+    expect(parseRailWidth('333.6')).toBe(334)
+  })
+})

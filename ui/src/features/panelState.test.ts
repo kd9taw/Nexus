@@ -494,6 +494,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
       'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
+      'spots', 'needed',
     ])
   })
 
@@ -610,14 +611,16 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.needed).toBeUndefined()
   })
 
-  it('only Phone ships panes hidden, and each hidden id is one of its own', () => {
+  it('only Phone and CW ship panes hidden — their Spots and Needed — and each hidden id is its own', () => {
     // ⚠️ `features/connectPresets.ts` reads Connect's record RAW (`state[s] === 'removed'`) and
     // writes it the same way, i.e. it takes absent to mean docked. That stays true only while
     // Connect lists nothing here: before a vocabulary gains a hidden pane, route every raw
-    // reader of its record through `panelStateIn`.
+    // reader of its record through `panelStateIn`. (CW's record has no raw reader: CwCockpit and
+    // panelHost read it through `stateOf`.)
     const shipsHidden = ALL_PANEL_VOCABULARIES.filter((v) => (v.defaultRemoved ?? []).length > 0)
-    expect(shipsHidden.map((v) => v.view)).toEqual(['phone'])
+    expect(shipsHidden.map((v) => v.view)).toEqual(['phone', 'cw'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
+    expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
@@ -633,6 +636,65 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     // A stored value always wins over the default, in both directions.
     expect(panelStateIn(PHONE_PANELS, { ...empty, state: { spots: 'docked' } }, 'spots')).toBe('docked')
     expect(panelStateIn(PHONE_PANELS, { ...empty, state: { receiver: 'removed' } }, 'receiver')).toBe('removed')
+  })
+})
+
+describe("CW ships Phone's two feeds hidden too (plan H8)", () => {
+  // The operator's pick: "CW gets Phone's Spots/Needed panes", hidden by default exactly as in Phone.
+  // Each case drives one reader of an absent state, as Phone's do, against CW's own record.
+  const CW_KEY = panelStorageKey('cw')
+
+  it('a FRESH CW record shows Spots and Needed hidden, and every other CW pane docked', () => {
+    const { result } = renderHook(() => usePanelLayout(CW_PANELS))
+    for (const id of ['spots', 'needed'] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
+    for (const id of CW_PANELS.panelIds) {
+      if (id === 'spots' || id === 'needed') continue
+      expect(result.current.stateOf(id), `"${id}" changed its default`).toBe('docked')
+    }
+    expect(localStorage.getItem(CW_KEY)).toBeNull()
+  })
+
+  it('an existing CW layout loads unchanged: its choices, shares and places, and neither feed', () => {
+    savePanelLayout(CW_KEY, {
+      v: 2,
+      state: { copilot: 'removed', sent: 'docked' },
+      share: { decode: 1.6 },
+      place: { bandActivity: { col: 'a', order: 2 }, decode: { col: 'a', order: 0 }, sent: { col: 'a', order: 1 } },
+    } as PanelLayout<string>)
+    const { result } = renderHook(() => usePanelLayout(CW_PANELS))
+    expect(result.current.stateOf('spots'), 'Spots appeared on an upgrade').toBe('removed')
+    expect(result.current.stateOf('needed'), 'Needed appeared on an upgrade').toBe('removed')
+    expect(result.current.stateOf('copilot')).toBe('removed')
+    expect(result.current.stateOf('sent')).toBe('docked')
+    expect(result.current.stateOf('decode')).toBe('docked')
+    expect(result.current.shareOf('decode')).toBe(1.6)
+    // The operator's placement is kept as stored; the two new ids are simply not in it, so each
+    // stands at the foot of its stock column (panelPlace) — shown only once it is ticked.
+    expect(result.current.layout.place).toEqual({
+      decode: { col: 'a', order: 0 },
+      sent: { col: 'a', order: 1 },
+      bandActivity: { col: 'a', order: 2 },
+    })
+  })
+
+  it('a tick docks one and is stored; ⊞ Reset hides both again and Undo brings them back', () => {
+    const { result } = renderHook(() => usePanelLayout(CW_PANELS))
+    act(() => result.current.setPanelState('spots', 'docked'))
+    act(() => result.current.setPanelState('needed', 'docked'))
+    expect(JSON.parse(localStorage.getItem(CW_KEY)!).state).toMatchObject({ spots: 'docked', needed: 'docked' })
+    act(() => result.current.reset())
+    expect(result.current.stateOf('spots')).toBe('removed')
+    expect(result.current.stateOf('needed')).toBe('removed')
+    act(() => result.current.undo())
+    expect(result.current.stateOf('spots')).toBe('docked')
+    expect(result.current.stateOf('needed')).toBe('docked')
+  })
+
+  it("the feeds take Phone's places: Spots under Decode's column, Needed under the middle one, both last below three tracks", () => {
+    expect(CW_PANELS.arrange!.columns.a).toEqual(['decode', 'sent', 'spots'])
+    expect(CW_PANELS.arrange!.columns.b).toEqual(['bandActivity', 'copilot', 'needed'])
+    expect(CW_PANELS.arrange!.pinned).toEqual([])
+    expect(CW_PANELS.arrange!.stockMerged).toEqual(['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'])
   })
 })
 

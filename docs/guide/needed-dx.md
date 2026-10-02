@@ -117,7 +117,7 @@ it's telling you the truth about a marginal path.
    so your transmit lands where the DX is listening.
 
 That's the same atomic "work it" path as double-clicking a spot on the
-[Connect map](connect.md) or pressing ▶ Work in a Chase pane.
+[Conditions map](connect.md) or pressing ▶ Work in a Chase pane.
 
 ### Filter the board
 
@@ -171,7 +171,7 @@ window's own close button, which belongs to the operating system and is outside 
 
 - [Spots](spots.md) — the same cluster and RBN traffic as a raw table, with none
   of this scoring applied
-- [Connect — map + propagation](connect.md)
+- [Conditions — map + propagation](connect.md)
 - [DXpeditions](dxpeditions.md)
 - [Awards & Journey](awards-journey.md)
 - [Operate — FT8/FT4 digital](operate-digital.md)

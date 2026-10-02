@@ -165,7 +165,7 @@ not appear here.
 ## Related guides
 
 - [Operate (digital)](operate-digital.md) — FT8 and FT4, where the population is.
-- [Connect](connect.md) — the situational-awareness screen, including who is on the band.
+- [Conditions](connect.md) — the situational-awareness screen, including who is on the band.
 - [Settings reference](settings-reference.md) — macros, which are what the quick-reply chips
   say.
 - [Logbook and QSL](logbook-qsl.md) — where a Tempo contact goes once it is worked.

@@ -18,7 +18,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useContext } from 'react'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import { heatPulse, sectorPulse } from '../features/pulse'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { loadGlobeLayers, saveGlobeLayers, type GlobeLayers } from '../features/globeLayers'
 import { useStableByKey } from '../features/useStableByKey'
 import {
   filterSatsToChased,
@@ -34,10 +34,13 @@ import Globe, { type GlobeMethods } from 'react-globe.gl'
 import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
-import { placeHoverCard } from './MapView'
+import { placeHoverCard, MARKER_HALO } from './MapView'
+import { MOON_DISC, SUN_DISC, SUN_REACH, drawMoon, drawSun } from '../features/skyGlyphs'
+import { STANDARD_SKY, type SkyToken } from '../features/skins'
 import { bandColor, openingModeColor } from '../bandColors'
 import {
   subsolarPoint,
+  moonAt,
   usStateBorders,
   flareField,
   flareRScale,
@@ -52,7 +55,7 @@ import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
 import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { MapLayersPanel } from './MapLayersPanel'
+import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import type {
   PropagationSnapshot,
@@ -284,6 +287,9 @@ interface Props {
   stations?: Station[]
   /** Draw US state borders (default on, matching the 2-D map). */
   showStates?: boolean
+  /** Bumped by a host that rewrote this surface's stored layer picks (Connect's layouts:
+   *  features/connectPresets `mapLayers`): the globe reads them again. */
+  layersRev?: number
 }
 
 const GETTING_OUT = '#3ddc6a' // a station that heard ME (matches the 2-D map)
@@ -334,6 +340,45 @@ function textSprite(text: string, color: string): THREE.Sprite {
   return sp
 }
 
+/** How high above the surface the sun and moon markers sit (globe radii): off the ground, so the
+ *  sphere never cuts them in half, and low enough to read as over their own points. */
+const SKY_ALT = 0.03
+/** A sky sprite's size in world units, where the globe's radius is 100: the sun's glyph spans 12 and
+ *  its disc 5 (`SUN_REACH` radii fill the sprite); the moon keeps the 2-D map's proportion to it. */
+const SKY_SCALE = 12
+/** The sun's disc on a sky sprite's canvas of `size` px, and the moon's beside it. */
+const sunDiscOn = (size: number) => size / 2 / SUN_REACH
+const moonDiscOn = (size: number) => (sunDiscOn(size) * MOON_DISC) / SUN_DISC
+
+/** The sun's and the moon's inks right now (styles.css MAP SKY). The same in every theme by rule
+ *  (styles-skins.test.ts), so a painted sprite never goes stale on a theme change. */
+const skyInkNow = (token: SkyToken) =>
+  getComputedStyle(document.documentElement).getPropertyValue(token).trim() || STANDARD_SKY[token]
+
+/** Paint (or repaint) a sky sprite's canvas with `draw` — the moon's picture changes with its phase. */
+function paintSky(sprite: THREE.Sprite, draw: (ctx: CanvasRenderingContext2D, size: number) => void): void {
+  const tex = sprite.material.map
+  const c = tex?.image as HTMLCanvasElement | undefined
+  const ctx = c?.getContext('2d')
+  if (!tex || !c || !ctx) return
+  ctx.clearRect(0, 0, c.width, c.height)
+  draw(ctx, c.width)
+  tex.needsUpdate = true
+}
+
+/** A sprite on a small canvas of its own, named so the scene can be read back: the sun or the moon
+ *  above the globe, in the 2-D map's glyphs. The globe's depth hides it on the far side. */
+function skySprite(name: string): THREE.Sprite {
+  const c = document.createElement('canvas')
+  c.width = 64
+  c.height = 64
+  const mat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })
+  const sp = new THREE.Sprite(mat)
+  sp.name = name
+  sp.scale.set(SKY_SCALE, SKY_SCALE, 1)
+  return sp
+}
+
 /** `MUF` is the acronym for Maximum Usable Frequency — a technical token that reads the
  * same in every language, so it is a constant rather than a catalog entry. It is the one
  * layer in the list below whose whole name is a token. */
@@ -352,6 +397,7 @@ type GlobeLayerKey =
   | 'muf'
   | 'pca'
   | 'greyline'
+  | 'sunMoon'
   | 'sats'
   | 'pass'
   | 'rings'
@@ -377,6 +423,7 @@ const LAYER_ROWS: readonly GlobeLayerRow[] = [
   { k: 'muf', label: MUF_LABEL },
   { k: 'pca', labelKey: 'globe.layer.pca' },
   { k: 'greyline', labelKey: 'globe.layer.greyline' },
+  { k: 'sunMoon', labelKey: 'globe.layer.sunMoon' },
   { k: 'sats', labelKey: 'globe.layer.sats' },
   { k: 'pass', labelKey: 'globe.layer.pass' },
   { k: 'rings', labelKey: 'globe.layer.rings' },
@@ -394,78 +441,6 @@ function webglOk(): boolean {
     return !!(c.getContext('webgl2') || c.getContext('webgl'))
   } catch {
     return false
-  }
-}
-
-/** The 3-D globe's toggleable layers. Persisted per-surface (#211) — the 2-D map already
- * remembered its layer picks (#199) but the globe reset to defaults on every mount, so a Connect
- * operator working on the 3-D map lost their choices each time. Same `surfaceGet/surfaceSet`
- * store the 2-D map uses, so a pop-out keeps its own picks. */
-type GlobeLayers = {
-  spots: boolean
-  arcs: boolean
-  rxarcs: boolean
-  states: boolean
-  lights: boolean
-  flare: boolean
-  aurora: boolean
-  muf: boolean
-  pca: boolean
-  heat: boolean
-  openings: boolean
-  grid: boolean
-  sats: boolean
-  pass: boolean
-  rings: boolean
-  cqzones: boolean
-  coverage: boolean
-  decodes: boolean
-  dxped: boolean
-  greyline: boolean
-}
-
-const GLOBE_LAYERS_KEY = 'nexus.connect.globe3d.layers'
-
-const defaultGlobeLayers = (showStates: boolean): GlobeLayers => ({
-  spots: true,
-  arcs: true,
-  // OFF by default, like the 2-D map's `rxPaths`: the decode roster on a busy band is 100+
-  // stations, and default-on would web the globe for everyone on upgrade.
-  rxarcs: false,
-  states: showStates,
-  lights: true,
-  flare: true,
-  aurora: false,
-  muf: true,
-  pca: true,
-  heat: true,
-  openings: true,
-  grid: false,
-  sats: false,
-  pass: true, // the tracked-pass scene; nothing is drawn unless a pass is live
-  rings: true,
-  cqzones: false,
-  coverage: false,
-  decodes: true,
-  dxped: false,
-  greyline: true,
-})
-
-/** Parse a persisted layer object, keeping only the known boolean toggles — an unknown or
- * malformed store never poisons the defaults it is merged onto. Exported for the round-trip test. */
-export function globeLayersFromStored(v: string | null): Partial<GlobeLayers> {
-  if (!v) return {}
-  try {
-    const raw: unknown = JSON.parse(v)
-    if (!raw || typeof raw !== 'object') return {}
-    const rec = raw as Record<string, unknown>
-    const out: Partial<GlobeLayers> = {}
-    for (const k of Object.keys(defaultGlobeLayers(true)) as (keyof GlobeLayers)[]) {
-      if (typeof rec[k] === 'boolean') out[k] = rec[k] as boolean
-    }
-    return out
-  } catch {
-    return {}
   }
 }
 
@@ -506,6 +481,7 @@ export default function Globe3D({
   xrayLong,
   stations: stationsProp,
   showStates = true,
+  layersRev = 0,
 }: Props) {
   const remoteMap=useContext(NavigationMapContext)
   const remoteConnect=remoteMap?.connect
@@ -589,15 +565,20 @@ export default function Globe3D({
   const workedGrids=useMemo(()=>remoteMap?(remoteConnect?.coverage.grids??[]).flatMap(grid=>{const ll=gridToLatLon(grid);return ll?[ll]:[]}):nativeWorkedGrids,[!!remoteMap,remoteConnect,nativeWorkedGrids])
   // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default), and the
   // operator's picks are restored from the per-surface store on mount (#211).
-  const [show, setShow] = useState<GlobeLayers>(() => ({
-    ...defaultGlobeLayers(showStates),
-    ...globeLayersFromStored(surfaceGet(GLOBE_LAYERS_KEY)),
-  }))
+  const [show, setShow] = useState<GlobeLayers>(() => loadGlobeLayers(showStates))
   // Persist every toggle so the next launch opens the globe you left — the 2-D map's #199
   // behaviour, which the globe was missing.
   useEffect(() => {
-    surfaceSet(GLOBE_LAYERS_KEY, JSON.stringify(show))
+    saveGlobeLayers(show)
   }, [show])
+  // A host that rewrote this surface's record (Connect, when a layout turns a layer on) bumps
+  // `layersRev`, and the globe reads its picks again — during render, React's "adjust state when a
+  // prop changes" pattern, so the save above never writes the old picks back over the new ones.
+  const [seenLayersRev, setSeenLayersRev] = useState(layersRev)
+  if (layersRev !== seenLayersRev) {
+    setSeenLayersRev(layersRev)
+    setShow(loadGlobeLayers(showStates))
+  }
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over
@@ -932,6 +913,51 @@ export default function Globe3D({
     const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
+
+  // THE SUN AND THE MOON where each is overhead — the light above lights the day side, and these show
+  // where the sun and the moon are. Built once when the globe is ready; everything they add they
+  // dispose.
+  const skyRef = useRef<{ sun: THREE.Sprite; moon: THREE.Sprite } | null>(null)
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const sun = skySprite('sky-sun')
+    paintSky(sun, (ctx, size) =>
+      drawSun(ctx, size / 2, size / 2, sunDiscOn(size), skyInkNow('--map-sun'), MARKER_HALO),
+    )
+    const moon = skySprite('sky-moon') // painted with its phase below
+    g.scene().add(sun, moon)
+    skyRef.current = { sun, moon }
+    return () => {
+      for (const sp of [sun, moon]) {
+        g.scene().remove(sp)
+        sp.material.map?.dispose()
+        sp.material.dispose()
+      }
+      skyRef.current = null
+    }
+  }, [ready])
+  // Moved on the 60 s clock above, the moon repainted in its phase (lit as it looks from the
+  // operator's hemisphere, like the 2-D map's), and shown or hidden with the layer — all written
+  // straight into the scene: the ONE-FRAME list below draws it, so a still globe stays asleep.
+  useEffect(() => {
+    const g = globeRef.current
+    const sky = skyRef.current
+    if (!g || !ready || !sky) return
+    const ss = subsolarPoint(nowMs)
+    const sc = g.getCoords(ss.lat, ss.lon, SKY_ALT)
+    sky.sun.position.set(sc.x, sc.y, sc.z)
+    const moon = moonAt(nowMs)
+    const mc = g.getCoords(moon.sublunar.lat, moon.sublunar.lon, SKY_ALT)
+    sky.moon.position.set(mc.x, mc.y, mc.z)
+    const south = (qth?.lat ?? 0) < 0
+    const inks = { lit: skyInkNow('--map-moon-lit'), dark: skyInkNow('--map-moon-dark') }
+    paintSky(sky.moon, (ctx, size) =>
+      drawMoon(ctx, size / 2, size / 2, moonDiscOn(size), moon.illuminated, moon.waxing !== south, inks, MARKER_HALO),
+    )
+    sky.sun.visible = show.sunMoon
+    sky.moon.visible = show.sunMoon
+  }, [ready, nowMs, show.sunMoon, qth])
 
   // Gated 1 s pulse tick — the 2-D map's pattern: only while a layer that
   // BREATHES is visible and something is actually open, and never for a hidden
@@ -1645,10 +1671,10 @@ export default function Globe3D({
     kickRef.current()
   }, [arcs, points, sectorPolys, statePaths, show, selectedCall, livePass, size.w, size.h])
   // ONE FRAME: everything this component writes straight into the scene — the point clouds, the
-  // line overlays and labels, the satellite scene, and the 1 s breath.
+  // line overlays and labels, the satellite scene, the sun and the moon, and the 1 s breath.
   useEffect(() => {
     frameRef.current()
-  }, [stations, prop, muf, xrayLong, auroraPts, pca, sats, cqzones, workedGrids, nowMs, pulseTick, satFav, satChaseRev])
+  }, [stations, prop, muf, xrayLong, auroraPts, pca, sats, cqzones, workedGrids, nowMs, pulseTick, satFav, satChaseRev, qth])
 
   // Pointer event → wrap LAYOUT coords (the .map-hover tooltip is positioned in the
   // same layout space the globe is sized in). The .app UI zoom makes visual px ≠ layout
@@ -1733,7 +1759,12 @@ export default function Globe3D({
       {/* Layers panel — the same place and the same fold as the 2-D map's (MapLayersPanel). Grows
           as Phase B adds layers. (Was gated on the Expert detail level, removed 2026-07-26.) */}
       {(
-        <MapLayersPanel className="globe3d-layers" title={t('globe.layers.head')}>
+        // Folded by default where it would cover the Conditions rail (the 2-D map's rule).
+        <MapLayersPanel
+          className="globe3d-layers"
+          title={t('globe.layers.head')}
+          narrow={prop != null && size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+        >
           {LAYER_ROWS.map((row) => (
             <Fragment key={row.k}>
               <label>

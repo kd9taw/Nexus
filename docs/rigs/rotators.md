@@ -136,7 +136,7 @@ is required — `192.168.1.50` on its own is not an address.
 
 Once it's configured and answering, rotator control appears throughout the app:
 
-- **Rotor pane in Connect** — a full rose you can click to slew, with a STOP
+- **Rotor pane in Conditions** — a full rose you can click to slew, with a STOP
   control. The heading reads in true degrees with magnetic beside it, e.g.
   `312°T (316°M)` (WMM2025 declination). A rotator that **cannot report its
   position** (the Hy-Gain DCU-1 is one — its Hamlib backend has no read-back at
@@ -154,7 +154,7 @@ Once it's configured and answering, rotator control appears throughout the app:
   "rotator not responding" at a glance. Click it to land on the model and port.
 - **↗ on Needed-board rows** — point the antenna at a spotted station.
 
-<!-- TODO: capture screenshot — Connect compass pane showing 312°T (316°M) with the slew rose -->
+<!-- TODO: capture screenshot — Conditions compass pane showing 312°T (316°M) with the slew rose -->
 
 ---
 

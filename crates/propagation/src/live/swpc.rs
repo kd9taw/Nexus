@@ -125,3 +125,56 @@ pub fn fetch_kp_forecast() -> Result<crate::kpforecast::KpForecast, String> {
         .map_err(|e| e.to_string())?;
     Ok(crate::kpforecast::parse_kp_forecast(&body))
 }
+
+/// NOAA's daily solar indices: the last thirty days of 10.7 cm flux and sunspot number. See
+/// [`crate::solar_indices`] for what the rows mean; this is only the wire.
+///
+/// A body with no dated row is an ERROR, never an empty success: the command caches only what
+/// this returns `Ok`, so an error page served with a 200 cannot replace thirty real days with
+/// nothing, and the last good copy keeps being served with its own dates on it.
+pub fn fetch_daily_solar_indices() -> Result<crate::solar_indices::DailySolarIndices, String> {
+    let c = client()?;
+    let body = c
+        .get("https://services.swpc.noaa.gov/text/daily-solar-indices.txt")
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .map_err(|e| e.to_string())?;
+    crate::solar_indices::parse_daily_solar_indices(&body)
+        .ok_or_else(|| "daily solar indices: no dated row in the response".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Network test: `#[ignore]`d, run on demand with
+    // `cargo test -p propagation --features live -- --ignored live::swpc`.
+
+    /// The real file through the real client. The parser's offline tests pin the rows; this pins
+    /// the wire: SWPC still serves the text product at this URL, in a shape that parses.
+    #[test]
+    #[ignore = "network: services.swpc.noaa.gov"]
+    fn live_daily_solar_indices_arrive_and_parse() {
+        let f = fetch_daily_solar_indices().expect("SWPC answered with a file that parses");
+        assert!(
+            f.days.len() >= 25,
+            "about thirty days, got {}",
+            f.days.len()
+        );
+        assert!(
+            f.days.iter().any(|d| d.sfi.is_some() && d.ssn.is_some()),
+            "no day carries both a flux and a sunspot number"
+        );
+        let newest = f.days.last().unwrap();
+        println!(
+            "SWPC daily indices: {} days, newest day_unix {} sfi {:?} ssn {:?}",
+            f.days.len(),
+            newest.day_unix,
+            newest.sfi,
+            newest.ssn
+        );
+    }
+}

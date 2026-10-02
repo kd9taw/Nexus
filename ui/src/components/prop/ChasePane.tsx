@@ -3,8 +3,10 @@
 // stations are workable this minute vs which have a later window. Dual-audience: Basic shows
 // the plain "call now" / "best 1400Z" action per row; Expert adds the entity + who heard it.
 // Clicking a row selects it on the map; ▶ Work QSYs the rig and opens the cockpit.
+import { useRef } from 'react'
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
+import { useChaseSplit } from './chaseSplit'
 import { buildChaseTargets, type ChaseTarget } from '../../features/chase'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
 import { t } from '../../i18n'
@@ -42,11 +44,14 @@ function openPhrase(target: ChaseTarget): { text: string; cls: string } {
 export function ChasePane({ ctx }: { ctx: PaneContext }) {
   // Freshness is re-derived on each snapshot-driven re-render; no per-second ticking needed.
   const targets = buildChaseTargets(ctx.needAlerts, ctx.bandOutlook, Date.now())
+  // A row whose first line has no room for the entity gives it the line under it (chaseSplit).
+  const list = useRef<HTMLUListElement>(null)
+  useChaseSplit(list, targets.length > 0)
   if (targets.length === 0) return null // PaneFrame falls back to the basic() line
 
   return (
     <section className="chase-pane panel">
-      <ul className="chase-list">
+      <ul className="chase-list" ref={list}>
         {targets.slice(0, 12).map((target) => {
           const chip = target.tags[0] ? NEED_CHIP[target.tags[0]] : null
           const op = openPhrase(target)
@@ -73,18 +78,20 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                       ↗
                     </button>
                   )}
-                  <span className="chase-entity">{target.entity}</span>
-                  {/* The heading beside the entity — this is the pane with a
-                      point-the-antenna button on the same row, so the number the
-                      button is about should be readable without pressing it. */}
-                  {(() => {
-                    const az = azimuthTo(ctx.myGrid, null, target.entity, ctx.entityCentroids)
-                    return az ? (
-                      <span className="chase-az" title={azimuthTitle(az, target.entity)}>
-                        {azimuthLabel(az)}
-                      </span>
-                    ) : null
-                  })()}
+                  <span className="chase-where">
+                    <span className="chase-entity">{target.entity}</span>
+                    {/* The heading beside the entity — this is the pane with a
+                        point-the-antenna button on the same row, so the number the
+                        button is about should be readable without pressing it. */}
+                    {(() => {
+                      const az = azimuthTo(ctx.myGrid, null, target.entity, ctx.entityCentroids)
+                      return az ? (
+                        <span className="chase-az" title={azimuthTitle(az, target.entity)}>
+                          {azimuthLabel(az)}
+                        </span>
+                      ) : null
+                    })()}
+                  </span>
                   {target.ageSecs != null && <span className="chase-age">{ageLabel(target.ageSecs)}</span>}
                 </div>
                 <div className={`chase-open o-${op.cls}`}>{op.text}</div>

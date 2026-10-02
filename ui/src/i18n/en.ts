@@ -2173,6 +2173,8 @@ export const EN = {
   'map.layers.expand.title': 'Show the Layers panel',
   'map.layer.opacity.aria': '{{layer}} opacity',
   'map.layer.daynight.label': 'Day / night (greyline)',
+  // The sun and the moon, each where it is overhead. One layer for both: they are the sky.
+  'map.layer.sunMoon.label': 'Sun and moon',
   'map.layer.relief.label': 'Relief (World view)',
   'map.layer.muf.label': 'Ionosonde MUF',
   'map.layer.aurora.label': 'Aurora oval',
@@ -2244,9 +2246,9 @@ export const EN = {
   // acronym and stays in the component; the three trend arias are whole strings rather than
   // a stem plus a direction word.
   'map.insights.collapsed.title': 'Show propagation insights',
-  'map.insights.pill': 'Conditions',
+  'map.insights.pill': 'Propagation',
   'map.insights.aria': 'Propagation insights',
-  'map.insights.title': 'Conditions',
+  'map.insights.title': 'Propagation',
   'map.insights.collapse.title': 'Collapse',
   'map.insights.muf.title':
     'Maximum Usable Frequency — the modelled DX ceiling right now; bands below it are open',
@@ -2279,6 +2281,7 @@ export const EN = {
   // The MUF layer's whole name is the acronym — a token, and a constant in the component.
   'globe.layer.pca': 'Polar cap (PCA)',
   'globe.layer.greyline': 'Greyline',
+  'globe.layer.sunMoon': 'Sun and moon',
   'globe.layer.sats': 'Satellites',
   'globe.layer.pass': 'Tracked pass',
   'globe.layer.rings': 'Range rings',
@@ -2340,6 +2343,10 @@ export const EN = {
   'prop.impact.bz.hardSouth': 'field hard south — storm likely, polar paths fading',
   'prop.impact.bz.south': 'field south — high-lat paths softening soon',
   'prop.impact.bz.neutral': 'field neutral/north — stable',
+  // The solar-wind speed gauge. It turns where the insight feed's fast-stream line does
+  // (FAST_WIND_KMS in propViz.ts), so the two never disagree about the same wind.
+  'prop.impact.wind.normal': 'ordinary wind — stable',
+  'prop.impact.wind.fast': 'fast stream — high-lat paths may get unsettled',
   // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
   'prop.spaceWx.bz.stale': 'last reading {{ago}}',
   'prop.spaceWx.bz.none': 'no solar-wind reading',
@@ -2449,6 +2456,8 @@ export const EN = {
   // Space-weather gauges. The index NAMES (SFI, Kp, A, X-ray, Bz) are technical tokens and
   // stay in the component; these are the Simple-mode plain-English glosses.
   'prop.spaceWx.aria': 'Space weather',
+  // The speed gauge's name is prose, unlike the index tokens; its unit (km/s) stays in the component.
+  'prop.spaceWx.wind': 'Wind',
   'prop.spaceWx.gloss.sfi':
     'Solar Flux Index — how energized the ionosphere is. Higher opens the upper HF bands (20–10 m). ~70 is low; 150+ is great.',
   'prop.spaceWx.gloss.kp':
@@ -2572,7 +2581,7 @@ export const EN = {
   'dxped.workNow.head': 'Work now — needed × on the air',
   'dxped.workNow.none':
     'Nothing you need is workable right now. New ones appear here the moment a needed expedition is on a band with a real path to you.',
-  'dxped.showOnMap.title': 'Open Connect with this expedition selected on the map',
+  'dxped.showOnMap.title': 'Open Conditions with this expedition selected on the map',
   'dxped.showOnMap.label': '◎ show on map',
   'dxped.calendar.empty': 'The forward calendar is empty — announced operations land here.',
 
@@ -3184,6 +3193,8 @@ export const EN = {
   'ota.filter.mode.aria': 'Mode filter',
   'ota.filter.mode.label': 'Mode',
   'ota.filter.all': 'All',
+  // The Connect box's Filter button (its label is the Spots board's own Filter / Filtered).
+  'ota.filter.toggle.title': 'Show or hide the band, mode and sort choices',
   // The sort picker. The <option> VALUES ('value', 'activator' …) are persisted tokens and
   // stay in the code; these are the words beside them.
   'ota.sort.aria': 'Sort spots',
@@ -3629,14 +3640,14 @@ export const EN = {
   'settings.launchAtLogin.aria.disable': 'Turn off start at sign-in',
   'settings.launchAtLogin.unsupported':
     'This computer did not let Nexus change whether it starts at sign-in, so the setting is unchanged.',
-  'settings.connectWeb.legend': 'Connect on a TV',
-  'settings.connectWeb.label': 'Serve Connect on this network',
+  'settings.connectWeb.legend': 'Conditions on a TV',
+  'settings.connectWeb.label': 'Serve Conditions on this network',
   'settings.connectWeb.hint':
-    'Serves the full Connect view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it.',
+    'Serves the full Conditions view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it.',
   'settings.connectWeb.exposes':
     'While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent.',
-  'settings.connectWeb.aria.enable': 'Serve Connect on the local network',
-  'settings.connectWeb.aria.disable': 'Stop serving Connect on the local network',
+  'settings.connectWeb.aria.enable': 'Serve Conditions on the local network',
+  'settings.connectWeb.aria.disable': 'Stop serving Conditions on the local network',
   'settings.connectWeb.port.label': 'Port',
   'settings.connectWeb.port.hint': 'Separate from the Field Day scoreboard, so both can run at once.',
   'settings.connectWeb.url.label': 'Open this on the TV',
@@ -4841,6 +4852,15 @@ export const EN = {
   'freq.channel.menu.aria': 'Band channel preset: {{channel}}',
   'bandMenu.condition.unknown': 'No data',
   'bandMenu.condition.unknown.title': 'No current band-condition data for this band',
+  'bandTiles.aria': 'Bands for you: one tile per band',
+  'bandTiles.title.state': '{{band}}: {{word}}',
+  'bandTiles.title.opening': '{{mode}} opening seen on this band',
+  'bandTiles.title.heard': '{{hearYou}} hear you · you hear {{youHear}}',
+  'bandTiles.title.region': 'Best toward {{region}} ({{octant}}, {{bearing}}°)',
+  'bandTiles.title.modelled': '{{timing}} (modelled)',
+  'bandTiles.title.best': 'The Band Advisor’s best band right now',
+  'bandTiles.title.rig': 'Your radio is on this band',
+  'bandTiles.title.focus': 'Click to show this band on the map, and again to clear it',
   'bandPicker.txLock.splitTitle':
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
@@ -4858,6 +4878,14 @@ export const EN = {
   'tv.noLink': 'no link to Nexus',
   'tv.stale': 'data {{min}} min old',
   'tv.waiting': 'Waiting for the first propagation picture from Nexus…',
+  // ---- The dashboard bar (components/DashboardBar.tsx): the clock and space-weather
+  // line across the top of the Connect pop-out and the TV page. The index names (SFI, Kp, A,
+  // X-ray, SW) and `UTC` are tokens, not catalog strings.
+  'dash.bar.aria': 'Clock and space weather',
+  'dash.index.sw.title': 'Solar wind speed, km/s',
+  'dash.behind.label': 'Stay behind',
+  'dash.behind.title': 'Keep this window behind your other windows, even when you click on it, so it can fill the screen behind Nexus',
+  'dash.behind.failed': 'Could not change whether this window stays behind',
   'freq.channel.rxOnly': 'receive only',
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',
@@ -5644,7 +5672,7 @@ export const EN = {
   'settings.amplifier.model.label': 'Amplifier',
   'settings.amplifier.model.none': 'None',
   'settings.amplifier.model.hint':
-    'Place the Amplifier pane in Connect to see the readings. Nothing here changes how the radio transmits.',
+    'Place the Amplifier pane in Conditions to see the readings. Nothing here changes how the radio transmits.',
   'settings.amplifier.follow.label': 'Follow the radio\u2019s band',
   'settings.amplifier.follow.hint':
     'Step the amplifier to the band you are on, without being asked. Off by default \u2014 this is the one amplifier control that acts on its own. It never moves the amplifier while you are transmitting, and it steps one band at a time, checking where the amplifier actually is after each one rather than assuming it got there. \u26a0\ufe0f If your amplifier already follows the radio through its own band-data cable, as most SPE installations do, leave this off: the hardware is doing the same job, and two things steering one band is worse than either alone.',
@@ -5668,7 +5696,7 @@ export const EN = {
   'settings.rotator.model.number.placeholder': 'Hamlib rotator model number (rotctl -l lists them)',
   'settings.rotator.model.number.aria': 'Hamlib rotator model number',
   'settings.rotator.model.hint':
-    'Nexus runs the control daemon (rotctld) for you, the same way it does CAT. Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.',
+    'Nexus runs the control daemon (rotctld) for you, the same way it does CAT. Then use the Rotor pane in Conditions, ↗ on Needed rows, or the compass anywhere.',
   'settings.rotator.port.label': 'Rotator port & baud',
   'settings.rotator.port.aria': 'Rotator serial port',
   'settings.rotator.baud.aria': 'Rotator baud rate',
@@ -6671,7 +6699,7 @@ export const EN = {
   'settings.integrations.pskreporter.hint': 'upload spots to the global map',
   'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
   'settings.integrations.clusterSpots.hint':
-    'Surface "new ones" from the Reverse Beacon Network on the Needed board + Connect. Takes effect on restart.',
+    'Surface "new ones" from the Reverse Beacon Network on the Needed board + Conditions. Takes effect on restart.',
   'settings.integrations.clusterNodes.label': 'Phone/SSB cluster nodes',
   'settings.integrations.clusterNodes.empty':
     'No nodes — add one below to get SSB/phone needs (RBN only carries CW + digital).',
@@ -7176,7 +7204,7 @@ export const EN = {
   'settings.waterfallScopes.ft.hint': 'The FT waterfall keeps a palette of its own.',
   'settings.mapGlobe.legend': 'Map & globe',
   'settings.mapGlobe.note':
-    'The Connect map’s view (globe, flat or beam), its layers and its colours are chosen on the map itself, and Connect keeps a separate set for each activity you pick there.',
+    'The Conditions map’s view (globe, flat or beam), its layers and its colours are chosen on the map itself, and Conditions keeps a separate set for each activity you pick there.',
   'settings.performance.legend': 'Performance',
   'settings.performance.motion.label': 'Motion',
   'settings.performance.motion.system': 'Follow the computer',
@@ -7269,20 +7297,42 @@ export const EN = {
   // labels stay in `ConnectView.tsx` as tokens; the other two are prose and are below.
   'connect.intent.aria': 'What are you doing?',
   'connect.intent.dx.label': 'Chase DX',
-  'connect.intent.dx.title': 'Beam map, need-colored, live openings',
+  'connect.intent.dx.title': 'Globe, need-colored, live openings',
   'connect.intent.pota.title': 'World view, park/summit activators',
   'connect.intent.casual.label': 'Ragchew',
   'connect.intent.casual.title': 'Who can I hear — signal-colored, calm',
   'connect.intent.vhf.title': 'Openings front-and-center (Es / F2 / aurora)',
   'connect.globe3d.loading': 'Loading 3D globe…',
   'connect.popOut.label': '⧉ Pop out',
-  'connect.popOut.title': 'Open Connect in its own window (for a second monitor)',
+  'connect.popOut.title': 'Open Conditions in its own window (for a second monitor)',
 
-  // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`),
-  // and the B2/B3 picker groups are named by their tier code — neither is prose.
+  // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`), which
+  // is not prose. The picker's groups, and ⋯ ▸ Add a tab's, say what the boxes in them are for.
   'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
   'connect.slot.pick.title': 'Choose what this slot shows',
-  'connect.slot.group.core': 'Panels',
+  'connect.slot.group.bands': 'Bands',
+  'connect.slot.group.spaceWx': 'Space weather',
+  'connect.slot.group.activity': 'Activity',
+  'connect.slot.group.station': 'Station',
+  // A pane's ⋯ menu (connect/BoxMenu): the pane's own options. `{{title}}` is the pane's name, `{{pct}}`
+  // a whole number. The A− / A+ glyphs beside the two words stay in the code.
+  'connect.box.menu.aria': 'Options for {{title}}',
+  'connect.box.menu.title': 'Options for this pane',
+  'connect.box.text.size': 'Text size: {{pct}}%',
+  'connect.box.text.smaller': 'Smaller text',
+  'connect.box.text.larger': 'Larger text',
+  // …and its link to the manual section that describes the pane (connect/paneHelp); the ? glyph stays in the code.
+  'connect.box.help': '{{title}} in the manual',
+  'connect.box.help.title': 'Opens this part of the manual in your browser',
+  // TABS: several panes in one slot. The strip of tabs is named for screen readers; the + and − glyphs stay in the code.
+  'connect.box.tabs.aria': 'Panes in this slot',
+  'connect.box.tab.add': 'Add a tab',
+  'connect.box.tab.remove': 'Remove {{title}} from this slot',
+  // AUTO-ROTATE (the dashboard window and the TV page only): the heading over the choices, and the choices, bare durations like dxped.alarm.lead.option.
+  'connect.box.rotate.heading': 'Rotate the tabs',
+  'connect.box.rotate.off': 'Off',
+  'connect.box.rotate.secs': '{{secs}} s',
+  'connect.box.rotate.mins': '{{mins}} min',
   // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
   // which pane sits in a slot is the operator's pick, so the title alone says nothing about
   // where the space will be taken from.
@@ -7302,12 +7352,33 @@ export const EN = {
   'connect.rail.handle.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click to reset.',
   // The divider between the map and the bottom panels (layout L7); its tooltip is paneSeam.title.
   'connect.strip.height.label': 'Bottom panel row height',
+  // ── The dashboard rail (components/DashRail): Connect's panels in a column beside a cockpit. Its
+  // name is also its landmark's and the ⊞ Panels row that turns it on; its title heads the rail and
+  // names the NOW bar's switch. The slot words finish "Choose what the {{slot}} slot shows" and a ⊞
+  // entry's "{{title}} · {{where}}"; `{{above}}`/`{{below}}` are two panels' names.
+  'dashRail.name': 'Dashboard rail',
+  'dashRail.title': 'Dashboard',
+  'dashRail.width.label': 'Dashboard rail width',
+  'dashRail.split.label': 'Split between {{above}} and {{below}}',
+  'dashRail.hide.label': 'Hide the dashboard rail',
+  'dashRail.hide.title': 'Hide the dashboard rail beside this cockpit (⊞ Panels or the NOW bar brings it back)',
+  'dashRail.crash.label': 'The dashboard rail',
+  'dashRail.slot.where.rail1': 'top',
+  'dashRail.slot.where.rail2': 'upper middle',
+  'dashRail.slot.where.rail3': 'lower middle',
+  'dashRail.slot.where.rail4': 'bottom',
+  'dashRail.menu.small': 'Needs a larger window (or a smaller zoom) to show. Remembered for this section.',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
   // anything. `replaces` quotes the Undo button by its own name (`panels.undo`).
   'connect.layout.heading': 'Layout',
   'connect.layout.standard': 'Standard',
+  'connect.layout.standard.title': 'Conditions as it opened before Frame + bar: two panes down each side of the map and three along the bottom, all open, at the usual widths',
+  // The layout the one-time switch to Frame + bar kept (step 5, ConnectView `switchToDefaultOnce`): the
+  // operator's own arrangement from before the update, offered after Standard whenever one was kept.
+  'connect.layout.kept.label': 'Your earlier layout',
+  'connect.layout.kept.title': 'The layout you had here before Conditions opened in Frame + bar, as you left it: every box, tab, width and split',
   'connect.layout.custom': 'Custom',
   'connect.layout.mapFirst.label': 'Map first',
   'connect.layout.mapFirst.title': 'The map as big as it goes: both side columns at their narrowest and the bottom row closed',
@@ -7315,11 +7386,25 @@ export const EN = {
   'connect.layout.listFirst.title': 'The chase and spot lists in two wide columns, with a small map between them and the bottom row closed',
   'connect.layout.dashboard.label': 'Dashboard',
   'connect.layout.dashboard.title': 'Seven panes open at once around a smaller map: conditions on the left, activity on the right, what is coming along the bottom',
+  // The dashboard window's wall-display layout: a frame of panes around a full-height map.
+  'connect.layout.frame.label': 'Frame',
+  'connect.layout.frame.title': 'Two panes down each side of a map that runs the full height, for a dashboard on a screen of its own: band conditions and space weather on the left, who is hearing you and what to chase on the right',
+  // The default view (the operator's pick, 2026-10-01: "A: Frame + bar"; the default since step 5, and
+  // named so: "Frame + bar (default)"): Frame's shape with the dashboard window's clock and space-weather
+  // bar across the top, and the other boxes behind tabs.
+  'connect.layout.frameBar.label': 'Frame + bar (default)',
+  'connect.layout.frameBar.title': "Frame's shape with the clock and space-weather bar across the top: Bands for you over Openings on the left, Chase over Getting Out on the right, and the other boxes one click away as tabs",
   'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
+  // Connect's own Layout button (the operator's pick, 2026-10-01): it opens the same picker as the
+  // ⊞ Panels menu's Layout section, beside ⊞ Panels in Connect's header. The title names the five
+  // layouts by their own labels above.
+  'connect.layout.button': 'Layout',
+  'connect.layout.button.title': 'Choose a layout for this screen: Standard, Map first, List first, Dashboard, Frame or Frame + bar (default)',
 
   // Pane names, as they read in the picker and in each pane's header.
-  'connect.pane.advisory.title': 'Conditions',
+  'connect.pane.advisory.title': 'Best band',
   'connect.pane.bandAdvisor.title': 'Band Advisor',
+  'connect.pane.bandTiles.title': 'Bands for you',
   'connect.pane.selection.title': 'Selection',
   'connect.pane.outlook.title': 'Band Outlook',
   'connect.pane.openings.title': 'Openings',
@@ -7340,9 +7425,15 @@ export const EN = {
   'connect.kp.kind.observed': 'measured',
   'connect.kp.kind.estimated': 'estimated by NOAA',
   'connect.kp.kind.predicted': 'forecast',
+  // ---- The Space Wx box's 30-day trends (NOAA's daily solar indices). SFI and SSN are index
+  // tokens and stay in the component; each {{date}}/{{from}}/{{to}} is a short UTC day it formats.
+  'connect.solar.caption': 'NOAA daily · {{from}} – {{to}}',
+  'connect.solar.stale': 'NOAA daily indices not updated since {{date}}',
+  'connect.solar.unavailable': '30-day SFI and sunspot trend unavailable.',
+  'connect.solar.trend.aria': '{{index}} daily, {{from}} to {{to}}: low {{low}}, high {{high}}',
   'connect.pane.spacewx.title': 'Space Wx',
   'connect.pane.getout.title': 'Getting Out',
-  'connect.pane.bestband.title': 'Best Band → Region',
+  'connect.pane.bestband.title': 'Bands by region',
   'connect.pane.activity.title': 'Activity Matrix',
   'connect.pane.beacons.title': 'NCDXF Beacons',
   'connect.pane.insights.title': 'Insights',
@@ -7357,6 +7448,7 @@ export const EN = {
   'connect.pane.amp.title': 'Amplifier',
   'connect.pane.scope.title': 'Band Scope',
   'connect.pane.contests.title': 'Contests',
+  'connect.pane.clock.title': 'Clock',
 
   // The five self-fetching panes describe themselves: their data lives inside the
   // component, so their one-line projection is a standing hint rather than a reading.
@@ -7372,6 +7464,24 @@ export const EN = {
     "A live spectrum of the active radio's passband — band noise and signals at a glance.",
   'connect.pane.scope.idle': "Flat — the radio's audio isn't reaching Nexus right now.",
   'connect.pane.contests.basic': 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
+
+  // ---- The Clock box. UTC is a token and stays in the component, "Local" is the top bar's own
+  // word, and every time is ASCII digits the component formats (never locale-formatted).
+  'connect.pane.clock.basic': "UTC and local time, today's date, and sunrise and sunset at your grid.",
+  'connect.clock.utc.aria': 'UTC {{time}}',
+  'connect.clock.local.aria': 'Local time {{time}}',
+  'connect.clock.sun': '{{grid}} · Sunrise {{rise}} · Sunset {{set}}',
+  'connect.clock.sun.local': "On this computer's clock: sunrise {{rise}}, sunset {{set}}",
+  'connect.clock.sun.up': 'Sun up all day',
+  'connect.clock.sun.down': 'Sun down all day',
+  'connect.clock.noGrid': "Set your grid in Settings for today's sunrise and sunset.",
+
+  // ---- The Spots and POTA/SOTA boxes: the two boards themselves (their words are the boards').
+  // The POTA/SOTA box's name is the programmes' names, a token in the registry, not an entry.
+  // Each one-line state is what a screen with no board to lend shows (the wall display).
+  'connect.pane.spots.title': 'Spots',
+  'connect.pane.spots.basic': "The spot list isn't available on this screen.",
+  'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',
@@ -8864,11 +8974,16 @@ export const EN = {
   'cw.panel.copilot': 'CW Copilot',
   'cw.panel.decode': 'CW Decode',
   'cw.panel.sent': 'Sent Echo',
+  // Phone's two feeds (#345) in CW (plan H8), named as the views they come from, as in Phone.
+  'cw.panel.spots': 'Spots',
+  'cw.panel.needed': 'Needed',
   'cw.pane.decode.title': 'Decode',
   'cw.pane.sent.title': 'Sent',
   'cw.pane.rigctl.title': 'Rig controls',
   'cw.pane.bandActivity.title': 'Band activity',
   'cw.pane.copilot.title': 'Copilot',
+  'cw.pane.spots.title': 'Spots',
+  'cw.pane.needed.title': 'Needed',
   'cw.pane.log.title': 'Log',
 
   // ── CW ▸ the header: the mode badge, speed, keyer, pitch, macro profile, filter ──────
@@ -8940,6 +9055,8 @@ export const EN = {
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',
+  // The divider between the Spots and Needed panes (its accessible name, and the resize tooltip's).
+  'cw.seam.spotsNeeded.label': 'Spots / Needed',
   'cw.rfZoom.aria': 'Panadapter zoom',
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
@@ -9658,9 +9775,9 @@ export const EN = {
     'JS8 — JS8Call-compatible keyboard mode: heartbeats, directed messages, relay and a store-and-forward inbox, all four speeds decoded at once',
   'nav.phone.title': 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
   'nav.cw.title': 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
-  'nav.connect.label': 'Connect',
+  'nav.connect.label': 'Conditions',
   'nav.connect.title':
-    'Connect — THE map: grayline globe + live spots + openings + propagation, with click-to-work',
+    'Conditions (formerly Connect) — THE map: grayline globe + live spots + openings + propagation, with click-to-work',
   'nav.needed.label': 'Needed',
   'nav.needed.title': "Needed — what you still need that's on the air now; single-click to QSY",
   'nav.spots.label': 'Spots',
@@ -9710,13 +9827,9 @@ export const EN = {
   'nowbar.age.mins': '{{mins}}m',
   'nowbar.age.hours': '{{hours}}h',
   'nowbar.band.label': 'Band',
-  'nowbar.band.open': 'open',
-  'nowbar.band.fair': 'fair',
-  'nowbar.band.quiet': 'quiet',
-  'nowbar.band.closed': 'closed',
   // The chip's own tooltip, used only when the advisory carries no reason of its own (that
   // reason is backend prose, interpolated as data — it moves in phase 3).
-  'nowbar.band.title.connect': 'Open Connect — the map + nowcast',
+  'nowbar.band.title.connect': 'Open Conditions — the map + nowcast',
   'nowbar.band.title.plain': 'Band activity',
   'nowbar.out.label': 'Out',
   // Reads the same at every value in English ("1 hear you" as much as "3 hear you"), so it is
@@ -9744,6 +9857,9 @@ export const EN = {
   'nowbar.prop.offline': 'NO LIVE DATA',
   'nowbar.prop.title':
     'Propagation nowcast data is {{source}} — separate from the Cluster/PSKR connection pills',
+  // The dashboard rail's switch, the bar's last chip (its label is dashRail.title).
+  'nowbar.rail.on.title': 'Hide the dashboard rail beside this cockpit',
+  'nowbar.rail.off.title': 'Show the dashboard rail beside this cockpit (a column of Conditions panels)',
   // The connector pills. Each state is a WHOLE sentence: "connected but quiet" and "cannot
   // reach the server" are different claims, and they were one broken-looking "waiting" once.
   'nowbar.feed.live.value': 'live {{age}}',
@@ -10410,7 +10526,7 @@ export const EN = {
   'features.chat.label': 'Chat',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
-  'features.connect.label': 'Connect',
+  'features.connect.label': 'Conditions (formerly Connect)',
   'features.connect.oneLine':
     'Situational awareness — the grayline map + live propagation in one view.',
   'features.needed.label': 'Needed',
@@ -10457,7 +10573,7 @@ export const EN = {
     'Activate and hunt: the map and a field log for parks-and-peaks operating.',
   'profiles.vhf.label': '6m / VHF & openings',
   'profiles.vhf.blurb':
-    'Catch the band coming alive: Connect (map + openings), satellite passes, and the DXpedition board.',
+    'Catch the band coming alive: Conditions (map + openings), satellite passes, and the DXpedition board.',
   'profiles.everything.label': 'Everything (expert)',
   'profiles.everything.blurb':
     'Turn the whole console on. Every section and capability enabled.',

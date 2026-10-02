@@ -206,6 +206,7 @@ pub const RPC_ALLOWLIST: &[&str] = &[
     "get_satellites",      // satellite positions (map layer)
     "get_ota_map_spots",   // POTA activators (map layer)
     "get_kp_forecast",     // the three-day outlook pane
+    "get_solar_indices",   // NOAA daily SFI + sunspot number (Space Wx pane's trends)
     "get_band_outlook",    // per-band outlook pane
     "get_path_outlook",    // outlook for a clicked spot
     "get_getting_out",     // the getting-out pane
@@ -571,6 +572,12 @@ mod tests {
             "set_frequency",
             "set_tx_enabled",
             "halt_tx",
+            // The Spots and POTA/SOTA boards' own traffic — which is also Connect's two boxes',
+            // the reason those boxes have neither a list nor a Work on this page:
+            "work_spot", // a Work: moves the rig and opens a cockpit (and is no set_ verb)
+            "set_hunt_target", // tags the next logged contact with a park or summit
+            "get_all_spots", // the Spots board's rows carry the log's worked flags and the licence's verdict
+            "get_ota_spots", // the POTA/SOTA board's rows carry hunted-today, from the log
         ];
         for f in FORBIDDEN {
             assert!(
