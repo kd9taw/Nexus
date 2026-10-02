@@ -7,10 +7,14 @@
 //! states and haversine-filter client-side), merge the sources into one row per
 //! machine ([`merge_nearby`]: field by field from the highest-precedence source, every
 //! source id kept, a disagreement shown and never silently resolved), filter/sort by
-//! distance, and convert a picked repeater into a programmable [`Channel`]. HTTP lives
+//! distance, and convert a picked repeater into a programmable [`Channel`]. A [`Route`]
+//! (one place to another, a corridor either side) plans and merges the same way
+//! ([`plan_route_states`], [`plan_rsgb_route`], [`merge_route`]), in route order. HTTP lives
 //! in `crate::live::{rsgb, repeaterbook, hearham}`; caching/orchestration in the shell.
 
-use crate::geo::{bearing_deg, haversine_km, latlon_to_maidenhead, maidenhead_to_latlon};
+use crate::geo::{
+    bearing_deg, haversine_km, interpolate, latlon_to_maidenhead, maidenhead_to_latlon,
+};
 use crate::gridstate::state_for_grid;
 use crate::memchan::{ChanMode, Channel, ChannelSource, Duplex, ToneMode};
 use serde::{Deserialize, Serialize};
@@ -113,7 +117,8 @@ pub struct RepeaterRecord {
     /// Left out of the JSON when there is none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
-    /// Filled by [`filter_sort`] — distance/bearing from the query origin.
+    /// Filled by [`filter_sort`] — distance/bearing from the query origin. On a route
+    /// ([`merge_route`]), from the machine's nearest point of the line.
     pub distance_km: f64,
     pub bearing_deg: f64,
 }
@@ -1136,6 +1141,10 @@ pub struct Machine {
     /// Every row merged in, the top one first.
     pub sources: Vec<SourceRef>,
     pub disagreements: Vec<Disagreement>,
+    /// On a route ([`merge_route`]): how far along the line the machine's nearest point of it is,
+    /// km from the start. `None` on a radius search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub along_km: Option<f64>,
 }
 
 /// Merge every source's rows near `origin` into one row per machine within `radius_km`, nearest
@@ -1171,17 +1180,7 @@ pub fn merge_nearby(
     // Precedence first; within one source, nearest first (filter_sort's order, kept by a
     // stable sort), so the top row of a machine is its best source's nearest listing.
     rows.sort_by_key(|r| r.source);
-    let mut groups: Vec<Vec<RepeaterRecord>> = Vec::new();
-    for r in rows {
-        match groups
-            .iter_mut()
-            .find(|g| g.iter().any(|x| same_machine(x, &r)))
-        {
-            Some(g) => g.push(r),
-            None => groups.push(vec![r]),
-        }
-    }
-    let mut out: Vec<Machine> = groups
+    let mut out: Vec<Machine> = group_machines(rows)
         .into_iter()
         .map(|g| machine(g, origin))
         .filter(|m| m.record.distance_km <= radius_km)
@@ -1199,6 +1198,22 @@ pub fn merge_nearby(
             )
     });
     out
+}
+
+/// `rows` (in the order they should lead their machine) grouped into machines: each row joins the
+/// first group holding a row of the same machine ([`same_machine`]), else starts one.
+fn group_machines(rows: Vec<RepeaterRecord>) -> Vec<Vec<RepeaterRecord>> {
+    let mut groups: Vec<Vec<RepeaterRecord>> = Vec::new();
+    for r in rows {
+        match groups
+            .iter_mut()
+            .find(|g| g.iter().any(|x| same_machine(x, &r)))
+        {
+            Some(g) => g.push(r),
+            None => groups.push(vec![r]),
+        }
+    }
+    groups
 }
 
 /// The callsign a machine is known by, without the decoration a list adds for a link or a node
@@ -1402,7 +1417,192 @@ fn machine(rows: Vec<RepeaterRecord>, origin: (f64, f64)) -> Machine {
         record: rec,
         sources,
         disagreements,
+        along_km: None,
     }
+}
+
+// ── a route: one place to another ───────────────────────────────────────────
+
+/// A trip, for the route list: the great-circle line from one place to another, and a corridor
+/// either side of it. Nexus has no road map, so the line is straight; the corridor (25 mi by
+/// default in Program) is what keeps the machines along a road that bends away from it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Route {
+    pub from: (f64, f64),
+    pub to: (f64, f64),
+    /// How far a machine may be from the line, km: either side of it and past either end.
+    pub corridor_km: f64,
+}
+
+/// Where a point sits on a [`Route`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoutePlace {
+    /// How far along the line its nearest point of the line is, km from the start: 0 for a point
+    /// before the start, the route's length for one past the end.
+    pub along_km: f64,
+    /// How far it is from that point, km: off the line, or past an end.
+    pub off_km: f64,
+    /// That nearest point of the line.
+    pub nearest: (f64, f64),
+}
+
+/// Plans sample the line at points this far apart: well inside the 4-character locator square
+/// (1° by 2°, about 110 km by 150) that [`state_for_grid`] answers for, and the RSGB list is asked
+/// about, so no square the corridor crosses falls between two samples.
+const ROUTE_STEP_KM: f64 = 10.0;
+
+impl Route {
+    pub fn length_km(&self) -> f64 {
+        haversine_km(self.from, self.to)
+    }
+
+    /// Where `p` sits: the point of the line nearest it (the foot of the perpendicular from it to
+    /// the great circle, or the nearer end when that falls outside the line), and how far it is
+    /// from there.
+    pub fn place(&self, p: (f64, f64)) -> RoutePlace {
+        const R: f64 = 6371.0;
+        let length = self.length_km();
+        // The along-track distance on the great circle through both ends (Napier's rule for the
+        // right spherical triangle start, foot, point): negative behind the start.
+        let to_p = haversine_km(self.from, p) / R;
+        let turn = (bearing_deg(self.from, p) - bearing_deg(self.from, self.to)).to_radians();
+        let along = (to_p.sin() * turn.cos()).atan2(to_p.cos()) * R;
+        let (along_km, nearest) = if along <= 0.0 || length < 1e-9 {
+            (0.0, self.from)
+        } else if along >= length {
+            (length, self.to)
+        } else {
+            (along, interpolate(self.from, self.to, along / length))
+        };
+        RoutePlace {
+            along_km,
+            off_km: haversine_km(nearest, p),
+            nearest,
+        }
+    }
+
+    /// Points along the line from the start to the end, both included, at most [`ROUTE_STEP_KM`]
+    /// apart.
+    fn samples(&self) -> Vec<(f64, f64)> {
+        let steps = (self.length_km() / ROUTE_STEP_KM).ceil().max(1.0) as u32;
+        (0..=steps)
+            .map(|i| interpolate(self.from, self.to, f64::from(i) / f64::from(steps)))
+            .collect()
+    }
+}
+
+/// The most RepeaterBook states one route asks about: nine, the most a radius search can plan
+/// ([`plan_states`]: its origin and eight compass points), so a route never costs more state
+/// requests than a radius search can, and each one goes through the same per-state cache and
+/// retry throttle in the shell. The states past the ninth are named ([`StatePlan::beyond`]).
+pub const RB_STATES_PER_SEARCH: usize = 9;
+
+/// Which RepeaterBook state exports a route asks about, and which it leaves out.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StatePlan {
+    /// RepeaterBook `state_id`s (US FIPS) to ask about, in the order the route reaches them; at
+    /// most [`RB_STATES_PER_SEARCH`].
+    pub ask: Vec<String>,
+    /// The states the corridor crosses after those, as 2-letter codes, in route order.
+    pub beyond: Vec<String>,
+}
+
+/// Every state the corridor crosses, in the order the route reaches them: [`plan_states`] at each
+/// sample point of the line with the corridor as its radius, so the corridor's edges and both of
+/// its ends count. The first [`RB_STATES_PER_SEARCH`] are asked about. Empty when the corridor
+/// reaches no US state.
+pub fn plan_route_states(route: &Route) -> StatePlan {
+    let mut ask: Vec<String> = Vec::new();
+    for p in route.samples() {
+        for st in plan_states(p, route.corridor_km) {
+            if !ask.contains(&st) {
+                ask.push(st);
+            }
+        }
+    }
+    let beyond = ask.split_off(ask.len().min(RB_STATES_PER_SEARCH));
+    StatePlan {
+        ask,
+        beyond: beyond
+            .iter()
+            .map(|id| state_code_for_id(id).unwrap_or(id).to_string())
+            .collect(),
+    }
+}
+
+/// Which RSGB locator squares a route asks about: every UK square within the corridor of a point
+/// of the line that is itself in the UK ([`plan_rsgb_squares`] at each sample point), in the order
+/// the route reaches them; the first [`RSGB_SQUARES_PER_SEARCH`] are asked about and the rest are
+/// named, as on a radius search.
+pub fn plan_rsgb_route(route: &Route) -> RsgbPlan {
+    let mut ask: Vec<String> = Vec::new();
+    for p in route.samples() {
+        let near = plan_rsgb_squares(p, route.corridor_km);
+        for sq in near.ask.into_iter().chain(near.beyond) {
+            if !ask.contains(&sq) {
+                ask.push(sq);
+            }
+        }
+    }
+    let beyond = ask.split_off(ask.len().min(RSGB_SQUARES_PER_SEARCH));
+    RsgbPlan { ask, beyond }
+}
+
+/// The route list: every source's rows within the corridor, merged into one row per machine
+/// exactly as [`merge_nearby`] merges them, in the order the route passes them: along the line,
+/// then nearer the line first, then by output. Each machine's [`Machine::along_km`] is set, and
+/// its distance and bearing are from its nearest point of the line.
+pub fn merge_route(layers: &[&[RepeaterRecord]], route: &Route) -> Vec<Machine> {
+    let reach = route.corridor_km + MERGE_MARGIN_KM;
+    let mut rows: Vec<(f64, RepeaterRecord)> = layers
+        .iter()
+        .flat_map(|layer| layer.iter())
+        .filter_map(|r| {
+            let off = route.place((r.lat, r.lon)).off_km;
+            (off <= reach).then(|| (off, r.clone()))
+        })
+        .collect();
+    // As merge_nearby: precedence first and, within one source, nearest the line first, so the
+    // top row of a machine is its best source's nearest listing.
+    rows.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.1.output_mhz
+                    .partial_cmp(&b.1.output_mhz)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    rows.sort_by_key(|(_, r)| r.source);
+    let mut out: Vec<(RoutePlace, Machine)> =
+        group_machines(rows.into_iter().map(|(_, r)| r).collect())
+            .into_iter()
+            .map(|g| {
+                // The machine stands where its top row places it ([`machine`]).
+                let at = route.place((g[0].lat, g[0].lon));
+                let mut m = machine(g, at.nearest);
+                m.along_km = Some(at.along_km);
+                (at, m)
+            })
+            .filter(|(at, _)| at.off_km <= route.corridor_km)
+            .collect();
+    out.sort_by(|(a, x), (b, y)| {
+        a.along_km
+            .partial_cmp(&b.along_km)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.off_km
+                    .partial_cmp(&b.off_km)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                x.record
+                    .output_mhz
+                    .partial_cmp(&y.record.output_mhz)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    out.into_iter().map(|(_, m)| m).collect()
 }
 
 // ── record → channel ────────────────────────────────────────────────────────
@@ -2897,5 +3097,366 @@ mod tests {
         assert!(parse_repeaterbook_json(RB_FIXTURE)
             .iter()
             .all(|r| r.links.is_empty()));
+    }
+    // ── the route list ──────────────────────────────────────────────────────
+
+    /// A route due north up the 72.7° W meridian, from south of Hartford to Massachusetts.
+    const ROUTE_START: (f64, f64) = (41.0, -72.7);
+    const ROUTE_END: (f64, f64) = (42.5, -72.7);
+    /// Liverpool to Leeds, the M62 across the Pennines.
+    const LIVERPOOL: (f64, f64) = (53.41, -2.98);
+    const LEEDS: (f64, f64) = (53.80, -1.55);
+    /// Program's default corridor, 25 mi.
+    const CORRIDOR_KM: f64 = 40.2336;
+
+    fn up_the_meridian(corridor_km: f64) -> Route {
+        Route {
+            from: ROUTE_START,
+            to: ROUTE_END,
+            corridor_km,
+        }
+    }
+
+    /// A point `along` km up the route's meridian (south of the start when negative) and `east` km
+    /// east of it (west when negative). The great circle due east from a point of a meridian
+    /// crosses it at a right angle, so the point's foot on the line is exactly `along` up it.
+    fn on_route(along: f64, east: f64) -> (f64, f64) {
+        let foot = if along < 0.0 {
+            crate::geo::destination_point(ROUTE_START, 180.0, -along)
+        } else {
+            crate::geo::destination_point(ROUTE_START, 0.0, along)
+        };
+        if east < 0.0 {
+            crate::geo::destination_point(foot, 270.0, -east)
+        } else {
+            crate::geo::destination_point(foot, 90.0, east)
+        }
+    }
+
+    /// A hearham FM row at `p`, on its own output.
+    fn route_row(call: &str, mhz: f64, p: (f64, f64)) -> RepeaterRecord {
+        RepeaterRecord {
+            output_mhz: mhz,
+            input_mhz: mhz + 0.6,
+            lat: p.0,
+            lon: p.1,
+            ..row(RepeaterSource::Hearham, call, call)
+        }
+    }
+
+    #[test]
+    fn a_route_places_a_point_by_how_far_along_the_line_and_how_far_off_it() {
+        let route = up_the_meridian(40.0);
+        let length = route.length_km();
+        assert!((length - 166.8).abs() < 0.1, "{length}");
+        let near = |a: f64, b: f64| (a - b).abs() < 0.05;
+        // Beside the line, either side of it, and on it.
+        for (along, east) in [(50.0, 30.0), (55.0, 0.0), (120.0, -39.0), (0.0, 10.0)] {
+            let at = route.place(on_route(along, east));
+            assert!(
+                near(at.along_km, along) && near(at.off_km, east.abs()),
+                "{along} {east}: {at:?}"
+            );
+            assert!(
+                haversine_km(at.nearest, on_route(along, 0.0)) < 0.05,
+                "{at:?}"
+            );
+        }
+        // Before the start and past the end, the nearer end is the nearest point of the line.
+        let before = route.place(on_route(-20.0, 0.0));
+        assert!(
+            near(before.along_km, 0.0) && near(before.off_km, 20.0),
+            "{before:?}"
+        );
+        assert!(haversine_km(before.nearest, ROUTE_START) < 0.05);
+        let beyond = on_route(length + 30.0, 10.0);
+        let past = route.place(beyond);
+        assert!(near(past.along_km, length), "{past:?}");
+        assert!(
+            near(past.off_km, haversine_km(ROUTE_END, beyond)),
+            "{past:?}"
+        );
+        assert!(haversine_km(past.nearest, ROUTE_END) < 0.05);
+        // A route that ends where it starts is a circle around the place.
+        let circle = Route {
+            from: ROUTE_START,
+            to: ROUTE_START,
+            corridor_km: 40.0,
+        };
+        let p = on_route(30.0, 20.0);
+        let at = circle.place(p);
+        assert!(near(at.along_km, 0.0) && near(at.off_km, haversine_km(ROUTE_START, p)));
+    }
+
+    /// The route list is the corridor, in the order the route passes it: along the line, never by
+    /// distance from the start, which would put W1BBB (55 km up the line, on it) before W1AAA (50 km
+    /// up, 30 km off, 58 km from the start). A machine before the start or past the end is in it
+    /// while it is within the corridor of that end.
+    #[test]
+    fn the_route_list_is_the_corridor_in_the_order_the_route_passes_it() {
+        let route = up_the_meridian(40.0);
+        let length = route.length_km();
+        let rows = [
+            route_row("W1BBB", 146.61, on_route(55.0, 0.0)),
+            route_row("W1AAA", 146.67, on_route(50.0, 30.0)),
+            // 45 km off, and 41 km: outside, the second inside the merge's margin.
+            route_row("W1OUT", 146.73, on_route(100.0, 45.0)),
+            route_row("W1EDG", 146.79, on_route(100.0, 41.0)),
+            route_row("W1GGG", 146.85, on_route(120.0, -39.0)),
+            route_row("W1DDD", 146.91, on_route(-20.0, 0.0)),
+            route_row("W1EEE", 146.97, on_route(length + 30.0, 0.0)),
+            route_row("W1FAR", 147.03, on_route(length + 50.0, 0.0)),
+            // Behind the start too, nearer it: both are at the start, the nearer first.
+            route_row("W1HHH", 147.09, on_route(-8.0, 3.0)),
+        ];
+        let got = merge_route(&[&rows], &route);
+        let calls: Vec<&str> = got.iter().map(|m| m.record.callsign.as_str()).collect();
+        assert_eq!(
+            calls,
+            ["W1HHH", "W1DDD", "W1AAA", "W1BBB", "W1GGG", "W1EEE"]
+        );
+        // Each one's place: how far along the line, and how far off it (its distance).
+        let want = [
+            (0.0, haversine_km(ROUTE_START, on_route(-8.0, 3.0))),
+            (0.0, 20.0),
+            (50.0, 30.0),
+            (55.0, 0.0),
+            (120.0, 39.0),
+            (length, 30.0),
+        ];
+        for (m, (along, off)) in got.iter().zip(want) {
+            let (a, d) = (m.along_km.unwrap(), m.record.distance_km);
+            assert!(
+                (a - along).abs() < 0.05 && (d - off).abs() < 0.05,
+                "{}: {a} {d}",
+                m.record.callsign
+            );
+        }
+        // Its bearing is from the line: W1AAA is east of it and W1GGG west.
+        let bearing = |call: &str| {
+            got.iter()
+                .find(|m| m.record.callsign == call)
+                .unwrap()
+                .record
+                .bearing_deg
+        };
+        assert!(
+            (bearing("W1AAA") - 90.0).abs() < 1.0,
+            "{}",
+            bearing("W1AAA")
+        );
+        assert!(
+            (bearing("W1GGG") - 270.0).abs() < 1.0,
+            "{}",
+            bearing("W1GGG")
+        );
+        // A radius search has no route position.
+        assert!(merge_nearby(&[&rows], ROUTE_START, 40.0)
+            .iter()
+            .all(|m| m.along_km.is_none()));
+    }
+
+    /// A route merges exactly as a radius search does: one machine is one row, programmed from its
+    /// highest source (here the one farther from the line), every source kept.
+    #[test]
+    fn a_machine_on_a_route_is_one_row_from_its_best_source() {
+        let route = up_the_meridian(40.0);
+        let hh = RepeaterRecord {
+            ctcss_enc_hz: Some(77.0),
+            ..route_row("W1MCH", 147.18, on_route(80.0, 10.0))
+        };
+        let rb = RepeaterRecord {
+            source: RepeaterSource::Repeaterbook,
+            source_id: "42-1".into(),
+            callsign: "W1MCH-R".into(),
+            ctcss_enc_hz: Some(88.5),
+            ..route_row("W1MCH", 147.18, on_route(80.0, 12.0))
+        };
+        let got = merge_route(&[&[], &[rb], &[hh]], &route);
+        assert_eq!(got.len(), 1, "{got:?}");
+        let ids: Vec<&str> = got[0]
+            .sources
+            .iter()
+            .map(|s| s.channel_id.as_str())
+            .collect();
+        assert_eq!(ids, ["rb:42-1", "hh:W1MCH"]);
+        assert_eq!(got[0].record.ctcss_enc_hz, Some(88.5));
+        assert_eq!(got[0].disagreements[0].field, DisputedField::Tone);
+    }
+
+    /// A route that ends where it starts is the radius search around that place: the same machines
+    /// in the same order (the real Manchester listings).
+    #[test]
+    fn a_route_to_where_it_starts_is_the_radius_search() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let layers: [&[RepeaterRecord]; 3] = [&coordinator, &[], &hearham];
+        let circle = Route {
+            from: MANCHESTER,
+            to: MANCHESTER,
+            corridor_km: 100.0,
+        };
+        let lines = |ms: Vec<Machine>| ms.iter().map(golden_line).collect::<Vec<_>>();
+        let around = lines(merge_nearby(&layers, MANCHESTER, 100.0));
+        assert_eq!(around.len(), 12);
+        assert_eq!(lines(merge_route(&layers, &circle)), around);
+    }
+
+    /// THE ROUTE GOLDEN: Liverpool to Leeds with the 25 mi corridor, from the real Manchester
+    /// listings. The order and each machine's place were worked out before the route merge first
+    /// ran, by a separate program that finds each machine's nearest point of the line by sampling
+    /// it every 5 m (none of this module's geometry), and every machine is the radius search's
+    /// own merged line, but for one thing the route changes: a machine's rows from one directory are
+    /// listed nearest the line first, so GB3OA's hearham rows swap (hh:4092 is 24.57 km off the
+    /// line, hh:692 24.73 km). GB3CR, south of Liverpool, is placed before the start; GB3BW, past
+    /// Leeds, after the end; MB7ITW (Sheffield, 42.9 km off the line) and GB3XN (53.0 km) are
+    /// outside.
+    #[test]
+    fn the_route_golden() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let route = Route {
+            from: LIVERPOOL,
+            to: LEEDS,
+            corridor_km: CORRIDOR_KM,
+        };
+        let got = merge_route(&[&coordinator, &[], &hearham], &route);
+        let want = [
+            ("GB3CR 433.15 in 434.75 110.9 FM cc- on [rsgb:744]", 0.000, 33.743),
+            ("GB3OA 145.6125 in 145.0125 82.5 FM+YSF cc- on [rsgb:207 hh:4092 hh:692] Mode(Rsgb FM+YSF|Hearham DMR)", 7.512, 25.452),
+            ("GB7SJ 433.175 in 434.775 103.5 FM cc- on [rsgb:2437 hh:4042] Mode(Rsgb FM|Hearham DMR)", 17.844, 30.554),
+            ("MB6JB 431.1375 in 431.1375 - DMR cc- on [rsgb:6531 hh:18598] Mode(Rsgb DMR|Hearham FM)", 32.376, 13.784),
+            ("GB3PP 433.375 in 434.975 82.5 FM+DMR+YSF cc10 on [rsgb:4356 hh:3959] ColorCode(Rsgb CC10|Hearham CC9)", 34.821, 24.423),
+            ("GB7PR 434.05 in 434.05 - — cc- on [rsgb:5190]", 47.115, 32.478),
+            ("GB3MN 145.65 in 145.05 82.5 FM+YSF cc- on [rsgb:2293 hh:14327]", 51.922, 36.034),
+            ("MB7IGF 430.0125 in 430.0125 82.5 FM cc- on [rsgb:355 hh:15527]", 61.532, 14.955),
+            ("GB3XL 430.8875 in 438.4875 82.5 FM+DMR cc1 off [rsgb:6863 hh:4017]", 89.931, 7.774),
+            ("GB3BW 430.8125 in 438.4125 88.5 FM cc- on [rsgb:4808 hh:12141 hh:12268] Tone(Rsgb 88.5|Hearham 82.5) Input(Rsgb 438.4125|Hearham 438.4125|Hearham 430.8125)", 103.834, 24.635),
+        ];
+        let lines: Vec<String> = got.iter().map(golden_line).collect();
+        assert_eq!(lines, want.map(|(line, _, _)| line));
+        for (m, (_, along, off)) in got.iter().zip(want) {
+            let (a, d) = (m.along_km.unwrap(), m.record.distance_km);
+            assert!(
+                (a - along).abs() < 0.05 && (d - off).abs() < 0.05,
+                "{}: {a} {d}",
+                m.record.callsign
+            );
+        }
+    }
+
+    #[test]
+    fn a_route_asks_repeaterbook_about_every_state_its_corridor_crosses_in_route_order() {
+        // The states come from the 4-character locator square a point is in ([`state_for_grid`]:
+        // the square's main state), so a route starts with the state its first square names:
+        // Chicago's EN61 is Indiana's, Rockford's EN52 Wisconsin's.
+        let start = |p: (f64, f64)| plan_states(p, CORRIDOR_KM)[0].clone();
+        // Rockford IL to Madison WI: both states, nothing left out.
+        let mut short = plan_route_states(&Route {
+            from: (42.27, -89.09),
+            to: (43.07, -89.40),
+            corridor_km: CORRIDOR_KM,
+        });
+        assert!(short.beyond.is_empty(), "{short:?}");
+        short.ask.sort();
+        assert_eq!(short.ask, ["17", "55"]);
+        // Chicago to Denver: from its start, through Illinois, Iowa and Nebraska to Colorado, in
+        // that order.
+        let chicago = (41.88, -87.63);
+        let west = plan_route_states(&Route {
+            from: chicago,
+            to: (39.74, -104.99),
+            corridor_km: CORRIDOR_KM,
+        });
+        let at = |id: &str| {
+            west.ask
+                .iter()
+                .position(|s| s == id)
+                .unwrap_or_else(|| panic!("{id} not asked: {west:?}"))
+        };
+        assert_eq!(west.ask[0], start(chicago), "{west:?}");
+        assert!(
+            at("17") < at("19") && at("19") < at("31") && at("31") < at("08"),
+            "{west:?}"
+        );
+        assert!(west.beyond.is_empty(), "{west:?}");
+        // Coast to coast crosses more than nine: the nine the route reaches first are asked
+        // about, the rest named, each state once.
+        let new_york = (40.71, -74.01);
+        let across = plan_route_states(&Route {
+            from: new_york,
+            to: (34.05, -118.24),
+            corridor_km: CORRIDOR_KM,
+        });
+        assert_eq!(across.ask.len(), RB_STATES_PER_SEARCH, "{across:?}");
+        assert_eq!(across.ask[0], start(new_york), "{across:?}");
+        assert_eq!(
+            across.beyond.last().map(String::as_str),
+            Some("CA"),
+            "{across:?}"
+        );
+        let mut every: Vec<&str> = across
+            .ask
+            .iter()
+            .map(|id| state_code_for_id(id).unwrap())
+            .chain(across.beyond.iter().map(String::as_str))
+            .collect();
+        let crossed = every.len();
+        every.sort_unstable();
+        every.dedup();
+        assert_eq!(every.len(), crossed, "{across:?}");
+        // Outside the US, none; a route that ends where it starts plans the radius search's.
+        let europe = Route {
+            from: (48.86, 2.35),
+            to: (50.85, 4.35),
+            corridor_km: CORRIDOR_KM,
+        };
+        assert_eq!(plan_route_states(&europe), StatePlan::default());
+        let circle = Route {
+            from: EN52,
+            to: EN52,
+            corridor_km: 60.0,
+        };
+        assert_eq!(plan_route_states(&circle).ask, plan_states(EN52, 60.0));
+    }
+
+    #[test]
+    fn a_uk_route_asks_rsgb_about_the_squares_along_it_and_names_the_rest() {
+        // Liverpool to Leeds: Liverpool's IO83 first, Leeds's IO93 on the way.
+        let m62 = plan_rsgb_route(&Route {
+            from: LIVERPOOL,
+            to: LEEDS,
+            corridor_km: CORRIDOR_KM,
+        });
+        assert_eq!(m62.ask.first().map(String::as_str), Some("IO83"), "{m62:?}");
+        assert!(m62.ask.contains(&"IO93".to_string()), "{m62:?}");
+        assert!(m62.beyond.is_empty(), "{m62:?}");
+        // London to Edinburgh reaches more than nine: those it reaches first are asked about, and
+        // the rest named, up to IO86 across the Forth (5 km north of Edinburgh).
+        let north = plan_rsgb_route(&Route {
+            from: (51.51, -0.13),
+            to: (55.95, -3.19),
+            corridor_km: CORRIDOR_KM,
+        });
+        assert_eq!(north.ask.len(), RSGB_SQUARES_PER_SEARCH, "{north:?}");
+        assert_eq!(north.ask[0], "IO91", "{north:?}");
+        assert_eq!(
+            north.beyond.last().map(String::as_str),
+            Some("IO86"),
+            "{north:?}"
+        );
+        // Outside the UK, none: Dunkirk to Brussels passes 26 km from the UK square JO01, but as
+        // on a radius search a search from outside the UK asks RSGB nothing.
+        for (from, to) in [
+            ((51.03, 2.38), (50.85, 4.35)),
+            ((41.88, -87.63), (39.74, -104.99)),
+        ] {
+            let route = Route {
+                from,
+                to,
+                corridor_km: CORRIDOR_KM,
+            };
+            assert_eq!(plan_rsgb_route(&route), RsgbPlan::default(), "{from:?}");
+        }
     }
 }
