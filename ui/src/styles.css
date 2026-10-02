@@ -16825,6 +16825,21 @@ button.cq-skiptx1.on {
    (a span, Phone and CW) takes the same box as the buttons. */
 .op-controls.cq-txctl {
   padding: 2px;
+  /* WRAPS rather than clips. At header size the cluster is ~400 px wide at 100 %; on a phone, or
+     a narrow window at a large pin, a one-row pill ran past its strip and the frame clipped Stop TX
+     in half (the hosted Quick layout at 390 px, 175 %). It keeps one row wherever it fits — a
+     flex line breaks on the cluster's one-row width — and only a strip narrower than that wraps
+     it. */
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+/* A SHELL WITH A STICKY TX STRIP keeps what it scrolls to clear of it. Parked at the top, the strip
+   covers the scrollport's first rows, so anything scrolled to the START — `scrollIntoView`, a focus
+   moving into the log form — would land under it (the hosted RTTY call field at 1024×768, 175 %).
+   The strip writes its own height on its shell (`--cockpit-txstrip-h`); a shell without one pads
+   nothing. */
+.layout.single {
+  scroll-padding-top: var(--cockpit-txstrip-h, 0px);
 }
 .cq-txctl .op-btn {
   display: inline-flex;

@@ -453,6 +453,13 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
 }
+/* The hosted observer's TX strip scrolls with its cockpit, for its dock's reason below: its
+   controls are disabled, and at a phone width a parked strip of disabled buttons covered the decode
+   text and the contact the observer was reading (compiled-browser v5, DX work). With station
+   control the strip is pinned like the dock. After `.cockpit-txstrip`, which it overrides. */
+.remote-observer-strip {
+  position: static;
+}
 /* The keyboard observer's disabled controls can fill the entire remaining
    viewport at 175% zoom, covering both text and recall at every scroll position.
    Let that inactive dock scroll with its cockpit. Only observers attach this

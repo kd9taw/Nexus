@@ -387,7 +387,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmit bar on Phone, CW and PSK. Each mode keeps its own send area. On Phone and CW the first
   button only shows whether transmit is enabled, because those screens enable it themselves. Tune
   lights while its carrier is up, as on FT. FT's transmit buttons are now the same size as
-  everyone else's.
+  everyone else's. On the Remote, the row follows the contact in the Quick layout, and for a
+  browser watching without station control it scrolls with the screen, as the transmit bar does.
 - **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
   message box holds text (you are typing, a reply waits there, or a message of yours is going out)
   or while a message to you is still arriving; a reply already queued waits until the box is

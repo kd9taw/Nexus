@@ -2271,6 +2271,25 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     </Fragment>
   )
 
+  // THE TX STRIP — FT's cluster (operator batch 60): the TX-enable latch READ-ONLY (Phone arms TX
+  // itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
+  // (→ halt_tx), sticky so they never leave the window. A shell child with no ⊞ id: under the
+  // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
+  // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
+  // which calls preventDefault, so the focused button does not click.
+  const txStrip = (
+    <CockpitTxStrip
+      radio={snap.radio}
+      onSnap={onSnap}
+      onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+      onAtuTune={() =>
+        void atuTune()
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
+      onStopTx={() => void haltTx()}
+    />
+  )
   return (
     <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`}>
       <CockpitHeader
@@ -2614,23 +2633,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         </>
       )}
 
-      {/* THE TX STRIP — FT's cluster under the scope (operator batch 60): the TX-enable latch
-          READ-ONLY (Phone arms TX itself — the mode change arms it and the PTT offers to), Tune,
-          the rig's ATU and Stop TX (→ halt_tx), sticky so they never leave the window. A shell
-          child with no ⊞ id, so hiding the scope leaves it directly under the header. Space as
-          PTT is a WINDOW listener and stays one: with focus on a strip button, Space still goes
-          to the PTT handler, which calls preventDefault, so the focused button does not click. */}
-      <CockpitTxStrip
-        radio={snap.radio}
-        onSnap={onSnap}
-        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
-        onAtuTune={() =>
-          void atuTune()
-            .then((s) => onSnap?.(s))
-            .catch((e) => pushToast(String(e), 'error'))
-        }
-        onStopTx={() => void haltTx()}
-      />
+      {/* THE TX STRIP (`txStrip` above), under the scope. */}
+      {!quick && txStrip}
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped
@@ -2701,6 +2705,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           />
         )}
       </div>
+
+      {/* THE HOSTED QUICK PRESENTATION puts the contact first (`.cockpit-col--contact`), so there
+          the strip follows the contact column instead of preceding it, right above the dock: a
+          strip under the header pushed the call field below the quick navigation on a phone. Still
+          a shell child with no id, still sticky above the dock. */}
+      {quick && txStrip}
 
       {/* TX DOCK — the transmit chrome, pinned OUTSIDE the pane region so no pane
           layout, stored or hand-edited, can move, hide or scroll it away. PTT and Lock

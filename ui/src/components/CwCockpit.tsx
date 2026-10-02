@@ -1476,6 +1476,23 @@ export function CwCockpit({
   const rigCtlSlot = <Fragment key="rigctl">{rigCtlPane}</Fragment>
   const logSlot = <Fragment key="log-form">{logPane}</Fragment>
 
+  // THE TX STRIP — FT's cluster (operator batch 60): the TX-enable latch READ-ONLY (the mode change
+  // arms TX here), Tune, the rig's ATU and Stop TX (→ stopCw + haltTx, the same abort Esc runs),
+  // sticky so they never leave the window. A shell child with no ⊞ id: under the scope, or after
+  // the contact in the hosted Quick presentation (below).
+  const txStrip = (
+    <CockpitTxStrip
+      radio={snap.radio}
+      onSnap={onSnap}
+      onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+      onAtuTune={() =>
+        void atuTune()
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
+      onStopTx={abort}
+    />
+  )
   return (
     <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`}>
       <CockpitHeader
@@ -1843,21 +1860,8 @@ export function CwCockpit({
         </>
       )}
 
-      {/* THE TX STRIP — FT's cluster under the scope (operator batch 60): the TX-enable latch
-          READ-ONLY (the mode change arms TX here), Tune, the rig's ATU and Stop TX (→ stopCw +
-          haltTx, the same abort Esc runs), sticky so they never leave the window. A shell child
-          with no ⊞ id, so hiding the scope leaves it directly under the header. */}
-      <CockpitTxStrip
-        radio={snap.radio}
-        onSnap={onSnap}
-        onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
-        onAtuTune={() =>
-          void atuTune()
-            .then((s) => onSnap?.(s))
-            .catch((e) => pushToast(String(e), 'error'))
-        }
-        onStopTx={abort}
-      />
+      {/* THE TX STRIP (`txStrip` above), under the scope. */}
+      {!quick && txStrip}
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped
@@ -1930,6 +1934,12 @@ export function CwCockpit({
           />
         )}
       </div>
+
+      {/* THE HOSTED QUICK PRESENTATION puts the contact first (`.cockpit-col--contact`), so there
+          the strip follows the contact column instead of preceding it, right above the dock: a
+          strip under the header pushed the call field below the quick navigation on a phone. Still
+          a shell child with no id, still sticky above the dock. */}
+      {quick && txStrip}
 
       {/* TX DOCK — the transmit chrome, pinned OUTSIDE the pane region so no pane layout,
           stored or hand-edited, can move, hide or scroll it away. Tune and Stop TX are up in

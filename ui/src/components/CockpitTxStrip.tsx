@@ -61,7 +61,10 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
   useDockClearance(ref)
 
   return (
-    <div className="cockpit-txstrip" ref={ref}>
+    // The hosted OBSERVER's strip scrolls with its cockpit, as its dock does (`.remote-observer-dock`):
+    // its controls are disabled, and a parked strip of disabled buttons covered the contact the
+    // observer was reading on a phone. With station control it is pinned like the dock.
+    <div className={`cockpit-txstrip${control ? '' : ' remote-observer-strip'}`} ref={ref}>
       <div className="op-controls cq-txctl" role="group" aria-label={t('operate.strip.txControls.aria')}>
         {/* ⚠️ DEFERRED (i18n), the four controls below — see this file's header. */}
         {onSetTxEnabled && !radio.transmitting ? (
@@ -176,26 +179,43 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
   )
 }
 
-/** THE STICKY BOTTOM IS THE DOCK'S HEIGHT. The dock is sticky at `bottom: 0`, so a strip parked at
- *  0 would park UNDER it — Stop TX covered by the PTT row, the exact defect at the 150–175 % pins.
- *  CSS cannot read a sibling's height, so the strip measures its shell's dock and writes the
- *  clearance as a placement input (`--cockpit-txstrip-bottom`, read by `.cockpit-txstrip`). A dock
- *  that is not sticky (the hosted observer's, which scrolls with its cockpit) clears nothing. */
+/** THE STICKY EDGES' TWO PLACEMENT INPUTS, measured because CSS cannot read a sibling's box.
+ *  · `--cockpit-txstrip-bottom` on the strip: the dock's height. The dock is sticky at `bottom: 0`,
+ *    so a strip parked at 0 would park UNDER it — Stop TX covered by the PTT row, the exact defect
+ *    at the 150–175 % pins. A dock that is not sticky (the hosted observer's) clears nothing.
+ *  · `--cockpit-txstrip-h` on the SHELL: the strip's rendered height while it is sticky, which the
+ *    shell's `scroll-padding-top` reads so whatever is scrolled to the start lands below a strip
+ *    parked at the top. RENDERED, not offsetHeight: under the UI zoom Chrome applies
+ *    `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded 42 screen px under a
+ *    74 px strip), and more padding than the strip only scrolls a target a little lower.
+ *  Re-read on every render as well as on a resize: station control arriving turns the observer's
+ *  dock and strip sticky with no change of size for an observer to see. */
 function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
+  const apply = () => {
+    const strip = ref.current
+    const shell = strip?.parentElement
+    if (!strip || !shell) return
+    const dock = Array.from(shell.children).find((c): c is HTMLElement =>
+      c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar')))
+    strip.style.setProperty('--cockpit-txstrip-bottom',
+      dock && getComputedStyle(dock).position === 'sticky' ? `${dock.offsetHeight}px` : '0px')
+    shell.style.setProperty('--cockpit-txstrip-h',
+      getComputedStyle(strip).position === 'sticky' ? `${Math.ceil(strip.getBoundingClientRect().height)}px` : '0px')
+  }
+  useLayoutEffect(apply)
   useLayoutEffect(() => {
     const strip = ref.current
     const shell = strip?.parentElement
-    const dock = shell
-      ? Array.from(shell.children).find((c): c is HTMLElement =>
-          c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar')))
-      : undefined
-    if (!strip || !dock) return
-    const apply = () => strip.style.setProperty('--cockpit-txstrip-bottom',
-      getComputedStyle(dock).position === 'sticky' ? `${dock.offsetHeight}px` : '0px')
-    apply()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(apply)
-    observer.observe(dock)
-    return () => observer.disconnect()
+    if (!strip || !shell) return
+    const dock = Array.from(shell.children).find((c) => c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply)
+    observer?.observe(strip)
+    if (dock) observer?.observe(dock)
+    return () => {
+      observer?.disconnect()
+      shell.style.removeProperty('--cockpit-txstrip-h')
+    }
+    // `apply` reads only refs and the DOM; the observer is set up once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref])
 }
