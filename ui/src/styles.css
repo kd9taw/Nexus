@@ -22517,8 +22517,9 @@ button.sat-chip:disabled {
 }
 
 /* ── Program (radio programming workbench): SOURCE pane (query + results) left,
-   CHANNEL LIST (the artifact) right. List-first by design — no map (the feature
-   is a programming tool, not a repeater directory). ────────────────────────── */
+   CHANNEL LIST (the artifact) right. List-first by design: it is a programming tool,
+   not a repeater directory. Its one map (.rp-map, below) shows hearham's listings
+   alone and only when asked. ──────────────────────────────────────────────────── */
 .radioprog {
   flex: 1;
   min-height: 0;
@@ -22666,6 +22667,42 @@ button.sat-chip:disabled {
 .rp-results > .aw-empty,
 .rp-chan-rows > .aw-empty {
   margin: auto;
+}
+/* The map (RepeaterMap.tsx; the operator's pick, 2026-09-30: a hearham-only map) takes the list's
+   place with the list's own sizing, the same zero LENGTH basis and 120 px floor, so nothing around
+   it moves when the operator switches. The canvas fills the stage out of flow, and the words under
+   it say what the map shows and what it leaves off. */
+.rp-map {
+  flex: 1 1 0px;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.rp-map-stage {
+  position: relative;
+  flex: 1 1 0px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--map-ocean);
+}
+.rp-map-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-label);
+  line-height: var(--lh-normal);
+  color: var(--text-dim);
+}
+/* List or Map, at the end of the count line. */
+.rp-view {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
 }
 .rp-row {
   display: grid;

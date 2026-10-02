@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RSGB list is a beta service: when it cannot be read, Program says so and shows hearham's
   machines alone. The CSV and CHIRP files credit every directory their rows came from, one
   comment line each, "Repeater data: RSGB ETCC (ukrepeater.net)" among them.
+- **Program shows the repeaters it found on a map.** Press **Map** at the end of the count line
+  and the machines take the list's place on a map of the search: the radius ring around the place,
+  or the corridor along a route, with each machine's callsign beside its dot. A filled dot is in
+  your channel list; click a dot to add the machine or take it off, and **List** goes back. The
+  map shows hearham's listings only, each where hearham places it: RepeaterBook's terms do not
+  allow its listings on a map, and the RSGB list is not mapped yet. So with a RepeaterBook token,
+  or around a UK place, the words under the map say how many machines only RepeaterBook or the
+  RSGB list has, and that those are left off.
 - **Program lists the repeaters along a route.** Press **Route to…** at the end of the Near row,
   give the place you leave from and the place you are going (My station, a grid or a city, as for
   Near), and Program lists the repeaters within a corridor of the straight line between them, in

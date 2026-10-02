@@ -285,6 +285,9 @@ const MIGRATED = [
   // reports (imported/skipped, added/refreshed, saved/already-there) are one entry per count.
   'components/MemoriesView.tsx',
   'components/RadioProgView.tsx',
+  // Program's map (2026-10-02): born migrated; its canvas writes only data (hearham's callsigns,
+  // place names, a formatted distance), never a word.
+  'components/RepeaterMap.tsx',
   'components/MemoryStrip.tsx',
   'components/RecallPanel.tsx',
   'components/BandPicker.tsx',

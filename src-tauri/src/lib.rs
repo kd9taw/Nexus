@@ -26733,6 +26733,11 @@ struct RepeaterSearchRow {
     /// distance and bearing are then from its nearest point of the route.
     #[serde(skip_serializing_if = "Option::is_none")]
     along_km: Option<f64>,
+    /// Where Program's map puts the machine: its hearham row's own place and words, never the
+    /// record's (propagation::repeaters::MapPoint). Absent when no hearham row lists it: the map
+    /// is hearham's alone (the operator, 2026-09-30), so the machine is left off it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    map: Option<propagation::repeaters::MapPoint>,
 }
 
 /// One directory a search read, and how old its list is.
@@ -26789,6 +26794,7 @@ fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSe
             sources: m.sources,
             disagreements: m.disagreements,
             along_km: m.along_km,
+            map: m.map,
         })
         .collect()
 }

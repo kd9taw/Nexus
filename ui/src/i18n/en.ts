@@ -4621,6 +4621,34 @@ export const EN = {
   'program.count.route': '{{shown}} of {{total}} shown · in order along the route',
   'program.count.freq.route':
     '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · in order along the route',
+  // THE MAP (the operator's pick, 2026-09-30: "hearham-only map now"). Every dot is a hearham
+  // listing, so the words say so, and say what is left off when RepeaterBook or the RSGB list
+  // filled the list too: RepeaterBook's terms forbid a map, and the RSGB list is not mapped yet.
+  'program.view.aria': 'Show the repeaters as a list or on a map',
+  'program.view.list': 'List',
+  'program.view.map': 'Map',
+  'program.view.map.title': "The machines shown, on a map: {{hearham}}'s listings only",
+  'program.map.aria': {
+    one: 'Map of {{count}} repeater',
+    other: 'Map of {{count}} repeaters',
+  },
+  'program.map.shows': {
+    one: 'On the map: {{count}} machine, as {{hearham}} lists it and where it places it.',
+    other: 'On the map: {{count}} machines, as {{hearham}} lists them and where it places them.',
+  },
+  'program.map.rb': {
+    one: 'Not on the map: {{count}} machine only {{rb}} lists. Its terms do not allow its listings on a map.',
+    other: 'Not on the map: {{count}} machines only {{rb}} lists. Its terms do not allow its listings on a map.',
+  },
+  'program.map.rb.none':
+    "{{rb}}'s listings are never mapped (its terms do not allow it). Every machine shown is one {{hearham}} lists too.",
+  'program.map.rsgb': {
+    one: 'Not on the map for now: {{count}} machine only the {{rsgb}} list has.',
+    other: 'Not on the map for now: {{count}} machines only the {{rsgb}} list has.',
+  },
+  'program.map.rsgb.none':
+    'The {{rsgb}} list is not mapped for now. Every machine shown is one {{hearham}} lists too.',
+  'program.map.hint': 'A filled dot is in your channel list. Click a dot to add the machine or take it off.',
   'program.addAll.label': '＋ Add all shown',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',

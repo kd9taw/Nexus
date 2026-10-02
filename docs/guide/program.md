@@ -6,7 +6,8 @@ list is the artifact — the repeater results are a source feed that fills it, a
 nothing is fetched until you press **Fetch repeaters**. Nexus never drives a
 programming cable; **CHIRP** does that, free, for about a thousand models, and
 this section builds the CSV CHIRP imports. It is deliberately not a repeater
-directory: no map, no polling, no browsing for its own sake.
+directory: no polling and no browsing for its own sake, and its one map shows
+hearham's listings only.
 
 Program ships on: it is enabled under the **Just getting started**,
 **POTA / SOTA** and **6m / VHF** goal profiles and wherever no goal profile was
@@ -261,6 +262,25 @@ in CO, NM, CA are hearham's alone"); search the rest of the drive as a second
 route that starts where the first one's states end. A long drive in the UK does
 the same with RSGB's locator squares.
 
+### See the repeaters on a map
+
+1. Fetch repeaters around a place or along a route, then press **Map** at the
+   end of the count line. The map takes the list's place: the place you searched
+   (or the two ends of the route) marked with a cross, the radius as a ring (or
+   the corridor as a band along the straight line), and each machine as a dot
+   with its callsign beside it. The band, FM, on-air and search filters apply to
+   the map as they do to the list.
+2. Point at a dot for its callsign, output and town. A filled dot is in your
+   channel list; click a dot to add the machine, click it again to take it off.
+3. **List** goes back to the list.
+
+The map shows **hearham's listings only**, each where hearham places it, with
+hearham's own callsign and town: hearham invites map use, RepeaterBook's terms
+do not allow its listings on a map, and the RSGB list is not mapped yet. With a
+RepeaterBook token, or around a UK place, the words under the map say how many
+of the machines shown only RepeaterBook or the RSGB list has; those stay in the
+list and off the map.
+
 ### Star one machine onto the cockpit strip
 
 1. Press ☆ on the result row of the machine you actually want on the radio in
@@ -302,6 +322,13 @@ handheld; ☆ on a result row is the one-machine version.
    cockpit MEM strip.
 
 ## Honest limits
+
+- **The map is hearham's listings, not your list.** A machine only RepeaterBook
+  or the RSGB list has is left off it (the words under the map count them), and
+  a machine hearham shares with them stands where hearham places it, which can
+  differ a little from the distance the list gives. The map also has no roads
+  and no towns of its own, and it does not zoom or pan: it is drawn to fit the
+  radius or the route.
 
 - **A route is a straight line, not the road.** Nexus has no road map, so the
   corridor is measured either side of the straight line between the two places.
