@@ -204,9 +204,50 @@ interface Props {
  *  projects a lone point from the far side straight through the sphere, onto the near face — so a
  *  spot in Sydney, on a globe centred on the Midwest, landed over the eastern Pacific. Every point
  *  marker, point label and hit target on this map is placed through this, the openings' tags
- *  included; their wedges are areas, drawn through `path`. */
+ *  included (`globeEdgeTag` writes one whose spot is behind the Globe at its edge); their wedges are
+ *  areas, drawn through `path`. */
 function placePoint(kind: Projection, proj: GeoProjection, ll: LatLon): [number, number] | null {
   return inView(kind, proj, ll) ? project(proj, ll) : null
+}
+
+/** Where an opening's tag is written on the Globe while its spot, the middle of the wedge's far edge, is
+ *  behind the planet: just inside the globe's edge, where the wedge meets it, so a long opening keeps its
+ *  name. The wedge's radials (taken as its far edge is, 17 across its 45°) that cross the horizon have one
+ *  end facing the viewer and the other behind; the middle one's crossing gives the direction from the
+ *  disc's centre, and the tag's box, `w` × 10 px, is pulled in along it until its outer corner is 2 px
+ *  inside the limb. Returns the box's bottom centre, where the tag is written. Null when no radial
+ *  crosses: the wedge is then wholly behind the planet and keeps no tag. */
+function globeEdgeTag(proj: GeoProjection, me: LatLon, bearingDeg: number, maxKm: number, w: number): [number, number] | null {
+  const faces = (ll: LatLon) => inView('globe', proj, ll)
+  const home = faces(me)
+  const crossing: number[] = []
+  for (let i = 0; i <= 16; i++) {
+    const brg = bearingDeg - 22.5 + (45 * i) / 16
+    if (faces(destinationPoint(me, brg, maxKm)) !== home) crossing.push(brg)
+  }
+  if (crossing.length === 0) return null
+  const brg = crossing[crossing.length >> 1]
+  // Halve that radial down to where it crosses the horizon, `on` staying on the face.
+  let on = home ? 0 : maxKm
+  let off = home ? maxKm : 0
+  for (let k = 0; k < 24; k++) {
+    const mid = (on + off) / 2
+    if (faces(destinationPoint(me, brg, mid))) on = mid
+    else off = mid
+  }
+  const p = project(proj, destinationPoint(me, brg, on))
+  if (!p) return null
+  const [cx, cy] = proj.translate()
+  const d = Math.hypot(p[0] - cx, p[1] - cy)
+  const ux = (p[0] - cx) / d
+  const uy = (p[1] - cy) / d
+  // The box's outer corner, its middle D px out along u, is D·u + (±w/2, ±5) with u's signs. It lies on the
+  // circle of radius ρ = R − 2 at D = −t + √(t² + ρ² − (w/2)² − 5²), t = |ux|·w/2 + |uy|·5; no D ≥ 0, no room.
+  const hw = w / 2
+  const t = Math.abs(ux) * hw + Math.abs(uy) * 5
+  const rho = proj.scale() - 2
+  const D = -t + Math.sqrt(t * t + rho * rho - hw * hw - 25)
+  return D >= 0 ? [cx + ux * D, cy + uy * D + 5] : null
 }
 
 /** Color for an ionosonde's measured MUF (MHz): a cold→hot scale (blue low → red high)
@@ -2138,9 +2179,10 @@ export function MapView({
     // a quiet band: no openings ⇒ nothing draws. Sits under the live-spot dots so
     // the stations that PROVE the opening render on top of its footprint.
     // The wedge is an AREA, drawn through `path` like every other area, so the Globe clips it at its
-    // horizon; its tag is placed like every other point label. Drawn from its projected corners, an
-    // edge behind the planet came out straight through it, on the face: a 15,000 km F2 wedge ended
-    // over the Arctic, and on a globe turned away from home the whole wedge and its tag still showed.
+    // horizon; its tag is placed like every other point label, or at the globe's edge while its spot is
+    // behind the planet. Drawn from its projected corners, an edge behind the planet came out straight
+    // through it, on the face: a 15,000 km F2 wedge ended over the Arctic, and on a globe turned away
+    // from home the whole wedge and its tag still showed.
     if (layers.openings.visible && me) {
       for (const o of prop?.openings ?? []) {
         if (!(o.maxKm > 0)) continue
@@ -2157,14 +2199,21 @@ export function MapView({
         ctx.strokeStyle = color
         ctx.lineWidth = 1.2
         ctx.stroke()
-        // Mode tag at the sector's far edge (readable "what kind" on the map), while that edge faces the viewer.
-        const tag = placePoint(kind, proj, destinationPoint(me, o.bearingDeg, o.maxKm))
+        // Mode tag at the sector's far edge (readable "what kind" on the map), while that edge faces the
+        // viewer; behind the Globe, where the wedge meets the globe's edge (globeEdgeTag).
+        const label = `${o.band} ${o.mode}`
+        ctx.font = 'bold 10px system-ui'
+        const far = placePoint(kind, proj, destinationPoint(me, o.bearingDeg, o.maxKm))
+        const tag: [number, number] | null = far
+          ? [far[0], far[1] - 3]
+          : kind === 'globe'
+            ? globeEdgeTag(proj, me, o.bearingDeg, o.maxKm, ctx.measureText(label).width)
+            : null
         if (tag) {
-          ctx.font = 'bold 10px system-ui'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'bottom'
           ctx.fillStyle = color
-          ctx.fillText(`${o.band} ${o.mode}`, tag[0], tag[1] - 3)
+          ctx.fillText(label, tag[0], tag[1])
         }
         ctx.globalAlpha = 1
       }
