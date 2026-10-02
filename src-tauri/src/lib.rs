@@ -18685,7 +18685,7 @@ async fn open_panel_window(
     }
     // Friendly window title so multi-monitor users can tell torn-off windows apart.
     let title = match slug.as_str() {
-        "connect" => "Nexus — Connect".to_string(),
+        "connect" => "Nexus — Conditions (formerly Connect)".to_string(),
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
         "operate" => "Nexus — Operate".to_string(),

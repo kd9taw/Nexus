@@ -48,6 +48,7 @@ import { PotaSotaView } from './PotaSotaView'
 import { classifyBoxFit } from './connect/SpotsBox'
 import { DEFAULT_SLOTS, type PaneId, type SlotId } from '../features/connectConfig'
 import type { OtaBoard, SpotsFeed } from './connect/paneContext'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 const spot = (call: string, band: string, freqMhz: number, mode: string, submode: string | null = null): SpotRow =>
   ({
@@ -107,6 +108,7 @@ const callsIn = (el: HTMLElement) => [...el.querySelectorAll('.sp-row .np-call')
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   sessionStorage.clear()
   api.getOtaSpots.mockReset()
   api.getOtaSpots.mockResolvedValue([])

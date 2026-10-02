@@ -32,6 +32,7 @@ import { parseJs8Sample } from './js8'
 import { RemoteCollections, RemoteCollectionsContext } from './collections'
 import type { ApplicationClient } from './application-client'
 import type { QueryPage } from './application-query-protocol'
+import { pastTheSwitch } from '../components/ConnectView.testkit'
 
 // ⏱ THE PER-TEST DEADLINE, and why it is not vitest's default 5 s.
 //
@@ -72,6 +73,7 @@ function projectedSettings(): Settings {
 }
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   window.matchMedia = ((media: string) => ({ matches: false, media, addEventListener() {}, removeEventListener() {},
     addListener() {}, removeListener() {} })) as unknown as typeof window.matchMedia
@@ -604,7 +606,7 @@ it.each(['connect','sats'] as const)('connects the actual %s section, keeps its 
     <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],navigation:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>
   const {container,rerender,unmount}=render(view(true))
-  fireEvent.click(screen.getByRole('button',{name:section==='connect'?/^Connect —/:/^Satellites —/}))
+  fireEvent.click(screen.getByRole('button',{name:section==='connect'?/^Conditions \(formerly Connect\) —/:/^Satellites —/}))
   if(section==='connect'){
     await waitFor(()=>expect(container.querySelector('.connect-header')?.textContent).toContain('Station data · Read only'))
     expect(container.querySelectorAll('.connect-shell')).toHaveLength(1)

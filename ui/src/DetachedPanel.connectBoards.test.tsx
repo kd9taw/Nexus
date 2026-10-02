@@ -87,6 +87,7 @@ vi.mock('./toast', async (importOriginal) => ({
 import { DetachedPanel } from './DetachedPanel'
 import * as api from './api'
 import { spotNeed } from './remote-web/remote-work'
+import { pastTheSwitch } from './components/ConnectView.testkit'
 
 type Call = [string, unknown[]]
 function traffic(): Call[] {
@@ -105,6 +106,7 @@ function clearMocks() {
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   sessionStorage.clear()
   state.needs = []
   localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: { cw: true, phone: true } }))

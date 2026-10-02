@@ -39,31 +39,16 @@ document.documentElement.setAttribute('data-theme', 'dark')
 // the app. The first render came out CRAMPED (operator, on the screenshot): two cards
 // parked over the globe and a Chase pane that can never fill here, because the needs
 // board is deliberately never served. A wall display is map-first.
+//
+// The boxes are not seeded here any more (step 5): the page opens in its own Frame + bar
+// (features/connectPresets TV_FRAME_BAR — A with only the boxes that fill from public
+// data), through the same one-time switch every Conditions surface makes, which keeps a
+// layout this browser already had for one tap back.
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 if (surfaceGet('nexus.connect.insights.collapsed') == null) {
   // The conditions card over the globe starts collapsed — its numbers live in the
   // panes anyway; the chevron brings it back.
   surfaceSet('nexus.connect.insights.collapsed', '1')
-}
-if (surfaceGet('nexus.connect.config') == null) {
-  // Panes that FILL from public weather. Chase and Selection need the needs board /
-  // a click-through workflow, which the read-only page never has — an empty pane on
-  // a wall reads as broken, not as waiting.
-  surfaceSet(
-    'nexus.connect.config',
-    JSON.stringify({
-      slots: {
-        left1: 'advisory',
-        left2: 'bandTiles',
-        right1: 'insights',
-        right2: 'kpOutlook',
-        bottom1: 'openings',
-        bottom2: 'spacewx',
-        bottom3: 'beacons',
-      },
-      overlays: {},
-    }),
-  )
 }
 // Room-distance type: a mild default magnification, overridable per TV with ?zoom=1.3
 // (and persisted nowhere — the URL is the setting, which a TV bookmark keeps).

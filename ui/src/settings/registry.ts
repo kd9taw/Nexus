@@ -625,9 +625,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // Connect, not a station or contest setting — and the keywords carry the words an
     // operator would actually search for ("tv", "chromecast", "cast", "browser").
     id: 'connect-web',
-    label: 'Connect on a TV',
+    label: 'Conditions on a TV',
     tab: 'appearance',
-    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan',
+    // 'connect': the view's name until step 5, so a search by the old name still finds it.
+    keywords: ['connect', 'tv', 'television', 'big screen', 'wall display', 'browser', 'lan',
       'network', 'web page', 'cast', 'chromecast', 'firestick', 'fire stick', 'tablet',
       'phone', 'remote view', 'read only', 'shack tv'],
   },

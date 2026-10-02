@@ -41,6 +41,7 @@ import { CONNECT_PRESET_IDS, CONNECT_PRESETS, type ConnectPresetId } from '../fe
 import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
 import { StationDataContext } from '../stationAccess'
 import { paneById } from './connect/panes'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 const RECORD = 'nexus.panels.connect.main'
 const POPOUT_RECORD = 'nexus.panels.connect.connect'
@@ -109,6 +110,7 @@ function fakeBoxes(connectW: number, railW = 300) {
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   window.history.replaceState(null, '', '/')
   globalThis.ResizeObserver = class {
     observe() {}
@@ -121,7 +123,10 @@ afterEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-describe('unconfigured, Connect is exactly today’s layout', () => {
+// Past the one-time switch to Frame + bar (pastTheSwitch, every test here): with nothing else stored, the
+// view is the Standard layout, and it stores nothing of its own. A fresh install opens in Frame + bar
+// instead, which is ConnectView.switch.test.tsx's.
+describe('past the switch with nothing else stored, Conditions is exactly the Standard layout', () => {
   it('renders every slot in both rails and the strip, stores nothing, overrides no size', async () => {
     const { container } = await mount()
     expect(slotsOn(container).sort()).toEqual([...SLOT_IDS].sort())
@@ -461,7 +466,7 @@ describe('resizing the rails', () => {
 // read back from the records they write, so a moved or resized pane reads Custom and nothing
 // snaps back. The preset table itself is guarded in features/connectPresets.test.ts.
 describe('layout presets — ⊞ Panels ▸ Layout', () => {
-  const LABEL: Record<ConnectPresetId, string> = { mapFirst: 'Map first', listFirst: 'List first', dashboard: 'Dashboard', frame: 'Frame', frameBar: 'Frame + bar' }
+  const LABEL: Record<ConnectPresetId, string> = { mapFirst: 'Map first', listFirst: 'List first', dashboard: 'Dashboard', frame: 'Frame', frameBar: 'Frame + bar (default)' }
   const CONFIG = 'nexus.connect.config'
   const layouts = () => screen.getByRole('group', { name: 'Layout' })
   const openMenu = () => {
@@ -553,6 +558,7 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
   for (const id of ['standard', ...CONNECT_PRESET_IDS] as const)
     it(`the dashboard boxes — Bands for you, Clock, Space Wx with its new lines — can be picked into every slot of ${id === 'standard' ? 'Standard' : LABEL[id]}${id !== 'standard' && CONNECT_PRESETS[id].hidden.length > 0 ? ', its closed row included,' : ''} and land there`, async () => {
       localStorage.clear()
+      pastTheSwitch()
       const { container } = await mount()
       if (id !== 'standard') pick(LABEL[id])
       expect(layoutNow(), `control: ${id} is on screen`).toBe(id === 'standard' ? 'Standard' : LABEL[id])
@@ -801,7 +807,7 @@ describe('the Layout button — the same picker, beside ⊞ Panels', () => {
     expect(button.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(picker()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Standard', 'Map first', 'List first', 'Dashboard', 'Frame', 'Frame + bar'])
+    expect(within(picker()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Standard', 'Map first', 'List first', 'Dashboard', 'Frame', 'Frame + bar (default)'])
     expect(now()).toBe('Standard')
     expect((screen.getByRole('button', { name: 'Undo last change' }) as HTMLButtonElement).disabled, 'nothing to undo yet').toBe(true)
   })
@@ -864,7 +870,7 @@ describe('a UTC clock on Connect, in every layout', () => {
       fireEvent.click(within(header(c)).getByRole('button', { name: 'Layout' }))
     fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: label }))
   }
-  const LABELS = ['Map first', 'List first', 'Dashboard', 'Frame', 'Frame + bar']
+  const LABELS = ['Map first', 'List first', 'Dashboard', 'Frame', 'Frame + bar (default)']
 
   it('the UTC time is on screen, to the second, in Standard and in every layout: in the header, or in Frame + bar’s bar', async () => {
     const { container } = await mount()
@@ -874,7 +880,7 @@ describe('a UTC clock on Connect, in every layout', () => {
         const now = screen.getByRole('group', { name: 'Layout' }).querySelector('.connect-layout-now')?.textContent
         expect(now, `control: ${label} is on screen`).toBe(label)
       }
-      const inBar = label === 'Frame + bar'
+      const inBar = label === 'Frame + bar (default)'
       const bar = container.querySelector('.connect-shell > .dash-bar')
       expect(!!bar, `${label}: the bar`).toBe(inBar)
       const clock = inBar ? bar!.querySelector('.dash-utc') : utc(container)
@@ -928,8 +934,9 @@ describe('a UTC clock on Connect, in every layout', () => {
   })
 })
 
-// FRAME + BAR — THE DEFAULT VIEW TO TRY (the operator's batch 60, 2026-10-01: "A: Frame + bar"). A layout
-// to pick, NOT yet the default: Connect still opens on Standard. Its bar is the dashboard window's clock
+// FRAME + BAR — THE DEFAULT (the operator's batch 60, 2026-10-01: "A: Frame + bar"). Every surface opens in
+// it once (step 5; ConnectView.switch.test.tsx holds that switch); these tests start past it, on Standard,
+// where an operator who has gone back to Standard is, so a tap is what applies it. Its bar is the dashboard window's clock
 // and indices, call and grid included (the operator's Q2: "Yes, the full bar"), across the top of the
 // view; its slots carry the tab plan (Q9); the map, its Propagation card included, is not the layout's
 // to change (Q4: the card "stays open"). The dashboard window and the TV page draw the bar themselves, so
@@ -956,18 +963,18 @@ describe('Frame + bar — the default view to try', () => {
     return r
   }
 
-  it('is not the default: Connect opens on Standard, with no bar, and writes nothing until a tap', async () => {
+  it('past the one-time switch, on Standard, it applies only on a tap: no bar, and nothing written until one', async () => {
     const { container } = await mountWith()
     expect(now(container)).toBe('Standard')
     expect(bar(container)).toBeNull()
     expect(localStorage.getItem(BAR)).toBeNull()
-    expect(within(openPicker(container)).getByRole('button', { name: 'Frame + bar' }).getAttribute('aria-pressed')).toBe('false')
+    expect(within(openPicker(container)).getByRole('button', { name: 'Frame + bar (default)' }).getAttribute('aria-pressed')).toBe('false')
   })
 
   it('a tap puts the full bar across the top of the view, call and grid included, and its clock stands for the header’s', async () => {
     const { container } = await mountWith()
-    pick(container, 'Frame + bar')
-    expect(now(container)).toBe('Frame + bar')
+    pick(container, 'Frame + bar (default)')
+    expect(now(container)).toBe('Frame + bar (default)')
     const b = bar(container)
     expect(b, 'the bar is drawn').not.toBeNull()
     expect(b!.nextElementSibling, 'over the header').toBe(headerOf(container))
@@ -980,7 +987,7 @@ describe('Frame + bar — the default view to try', () => {
 
   it('the tab plan: each open slot shows its tabs, and the closed row keeps the rest for ⊞ Panels', async () => {
     const { container } = await mountWith()
-    pick(container, 'Frame + bar')
+    pick(container, 'Frame + bar (default)')
     expect(slotsOn(container).sort()).toEqual(['left1', 'left2', 'right1', 'right2'])
     expect(tabNames(container, 'left1')).toEqual(['Bands for you', 'Band Advisor', 'Bands by region', 'Activity Matrix', 'Best band'])
     for (const s of ['left2', 'right1', 'right2'] as const)
@@ -996,10 +1003,10 @@ describe('Frame + bar — the default view to try', () => {
 
   it('showing another tab is no change of layout: it still reads Frame + bar, and Undo still takes the tap back', async () => {
     const { container } = await mountWith()
-    pick(container, 'Frame + bar')
+    pick(container, 'Frame + bar (default)')
     fireEvent.click(within(container.querySelector('.pane-frame[data-slot="left1"]') as HTMLElement).getByRole('tab', { name: 'Best band' }))
     expect(container.querySelector('.pane-frame[data-slot="left1"]')?.getAttribute('data-pane'), 'control: the tab is shown').toBe('advisory')
-    expect(now(container)).toBe('Frame + bar')
+    expect(now(container)).toBe('Frame + bar (default)')
     undo()
     expect(now(container)).toBe('Standard')
     expect(bar(container)).toBeNull()
@@ -1007,7 +1014,7 @@ describe('Frame + bar — the default view to try', () => {
 
   it('Undo takes the bar back off with the rest of the layout, and the header’s clock returns', async () => {
     const { container } = await mountWith()
-    pick(container, 'Frame + bar')
+    pick(container, 'Frame + bar (default)')
     expect(bar(container), 'control: the bar is on').not.toBeNull()
     undo()
     expect(now(container)).toBe('Standard')
@@ -1019,7 +1026,7 @@ describe('Frame + bar — the default view to try', () => {
 
   it('the operator’s own change keeps the bar (Custom), and so does a remount; another layout’s tap takes it away', async () => {
     const first = await mountWith()
-    pick(first.container, 'Frame + bar')
+    pick(first.container, 'Frame + bar (default)')
     fireEvent.change(first.container.querySelector('.pane-frame[data-slot="left2"] select')!, { target: { value: 'clock' } })
     expect(now(first.container), 'a pane picked into a slot').toBe('Custom')
     expect(bar(first.container), 'nothing snaps back, and nothing is taken away').not.toBeNull()
@@ -1034,7 +1041,7 @@ describe('Frame + bar — the default view to try', () => {
 
   it('Reset layout takes the bar away with everything else; Undo after the Reset brings it back with the panes', async () => {
     const { container } = await mountWith()
-    pick(container, 'Frame + bar')
+    pick(container, 'Frame + bar (default)')
     fireEvent.pointerDown(document.body)
     fireEvent.click(within(headerOf(container)).getByRole('button', { name: /⊞ Panels/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
@@ -1051,7 +1058,7 @@ describe('Frame + bar — the default view to try', () => {
   it('the map is not the layout’s: its card stays as it was', async () => {
     const { container } = await mountWith()
     const card = localStorage.getItem('nexus.connect.insights.collapsed')
-    pick(container, 'Frame + bar')
+    pick(container, 'Frame + bar (default)')
     expect(localStorage.getItem('nexus.connect.insights.collapsed'), 'the Propagation card’s fold').toBe(card)
     expect(A.mapLayers, 'no map layer is turned on').toBeUndefined()
   })
@@ -1059,8 +1066,8 @@ describe('Frame + bar — the default view to try', () => {
   it('where the host draws the bar (the dashboard window, the TV page), it is the one bar: the view draws no second', async () => {
     window.history.replaceState(null, '', '/?panel=connect')
     const { container } = await mountWith({ hostBar: true })
-    pick(container, 'Frame + bar')
-    expect(now(container), 'control: the layout is on screen').toBe('Frame + bar')
+    pick(container, 'Frame + bar (default)')
+    expect(now(container), 'control: the layout is on screen').toBe('Frame + bar (default)')
     expect(bar(container)).toBeNull()
     expect(headerOf(container).querySelector('.utc-clock'), 'and no header clock').toBeNull()
     expect(localStorage.getItem('nexus.connect.bar.connect'), 'the window’s own record').toBe('1')
@@ -1069,11 +1076,11 @@ describe('Frame + bar — the default view to try', () => {
 
   it('the dashboard window follows the main window’s pick until it changes its own', async () => {
     const main = await mountWith()
-    pick(main.container, 'Frame + bar')
+    pick(main.container, 'Frame + bar (default)')
     cleanup()
     window.history.replaceState(null, '', '/?panel=connect')
     const { container } = await mountWith({ hostBar: true })
-    expect(now(container)).toBe('Frame + bar')
+    expect(now(container)).toBe('Frame + bar (default)')
     expect(tabNames(container, 'left1')[0]).toBe('Bands for you')
     expect(bar(container), 'the window’s own bar is the one').toBeNull()
   })
@@ -1091,7 +1098,7 @@ describe('Frame + bar — the default view to try', () => {
       )
     })
     expect(r.container.querySelector('.connect-header [role="status"]'), 'control: this is the Remote page').not.toBeNull()
-    pick(r.container, 'Frame + bar')
+    pick(r.container, 'Frame + bar (default)')
     expect(bar(r.container)).not.toBeNull()
     expect(headerOf(r.container).querySelector('.utc-clock')).toBeNull()
   })
@@ -1122,8 +1129,8 @@ describe('Standard — one tap back from a layout you are trying', () => {
     const restore = fakeBoxes(1920)
     try {
       const { container } = await mount()
-      pick(container, 'Frame + bar')
-      expect(now(container), 'control: Frame + bar is on screen').toBe('Frame + bar')
+      pick(container, 'Frame + bar (default)')
+      expect(now(container), 'control: Frame + bar is on screen').toBe('Frame + bar (default)')
       expect(bar(container), 'control: its bar is drawn').not.toBeNull()
 
       pick(container, 'Standard')
@@ -1143,7 +1150,7 @@ describe('Standard — one tap back from a layout you are trying', () => {
       expect(undoButton().disabled, 'the tap is a step Undo can take back').toBe(false)
 
       fireEvent.click(undoButton())
-      expect(now(container), 'Undo: one tap back to the layout being tried').toBe('Frame + bar')
+      expect(now(container), 'Undo: one tap back to the layout being tried').toBe('Frame + bar (default)')
       expect(bar(container)).not.toBeNull()
       expect(slotsOn(container).sort()).toEqual(['left1', 'left2', 'right1', 'right2'])
       expect(stored(CONFIG).tabs, 'its tabs').toEqual(CONNECT_PRESETS.frameBar.tabs)
@@ -1192,7 +1199,7 @@ describe('Standard — one tap back from a layout you are trying', () => {
 
   it('⊞ Panels’ copy of the picker has it too, and a tap there is the same step', async () => {
     const { container } = await mount()
-    pick(container, 'Frame + bar')
+    pick(container, 'Frame + bar (default)')
     fireEvent.pointerDown(document.body)
     fireEvent.click(within(headerOf(container)).getByRole('button', { name: /⊞ Panels/ }))
     fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Standard' }))

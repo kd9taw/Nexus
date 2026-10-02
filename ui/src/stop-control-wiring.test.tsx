@@ -72,6 +72,7 @@ import App from './App'
 import { allFeatureIds, featureById, sectionFeatures, type View } from './features/registry'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 import { LOCAL_CLOCK_STORAGE_KEY } from './useLocalClock'
+import { pastTheSwitch } from './components/ConnectView.testkit'
 
 // A 30 s budget for every test and hook here, for the machine and not for the checks. Each test mounts the real App, and
 // in three full-suite runs on a loaded box (2026-09-29 and 30) vitest's default budgets ran out with nothing wrong: "Test
@@ -268,6 +269,7 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   bridgeCalls.length = 0
   tuning = false
   settingsAnswer = null
@@ -739,7 +741,7 @@ describe('Connect keeps the station clock', () => {
     expect(shell, 'control: Connect is the screen on show').not.toBeNull()
     expect(shell.querySelector(':scope > .dash-bar'), 'control: no bar before the tap').toBeNull()
     fireEvent.click(within(shell.querySelector('.connect-header') as HTMLElement).getByRole('button', { name: 'Layout' }))
-    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Frame + bar' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Frame + bar (default)' }))
     const bar = shell.querySelector(':scope > .dash-bar') as HTMLElement
     expect(bar, 'the bar is over the view').not.toBeNull()
     expect([bar.querySelector('.dash-call')?.textContent, bar.querySelector('.dash-grid')?.textContent]).toEqual(['KD9TAW', 'EN52'])

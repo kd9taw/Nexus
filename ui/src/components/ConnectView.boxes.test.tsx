@@ -31,6 +31,7 @@ vi.mock('../api', async (importOriginal) => ({
 import { ConnectView } from './ConnectView'
 import { DEFAULT_SLOTS, SLOT_IDS, type SlotId } from '../features/connectConfig'
 import { installExternalLinkInterceptor } from '../externalLinks'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 const RECORD = 'nexus.panels.connect.main'
 
@@ -76,6 +77,7 @@ beforeAll(() => {
 })
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   window.history.replaceState(null, '', '/')
   globalThis.ResizeObserver = class {
     observe() {}

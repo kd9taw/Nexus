@@ -34,6 +34,7 @@ vi.mock('../api', async (importOriginal) => ({
   getOtaMapSpots: vi.fn(async () => []),
 }))
 import { ConnectView } from './ConnectView'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 const props = {
   myGrid: 'EN52',
@@ -69,6 +70,7 @@ function frame(c: HTMLElement) {
 describe('the map button clears the whole Connect frame, not just the Layers panel', () => {
   beforeEach(() => {
     localStorage.clear()
+    pastTheSwitch()
     // jsdom has no ResizeObserver; the house stub (stop-line.test.tsx:299).
     globalThis.ResizeObserver = class {
       observe() {}

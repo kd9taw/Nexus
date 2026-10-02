@@ -33,6 +33,7 @@ vi.mock('../api', async (importOriginal) => {
 import * as api from '../api'
 import { ConnectView } from './ConnectView'
 import { DashRail } from './DashRail'
+import { pastTheSwitch } from './ConnectView.testkit'
 
 const FEEDS = ['getGettingOut', 'getBandOutlook', 'getSpaceWxScales', 'getKc2gMuf', 'getXrayNow', 'getDxpedWindows'] as const
 const calls = (name: (typeof FEEDS)[number]) => vi.mocked(api[name] as unknown as ReturnType<typeof vi.fn>).mock.calls.length
@@ -45,6 +46,7 @@ const counts = () =>
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   for (const name of FEEDS) vi.mocked(api[name] as unknown as ReturnType<typeof vi.fn>).mockClear()
   let n = 0
   vi.mocked(api.getGettingOut).mockImplementation(async (): Promise<GettingOut> => {

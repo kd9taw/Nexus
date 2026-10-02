@@ -12,10 +12,13 @@
 // after picking one and it reads Custom, and nothing snaps back, because nothing remembers the
 // pick to snap back to.
 //
-// ADDITIVE, BY OPERATOR RULING. DEFAULT_SLOTS is the approved first-run layout and stays the
-// default (`STANDARD_LAYOUT` is it, by reference): nobody's Connect changes until they tap a
-// preset, and a tap is the only way one applies — no migration, no first-run seed, no intent
-// switch applies one.
+// FRAME + BAR IS THE DEFAULT, ONCE (step 5, the operator's "Everyone, once", 2026-10-01). Every surface
+// opens in it once after the update, a fresh install included, through ONE switch that runs once per
+// surface and never again (ConnectView `switchToDefaultOnce`). It keeps the arrangement it replaced
+// when that was the operator's own (`layoutOf`), and the picker offers it as "Your earlier layout", so
+// one tap brings back exactly what they had. Standard (DEFAULT_SLOTS; `STANDARD_LAYOUT` is it, by
+// reference) stays in the picker and is still what ⊞ Reset layout gives. Apart from that switch, a tap
+// is the only way a layout applies: no intent switch applies one.
 //
 // Deliberately NOT part of a preset: the map's own choices (projection, layers, colour — the
 // per-intent map setup in features/intentMapSettings). Those are the operator's picks per intent;
@@ -56,6 +59,12 @@ export interface ConnectLayout {
    *  it either way and it reads back, like the closed slots. Where the host draws the bar itself (the
    *  dashboard window, the TV page) the record is kept but the view draws no second one. */
   bar?: boolean
+  /** The splits of the panel record. Absent is even, which is every preset; only the kept layout
+   *  carries any. Written and read back like the closed slots. */
+  share?: Readonly<Partial<Record<SlotId, number>>>
+  /** The tabs' rotation (connectConfig `rotate`). Absent is none; only the kept layout carries any.
+   *  Written by a tap, not read back: an interval is no arrangement. */
+  rotate?: Readonly<Partial<Record<SlotId, number>>>
 }
 
 /** What the screen is built from right now — the three records a layout writes. */
@@ -166,8 +175,8 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     rails: { left: 400, right: 400 },
     mapLayers: ['sats'],
   },
-  // FRAME + BAR — the default view to try (the operator's batch 60, 2026-10-01: "A: Frame + bar"; NOT
-  // yet the default, which is a later step). The default-view survey's candidate A, as the side-by-side
+  // FRAME + BAR — THE DEFAULT (the operator's batch 60, 2026-10-01: "A: Frame + bar"; the default since
+  // step 5, "Frame + bar (default)" in the picker). The default-view survey's candidate A, as the side-by-side
   // renders measured it: Frame's shape with the boxes an operator reads first — Bands for you over
   // Openings on the left, Chase over Getting Out on the right — in 400 px columns, where the renders
   // found every band tile and every Chase row whole at 1024, 1366 and 1920 wide. The bar across the top
@@ -201,6 +210,41 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     bar: true,
   },
 }
+
+/**
+ * THE TV PAGE'S FRAME + BAR (step 5: "it gets a TV version of A without Chase, under the TV's
+ * public-data-only rule"). The page is served public data only (tempo-app connect_web.rs
+ * `RPC_ALLOWLIST`): no needs board, no click-through, no contest calendar, no station devices. So it is
+ * A with every box the page can never fill taken out of the plan — Chase, Chase Feed, Selection and
+ * Contests from Chase's tabs, the rotor, the amplifier and the band scope from the closed row. Chase's
+ * place goes to Space Wx with the K outlook (from Getting Out's tabs), and Getting Out keeps its own
+ * place with the rest of its tabs. The left column is A's. The closed row holds Band Outlook, Satellite
+ * Passes and the Clock, so ⊞ Panels can only bring back a box that fills on a wall. The page draws the
+ * bar itself; the record says on, as A's does, so the layout reads back as Frame + bar there.
+ */
+export const TV_FRAME_BAR: ConnectLayout = {
+  slots: {
+    left1: 'bandTiles',
+    left2: 'openings',
+    right1: 'spacewx',
+    right2: 'getout',
+    bottom1: 'outlook',
+    bottom2: 'satPasses',
+    bottom3: 'clock',
+  },
+  tabs: {
+    left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
+    left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours'],
+    right1: ['spacewx', 'kpOutlook'],
+    right2: ['getout', 'measuredMuf', 'beacons', 'greyline'],
+  },
+  hidden: STRIP,
+  rails: { left: 400, right: 400 },
+  bar: true,
+}
+
+/** The TV page's layout table (tv/ConnectTv): the app's, with its own Frame + bar. */
+export const TV_PRESETS: Readonly<Record<ConnectPresetId, ConnectLayout>> = { ...CONNECT_PRESETS, frameBar: TV_FRAME_BAR }
 
 /**
  * Why `layout` could not apply as written — empty when it can. A preset naming a pane this build
@@ -247,15 +291,16 @@ export function validateConnectLayout(id: string, layout: ConnectLayout): string
   return errs
 }
 
-/** The panel record a layout writes: its closed slots removed, every split even. */
+/** The panel record a layout writes: its closed slots removed, its splits (every one even but the kept
+ *  layout's). */
 export function layoutPanels(layout: ConnectLayout): PanelLayout<SlotId> {
   const state: PanelLayout<SlotId>['state'] = {}
   for (const s of layout.hidden) state[s] = 'removed'
-  return { v: 1, state, share: {} }
+  return { v: 1, state, share: { ...layout.share } }
 }
 
-/** An even split, allowing for the float a seam's arithmetic can leave behind. */
-const even = (share: number | undefined) => Math.abs((share ?? 1) - 1) < 1e-6
+/** The same split, allowing for the float a seam's arithmetic can leave behind. Absent is even. */
+const sameShare = (a: number | undefined, b: number | undefined) => Math.abs((a ?? 1) - (b ?? 1)) < 1e-6
 
 function matches(layout: ConnectLayout, now: ConnectLayoutState): boolean {
   for (const s of SLOT_IDS) {
@@ -271,15 +316,46 @@ function matches(layout: ConnectLayout, now: ConnectLayoutState): boolean {
       if (now.slots[s] !== layout.slots[s]) return false
     }
     if ((now.panels.state[s] === 'removed') !== layout.hidden.includes(s)) return false
-    if (!even(now.panels.share[s])) return false
+    if (!sameShare(now.panels.share[s], layout.share?.[s])) return false
   }
   if (!!now.bar !== !!layout.bar) return false
   return now.rails.left === layout.rails.left && now.rails.right === layout.rails.right
 }
 
-/** Which layout the screen shows: 'standard' (the default), a preset, or 'custom' — anything the
- *  operator has arranged themselves, including a preset they have since moved or resized. */
-export function connectLayoutNow(now: ConnectLayoutState): ConnectPresetId | 'standard' | 'custom' {
+/** Which layout the screen shows: 'standard', a preset (of this host's table: the TV page's Frame + bar
+ *  is its own), 'kept' (the arrangement the one-time switch kept), or 'custom' — anything the operator
+ *  has arranged themselves, including a layout they have since moved or resized. */
+export function connectLayoutNow(
+  now: ConnectLayoutState,
+  presets: Readonly<Record<ConnectPresetId, ConnectLayout>> = CONNECT_PRESETS,
+  kept?: ConnectLayout | null,
+): ConnectPresetId | 'standard' | 'kept' | 'custom' {
   if (matches(STANDARD_LAYOUT, now)) return 'standard'
-  return CONNECT_PRESET_IDS.find((id) => matches(CONNECT_PRESETS[id], now)) ?? 'custom'
+  const preset = CONNECT_PRESET_IDS.find((id) => matches(presets[id], now))
+  if (preset) return preset
+  return kept && matches(kept, now) ? 'kept' : 'custom'
+}
+
+/** The arrangement on screen as a layout a tap can put back — what the one-time switch keeps when the
+ *  screen reads Custom. Everything a layout writes, as it is: the placement with its tabs and their
+ *  rotation, the closed slots and the splits, the stored widths and the bar. The panes' text sizes are
+ *  not in it; they ride through every layout. */
+export function layoutOf(now: ConnectLayoutState, rotate?: Partial<Record<SlotId, number>>): ConnectLayout {
+  const tabs: Partial<Record<SlotId, PaneId[]>> = {}
+  const share: Partial<Record<SlotId, number>> = {}
+  for (const s of SLOT_IDS) {
+    const list = now.tabs?.[s]
+    if (list && list.length > 1) tabs[s] = [...list]
+    const sh = now.panels.share[s]
+    if (sh !== undefined && !sameShare(sh, undefined)) share[s] = sh
+  }
+  return {
+    slots: { ...now.slots },
+    hidden: SLOT_IDS.filter((s) => now.panels.state[s] === 'removed'),
+    rails: { left: now.rails.left, right: now.rails.right },
+    ...(Object.keys(tabs).length ? { tabs } : {}),
+    ...(Object.keys(share).length ? { share } : {}),
+    ...(rotate && Object.keys(rotate).length ? { rotate: { ...rotate } } : {}),
+    ...(now.bar ? { bar: true } : {}),
+  }
 }

@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,365 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,367 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.

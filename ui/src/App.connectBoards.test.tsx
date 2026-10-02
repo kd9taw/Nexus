@@ -143,6 +143,7 @@ vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="wa
 
 import App from './App'
 import * as api from './api'
+import { pastTheSwitch } from './components/ConnectView.testkit'
 
 type Call = [string, unknown[]]
 /** Every call any api mock received, by name, in order — the whole backend traffic. */
@@ -200,6 +201,7 @@ function clearMocks() {
 
 beforeEach(() => {
   localStorage.clear()
+  pastTheSwitch()
   sessionStorage.clear()
   localStorage.setItem(
     'nexus.features.v1',

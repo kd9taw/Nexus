@@ -3,7 +3,10 @@ import {
   CONNECT_PRESET_IDS,
   CONNECT_PRESETS,
   STANDARD_LAYOUT,
+  TV_FRAME_BAR,
+  TV_PRESETS,
   connectLayoutNow,
+  layoutOf,
   layoutPanels,
   validateConnectLayout,
   type ConnectLayout,
@@ -248,5 +251,88 @@ describe('which layout is on screen', () => {
     // lives in ConnectView.panes.test.tsx, against the real view).
     const base = applied(CONNECT_PRESETS.listFirst)
     expect(connectLayoutNow({ ...base, rails: { ...base.rails, last: 'left' } })).toBe('listFirst')
+  })
+})
+
+// THE TV PAGE'S FRAME + BAR and THE KEPT LAYOUT (step 5: the one-time switch to Frame + bar, which keeps the
+// operator's own arrangement for one tap back). ConnectView.switch.test.tsx drives both through the real view.
+describe('the TV page’s Frame + bar: A without the boxes the page can never fill', () => {
+  const A = CONNECT_PRESETS.frameBar
+  // What the TV page is never served (tempo-app connect_web.rs RPC_ALLOWLIST), so the boxes that can never
+  // fill there: the needs board (Chase, Chase Feed), a click-through (Selection), the contest calendar
+  // (get_contests), the station's devices (rotor, amplifier, band scope), and the two boards the page lends
+  // none of (tv/ConnectTv passes no spotsFeed and no otaBoard).
+  const NEVER_FILLS: readonly PaneId[] = ['chase', 'chaseFeed', 'selection', 'contests', 'rotor', 'amp', 'scope', 'spots', 'pota']
+  const placed = (l: ConnectLayout) =>
+    SLOT_IDS.flatMap((s) => slotBoxes({ slots: { ...l.slots }, tabs: { ...(l.tabs as Partial<Record<SlotId, PaneId[]>>) } }, s))
+
+  it('validates like every preset, and is the TV table’s Frame + bar; its other layouts are the app’s', () => {
+    expect(validateConnectLayout('tvFrameBar', TV_FRAME_BAR)).toEqual([])
+    expect(TV_PRESETS.frameBar).toBe(TV_FRAME_BAR)
+    for (const id of CONNECT_PRESET_IDS.filter((x) => x !== 'frameBar')) expect(TV_PRESETS[id], id).toBe(CONNECT_PRESETS[id])
+  })
+
+  it('places no box the page can never fill: none on screen, none behind a tab, none in the closed row', () => {
+    expect(placed(TV_FRAME_BAR).filter((p) => NEVER_FILLS.includes(p))).toEqual([])
+  })
+
+  it('POSITIVE CONTROL — the app’s Frame + bar places seven of them, so the check above can see one', () => {
+    expect(placed(A).filter((p) => NEVER_FILLS.includes(p)).sort()).toEqual(
+      ['amp', 'chase', 'chaseFeed', 'contests', 'rotor', 'scope', 'selection'].sort(),
+    )
+  })
+
+  it('is A’s shape: A’s left column, Getting Out where A has it, the bottom row closed, 400 px columns, the bar', () => {
+    for (const s of ['left1', 'left2'] as const) {
+      expect(TV_FRAME_BAR.slots[s], s).toBe(A.slots[s])
+      expect(TV_FRAME_BAR.tabs?.[s], s).toEqual(A.tabs?.[s])
+    }
+    expect(TV_FRAME_BAR.slots.right2).toBe(A.slots.right2)
+    expect(TV_FRAME_BAR.hidden).toEqual(A.hidden)
+    expect(TV_FRAME_BAR.rails).toEqual(A.rails)
+    expect(TV_FRAME_BAR.bar).toBe(true)
+  })
+
+  it('reads back as Frame + bar on the TV, and as Custom against the app’s table', () => {
+    expect(connectLayoutNow(applied(TV_FRAME_BAR), TV_PRESETS)).toBe('frameBar')
+    expect(connectLayoutNow(applied(TV_FRAME_BAR))).toBe('custom')
+  })
+
+  it('neither default reaches into the map, so the one-time switch never touches it', () => {
+    expect(A.mapLayers).toBeUndefined()
+    expect(TV_FRAME_BAR.mapLayers).toBeUndefined()
+  })
+})
+
+describe('the kept layout: what the one-time switch keeps, and how it reads back', () => {
+  // An operator's own arrangement: two boxes swapped, a tab, a closed box, an uneven split, dragged widths.
+  const own: ConnectLayoutState = {
+    slots: { ...DEFAULT_SLOTS, left1: 'spacewx', bottom2: 'advisory' },
+    tabs: { right2: ['outlook', 'clock'] },
+    panels: { v: 1, state: { bottom3: 'removed' }, share: { left1: 1.4, left2: 0.6 } },
+    rails: { left: 304, right: 512 },
+    bar: false,
+  }
+
+  it('is the arrangement on screen as a layout: a tap on it writes back exactly that, rotation included', () => {
+    expect(applied(layoutOf(own))).toEqual(own)
+    expect(layoutOf(own, { right2: 30 }).rotate).toEqual({ right2: 30 })
+    expect(validateConnectLayout('kept', layoutOf(own))).toEqual([])
+  })
+
+  it('reads back as the kept layout while nothing has moved, and as Custom once anything does', () => {
+    const kept = layoutOf(own)
+    expect(connectLayoutNow(own, CONNECT_PRESETS, kept)).toBe('kept')
+    // Without it the same screen is Custom: the reason the switch keeps it.
+    expect(connectLayoutNow(own)).toBe('custom')
+    expect(connectLayoutNow({ ...own, panels: { ...own.panels, share: {} } }, CONNECT_PRESETS, kept)).toBe('custom')
+    expect(connectLayoutNow({ ...own, rails: { left: 304, right: 520 } }, CONNECT_PRESETS, kept)).toBe('custom')
+    expect(connectLayoutNow(picked(own, 'left2', 'greyline'), CONNECT_PRESETS, kept)).toBe('custom')
+  })
+
+  it('Standard or a preset on screen reads as itself, with a kept layout or without', () => {
+    const kept = layoutOf(own)
+    expect(connectLayoutNow(applied(STANDARD_LAYOUT), CONNECT_PRESETS, kept)).toBe('standard')
+    expect(connectLayoutNow(applied(CONNECT_PRESETS.frameBar), CONNECT_PRESETS, kept)).toBe('frameBar')
   })
 })

@@ -24,6 +24,7 @@ vi.mock('../components/ConnectView', () => ({
 }))
 
 import { ConnectTv } from './ConnectTv'
+import { TV_PRESETS } from '../features/connectPresets'
 import { getKpForecast } from '../api'
 
 const PROP = { advisory: { headline: 'h', bands: [], banners: [] }, openings: [], source: 'live' }
@@ -89,6 +90,10 @@ describe('the chrome', () => {
     // view), and the server serves neither list nor any command (connect_web.rs's allowlist).
     expect(p.spotsFeed).toBeUndefined()
     expect(p.otaBoard).toBeUndefined()
+    // …and its own layout table, whose Frame + bar (the default the page opens in) holds only the boxes
+    // that fill from what the page is served (features/connectPresets TV_FRAME_BAR).
+    expect(p.presets, 'the page’s own layout table').toBeDefined()
+    expect(p.presets).toBe(TV_PRESETS)
   })
 
   it('wears the same dashboard bar as the Connect pop-out: the station, the clocks, the indices, its own chips last', async () => {

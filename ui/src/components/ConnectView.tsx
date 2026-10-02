@@ -31,19 +31,39 @@ import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { OtaBoard, SpotsFeed } from './connect/paneContext'
-import { SLOT_IDS, addableTo, slotBoxes, useConnectConfig, type PaneId, type SlotId } from '../features/connectConfig'
+import {
+  SLOT_IDS,
+  addableTo,
+  loadConnectConfig,
+  normalizeConfig,
+  saveConnectConfig,
+  slotBoxes,
+  useConnectConfig,
+  type PaneId,
+  type SlotId,
+} from '../features/connectConfig'
 import {
   CONNECT_PRESET_IDS,
   CONNECT_PRESETS,
   STANDARD_LAYOUT,
   connectLayoutNow,
+  layoutOf,
   layoutPanels,
+  type ConnectLayout,
   type ConnectPresetId,
   type PresetMapLayer,
 } from '../features/connectPresets'
-import type { RailWidths } from '../features/connectRails'
-import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
-import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
+import { loadRailWidths, parseRailWidths, saveRailWidths, type RailWidths } from '../features/connectRails'
+import { durableGet, durableSet } from '../features/durableStore'
+import {
+  CONNECT_PANELS,
+  coercePanelLayout,
+  loadPanelLayout,
+  panelStorageKey,
+  savePanelLayout,
+  usePanelLayout,
+} from '../features/panelState'
+import { surfaceGet, surfaceHasOwn, surfaceId, surfaceSet } from '../features/windowScope'
 import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
 import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
 import { t } from '../i18n'
@@ -109,16 +129,19 @@ const SLOT_WHERE: Record<SlotId, () => string> = {
   bottom3: () => t('connect.slot.where.bottom3'),
 }
 
-/** What the Layout picker offers: Standard first — Connect as it first opens, applied by a tap like any
- * layout's and undone the same way (the operator's batch 63), so trying a layout and going back is one
- * tap each way — then the presets (features/connectPresets). */
-type LayoutChoice = ConnectPresetId | 'standard'
+/** What the Layout picker offers: Standard first — every pane open at the usual widths, applied by a tap
+ * like any layout's and undone the same way (the operator's batch 63), so trying a layout and going back
+ * is one tap each way — then, when the one-time switch to Frame + bar kept one, the operator's own
+ * earlier layout (`kept`, below), then the presets (features/connectPresets). */
+type LayoutChoice = ConnectPresetId | 'standard' | 'kept'
 const LAYOUT_CHOICES: readonly LayoutChoice[] = ['standard', ...CONNECT_PRESET_IDS]
+const LAYOUT_CHOICES_KEPT: readonly LayoutChoice[] = ['standard', 'kept', ...CONNECT_PRESET_IDS]
 
 /** The ⊞ Layout picker's words (features/connectPresets). Literal keys, resolved lazily at render
  * (the INTENTS treatment). */
 const LAYOUT_WORDS: Record<LayoutChoice, { label: () => string; title: () => string }> = {
   standard: { label: () => t('connect.layout.standard'), title: () => t('connect.layout.standard.title') },
+  kept: { label: () => t('connect.layout.kept.label'), title: () => t('connect.layout.kept.title') },
   mapFirst: { label: () => t('connect.layout.mapFirst.label'), title: () => t('connect.layout.mapFirst.title') },
   listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
   dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
@@ -132,7 +155,16 @@ const LAYOUT_WORDS: Record<LayoutChoice, { label: () => string; title: () => str
  * choices, not a chip row: the popover is 220 px wide, where three chips side by side wrap at Large
  * text or in German. The words over the operator's own arrangement say what a tap costs before it is
  * made. Its ids are its own (`useId`), so the two doors never share one. */
-function LayoutPicker({ now, onPick }: { now: LayoutChoice | 'custom'; onPick: (id: LayoutChoice) => void }) {
+function LayoutPicker({
+  now,
+  onPick,
+  kept,
+}: {
+  now: LayoutChoice | 'custom'
+  onPick: (id: LayoutChoice) => void
+  /** The one-time switch kept this surface's earlier layout: offer it. */
+  kept: boolean
+}) {
   const id = useId()
   return (
     <div className="connect-layouts" role="group" aria-labelledby={`${id}-head`}>
@@ -142,7 +174,7 @@ function LayoutPicker({ now, onPick }: { now: LayoutChoice | 'custom'; onPick: (
           {now === 'custom' ? t('connect.layout.custom') : LAYOUT_WORDS[now].label()}
         </span>
       </div>
-      {LAYOUT_CHOICES.map((p) => (
+      {(kept ? LAYOUT_CHOICES_KEPT : LAYOUT_CHOICES).map((p) => (
         <button
           key={p}
           type="button"
@@ -221,6 +253,102 @@ function LayoutMenu({ picker, onUndo, canUndo }: { picker: ReactNode; onUndo: ()
  *  writes it: Frame + bar on, every other layout and Reset layout off). '1' is on; anything else, off. */
 const BAR_KEY = 'nexus.connect.bar'
 
+// THE ONE-TIME SWITCH TO THE DEFAULT (step 5, the operator's "Everyone, once", 2026-10-01: "All users
+// switch to Frame + bar on update, with Standard one click away. This overrides layouts people chose.")
+// With the condition the operator was told: what each surface had is KEPT, so one tap brings back
+// exactly that, not just Standard, and the switch runs once per surface, never again.
+//
+// ONE RECORD PER SURFACE, `nexus.connect.switch.<surface>`: present once the switch has run there, and
+// holding the arrangement it replaced when that was the operator's own (the screen read Custom). When it
+// was Standard or a layout, that choice in the picker is already the way back, so nothing is kept. The
+// MAIN window's record is durable (features/durableStore): it rides in the profile's ui-state.json, and
+// so in a backup, so neither a reinstall nor a restore runs the switch a second time, and the kept
+// layout is as safe as the panel record it replaced. A pop-out's is per-surface chrome, the panel
+// record's own split, which is why the key carries its surface itself instead of windowScope's bare key.
+//
+// It runs in the view's first render, before the records are read, so nothing paints the old layout
+// first, and it writes what a tap on Frame + bar writes: the placement and its tabs, the panel record
+// (the text sizes kept), the widths and the bar. Never the map. A fresh install starts in Frame + bar
+// the same way, with nothing kept.
+//
+// A SURFACE THAT HAS NO LAYOUT OF ITS OWN is not switched: a dashboard window that never made a change
+// reads the main window's records (windowScope inheritance), before the switch and after it, so it
+// switches when the main window does and goes back when the main window goes back. Switching it on its
+// own would override, a second time, a layout the operator may already have chosen to keep. It records
+// that it has been past this point (so a later change of its own does not set the switch off), with the
+// main window's earlier layout, which is what it showed too, for its own one tap back.
+const SWITCH_V = 1
+const switchKey = (surface: string) => `nexus.connect.switch.${surface}`
+
+/** A surface's switch record: absent until the switch has run there. */
+function switchRecord(surface: string): { kept?: unknown } | null {
+  try {
+    const raw = durableGet(switchKey(surface))
+    return raw == null ? null : ((JSON.parse(raw) as { kept?: unknown }) ?? {})
+  } catch {
+    return {}
+  }
+}
+
+/** Whether a pop-out surface has written any of the records a layout is made of (connectConfig's
+ *  placement, panelState's record, connectRails' widths, the bar) — or still reads the main window's. */
+function hasOwnLayout(surface: string): boolean {
+  return (
+    surfaceHasOwn('nexus.connect.config') ||
+    surfaceHasOwn('nexus.connect.railWidths') ||
+    surfaceHasOwn(BAR_KEY) ||
+    durableGet(panelStorageKey(CONNECT_PANELS.view, surface)) != null
+  )
+}
+
+function switchToDefaultOnce(presets: Readonly<Record<ConnectPresetId, ConnectLayout>>): void {
+  const surface = surfaceId()
+  const key = switchKey(surface)
+  if (switchRecord(surface)) return
+  if (surface !== 'main' && !hasOwnLayout(surface)) {
+    durableSet(key, JSON.stringify({ v: SWITCH_V, kept: switchRecord('main')?.kept ?? null }))
+    return
+  }
+  const cfg = loadConnectConfig()
+  const panels = loadPanelLayout(CONNECT_PANELS, surface, 'main')
+  const rails = loadRailWidths()
+  const now = { slots: cfg.slots, tabs: cfg.tabs, panels, rails, bar: surfaceGet(BAR_KEY) === '1' }
+  const reads = connectLayoutNow(now, presets)
+  const def = presets.frameBar
+  if (reads !== 'frameBar') {
+    saveConnectConfig(normalizeConfig({ ...cfg, slots: def.slots, tabs: def.tabs, rotate: {} }))
+    savePanelLayout(panelStorageKey(CONNECT_PANELS.view, surface), { ...layoutPanels(def), scale: panels.scale })
+    saveRailWidths({ left: def.rails.left, right: def.rails.right })
+    surfaceSet(BAR_KEY, def.bar ? '1' : '0')
+  }
+  durableSet(key, JSON.stringify({ v: SWITCH_V, kept: reads === 'custom' ? layoutOf(now, cfg.rotate) : null }))
+}
+
+/** The layout this surface's switch kept, each part coerced as the record it came from is on load;
+ *  null when it kept none, and for anything unreadable. */
+function loadKeptLayout(): ConnectLayout | null {
+  try {
+    const k = switchRecord(surfaceId())?.kept
+    if (!k || typeof k !== 'object') return null
+    const o = k as Record<string, unknown>
+    const cfg = normalizeConfig({ slots: o.slots, tabs: o.tabs, rotate: o.rotate })
+    const hidden = Array.isArray(o.hidden) ? SLOT_IDS.filter((s) => (o.hidden as unknown[]).includes(s)) : []
+    const { share } = coercePanelLayout(CONNECT_PANELS, { v: 1, state: {}, share: o.share })
+    const rails = parseRailWidths(JSON.stringify(o.rails ?? null))
+    return {
+      slots: cfg.slots,
+      tabs: cfg.tabs,
+      rotate: cfg.rotate,
+      hidden,
+      share,
+      rails: { left: rails.left, right: rails.right },
+      bar: o.bar === true,
+    }
+  } catch {
+    return null
+  }
+}
+
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
 function persisted<T extends string>(key: string, allow: readonly T[], fallback: T): T {
   const v = surfaceGet(key)
@@ -273,6 +401,10 @@ interface Props {
   /** The host draws the dashboard bar over this view (the dashboard window, DetachedPanel; the TV page,
    *  ConnectTv), so the header draws no clock of its own: the bar's big one is the clock there. */
   hostBar?: boolean
+  /** This host's layout table, when it is not the app's: the TV page's (features/connectPresets
+   *  TV_PRESETS) has its own Frame + bar, the default it opens in, without the boxes the page can never
+   *  fill. Omitted ⇒ CONNECT_PRESETS. */
+  presets?: Readonly<Record<ConnectPresetId, ConnectLayout>>
 }
 
 export function ConnectView({
@@ -296,6 +428,7 @@ export function ConnectView({
   autoRotate,
   showLocalClock,
   hostBar,
+  presets,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -346,6 +479,14 @@ export function ConnectView({
   // full-screen flag left standing while the 3-D globe is mounted would hide the header and the
   // panes with nothing on screen able to bring them back.
   const [mapFull, setMapFull] = useState(false)
+  // THE ONE-TIME SWITCH TO FRAME + BAR (switchToDefaultOnce, above): here, in the first render, so the
+  // placement, the panel record, the widths and the bar below are all read after it. Then the layout
+  // it kept, if it kept one, for the picker's "Your earlier layout".
+  const table = presets ?? CONNECT_PRESETS
+  const [kept] = useState(() => {
+    switchToDefaultOnce(table)
+    return loadKeptLayout()
+  })
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
   const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
@@ -413,7 +554,9 @@ export function ConnectView({
   }
   const barShown = barOn && !hostBar
   // RESET LAYOUT IS THE OUT-OF-BOX STATE (operator 2026-09-13): default pane in every slot, every
-  // pane open, default widths and splits. The panel record's one-level Undo already covers the
+  // pane open, default widths and splits — Standard, the install's layout until step 5 made a first run
+  // open in Frame + bar (switchToDefaultOnce); the picker's Frame + bar (default) is the way to that one.
+  // The panel record's one-level Undo already covers the
   // visibility + split half of a Reset; the slot placement lives in the config, so the placement
   // Reset replaced is held here and put back by the SAME Undo press. It is dropped by the next
   // change of any kind, so Undo only ever reverts the last change. Widths are not undo steps
@@ -467,18 +610,20 @@ export function ConnectView({
   } as React.CSSProperties
 
   // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame · Frame + bar,
-  // and Standard, which a tap applies the same way.
+  // and Standard and the kept layout, which a tap applies the same way.
   // Which one is on screen is READ BACK from the placement (its tabs included), the panel record, the
   // stored rail widths and the bar's record — never stored — so a pane moved or resized after a pick
   // reads Custom and nothing can snap back.
-  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref, bar: barOn })
+  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref, bar: barOn }, table, kept)
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
   const pickLayout = (id: LayoutChoice) => {
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
     // Standard is a layout here like the others: no closed slots, the default widths, no tabs, no bar,
-    // no map layers. Only Reset layout also puts the text sizes and the bottom row's height back.
-    const p = id === 'standard' ? STANDARD_LAYOUT : CONNECT_PRESETS[id]
+    // no map layers. Only Reset layout also puts the text sizes and the bottom row's height back. The
+    // kept layout is one too, with its own splits and its tabs' rotation.
+    const p = id === 'standard' ? STANDARD_LAYOUT : id === 'kept' ? kept : table[id]
+    if (!p) return
     const turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> = []
     for (const layer of p.mapLayers ?? []) {
       if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })
@@ -489,8 +634,13 @@ export function ConnectView({
     // go and how much room each gets, never how big their words are — the rule it already keeps for
     // the map's own settings. Reset layout is what puts every pane back at the app's size.
     panels.setLayout({ ...layoutPanels(p), scale: panels.layout.scale })
-    // Its tab plan, or one pane per slot (Frame + bar is the one layout with tabs).
-    restoreSlots(p.slots, p.tabs ? Object.fromEntries(Object.entries(p.tabs).map(([s, l]) => [s, [...l]])) : undefined)
+    // Its tab plan, or one pane per slot (Frame + bar is the one preset with tabs; the kept layout has
+    // the operator's own, and their rotation).
+    restoreSlots(
+      p.slots,
+      p.tabs ? Object.fromEntries(Object.entries(p.tabs).map(([s, l]) => [s, [...l]])) : undefined,
+      p.rotate ? { ...p.rotate } : undefined,
+    )
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
     writeBar(!!p.bar)
     if (turnedOn.length) setMapLayersRev((n) => n + 1)
@@ -514,7 +664,7 @@ export function ConnectView({
       }
     }
   }
-  const picker = <LayoutPicker now={layoutNow} onPick={pickLayout} />
+  const picker = <LayoutPicker now={layoutNow} onPick={pickLayout} kept={kept != null} />
 
   // TABS (features/connectConfig): a slot holds one or more panes and shows one. Showing a tab is not
   // an arrangement change, so it leaves the one Undo alone; adding or removing one is, like a pick.

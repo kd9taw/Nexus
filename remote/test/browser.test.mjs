@@ -3176,10 +3176,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(sstv?`document.querySelectorAll('.sstv-thumb').length===40`:`!document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
     }
 
-    for(const label of ['Connect','Satellites']){
+    for(const label of ['Conditions','Satellites']){
       await click(button(label))
       if(applicationVersion<13){await until(`!!document.querySelector('.remote-view-unavailable')`);assert.equal(navigationQueries.length,0);continue}
-      const connect=label==='Connect',root=connect?'.connect-shell':'.sats-view'
+      const connect=label==='Conditions',root=connect?'.connect-shell':'.sats-view'
       await until(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
       if(connect){
         // The 2-D renderer is available even on headless/software-only hardware.
@@ -3222,7 +3222,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await settledLayout();await settledLayout()
       if(connect){
         const canvas=await evaluate(`(()=>{const e=document.querySelector('.connect-map canvas'),d=e.getContext('2d').getImageData(0,0,e.width,e.height).data,colors=new Set();for(let i=0;i<d.length;i+=Math.max(4,Math.floor(d.length/4000/4)*4))colors.add(Array.from(d.slice(i,i+4)).join(','));return {width:e.width,height:e.height,colors:colors.size}})()`)
-        assert.ok(canvas.width>300&&canvas.height>100&&canvas.colors>8,'Connect renders its actual map: '+JSON.stringify(canvas))
+        assert.ok(canvas.width>300&&canvas.height>100&&canvas.colors>8,'Conditions renders its actual map: '+JSON.stringify(canvas))
       }
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${label.toLowerCase()}.png`),Buffer.from(shot.data,'base64'))}
       const collection=connect?'connect':'satellites'

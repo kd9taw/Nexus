@@ -2581,7 +2581,7 @@ export const EN = {
   'dxped.workNow.head': 'Work now — needed × on the air',
   'dxped.workNow.none':
     'Nothing you need is workable right now. New ones appear here the moment a needed expedition is on a band with a real path to you.',
-  'dxped.showOnMap.title': 'Open Connect with this expedition selected on the map',
+  'dxped.showOnMap.title': 'Open Conditions with this expedition selected on the map',
   'dxped.showOnMap.label': '◎ show on map',
   'dxped.calendar.empty': 'The forward calendar is empty — announced operations land here.',
 
@@ -3640,14 +3640,14 @@ export const EN = {
   'settings.launchAtLogin.aria.disable': 'Turn off start at sign-in',
   'settings.launchAtLogin.unsupported':
     'This computer did not let Nexus change whether it starts at sign-in, so the setting is unchanged.',
-  'settings.connectWeb.legend': 'Connect on a TV',
-  'settings.connectWeb.label': 'Serve Connect on this network',
+  'settings.connectWeb.legend': 'Conditions on a TV',
+  'settings.connectWeb.label': 'Serve Conditions on this network',
   'settings.connectWeb.hint':
-    'Serves the full Connect view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it.',
+    'Serves the full Conditions view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it.',
   'settings.connectWeb.exposes':
     'While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent.',
-  'settings.connectWeb.aria.enable': 'Serve Connect on the local network',
-  'settings.connectWeb.aria.disable': 'Stop serving Connect on the local network',
+  'settings.connectWeb.aria.enable': 'Serve Conditions on the local network',
+  'settings.connectWeb.aria.disable': 'Stop serving Conditions on the local network',
   'settings.connectWeb.port.label': 'Port',
   'settings.connectWeb.port.hint': 'Separate from the Field Day scoreboard, so both can run at once.',
   'settings.connectWeb.url.label': 'Open this on the TV',
@@ -5633,7 +5633,7 @@ export const EN = {
   'settings.amplifier.model.label': 'Amplifier',
   'settings.amplifier.model.none': 'None',
   'settings.amplifier.model.hint':
-    'Place the Amplifier pane in Connect to see the readings. Nothing here changes how the radio transmits.',
+    'Place the Amplifier pane in Conditions to see the readings. Nothing here changes how the radio transmits.',
   'settings.amplifier.follow.label': 'Follow the radio\u2019s band',
   'settings.amplifier.follow.hint':
     'Step the amplifier to the band you are on, without being asked. Off by default \u2014 this is the one amplifier control that acts on its own. It never moves the amplifier while you are transmitting, and it steps one band at a time, checking where the amplifier actually is after each one rather than assuming it got there. \u26a0\ufe0f If your amplifier already follows the radio through its own band-data cable, as most SPE installations do, leave this off: the hardware is doing the same job, and two things steering one band is worse than either alone.',
@@ -5657,7 +5657,7 @@ export const EN = {
   'settings.rotator.model.number.placeholder': 'Hamlib rotator model number (rotctl -l lists them)',
   'settings.rotator.model.number.aria': 'Hamlib rotator model number',
   'settings.rotator.model.hint':
-    'Nexus runs the control daemon (rotctld) for you, the same way it does CAT. Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.',
+    'Nexus runs the control daemon (rotctld) for you, the same way it does CAT. Then use the Rotor pane in Conditions, ↗ on Needed rows, or the compass anywhere.',
   'settings.rotator.port.label': 'Rotator port & baud',
   'settings.rotator.port.aria': 'Rotator serial port',
   'settings.rotator.baud.aria': 'Rotator baud rate',
@@ -6660,7 +6660,7 @@ export const EN = {
   'settings.integrations.pskreporter.hint': 'upload spots to the global map',
   'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
   'settings.integrations.clusterSpots.hint':
-    'Surface "new ones" from the Reverse Beacon Network on the Needed board + Connect. Takes effect on restart.',
+    'Surface "new ones" from the Reverse Beacon Network on the Needed board + Conditions. Takes effect on restart.',
   'settings.integrations.clusterNodes.label': 'Phone/SSB cluster nodes',
   'settings.integrations.clusterNodes.empty':
     'No nodes — add one below to get SSB/phone needs (RBN only carries CW + digital).',
@@ -7165,7 +7165,7 @@ export const EN = {
   'settings.waterfallScopes.ft.hint': 'The FT waterfall keeps a palette of its own.',
   'settings.mapGlobe.legend': 'Map & globe',
   'settings.mapGlobe.note':
-    'The Connect map’s view (globe, flat or beam), its layers and its colours are chosen on the map itself, and Connect keeps a separate set for each activity you pick there.',
+    'The Conditions map’s view (globe, flat or beam), its layers and its colours are chosen on the map itself, and Conditions keeps a separate set for each activity you pick there.',
   'settings.performance.legend': 'Performance',
   'settings.performance.motion.label': 'Motion',
   'settings.performance.motion.system': 'Follow the computer',
@@ -7265,7 +7265,7 @@ export const EN = {
   'connect.intent.vhf.title': 'Openings front-and-center (Es / F2 / aurora)',
   'connect.globe3d.loading': 'Loading 3D globe…',
   'connect.popOut.label': '⧉ Pop out',
-  'connect.popOut.title': 'Open Connect in its own window (for a second monitor)',
+  'connect.popOut.title': 'Open Conditions in its own window (for a second monitor)',
 
   // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`), which
   // is not prose. The picker's groups, and ⋯ ▸ Add a tab's, say what the boxes in them are for.
@@ -7335,7 +7335,11 @@ export const EN = {
   // anything. `replaces` quotes the Undo button by its own name (`panels.undo`).
   'connect.layout.heading': 'Layout',
   'connect.layout.standard': 'Standard',
-  'connect.layout.standard.title': 'Connect as it first opens: two panes down each side of the map and three along the bottom, all open, at the usual widths',
+  'connect.layout.standard.title': 'Conditions as it opened before Frame + bar: two panes down each side of the map and three along the bottom, all open, at the usual widths',
+  // The layout the one-time switch to Frame + bar kept (step 5, ConnectView `switchToDefaultOnce`): the
+  // operator's own arrangement from before the update, offered after Standard whenever one was kept.
+  'connect.layout.kept.label': 'Your earlier layout',
+  'connect.layout.kept.title': 'The layout you had here before Conditions opened in Frame + bar, as you left it: every box, tab, width and split',
   'connect.layout.custom': 'Custom',
   'connect.layout.mapFirst.label': 'Map first',
   'connect.layout.mapFirst.title': 'The map as big as it goes: both side columns at their narrowest and the bottom row closed',
@@ -7346,16 +7350,17 @@ export const EN = {
   // The dashboard window's wall-display layout: a frame of panes around a full-height map.
   'connect.layout.frame.label': 'Frame',
   'connect.layout.frame.title': 'Two panes down each side of a map that runs the full height, for a dashboard on a screen of its own: band conditions and space weather on the left, who is hearing you and what to chase on the right',
-  // The default view to try (the operator's pick, 2026-10-01: "A: Frame + bar"): Frame's shape with the
-  // dashboard window's clock and space-weather bar across the top, and the other boxes behind tabs.
-  'connect.layout.frameBar.label': 'Frame + bar',
+  // The default view (the operator's pick, 2026-10-01: "A: Frame + bar"; the default since step 5, and
+  // named so: "Frame + bar (default)"): Frame's shape with the dashboard window's clock and space-weather
+  // bar across the top, and the other boxes behind tabs.
+  'connect.layout.frameBar.label': 'Frame + bar (default)',
   'connect.layout.frameBar.title': "Frame's shape with the clock and space-weather bar across the top: Bands for you over Openings on the left, Chase over Getting Out on the right, and the other boxes one click away as tabs",
   'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
   // Connect's own Layout button (the operator's pick, 2026-10-01): it opens the same picker as the
   // ⊞ Panels menu's Layout section, beside ⊞ Panels in Connect's header. The title names the five
   // layouts by their own labels above.
   'connect.layout.button': 'Layout',
-  'connect.layout.button.title': 'Choose a layout for this screen: Standard, Map first, List first, Dashboard, Frame or Frame + bar',
+  'connect.layout.button.title': 'Choose a layout for this screen: Standard, Map first, List first, Dashboard, Frame or Frame + bar (default)',
 
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Best band',
@@ -9730,9 +9735,9 @@ export const EN = {
     'JS8 — JS8Call-compatible keyboard mode: heartbeats, directed messages, relay and a store-and-forward inbox, all four speeds decoded at once',
   'nav.phone.title': 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
   'nav.cw.title': 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
-  'nav.connect.label': 'Connect',
+  'nav.connect.label': 'Conditions',
   'nav.connect.title':
-    'Connect — THE map: grayline globe + live spots + openings + propagation, with click-to-work',
+    'Conditions (formerly Connect) — THE map: grayline globe + live spots + openings + propagation, with click-to-work',
   'nav.needed.label': 'Needed',
   'nav.needed.title': "Needed — what you still need that's on the air now; single-click to QSY",
   'nav.spots.label': 'Spots',
@@ -9784,7 +9789,7 @@ export const EN = {
   'nowbar.band.label': 'Band',
   // The chip's own tooltip, used only when the advisory carries no reason of its own (that
   // reason is backend prose, interpolated as data — it moves in phase 3).
-  'nowbar.band.title.connect': 'Open Connect — the map + nowcast',
+  'nowbar.band.title.connect': 'Open Conditions — the map + nowcast',
   'nowbar.band.title.plain': 'Band activity',
   'nowbar.out.label': 'Out',
   // Reads the same at every value in English ("1 hear you" as much as "3 hear you"), so it is
@@ -9814,7 +9819,7 @@ export const EN = {
     'Propagation nowcast data is {{source}} — separate from the Cluster/PSKR connection pills',
   // The dashboard rail's switch, the bar's last chip (its label is dashRail.title).
   'nowbar.rail.on.title': 'Hide the dashboard rail beside this cockpit',
-  'nowbar.rail.off.title': 'Show the dashboard rail beside this cockpit (a column of Connect panels)',
+  'nowbar.rail.off.title': 'Show the dashboard rail beside this cockpit (a column of Conditions panels)',
   // The connector pills. Each state is a WHOLE sentence: "connected but quiet" and "cannot
   // reach the server" are different claims, and they were one broken-looking "waiting" once.
   'nowbar.feed.live.value': 'live {{age}}',
@@ -10481,7 +10486,7 @@ export const EN = {
   'features.chat.label': 'Chat',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
-  'features.connect.label': 'Connect',
+  'features.connect.label': 'Conditions (formerly Connect)',
   'features.connect.oneLine':
     'Situational awareness — the grayline map + live propagation in one view.',
   'features.needed.label': 'Needed',
@@ -10528,7 +10533,7 @@ export const EN = {
     'Activate and hunt: the map and a field log for parks-and-peaks operating.',
   'profiles.vhf.label': '6m / VHF & openings',
   'profiles.vhf.blurb':
-    'Catch the band coming alive: Connect (map + openings), satellite passes, and the DXpedition board.',
+    'Catch the band coming alive: Conditions (map + openings), satellite passes, and the DXpedition board.',
   'profiles.everything.label': 'Everything (expert)',
   'profiles.everything.blurb':
     'Turn the whole console on. Every section and capability enabled.',

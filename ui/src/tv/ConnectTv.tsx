@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ConnectView } from '../components/ConnectView'
 import { DashboardBar } from '../components/DashboardBar'
+import { TV_PRESETS } from '../features/connectPresets'
 import { getPropagation, getTvStation } from '../api'
 import type { NeedTag, PropagationSnapshot } from '../types'
 import { useViewport } from '../useViewport'
@@ -105,6 +106,8 @@ export function ConnectTv() {
           autoRotate
           // The bar above is this page's clock; Connect's header draws none of its own.
           hostBar
+          // Its own Frame + bar, the default it opens in: A without the boxes this page can never fill.
+          presets={TV_PRESETS}
         />
       )}
     </div>
