@@ -43,7 +43,8 @@ vi.setConfig({ testTimeout: 30_000 })
 
 const STOP_TX: [string, RegExp] = ['Stop TX', /^stop tx$/i]
 const TUNE: [string, RegExp] = ['Tune', /^tune$|^tuning…$/i]
-const TX_LATCH: [string, RegExp] = ['TX-enable latch', /^▼ tx on$|^■ tx off$/i]
+// The TX strip draws the latch in FT's words since 2026-10-01 (the header's read "▼ TX On" / "■ TX Off"), as stop-line.test.tsx has it.
+const TX_LATCH: [string, RegExp] = ['TX-enable latch', /^tx on$|^tx off$/i]
 
 /** Each operating cockpit's stop-line list — stop-line.test.tsx's, and Operate's from its own sweep. */
 const CASES: Record<DashRailSection, Array<[string, RegExp]>> = {
