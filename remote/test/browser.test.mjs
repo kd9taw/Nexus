@@ -3476,17 +3476,48 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok(await evaluate(`[...document.querySelectorAll('.radioprog button,.radioprog input,.radioprog select')].length>1000&&[...document.querySelectorAll('.radioprog button,.radioprog input,.radioprog select')].every(e=>e.disabled)`))
       }
       const targets=settings?['.settings-tab:last-child','#settings-operator-radio input','#settings-remote-access']:['.rp-origin','.rp-chan-row:first-child .rp-chan-name','.rp-chan-row:last-child .rp-chan-name','.rp-export-chirp']
+      // A LAPSED SESSION IS NOT A LAYOUT READING (2026-10-02). On a loaded machine this page can go
+      // APPLICATION_TIMEOUT_MS (3 s) without a station sample. Its readings are then stale, so it
+      // withdraws the station's document and reads it again; if a frame went unacknowledged that long,
+      // the relay also closes the socket (1008 applicationTimeout) and the page reconnects by itself.
+      // Until the document is back, Program's body is `hidden` and Settings draws no form, so a target
+      // reads 0x0 with the status bar under its centre. Three gate reds (2026-09-30, 10-01, 10-02) each
+      // followed a 3.25-3.35 s sample gap, and one 3.5 s stall of this page reproduces them. So a
+      // reading taken without the document after such a lapse is taken again once the document is
+      // back, and the log says so. Never skipped: a document not back within 30 s fails, a third such
+      // reading fails, and a missing document with no lapse behind it is asserted exactly as before.
+      const held=settings?`(!!document.querySelector('.settings-tabs')&&document.querySelector('#settings-operator-radio input')?.value==='W1AW')`:`(document.querySelector('.rp-body')?.hidden===false&&document.querySelectorAll('.rp-chan-name').length===1200)`
+      // The last page time the station readings were 3 s old: when a snapshot arrived that long after
+      // the one before it, or now if the newest is already that old.
+      const lapsed=`(()=>{let t=-1,p=null;for(const e of window.__protocolTrace)for(const u of e.updates??[])if(u.command==='get_snapshot'&&u.type==='applicationResult'){if(p!==null&&e.at-p>=3000)t=e.at;p=e.at-u.age}return p!==null&&performance.now()-p>=3000?performance.now():t})()`
+      let heldAt=await evaluate(`${held}?performance.now():-1`)
+      const lapsedRead=async()=>{const s=await evaluate(`({held:${held},lapsed:${lapsed}})`);return !s.held&&s.lapsed>heldAt}
+      const awaitDocument=async where=>{
+        const started=performance.now()
+        try{await until(held,30000)}catch(error){if(error.message!=='Expected browser state did not appear')throw error;assert.fail(`${label}: the station's document was not back within 30 s of a lapsed session (${where}): ${JSON.stringify(await sessionDiagnostic())}`)}
+        console.log(`${label} sweep: the session lapsed (no station sample for 3 s); the station's document was back after ${Math.round(performance.now()-started)} ms, reading ${where} with it`,JSON.stringify(await evaluate('window.__socketClosures.slice(-2)')))
+      }
       for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout();await settledLayout()
         for(const target of targets){
-          if(!await evaluate(`!!document.querySelector('${target}')`))console.log('Missing navigation target',label,target,JSON.stringify(await sessionDiagnostic()));
-          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'},`e=>{window.__navTarget=e;window.__navBefore=e.getBoundingClientRect().toJSON();return true}`,`${label} ${target} at ${width}x${height} zoom ${zoom}`))
-          await settledLayout();await settledLayout()
-          if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
-          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,500),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
-          const good=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.top<height&&shape.rect.bottom>0&&shape.reachable&&shape.clipped.length===0
+          const where=`${target} at ${width}x${height} zoom ${zoom} ${theme}`
+          let shape,good
+          for(let attempt=1;;attempt++){
+            if(await lapsedRead())await awaitDocument(where)
+            try{
+              if(!await evaluate(`!!document.querySelector('${target}')`))console.log('Missing navigation target',label,target,JSON.stringify(await sessionDiagnostic()));
+              await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'},`e=>{window.__navTarget=e;window.__navBefore=e.getBoundingClientRect().toJSON();return true}`,`${label} ${target} at ${width}x${height} zoom ${zoom}`))
+              await settledLayout();await settledLayout()
+              if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
+              shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,500),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped,held:${held},lapsed:${lapsed},at:performance.now()}})()`)
+              good=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.top<height&&shape.rect.bottom>0&&shape.reachable&&shape.clipped.length===0
+            }catch(error){if(attempt<3&&await lapsedRead()){await awaitDocument(where);continue}throw error}
+            if(shape.held)heldAt=shape.at
+            if(good||shape.held||shape.lapsed<=heldAt||attempt===3)break
+            await awaitDocument(where)
+          }
           if(!good)console.log('SESSION FAILURE',JSON.stringify(await sessionDiagnostic()));
           if(!good)console.log('Navigation layout trace',JSON.stringify(await evaluate(`(()=>{const e=document.querySelector('${target}'),chain=[];for(let p=e;p;p=p.parentElement){const r=p.getBoundingClientRect(),c=getComputedStyle(p);chain.push({class:p.className,rect:r.toJSON(),at:p.scrollTop,scroll:p.scrollHeight,client:p.clientHeight,y:c.overflowY})}return {same:e===window.__navTarget,before:window.__navBefore,viewport:document.documentElement.dataset.viewport,chain}})()`)));
           if(!good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-${label.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64'))}
