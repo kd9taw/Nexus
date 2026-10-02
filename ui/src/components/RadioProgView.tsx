@@ -16,7 +16,8 @@ import { saveDownload } from '../remote-web/chunked-file'
 //
 // Four more things stay in the code as named constants, each for its own reason:
 //   • the DIRECTORY NAMES (`RSGB`, `RepeaterBook`, `hearham`) — proper nouns — and the values a
-//     disagreement quotes (a tone, a frequency, a mode list, a colour code), which are tokens;
+//     disagreement quotes (a tone, a frequency, a mode list, a colour code), which are tokens, as
+//     are the LINK NETWORKS (`AllStar`, `IRLP`, `DMR ID`) a machine's node numbers are named by;
 //   • the ATTRIBUTION lines the three directories require, which are also written verbatim into
 //     the exported CSV, so they cannot be locale-dependent;
 //   • the example grid and frequency the origin field and the by-hand prompt offer;
@@ -30,6 +31,7 @@ import type {
   RadioProgFileNotice,
   RadioProgProject,
   RepeaterDisagreement,
+  RepeaterLink,
   RepeaterRecord,
   RepeaterSearchResult,
   RepeaterSearchRow,
@@ -59,11 +61,15 @@ import {
   bandOfMhz,
   deriveNames,
   favoriteName,
+  FREQ_MATCH_MHZ,
+  frequencyQuery,
   isProgrammable,
+  mhzLabel,
   miToKm,
   modeBadge,
   NAME_CAPS,
   octant,
+  onFrequency,
   RADIUS_CHIPS_MI,
   repeaterMemory,
   rigRepeaterParams,
@@ -106,6 +112,17 @@ const DIRECTORY: Record<Directory, { name: string; credit: string; href: string 
   },
   hearham: { name: SOURCE_HEARHAM, credit: ATTRIB_HEARHAM, href: 'https://hearham.com' },
 }
+/** The networks a machine's node numbers are named by, as hams write them (tokens). A node whose
+ * directory names no network (`node`) is worded instead: `program.row.link.node`. */
+const LINK_NETWORK: Record<Exclude<RepeaterLink['network'], 'node'>, string> = {
+  allStar: 'AllStar',
+  irlp: 'IRLP',
+  dmrId: 'DMR ID',
+}
+
+/** The frequency search's tolerance as the count line prints it, kHz ("2.5"). */
+const FREQ_TOL_KHZ = (FREQ_MATCH_MHZ * 1000).toFixed(1)
+
 const isDirectory = (s: string | undefined): s is Directory =>
   s === 'rsgb' || s === 'repeaterbook' || s === 'hearham'
 
@@ -340,8 +357,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }
 
   // ── filtered picker rows ──
+  // A frequency in the search box finds every machine ON it, whatever the band, digital and
+  // on-air filters say: "what is on 147.18?" has one answer, and the default filters (FM only, on
+  // the air) would hide a DMR or an off-air machine there and read as "nothing on it".
+  const searchMhz = useMemo(() => frequencyQuery(search), [search])
   const shown = useMemo(() => {
     if (!result) return []
+    if (searchMhz !== null) {
+      return result.rows.filter((row) => onFrequency(row.record.outputMhz, searchMhz))
+    }
     const q = search.trim().toUpperCase()
     return result.rows.filter((row) => {
       const r = row.record
@@ -353,7 +377,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         return false
       return true
     })
-  }, [result, bands, showDigital, onAirOnly, search])
+  }, [result, bands, showDigital, onAirOnly, search, searchMhz])
 
   const inList = useMemo(() => new Set(rows.map((r) => r.channel.id)), [rows])
   const isAdded = (row: RepeaterSearchRow) => rowIds(row).some((id) => inList.has(id))
@@ -756,6 +780,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     }
   }
 
+  /** A machine's links and its DMR colour code, as hams write them ("IRLP 3570", "DMR ID 314158",
+   * "CC1"); a node whose network its directory does not name is worded. Empty: no line. */
+  const linkParts = (r: RepeaterRecord): string[] => [
+    ...(r.links ?? []).map((l) =>
+      l.network === 'node'
+        ? t('program.row.link.node', { node: l.node })
+        : `${LINK_NETWORK[l.network]} ${l.node}`,
+    ),
+    ...(r.dmrColorCode != null ? [`CC${r.dmrColorCode}`] : []),
+  ]
+
   const toneLabel = (c: ProgChannel): string => {
     if (c.toneMode === 'none') return '—'
     if (c.toneMode === 'dtcs') return `D${String(c.dtcsCode).padStart(3, '0')}`
@@ -1040,6 +1075,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               className="settings-input rp-search"
               value={search}
               placeholder={t('program.filters.search.placeholder')}
+              title={t('program.filters.search.title')}
               aria-label={t('program.filters.search.aria')}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -1047,7 +1083,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
           {result && (
             <div className="rp-count">
-              {t('program.count', { shown: shown.length, total: result.rows.length })}
+              {searchMhz !== null
+                ? t('program.count.freq', {
+                    shown: shown.length,
+                    freq: mhzLabel(searchMhz),
+                    tol: FREQ_TOL_KHZ,
+                  })
+                : t('program.count', { shown: shown.length, total: result.rows.length })}
               {shown.some((r) => isProgrammable(r.record) && !isAdded(r)) && (
                 <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
                   {t('program.addAll.label')}
@@ -1066,13 +1108,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               <p className="aw-empty">
                 {/* Two whole sentences, not one with an "FM " fragment spliced in: where the
                     mode word sits in the sentence is the translator's to decide. */}
-                {showDigital
-                  ? t('program.results.none', {
+                {searchMhz !== null
+                  ? t('program.results.none.freq', {
+                      freq: mhzLabel(searchMhz),
+                      tol: FREQ_TOL_KHZ,
                       radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
                     })
-                  : t('program.results.none.fm', {
-                      radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
-                    })}
+                  : showDigital
+                    ? t('program.results.none', {
+                        radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                      })
+                    : t('program.results.none.fm', {
+                        radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                      })}
                 {radiusMi !== 200 && (
                   <button disabled={remote}
                     type="button"
@@ -1084,7 +1132,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     })}
                   </button>
                 )}
-                {!showDigital && (
+                {!showDigital && searchMhz === null && (
                   <button disabled={remote} type="button" className="filter-chip" onClick={() => setShowDigital(true)}>
                     {t('program.results.showDigital')}
                   </button>
@@ -1097,6 +1145,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               const added = isAdded(row)
               const programmable = isProgrammable(r)
               const badge = modeBadge(r)
+              const links = linkParts(r)
               return (
                 <div
                   key={c.id}
@@ -1107,7 +1156,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     {r.callsign || '—'}
                   </span>
                   <span className="rp-freq mono" role="cell">
-                    {r.outputMhz.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.0')}
+                    {mhzLabel(r.outputMhz)}
                   </span>
                   <span className="rp-off mono" role="cell">
                     {offsetLabel(c)}
@@ -1166,6 +1215,11 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                       {added ? t('program.row.added.label') : t('program.row.add.label')}
                     </button>
                   </span>
+                  {links.length > 0 && (
+                    <span className="rp-links mono" role="cell" title={t('program.row.links.title')}>
+                      {links.join(' · ')}
+                    </span>
+                  )}
                   <span className="rp-src" role="cell">
                     {sourceLine(row)}
                   </span>

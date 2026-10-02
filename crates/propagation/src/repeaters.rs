@@ -28,6 +28,44 @@ pub enum RepeaterSource {
     Hearham,
 }
 
+/// A network a machine is reached through beyond its own coverage, as a directory names it.
+/// Declared in the order a row lists its links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkNetwork {
+    /// An AllStar node.
+    AllStar,
+    /// An IRLP node.
+    Irlp,
+    /// The machine's DMR ID, the number a DMR network (BrandMeister, DMR+, …) knows it by.
+    DmrId,
+    /// A node number its directory gives without saying which network it is on.
+    Node,
+}
+
+/// One way onto a machine beyond its own coverage: a [`LinkNetwork`] and the node number as the
+/// directory writes it ("2462", "314158").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Link {
+    pub network: LinkNetwork,
+    pub node: String,
+}
+
+impl Link {
+    /// The link as the exports write it: "AllStar 2462", "IRLP 3570", "DMR ID 314158",
+    /// "node 7230" (tokens, like the colour code's "CC1" beside them).
+    pub fn label(&self) -> String {
+        let network = match self.network {
+            LinkNetwork::AllStar => "AllStar",
+            LinkNetwork::Irlp => "IRLP",
+            LinkNetwork::DmrId => "DMR ID",
+            LinkNetwork::Node => "node",
+        };
+        format!("{network} {}", self.node)
+    }
+}
+
 /// One repeater, normalized across both feeds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +108,11 @@ pub struct RepeaterRecord {
     /// machine, and the proxy's narrowed RepeaterBook rows drop it.
     #[serde(default)]
     pub updated: Option<String>,
+    /// How the machine links beyond its own coverage ([`Link`]): hearham's `internet_node`
+    /// ([`hearham_link`]). Neither other directory gives one Program reads (see their parsers).
+    /// Left out of the JSON when there is none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
     /// Filled by [`filter_sort`] — distance/bearing from the query origin.
     pub distance_km: f64,
     pub bearing_deg: f64,
@@ -211,6 +254,11 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 operational: !status.eq_ignore_ascii_case("off-air"),
                 open_use: jstr(v, "Use").is_empty() || jstr(v, "Use").eq_ignore_ascii_case("open"),
                 updated: Some(jstr(v, "Last Update")).filter(|d| !d.is_empty()),
+                // The export's own node columns ("AllStar Node", "EchoLink Node", "IRLP Node",
+                // "Wires Node", "DMR ID") are left unread on purpose: a channel's links are saved
+                // with it, where the Remote's programming view can show them, and RepeaterBook's
+                // rows never leave this PC.
+                links: Vec::new(),
                 distance_km: 0.0,
                 bearing_deg: 0.0,
             })
@@ -305,6 +353,30 @@ fn hearham_cc(field: &str) -> Option<u8> {
     field.split('/').find_map(cc_code)
 }
 
+/// The link a hearham row gives: its `internet_node`, on the network its `group` names. The
+/// group is the list hearham imported the row from, and three of them are the networks
+/// themselves: "Allstar" (an AllStar node), "IRLP" (an IRLP node) and "DMR" (the machine's DMR ID:
+/// 3,072 of those rows' descriptions link its BrandMeister page by that number). A node in any
+/// other group names no network, so it stays a plain node: 90 rows on 2026-10-01, 83 of them one
+/// regional directory's, whose free text names IRLP on most, and free text is not read.
+///
+/// Measured on the whole list (22,696 rows, 2026-10-01): 10,297 rows give a node (DMR 5,480,
+/// Allstar 2,875, IRLP 1,850), each a number once trimmed ("8728\t" once) but two, which hold a
+/// callsign. Anything that is not a number is not read as a node.
+fn hearham_link(v: &serde_json::Value) -> Option<Link> {
+    let node = jstr(v, "internet_node");
+    if node.is_empty() || !node.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let network = match jstr(v, "group").to_ascii_lowercase().as_str() {
+        "allstar" => LinkNetwork::AllStar,
+        "irlp" => LinkNetwork::Irlp,
+        "dmr" => LinkNetwork::DmrId,
+        _ => LinkNetwork::Node,
+    };
+    Some(Link { network, node })
+}
+
 /// Parse the hearham.com `/api/repeaters/v1` payload (bare array; `frequency` +
 /// `offset` in Hz as integers; tones as strings — `"0.00"`/`""` = none, and DMR
 /// rows carry the color code as `"CC2"` in `encode`, joined with `/` to the FM tone
@@ -373,6 +445,7 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 operational: jf64(v, "operational").unwrap_or(1.0) != 0.0,
                 open_use: jstr(v, "restriction").is_empty(),
                 updated: None,
+                links: hearham_link(v).into_iter().collect(),
                 distance_km: 0.0,
                 bearing_deg: 0.0,
             })
@@ -485,6 +558,10 @@ pub fn parse_rsgb_json(json: &str) -> Result<Vec<RepeaterRecord>, String> {
             operational: !jstr(v, "status").eq_ignore_ascii_case("not operational"),
             open_use: true,
             updated: None,
+            // The API has no node or network field, and the only access code its listings carry
+            // is DMR's colour code (`M:<code>`, above): 85 Fusion flags in 372 listings, none
+            // with a DG-ID (three squares, 2026-10-01).
+            links: Vec::new(),
             distance_km: 0.0,
             bearing_deg: 0.0,
         });
@@ -1079,6 +1156,9 @@ pub struct Machine {
 ///
 /// **Disagreements** on the tone, the input, the modes and the colour code stay on the machine
 /// ([`Disagreement`]). A row that only lacks a field disagrees with nothing.
+///
+/// **Links** ([`Link`]) are every one any of its rows gives, each once: hearham lists a linked
+/// machine once per node, so a machine on AllStar and IRLP shows both.
 pub fn merge_nearby(
     layers: &[&[RepeaterRecord]],
     origin: (f64, f64),
@@ -1236,6 +1316,14 @@ fn machine(rows: Vec<RepeaterRecord>, origin: (f64, f64)) -> Machine {
     if rec.fm {
         rec.bandwidth_khz = rows.iter().filter(|r| r.fm).find_map(|r| r.bandwidth_khz);
     }
+    // Every link any row gives, once, in the network order; one network's as the rows give them.
+    rec.links = Vec::new();
+    for l in rows.iter().flat_map(|r| &r.links) {
+        if !rec.links.contains(l) {
+            rec.links.push(l.clone());
+        }
+    }
+    rec.links.sort_by_key(|l| l.network);
     rec.distance_km = haversine_km(origin, (rec.lat, rec.lon));
     rec.bearing_deg = bearing_deg(origin, (rec.lat, rec.lon));
 
@@ -1347,7 +1435,8 @@ const NARROW_FM_KHZ: f32 = 12.5;
 /// `TSql`; DCS ⇒ `Dtcs`, both ways only when the downlink gives the same code and
 /// otherwise send-only ([`Channel::dtcs_tx_only`], the DCS counterpart of `Tone`, for the
 /// same reason). Mode: FM, or NFM for a machine its source marks narrow
-/// ([`NARROW_FM_KHZ`]), unless the record is digital-only.
+/// ([`NARROW_FM_KHZ`]), unless the record is digital-only. The machine's links go with it as
+/// [`Link::label`] tokens, for the exports' comment ([`Channel::export_comment`]).
 pub fn to_channel(r: &RepeaterRecord) -> Channel {
     let diff = r.input_mhz - r.output_mhz;
     let (duplex, offset_mhz) = if diff.abs() < 1e-6 {
@@ -1402,6 +1491,7 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         } else {
             r.city.clone()
         },
+        links: r.links.iter().map(Link::label).collect(),
         dmr_color_code: r.dmr_color_code,
         source: Some(ChannelSource {
             source: match r.source {
@@ -2462,6 +2552,7 @@ mod tests {
             operational: true,
             open_use: true,
             updated: None,
+            links: Vec::new(),
             distance_km: 0.0,
             bearing_deg: 0.0,
         }
@@ -2635,5 +2726,176 @@ mod tests {
             (src.source.as_str(), src.source_id.as_str()),
             ("rsgb", "6863")
         );
+    }
+
+    // ── links ───────────────────────────────────────────────────────────────
+
+    /// One hearham row with a `group` and an `internet_node` (written as JSON: a string, or null).
+    fn hh_node(group: &str, node: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"{group}","internet_node":{node},"mode":"FM","encode":"","decode":"","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
+        );
+        let mut recs = parse_hearham_json(&json);
+        assert_eq!(recs.len(), 1, "the {group:?} {node} row did not parse");
+        recs.remove(0)
+    }
+    fn link(network: LinkNetwork, node: &str) -> Link {
+        Link {
+            network,
+            node: node.into(),
+        }
+    }
+
+    /// hearham's `internet_node` is a node on the network its `group` names (AllStar, IRLP, or the
+    /// DMR ID of a row the DMR registry gave), and a plain node where the group names none. The
+    /// shapes are the directory's own on 2026-10-01: a string, one with a tab after it, null, and
+    /// a callsign where a number belongs.
+    #[test]
+    fn a_hearham_internet_node_is_a_link_on_the_network_its_group_names() {
+        let recs = parse_hearham_json(HEARHAM_FIXTURE);
+        let links = |id: &str| {
+            recs.iter()
+                .find(|r| r.source_id == id)
+                .unwrap()
+                .links
+                .clone()
+        };
+        assert_eq!(
+            links("15279"),
+            [link(LinkNetwork::DmrId, "314158")],
+            "the DMR registry's row"
+        );
+        assert_eq!(links("1166"), [link(LinkNetwork::Irlp, "8625")]);
+        assert_eq!(links("18545"), [link(LinkNetwork::AllStar, "569394")]);
+        assert!(links("16091").is_empty(), "a null node is none");
+
+        assert_eq!(
+            hh_node("", r#""7230""#).links,
+            [link(LinkNetwork::Node, "7230")],
+            "a group that names no network"
+        );
+        assert_eq!(
+            hh_node("PALS", r#""4100""#).links,
+            [link(LinkNetwork::Node, "4100")]
+        );
+        assert_eq!(
+            hh_node("IRLP", "\"8728\\t\"").links,
+            [link(LinkNetwork::Irlp, "8728")],
+            "trimmed"
+        );
+        assert!(
+            hh_node("w0eno", r#""w0eno""#).links.is_empty(),
+            "a callsign is not a node"
+        );
+        assert!(hh_node("Allstar", r#""""#).links.is_empty());
+        assert!(hh_node("Allstar", "null").links.is_empty());
+    }
+
+    /// A machine keeps every link its rows give, once each, in the network order (AllStar, IRLP,
+    /// DMR ID, plain node) and, within one network, as its rows give them, nearest first. hearham
+    /// lists a linked machine once per node: GB3BW twice on IRLP, GB3OA once on IRLP and once as
+    /// the DMR registry's. The coordinator's rows give none.
+    #[test]
+    fn a_machine_keeps_every_link_its_rows_give_once() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let both = merge_nearby(&[&coordinator, &[], &hearham], MANCHESTER, 100.0);
+        let links = |call: &str| {
+            both.iter()
+                .find(|m| m.record.callsign == call)
+                .unwrap()
+                .record
+                .links
+                .clone()
+        };
+        assert_eq!(
+            links("GB3BW"),
+            [
+                link(LinkNetwork::Irlp, "5775"),
+                link(LinkNetwork::Irlp, "5201")
+            ]
+        );
+        assert_eq!(
+            links("GB3OA"),
+            [
+                link(LinkNetwork::Irlp, "5302"),
+                link(LinkNetwork::DmrId, "235239")
+            ]
+        );
+        assert!(links("GB7PR").is_empty(), "the coordinator's row alone");
+        assert!(coordinator.iter().all(|r| r.links.is_empty()));
+
+        let on = |id: &str, l: Link| RepeaterRecord {
+            links: vec![l],
+            ..row(RepeaterSource::Hearham, id, "W1AW")
+        };
+        let m = &merged(&[
+            on("1", link(LinkNetwork::Node, "7230")),
+            on("2", link(LinkNetwork::DmrId, "310123")),
+            on("3", link(LinkNetwork::Irlp, "3570")),
+            on("4", link(LinkNetwork::AllStar, "2462")),
+            on("5", link(LinkNetwork::Irlp, "3570")),
+        ])[0];
+        assert_eq!(
+            m.record.links,
+            [
+                link(LinkNetwork::AllStar, "2462"),
+                link(LinkNetwork::Irlp, "3570"),
+                link(LinkNetwork::DmrId, "310123"),
+                link(LinkNetwork::Node, "7230"),
+            ]
+        );
+    }
+
+    /// A machine's links and its DMR colour code ride into its channel and out in both files'
+    /// comment, after the town, which stays the channel's own comment.
+    #[test]
+    fn a_machines_links_and_colour_code_ride_into_both_exports() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let both = merge_nearby(&[&coordinator, &[], &hearham], MANCHESTER, 100.0);
+        let pp = both.iter().find(|m| m.record.callsign == "GB3PP").unwrap();
+        let c = to_channel(&pp.record);
+        assert_eq!(c.links, ["DMR ID 234109"]);
+        assert_eq!(c.dmr_color_code, Some(10));
+        assert!(
+            !c.comment.is_empty() && !c.comment.contains(';'),
+            "the comment is still the town: {:?}",
+            c.comment
+        );
+        let want = format!("{}; DMR ID 234109; CC10", c.comment);
+        assert_eq!(c.export_comment(), want);
+        let chirp = crate::chirp::to_chirp_csv(std::slice::from_ref(&c), 7, "");
+        assert!(chirp.lines().nth(1).unwrap().contains(&want), "{chirp}");
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        assert!(csv.lines().nth(1).unwrap().contains(&want), "{csv}");
+
+        let labels: Vec<String> = [
+            link(LinkNetwork::AllStar, "2462"),
+            link(LinkNetwork::Irlp, "3570"),
+            link(LinkNetwork::DmrId, "310123"),
+            link(LinkNetwork::Node, "7230"),
+        ]
+        .iter()
+        .map(Link::label)
+        .collect();
+        assert_eq!(
+            labels,
+            ["AllStar 2462", "IRLP 3570", "DMR ID 310123", "node 7230"]
+        );
+    }
+
+    /// RepeaterBook's own node columns are never read: a channel's links are saved with it, where
+    /// the Remote's programming view can show them, and RepeaterBook's rows never leave this PC.
+    #[test]
+    fn repeaterbook_node_columns_are_never_read() {
+        let json = r#"{"results":[{"Callsign":"W9NOD","Frequency":"146.9400","Input Freq":"146.3400","PL":"103.5","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"8","FM Analog":"Yes","AllStar Node":"2462","EchoLink Node":"12345","IRLP Node":"3570","Wires Node":"54321","DMR":"Yes","DMR ID":"310123","DMR Color Code":"1"}]}"#;
+        let recs = parse_repeaterbook_json(json);
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].links.is_empty());
+        assert!(to_channel(&recs[0]).links.is_empty());
+        assert!(parse_repeaterbook_json(RB_FIXTURE)
+            .iter()
+            .all(|r| r.links.is_empty()));
     }
 }

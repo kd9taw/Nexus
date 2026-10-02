@@ -45,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RSGB list is a beta service: when it cannot be read, Program says so and shows hearham's
   machines alone. The CSV and CHIRP files credit every directory their rows came from, one
   comment line each, "Repeater data: RSGB ETCC (ukrepeater.net)" among them.
+- **Program finds the repeaters on a frequency.** Type a frequency into Program's search box
+  (147.18, 147.180, 438.5125, or 438,5125 with a decimal comma) and the list shows every repeater
+  on it, within 2.5 kHz, whatever the band, digital and on-air filters are set to: a DMR or
+  off-air machine on that frequency is listed rather than hidden, and the count line says the
+  filters are not applied. A neighbouring channel never matches (147.18 does not find 147.195 or
+  147.1875). A callsign or town filters the list as before.
+- **Program shows how a repeater links, and the export carries it.** A repeater hearham lists
+  with an AllStar or IRLP node, or with its DMR ID, has a line under its row with those numbers
+  and its DMR colour code ("AllStar 2462 · IRLP 3570 · CC1"); a node hearham gives without
+  naming its network reads "node 7230". The CHIRP and CSV files write the same after the town in
+  that channel's comment ("Rockford; IRLP 3570; CC1"), since neither has a column for them.
 
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be

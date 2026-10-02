@@ -115,10 +115,25 @@ type. A machine on a band with no chip of its own — 33 cm, say — shows only
 under All. The count line reads "12 of 47 shown · nearest first" and grows a
 **＋ Add all shown** button whenever there is anything left to add.
 
+Type a **frequency** in MHz into the same box — 147.18, 147.180, 438.5125, or
+438,5125 with a decimal comma — and the list shows every machine whose output is
+within 2.5 kHz of it, whatever the band, digital and on-air filters say, so a DMR
+or off-air machine on that frequency is not hidden: "3 on 147.18 MHz (±2.5 kHz),
+filters not applied · nearest first". 2.5 kHz is under half the narrowest channel
+spacing in use (6.25 kHz), so a frequency names one channel: 147.18 never finds
+147.195 or 147.1875. The search covers the machines inside your radius; with none
+on the frequency, Program says so and offers a wider one.
+
 **A result row** is callsign, output frequency, offset (`-0.6`, `+5.0`, `→` and
 the absolute input for a true split, `—` for simplex), tone (`103.5`, `D023`,
 `—`), then distance in miles and compass octant from your origin, with the city
-and state on hover. Under it, a line names the directories behind the machine
+and state on hover. A machine hearham lists with an AllStar or IRLP node, or
+with its DMR ID, carries a line under the row with those numbers and its DMR
+colour code: "AllStar 2462 · IRLP 3570 · CC1" (a node hearham gives without
+naming its network reads "node 7230"). The exported files write the same after
+the town in that channel's comment, "Rockford; IRLP 3570; CC1", as neither file
+has a column for them. RepeaterBook's own node columns are not read, and the RSGB
+list has none. Under that, a line names the directories behind the machine
 and its date: the directory's own date when it gives one ("RepeaterBook ·
 updated 2026-05-14"), otherwise "no date" and the age of the list it came in
 ("RSGB + hearham · no date · fetched 2d ago"; hearham and the RSGB list date no

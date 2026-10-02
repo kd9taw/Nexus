@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,291 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,296 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -28,7 +28,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | CW | 68 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 67 | Both the Q-code and the callsign lookup site. |
 | CQ | 63 | The call. Translating it would be strange on the air and on screen. |
-| MHz / kHz / Hz | 62 / 16 / 44 | SI units. Never translated, never re-punctuated. |
+| MHz / kHz / Hz | 66 / 18 / 44 | SI units. Never translated, never re-punctuated. |
 | Doppler | 62 | The effect, in satellite work. Same word, proper name. |
 | DX | 52 | Distant station / distance working. |
 | ADIF | 49 | The log file format. |
@@ -108,9 +108,9 @@ word in, and use only that word in the CSV.
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 99 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 86 | A satellite pass. | |
-| callsign | 79 | Appears constantly. Whatever you choose, choose it once. | |
+| callsign | 80 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
-| frequency | 76 | | |
+| frequency | 77 | | |
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 52 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
