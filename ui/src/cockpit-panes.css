@@ -72,8 +72,8 @@
          rendered only while auto is on and the sequence is not idle).
        SSTV — Stop (.sstv-tx-bar, disabled={!sending}) and the TX-enable latch (same mechanism
          as RTTY, via sstv_abort).
-       APRS — no vocabulary at all, so the rule holds by construction; its stop control is
-         the TX-enable latch (TX On/Off). It arms no abort, but turning it off stops a beacon on
+       APRS — no vocabulary at all, so the rule holds by construction; its stop controls are
+         the TX strip's Stop TX (halt_tx) and the TX-enable latch (TX On/Off). It arms no abort, but turning it off stops a beacon on
          the air through the loop's TX-off cut (unkey + flush of a non-slot over; measured
          2026-09-30) and drops what is still queued.
      The TopBar's TX cluster backstops none of them: App hides it in Operate, Tempo and

@@ -377,6 +377,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The transmit buttons are in one place on every screen: FT's strip, under the scope.** TX
+  On/Off, Tune, ATU and Stop TX now sit in one row under the scope or waterfall on Phone, CW, RTTY,
+  PSK, JS8 and SSTV, in FT's order and at the size the header's buttons had, so Stop TX is in the
+  same spot whichever mode you are in. On Tempo the row moves from the top bar to just under the
+  Tempo header, with Hold Tx, and gains ATU. On APRS it replaces the TX On/Off chip and adds Stop TX
+  (Tune and ATU too, when the radio reports a tuner). The row stays in the window when a large text
+  scale makes the screen scroll: at 150 % and 175 % the header's Stop TX could sit under the
+  transmit bar on Phone, CW and PSK. Each mode keeps its own send area. On Phone and CW the first
+  button only shows whether transmit is enabled, because those screens enable it themselves. Tune
+  lights while its carrier is up, as on FT. FT's transmit buttons are now the same size as
+  everyone else's.
 - **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
   message box holds text (you are typing, a reply waits there, or a message of yours is going out)
   or while a message to you is still arriving; a reply already queued waits until the box is

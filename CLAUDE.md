@@ -244,7 +244,8 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   is latched), Tune, Esc (a window `keydown` bound only while RTTY is the visible view), the TX-enable
   latch and the sequencer's Abort (rendered only while auto runs); PSK — Stop TX, the dock's Esc/Stop
   macro (RTTY's shape and predicate), Tune, Esc (bound only while PSK is visible), the TX-enable
-  latch; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch; APRS — the TX-enable latch (TX On/Off).
+  latch; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch; APRS — Stop TX (TX strip → `halt_tx`) + the
+  TX-enable latch (TX On/Off).
   **Tune reached RTTY and PSK on 2026-08-20**, with the RF-power slider it exists to set — the two
   keyboard cockpits had been shipping without the header's own declared base controls (power, Tune,
   ATU), which is the discoverability defect the triage found in a different form ("the ATU button is

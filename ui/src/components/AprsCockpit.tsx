@@ -17,7 +17,7 @@ import { AprsStationCard } from './AprsStationCard'
 import { AprsRailSeam } from './AprsRailSeam'
 import type { NeedTag, Station } from '../types'
 import type { Theme } from '../useTheme'
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import {
   aprsArm,
@@ -584,7 +584,7 @@ export function AprsCockpit({
   active,
   onTune,
   radio,
-  onSetTxEnabled,
+  txStrip,
   theme,
   myGrid = '',
   onOpenSettings,
@@ -606,9 +606,13 @@ export function AprsCockpit({
     /** Receive coverage from Hamlib's caps; EMPTY = unknown = allow (see `radioCoversMhz`). */
     rxRangesMhz?: [number, number][]
   }
-  /** Arm/disarm TX (the TopBar's Enable-Tx is hidden here, so APRS carries its own — otherwise a
-   * beacon/message is gated off with no way to turn TX on). */
-  onSetTxEnabled?: (on: boolean) => void
+  /** THE TX STRIP (CockpitTxStrip, FT's cluster: TX On/Off · Tune · ATU · Stop TX), drawn by App
+   *  and placed here as a SHELL CHILD right under the header line — APRS has no scope there. It
+   *  carries this screen's stop controls: the TX-enable latch (the TopBar's Enable-Tx is hidden
+   *  here, and without it a beacon or message is gated off with no way to turn TX on; its TX-off
+   *  cut stops a beacon on the air) and Stop TX (halt_tx). No ⊞ vocabulary exists here, so
+   *  nothing can hide it. */
+  txStrip?: ReactNode
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the note below names
    * where the rest of the APRS settings live without offering to open them. */
   onOpenSettings?: (target: string) => void
@@ -1126,26 +1130,6 @@ export function AprsCockpit({
             {radio.dialMhz.toFixed(3)} {MHZ_UNIT} · {radio.band} · {radio.sideband || '—'}
           </span>
         )}
-        {/* ⚠️ NOT MIGRATED, DELIBERATELY. This is the TX-enable arm latch: its label and its
-            two tooltips are a transmit-path control's accessible name, and every one of those
-            moves in its own batch with the stop-line sweeps re-run. It stays English here
-            until then — see the file header. */}
-        {onSetTxEnabled && radio && (
-          <button
-            type="button"
-            className={`np-chip${radio.txEnabled ? ' active' : ''}`}
-            aria-pressed={radio.txEnabled}
-            disabled={!canControl}
-            onClick={() => { if (canControl) onSetTxEnabled(!radio.txEnabled) }}
-            title={
-              radio.txEnabled
-                ? 'Transmit ENABLED — beacons/messages will go out. Click to disable.'
-                : 'Transmit is OFF — enable it before a beacon or message can send.'
-            }
-          >
-            {radio.txEnabled ? 'TX On' : 'TX Off'}
-          </button>
-        )}
         {/* Three states, because "decoding" and "may transmit an ack by itself" are different
             things and the operator has to be able to tell them apart. Auto-armed must never look
             ack-capable — see aprs_auto_ack's gate. */}
@@ -1312,6 +1296,8 @@ export function AprsCockpit({
           </button>
         )}
       </div>
+
+      {txStrip}
 
       {/* ⭐ APRS IS A GEOGRAPHIC MODE AND HAD NO MAP. Everything lived in one
           vertical stack, so on any real window the controls bunched into the

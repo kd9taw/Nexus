@@ -94,6 +94,7 @@ import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
 import { TempoHeader } from './components/TempoHeader'
+import { CockpitTxStrip } from './components/CockpitTxStrip'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { markerWidthHz } from './waterfall'
@@ -3653,7 +3654,19 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 active={effectiveView === 'aprs'}
                 onTune={handleAprsTune}
                 radio={snap.radio}
-                onSetTxEnabled={handleSetTxEnabled}
+                // FT's TX cluster (operator batch 60): APRS's TX On/Off moved into it, and it gained
+                // Stop TX (halt_tx, the stop its Esc sends). Tune and ATU only when the rig reports a
+                // tuner — there is nothing to tune a 2 m FM antenna against otherwise.
+                txStrip={
+                  <CockpitTxStrip
+                    radio={snap.radio}
+                    onSnap={setSnap}
+                    onSetTxEnabled={handleSetTxEnabled}
+                    onTune={snap.radio.atu != null ? handleSetTune : undefined}
+                    onAtuTune={handleAtuTune}
+                    onStopTx={handleHaltTx}
+                  />
+                }
                 onOpenSettings={openSettingsAt}
               />
             </div>
