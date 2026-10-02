@@ -342,7 +342,7 @@ still says what a thing does *not* do, and so does every entry in the changelog.
 │ Tauri v2 desktop shell (src-tauri) + web UI (ui/, React + TS)  │
 │   cockpits: Operate · CW · Phone · RTTY · SSTV · APRS · Tempo  │
 │   boards: Needed · Spots · POTA/SOTA · Logbook · Awards ·      │
-│           Journey · Connect map · Satellites · Memories        │
+│           Journey · Conditions map · Satellites · Memories        │
 ├────────────────────────────────────────────────────────────────┤
 │ Rust core (crates/)                                            │
 │   tempo-app    live TX/RX engine · settings · DTOs             │

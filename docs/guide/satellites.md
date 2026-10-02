@@ -83,7 +83,7 @@ inside itself after that, so it can never take the schedule away.
 **Frequencies** for each bird are listed so you know where to listen and where to
 transmit.
 
-You can also drop a **Satellite Passes** pane into the [Connect](connect.md) grid
+You can also drop a **Satellite Passes** pane into the [Conditions](connect.md) grid
 for an at-a-glance next-passes list beside the map, and turn on the
 **Satellites (amateur)** map layer to watch the birds move in real time.
 
@@ -514,7 +514,7 @@ plainly when it can't:
 
 ## Related guides
 
-- [Connect — map + propagation](connect.md) (Satellite Passes pane, live map layer)
+- [Conditions — map + propagation](connect.md) (Satellite Passes pane, live map layer)
 - [SSTV](sstv.md) (ISS SSTV auto-arm: at AOS Nexus tunes 145.800 FM and arms the
   decoder for you)
 - [Settings reference](settings-reference.md) (rotator setup)

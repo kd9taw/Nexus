@@ -39,7 +39,7 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 | Page | What you will do |
 |---|---|
 | [Logbook and Awards](Logbook-and-Awards.md) | DXCC/Challenge/Honor Roll/WAS/WAZ computed offline, confirmation source rules, LoTW two-pull sync, Journey achievements |
-| [Connect — Propagation](Connect-Propagation.md) | World map, grayline, PSK Reporter/RBN/cluster fusion, opening detector, Now-Bar, space weather |
+| [Conditions — Propagation](Connect-Propagation.md) | World map, grayline, PSK Reporter/RBN/cluster fusion, opening detector, Now-Bar, space weather |
 | [Integrations](Integrations.md) | WSJT-X UDP protocol, CAT broker, Companion mode, LoTW, QRZ, ClubLog, eQSL, N3FJP, N1MM+, PSK Reporter |
 | [Tempo Chat](Tempo-Chat.md) | TempoFast (4 s conversational) and TempoDeep (15 s fading-resilient) chat tiers, IR-HARQ, store-and-forward, presence |
 

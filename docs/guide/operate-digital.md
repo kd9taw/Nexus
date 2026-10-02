@@ -146,7 +146,7 @@ bar and in [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
 The [Needed board](needed-dx.md) ranks everything on the air by what it's worth
 to your log. One click on a row QSYs band + mode + exact frequency atomically and
 opens this cockpit with the DX ready to work — the same atomic path as
-double-clicking a spot on the [Connect map](connect.md).
+double-clicking a spot on the [Conditions map](connect.md).
 
 ### Hound a DXpedition (Fox/Hound)
 
@@ -305,6 +305,6 @@ daily-driver load meanwhile.
 - [RTTY](rtty.md) — the sibling digital cockpit, free-running instead of slotted
 - [SSTV](sstv.md) — the same waterfall instrument, carrying pictures
 - [Memories](memories.md) — the bank behind this cockpit's MEM strip
-- [Connect — map + propagation](connect.md)
+- [Conditions — map + propagation](connect.md)
 - [Logbook & QSL](logbook-qsl.md)
 - [Settings reference](settings-reference.md)

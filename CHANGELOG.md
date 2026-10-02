@@ -258,16 +258,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is the same picker that opens at the top of **⊞ Panels**, so a pick made in either shows in
   both, and either Undo takes it back. The dashboard window, the TV page and the Remote Connect
   page have the button too.
-- **Connect: Frame + bar, the new default view to try.** **Layout** has a fifth choice, **Frame +
+- **Connect: Frame + bar, the new default view.** **Layout** has a fifth choice, **Frame +
   bar**: Bands for you over Openings on the left and Chase over Getting Out on the right, in 400 px
   columns around a full-height map, with the dashboard window's bar across the top (your callsign
   and grid, a big UTC clock and your local time, and the day's indices). Every other box is one click
-  away as a tab behind those four. Connect still opens on Standard; pick Frame + bar to try it, and
+  away as a tab behind those four. Conditions (formerly Connect) opens in it now (see Changed), and
   **Undo last change**, another layout or **Reset layout** takes the bar away again. In the dashboard
   window and on the TV page, which have the bar already, it is the one bar.
 - **Connect: Standard is a choice in Layout.** **Layout** (and the top of **⊞ Panels**) lists
-  **Standard** first: Connect as it first opens, every pane open in its usual place at the usual
-  widths, with no bar. Trying Frame + bar or another layout and going back is one tap each way, and
+  **Standard** first: every pane open in its usual place at the usual widths, with no bar, as Connect
+  opened before Frame + bar. Trying Frame + bar or another layout and going back is one tap each way, and
   **Undo last change** takes the Standard tap back like any other. Unlike **Reset layout**, it leaves
   your panes' text sizes as they are, as every layout does.
 - **The dashboard bar shows a storm.** Kp, X-ray and the solar-wind speed turn amber when the Space
@@ -560,6 +560,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
+  **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
+  the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After
+  the update Conditions opens in **Frame + bar (default)** once, in the main window, the dashboard
+  window and on the TV page, whatever layout it had. If you had arranged it yourself, your
+  arrangement is kept: **Layout ▸ Your earlier layout** brings it back exactly, boxes, tabs, widths
+  and splits, in one tap. **Standard** is still the first choice in **Layout**, and **Reset layout**
+  still puts every pane back. The switch happens once and never again, even after a reinstall or a
+  restore from a backup, and a dashboard window you never arranged follows the main window, as it
+  always has. On the TV page Frame + bar leaves out the boxes the page can never fill (Chase and its
+  tabs, the rotor, the amplifier and the band scope): Space Wx and the Kp outlook take Chase's
+  place. In all five languages, and in the Portuguese translation kit.
 - **Connect has no radio controls, so its map and panes get the whole height.** The bar across the
   top of the window, with the frequency, the band list, TX Off, Tune and Stop TX, is no longer shown
   on Connect; every other screen still has it. To stop a transmission while Connect is on screen,

@@ -1,6 +1,6 @@
-# Connect — World Map and Propagation Intelligence
+# Conditions (formerly Connect) — World Map and Propagation Intelligence
 
-Connect is Nexus's unified situational-awareness surface: a live Canvas2D world map fused with a propagation nowcast built from PSK Reporter MQTT, RBN/DX-cluster telnet, and NOAA SWPC space-weather feeds. It answers three questions — "Is the band open?", "Am I getting out?", and "What do I need?" — from observed signal-path evidence, not static ionospheric charts.
+Conditions is Nexus's unified situational-awareness surface: a live Canvas2D world map fused with a propagation nowcast built from PSK Reporter MQTT, RBN/DX-cluster telnet, and NOAA SWPC space-weather feeds. It answers three questions — "Is the band open?", "Am I getting out?", and "What do I need?" — from observed signal-path evidence, not static ionospheric charts.
 
 ---
 
@@ -113,7 +113,7 @@ The opening detector is operator-anchored: it watches for anomalous spot density
 
 Each classification returns a confidence score combining anomaly z-score, geometry fit, and space-weather fit. Tropo confidence is capped at "Marginal" because SNR data needed to confirm it is not yet available from the MQTT topic-level feed.
 
-**Opening strips** in the Connect right rail show: band, propagation mode classification, direction octant, max distance (km), participating station count, two-way reciprocal pair count, confidence word, and onset age. Clicking a strip focuses that band's heat layer on the map.
+**Opening strips** in the Conditions right rail show: band, propagation mode classification, direction octant, max distance (km), participating station count, two-way reciprocal pair count, confidence word, and onset age. Clicking a strip focuses that band's heat layer on the map.
 
 ---
 
@@ -146,12 +146,12 @@ Clicking a receiver row selects it on the map. Stations that heard you appear as
 
 ## Spots and POTA / SOTA Boxes
 
-Two boxes put the hunting lists in the Connect grid; pick either from any box's menu. Neither is in a default or ready-made layout.
+Two boxes put the hunting lists in the Conditions grid; pick either from any box's menu. Neither is in a default or ready-made layout.
 
 - **Spots** is the Spots screen's list itself: every cluster and RBN spot, with the Spots screen's search and Filter chips (Heard on my continent and Hide worked start on). A click on a row works the station exactly as it does on the Spots screen: the radio goes to the spot's frequency and mode, and the matching cockpit opens.
 - **POTA / SOTA** is the POTA/SOTA screen's hunter list itself: the POTA, SOTA and Both tabs, Hide worked today, Refresh and **HUNT**, which tags your next contact with the park or summit and goes to the station, as it does on that screen. Its band, mode and sort choices open on its Filter button.
 
-Neither box transmits. In the Connect pop-out (the dashboard window) the two boxes work through that window's own Needed and POTA/SOTA boards, the paths its board pop-outs use, and the main window follows the Work to the matching cockpit. Each keeps its own filters, apart from its screen's, so a chip in one never moves the other. The Spots box drops columns as it narrows (call, frequency and mode at its narrowest; the age, country and comment from about 360 px; every column from about 640 px) and scrolls inside itself. The wall display (TV page) is served no spot list, so there each box shows one line saying the list is not available.
+Neither box transmits. In the Conditions pop-out (the dashboard window) the two boxes work through that window's own Needed and POTA/SOTA boards, the paths its board pop-outs use, and the main window follows the Work to the matching cockpit. Each keeps its own filters, apart from its screen's, so a chip in one never moves the other. The Spots box drops columns as it narrows (call, frequency and mode at its narrowest; the age, country and comment from about 360 px; every column from about 640 px) and scrolls inside itself. The wall display (TV page) is served no spot list, so there each box shows one line saying the list is not available.
 
 ---
 
@@ -178,7 +178,7 @@ In Simple mode each acronym carries a tooltip gloss so you do not need to memori
 
 ## Now-Bar
 
-The Now-Bar is a persistent one-line strip visible across **all** nav sections — you never need to navigate to Connect to see propagation health.
+The Now-Bar is a persistent one-line strip visible across **all** nav sections — you never need to navigate to Conditions to see propagation health.
 
 It shows:
 
@@ -186,7 +186,7 @@ It shows:
 - **Getting-out count** — how many PSK Reporter stations currently hear you
 - **Top DXpedition need** — entity, band, and likelihood for your highest-priority active DXpedition
 
-The Band chip (→ Connect) and the Need chip (→ DXpeditions board) are clickable. The middle getting-out chip is informational only and has no click action.
+The Band chip (→ Conditions) and the Need chip (→ DXpeditions board) are clickable. The middle getting-out chip is informational only and has no click action.
 
 ### Feed-health pills
 

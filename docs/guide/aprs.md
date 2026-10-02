@@ -442,7 +442,7 @@ anything**, and nothing was uploaded to make this picture — the figures are a 
 ## Related guides
 
 - [Phone (SSB)](phone.md) — the FM side of the same radio, repeaters and CTCSS
-- [Connect — map + propagation](connect.md) — the full map, with everything this
+- [Conditions — map + propagation](connect.md) — the full map, with everything this
   one deliberately leaves off
 - [Settings reference](settings-reference.md) — the Radio tab's Rig & CAT and
   Audio fieldsets, and the Features toggles this section depends on

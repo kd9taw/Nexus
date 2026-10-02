@@ -155,7 +155,7 @@ cards.
    of day, the histogram is describing your *timed* QSOs only — typically the
    ones Nexus logged, not the ones you imported.
 3. Use the shape to choose a session time, then check it against the band with
-   [Connect](connect.md) — Stats tells you when *you* have been on, not when the
+   [Conditions](connect.md) — Stats tells you when *you* have been on, not when the
    band was open.
 
 <!-- TODO: capture screenshot — the Activity by hour (UTC) card with a bar tooltip open, and the "not shown — imported with a date but no time of day" note visible beneath it -->

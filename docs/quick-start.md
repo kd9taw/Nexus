@@ -270,7 +270,7 @@ You're on the air. When you want to go deeper, each section has its own guide:
 
 - [Operate: FT8 / FT4](manual/Operate-FT8-FT4.md) — the full click model, split, Hound, directed CQ, and every keyboard shortcut.
 - [Needed board & hunting](manual/Needed-and-Hunting.md) — how the ranking and evidence rules work.
-- [Connect: map & propagation](manual/Connect-Propagation.md) — the globe, opening detector, and band advisor.
+- [Conditions: map & propagation](manual/Connect-Propagation.md) — the globe, opening detector, and band advisor.
 - [Phone](manual/Phone.md) and [CW](manual/CW.md) — the voice and Morse cockpits.
 - [POTA / SOTA](manual/POTA-SOTA.md) and [Field Day](manual/Field-Day.md) — hunting and event operating.
 - [Logbook & awards](manual/Logbook-and-Awards.md) and [Integrations](manual/Integrations.md) — DXCC/WAS/WAZ math and the LoTW/QRZ/ClubLog/eQSL connectors.
