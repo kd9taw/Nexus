@@ -103,6 +103,13 @@ pub struct Channel {
     pub dtcs_tx_only: bool,
     pub mode: ChanMode,
     pub comment: String,
+    /// How the machine links beyond its own coverage, as its directory gives it ("IRLP 3570",
+    /// "AllStar 2462", "DMR ID 314158"): tokens the exports write after the comment
+    /// ([`Channel::export_comment`]). Apart from `comment` because Program's naming engine reads
+    /// that as the town a callsign-less channel is named from. Not written when there are none, so
+    /// a list without links saves exactly as before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
     // ── forward-compat (persisted now, exported in v2) ──
     pub dmr_color_code: Option<u8>,
     pub dmr_timeslot: Option<u8>,
@@ -127,6 +134,7 @@ impl Default for Channel {
             dtcs_tx_only: false,
             mode: ChanMode::Fm,
             comment: String::new(),
+            links: Vec::new(),
             dmr_color_code: None,
             dmr_timeslot: None,
             dmr_talkgroup: None,
@@ -146,6 +154,19 @@ impl Channel {
             Duplex::Minus => self.rx_mhz - self.offset_mhz,
             Duplex::Split => self.offset_mhz,
         }
+    }
+
+    /// The comment both exports write: the channel's own, then its links and its DMR colour code,
+    /// the parts there are joined with "; " ("Seattle; IRLP 3570; AllStar 2462; CC1"). Neither
+    /// file has a column for those two, and a radio's DMR side is set up from them by hand.
+    pub fn export_comment(&self) -> String {
+        let colour = self.dmr_color_code.map(|cc| format!("CC{cc}"));
+        std::iter::once(self.comment.clone())
+            .chain(self.links.iter().cloned())
+            .chain(colour)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 }
 
@@ -200,7 +221,7 @@ pub fn sanitize_name(name: &str, max_len: usize) -> String {
 /// Generic CSV export — a plain spreadsheet-friendly dump (Anytone CPS / RT
 /// Systems users copy columns from it; it is NOT the CHIRP format, see
 /// [`crate::chirp`]). `attribution` becomes trailing comment lines ("" = none), one per line
-/// of it ([`attribution_lines`]).
+/// of it ([`attribution_lines`]). `Comment` is [`Channel::export_comment`], as in CHIRP's file.
 pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
     let mut out = String::from(
         "Channel,Name,RX Frequency (MHz),TX Frequency (MHz),Duplex,Offset (MHz),\
@@ -242,7 +263,7 @@ pub fn to_generic_csv(channels: &[Channel], attribution: &str) -> String {
             c.ctone_hz,
             c.dtcs_code,
             mode,
-            csv_field(&c.comment),
+            csv_field(&c.export_comment()),
         ));
     }
     out.push_str(&attribution_lines(attribution));
@@ -395,5 +416,42 @@ mod tests {
         let json = serde_json::to_string(&send_only).unwrap();
         assert!(json.contains("\"dtcsTxOnly\":true"), "{json}");
         assert_eq!(serde_json::from_str::<Channel>(&json).unwrap(), send_only);
+    }
+
+    /// The exports' comment: the channel's own, then its links and its colour code, the parts
+    /// there are joined with "; ". A channel with neither writes its comment unchanged.
+    #[test]
+    fn the_export_comment_adds_links_and_the_colour_code_after_the_comment() {
+        let ch = |comment: &str, links: &[&str], cc: Option<u8>| Channel {
+            comment: comment.into(),
+            links: links.iter().map(|l| l.to_string()).collect(),
+            dmr_color_code: cc,
+            ..Channel::default()
+        };
+        assert_eq!(
+            ch("Seattle", &["IRLP 3570", "AllStar 2462"], Some(1)).export_comment(),
+            "Seattle; IRLP 3570; AllStar 2462; CC1"
+        );
+        assert_eq!(ch("", &["IRLP 3570"], None).export_comment(), "IRLP 3570");
+        assert_eq!(ch("", &[], Some(2)).export_comment(), "CC2");
+        assert_eq!(ch("Seattle", &[], None).export_comment(), "Seattle");
+        assert_eq!(ch("", &[], None).export_comment(), "");
+    }
+
+    /// A channel without links saves exactly as before: no `links` key, and a file written before
+    /// links existed reads with none.
+    #[test]
+    fn a_channel_without_links_saves_as_before() {
+        let plain = serde_json::to_value(Channel::default()).unwrap();
+        assert!(plain.get("links").is_none(), "{plain}");
+        let old: Channel = serde_json::from_value(plain).unwrap();
+        assert!(old.links.is_empty());
+        let linked = Channel {
+            links: vec!["IRLP 3570".into()],
+            ..Channel::default()
+        };
+        let v = serde_json::to_value(&linked).unwrap();
+        assert_eq!(v["links"], serde_json::json!(["IRLP 3570"]));
+        assert_eq!(serde_json::from_value::<Channel>(v).unwrap(), linked);
     }
 }

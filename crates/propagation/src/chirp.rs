@@ -26,7 +26,8 @@ pub const CHIRP_HEADER: &str = "Location,Name,Frequency,Duplex,Offset,Tone,rTone
 /// filter is a safety net so a digital channel can never corrupt an import).
 /// `name_cap` = the per-radio display limit chosen in the UI (CHIRP would clamp
 /// at copy time anyway; capping here makes the file match the preview exactly).
-/// `attribution` ("" = none) becomes trailing comment lines, one per line of it.
+/// `attribution` ("" = none) becomes trailing comment lines, one per line of it. `Comment` is
+/// [`Channel::export_comment`]: the channel's own, then its links and DMR colour code.
 pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) -> String {
     let mut out = String::from(CHIRP_HEADER);
     out.push('\n');
@@ -64,7 +65,7 @@ pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) ->
             c.ctone_hz,
             c.dtcs_code,
             mode,
-            csv_field(&c.comment),
+            csv_field(&c.export_comment()),
             c.dtcs_code,
             cross,
         ));
