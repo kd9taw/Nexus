@@ -22681,6 +22681,13 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
 }
+/* In the stacked layout the list sits at its 120 px floor and the panel scrolls, but a map that
+   short is no map: at 1024×768 its canvas was 53 px tall under its words (Chrome, 2026-10-02). So
+   there the map floors at two fifths of the window, and the panel scrolls a little further. */
+[data-viewport='sm'] .rp-map,
+[data-viewport='xs'] .rp-map {
+  min-height: max(120px, calc(0.42 * var(--vh-eff, 100vh)));
+}
 .rp-map-stage {
   position: relative;
   flex: 1 1 0px;
