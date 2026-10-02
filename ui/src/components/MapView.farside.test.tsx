@@ -44,6 +44,8 @@ class RO {
 /** Every call a canvas's context took, in order. */
 type Op = { k: string; a: unknown[] }
 const opsOf = new Map<HTMLCanvasElement, Op[]>()
+/** How wide the recording context measures a text, per character: 0 unless a test sets it. */
+let charW = 0
 function recordingContext(canvas: HTMLCanvasElement) {
   const ops: Op[] = []
   opsOf.set(canvas, ops)
@@ -54,7 +56,7 @@ function recordingContext(canvas: HTMLCanvasElement) {
       if (k === 'canvas') return canvas
       return (...a: unknown[]) => {
         ops.push({ k: String(k), a })
-        if (k === 'measureText') return { width: 0 }
+        if (k === 'measureText') return { width: charW * String(a[0]).length }
         return { addColorStop() {} }
       }
     },
@@ -78,6 +80,7 @@ beforeEach(() => {
   feeds.sats = null
   feeds.aurora = null
   feeds.pca = null
+  charW = 0
   W = 600
   H = 400
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
@@ -182,6 +185,22 @@ function pathThrough(canvas: HTMLCanvasElement, p: [number, number]): Op[] {
   if (i < 0) return []
   const fill = ops.findIndex((o, j) => j > i && o.k === 'fill')
   return ops.slice(ops.map((o) => o.k).lastIndexOf('beginPath', i), fill < 0 ? undefined : fill)
+}
+/** The texts `label` that `canvas` wrote: an opening's tag reads band and mode. */
+const tagsOf = (canvas: HTMLCanvasElement, label: string) =>
+  (opsOf.get(canvas) ?? []).filter((o) => o.k === 'fillText' && o.a[0] === label)
+/** The direction of (x, y) from the centre of the globe, in degrees clockwise from up. On a globe centred
+ *  on the QTH, that is the bearing from home. */
+const angleAt = (x: number, y: number) => (Math.atan2(x - W / 2, H / 2 - y) * 180) / Math.PI
+/** A tag's box as the map writes it, centred on its x with its bottom on its y, `charW` px a character
+ *  wide and 10 px tall (its font): how far its outer corner reaches from the centre of the globe, and the
+ *  direction of its middle from there. */
+function tagBox(op: Op): { reach: number; angle: number } {
+  const x = op.a[1] as number
+  const y = op.a[2] as number
+  const hw = (charW * String(op.a[0]).length) / 2
+  const corners = [-hw, hw].flatMap((dx) => [y - 10, y].map((cy) => Math.hypot(x + dx - W / 2, cy - H / 2)))
+  return { reach: Math.max(...corners), angle: angleAt(x, y - 5) }
 }
 
 describe('the control: this test can see the far point, where the map shows it', () => {
@@ -522,14 +541,32 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
     expect(outside.length, "the horizon it fills to, between its radials (not the rest of the globe's)").toBe(0)
   })
 
-  it('the opening sectors: a far edge behind the globe is not tagged through it, and a near one still is', async () => {
+  it('the opening sectors: a far edge behind the globe is tagged where the wedge meets the globe’s edge, inside it — and a near one where it always was', async () => {
     layers(['openings'])
+    charW = 6
+    const far = opening('20m', 'F2', 340, 15_000)
     const near = opening('2m', 'Tropo', 90, 1_200)
-    const r = await mount({ prop: snap({ openings: [opening('20m', 'F2', 340, 15_000), near] }) })
-    const tag = at(farEdge(near)[8])
-    expect(drewAt(mapCanvas(r.container), tag[0], tag[1] - 3, ['fillText']), 'CONTROL: the near opening, tagged at its far edge').toBe(true)
-    expect(texts(), 'CONTROL: its tag reads band and mode').toContain('2m Tropo')
-    expect(texts(), 'the far opening, tagged through the globe').not.toContain('20m F2')
+    const r = await mount({ prop: snap({ openings: [far, near] }) })
+    const canvas = mapCanvas(r.container)
+    // A far edge facing the viewer keeps its tag exactly where it was: 3 px over the edge's middle.
+    const nearTip = at(farEdge(near)[8])
+    const nearTags = tagsOf(canvas, '2m Tropo')
+    expect(nearTags.length, 'CONTROL: the near opening is tagged, band and mode').toBeGreaterThan(0)
+    const moved = nearTags.filter((t) => Math.hypot((t.a[1] as number) - nearTip[0], (t.a[2] as number) - (nearTip[1] - 3)) >= 0.5)
+    expect(moved, 'CONTROL: over the middle of its far edge, where it always was').toEqual([])
+    // The long one's far edge is behind the globe (the wedge test above). Its tag is not written there, which
+    // is straight through the planet, but where the wedge meets the globe's edge: on its centre line, inside.
+    const tip = at(farEdge(far)[8])
+    expect(drewAt(canvas, tip[0], tip[1] - 3, ['fillText']), 'the far opening, tagged through the globe').toBe(false)
+    const tags = tagsOf(canvas, '20m F2')
+    expect(tags.length, 'the far opening, tagged').toBeGreaterThan(0)
+    const R = (Math.min(W, H) / 2) * 0.92
+    for (const t of tags) {
+      const box = tagBox(t)
+      expect(box.reach, 'the tag’s outer corner, inside the disc').toBeLessThanOrEqual(R)
+      expect(box.reach, 'the tag’s outer corner, at the globe’s edge').toBeGreaterThan(R - 3)
+      expect(Math.abs(((box.angle - far.bearingDeg + 540) % 360) - 180), 'the tag, on the wedge’s centre line').toBeLessThan(0.5)
+    }
   })
 
   it('the opening sectors, on a globe turned away from the QTH: neither the wedge nor its tag', async () => {
@@ -560,5 +597,47 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
     expect(texts(), 'its tag, through the globe').not.toContain('2m Tropo')
     const traced = (opsOf.get(canvas) ?? []).filter((op) => op.k === 'moveTo' || op.k === 'lineTo')
     expect(traced.length, 'any outline at all on the face of the turned globe, the wedge being wholly behind it').toBe(0)
+  })
+
+  it('the opening sectors, on a globe turned until only the end of a long wedge shows: tagged where that end meets the globe’s edge', async () => {
+    layers(['openings'])
+    charW = 6
+    const o = opening('20m', 'F2', 340, 15_000)
+    const r = await mount({ prop: snap({ openings: [o] }) })
+    const canvas = mapCanvas(r.container)
+    // Spin the globe to face 13.5°S 10.2°E, as the operator drags it (0.32° per pixel at zoom 1). EN52 is then
+    // 106° away and the middle of the far edge 95°, while the edge's eastern end, over India, comes round the limb.
+    const dx = -310
+    const dy = -175
+    const view: MapView3 = { ...HOME, rotate: [-ME.lon + dx * 0.32, -ME.lat - dy * 0.32] }
+    for (const ops of opsOf.values()) ops.length = 0
+    await act(async () => {
+      fireEvent.pointerDown(canvas, { clientX: 1000, clientY: 1000, pointerId: 1 })
+      fireEvent.pointerMove(canvas, { clientX: 1000 + dx, clientY: 1000 + dy, pointerId: 1 })
+      fireEvent.pointerUp(canvas, { clientX: 1000 + dx, clientY: 1000 + dy, pointerId: 1 })
+    })
+    const proj = makeProjection('globe', ME, W, H, view)
+    const edge = farEdge(o)
+    expect(inView('globe', proj, ME), 'CONTROL: the QTH is behind the turned globe').toBe(false)
+    expect(inView('globe', proj, edge[8]), 'CONTROL: so is the middle of the far edge, where the tag belongs').toBe(false)
+    const facing = edge.filter((ll) => inView('globe', proj, ll))
+    expect(facing.length, 'CONTROL: the far edge’s eastern end faces the viewer').toBeGreaterThan(0)
+    // The end of the wedge that is drawn, and the stretch of the globe's edge it reaches.
+    const R = (Math.min(W, H) / 2) * 0.92
+    const corner = at(facing[facing.length - 1], 'globe', view)
+    const limb = pathThrough(canvas, corner).filter(
+      (op) => (op.k === 'moveTo' || op.k === 'lineTo') && Math.abs(Math.hypot((op.a[0] as number) - W / 2, (op.a[1] as number) - H / 2) - R) < 0.5,
+    )
+    expect(limb.length, 'CONTROL: the end of the wedge is drawn out to the globe’s edge').toBeGreaterThan(1)
+    const tags = tagsOf(canvas, '20m F2')
+    expect(tags.length, 'the end of the wedge that shows, tagged').toBeGreaterThan(0)
+    for (const t of tags) {
+      const box = tagBox(t)
+      expect(box.reach, 'the tag’s outer corner, inside the disc').toBeLessThanOrEqual(R)
+      expect(box.reach, 'the tag’s outer corner, at the globe’s edge').toBeGreaterThan(R - 3)
+      // Seen from the centre of the globe, between the two ends of the stretch of edge the wedge reaches.
+      const rel = limb.map((op) => ((angleAt(op.a[0] as number, op.a[1] as number) - box.angle + 540) % 360) - 180)
+      expect(Math.min(...rel) < 0 && Math.max(...rel) > 0, 'the tag, on the stretch of the globe’s edge the wedge reaches').toBe(true)
+    }
   })
 })

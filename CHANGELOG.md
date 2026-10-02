@@ -567,10 +567,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   centred on the US Midwest, a 20 m F2 opening 15,000 km long toward Southeast Asia ended over the
   Arctic, tagged "20m F2" there, and with the globe turned to Australia a 2 m tropo opening at home
   still showed, tag and all, over the western Pacific. Now the wedge stops at the edge of the
-  globe, as range rings and satellite footprints do, and its band and mode tag shows only while the
-  wedge's far end is on your side of the planet. On the Flat map a long wedge now follows its
-  bearings as well: that F2 wedge, which runs over the pole, was drawn as a thin sliver straight
-  across the Atlantic and Africa. The Beam map and the 3D globe are unchanged.
+  globe, as range rings and satellite footprints do. Its band and mode tag stays at the wedge's far
+  end while that end is on your side of the planet; when the far end is behind the planet, the tag
+  is written just inside the edge of the globe, where the wedge meets it, so that F2 opening is
+  still labelled "20m F2". A wedge wholly behind the planet shows nothing, tag included. On the
+  Flat map a long wedge now follows its bearings as well: that F2 wedge, which runs over the pole,
+  was drawn as a thin sliver straight across the Atlantic and Africa. The Beam map and the 3D globe
+  are unchanged.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
