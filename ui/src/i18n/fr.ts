@@ -1752,7 +1752,7 @@ export const FR: PartialCatalog = {
   "js8.dock.arm.differs": "Deux gestes, là où JS8Call n’en a qu’un : cet interrupteur est le second, la pastille TX d’en-tête est le premier, et la pastille n’affiche ARMÉ que si les deux sont actifs.",
   "js8.dock.pending.txOff": "Répondrait à {{to}} — TX est coupé, rien n’émet : {{text}}",
   "js8.toast.idleTripped":
-    "Veille d'inactivité JS8 : {{min}} min sans action de l'opérateur — heartbeat, autoreply et relay sont coupés. TX reste tel quel ; tout envoi ou commutateur les réactive.",
+    "Veille d'inactivité JS8 : {{min}} min sans action de l'opérateur — HB, AUTOREPLY, RELAY, HB ACK et la répétition de CQ sont coupés. TX reste tel quel. Dès que vous envoyez un message ou une commande, actionnez un commutateur, choisissez la vitesse ou cliquez sur Lu ou Supprimer dans la boîte de réception, AUTOREPLY, RELAY et HB ACK reviennent tels que les Réglages les définissent ; HB et la répétition de CQ restent coupés jusqu’à ce que vous les rallumiez.",
   "js8.dock.confirm": "Une émission est en attente de réponse automatique : {{text}} — voulez-vous envoyer cette émission ?",
   "js8.dock.confirm.yes.label": "Oui",
   "js8.dock.confirm.yes.title": "L’envoyer : elle part à la période suivante, après toutes les vérifications TX.",
@@ -1769,7 +1769,7 @@ export const FR: PartialCatalog = {
   "js8.dock.origin.cqRepeat": "CQ répété",
   "js8.dock.idle": "Inactif {{min}}/{{limit}} min",
   "js8.dock.idle.off": "Chien de garde d’inactivité désactivé",
-  "js8.dock.idle.tripped": "Chien de garde d’inactivité déclenché — heartbeats, réponse automatique et relais sont arrêtés jusqu’à votre prochain envoi",
+  "js8.dock.idle.tripped": "Chien de garde d’inactivité déclenché — votre prochain envoi ou commutateur rétablit AUTOREPLY, RELAY et HB ACK ; HB et la répétition de CQ restent coupés jusqu’à ce que vous les rallumiez",
   "js8.toast.noAddressee": "Une commande a besoin d’une station — mettez un indicatif, @ALLCALL ou un groupe dans À",
   "js8.toast.answer.failed": "Impossible de répondre à la question",
   "js8.toast.drop.failed": "Impossible de vider la file",

@@ -5633,7 +5633,7 @@ export const DE: PartialCatalog = {
   "js8.dock.arm.differs": "Zwei Schritte, wo JS8Call einen hat: dieser Schalter ist der zweite, die TX-Pille in der Kopfzeile ist der erste, und der Chip zeigt SCHARF nur, solange beide an sind.",
   "js8.dock.pending.txOff": "Würde {{to}} antworten — TX ist aus, nichts tastet: {{text}}",
   "js8.toast.idleTripped":
-    "JS8-Leerlaufwächter: {{min}} min ohne Bedienereingriff – heartbeat, autoreply und relay sind aus. TX bleibt wie eingestellt; jedes Senden oder jeder Schalter aktiviert sie wieder.",
+    "JS8-Leerlaufwächter: {{min}} min ohne Bedienereingriff – HB, AUTOREPLY, RELAY, HB ACK und die CQ-Wiederholung sind aus. TX bleibt wie eingestellt. Sobald du sendest, einen Schalter drückst, die Geschwindigkeit wählst oder im Posteingang auf Gelesen oder Löschen klickst, kommen AUTOREPLY, RELAY und HB ACK so zurück, wie sie in den Einstellungen stehen; HB und die CQ-Wiederholung bleiben aus, bis du sie einschaltest.",
   "js8.dock.confirm": "Eine Aussendung steht zur automatischen Antwort bereit: {{text}} — möchtest du sie senden?",
   "js8.dock.confirm.yes.label": "Ja",
   "js8.dock.confirm.yes.title": "Senden: sie geht in der nächsten Periode raus, durch alle TX-Prüfungen.",
@@ -5650,7 +5650,7 @@ export const DE: PartialCatalog = {
   "js8.dock.origin.cqRepeat": "CQ-Wiederholung",
   "js8.dock.idle": "Leerlauf {{min}}/{{limit}} min",
   "js8.dock.idle.off": "Leerlauf-Wächter aus",
-  "js8.dock.idle.tripped": "Leerlauf-Wächter ausgelöst — Heartbeats, Auto-Antwort und Relay sind aus, bis du etwas sendest",
+  "js8.dock.idle.tripped": "Leerlauf-Wächter ausgelöst — mit deinem nächsten Senden oder Schalter kommen AUTOREPLY, RELAY und HB ACK zurück; HB und die CQ-Wiederholung bleiben aus, bis du sie einschaltest",
   "js8.toast.noAddressee": "Ein Befehl braucht eine Station — Rufzeichen, @ALLCALL oder Gruppe ins An-Feld",
   "js8.toast.answer.failed": "Die Rückfrage konnte nicht beantwortet werden",
   "js8.toast.drop.failed": "Warteschlange konnte nicht geleert werden",

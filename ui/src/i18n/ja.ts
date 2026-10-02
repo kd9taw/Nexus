@@ -5274,7 +5274,7 @@ export const JA: PartialCatalog = {
   "js8.dock.arm.differs": "JS8Call では1段階のところ、ここは2段階です。このスイッチが2段階目、1段階目はヘッダーの TX ピルで、両方がオンのときだけチップが ARMED になります。",
   "js8.dock.pending.txOff": "{{to}} へ応答するはずでした — TX がオフのため何も送信しません: {{text}}",
   "js8.toast.idleTripped":
-    "JS8 アイドル監視: {{min}} 分間オペレーター操作がないため、heartbeat・autoreply・relay をオフにしました。TX はそのままです。送信またはスイッチ操作で再度有効になります。",
+    "JS8 アイドル監視: {{min}} 分間オペレーター操作がないため、HB・AUTOREPLY・RELAY・HB ACK・CQ の繰り返しをオフにしました。TX はそのままです。次の送信、スイッチ操作、速度の選択、または受信箱での既読・削除で、AUTOREPLY・RELAY・HB ACK が設定どおりに戻ります。HB と CQ の繰り返しは、スイッチを入れ直すまでオフのままです。",
   "js8.dock.confirm": "自動応答の送信が待機中です: {{text}} — この送信を行いますか？",
   "js8.dock.confirm.yes.label": "はい",
   "js8.dock.confirm.yes.title": "送信する: 次の周期に、すべての TX チェックを通って送信されます。",
@@ -5291,7 +5291,7 @@ export const JA: PartialCatalog = {
   "js8.dock.origin.cqRepeat": "CQ 繰り返し",
   "js8.dock.idle": "アイドル {{min}}/{{limit}} 分",
   "js8.dock.idle.off": "アイドル監視オフ",
-  "js8.dock.idle.tripped": "アイドル監視が作動 — 何か送信するまでハートビート・自動応答・リレーはオフです",
+  "js8.dock.idle.tripped": "アイドル監視が作動 — 次の送信かスイッチ操作で AUTOREPLY・RELAY・HB ACK が戻ります。HB と CQ の繰り返しは、スイッチを入れ直すまでオフのままです",
   "js8.toast.noAddressee": "コマンドには宛先が必要です — 宛先欄にコールサイン、@ALLCALL、またはグループを入力してください",
   "js8.toast.answer.failed": "確認に応答できませんでした",
   "js8.toast.drop.failed": "キューを破棄できませんでした",
