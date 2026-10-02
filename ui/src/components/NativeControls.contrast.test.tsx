@@ -66,6 +66,7 @@ import {
   BASE_MODES,
   SENTINEL_MODES,
   chainOf,
+  compoundMatches,
   contrast,
   expandWith,
   parseRules,
@@ -129,9 +130,28 @@ function once<T>(rules: Rule[], key: string, make: () => T): T {
   return byKey.get(key) as T
 }
 const keyOf = (chain: El[]) => JSON.stringify(chain.map((e) => [e.tag, e.classes, e.attrs]))
+/** The compound a rule puts on the element itself, split off its selector the way reachesChain splits it. */
+const SUBJECT = new WeakMap<Rule, string | undefined>()
+function subjectOf(rule: Rule): string | undefined {
+  if (!SUBJECT.has(rule)) SUBJECT.set(rule, rule.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop())
+  return SUBJECT.get(rule)
+}
+/** The rules that can win `props` on `el`: those that declare one of them (winnerAt passes over the rest) and whose subject
+ *  matches `el` (reachesChain gives up on any other before it reads an ancestor or the mode). So the cut is made once per
+ *  element, not once per mode, and winnerAt over it names the same winner as over every rule. */
+const cutFor = (rules: Rule[], el: El, props: string[]) =>
+  once(rules, `c|${keyOf([el])}|${props.join()}`, () =>
+    rules.filter((r) => {
+      const subject = subjectOf(r)
+      return r.decls.some((d) => props.includes(d.prop)) && !!subject && compoundMatches(subject, el)
+    }),
+  )
+/** Only a rule that declares a custom property can set one: tokensAt over those alone gives the same tokens. */
+const tokenRules = (rules: Rule[]) => once(rules, 'tokens', () => rules.filter((r) => r.decls.some((d) => d.prop.startsWith('--'))))
 const win = (rules: Rule[], mode: Mode, chain: El[], ...props: string[]) =>
-  once(rules, `w|${mode}|${keyOf(chain)}|${props.join()}`, () => winnerAt(rules, mode, chain, ...props))
-const tokensFor = (rules: Rule[], mode: Mode, chain: El[]) => once(rules, `t|${mode}|${keyOf(chain)}`, () => tokensAt(rules, mode, chain))
+  once(rules, `w|${mode}|${keyOf(chain)}|${props.join()}`, () => winnerAt(cutFor(rules, chain[chain.length - 1], props), mode, chain, ...props))
+const tokensFor = (rules: Rule[], mode: Mode, chain: El[]) =>
+  once(rules, `t|${mode}|${keyOf(chain)}`, () => tokensAt(tokenRules(rules), mode, chain))
 const colour = (tokens: Map<string, string>, value: string, backdrop: Rgb): Rgb => {
   // `background: none` is a transparent face, as `transparent` is.
   const c = toRgb(expandWith(tokens, value === 'none' ? 'transparent' : value), backdrop)

@@ -644,6 +644,21 @@ async function settle() {
   })
 }
 
+/** Each stop control on the screen, by label: the buttons `screen.queryAllByRole('button', { name })`
+ *  finds for its name, in the same order. That query works out the accessible name of every button
+ *  on the screen before it matches one, so a query per control worked out the same names once per
+ *  control. Here one query works them out once, and each control's name is matched against them. */
+function stopsOnScreen(controls: Array<[label: string, name: RegExp]>): Map<string, HTMLButtonElement[]> {
+  const names = new Map<Element, string>()
+  const all = screen.queryAllByRole('button', {
+    name: (accessible, el) => {
+      names.set(el, accessible)
+      return controls.some(([, name]) => name.test(accessible))
+    },
+  }) as HTMLButtonElement[]
+  return new Map(controls.map(([label, name]) => [label, all.filter((e) => name.test(names.get(e)!))]))
+}
+
 describe('the stop line, computed against the real cockpits', () => {
   it.each(CASES.map((c) => [c.cockpit, c] as const))(
     '%s: no ⊞ panel id gates any control that stops a transmission',
@@ -654,14 +669,14 @@ describe('the stop line, computed against the real cockpits', () => {
       // when idle: RTTY's and SSTV's Stop are dead until `sending`. That is a property of
       // the transmitter, not of the ⊞ menu, which is exactly why the baseline is the
       // comparison rather than `disabled === false`.)
-      const found = (name: RegExp) => screen.queryAllByRole('button', { name })
       // Explicit <string>: an empty literal would infer `never` and fail the case's own
       // PanelLayoutApi<P>.
       c.render(panelsWith<string>([]))
       await settle()
+      const shown = stopsOnScreen(c.stopControls)
       const baseline = new Map(
-        c.stopControls.map(([label, name]) => {
-          const els = found(name) as HTMLButtonElement[]
+        c.stopControls.map(([label]) => {
+          const els = shown.get(label)!
           expect(
             els.length,
             `${c.cockpit}: "${label}" is not on screen with every panel SHOWN — the sweep ` +
@@ -679,8 +694,9 @@ describe('the stop line, computed against the real cockpits', () => {
       for (const removed of combos) {
         c.render(panelsWith(removed))
         await settle()
-        for (const [label, name] of c.stopControls) {
-          const els = found(name) as HTMLButtonElement[]
+        const on = stopsOnScreen(c.stopControls)
+        for (const [label] of c.stopControls) {
+          const els = on.get(label)!
           expect(
             els.length,
             `${c.cockpit}: hiding {${removed.join(', ')}} took "${label}" with it — the ` +
@@ -695,6 +711,11 @@ describe('the stop line, computed against the real cockpits', () => {
         cleanup()
       }
     },
+    // A budget for real work (2026-10-02): eleven fresh mounts for Phone, each followed by one
+    // accessible-name pass over every button, and Phone, the first case, also pays the file's
+    // first render. It took 0.55 s alone, 2.6 s in the full suite, 3.0 s at a fifth of a CPU
+    // and 5.9 s at a tenth, past the 5 s default.
+    20_000,
   )
 
   it('the two Sub-receiver cases really draw a SUB row — else they would sweep a copy of their twin', async () => {
@@ -809,12 +830,12 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
     '%s: 50 random placements, every id hidden singly and all at once, every stop control where it was',
     async (_name, c) => {
       const spec = ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)!.arrange! as ArrangeSpec<string>
-      const found = (name: RegExp) => screen.queryAllByRole('button', { name })
       const order = () => [...document.querySelectorAll('.cockpit-panes .pane-frame')].map((f) => f.getAttribute('data-pane'))
       c.render(panelsWith<string>([]))
       await settle()
       const stock = order()
-      const baseline = new Map(c.stopControls.map(([label, name]) => [label, (found(name) as HTMLButtonElement[]).some((e) => !e.disabled)]))
+      const shown = stopsOnScreen(c.stopControls)
+      const baseline = new Map(c.stopControls.map(([label]) => [label, shown.get(label)!.some((e) => !e.disabled)]))
       cleanup()
       let differs = 0
       const placements = randomPlacements(spec, 50, 20260929)
@@ -825,8 +846,9 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
           c.render(panelsWith(removed, place))
           await settle()
           if (removed.length === 0 && order().join() !== stock.join()) differs++
-          for (const [label, name] of c.stopControls) {
-            const els = found(name) as HTMLButtonElement[]
+          const on = stopsOnScreen(c.stopControls)
+          for (const [label] of c.stopControls) {
+            const els = on.get(label)!
             const where = `${c.cockpit}, placement #${i} ${JSON.stringify(place)}, hiding {${removed.join(', ')}}`
             expect(els.length, `${where} took "${label}" with it`).toBeGreaterThan(0)
             expect(els.some((e) => !e.disabled), `${where} left "${label}" on screen but DISABLED`).toBe(baseline.get(label))
@@ -837,7 +859,12 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
       // The placements reached the region: most of them render in an order the stock one does not.
       expect(differs, `${c.cockpit}: the random placements left the region in its stock order — the sweep is reading nothing`).toBeGreaterThan(20)
     },
-    120_000,
+    // A budget for real work (2026-10-02): 550 fresh mounts a pass, each followed by one
+    // accessible-name pass over every button, and the time grows in step with the CPU share.
+    // Phone took 15 s alone, 57 s in the full suite, 83 s at a fifth of a CPU and 160 s at a
+    // tenth; CW 17 s alone and 90 s at a fifth. Only one of Phone's 50 placements repeats, so
+    // there is no repeated render left to skip.
+    240_000,
   )
 })
 
