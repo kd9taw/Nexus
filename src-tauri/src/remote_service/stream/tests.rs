@@ -289,6 +289,66 @@ fn an_offer_to_a_station_with_streaming_off_is_refused() {
     );
 }
 
+/// A settings document from 1.15.0, the release before the stream: the default document that
+/// release's UI fixtures carried (`git show v1.15.0:ui/src/components/__fixtures__/defaultSettings.json`).
+/// It predates the switch's key.
+const SETTINGS_1_15_0: &str = include_str!("../../../tests/fixtures/settings-1.15.0.json");
+
+/// ★ OFF BY DEFAULT, on a fresh install and on an update from 1.15.0 (the operator's ruling of
+/// 2026-10-02: the stream ships "off by default"). Nothing here turns the switch off. Each install's
+/// settings come through `Settings::load`, the path the app starts on (migrations included): no file
+/// at all, as on a first run, and 1.15.0's document. Each leaves the switch off, and a browser that
+/// is otherwise admitted (Remote on, approved for station controls at the radio, holding control
+/// under a live lease) is refused `streamDisabled`, the check before anything of a session exists.
+/// The CONTROL is the same offer once the operator turns the switch on.
+#[test]
+fn streaming_stays_off_on_a_fresh_install_and_after_an_update_until_it_is_turned_on() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let apply = |settings: tempo_app::settings::Settings| {
+        tempo_app::engine::engine_lock(&f.station.engine).apply_settings(settings);
+    };
+    let dir = std::env::temp_dir().join(format!("nexus-stream-off-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // A fresh install: no settings file yet.
+    let fresh = tempo_app::settings::Settings::load(&dir.join("settings.json"));
+    assert!(!fresh.remote_stream, "a fresh install's switch is on");
+    apply(fresh);
+    assert_eq!(
+        admit(&f.station, &offer(&f.lease), now),
+        Err(StreamReason::StreamDisabled),
+        "a fresh install streams before the switch is turned on"
+    );
+
+    // An update from 1.15.0: that release's settings file, loaded by this one.
+    assert!(
+        !SETTINGS_1_15_0.contains("remoteStream"),
+        "premise: 1.15.0 had no switch"
+    );
+    let path = dir.join("settings-1.15.0.json");
+    std::fs::write(&path, SETTINGS_1_15_0).unwrap();
+    let updated = tempo_app::settings::Settings::load(&path);
+    assert!(
+        !updated.remote_stream,
+        "the update from 1.15.0 turned the switch on"
+    );
+    apply(updated.clone());
+    assert_eq!(
+        admit(&f.station, &offer(&f.lease), now),
+        Err(StreamReason::StreamDisabled),
+        "an update from 1.15.0 streams before the switch is turned on"
+    );
+
+    // CONTROL: the operator turns it on at the shack, and the same offer gets past admission.
+    let mut on = updated;
+    on.remote_stream = true;
+    apply(on);
+    assert_eq!(admit(&f.station, &offer(&f.lease), now), passed());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A4's first lock, reached through admission: an admitted browser's plain-RTP offer is refused
 /// as an invalid offer.
 #[test]
