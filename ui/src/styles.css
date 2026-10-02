@@ -14890,6 +14890,31 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='xs'] .topbar {
   gap: var(--space-3);
 }
+/* The top bar at the small size (operator, 2026-10-01): four lines on the screens without
+   FT, two with the FT-only items out. Every screen but Operate and Tempo (`.topbar--ft`) drops
+   the mode pills, the Tx cycle, the slot countdown, Sync and DT. Operate and Tempo keep them,
+   the eleven pills folded into one mode button (`.tier-menu-btn`, never drawn above sm) and
+   the Tx cycle's small captions dropped. Larger windows are unchanged.
+   ⚠️ NOTHING HERE MAY REACH THE TX CLUSTER (`.op-controls`): on Field Day and every other
+   screen without a cockpit it is the only Stop TX. TopBar.small.test.tsx computes these
+   rules' winners on the real bar, cluster included. */
+.tier-menu-btn {
+  display: none;
+}
+[data-viewport='sm'] .topbar:not(.topbar--ft) :is(.tier-toggle, .slot-clock, .timesync, .dt-readout),
+[data-viewport='xs'] .topbar:not(.topbar--ft) :is(.tier-toggle, .slot-clock, .timesync, .dt-readout),
+[data-viewport='sm'] .topbar--ft .tier-toggle:not(.tx-period) > .tier-btn:not(.tier-menu-btn),
+[data-viewport='xs'] .topbar--ft .tier-toggle:not(.tx-period) > .tier-btn:not(.tier-menu-btn),
+[data-viewport='sm'] .topbar--ft .tx-period small,
+[data-viewport='xs'] .topbar--ft .tx-period small {
+  display: none;
+}
+[data-viewport='sm'] .topbar--ft .tier-menu-btn,
+[data-viewport='xs'] .topbar--ft .tier-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
 [data-viewport='sm'] .log-row,
 [data-viewport='xs'] .log-row {
   grid-template-columns: 0.6fr 1fr 0.5fr 2fr;

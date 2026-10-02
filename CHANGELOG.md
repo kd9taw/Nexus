@@ -617,6 +617,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Best Band → Region** is **Bands by region**, so nothing else on Connect is called "Conditions"
   and the two band boxes no longer read alike. A box's picker and **⋯ ▸ Add a tab** list the boxes
   under **Bands**, **Space weather**, **Activity** and **Station** instead of Panels, B2 and B3.
+- **On a small window the top bar takes two lines instead of four.** A small window is one under
+  1100 pixels wide after the text scale: 1024×768 at 100 % or more, 1366×768 at 125 % or more,
+  1920×1080 at 175 %. There, Connect, Needed, Spots, DXped, Logbook, Awards, Stats, Field Day,
+  POTA/SOTA, Memories, Program and Settings leave the FT items out of the bar: the eleven mode
+  buttons, the Tx cycle, the slot countdown, Sync and DT. Those are on FT and Tempo. TX Off, Tune,
+  Stop TX and Hold Tx stay in the bar on all twelve; on Field Day that is still the screen's Stop
+  TX. On FT and Tempo the eleven mode buttons become one button that shows the mode in use and
+  opens the list of all eleven, and Auto, Tx 1st and Tx 2nd lose their small "cycle", "even" and
+  "odd" captions, so FT's bar fits on one line at 1024×768 and 100 %. At 1024×768 and 175 % the
+  twelve screens' bar is three lines. Larger windows are unchanged, and the Remote changes the
+  same way.
 - **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
   message box holds text (you are typing, a reply waits there, or a message of yours is going out)
   or while a message to you is still arriving; a reply already queued waits until the box is
