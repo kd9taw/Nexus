@@ -22681,8 +22681,10 @@ button.sat-chip:disabled {
   color: var(--state-warn);
   border-color: color-mix(in srgb, var(--state-warn) 45%, transparent);
 }
-/* Under each row, across all its columns: the directories it came from with their date, and,
-   on a machine they disagree about, what each listed. */
+/* Under each row, across all its columns: how the machine links (its node numbers and DMR colour
+   code, when it has any), the directories it came from with their date, and, on a machine they
+   disagree about, what each listed. */
+.rp-links,
 .rp-src,
 .rp-differ {
   grid-column: 1 / -1;

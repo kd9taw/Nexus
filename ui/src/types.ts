@@ -4502,8 +4502,18 @@ export interface RepeaterRecord {
   /** The source's own date for this entry, as it writes it (RepeaterBook's "Last Update",
    * `2026-05-14`). Absent when it gives none: hearham and the RSGB list have no per-machine date. */
   updated?: string | null
+  /** How the machine links beyond its own coverage (`repeaters::Link`): hearham's internet node,
+   * on the network its directory names. Absent when there is none. */
+  links?: RepeaterLink[]
   distanceKm: number
   bearingDeg: number
+}
+
+/** One way onto a machine beyond its own coverage: the network (`allStar`, `irlp`, `dmrId` = the
+ * machine's DMR ID, `node` = a node whose network the directory does not name) and the number. */
+export interface RepeaterLink {
+  network: 'allStar' | 'irlp' | 'dmrId' | 'node'
+  node: string
 }
 
 /** One directory row behind a merged machine (`repeaters::SourceRef`). */
@@ -4593,6 +4603,9 @@ export interface ProgChannel {
   dtcsTxOnly?: boolean
   mode: 'fm' | 'nfm' | 'am' | 'dmr' | 'dstar' | 'fusion'
   comment: string
+  /** How the machine links beyond its own coverage ("IRLP 3570", "DMR ID 314158"): tokens the
+   *  exports write after the comment (`Channel::export_comment`). Absent when there are none. */
+  links?: string[]
   dmrColorCode?: number | null
   dmrTimeslot?: number | null
   dmrTalkgroup?: number | null

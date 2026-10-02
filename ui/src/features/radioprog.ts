@@ -108,6 +108,34 @@ export function bandOfMhz(mhz: number): string {
 
 export const BAND_CHIPS = ['2m', '70cm', '1.25m', '6m', '10m'] as const
 
+/** How close an output must be to a typed frequency to be ON it, MHz: 2.5 kHz, the merge's own
+ * same-channel tolerance (`SAME_CHANNEL_MHZ` in `repeaters.rs`). Under half the narrowest channel
+ * raster in use (6.25 kHz), so a typed frequency names one channel on any band plan (147.18 never
+ * finds 147.195 on a 15 kHz plan or 147.1875 on a 12.5 kHz one), while a directory that writes a
+ * 12.5 kHz channel to the kHz (438.5125 as 438.513) still matches it. */
+export const FREQ_MATCH_MHZ = 0.0025
+
+/** The search box's text read as a frequency in MHz, or null when it is not one: a number with a
+ * point or the decimal comma some languages write (147.18, 147.180, 438,5125), from 28 to
+ * 1300 MHz, 10 m to 23 cm. A callsign, a town or a lone digit stays a text filter. */
+export function frequencyQuery(q: string): number | null {
+  const t = q.trim()
+  if (!/^\d{2,4}([.,]\d{0,6})?$/.test(t)) return null
+  const mhz = Number(t.replace(',', '.'))
+  return mhz >= 28 && mhz <= 1300 ? mhz : null
+}
+
+/** Is a machine with this output on the typed frequency (within `FREQ_MATCH_MHZ`)? */
+export function onFrequency(outputMhz: number, mhz: number): boolean {
+  return Math.abs(outputMhz - mhz) <= FREQ_MATCH_MHZ + 1e-9
+}
+
+/** A frequency as Program prints one: four decimals, trailing zeros dropped (147.18, 438.5125,
+ * 147.0). */
+export function mhzLabel(mhz: number): string {
+  return mhz.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.0')
+}
+
 /** Band-aware auto radius (miles): the reach you'd realistically work the band
  * at HT/mobile power. Multiple bands → the widest; none selected → 50. */
 export function autoRadiusMi(bands: string[]): number {

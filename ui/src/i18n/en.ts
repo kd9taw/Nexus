@@ -4592,9 +4592,11 @@ export const EN = {
     'Also list DMR / D-STAR / Fusion machines (badged; programming them comes later)',
   'program.filters.onAir.label': 'On-air only',
   'program.filters.onAir.title': 'Hide machines the directory marks off-air',
-  'program.filters.search.placeholder': 'Filter call / city…',
+  'program.filters.search.placeholder': 'Call, city or MHz…',
   'program.filters.search.aria': 'Filter results',
+  'program.filters.search.title': 'A callsign or town filters the list. A frequency in MHz (147.18, 438.5125) shows every repeater on it, whatever the filters.',
   'program.count': '{{shown}} of {{total}} shown · nearest first',
+  'program.count.freq': '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · nearest first',
   'program.addAll.label': '＋ Add all shown',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',
@@ -4606,6 +4608,7 @@ export const EN = {
     'Pick a location and press <b>Fetch repeaters</b> — results land here; ADD the machines you want on your radio.',
   'program.results.none': 'No repeaters within {{radius}}.',
   'program.results.none.fm': 'No FM repeaters within {{radius}}.',
+  'program.results.none.freq': 'No repeater on {{freq}} MHz (±{{tol}} kHz) within {{radius}}.',
   'program.results.tryWider': 'Try {{radius}}',
   'program.results.showDigital': 'Show digital',
   'program.row.offAir': 'OFF-AIR',
@@ -4614,6 +4617,8 @@ export const EN = {
   // program.age.* prints it ("2d ago").
   'program.row.source.updated': '{{sources}} · updated {{date}}',
   'program.row.source.noDate': '{{sources}} · no date · fetched {{age}}',
+  'program.row.links.title': 'How this repeater links beyond its own coverage, as its directory lists it: AllStar, IRLP and DMR ID numbers, and its DMR color code (CC).',
+  'program.row.link.node': 'node {{node}}',
   // Where the directories disagree. `{{used}}` and `{{others}}` are a directory's name with what
   // it lists ("RSGB 88.5", "hearham 438.525", "RSGB FM+DMR", "hearham CC9"): tokens.
   'program.row.differ.label': 'Sources differ',

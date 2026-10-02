@@ -7,6 +7,9 @@ import {
   deriveNames,
   favoriteName,
   freqTail,
+  frequencyQuery,
+  mhzLabel,
+  onFrequency,
   repeaterMemory,
   rigRepeaterParams,
   sanitizeName,
@@ -257,5 +260,45 @@ describe('repeaterMemory', () => {
     const m = repeaterMemory(chan(), 'W9ABC 94')
     expect(m.lat).toBeUndefined()
     expect(m.lon).toBeUndefined()
+  })
+})
+
+describe('frequencyQuery', () => {
+  it('reads a frequency in MHz the ways an operator types one', () => {
+    expect(frequencyQuery('147.18')).toBe(147.18)
+    expect(frequencyQuery('147.180')).toBe(147.18)
+    expect(frequencyQuery(' 438.5125 ')).toBe(438.5125)
+    expect(frequencyQuery('438,5125')).toBe(438.5125)
+    expect(frequencyQuery('29.62')).toBe(29.62)
+    expect(frequencyQuery('1296.1')).toBe(1296.1)
+    expect(frequencyQuery('147')).toBe(147)
+    expect(frequencyQuery('147.')).toBe(147)
+  })
+
+  it('leaves a callsign, a town, a lone digit and a number off the bands to the text filter', () => {
+    for (const q of ['', 'W9ABC', 'Rockford', '9', '1.25', '14.2', '1500', '147.18.5', '147.1234567', '-147.18']) {
+      expect(frequencyQuery(q), q).toBeNull()
+    }
+  })
+})
+
+describe('onFrequency', () => {
+  it('finds the machine on the typed frequency and never its neighbour', () => {
+    expect(onFrequency(147.18, 147.18)).toBe(true)
+    expect(onFrequency(147.1825, 147.18)).toBe(true) // 2.5 kHz: the same channel
+    expect(onFrequency(147.1774, 147.18)).toBe(false) // 2.6 kHz
+    expect(onFrequency(147.195, 147.18)).toBe(false) // the next 15 kHz channel
+    expect(onFrequency(147.1875, 147.18)).toBe(false) // the next 12.5 kHz channel
+    expect(onFrequency(438.513, 438.5125)).toBe(true) // a directory writing it to the kHz
+    expect(onFrequency(438.5, 438.5125)).toBe(false)
+    expect(onFrequency(438.50625, 438.5125)).toBe(false) // the next 6.25 kHz channel
+  })
+})
+
+describe('mhzLabel', () => {
+  it('prints four decimals with the trailing zeros dropped', () => {
+    expect(mhzLabel(147.18)).toBe('147.18')
+    expect(mhzLabel(438.5125)).toBe('438.5125')
+    expect(mhzLabel(147)).toBe('147.0')
   })
 })
