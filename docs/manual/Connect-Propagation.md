@@ -1,4 +1,4 @@
-# Conditions (formerly Connect) — World Map and Propagation Intelligence
+# Conditions — World Map and Propagation Intelligence
 
 Conditions is Nexus's unified situational-awareness surface: a live Canvas2D world map fused with a propagation nowcast built from PSK Reporter MQTT, RBN/DX-cluster telnet, and NOAA SWPC space-weather feeds. It answers three questions — "Is the band open?", "Am I getting out?", and "What do I need?" — from observed signal-path evidence, not static ionospheric charts.
 
