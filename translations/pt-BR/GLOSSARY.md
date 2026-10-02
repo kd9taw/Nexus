@@ -101,9 +101,9 @@ word in, and use only that word in the CSV.
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 141 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 125 | The Settings screen and every reference to it. | |
-| grid | 120 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
+| grid | 123 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 108 | Sound cards, levels, routing. | |
-| station | 114 | Both your own station and the one you are working. | |
+| station | 115 | Both your own station and the one you are working. | |
 | port | 99 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 99 / 30 | The verbs. The abbreviations TX/RX stay English. | |
@@ -129,7 +129,7 @@ word in, and use only that word in the CSV.
 | beacon | 30 | | |
 | antenna | 31 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
-| cockpit | 30 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
+| cockpit | 32 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
 | pane / panel | 24 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
