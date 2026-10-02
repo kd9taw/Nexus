@@ -37,7 +37,9 @@
 //                and broker PTT released. · Tune (CockpitHeader) → Engine::set_tune(false),
 //                which ends the tune carrier and only that. · the Space bar (window keyup) →
 //                the same setPtt(false) as PTT-release, and ONLY while `lock` is off: both
-//                Space handlers early-return in Lock (hands-free) mode.
+//                Space handlers early-return in Lock (hands-free) mode. · Esc (App's window
+//                keydown while Phone is shown, N71) → the same halt_tx as Stop TX; the voice
+//                keyer's own Esc still stops its playback.
 //     · CW     — Stop TX (CockpitHeader) → stopCw + haltTx. · Tune → set_tune (the carrier
 //                only). · Esc (window keydown) → the same abort() Stop TX calls.
 //     · Operate— Stop TX (.op-btn.stop in the merged .cockpit-qso strip) → onHaltTx →
@@ -74,9 +76,12 @@
 //                a real stop here for the same reason as RTTY: set_tx_enabled(false) drops
 //                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
 //                into feed dropped + output flushed + unkey while an image is in flight.
+//                · Esc (App's window keydown while SSTV is shown, N71) → halt_tx, the halt the
+//                header's Stop TX sends.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
 //                the rule holds there by construction. Its one stop control is the TX On/Off
-//                latch. set_tx_enabled(false) arms no APRS abort, but the radio loop's TX-off
+//                latch, and from N71 Esc (App's window keydown while APRS is shown → halt_tx)
+//                is a stop there too. set_tx_enabled(false) arms no APRS abort, but the radio loop's TX-off
 //                cut (service.rs `tx_off_cut`) unkeys and flushes a beacon on the air once the
 //                latch is down (measured 2026-09-30), and set_tx_enabled(false) also drops
 //                what aprs_tx_queue still holds, with a notice (poll_aprs_tx drops it the same
@@ -102,7 +107,8 @@
 //                Abort is census-only: it renders only inside `{auto && seqState !== 'idle'}`
 //                and the sweep's fixture is auto:false / seqState:'idle', so there is nothing
 //                on screen to find.
-//     · SSTV   — swept: Stop, the TX-enable latch. An exact match, and the only one.
+//     · SSTV   — swept: Stop, the TX-enable latch. An exact match apart from Esc (keyboard-only,
+//                census-only), and the only one.
 //   A control that is KEYBOARD-ONLY or CONDITIONALLY RENDERED is outside both sweeps by
 //   construction. What is checkable in minutes is not list equality: it is that every swept
 //   list is a non-empty subset of its cockpit's census.

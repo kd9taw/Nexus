@@ -86,6 +86,7 @@ import {
   makeProjection,
   project,
   rangeRing,
+  sectorRing,
   destinationPoint,
   greatCircle,
   terminator,
@@ -202,8 +203,8 @@ interface Props {
  *  the far side of the Globe (mapGeo `inView`). d3 clips a path at the globe's horizon, but it
  *  projects a lone point from the far side straight through the sphere, onto the near face — so a
  *  spot in Sydney, on a globe centred on the Midwest, landed over the eastern Pacific. Every point
- *  marker, point label and hit target on this map is placed through this, bar the openings' wedge
- *  and its tag: an area drawn from its projected corners, which `path` does not clip. */
+ *  marker, point label and hit target on this map is placed through this, the openings' tags
+ *  included; their wedges are areas, drawn through `path`. */
 function placePoint(kind: Projection, proj: GeoProjection, ll: LatLon): [number, number] | null {
   return inView(kind, proj, ll) ? project(proj, ll) : null
 }
@@ -2136,27 +2137,19 @@ export function MapView({
     // (tropo amber / Es green / aurora violet / F2 cyan — bandColors.ts). Free on
     // a quiet band: no openings ⇒ nothing draws. Sits under the live-spot dots so
     // the stations that PROVE the opening render on top of its footprint.
+    // The wedge is an AREA, drawn through `path` like every other area, so the Globe clips it at its
+    // horizon; its tag is placed like every other point label. Drawn from its projected corners, an
+    // edge behind the planet came out straight through it, on the face: a 15,000 km F2 wedge ended
+    // over the Arctic, and on a globe turned away from home the whole wedge and its tag still showed.
     if (layers.openings.visible && me) {
       for (const o of prop?.openings ?? []) {
         if (!(o.maxKm > 0)) continue
         const color = openingModeColor(o.mode)
         const pulse = sectorPulse(Date.now())
-        // Wedge outline: QTH → arc across the far edge → back. Sampled along
-        // great-circle destination points so it follows the projection.
-        const STEPS = 16
-        const pts: Array<[number, number]> = []
-        const start = o.bearingDeg - 22.5
-        for (let i = 0; i <= STEPS; i++) {
-          const brg = start + (45 * i) / STEPS
-          const p = project(proj, destinationPoint(me, brg, o.maxKm))
-          if (p) pts.push(p)
-        }
-        const qth = project(proj, me)
-        if (!qth || pts.length < 2) continue
+        // The same subdivided ring as the 3-D globe's wedge: QTH → out one radial → across the
+        // far edge → back down the other.
         ctx.beginPath()
-        ctx.moveTo(qth[0], qth[1])
-        for (const [px, py] of pts) ctx.lineTo(px, py)
-        ctx.closePath()
+        path({ type: 'Polygon', coordinates: [sectorRing(me, o.bearingDeg, o.maxKm)] } as GeoPermissibleObjects)
         ctx.globalAlpha = layers.openings.opacity * 0.16 * pulse
         ctx.fillStyle = color
         ctx.fill()
@@ -2164,13 +2157,15 @@ export function MapView({
         ctx.strokeStyle = color
         ctx.lineWidth = 1.2
         ctx.stroke()
-        // Mode tag at the sector's far edge (readable "what kind" on the map).
-        const mid = pts[Math.floor(pts.length / 2)]
-        ctx.font = 'bold 10px system-ui'
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'bottom'
-        ctx.fillStyle = color
-        ctx.fillText(`${o.band} ${o.mode}`, mid[0], mid[1] - 3)
+        // Mode tag at the sector's far edge (readable "what kind" on the map), while that edge faces the viewer.
+        const tag = placePoint(kind, proj, destinationPoint(me, o.bearingDeg, o.maxKm))
+        if (tag) {
+          ctx.font = 'bold 10px system-ui'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'bottom'
+          ctx.fillStyle = color
+          ctx.fillText(`${o.band} ${o.mode}`, tag[0], tag[1] - 3)
+        }
         ctx.globalAlpha = 1
       }
     }

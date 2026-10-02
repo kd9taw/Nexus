@@ -129,13 +129,34 @@ const borderColour = (value: string): string =>
     .filter((t) => !/^-?[\d.]+(px|em|rem)?$/.test(t) && !/^(solid|dashed|dotted|double|groove|ridge|inset|outset|none|hidden|thin|medium|thick)$/.test(t))
     .join(' ')
 
+// Each answer the sweep needs is resolved once, keyed by the exact arguments it is computed from,
+// so nothing below is approximated. Resolved afresh at every step, the desktop and Remote sweep
+// took 4.9 s alone, and on a loaded full suite (2026-10-01) it ran past its 20 s budget: at a fifth
+// of a CPU it took 27 s. Most of that was repeated work. The winners are resolved under the base
+// mode, so the forty skin modes reuse their base's eight. The ancestors' winners and tokens are the
+// same idle and hovered, because hover marks only the button. Tokens are resolved over the rules
+// that declare a custom property (186 of the desktop sheet's 4269), since no other rule can set
+// one. Shared this way, the sweep takes 0.9 s and yields the same colours in every case.
+const memo = new WeakMap<Rule[], Map<string, unknown>>()
+function once<T>(rules: Rule[], key: string, make: () => T): T {
+  let byKey = memo.get(rules)
+  if (!byKey) memo.set(rules, (byKey = new Map()))
+  if (!byKey.has(key)) byKey.set(key, make())
+  return byKey.get(key) as T
+}
+const tokenRules = (rules: Rule[]) => once(rules, 'token rules', () => rules.filter((r) => r.decls.some((d) => d.prop.startsWith('--'))))
+const tokensFor = (rules: Rule[], mode: Mode, chain: El[]) =>
+  once(rules, `t|${mode}|${JSON.stringify(chain)}`, () => tokensAt(tokenRules(rules), mode, chain))
+const win = (rules: Rule[], mode: Mode, chain: El[], ...props: string[]) =>
+  once(rules, `w|${baseOf(mode)}|${JSON.stringify(chain)}|${props.join()}`, () => winnerAt(rules, baseOf(mode), chain, ...props))
+
 /** What lies under the button: every ancestor's own background, composited from the page down. */
 function surfaceUnder(rules: Rule[], mode: Mode, chain: El[]): Rgb {
-  let under = colour(tokensAt(rules, mode, chain.slice(0, 1)), 'var(--bg)', [0, 0, 0])
+  let under = colour(tokensFor(rules, mode, chain.slice(0, 1)), 'var(--bg)', [0, 0, 0])
   for (let i = 0; i < chain.length - 1; i++) {
     const at = chain.slice(0, i + 1)
-    const bg = winnerAt(rules, baseOf(mode), at, 'background', 'background-color')
-    if (bg) under = colour(tokensAt(rules, mode, at), bg.value, under)
+    const bg = win(rules, mode, at, 'background', 'background-color')
+    if (bg) under = colour(tokensFor(rules, mode, at), bg.value, under)
   }
   return under
 }
@@ -148,11 +169,11 @@ interface Look {
 }
 
 function look(rules: Rule[], mode: Mode, chain: El[]): Look {
-  const tokens = tokensAt(rules, mode, chain)
+  const tokens = tokensFor(rules, mode, chain)
   const under = surfaceUnder(rules, mode, chain)
-  const face = winnerAt(rules, baseOf(mode), chain, 'background', 'background-color')
-  const ink = winnerAt(rules, baseOf(mode), chain, 'color')
-  const border = winnerAt(rules, baseOf(mode), chain, 'border', 'border-color', 'border-top-color')
+  const face = win(rules, mode, chain, 'background', 'background-color')
+  const ink = win(rules, mode, chain, 'color')
+  const border = win(rules, mode, chain, 'border', 'border-color', 'border-top-color')
   if (!ink || !border) throw new Error(`the browser draws STOP's ${ink ? 'border' : 'ink'} under ${mode}`)
   const faceRgb = face ? colour(tokens, face.value, under) : under
   return {

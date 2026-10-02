@@ -66,13 +66,15 @@
 // swept here, by construction rather than by oversight — this file finds BUTTONS BY ACCESSIBLE
 // NAME, in one fixed fixture state:
 //   · KEYBOARD-ONLY. Phone's Space bar (window keyup → setPtt(false), only while Lock is off)
-//     and CW's Esc (window keydown → the same abort() Stop TX calls) have no accessible name
-//     and no element. Operate's Esc is the same, in its own sweep.
+//     and Esc have no accessible name and no element. Esc is a stop on every operating screen
+//     and on Satellites (CW's: window keydown → the same abort() Stop TX calls; App binds
+//     Tempo's, Phone's, SSTV's, APRS's and Satellites'); each is NAMED in the last block of this
+//     file and pressed in stop-control-wiring.test.tsx.
 //   · CONDITIONALLY RENDERED. RTTY's auto-sequencer Abort renders only inside
 //     `{auto && seqState !== 'idle'}`, and the `rttyState` fixture above is auto:false /
 //     seqState:'idle' — so there is nothing on screen to look for. Adding a second RTTY case
 //     with an in-flight sequence would sweep it; not done here, and not claimed.
-// SSTV is the one cockpit whose list and census match exactly.
+// SSTV is the one cockpit whose list and census match exactly, Esc (keyboard-only) apart.
 //
 // WHAT THIS DOES NOT COMPUTE, stated rather than guarded:
 //   · A STOP CONTROL THAT IS PRESENT, ENABLED AND INERT. Every assertion here is about the
@@ -92,7 +94,10 @@
 // transmit control at all — it is setup, score, sections, bonuses, the log and the club board.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import * as api from '../api'
+import { sectionFeatures } from '../features/registry'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
@@ -934,5 +939,54 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(rttyStop()).toHaveBeenCalled()
     expect(haltTx()).toHaveBeenCalled()
+  })
+})
+
+// ── ESC, NAMED ON EVERY SCREEN ─────────────────────────────────────────────────────────────────
+// Esc is the stop the keyboard holds, on every screen the operator transmits from and on
+// Satellites (N71, 2026-10-01; N66 measured it missing on Tempo, SSTV and APRS, Phone's stopping
+// only its voice keyer, and Satellites with no stop at all). This file cannot press it: it finds
+// controls by accessible name, and five of these screens' Esc is bound by App, which no
+// cockpit-level render contains. So each screen is NAMED here with what binds its Esc, and the
+// list is computed against the registry: a section the operator can transmit from that is not
+// named here goes red, whatever anybody remembers. Every one is PRESSED, with a real keydown, in
+// stop-control-wiring.test.tsx ("Esc on every screen in the registry"), which mounts the real App
+// over a fake bridge and asserts the exact commands that left the UI; that census must name each
+// one too, so the two lists cannot drift apart. The hosted page's Esc is pressed in
+// remote-web/remote-stop-line.test.tsx.
+describe('Esc is a stop on every operating screen and on Satellites', () => {
+  const ESC: Record<string, string> = {
+    operate: 'OperateCockpit, its own listener while on show → App handleHaltTx (halt_tx)',
+    cw: 'CwCockpit, its own listener → the abort() its Stop TX calls (stop_cw, halt_tx)',
+    rtty: 'RttyCockpit, its own listener → stop() (rtty_stop, halt_tx); an open F-key editor closes instead while nothing is on the air',
+    psk: 'PskCockpit, as RTTY (psk_stop, halt_tx)',
+    js8: 'Js8Cockpit, its own listener → stop() (halt_tx)',
+    chat: 'App, while Tempo is on show → handleHaltTx, the top bar Stop TX on this screen (halt_tx)',
+    phone: 'App, while Phone is on show → handleHaltTx (halt_tx, as its header Stop TX); the voice keyer also stops itself',
+    sstv: 'App, while SSTV is on show → handleHaltTx (halt_tx, as its header Stop TX)',
+    aprs: 'App, while APRS is on show → handleHaltTx (halt_tx); APRS draws no stop control',
+    sats: 'App, while Satellites is on show → handleHaltTx (halt_tx); Satellites draws no stop control',
+  }
+  // Filed under Operate in the registry and never transmit: manager views that do not touch the rig.
+  const NEVER_TRANSMIT = ['memories', 'program']
+
+  it('every section the operator transmits from, and Satellites, is named with what binds its Esc', () => {
+    const operating = sectionFeatures()
+      .filter((f) => f.category === 'Operate' && !NEVER_TRANSMIT.includes(f.id))
+      .map((f) => f.id as string)
+    expect(operating.length, 'control: the registry has operating sections').toBeGreaterThan(5)
+    expect(Object.keys(ESC).sort()).toEqual([...operating, 'sats'].sort())
+  })
+
+  it('…and the wire census presses Esc on each of them, expecting a stop', () => {
+    const wiring = readFileSync(resolve(__dirname, '../stop-control-wiring.test.tsx'), 'utf8')
+    const census = wiring.slice(wiring.indexOf('const ESC_SCREENS'))
+    expect(census.length, 'control: the census is in the wiring suite').toBeLessThan(wiring.length)
+    for (const view of Object.keys(ESC)) {
+      expect(
+        census.includes(`view: '${view}'`) || census.includes(`\n    ${view}: ['`),
+        `${view}: the wiring census does not press Esc on it`,
+      ).toBe(true)
+    }
   })
 })

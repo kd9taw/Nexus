@@ -14,7 +14,7 @@
 // REAL component.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
-import type { MapSpot, PropagationSnapshot, SatView, Station, WorkableCard } from '../types'
+import type { MapSpot, OpeningView, PropagationSnapshot, SatView, Station, WorkableCard } from '../types'
 import type { AprsStation } from '../api'
 
 const feeds = vi.hoisted(() => ({
@@ -170,6 +170,19 @@ const snap = (over: Partial<PropagationSnapshot>): PropagationSnapshot =>
     insights: [],
     ...over,
   }) as unknown as PropagationSnapshot
+/** A live opening: its wedge spans `bearingDeg` ±22.5° from the QTH, out to `maxKm`. */
+const opening = (band: string, mode: string, bearingDeg: number, maxKm: number): OpeningView =>
+  ({ band, mode, octant: 'N', bearingDeg, maxKm, probability: 0.8, stations: 3, confidence: 'Likely', confidenceScore: 0.8, reciprocalPairs: 1, anomalyZ: 4, onsetSecs: 600, isNew: false, note: '' }) as OpeningView
+/** The corners of an opening's far edge, left to right, as the map has always sampled it: 17 across 45°. */
+const farEdge = (o: OpeningView) => Array.from({ length: 17 }, (_, i) => destinationPoint(ME, o.bearingDeg - 22.5 + (45 * i) / 16, o.maxKm))
+/** The path an area on `canvas` was drawn with, from the beginPath before its first point at `p` to its fill. */
+function pathThrough(canvas: HTMLCanvasElement, p: [number, number]): Op[] {
+  const ops = opsOf.get(canvas) ?? []
+  const i = ops.findIndex((o) => (o.k === 'moveTo' || o.k === 'lineTo') && Math.hypot((o.a[0] as number) - p[0], (o.a[1] as number) - p[1]) < 0.5)
+  if (i < 0) return []
+  const fill = ops.findIndex((o, j) => j > i && o.k === 'fill')
+  return ops.slice(ops.map((o) => o.k).lastIndexOf('beginPath', i), fill < 0 ? undefined : fill)
+}
 
 describe('the control: this test can see the far point, where the map shows it', () => {
   it('on the flat map, which shows the whole world, the far station IS drawn', async () => {
@@ -183,6 +196,14 @@ describe('the control: this test can see the far point, where the map shows it',
     expect(inView('globe', proj, FAR), 'Sydney, behind a globe centred on EN52').toBe(false)
     expect(inView('globe', proj, NEAR), 'Chicago, on its face').toBe(true)
     expect(inView('world', makeProjection('world', ME, W, H, HOME), FAR), 'the flat maps have no far side').toBe(true)
+  })
+  it('on the flat map, an opening wedge 15,000 km long is drawn to its far edge, and tagged there', async () => {
+    layers(['openings'])
+    const o = opening('20m', 'F2', 340, 15_000)
+    const r = await mount({ projection: 'world', prop: snap({ openings: [o] }) })
+    const tip = at(farEdge(o)[8], 'world')
+    expect(drewAt(mapCanvas(r.container), tip[0], tip[1], ['moveTo', 'lineTo']), 'the far edge, on the flat map').toBe(true)
+    expect(drewAt(mapCanvas(r.container), tip[0], tip[1] - 3, ['fillText']), 'its tag, at the far edge').toBe(true)
   })
 })
 
@@ -473,5 +494,71 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
     await mount()
     expect(texts(), 'CONTROL: the near zone is numbered').toContain('4')
     expect(texts(), 'the far zone, numbered through the globe').not.toContain('30')
+  })
+
+  it('the opening sectors: a wedge reaching behind the globe stops at its horizon', async () => {
+    layers(['openings'])
+    // A 20 m F2 opening over the pole toward SE Asia: its far edge, 15,000 km out, is 135° from EN52.
+    const o = opening('20m', 'F2', 340, 15_000)
+    const r = await mount({ prop: snap({ openings: [o] }) })
+    const canvas = mapCanvas(r.container)
+    const proj = makeProjection('globe', ME, W, H, HOME)
+    const edge = farEdge(o)
+    expect(edge.filter((ll) => inView('globe', proj, ll)), 'CONTROL: the whole far edge is behind the globe').toEqual([])
+    // Between the two radials: a radial's own end lands on that radial's line, where its facing part is drawn.
+    for (const ll of edge.slice(1, -1)) {
+      const p = at(ll)
+      expect(drewAt(canvas, p[0], p[1], ['moveTo', 'lineTo']), `the far edge at ${ll.lat.toFixed(1)}, ${ll.lon.toFixed(1)}, through the globe`).toBe(false)
+    }
+    // What faces the viewer is still drawn: from the QTH out to the horizon, between the wedge's own radials.
+    const wedge = pathThrough(canvas, at(ME))
+    expect(wedge.length, 'the facing part of the wedge, from the QTH').toBeGreaterThan(0)
+    const R = (Math.min(W, H) / 2) * 0.92
+    const onLimb = wedge.filter((op) => (op.k === 'moveTo' || op.k === 'lineTo') && Math.abs(Math.hypot((op.a[0] as number) - W / 2, (op.a[1] as number) - H / 2) - R) < 0.5)
+    expect(onLimb.length, 'the facing part of the wedge, out to the horizon').toBeGreaterThan(0)
+    // The globe is centred on the QTH, so a point's direction from the centre is its bearing from home.
+    const brg = (op: Op) => (Math.atan2((op.a[0] as number) - W / 2, H / 2 - (op.a[1] as number)) * 180) / Math.PI
+    const outside = onLimb.filter((op) => Math.abs(((brg(op) - o.bearingDeg + 540) % 360) - 180) > 23)
+    expect(outside.length, "the horizon it fills to, between its radials (not the rest of the globe's)").toBe(0)
+  })
+
+  it('the opening sectors: a far edge behind the globe is not tagged through it, and a near one still is', async () => {
+    layers(['openings'])
+    const near = opening('2m', 'Tropo', 90, 1_200)
+    const r = await mount({ prop: snap({ openings: [opening('20m', 'F2', 340, 15_000), near] }) })
+    const tag = at(farEdge(near)[8])
+    expect(drewAt(mapCanvas(r.container), tag[0], tag[1] - 3, ['fillText']), 'CONTROL: the near opening, tagged at its far edge').toBe(true)
+    expect(texts(), 'CONTROL: its tag reads band and mode').toContain('2m Tropo')
+    expect(texts(), 'the far opening, tagged through the globe').not.toContain('20m F2')
+  })
+
+  it('the opening sectors, on a globe turned away from the QTH: neither the wedge nor its tag', async () => {
+    layers(['openings'])
+    const o = opening('2m', 'Tropo', 90, 1_200)
+    const r = await mount({ prop: snap({ openings: [o] }) })
+    const canvas = mapCanvas(r.container)
+    expect(drewAt(canvas, at(ME)[0], at(ME)[1], ['moveTo', 'lineTo']), 'CONTROL: facing the QTH, its wedge is drawn').toBe(true)
+    expect(texts(), 'CONTROL: and tagged').toContain('2m Tropo')
+    // Spin the globe to face Australia, as the operator drags it (0.32° per pixel at zoom 1): 25°S 135°E, 140° from EN52.
+    const dx = 425
+    const dy = -211
+    const view: MapView3 = { ...HOME, rotate: [-ME.lon + dx * 0.32, -ME.lat - dy * 0.32] }
+    for (const ops of opsOf.values()) ops.length = 0
+    await act(async () => {
+      fireEvent.pointerDown(canvas, { clientX: 1000, clientY: 1000, pointerId: 1 })
+      fireEvent.pointerMove(canvas, { clientX: 1000 + dx, clientY: 1000 + dy, pointerId: 1 })
+      fireEvent.pointerUp(canvas, { clientX: 1000 + dx, clientY: 1000 + dy, pointerId: 1 })
+    })
+    expect((opsOf.get(canvas) ?? []).some((op) => op.k === 'drawImage'), 'CONTROL: the turned globe was drawn').toBe(true)
+    const proj = makeProjection('globe', ME, W, H, view)
+    const corners = [ME, ...farEdge(o)]
+    expect(corners.filter((ll) => inView('globe', proj, ll)), 'CONTROL: the whole wedge is behind the turned globe').toEqual([])
+    for (const ll of corners) {
+      const p = at(ll, 'globe', view)
+      expect(drewAt(canvas, p[0], p[1], ['moveTo', 'lineTo']), `the wedge's corner at ${ll.lat.toFixed(1)}, ${ll.lon.toFixed(1)}, through the globe`).toBe(false)
+    }
+    expect(texts(), 'its tag, through the globe').not.toContain('2m Tropo')
+    const traced = (opsOf.get(canvas) ?? []).filter((op) => op.k === 'moveTo' || op.k === 'lineTo')
+    expect(traced.length, 'any outline at all on the face of the turned globe, the wedge being wholly behind it').toBe(0)
   })
 })

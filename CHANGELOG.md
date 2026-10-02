@@ -621,6 +621,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Program at a large zoom: Tune and Add can be clicked again.** With the app pinned at 100 % on
+  a 1024×768 screen (or 125 % on 1366×768, 175 % on 1920×1080), Program puts the search above the
+  channel list, and the channel list covered the search results, so no Tune or Add button in them
+  could be clicked. Each half now keeps room for what it holds and Program scrolls instead. At the
+  automatic zoom nothing moves.
+- **Operate at a large zoom: Call Roster, Band Activity and Rx Frequency show their rows.** With
+  the app pinned at 100 % on a 1024×768 screen, Operate squeezed the decode panes down to their
+  title bars with nothing to scroll, and at 125 % on 1366×768 they disappeared. Now the waterfall
+  gives way first, each pane keeps a usable box that you scroll between, and past that the cockpit
+  scrolls. The QSO strip with Stop TX and Tune stays on screen while you scroll. At 175 % on
+  1366×768 the strip used to sit below the bottom of the window, where the mouse could not reach
+  it; the cockpit now scrolls to it. At the automatic zoom on a 1024×768 or larger screen nothing
+  moves, except that a very tall waterfall drag now stops short of squeezing the panes below it.
+- **Tempo at a large zoom: the station list, the conversation and the waterfall rail no longer
+  sit on top of each other.** With the app pinned at 100 % on a 1024×768 screen (or 125 % on
+  1366×768, 175 % on 1920×1080), all of Tempo's panes landed in the same place: the waterfall rail
+  covered the station list and the conversation, and the station search box sat over the first
+  Band Activity rows. They now stack one under another and Tempo scrolls.
+- **Program: an off-air repeater fades by colour and stays readable.** With "On-air only" off, a
+  repeater listed as off the air was drawn see-through, which made every word on its row hard to
+  read. Its call, frequency and buttons are now in the dimmer text colour, Tune and Add lose their
+  tint, and the OFF-AIR tag is in the normal text colour with its warning colour as an outline, so
+  the row reads clearly in every theme and still stands out as off the air.
+- **On the Globe map, an opening's wedge no longer shows through the planet.** The Opening sectors
+  layer drew each opening's wedge from its corners, so a part of it behind the planet was drawn on
+  the side facing you, where a line from it straight through the Earth comes out. On a globe
+  centred on the US Midwest, a 20 m F2 opening 15,000 km long toward Southeast Asia ended over the
+  Arctic, tagged "20m F2" there, and with the globe turned to Australia a 2 m tropo opening at home
+  still showed, tag and all, over the western Pacific. Now the wedge stops at the edge of the
+  globe, as range rings and satellite footprints do, and its band and mode tag shows only while the
+  wedge's far end is on your side of the planet. On the Flat map a long wedge now follows its
+  bearings as well: that F2 wedge, which runs over the pole, was drawn as a thin sliver straight
+  across the Atlantic and Africa. The Beam map and the 3D globe are unchanged.
+- **Esc stops transmit on every operating screen and on Satellites.** It did nothing on Tempo,
+  SSTV, APRS and Satellites, and on Phone it stopped only the voice keyer. Now on each of them it
+  does what **Stop TX** does (on Tempo, the top bar's; APRS and Satellites draw no Stop TX of
+  their own), from anywhere on the screen, a text field included, as it already did on FT, CW,
+  RTTY, PSK and JS8. A menu or dialog that Esc closes still closes on the same press. Phone's
+  space bar is unchanged.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
@@ -729,12 +768,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat acknowledgement) named a station heard as W1AW/P as W1AW. Each now names the station as
   it was heard, as a JS8Call station's reply does, and a message delivered from your store names
   its sender as it was heard too. A message held for W1AW is still offered and delivered to W1AW/P.
+- **JS8: a message left for a station with a prefix or suffix is held for its base call, as in
+  JS8Call.** A MSG TO: for VE3/W1AW or W1AW/MM was held under that whole call, so W1AW asking
+  QUERY MSGS was told NO, and a message held for W1AW was never offered to VE3/W1AW. JS8Call holds
+  every such message under the base call, W1AW, and offers it to a station by the call it is heard
+  under or by its base call; Nexus now does the same, in the heartbeat acknowledgement's MSG ID,
+  the answer to QUERY MSGS, QUERY MSG and the count in the Stations list. A message already held
+  is still found under the call it was held for.
 - **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
   When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
   put those switches back on underneath while the watchdog still stood, so a query heard then
   counted down a reply, and the reply went out after your next send. Now nothing is answered,
   relayed or delivered while the watchdog stands, as JS8Call does, and nothing heard meanwhile goes
   out later.
+- **JS8: what you do in the JS8 screen restarts the idle watchdog, as in JS8Call.** After the idle
+  watchdog had turned auto-reply, relay and the heartbeat off, turning a switch or the repeating CQ
+  back on ended it for one second only: the watchdog still counted from your last send and tripped
+  again, with its notice. Now each send, each switch on or off, Drop queue, Yes or No, Read or
+  Delete in the Inbox and a speed choice starts the idle count again, as each key press or click
+  does in JS8Call. A send did end the watchdog, but left auto-reply and relay off while the dock
+  showed them on: a query heard afterwards waited in your message box instead of being answered,
+  and a MSG TO: for another station was not held. They now come back on, as the dock shows them.
+  The heartbeat and the repeating CQ stay off until you turn them on.
 - **JS8: the Auto-reply hint and tooltip say what is answered.** Settings' Auto-reply hint now
   names the ACK for a message to you or a group you joined and for a MSG TO: you hold, and says
   that on @ALLCALL only QUERY MSGS is answered; the cockpit's AUTOREPLY tooltip no longer says

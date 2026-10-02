@@ -297,7 +297,9 @@ describe('the Classic lower region is the three-column decode-first grid', () =>
         ).toEqual(['minmax(0,1fr)'])
         const rows = winner(lowerChain(vp, cols), 'grid-auto-rows')
         expect(rows, 'stacked children need grid-auto-rows to share the height').not.toBeNull()
-        expect(rows!.value.replace(/\s+/g, '')).toBe('minmax(0,1fr)')
+        // Shared above a floor each since 2026-10-01: unfloored shares were 49 px per pane at the
+        // 1024×768 floor at 100 %. The floor and the stack's scroller are guarded below.
+        expect(rows!.value.replace(/\s+/g, '')).toBe('minmax(26em,1fr)')
       })
     }
   }
@@ -594,6 +596,98 @@ describe("Operate's column dividers read the sheet's own tracks (layout L5)", ()
         expect(winner(seam, 'left')?.value, `${mode}: the divider is not centred on the gap (${gap})`).toBe(`calc(${gap} / -2 - 6px)`)
         expect(winner(seam, 'width')?.value).toBe('12px')
       }
+    }
+  })
+})
+
+// ── THE LOWER REGION AT A NARROW EFFECTIVE SIZE (2026-10-01) ────────────────────────────────
+/** Final overflow-y a block computes: the `overflow` shorthand (its second value, or its only
+ *  one) and the longhand, in block order. */
+function blockOverflowY(body: string): string | null {
+  let v: string | null = null
+  for (const decl of body.split(';')) {
+    const m = /^\s*(overflow|overflow-y)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+    if (!m) continue
+    const parts = m[2].split(/\s+/)
+    v = m[1] === 'overflow-y' ? parts[0] : (parts[1] ?? parts[0])
+  }
+  return v
+}
+
+function winnerOverflowY(chain: El[]): { value: string; selector: string } | null {
+  let win: { value: string; selector: string; spec: number; order: number } | null = null
+  for (const r of RULES) {
+    if (r.media !== null || !matchesChain(r.selector, chain)) continue
+    const v = blockOverflowY(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) {
+      win = { value: v, selector: r.selector, spec, order: r.order }
+    }
+  }
+  return win && { value: win.value, selector: win.selector }
+}
+
+describe("Operate's lower region floors itself, and its narrow stack scrolls instead of crushing", () => {
+  // THE DEFECT. Below the md tier (data-viewport sm/xs: the 1024×768 floor at a 100 % scale,
+  // 1366×768 at 125 %, 1920×1080 at 175 %) the TopBar wraps, the header wraps and the region is
+  // whatever the column has left. It was `flex: 1; min-height: 0` under a shell that clipped, so
+  // it was the ONLY box that gave: the waterfall (built to yield) kept its 22 %, and the region got
+  // 109 px at the floor and 0 px at 1366×768 at 125 %. The narrow stack then split that into equal
+  // `minmax(0, 1fr)` rows with no scroller, two or three panes in 49 or 31 px each: Call Roster,
+  // Band Activity and Rx Frequency showed their title bars and no row (Chrome, 0 of 8 decodes).
+  //
+  // THE FIX is the pane grid's own contract (cockpit-panes.css): the region floors at 18em, so the
+  // waterfall yields before the decode panes do and, past the floor, the shell's deficit valve
+  // scrolls (cockpit-shells.test.ts); and the narrow stack is the interposed scroller, its rows
+  // floored so a pane never gets less than a usable box. The QSO strip with Stop TX sits outside
+  // the region, so scrolling the stack never moves it. The floor yields to a short window (the
+  // hosted FT's `min(18em, 35 % of the window)`): the valve's end shows the floor whole with the
+  // strip right above it, and a plain 18em scrolled Stop TX out of view at 1366×768 at 150 %.
+  const LAYOUTS: Array<['classic' | 'roster', string[]]> = [['classic', ['one', 'two', 'three']], ['roster', ['one', 'two']]]
+  const chains = (vps: readonly string[]) =>
+    vps.flatMap((vp) => LAYOUTS.flatMap(([mode, cols]) => cols.flatMap((c) => [false, true].map((rail) => ({ name: `[data-viewport='${vp}'] ${mode} data-cols='${c}'${rail ? ' rail left' : ''}`, chain: gridChain(mode, vp, c, rail) })))))
+  const em = (v: string | undefined) => (v && /^\d+(\.\d+)?em$/.test(v) ? parseFloat(v) : NaN)
+  /** The region floor: `min(<em>, calc(<share> * var(--vh-eff)))` → its em arm and its share of the window. */
+  const floorOf = (v: string | undefined) => {
+    const m = /^min\((\d+(?:\.\d+)?)em, calc\(([\d.]+) \* var\(--vh-eff\)\)\)$/.exec(v ?? '')
+    return m ? { em: parseFloat(m[1]), share: parseFloat(m[2]) } : null
+  }
+
+  it('the region floors at 18em at every tier and in both layouts, yielding to a short window', () => {
+    for (const { name, chain } of chains(['xs', 'sm', 'md', 'lg', 'xl'])) {
+      const w = winner(chain, 'min-height')
+      const f = floorOf(w?.value)
+      expect(
+        f,
+        `${name}: \`${w?.selector} { min-height: ${w?.value} }\` — an unfloored region is the column's only ` +
+          'give, so the decode panes are crushed to their title bars while the waterfall keeps its height; and a ' +
+          'floor that does not yield to the window can scroll the QSO strip with Stop TX out of view.',
+      ).not.toBeNull()
+      expect(f!.em, `${name}: the floor's em arm`).toBeGreaterThanOrEqual(18)
+      expect(f!.share, `${name}: the floor's share of the window`).toBeGreaterThan(0)
+      expect(f!.share, `${name}: the floor's share of the window`).toBeLessThanOrEqual(0.35)
+    }
+  })
+
+  it('at sm and xs the stack scrolls, has no explicit row, and floors every row at least as tall as the region', () => {
+    for (const { name, chain } of chains(['sm', 'xs'])) {
+      const explicit = winner(chain, 'grid-template-rows')
+      expect(explicit?.value, `${name}: \`${explicit?.selector}\` leaves an explicit first row the row floor does not reach`).toBe('none')
+      const rows = winner(chain, 'grid-auto-rows')
+      const m = /^minmax\((\d+(?:\.\d+)?em), 1fr\)$/.exec(rows?.value ?? '')
+      expect(m, `${name}: \`${rows?.selector} { grid-auto-rows: ${rows?.value} }\` lets a stacked pane shrink to its title bar`).not.toBeNull()
+      expect(em(m![1]), `${name}: a stacked row smaller than the region's own floor`).toBeGreaterThanOrEqual(floorOf(winner(chain, 'min-height')?.value)?.em ?? Infinity)
+      const oy = winnerOverflowY(chain)
+      expect(oy?.value, `${name}: the stack's rows overflow a region that does not scroll (\`${oy?.selector}\`)`).toBe('auto')
+    }
+  })
+
+  it('at md and wider the columns are bounded rows again, and the narrow scroller reaches none of them', () => {
+    for (const { name, chain } of chains(['md', 'lg', 'xl'])) {
+      expect(winner(chain, 'grid-template-rows')?.value, name).toBe('minmax(0, 1fr)')
+      expect(winner(chain, 'grid-auto-rows'), `${name}: a row floor meant for the narrow stack`).toBeNull()
+      expect(winnerOverflowY(chain), `${name}: a scroller meant for the narrow stack`).toBeNull()
     }
   })
 })

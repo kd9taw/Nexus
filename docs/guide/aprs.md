@@ -156,7 +156,8 @@ with any sensor the station does not carry simply omitted rather than shown as a
 zero; and a **Raw packet** disclosure holding the TNC2 monitor line verbatim.
 Two links close it out: **QRZ** and **aprs.fi** — the latter just opens that
 station's page in your browser, nothing is sent to it. `Esc` closes the card and
-hands focus back where it came from.
+hands focus back where it came from; as everywhere on this screen, the same press
+also stops transmit.
 
 ## Safety — why transmit works the way it does
 

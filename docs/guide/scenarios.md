@@ -27,11 +27,17 @@ name.
 
 ### Steps
 
-1. **Press `Esc`.** In Operate, CW, RTTY, PSK and JS8 this stops the
-   transmission from anywhere in that section — in Operate and CW it works even
-   with the cursor in a text field. In Phone, release the space bar.
-2. **If `Esc` did nothing, press `Stop TX`** in the cockpit header. It is never
-   disabled and never hidden.
+1. **Press `Esc`.** On every screen you transmit from (Operate, Tempo, Phone,
+   CW, RTTY, PSK, JS8, SSTV and APRS) and on Satellites, this stops the
+   transmission from anywhere on that screen, even with the cursor in a text
+   field. It is the same stop as **Stop TX**, so it turns transmit off as well.
+   A menu or dialog open on that screen closes on the same press. In RTTY and
+   PSK, with an F-key macro editor open and nothing on the air, `Esc` closes the
+   editor instead. In Phone, release the space bar.
+2. **If `Esc` did nothing, press `Stop TX`**: in the cockpit header, or in the
+   top bar on Tempo and on the screens that are not cockpits. It is never
+   disabled and never hidden. APRS and Satellites have no Stop TX of their own;
+   `Esc` is the stop there.
 3. **Drop the TX latch**, where the cockpit has one on screen — the ▼ TX On /
    ■ TX Off control in the header of Operate, RTTY, PSK, JS8 and SSTV. This does
    not just cut the over; it disarms transmit, so nothing can start another one.
@@ -51,12 +57,15 @@ Every cockpit's on-screen stop line:
 | Cockpit | Controls that stop a transmission |
 |---|---|
 | Operate (FT8/FT4) | `Esc` · **Stop TX** · **TX Off** · **Tune** |
-| Phone | The **PTT** button (release) · space bar (release) · **Stop TX** · **Tune** |
+| Tempo | `Esc` · **Stop TX** and **Tune** in the top bar |
+| Phone | `Esc` · the **PTT** button (release) · space bar (release) · **Stop TX** · **Tune** |
 | CW | `Esc` · **Stop TX** · **Tune** |
 | RTTY | `Esc` · **Stop TX** · the dock's **Esc / Stop** macro · the TX latch · **Tune** |
 | PSK | `Esc` · **Stop TX** · the dock's **Esc / Stop** macro · the TX latch · **Tune** |
 | JS8 | `Esc` · **Stop TX** · **Tune** |
-| SSTV | **Stop** · the TX latch |
+| SSTV | `Esc` · **Stop** · the TX latch |
+| APRS | `Esc` · the TX latch (**TX Off**) |
+| Satellites | `Esc` (Satellites draws no transmit control) |
 
 Two stop controls live *inside* removable panes and can be hidden: Phone's voice
 keyer **■ Stop**, and RTTY's **Auto on** toggle in the `stream` pane. Both are

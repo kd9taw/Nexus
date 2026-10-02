@@ -13415,8 +13415,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // command takes any member of `Tier::ALL`, which now includes `"JS8"` — so the
         // companion/UDP path, the rig-share broker, or any later UI change reaches the tier
         // without that verb. Seeding at the transition closes the class instead of one door.
+        // A trip that stood when the tier was left ends here too, and the station gets back the
+        // autoreply and relay it turned off, as the dock shows them (`js8_restart_idle_clock`).
         if tier == Tier::Js8 {
-            self.js8_station.mark_active(now_unix_secs() * 1000);
+            self.js8_restart_idle_clock(now_unix_secs() * 1000);
         }
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //

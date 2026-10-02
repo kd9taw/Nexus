@@ -81,7 +81,7 @@ pane is off your screen because you said so, and a note still blaming the rig
 would no longer be true. Tick it back and the line returns if it still applies.
 Each entry is a keyboard tab stop and reads its reason with the panel name;
 **Esc** closes the menu and puts focus back on the ⊞ button rather than at the top
-of the app. If the list outgrows your window it scrolls inside the menu, so **Undo
+of the app; as everywhere on this screen, the same press also stops transmit. If the list outgrows your window it scrolls inside the menu, so **Undo
 last change** and **Reset layout** stay reachable.
 
 **The control column.** Band Activity, the voice keyer and the rig-scope / DSP /
