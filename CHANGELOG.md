@@ -9,6 +9,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote as a stream, the station's half (Windows, off by default).** With **Stream this window
+  to an approved browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
+  station controls, while it holds control, can be shown this Nexus window and operate it, and
+  hear the station's receive audio. Only the Nexus window is sent, cropped to its contents: a
+  dialog that opens outside it, such as a file picker, is not, and a minimized window sends
+  nothing. Windows draws its yellow capture border round the window while a stream is attached.
+  The browser's clicks and keys reach Nexus only, never anything else on the computer. While a
+  browser is attached, every transmission at the station stops within five seconds if its
+  connection drops, and within seven if its picture freezes. The picture is VP8 over encrypted
+  WebRTC, at most 30 frames a second.
+- **Remote: stream Nexus from the shack (first test build).** Each station on the Remote page has
+  a **Stream Nexus** button: the Nexus window at the shack, live in your browser, worked with your
+  own mouse and keyboard. It needs a Nexus at the shack with streaming turned on, and the page says
+  so when that is missing. Only the Nexus window is sent,
+  never the rest of the PC's screen, and what you click and type reaches Nexus and no other
+  program. Nothing streams until you press **Start the stream**, and only with station control
+  allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
+  and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
+  or let the picture freeze, and it lets go. In Phone the space bar over the picture is push-to-talk
+  for your own microphone, and a space typed into a Nexus field still types. Anything you hold down
+  over the picture, a key or a mouse button, is let go at the shack within a fifth of a second if
+  the connection drops. While the picture is frozen Nexus takes no clicks or keys from the browser,
+  and Stop TX still works. A band or mode list you open from the browser opens inside the Nexus
+  window, so you can see it and pick from it. Switching to another tab ends the stream; press
+  **Start the stream** again when you are back. If Remote access is switched off for your account
+  while you stream, the stream ends within about two seconds and the page says why.
+- **Remote as a stream: talk on the rig with your browser's microphone (Windows).** A streamed
+  operator's own voice reaches the rig in Phone, played into the rig's USB audio.
+  **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig
+  keys only when the operator's voice starts arriving, so a held PTT with the microphone off or
+  muted puts nothing on the air. Held, the page's PTT shows the accent colour, as the microphone
+  button does, while it waits for the voice, and the transmit colour once the voice has keyed the
+  rig. The over ends 200 ms after the voice stops arriving or the PTT
+  is let go, whichever comes first. Stop TX, TX Off, a lost connection, a frozen picture and
+  leaving Phone each end it at once, and no over lasts longer than 10 minutes. Voice that arrives
+  late is dropped, never played late. The rig must take its SSB audio from USB (the menu that
+  sets the transmit audio source for voice); on most radios the factory setting is the front
+  microphone, and then an over keys the rig on the shack's microphone instead of yours; the page
+  says so when the rig shows no power out while your voice is arriving. On the stream page the
+  microphone is off until you press its button, and only then does the browser ask for it. The
+  space bar over the picture and the Phone cockpit's PTT clicked through it arm the same over as
+  the page's own PTT: from Remote they never key the shack's microphone, and Lock does not work.
+  The station's audio in your browser is muted while you are on the air, the page says why an over
+  ended when the station ended it, and it reminds you to give your call sign before each ten
+  minutes of a run of overs is up.
+- **Remote: a stream only starts for the browser you approved.** Each browser now holds its own key,
+  which never leaves it. The Remote page shows it under the station ("This browser's key"), and
+  Nexus at the shack shows the same one beside the browser: check that they match when you approve
+  it. The station starts a stream only for that browser, on that key. A browser approved before
+  this update must be approved once more in Nexus at the shack before it can stream. So must a
+  browser whose key changed, for example after its site data was cleared. The page says which.
+- **Remote: Listen and the stream hear the station at the same time.** Listening on the Remote page
+  and a stream's audio used to shut each other out: whichever started first had the station's
+  receive audio, and the other was told it was in use. The station now encodes its receive audio
+  once and sends it to both. A browser that falls behind loses its own audio as a short gap and
+  never delays or cuts the other's, and a station nobody listens to still encodes nothing.
+- **Remote as a stream: a stream nobody is using ends.** After 15 minutes with no click, key
+  press, turn of the mouse wheel or PTT from your browser, the stream page asks "Still there?".
+  Any click keeps the stream going for another 15 minutes. If nobody answers within a minute, the
+  stream ends the way **End the stream** ends it, and any transmission at the station stops within
+  five seconds. Watching the picture, listening and the station transmitting do not count, so an
+  FT8 sequence left running does not keep a stream open. A PTT held down counts for as long as it
+  is held. The question sits over the picture: **Stop TX** stays where it is and works the whole
+  time.
+- **Remote as a stream: what it needs at the shack, said where you start it.** Beside **Stream
+  this window to an approved browser** in Settings, and on the stream page beside **Start the
+  stream**, Nexus says that the stream is its window as Windows draws it at the shack, so Nexus
+  must stay open there and not minimized.
+- **Remote as a stream: the shack's PC stays awake while you stream (Windows).** Clicks and keys
+  from a stream reach Nexus only, so Windows does not count them as someone at the computer, and it
+  could turn the shack's screen off or put the PC to sleep in the middle of a stream. While a stream
+  is attached, Nexus now asks Windows to keep the PC awake with the screen on, and it stops asking
+  when the last stream ends, however it ended, or when Nexus closes. A screen saver still starts if
+  one is set, a lock enforced by policy still happens, and someone at the shack can still put the PC
+  to sleep. A forgotten stream still ends at the "Still there?" question, and from then on Windows'
+  own power settings apply again.
+- **Remote as a stream: the Phone PTT says Armed until your voice keys the rig.** Pressed through
+  the stream (its button, or the space bar over the picture), the Phone cockpit's PTT reads "Armed
+  — talk to transmit" while the over waits for your voice, and "ON AIR — release to stop" once your
+  voice has keyed the rig. The Phone header's ▲ TX sign waits too, whichever PTT armed the over,
+  the page's own included: it stays dark until your voice keys the rig, unless something else is
+  on the air. It is the same stop control with the same name for screen readers, and a press at
+  the shack reads as before.
 - **Wavelog and Cloudlog on your own network over plain http (#378).** A Wavelog or Cloudlog on your
   LAN with no certificate can now take uploads at an `http://` address, as long as that address is
   on your own network: 192.168.x.x, 10.x.x.x, 172.16–31.x.x or 127.x.x.x (or a local IPv6

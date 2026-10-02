@@ -11,6 +11,9 @@ import { APPLICATION_VERSIONS } from './application-capabilities'
 import { ApplicationClient } from './application-client'
 import { APPLICATION_MAX_BYTES } from './application-protocol'
 import { AudioLink, browserAudio } from './audio-listen'
+import { StreamLink, browserStream, type StreamEnvironment } from './stream-link'
+import { STREAM_SIGNAL_BYTES } from './stream-protocol'
+import { signOffer, type DeviceKey } from './device-key'
 
 export type AccountSession = {
   accountId: string
@@ -22,7 +25,9 @@ export type AccountSession = {
   /** `expires_at` is when this browser's approval ends unless it is used again; `renewsUntil` is the end
    *  that use cannot move, or null for an approval that never renews. */
   stations: { id: string; name: string; device: { id: string; name: string; approved: number
-    generation?: number; expires_at?: number; renewsUntil?: number | null } | null }[]
+    generation?: number; expires_at?: number; renewsUntil?: number | null
+    /** A5: the device key the service holds for this browser (SPKI hex), or null. */
+    publicKey?: string | null } | null }[]
   /** A code this account has claimed that the shack has not approved yet, or null. Durable on the
    *  server, so the waiting-for-approval state survives a reload instead of living in component
    *  state that a refresh throws away. Never carries the pairing credentials. */
@@ -122,9 +127,9 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
 }
 export class BrowserClient {
   constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0,
-    readonly signInRefusal: SignInRefusal | null = null) {}
+    readonly signInRefusal: SignInRefusal | null = null, readonly streamVersion = 0) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number; operationPushVersion?: number }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number; operationPushVersion?: number; streamVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
@@ -149,7 +154,9 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion, config.operationPushVersion), signInRefusal)
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion, config.operationPushVersion), signInRefusal,
+      // A service rolled back past the stream lane reports nothing here, and the page then offers no stream.
+      config.streamVersion === 1 ? 1 : 0)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   // `createAccount` sends Auth0 straight to its sign-up screen. Without it a first-time operator
@@ -192,6 +199,10 @@ export class HostedConnection {
    *  and its own byte budget, so a bundle can never consume the allowance an operation
    *  response or an observation ACK needs. */
   readonly audio: AudioLink
+  /** The stream. Its signalling shares this socket - an offer, an answer and the candidates, with
+   *  their own small budget - and once its own WebRTC link is up, nothing of it passes here. It
+   *  is inert until a stream view starts it with a lease. */
+  readonly stream: StreamLink
   private socket: WebSocket | null = null
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
@@ -226,7 +237,11 @@ export class HostedConnection {
    *  without this the page kept showing a workspace that could never come back. */
   onRefused: ((error: RemoteError) => void) | null = null
 
-  constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
+  /** `device` is this browser's device for the station, and its key (A5): the stream's offer is
+   *  signed with it for this session. Without one the offer goes unsigned and the station refuses it
+   *  by name. */
+  constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false,
+    streamEnvironment: StreamEnvironment = browserStream(), device?: { id: string; key: () => Promise<DeviceKey | null> }) {
     this.application = new ApplicationClient(message => {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
@@ -244,6 +259,19 @@ export class HostedConnection {
         || this.socket.bufferedAmount + new TextEncoder().encode(text).length > AUDIO_BUDGET_BYTES) throw new RemoteError(503)
       this.socket.send(text)
     }, browserAudio())
+    this.stream = new StreamLink((payload, leaseId) => {
+      const text = JSON.stringify({ type: 'streamSignal', leaseId, payload })
+      // Its own budget, the lane's own ceiling: an offer is the largest thing this page sends on the
+      // socket and it may not take the queue an acknowledgement or a Stop needs beyond that.
+      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN
+        || this.socket.bufferedAmount + new TextEncoder().encode(text).length > STREAM_SIGNAL_BYTES) throw new RemoteError(503)
+      this.socket.send(text)
+    }, { ...streamEnvironment, signOffer: streamEnvironment.signOffer ?? (device && (async sdp => {
+      // The session this offer is made in: the relay stamps its id on the offer, and the station
+      // checks the signature against it.
+      const key = await device.key(), sessionId = this.sessionId
+      return key && sessionId ? signOffer(key, sdp, stationId, device.id, sessionId) : null
+    })) })
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)
@@ -269,7 +297,7 @@ export class HostedConnection {
     void this.connect()
   }
   stop(): void {
-    this.application.disconnected(); this.operations.disconnected(); this.audio.close()
+    this.application.disconnected(); this.operations.disconnected(); this.audio.close(); this.stream.dispose()
     this.disposed = true; this.abort.abort(); this.latest = null
     this.watching?.(); this.watching = undefined
     this.deferred?.(); this.deferred = undefined
@@ -314,7 +342,7 @@ export class HostedConnection {
    *  from showing readings that look live. */
   private sleep(): void {
     if (this.sleepState.asleep) return
-    this.audio.release(); this.application.disconnected(); this.operations.disconnected()
+    this.stream.close('streamHidden'); this.audio.release(); this.application.disconnected(); this.operations.disconnected()
     this.latest = null
     clearInterval(this.renewal); clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined
     // The in-flight ticket request goes with it; the next connect needs a fresh controller.
@@ -351,7 +379,7 @@ export class HostedConnection {
     if (this.sleepState.resumed) this.publishFeed({ resumed: false })
   }
   private retry(): void {
-    this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected()
+    this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.sleepState.asleep || this.reconnectTimer) return
     // What forgives the ladder is a connection that made PROGRESS, read here and cleared as it is
@@ -421,6 +449,9 @@ export class HostedConnection {
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('audio')) {
             this.audio.receive(message); return
           }
+          // The stream's signalling and the station's state for it, on the same terms: a wrong one costs
+          // the stream, never the session - and the lease the session holds.
+          if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('stream')) { this.stream.receive(message); return }
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
           // Operation v5: a settled control, pushed by the station. Same lane, same strictness.
           if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; this.operations.receiveEvent(message, new TextEncoder().encode(event.data).length); return }
@@ -476,10 +507,10 @@ export class HostedConnection {
             if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? (this.operations.enabled?OPERATION_REQUEST_BYTES:2048) : 512)) throw new RemoteError(503)
             socket.send(ack)
           } else throw new RemoteError(403)
-        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); socket.close(1000, reason) }
+        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected(); socket.close(1000, reason) }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
-      socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected() }
+      socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.stream.disconnected() }
     } catch (error) {
       if (error instanceof RemoteError && [401, 403].includes(error.status)) {
         this.latest = null

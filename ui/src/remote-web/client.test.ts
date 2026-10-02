@@ -7,6 +7,9 @@ import type { Auth0Client } from '@auth0/auth0-spa-js'
 import fixtures from '../remote-monitor/fixtures.v2.json'
 import { POLL_MS } from '../remote-monitor/protocol'
 import { startMonitor } from '../remote-monitor/session'
+import { deviceKey } from './device-key'
+import { harness, LEASE } from './stream-link.testkit'
+import { offerBinding, offerFingerprint } from './stream-protocol'
 
 class Socket {
   static OPEN = 1
@@ -542,5 +545,52 @@ it('tells the page once when a ticket is refused, and not for a failure it will 
   expect(refused.mock.calls[0]![0].code).toBe('trialRequired')
   await vi.advanceTimersByTimeAsync(120000)
   expect(refused).toHaveBeenCalledTimes(1)
+  remote.stop()
+})
+
+// The stream's messages share the observe socket. Both kinds the relay delivers - a signal and the
+// station's state - reach the stream, and neither is ever read as a malformed observation: that
+// closes the socket, and the station's lease goes with it (found by the compiled-browser stream run).
+it('routes both of the stream\'s message kinds to the stream and keeps the socket', async () => {
+  const { remote, socket } = await connection(true, 4)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  const seen: unknown[] = []
+  remote.stream.receive = raw => { seen.push(raw) }
+  socket.receive({ type: 'streamState', streaming: true })
+  socket.receive({ type: 'streamSignal', payload: { kind: 'candidate', candidate: 'candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0', sdpMid: '0' } })
+  expect(socket.readyState, 'the socket stays open').toBe(1)
+  expect(seen.map(m => (m as { type: string }).type)).toEqual(['streamState', 'streamSignal'])
+  remote.stop()
+})
+
+// A5: the offer on the socket carries this browser's key and its signature over the offer's own
+// fingerprint and the ids the relay stamps: this station, this browser's device, and the session
+// the relay gave this socket. The key is made at run time in a memory store.
+it('A5: signs the stream offer with this browser\'s key, for this station, device and session', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  vi.stubGlobal('WebSocket', Socket)
+  const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
+  const post = vi.fn(async () => ({ ticket, serverNow: 1000 }))
+  const observationTicket = async () => ({ body: await post(), startedAt: performance.now() })
+  const stationId = crypto.randomUUID(), deviceId = crypto.randomUUID(), sessionId = crypto.randomUUID()
+  const pairs = new Map<string, CryptoKeyPair>()
+  const store = { get: async (id: string) => pairs.get(id),
+    keep: async (id: string, pair: CryptoKeyPair) => { if (!pairs.has(id)) pairs.set(id, pair); return pairs.get(id)! } }
+  const h = harness({ sign: false })
+  const remote = new HostedConnection({ post, observationTicket, operationVersion: 4 } as unknown as BrowserClient, stationId, true,
+    h.env, { id: deviceId, key: () => deviceKey(stationId, store) })
+  remote.start(); await vi.advanceTimersByTimeAsync(0)
+  const socket = sockets[sockets.length - 1]
+  socket.receive({ type: 'session', sessionId })
+  await remote.stream.start(LEASE)
+  const offer = socket.sent.map(text => JSON.parse(text)).find(m => m.type === 'streamSignal' && m.payload.kind === 'offer')
+  expect(offer.payload.publicKey).toBe((await deviceKey(stationId, store))!.publicKey)
+  const publicKey = await crypto.subtle.importKey('spki', Uint8Array.from(Buffer.from(offer.payload.publicKey, 'hex')),
+    { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(offerFingerprint(offer.payload.sdp)!)))
+  const verifies = (session: string) => crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey,
+    Uint8Array.from(Buffer.from(offer.payload.signature, 'hex')), new Uint8Array(offerBinding(digest, stationId, deviceId, session)))
+  expect(await verifies(sessionId)).toBe(true)
+  expect(await verifies(crypto.randomUUID()), 'control: another session\'s does not verify').toBe(false)
   remote.stop()
 })

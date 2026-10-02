@@ -1,6 +1,6 @@
 // Same-origin browser API and outbound station admission. No radio command router.
-import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, browserOrigin, caller, cookie, device, deviceCookie, digest, id, label,
-  lifetime, native, proof, rate, Refusal, renewsUntil, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
+import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, browserOrigin, caller, cookie, device, deviceCookie, deviceKeys, digest, id, label,
+  lifetime, native, proof, publicKey, rate, Refusal, renewsUntil, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
 import { APPLICATION_VERSION, negotiatedApplicationVersion } from './application-version'
@@ -48,6 +48,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // A service rolled back past the audio lane reports nothing here, and a browser
     // that cannot see this number never offers listening at all.
     audioVersion: 1,
+    // The stream's signalling lane. A page that cannot see this number never offers a stream.
+    streamVersion: 1,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -71,6 +73,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // whose unknown fields its message parser would refuse - taking the whole
         // control socket down with it.
         audioVersion: request.headers.get('x-nexus-audio-version') === '1' ? 1 : 0,
+        // The stream's signalling lane, on the same terms: a station that does not send this header
+        // is never handed a `streamSignal`.
+        streamVersion: request.headers.get('x-nexus-stream-version') === '1' ? 1 : 0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
     }
     browserOrigin(request, env)
@@ -176,9 +181,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // device already holds the digest, so a retried approve adds nothing. The name is a label the
       // shack shows beside the browser code; the browser never asked to be named.
       // The approval time is recorded only for a Nexus that binds its grants to the generation, so only
-      // its approvals ever renew (authority.ts, `lifetime`).
-      env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,approved,approved_at,expires_at)
-        SELECT ?,e.id,e.account_id,'Paired browser',e.device_hash,1,?,? FROM enrollments e
+      // its approvals ever renew (authority.ts, `lifetime`). The device key (A5) is the one the
+      // confirming browser brought, and none from a page that sent none.
+      env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,approved,approved_at,expires_at,public_key)
+        SELECT ?,e.id,e.account_id,'Paired browser',e.device_hash,1,?,?,e.public_key FROM enrollments e
         WHERE e.id=? AND e.proof_hash=? AND e.device_hash IS NOT NULL
         AND EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
         AND NOT EXISTS(SELECT 1 FROM devices d WHERE d.station_id=e.id AND d.credential_hash=e.device_hash)`)
@@ -219,10 +225,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // waiting for a browser list. Additive: the shack reads stationId and accountId by name and has
     // always ignored anything else here. `null` when the confirm came from a browser of an older era.
     // `generation` is additive here too: the shack reads `device.id` and `device.expiresAt` by name.
-    const paired = await env.DB.prepare(`SELECT d.id, d.expires_at AS expiresAt, d.generation FROM devices d
+    // So is `publicKey` (A5), the key a Nexus that pins keys pins for this browser with the pairing.
+    const paired = await env.DB.prepare(`SELECT d.id, d.expires_at AS expiresAt, d.generation, d.public_key AS publicKey FROM devices d
       JOIN enrollments e ON d.station_id=e.id AND d.credential_hash=e.device_hash
       WHERE e.id=? AND e.proof_hash=? AND d.approved=1 AND d.expires_at>?`)
-      .bind(stationId, hash, now).first<{ id: string; expiresAt: number; generation: number }>()
+      .bind(stationId, hash, now).first<{ id: string; expiresAt: number; generation: number; publicKey: string | null }>()
     return json({ stationId, accountId: pending.account_id, entitlement: started, device: paired ?? null })
   }
 
@@ -233,12 +240,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     if (verb === 'devices') {
       await body(request, [])
       // The generation and the renewal limit go ONLY to a Nexus that asks. 1.12.0 parses this list with
-      // deny_unknown_fields, so a field added for everyone would fail every refresh it makes.
+      // deny_unknown_fields, so a field added for everyone would fail every refresh it makes. The device
+      // key (A5) likewise, on its own header.
+      const key = deviceKeys(request) ? ',public_key AS publicKey' : ''
       const devices = lifetime(request)
         ? await env.DB.prepare(`SELECT id,name,approved,expires_at AS expiresAt,generation,
-            CASE WHEN approved=1 AND approved_at IS NOT NULL THEN approved_at+? END AS renewsUntil
+            CASE WHEN approved=1 AND approved_at IS NOT NULL THEN approved_at+? END AS renewsUntil${key}
             FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8`).bind(APPROVAL_LIMIT_MS, row.id, now).all()
-        : await env.DB.prepare('SELECT id,name,approved,expires_at AS expiresAt FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8')
+        : await env.DB.prepare(`SELECT id,name,approved,expires_at AS expiresAt${key} FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8`)
           .bind(row.id, now).all()
       return json({ devices: devices.results })
     }
@@ -315,7 +324,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const stations = await Promise.all(rows.results.map(async row => {
       const current = await device(request, env, row.id, identity.accountId, now)
       return { id: row.id, name: row.name, device: current && { id: current.id, name: current.name, generation: current.generation,
-        approved: current.approved, expires_at: current.expires_at, renewsUntil: renewsUntil(current) } }
+        approved: current.approved, expires_at: current.expires_at, renewsUntil: renewsUntil(current), publicKey: current.public_key } }
     }))
     // A claim is durable on the enrollment row, but nothing put it on the wire, so the browser
     // could only remember "waiting for approval" in component state. A reload lost it, the
@@ -351,8 +360,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     requireEligible(entitlement)
     await requireUnspentIdentity(env, identity.accountId, now)
     await rate(env, `confirm:${identity.accountId}`, now, 10, 600000)
-    const input = await body(request, ['id'])
+    const input = await body(request, ['id'], ['publicKey'])
     requireValue(typeof input.id === 'string' && /^[0-9a-f-]{36}$/.test(input.id), 'invalidPairingCode', 400)
+    // The confirming browser's device key (A5), which the approval gives the device it creates.
+    const key = 'publicKey' in input ? await publicKey(input.publicKey) : null
     // Scoped to this account's own unapproved claim. An id alone is not authority: another account
     // holding the same id confirms nothing, and a claim already approved is past the point this
     // gate protects.
@@ -363,9 +374,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // credential now, as the same cookie `device` sets, and the enrollment keeps only the digest.
     // Confirming again from another browser moves that approval to the other browser.
     const credential = secret()
-    const row = await env.DB.prepare(`UPDATE enrollments SET confirmed=1, device_hash=?
+    const row = await env.DB.prepare(`UPDATE enrollments SET confirmed=1, device_hash=?, public_key=?
       WHERE id=? AND account_id=? AND approved=0 AND expires_at>? RETURNING id,name`)
-      .bind(await digest(credential), input.id, identity.accountId, now).first<{ id: string; name: string }>()
+      .bind(await digest(credential), key, input.id, identity.accountId, now).first<{ id: string; name: string }>()
     requireValue(row, 'invalidPairingCode', 400)
     return json({ station: row, accountId: identity.accountId }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
@@ -402,13 +413,24 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   }
   requireTrial(entitlement, now)
   if (verb === 'device') {
-    const input = await body(request, ['name']), name = label(input.name)
+    const input = await body(request, ['name'], ['publicKey']), name = label(input.name)
+    // The browser's device key (A5), when the page sends one.
+    const key = 'publicKey' in input ? await publicKey(input.publicKey) : null
     const current = await device(request, env, row.id, identity.accountId, now)
-    if (current) return json({ deviceId: current.id, approved: current.approved === 1 })
+    if (current) {
+      // A browser approved before it had a key registers one here, and one that lost its stored key
+      // brings a new one. The approval is left exactly as it is: the station's pin, not this row,
+      // decides whether a browser can stream, and a key the station has not pinned is approved again
+      // at the radio. Only this browser's own credential reaches this row.
+      if (key !== null && key !== current.public_key) {
+        await env.DB.prepare('UPDATE devices SET public_key=? WHERE id=? AND station_id=?').bind(key, current.id, row.id).run()
+      }
+      return json({ deviceId: current.id, approved: current.approved === 1 })
+    }
     const credential = secret(), deviceId = uuid()
-    const inserted = await env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,expires_at)
-      SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM devices WHERE station_id=? AND expires_at>?)<8 RETURNING id`)
-      .bind(deviceId, row.id, identity.accountId, name, await digest(credential), now + 600000, row.id, now).first()
+    const inserted = await env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,expires_at,public_key)
+      SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM devices WHERE station_id=? AND expires_at>?)<8 RETURNING id`)
+      .bind(deviceId, row.id, identity.accountId, name, await digest(credential), now + 600000, key, row.id, now).first()
     requireValue(inserted, 'deviceLimit', 409)
     return json({ deviceId, approved: false }, 200, { 'set-cookie': cookie(row.id, credential) })
   }

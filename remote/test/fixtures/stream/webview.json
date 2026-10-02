@@ -1,0 +1,187 @@
+{
+  "stationToWebview": [
+    {
+      "name": "pointer down",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 0.5,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer move (no button change)",
+      "message": {
+        "type": "pointer",
+        "action": "move",
+        "x": 0.5125,
+        "y": 0.2625,
+        "button": -1,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 0
+      }
+    },
+    {
+      "name": "pointer up",
+      "message": {
+        "type": "pointer",
+        "action": "up",
+        "x": 0.5125,
+        "y": 0.2625,
+        "button": 0,
+        "buttons": 0,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer down, second click of a double-click",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 0.5,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 2
+      }
+    },
+    {
+      "name": "touch cancel",
+      "message": {
+        "type": "pointer",
+        "action": "cancel",
+        "x": 0.25,
+        "y": 0.75,
+        "button": 0,
+        "buttons": 0,
+        "modifiers": 0,
+        "pointerType": "touch",
+        "clicks": 0
+      }
+    },
+    {
+      "name": "wheel",
+      "message": {
+        "type": "wheel",
+        "x": 0.3,
+        "y": 0.6,
+        "deltaX": 0,
+        "deltaY": 120,
+        "deltaMode": 0,
+        "modifiers": 0
+      }
+    },
+    {
+      "name": "key down, Space (an ordinary key: the window's own handlers decide what it does)",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": " ",
+        "code": "Space",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "key up, Space",
+      "message": {
+        "type": "key",
+        "action": "up",
+        "key": " ",
+        "code": "Space",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "key with modifiers",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": "F",
+        "code": "KeyF",
+        "modifiers": 3,
+        "repeat": false
+      }
+    },
+    {
+      "name": "committed text",
+      "message": {
+        "type": "text",
+        "text": "W1AW"
+      }
+    },
+    {
+      "name": "held: keys and a button",
+      "message": {
+        "type": "held",
+        "keys": [
+          "ShiftLeft",
+          "KeyF"
+        ],
+        "buttons": 1,
+        "seq": 19
+      }
+    },
+    {
+      "name": "reset",
+      "message": {
+        "type": "reset"
+      }
+    }
+  ],
+  "refused": [
+    {
+      "name": "an unknown kind",
+      "message": {
+        "type": "click",
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    {
+      "name": "reset with a key",
+      "message": {
+        "type": "reset",
+        "extra": 1
+      }
+    },
+    {
+      "name": "pointer outside the viewport",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": -0.1,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "held with a key twice",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Space",
+          "Space"
+        ],
+        "buttons": 0,
+        "seq": 1
+      }
+    }
+  ]
+}

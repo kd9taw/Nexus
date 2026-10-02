@@ -57,6 +57,18 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
   // How far a remote Stop has got. ACCEPTANCE IS NOT RF: see `useStationStopProgress`.
   const stopProgress = useStationStopProgress(radio)
   const onAir = isOnAir(radio)
+  // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
+  // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
+  // operator's PTT, whichever they hold, arms an over that owns the transmitter from the arm, but
+  // nothing is on the air until the voice keys it, so while the station reports it armed
+  // (`streamMic`, which says so only while that over owns the transmitter) the sign reads as it
+  // does before a key. A key read back from the radio is not one of the arbiter's owners, and the
+  // FT slot flag and the tune carrier are checked here too, for a station that reports `armed`
+  // whatever else holds the transmitter: any of them lights it. DISPLAY ONLY: `onAir` stays the
+  // arbiter's answer, and the header's amplifier strip reads it; Stop TX is not touched.
+  const lit =
+    onAir &&
+    !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
 
@@ -167,9 +179,10 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
         </span>
       )}
       {/* The ON AIR sign reads the arbiter (`isOnAir`), never the FT slot flag alone, so a voice
-          over, CW, RTTY, a tune or a key held at the radio all light it. Paint only. */}
-      <span className={`cq-statecap ${onAir ? 'tx' : radio.txEnabled ? 'rx' : 'off'}`}>
-        {onAir
+          over, CW, RTTY, a tune or a key held at the radio all light it; an over armed through the
+          stream lights it once the voice keys it (`lit`, above). Paint only. */}
+      <span className={`cq-statecap ${lit ? 'tx' : radio.txEnabled ? 'rx' : 'off'}`}>
+        {lit
           ? t('operate.strip.state.transmitting')
           : radio.txEnabled
             ? t('operate.strip.state.receiving')

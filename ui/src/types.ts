@@ -1468,6 +1468,12 @@ export interface RadioStatus {
    * (`transmitting` is set solely by the FT slot-TX path), so it is blind to manual PTT,
    * the voice keyer, CW, RTTY and SSTV. It let the dial move under a held mic key. */
   txBusyReason?: string | null
+  /** A streamed Remote operator's microphone over, null/absent without one: `armed` by their press
+   * and waiting for their voice, then `keyed` by it. DISPLAY ONLY — the Phone cockpit's PTT reads
+   * "Armed" for a press it made through the stream until this says `keyed`, and the header's ON AIR
+   * sign waits while it says `armed`, which the station says only while that over owns the
+   * transmitter. */
+  streamMic?: 'armed' | 'keyed' | null
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
@@ -3783,6 +3789,10 @@ export interface Settings {
    *  through their own stop paths. Stop-only; FT auto-sequencing is not covered. The watcher
    *  runs on a Windows station only (the Parsec host). */
   parsecPresenceStop?: boolean
+  /** Remote as a stream. Default OFF. A browser holding station control may be shown this
+   *  station's own Nexus window and drive it; while one is attached, every transmission stops
+   *  within five seconds of the stream going away or its picture going stale. Windows only. */
+  remoteStream?: boolean
   maxPowerPhone?: number | null
   maxPowerCw?: number | null
   maxPowerDigital?: number | null

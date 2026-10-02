@@ -19,6 +19,7 @@ members = [
     "crates/tempo-audio",
     "crates/tempo-net",
     "crates/tempo-sstv",
+    "crates/tempo-stream",
     "crates/deepcw",
 ]
 

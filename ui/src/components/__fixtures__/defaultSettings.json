@@ -162,6 +162,7 @@
   "swrStopEnabled": false,
   "swrStopThreshold": 2.5,
   "parsecPresenceStop": false,
+  "remoteStream": false,
   "maxPowerPhone": null,
   "maxPowerCw": null,
   "maxPowerDigital": null,

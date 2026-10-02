@@ -66,6 +66,8 @@ export type AudioPlayback = {
   reset: () => void
   close: () => Promise<void>
   sampleRate: number
+  /** Silence the output, or let it through again, without touching the buffer. */
+  mute?: (muted: boolean) => void
 }
 export type DecodedFrame = { sampleRate: number; frames: number; copyTo: (target: Float32Array, options: { planeIndex: number; format: string }) => void; close: () => void }
 export type AudioDecoderLike = {
@@ -93,6 +95,10 @@ export class AudioLink {
   /** Frames decoded, only ever counted up: the decoder's timestamps must be monotonic. */
   private frames = 0
   private closed = false
+  /** Muted while the operator's own over is on the air (the audio design's M9). Applied, never
+   *  decided, here: the caller derives it from the over on every change, so no flag of this
+   *  file's can stick on and leave the operator in silence. */
+  private muted = false
 
   constructor(
     private readonly send: (message: object) => void,
@@ -149,6 +155,15 @@ export class AudioLink {
 
   /** Permanent. Frees the audio device. */
   close(): void { this.closed = true; this.teardown(); this.set('off', null) }
+
+  /** M9: MUTED, not ducked, while the operator's own over is on the air. What the station hears
+   *  while its rig is keyed is not the band - on many radios it is the rig's own monitor, arriving
+   *  a quarter of a second late, which nobody can talk over. */
+  setMuted(muted: boolean): void {
+    if (this.muted === muted) return
+    this.muted = muted
+    this.playback?.mute?.(muted)
+  }
 
   /** One `audio*` message off the socket. Returns false when it was not one of ours, so
    *  the caller can carry on looking. Never throws for content: a malformed audio
@@ -231,6 +246,7 @@ export class AudioLink {
       const playback = await this.env.context()
       if (this.phase === 'off' || this.closed) { void playback.close(); return }
       this.playback = playback
+      playback.mute?.(this.muted)
       const decoder = this.env.decoder({
         output: frame => this.rendered(frame),
         error: () => this.fail('audioUnavailable'),
@@ -340,7 +356,10 @@ export function browserAudio(): AudioEnvironment {
           ceiling: Math.ceil((rate * AUDIO_CEILING_MS) / 1000),
         },
       })
-      node.connect(context.destination)
+      // Through a gain the page can close to silence while the operator's own over is on the air.
+      const gain = context.createGain()
+      node.connect(gain)
+      gain.connect(context.destination)
       // Autoplay policy: the listen control is a click, so this resolves - but a page
       // restored from bfcache can land here suspended, and a suspended context renders
       // nothing at all while looking perfectly healthy.
@@ -349,7 +368,8 @@ export function browserAudio(): AudioEnvironment {
         sampleRate: rate,
         push: samples => node.port.postMessage({ pcm: samples.buffer }, [samples.buffer]),
         reset: () => node.port.postMessage({ reset: true }),
-        close: async () => { node.disconnect(); await context.close() },
+        mute: muted => { gain.gain.value = muted ? 0 : 1 },
+        close: async () => { node.disconnect(); gain.disconnect(); await context.close() },
       }
     },
     document: typeof document === 'undefined' ? undefined : document,

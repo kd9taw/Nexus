@@ -62,7 +62,7 @@ const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
 // shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
 // was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
-const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true}]
+const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true}]
 
 // Shard selection. Unset means shard 0 of 1 — i.e. EVERYTHING — so a local run,
 // `npm --prefix remote run test:browser` and `scripts/gates` all keep full coverage. CI
@@ -81,8 +81,8 @@ const SHARD_SCENARIOS = SCENARIOS.filter((_, index) => index % SHARDS === SHARD)
 if (SHARDS === 1 && SHARD_SCENARIOS.length !== SCENARIOS.length) throw new Error('unsharded run must select every scenario')
 console.log(`# browser shard ${SHARD} of ${SHARDS}: running ${SHARD_SCENARIOS.length} of ${SCENARIOS.length} scenarios`)
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating} of SHARD_SCENARIOS) test(`compiled hosted browser ${ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream} of SHARD_SCENARIOS) test(`compiled hosted browser ${stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -107,7 +107,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1',...(ftOperating?{'x-nexus-operation-ft-version':'1'}:{}),...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1',...(ftOperating||stream?{'x-nexus-operation-ft-version':'1'}:{}),...(stream?{'x-nexus-stream-version':'1'}:{}),...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
     browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
@@ -151,6 +151,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && APPLICATION_VERSIONS.includes(message.version)))) {}
         else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3,4,5].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl','stopTransmit'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId,action:message.request.action?.action,on:message.request.action?.on})}
+        else if (stream && message.type === 'streamSignal' && Object.keys(message).length === 3 && ['offer', 'candidate', 'close'].includes(message.payload?.kind)) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -701,7 +702,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl'){value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'};unknownResults++}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating||stream?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         // A slow link answers heartbeats late; the station's own reply content is unchanged.
         if(r.type==='heartbeat'&&(heartbeatReplyDelayMs||heartbeatReplyJitterMs))await sleep(heartbeatReplyDelayMs+Math.random()*heartbeatReplyJitterMs)
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
@@ -786,6 +787,220 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const bytes=Buffer.byteLength(JSON.stringify(response));applicationTraffic.bytes+=bytes;applicationTraffic.maxResponseBytes=Math.max(applicationTraffic.maxResponseBytes,bytes)
       source.send(response)
     }})()
+    if(stream){
+      // REMOTE AS A STREAM, end to end in real Chrome, under the Worker's real CSP and through the real
+      // relay lane. The station's WebRTC end is a second Chrome window standing in for str0m: it answers
+      // the page's offer with a canvas picture and records what reaches each data channel. Nothing of
+      // the page is faked. The wire contract is fixtures/stream/; this proves the page speaks it.
+      stationControls=true;transmitAllowed=true
+      let shackLive=true
+      const shackWindow=(await browser.call('Target.createTarget',{url:'about:blank',newWindow:true})).targetId
+      const shack=(await browser.call('Target.attachToTarget',{targetId:shackWindow,flatten:true})).sessionId
+      await browser.call('Runtime.enable',{},shack)
+      const atShack=async expression=>{const v=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},shack);if(v.exceptionDetails)throw new Error('Station evaluation failed: '+String(v.exceptionDetails.exception?.description??v.exceptionDetails.text).split('\n')[0]);return v.result?.value}
+      const untilShack=async(expression,timeout=12000)=>{for(let i=0;i<Math.ceil(timeout/100);i++){if(await atShack(expression))return;await sleep(100)}console.log('Station diagnostic',JSON.stringify(await atShack('({received:__shack.received,state:window.__pc?.connectionState})')));throw new Error('Expected station state did not appear: '+expression)}
+      await atShack(`window.__shack={received:{control:[],ptt:[],audio:[]},candidates:[]};(()=>{const c=document.createElement('canvas');c.width=640;c.height=360;document.body.appendChild(c);const x=c.getContext('2d');let n=0;setInterval(()=>{x.fillStyle='hsl('+(n*7%360)+' 55% 35%)';x.fillRect(0,0,640,360);x.fillStyle='#fff';x.font='40px sans-serif';x.fillText('Nexus at the shack '+(n++),24,190)},50);window.__picture=c.captureStream(20)})();true`)
+      let streamSession=null
+      const offers=[],closes=[]
+      const signalling=(async()=>{while(producing&&shackLive){const source=station;let signal;try{signal=await source.take(value=>value.type==='streamSignal',500)}catch{continue}
+        try{
+          streamSession=signal.sessionId
+          assert.equal(signal.deviceId,device.id,'the relay stamps the approved device')
+          if(signal.payload.kind==='offer'){
+            offers.push(signal)
+            const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data))};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
+            source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp}})
+            source.send({type:'streamState',sessionId:signal.sessionId,streaming:true})
+          }else if(signal.payload.kind==='candidate')await atShack(`__pc?.addIceCandidate(${JSON.stringify({candidate:signal.payload.candidate,sdpMid:signal.payload.sdpMid})}).then(()=>true,()=>false)`)
+          else if(signal.payload.kind==='close'){closes.push(signal);await atShack('(window.__pc?.close(),true)')}
+        }catch(error){if(producing&&shackLive)throw error}
+      }})()
+      // The station's own candidates, trickled back as they appear - one per message, as the contract has it.
+      const trickle=(async()=>{let sent=0;while(producing&&shackLive){await sleep(100);if(!streamSession)continue;const all=await atShack('__shack.candidates').catch(()=>[]);for(;sent<all.length;sent++)station.send({type:'streamSignal',sessionId:streamSession,payload:{kind:'candidate',...all[sent]}})}})()
+      const center=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+      const press=async(point,hold=0)=>{await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session);if(hold)await sleep(hold);await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session);await sleep(50)}
+      const typeKey=async(key,code,text)=>{await browser.call('Input.dispatchKeyEvent',{type:text?'keyDown':'rawKeyDown',key,code,text,windowsVirtualKeyCode:key==='Tab'?9:key.toUpperCase().charCodeAt(0)},session);await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:key==='Tab'?9:key.toUpperCase().charCodeAt(0)},session);await sleep(50)}
+      try{
+        await geometry(1280,800)
+        await evaluate(`window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.violatedDirective+' '+e.blockedURI));true`)
+        await click(button('Stream Nexus'))
+        await until(`!!document.querySelector('.remote-stream-app')&&!!${button('Start the stream')}`,15000)
+        assert.equal(offers.length,0,'A3: nothing is offered before the operator starts it, even with station control available')
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'stream-ready.png'),Buffer.from(shot.data,'base64'))}
+        const streamDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const o=c.operations.getSnapshot();return {status:document.querySelector('.remote-stream-status')?.textContent,link:c.stream.getSnapshot(),ops:{connected:o.connected,fresh:o.fresh,busy:o.busy,error:o.error,phase:o.state?.phase,lease:o.state?.leaseId}}}f=f.return}return null})()`)
+        await click(button('Start the stream'))
+        try{await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='live'&&document.querySelector('.remote-stream-video')?.videoWidth>0`,20000)}
+        catch(error){console.log('Stream diagnostic',JSON.stringify({page:await streamDiagnostic(),offers:offers.length,shack:await atShack('({state:window.__pc?.connectionState,received:__shack.received,candidates:__shack.candidates.length})').catch(e=>String(e))}));throw error}
+        assert.equal(offers.length,1,'one offer, under the lease the station issued')
+        const heldLease=await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return c.operations.getSnapshot().state?.leaseId;f=f.return}return null})()`)
+        assert.equal(offers[0].leaseId,heldLease,'A3: the offer carries the lease this browser holds')
+        // A5 in real Chrome: the offer carries the key this browser made and registered with its device,
+        // and a signature over the offer's own DTLS fingerprint and the ids the relay stamps. The station's
+        // check is Rust's (ring); this proves the page's half end to end, against the signed bytes built
+        // again here from the contract's README. The private half is a non-extractable key in IndexedDB.
+        const signed=offers[0].payload
+        assert.equal(signed.publicKey,(await app.db.prepare('SELECT public_key FROM devices WHERE id=?').bind(device.id).first()).public_key,'A5: the offer carries the key this browser registered with its device')
+        const fingerprint=signed.sdp.split('\r\n').find(line=>line.startsWith('a=fingerprint:sha-256 ')).slice(22).split(':').map(pair=>parseInt(pair,16))
+        const hashed=new Uint8Array(await crypto.subtle.digest('SHA-256',Uint8Array.from(fingerprint)))
+        const bound=session=>Uint8Array.from([...new TextEncoder().encode('nexus-stream-offer/1'),...hashed,...new TextEncoder().encode(pair.stationId+device.id+session)])
+        const verifyKey=await crypto.subtle.importKey('spki',Buffer.from(signed.publicKey,'hex'),{name:'ECDSA',namedCurve:'P-256'},false,['verify'])
+        const verifies=session=>crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},verifyKey,Buffer.from(signed.signature,'hex'),bound(session))
+        assert.equal(await verifies(offers[0].sessionId),true,'A5: the signature verifies for this station, device and session')
+        assert.equal(await verifies(crypto.randomUUID()),false,'control: it does not verify for another session')
+        assert.deepEqual(await evaluate(`new Promise(done=>{const open=indexedDB.open('nexus-remote-device-keys');open.onsuccess=()=>{const got=open.result.transaction('keys').objectStore('keys').get(${JSON.stringify(pair.stationId)});got.onsuccess=()=>done({type:got.result?.privateKey?.type,extractable:got.result?.privateKey?.extractable})}})`),{type:'private',extractable:false},'A5: the private half is a non-extractable key in IndexedDB')
+        // S9: the heartbeat names the frame the page actually presented, in the station's RTP clock.
+        await untilShack(`__shack.received.control.some(m=>m.type==='heartbeat'&&Number.isInteger(m.decodedFrameAt))`)
+        assert.deepEqual(await atShack(`Object.keys(__shack.received.control.find(m=>m.type==='heartbeat')).sort()`),['decodedFrameAt','leaseId','requestId','type'])
+        // W3: the whole stream ran under the Worker's policy without one violation.
+        assert.deepEqual(await evaluate('window.__csp'),[],'no CSP violation while negotiating and streaming')
+        if(artifacts)for(const theme of ['dark','light']){await evaluate(`document.documentElement.dataset.theme='${theme}';true`);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`stream-live-${theme}.png`),Buffer.from(shot.data,'base64'))}
+        await evaluate(`document.documentElement.dataset.theme='dark';true`)
+        // S11 / A2, the page's half: a click on the picture arrives as a pointer at the frame's own
+        // coordinates; a key typed on the focused picture arrives; Tab stays here and leaves the picture.
+        await press(await center('.remote-stream-video'))
+        await untilShack(`__shack.received.control.some(m=>m.type==='pointer'&&m.action==='up')`)
+        const [down]=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='down')`)
+        assert.ok(Math.abs(down.x-0.5)<0.02&&Math.abs(down.y-0.5)<0.02,'the press lands at the centre of the frame: '+JSON.stringify(down))
+        // A click is a click at the shack: Chrome's pointer events carry no click count (detail 0), and a
+        // press and release sent with none would reach Nexus as a release that clicks nothing.
+        const [up]=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up')`)
+        assert.deepEqual([down.clicks,up.clicks],[1,1],'one click, counted on the press and its release')
+        assert.equal(await evaluate(`document.activeElement?.classList.contains('remote-stream-video')`),true,'pressing the picture focuses it')
+        await typeKey('a','KeyA','a')
+        await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.key==='a'&&m.action==='up')`)
+        await typeKey('Tab','Tab')
+        assert.equal(await atShack(`__shack.received.control.some(m=>m.type==='key'&&m.key==='Tab')`),false,'Tab is never sent: it is the way out of the picture')
+        // Keys typed on the page's own controls stay on the page.
+        const before=await atShack('__shack.received.control.filter(m=>m.type==="key").length')
+        await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX').focus();true`)
+        await typeKey('b','KeyB','b')
+        assert.equal(await atShack('__shack.received.control.filter(m=>m.type==="key").length'),before,'a key on Stop TX never reaches the station')
+        // S7: a held PTT is re-asserted under one hold id until let go, then released at once.
+        await press(await center('.remote-stream-ptt'),450)
+        await untilShack(`__shack.received.ptt.some(m=>m.type==='pttRelease')`)
+        const ptt=await atShack('__shack.received.ptt')
+        const holds=ptt.filter(m=>m.type==='pttHold')
+        assert.ok(holds.length>=3,'held for 450 ms: re-asserted about every 100 ms ('+holds.length+')')
+        assert.equal(new Set(ptt.filter(m=>m.type!=='held').map(m=>m.holdId)).size,1,'one press, one hold id')
+        assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
+        // THE DEAD-MAN, the page's half: a key held on the picture goes as itself and is re-asserted on
+        // ptt at once and every 100 ms while held, and not after; a button held on the picture likewise.
+        const helds=async()=>(await atShack('__shack.received.ptt')).filter(m=>m.type==='held')
+        const consecutive=list=>{const seqs=list.map(m=>m.seq).sort((a,b)=>a-b);return seqs.every((seq,i)=>seq===seqs[0]+i)}
+        await evaluate(`document.querySelector('.remote-stream-video').focus();true`)
+        let heldBefore=(await helds()).length
+        const space={key:' ',code:'Space',windowsVirtualKeyCode:32}
+        await browser.call('Input.dispatchKeyEvent',{type:'keyDown',text:' ',...space},session)
+        await sleep(450)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyUp',...space},session)
+        await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.code==='Space'&&m.action==='up')`)
+        await sleep(300)
+        const keyHeld=(await helds()).slice(heldBefore)
+        assert.ok(keyHeld.length>=4&&keyHeld.length<=7&&keyHeld.every(m=>m.keys.join()==='Space'&&m.buttons===0)&&consecutive(keyHeld),'Space held 450 ms, then let go: re-asserted at once and every 100 ms, and not after ('+JSON.stringify(keyHeld)+')')
+        heldBefore=(await helds()).length
+        const point=await center('.remote-stream-video'),ups=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up').length`)
+        await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
+        await sleep(450)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session)
+        await untilShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up').length>${ups}`)
+        await sleep(300)
+        const buttonHeld=(await helds()).slice(heldBefore)
+        assert.ok(buttonHeld.length>=4&&buttonHeld.length<=7&&buttonHeld.every(m=>m.keys.length===0&&m.buttons===1)&&consecutive(buttonHeld),'a button held 450 ms, then let go: re-asserted likewise ('+JSON.stringify(buttonHeld)+')')
+        // THE STOP LINE, in real layout: Stop TX is on screen and nothing covers it, at every size.
+        for(const [w,h] of [[360,640],[390,844],[844,390],[1024,768],[1280,800],[1920,1080]])for(const theme of ['dark','light']){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'));true`)
+          await settledLayout()
+          const stop=await evaluate(`(()=>{const e=[...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX'),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y)),docW:document.documentElement.scrollWidth,w:innerWidth}})()`)
+          assert.ok(stop.inside&&stop.hit&&stop.docW<=stop.w+1,`Stop TX reachable at ${w}x${h} ${theme}: ${JSON.stringify(stop)}`)
+        }
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.dataset.theme='dark';window.dispatchEvent(new Event('resize'));true`)
+        await settledLayout()
+        // Stop reaches the station both ways: on the stream's control channel and on the socket.
+        const socketStops=stopRequests.length
+        await click(button('Stop TX'))
+        await untilShack(`__shack.received.control.some(m=>m.type==='stopTransmit')`)
+        assert.equal((await atShack(`__shack.received.control.find(m=>m.type==='stopTransmit')`)).leaseId,heldLease)
+        await sleep(300)
+        assert.equal(stopRequests.length,socketStops+1,'and the same Stop over the socket, at the same moment')
+        // Ending it is the operator's to ask; the station is told, and the picture goes.
+        await click(button('End the stream'))
+        await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`)
+        for(let i=0;i<30&&!closes.length;i++)await sleep(100)
+        assert.equal(closes.length,1,'the station is told the stream ended')
+        // "STILL THERE?" (the operator's picks "15 min + prompt" and "Only clicks, keys, PTT"), in real
+        // layout and real hit-testing. The stream starts again and this TEST puts a clock of its own on
+        // the page's idle watch; nothing in the product changes the fifteen minutes. At 15:00 the prompt
+        // is up with Stop TX where it was and reachable at every size; the prompt's own press reaches
+        // nothing at the shack; and unanswered at 16:00 the stream ends as End the stream ends it.
+        await click(button('Start the stream'))
+        await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='live'&&document.querySelector('.remote-stream-video')?.videoWidth>0`,20000)
+        assert.equal(offers.length,2,'a second offer, for the stream started again')
+        assert.equal(await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){window.__idleSkew=0;c.stream.idle.now=()=>performance.now()+window.__idleSkew;return true}f=f.return}return false})()`),true,'the test clock is on the idle watch')
+        const stopBox=()=>evaluate(`JSON.stringify([...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX').getBoundingClientRect())`)
+        const stopBefore=await stopBox()
+        await evaluate(`window.__idleSkew+=15*60000+1000;true`)
+        await until(`!!document.querySelector('.remote-stream-idle')`,5000)
+        assert.equal(await stopBox(),stopBefore,'the prompt moved Stop TX')
+        if(artifacts)for(const theme of ['dark','light']){await evaluate(`document.documentElement.dataset.theme='${theme}';true`);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`stream-still-there-${theme}.png`),Buffer.from(shot.data,'base64'))}
+        // THE STOP LINE while the prompt is up: Stop TX on screen and uncovered, and the prompt's button too.
+        for(const [w,h] of [[360,640],[390,844],[844,390],[1024,768],[1280,800],[1920,1080]])for(const theme of ['dark','light']){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'));true`)
+          await settledLayout()
+          const reach=await evaluate(`(()=>{const at=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y))}},keep=document.querySelector('.remote-stream-idle button');return {stop:at([...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX')),keep:keep&&at(keep),docW:document.documentElement.scrollWidth,w:innerWidth}})()`)
+          assert.ok(reach.stop.inside&&reach.stop.hit&&reach.docW<=reach.w+1,`Stop TX reachable with the prompt up at ${w}x${h} ${theme}: ${JSON.stringify(reach)}`)
+          assert.ok(reach.keep?.inside&&reach.keep.hit,`the prompt's button reachable at ${w}x${h} ${theme}: ${JSON.stringify(reach)}`)
+        }
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.dataset.theme='dark';window.dispatchEvent(new Event('resize'));true`)
+        await settledLayout()
+        assert.equal(await evaluate(`!!document.querySelector('.remote-stream-idle')`),true,'the sweep ran with the prompt up')
+        // The prompt's own press, dragged off it onto the picture before it is let go: none of it is a
+        // press, a release or a drag at the shack, and it answers the prompt.
+        const keep=await center('.remote-stream-idle button'),below={x:keep.x,y:keep.y+140}
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-video').contains(document.elementFromPoint(${below.x},${below.y}))`),true,'the drag ends over the picture')
+        const [controlBefore,pttBefore]=await atShack('[__shack.received.control.length,__shack.received.ptt.length]')
+        await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...keep,button:'left',buttons:1,clickCount:1},session)
+        await sleep(100)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',...below,button:'left',buttons:1},session)
+        await sleep(100)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...below,button:'left',buttons:0,clickCount:1},session)
+        await until(`!document.querySelector('.remote-stream-idle')`,3000)
+        await sleep(400)
+        const leaked=await atShack(`[...__shack.received.control.slice(${controlBefore}).filter(m=>m.type==='pointer'&&(m.action!=='move'||m.buttons!==0)),...__shack.received.ptt.slice(${pttBefore}).filter(m=>m.type==='held'&&m.buttons!==0)]`)
+        assert.deepEqual(leaked,[],'the prompt\'s own press reached nothing at the shack')
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-app')?.dataset.streamPhase`),'live','answered: the stream carries on')
+        // Unanswered: fifteen minutes on the prompt is back, and a minute after that the stream ends -
+        // the close on the signalling lane and control released, which is what End the stream sends.
+        const releases=()=>operationWire.filter(v=>v.direction==='out'&&v.type==='release').length
+        const releasesBefore=releases()
+        await evaluate(`window.__idleSkew+=15*60000+1000;true`)
+        await until(`!!document.querySelector('.remote-stream-idle')`,5000)
+        assert.equal(closes.length,1,'the prompt alone ends nothing')
+        await evaluate(`window.__idleSkew+=60000;true`)
+        await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`,5000)
+        for(let i=0;i<30&&closes.length<2;i++)await sleep(100)
+        assert.equal(closes.length,2,'unanswered, the station is told the stream ended')
+        for(let i=0;i<30&&releases()===releasesBefore;i++)await sleep(100)
+        assert.equal(releases(),releasesBefore+1,'and control is released')
+        assert.equal(loggingLease,null,'the station holds no lease for this browser')
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-placeholder')?.textContent.includes('Nobody answered “Still there?”, so the stream ended.')`),true,'the page says why it ended')
+        // POSITIVE CONTROL for the CSP listener above: a request the policy forbids is reported, so the
+        // empty list really meant "nothing violated", not "nothing was listening".
+        await evaluate(`fetch('https://example.invalid/').catch(()=>{});true`)
+        for(let i=0;i<30&&!(await evaluate('window.__csp.length'));i++)await sleep(100)
+        assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
+        assert.equal(exceptions,0,'the stream view raised no runtime exception')
+        assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, "Still there?" at 15:00 with Stop TX unmoved and reachable at 12 layouts and its press reaching nothing at the shack, the idle end at 16:00 as close and release, no CSP violation`)
+      }finally{
+        shackLive=false
+        await Promise.allSettled([signalling,trickle])
+      }
+      return
+    }
     await geometry(390,844)
     await click(button('Observe station'))
     await until(`document.querySelector('.rm-frequency')?.textContent.includes('14.074000')`)

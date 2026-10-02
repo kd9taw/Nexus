@@ -25,9 +25,11 @@ pub mod parsec_presence;
 pub mod radio_selection;
 pub mod receivers;
 pub mod remote_logging;
+pub mod remote_mic;
 pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
+pub mod remote_stream;
 pub mod remote_transmit;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
@@ -2582,6 +2584,24 @@ pub struct Engine {
     remote_settings_path: Option<std::path::PathBuf>,
     remote_selection_host_ready: bool,
     remote_transmit: Option<crate::remote_control::transmit::TransmitPermit>,
+    /// A streamed session's transmit presence, and its held PTT: see `engine/remote_stream.rs`.
+    remote_presence: Option<crate::remote_control::transmit::TransmitPermit>,
+    remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
+    /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
+    mic: crate::mic::MicLatch,
+    mic_feed: Option<crate::mic::MicFeed>,
+    /// The presence permit the over armed under: G5 is "presence, for THIS over".
+    mic_presence: Option<crate::remote_control::transmit::TransmitPermit>,
+    /// One-shot microphone abort: the loop flushes the output ring + unkeys, then clears it.
+    mic_abort: bool,
+    /// Why the next drop of the over happens, when a caller knows better than "a stop".
+    mic_end: Option<crate::mic::MicEnded>,
+    /// Why the last over ended, for the page, until the next arm.
+    mic_ended: Option<crate::mic::MicEnded>,
+    /// The no-power warning's evidence for the current over (display only): the rig reported
+    /// power out, or reported ~0 while the operator's voice was arriving.
+    mic_rf_seen: bool,
+    mic_zero_seen: bool,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4453,6 +4473,8 @@ pub enum TxOwner {
     Tune,
     /// A held mic key — the operator's, or a CAT-broker client's.
     ManualPtt,
+    /// A streamed Remote operator's microphone over, armed or keyed (`engine/remote_mic.rs`).
+    Mic,
     /// The voice keyer is playing a message.
     Voice,
     /// CW is sending (queue non-empty).
@@ -4472,6 +4494,7 @@ impl TxOwner {
             TxOwner::Slot => "Another transmission is in flight — stop it first",
             TxOwner::Tune => "Tune carrier is up — stop tuning first",
             TxOwner::ManualPtt => "Mic PTT is held — release it first",
+            TxOwner::Mic => "The Remote microphone is transmitting — stop it first",
             TxOwner::Voice => "A voice message is transmitting — stop it first",
             TxOwner::Cw => "CW is sending — stop it first",
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
@@ -4926,6 +4949,16 @@ impl Engine {
             remote_settings_path: None,
             remote_selection_host_ready: false,
             remote_transmit: None,
+            remote_presence: None,
+            remote_ptt_hold: None,
+            mic: crate::mic::MicLatch::default(),
+            mic_feed: None,
+            mic_presence: None,
+            mic_abort: false,
+            mic_end: None,
+            mic_ended: None,
+            mic_rf_seen: false,
+            mic_zero_seen: false,
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
@@ -9514,6 +9547,7 @@ impl Engine {
         if po_w.is_some() {
             self.rig_tx_po_w = po_w;
         }
+        self.observe_mic_power(po_w);
         if comp_db.is_some() {
             self.rig_tx_comp_db = comp_db;
         }
@@ -9907,6 +9941,16 @@ impl Engine {
     /// `Err`, which the keyer's toast shows. It used to be ignored without a word. Replaces any
     /// still-pending message (one voice over at a time).
     pub fn send_voice(&mut self, samples: Vec<f32>) -> Result<(), String> {
+        // A streamed operator's microphone over owns the transmitter from its arm: a canned
+        // message queued under it would be appended to the output ring behind their voice, and
+        // their live audio would then reach the air late (the microphone's M3 and M4).
+        if self.mic.active() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: the Remote microphone is transmitting",
+            );
+            return Err(TxOwner::Mic.busy_reason());
+        }
         if !self.tx_enabled {
             tempo_core::applog::info("tx", "voice-keyer message refused: transmit is off");
             return Err(
@@ -13737,6 +13781,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // TX re-enables — else re-arming TX re-keys the radio with nobody holding it.
         self.manual_ptt = false;
         self.broker_ptt = false;
+        // …and a streamed operator's microphone over: dropped, its feed closed, and the abort
+        // armed so the loop flushes and unkeys (M10: halt_tx is still the universal stop).
+        self.drop_mic_latch();
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
@@ -14124,6 +14171,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.psk_queue.clear();
             self.psk_abort = true;
             self.drop_psk_latch();
+            // The microphone over joins RTTY and SSTV (the audio design's M10): it is latched,
+            // with no end of its own, so TX Off ends it in flight rather than letting it run.
+            self.drop_mic_latch();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -16965,6 +17015,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(TxOwner::Tune)
         } else if self.manual_ptt || self.broker_ptt {
             Some(TxOwner::ManualPtt)
+        } else if self.mic.active() {
+            // From the arm, before any audio: an armed over owns the transmitter the way a
+            // latched RTTY stream does from its first tick, so nothing else can key under it.
+            Some(TxOwner::Mic)
         } else if self.voice_tx.is_some() {
             Some(TxOwner::Voice)
         } else if !self.cw_queue.is_empty() {
@@ -20467,6 +20521,16 @@ contact yourself."
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
+        // What the Phone cockpit's PTT and the header's ON AIR sign show of a streamed microphone
+        // over; display only. `Armed` only while that over owns the transmitter: anything the
+        // arbiter names before it (an FT over, the tune carrier, a key at the shack) is on the air.
+        s.radio.stream_mic = if self.mic.keyed() {
+            Some(crate::dto::StreamMic::Keyed)
+        } else if self.mic.active() && self.tx_owner() == Some(TxOwner::Mic) {
+            Some(crate::dto::StreamMic::Armed)
+        } else {
+            None
+        };
         s.radio.rig_keyed = self.rig_keyed;
         // HRD link: Some(true) delivered, Some(false) HRD unreachable (contacts queued),
         // None nothing sent yet. Only meaningful when HRD forwarding is on.

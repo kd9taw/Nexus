@@ -113,6 +113,36 @@ no window size moves them.
 4. The cockpit **unconditionally drops PTT when you navigate away**, so there is
    no stuck-transmitter path.
 
+### Talk from Remote
+
+From a browser on [Remote](settings-reference.md#remote-access), with the stream
+of this window on, you talk on your own microphone instead of the rig's.
+
+1. **Set the rig to take its transmit audio from USB** before you start. The
+   menu is usually called the SSB (or voice) audio source, and most radios come
+   set to the front microphone. FM and AM have their own source menu on some
+   radios. Until it is set, an over keys the rig but sends whatever the shack's
+   microphone picks up. If the rig reports its power output and shows none while
+   your voice is arriving, the page tells you to check that menu.
+2. Turn on the stream page's microphone button, which reads **Mic off** until you
+   do. Your browser asks for the microphone then, and not before.
+3. Hold PTT: the page's **Hold PTT**, the Space bar over the picture, or this
+   cockpit's **PTT** clicked through the picture. Each one arms an over, and the
+   rig keys when your audio arrives. With the microphone off, nothing keys, and
+   the page says so. Pressed through the picture, this cockpit's PTT reads
+   **Armed — talk to transmit** until your voice keys the rig, then **ON AIR —
+   release to stop**. Whichever you hold, the header's **▲ TX** sign stays dark
+   until your voice keys the rig, and the page's **Hold PTT**, held, shows the
+   accent colour until then and the transmit colour from then on.
+
+The over ends when you let go, when your audio stops arriving for 200 ms, when
+the picture or the connection freezes, and at 10 minutes. **Lock** does not work
+from Remote: an over lasts only while you hold PTT. The station's receive audio
+is muted in your browser while you are on the air. The page reminds you to give
+your call sign before each ten minutes of a run of overs is up, and again when
+the stream ends. **Stop TX**, beside the picture, stops everything at the
+station.
+
 ### Work FM and repeaters
 
 1. Set **Phone mode ▸ FM** in
@@ -182,9 +212,11 @@ License-class enforcement hard-blocks PTT outside your privileges — see
 
 ## Honest limits
 
-- **No live mic-through-app audio bridge.** You use the rig's mic for live voice;
-  Nexus handles canned messages, recording, the scope, and CAT/PTT — not a
-  software voice path to the transmitter. This applies to SSB and FM alike.
+- **No live mic-through-app audio bridge at the shack.** You use the rig's mic for
+  live voice; Nexus handles canned messages, recording, the scope, and CAT/PTT —
+  not a software voice path to the transmitter. This applies to SSB and FM alike.
+  The one exception is [Remote](#talk-from-remote), where your browser's
+  microphone is the voice, and the rig has to take its audio from USB for it.
 
 ## Related guides
 

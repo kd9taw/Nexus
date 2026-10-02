@@ -11,6 +11,8 @@ pub(crate) mod query;
 pub(crate) mod sstv;
 #[cfg(test)]
 pub(crate) mod stored_log_tests;
+/// Remote as a stream: the `streamSignal` lane and the session thread (see its header).
+pub(crate) mod stream;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -18,6 +20,7 @@ mod vault;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch};
 use transport::{credential, empty, identifier, station_path, Client, REMOTE_ORIGIN};
@@ -40,6 +43,9 @@ pub struct Status {
     station_permissions: Vec<String>,
     transmit_permissions: Vec<String>,
     logging_controller: Option<String>,
+    /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
+    /// stream. An approved browser listed with a key and missing here is approved again to stream.
+    pinned_devices: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -56,6 +62,33 @@ struct Device {
     /// never renews.
     #[serde(default)]
     renews_until: Option<u64>,
+    /// The browser's device key (A5): its SPKI as lowercase hex. Listed only to a Nexus that asks
+    /// (`transport::Client::post` does), and never shown: the desktop is given `key`.
+    #[serde(default, skip_serializing)]
+    public_key: Option<String>,
+    /// SHA-256 of that key as lowercase hex: shown, shortened, beside the browser's name, and what
+    /// approving it pins. Worked out here from the listed key, never taken from the service.
+    #[serde(skip_deserializing)]
+    key: Option<String>,
+}
+/// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). `None` for anything that
+/// is not the shape of a P-256 key.
+fn fingerprint(public_key: &str) -> Option<String> {
+    if !tempo_stream::protocol::device_key(public_key) {
+        return None;
+    }
+    let spki = tempo_stream::protocol::hex_bytes(public_key)?;
+    Some(
+        ring::digest::digest(&ring::digest::SHA256, &spki)
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+/// A pin as stored: 32 bytes of SHA-256 as lowercase hex.
+fn pin_shape(key: &str) -> bool {
+    key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 impl Device {
     fn approval(&self) -> Approval {
@@ -135,6 +168,10 @@ pub enum Action {
         /// "Also allow FT8/FT4 transmit" on this approval. Ignored when revoking.
         #[serde(default)]
         transmit: bool,
+        /// A5: the device key the operator was shown beside this browser (its SHA-256, the device
+        /// list's `key`). Pinned only if the service still lists that key once it has approved.
+        #[serde(default)]
+        key: Option<String>,
     },
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
@@ -152,7 +189,7 @@ const MAX_REMEMBERED: usize = 8;
 /// store can block (a locked keychain can prompt).
 enum Persist {
     /// The controller loaded or created this pairing; later decisions apply to it.
-    Bound(Binding, Option<vault::State>),
+    Bound(Binding, Option<vault::State>, Option<Box<vault::Pins>>),
     /// Remote was turned on and is connecting.
     Enabled,
     /// Remote went off for a reason that ends access: Revoke station access, a cancelled pairing,
@@ -176,27 +213,91 @@ enum Persist {
     },
     /// The approvals the service lists right now. A grant remembered against any other approval
     /// (a browser revoked, re-approved, expired or gone) is forgotten; the rest are rebound to the
-    /// approval as listed.
+    /// approval as listed. So is a pin for a browser no longer approved.
     Approvals(Vec<(String, Approval)>),
     /// The pairing was removed.
     Removed,
+    /// A5: the operator approved this browser at the radio with its device key shown (`Some`: the
+    /// key's SHA-256, now pinned), or the approval pinned nothing, or the browser was revoked
+    /// (`None`: no pin).
+    Pin {
+        device_id: String,
+        key: Option<String>,
+    },
+    /// The browsers the service lists as approved right now: a pin for any other is forgotten.
+    Listed(Vec<String>),
 }
-/// What the vault must hold next. Each write is the whole record, so only the latest matters.
+/// What the vault must hold next. Each write is a whole record, so only the latest of each matters.
 enum Write {
     Save(vault::State),
     Remove,
+    /// The pins' own entry (A5).
+    SavePins(vault::Pins),
+    RemovePins,
 }
 /// The record for the current pairing, kept in step with every decision.
 #[derive(Default)]
 struct Remembered {
     binding: Option<Binding>,
     state: Option<vault::State>,
+    /// A5: browser id to the SHA-256 of the device key the operator pinned for it, kept in the
+    /// vault's pins entry. A pin is an approval's, not a permission's: the switches, take over and
+    /// Turn off leave it; approving at the radio sets it and revoking the browser removes it.
+    pins: BTreeMap<String, String>,
 }
 impl Remembered {
-    /// Apply one decision. Returns the write it calls for, or `None` when nothing changed.
-    fn apply(&mut self, decision: Persist) -> Option<Write> {
+    /// Apply one decision. Returns the writes it calls for: at most one for each entry, and none
+    /// when nothing changed.
+    fn apply(&mut self, decision: Persist) -> Vec<Write> {
+        let pins = self.apply_pins(&decision);
+        self.apply_state(decision).into_iter().chain(pins).collect()
+    }
+    fn apply_pins(&mut self, decision: &Persist) -> Option<Write> {
+        let before = self.pins.clone();
         match decision {
-            Persist::Bound(bound, state) => {
+            Persist::Bound(bound, _, pins) => {
+                self.pins = pins
+                    .as_ref()
+                    .filter(|p| p.binding == *bound)
+                    .map(|p| p.keys.clone())
+                    .unwrap_or_default();
+                return None;
+            }
+            Persist::Removed => {
+                self.pins.clear();
+                return Some(Write::RemovePins);
+            }
+            Persist::Off => self.pins.clear(),
+            Persist::Pin { device_id, key } => match key {
+                Some(key) => {
+                    self.pins.insert(device_id.clone(), key.clone());
+                }
+                None => {
+                    self.pins.remove(device_id);
+                }
+            },
+            Persist::Listed(approved) => self.pins.retain(|id, _| approved.contains(id)),
+            Persist::Approvals(approvals) => self
+                .pins
+                .retain(|id, _| approvals.iter().any(|(listed, _)| listed == id)),
+            _ => return None,
+        }
+        if self.pins == before {
+            return None;
+        }
+        let binding = self.binding.clone()?;
+        Some(if self.pins.is_empty() {
+            Write::RemovePins
+        } else {
+            Write::SavePins(vault::Pins {
+                binding,
+                keys: self.pins.clone(),
+            })
+        })
+    }
+    fn apply_state(&mut self, decision: Persist) -> Option<Write> {
+        match decision {
+            Persist::Bound(bound, state, _) => {
                 self.state = state.filter(|s| s.binding == bound);
                 self.binding = Some(bound);
                 return None;
@@ -206,6 +307,7 @@ impl Remembered {
                 self.state = None;
                 return Some(Write::Remove);
             }
+            Persist::Pin { .. } | Persist::Listed(_) => return None,
             _ => {}
         }
         let bound = self.binding.clone()?;
@@ -270,7 +372,9 @@ impl Remembered {
                 }
                 listed.is_some()
             }),
-            Persist::Bound(..) | Persist::Removed => return None,
+            Persist::Bound(..) | Persist::Removed | Persist::Pin { .. } | Persist::Listed(_) => {
+                return None
+            }
         }
         if self.state.as_ref() == Some(&state) {
             return None;
@@ -280,6 +384,12 @@ impl Remembered {
     }
     fn grants(&self) -> &[vault::Grant] {
         self.state.as_ref().map_or(&[], |s| s.grants.as_slice())
+    }
+    /// The device key pinned for this browser (A5), as the SHA-256 a stream offer's key must have.
+    fn pinned(&self, device_id: &str) -> Option<[u8; 32]> {
+        tempo_stream::protocol::hex_bytes(self.pins.get(device_id)?)?
+            .try_into()
+            .ok()
     }
 }
 #[derive(Default)]
@@ -307,7 +417,7 @@ impl Control {
     /// Hand a decision to the vault writer. Never called from `stop`: `stop` also runs when Nexus
     /// exits, and an exit must not be remembered as the operator turning Remote off.
     fn remember(&mut self, decision: Persist) {
-        if let Some(write) = self.remembered.apply(decision) {
+        for write in self.remembered.apply(decision) {
             if let Some(writer) = &self.vault_writer {
                 let _ = writer.send(write);
             }
@@ -373,6 +483,8 @@ impl Service {
         // `audio`: the station's bounded receive-audio copy, for a listening browser.
         // `None` leaves the audio lane unadvertised, so nothing is ever offered it.
         #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
+        // What a streamed session needs from the application: the window its input goes to.
+        stream: stream::Host,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -385,8 +497,10 @@ impl Service {
                 spectrum: Some(spectrum),
                 meters,
                 sources,
+                // One encoder for the station, whoever listens: the Listen lane and every stream.
                 #[cfg(feature = "radio")]
-                audio,
+                audio: audio.map(audio::ReceiveFanout::new),
+                stream,
             },
         )
     }
@@ -408,6 +522,7 @@ impl Service {
                 sources: None,
                 #[cfg(feature = "radio")]
                 audio: None,
+                stream: stream::Host::default(),
             },
         )
     }
@@ -446,6 +561,12 @@ impl Service {
         // of arming the rig a second later. See `Engine::halt_tx`.
         tempo_app::engine::engine_lock(&engine)
             .set_remote_transmit_revocation(operations.transmit_revocation());
+        // A streamed operator's held PTT: the stream records the holds, the engine arms and
+        // releases the microphone over on its own radio-loop tick (`engine/remote_stream.rs`).
+        tempo_app::engine::engine_lock(&engine).set_remote_ptt_hold(feeds.stream.ptt.clone());
+        // …and the page's microphone, which the stream decodes and the engine's microphone over
+        // plays, only while that press has armed it (`engine/remote_mic.rs`).
+        tempo_app::engine::engine_lock(&engine).set_remote_mic_feed(feeds.stream.mic.clone());
         let control = Arc::new(Mutex::new(Control {
             operations,
             memories: feeds
@@ -509,6 +630,12 @@ impl Service {
             serde_json::from_value(operations["controlDevices"].clone()).unwrap_or_default();
         status.transmit_permissions =
             serde_json::from_value(operations["transmitDevices"].clone()).unwrap_or_default();
+        status.pinned_devices = status
+            .devices
+            .iter()
+            .filter(|d| d.key.is_some() && control.remembered.pins.get(&d.id) == d.key.as_ref())
+            .map(|d| d.id.clone())
+            .collect();
         status.observation_generation = enabled.then(|| control.generation.to_string());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
@@ -597,9 +724,19 @@ impl Service {
         let (reply, response) = oneshot::channel();
         {
             let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
-            if matches!(&action, Action::Device { approve: false, .. }) {
+            if let Action::Device {
+                approve: false,
+                device_id,
+                ..
+            } = &action
+            {
                 control.operations.invalidate();
                 control.remember(Persist::ClearGrants);
+                // A5: revoking ends the approval, and its pin with it.
+                control.remember(Persist::Pin {
+                    device_id: device_id.clone(),
+                    key: None,
+                });
             }
             if matches!(
                 action,
@@ -725,13 +862,22 @@ impl Controller {
             }),
             Err(error) => {
                 if let Ok(mut control) = self.control.lock() {
-                    control.remember(Persist::Bound(binding, None));
+                    control.remember(Persist::Bound(binding, None, None));
                 }
                 self.reflect("disabled");
                 phase(&self.status, "disabled", Some(error));
                 return;
             }
         };
+        // A5: the pins, from their own entry. One that is locked, unreadable or out of shape pins
+        // nothing: every browser is then approved again at the radio before it streams.
+        let pins = self.vault.pins().ok().flatten().filter(|p| {
+            p.binding == binding
+                && p.keys.len() <= MAX_REMEMBERED
+                && p.keys
+                    .iter()
+                    .all(|(id, key)| identifier(id) && pin_shape(key))
+        });
         // Decide under the lock BEFORE the pairing becomes visible, so a Turn off that arrives
         // afterwards is ordered after this decision and wins.
         let resumed = {
@@ -739,7 +885,7 @@ impl Controller {
                 return;
             };
             let enabled = remembered.as_ref().is_some_and(|s| s.enabled);
-            control.remember(Persist::Bound(binding, remembered));
+            control.remember(Persist::Bound(binding, remembered, pins.map(Box::new)));
             if enabled {
                 control.stop();
                 control.enabled = true;
@@ -854,7 +1000,7 @@ impl Controller {
         struct Devices {
             devices: Vec<Device>,
         }
-        let value: Devices = serde_json::from_value(value).map_err(|_| "invalidResponse")?;
+        let mut value: Devices = serde_json::from_value(value).map_err(|_| "invalidResponse")?;
         if value.devices.len() > 8
             || value
                 .devices
@@ -862,6 +1008,11 @@ impl Controller {
                 .any(|d| !identifier(&d.id) || !valid_name(&d.name) || d.approved > 1)
         {
             return Err("invalidResponse");
+        }
+        // A5: a key that is not the shape of a P-256 key is no key. It shows nothing and pins
+        // nothing, and the rest of the list (approvals, grants) stands.
+        for device in &mut value.devices {
+            device.key = device.public_key.as_deref().and_then(fingerprint);
         }
         Ok(value.devices)
     }
@@ -896,18 +1047,30 @@ impl Controller {
     /// effect at once; with Remote off they wait in the record for Turn on. A local decision made
     /// after the approval was asked for (Turn off or on, take over, revoking a browser) wins, and
     /// nothing is granted. ⛔ Granting transmit arms nothing: the browser still has to press TX On.
+    ///
+    /// A5: the device key the operator was shown (`shown`) is pinned if the service still lists that
+    /// key for the browser now that it has approved it. A key that changed in between pins nothing,
+    /// and that browser is approved again before it streams.
     fn grant_approved(
         &self,
         devices: &[Device],
         device_id: String,
         transmit: bool,
+        shown: Option<String>,
         (generation, epoch): (u64, u64),
     ) -> Result<(), &'static str> {
-        let approval = devices
+        let now = now_ms();
+        let device = devices
             .iter()
-            .find(|d| d.id == device_id && d.approved == 1 && d.expires_at > now_ms())
-            .map(Device::approval)
+            .find(|d| d.id == device_id && d.approved == 1 && d.expires_at > now)
             .ok_or("invalidResponse")?;
+        let approval = device.approval();
+        let pin = shown.filter(|shown| device.key.as_ref() == Some(shown));
+        let approved: Vec<String> = devices
+            .iter()
+            .filter(|d| d.approved == 1 && d.expires_at > now)
+            .map(|d| d.id.clone())
+            .collect();
         let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(());
@@ -920,11 +1083,16 @@ impl Controller {
             operations.permit_transmit(&device_id, transmit)?;
         }
         control.remember(Persist::Browser {
-            device_id,
+            device_id: device_id.clone(),
             approval: Some(approval),
             logging: Some(true),
             control: Some(true),
             transmit: Some(transmit),
+        });
+        control.remember(Persist::Listed(approved));
+        control.remember(Persist::Pin {
+            device_id,
+            key: pin,
         });
         Ok(())
     }
@@ -1145,20 +1313,28 @@ impl Controller {
                                 expires_at: d.get("expiresAt")?.as_u64()?,
                                 generation: d.get("generation").and_then(|g| g.as_u64()),
                             },
+                            // The device key the confirming browser brought (A5), if any.
+                            d.get("publicKey")
+                                .and_then(|k| k.as_str())
+                                .and_then(fingerprint),
                         ))
                     })
-                    .filter(|(id, approval)| identifier(id) && approval.expires_at > now_ms());
+                    .filter(|(id, approval, _)| identifier(id) && approval.expires_at > now_ms());
                 if let Ok(mut control) = self.control.lock() {
-                    // A new pairing starts with nothing remembered: off, and no grants.
-                    control.remember(Persist::Bound(binding.clone(), None));
-                    if let Some((device_id, approval)) = paired {
+                    // A new pairing starts with nothing remembered: off, no grants, no pins.
+                    control.remember(Persist::Bound(binding.clone(), None, None));
+                    if let Some((device_id, approval, key)) = paired {
                         control.remember(Persist::Browser {
-                            device_id,
+                            device_id: device_id.clone(),
                             approval: Some(approval),
                             logging: Some(true),
                             control: Some(true),
                             transmit: Some(transmit),
                         });
+                        // A5, operator ruling D4 (2026-09-28): that browser's key is pinned on first
+                        // use, the trust the pairing already places in the service. Both ends show
+                        // its fingerprint straight after, and revoking the browser is one click.
+                        control.remember(Persist::Pin { device_id, key });
                     }
                 }
                 self.binding = Some(binding);
@@ -1204,8 +1380,9 @@ impl Controller {
                 device_id,
                 approve,
                 transmit,
+                key,
             } => {
-                if !identifier(&device_id) {
+                if !identifier(&device_id) || key.as_deref().is_some_and(|key| !pin_shape(key)) {
                     return Err("invalidRequest");
                 }
                 let (binding, token) = self.bound()?;
@@ -1229,8 +1406,13 @@ impl Controller {
                 if approve {
                     // The list names the approval the service just wrote; the grant binds to it.
                     let devices = self.devices().await?;
-                    let granted =
-                        self.grant_approved(&devices, device_id, transmit, (generation, epoch));
+                    let granted = self.grant_approved(
+                        &devices,
+                        device_id,
+                        transmit,
+                        key,
+                        (generation, epoch),
+                    );
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                     }
@@ -1242,23 +1424,40 @@ impl Controller {
     }
 }
 
-/// The vault writer. Each write is the whole record for the current pairing, produced in the order
-/// the decisions were made, so a backlog collapses to its latest. A failed save is followed by
-/// deleting the record: a record that could not be updated must not survive to be restored, and no
-/// record at all means Remote stays off at the next launch.
+/// The vault writer. Each write is a whole record for the current pairing, produced in the order
+/// the decisions were made, so a backlog collapses to the latest write of each entry. A failed save
+/// is followed by deleting the record: a record that could not be updated must not survive to be
+/// restored. No state record means Remote stays off at the next launch; no pins record means every
+/// browser is approved again at the radio before it streams.
 fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<Write>) {
-    while let Some(mut write) = writes.blocking_recv() {
-        while let Ok(next) = writes.try_recv() {
-            write = next;
+    while let Some(first) = writes.blocking_recv() {
+        let (mut state, mut pins) = (None, None);
+        let mut next = Some(first);
+        while let Some(write) = next {
+            match write {
+                Write::Save(_) | Write::Remove => state = Some(write),
+                Write::SavePins(_) | Write::RemovePins => pins = Some(write),
+            }
+            next = writes.try_recv().ok();
         }
-        match write {
-            Write::Save(state) => {
-                if vault.save_state(&state).is_err() {
+        for write in [state, pins].into_iter().flatten() {
+            match write {
+                Write::Save(state) => {
+                    if vault.save_state(&state).is_err() {
+                        let _ = vault.remove_state();
+                    }
+                }
+                Write::Remove => {
                     let _ = vault.remove_state();
                 }
-            }
-            Write::Remove => {
-                let _ = vault.remove_state();
+                Write::SavePins(pins) => {
+                    if vault.save_pins(&pins).is_err() {
+                        let _ = vault.remove_pins();
+                    }
+                }
+                Write::RemovePins => {
+                    let _ = vault.remove_pins();
+                }
             }
         }
     }

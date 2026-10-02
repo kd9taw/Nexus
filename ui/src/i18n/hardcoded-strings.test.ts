@@ -73,8 +73,12 @@ const MIGRATED = [
   'remote-web/usePotaAlerts.ts',
   'remote-web/presentation.tsx',
   'remote-web/RemoteApp.tsx',
+  'remote-web/StreamView.tsx',
+  'remote-web/stream-capture.ts',
+  'remote-web/stream-link.ts',
   'remote-web/control-failure.ts',
   'remote-native/RemoteStation.tsx',
+  'remote-native/stream-input.ts',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
@@ -616,7 +620,8 @@ const MIGRATED = [
  *
  *   · Phone — THE PTT ROW, whole. The button's four labels ARE the accessible name
  *     `stop-line.test.tsx` matches (/push to talk|on air — release to stop|tx locked|tx off —
- *     click to enable/i) and its three-armed tooltip is that control's description, naming
+ *     click to enable/i); a fifth, "Armed — talk to transmit", shows while a streamed press waits
+ *     for the voice, under the name "ON AIR — release to stop". Its three-armed tooltip is that control's description, naming
  *     which switch is down and the mic the operator talks on. The LOCK toggle beside it stays
  *     with them because it decides whether the window's Space keyup is a PTT release at all —
  *     the census's fourth holder — and the Field Day exchange chip stays because it shares the

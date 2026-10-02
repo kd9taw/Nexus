@@ -114,9 +114,9 @@ you like.
 | **1** | **626** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 313 | First run — the setup wizard and the Getting Started guide. The first thing a new operator meets. |
 | **3** | 853 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
-| **4** | 382 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
-| **5** | 2446 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, satellites, the map, awards, memories. |
-| **6** | 776 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, and the long tail. |
+| **4** | 386 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
+| **5** | 2447 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, satellites, the map, awards, memories. |
+| **6** | 834 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, and the long tail. |
 
 **Tier 1 on its own is a real release.** 626 rows, about 21,000 characters — roughly 9% of the
 text — and it buys a program whose menus, buttons, status messages and log form are all in

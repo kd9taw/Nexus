@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
+import { shortFingerprint } from '../remote-web/stream-protocol'
 import '../remote-web/remote.css'
 
 // Browser approval lifetime: the shack warns this long before the end that use cannot move.
@@ -126,8 +127,14 @@ export function RemoteStation() {
       {status.transmitPermissions && <p>{t('remote.transmitLocalHint')}</p>}
       <h3>{t('remote.browserApprovals')}</h3><p>{t('remote.browserMatch')}</p>
       {status.devices.length === 0 && <p>{t('remote.noBrowsers')}</p>}
-      {status.devices.map(device => <div key={device.id}>
-        <p>{device.name} <code>{device.id.slice(-6)}</code></p>
+      {status.devices.map(device => { const key = device.key ?? undefined
+        // A5: approved, with a key the service lists, and that key not the one pinned here (approved
+        // before keys, or the browser came back with a new one): it cannot stream until approved again.
+        const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
+        const ending = device.approved === 1 && (device.renewsUntil ?? device.expiresAt) - Date.now() <= APPROVAL_WARNING_MS
+        return <div key={device.id}>
+        {/* The browser's key beside its name: the page shows the same one, for the operator to compare. */}
+        <p>{device.name} <code>{device.id.slice(-6)}</code>{key && <> <span>{t('remote.browserKey', { key: shortFingerprint(key) })}</span></>}</p>
         {/* One approval: approving grants station controls and logging, plus transmit if ticked.
             The switches below then only restrict (or give back) what an approved browser holds. */}
         {device.approved === 1
@@ -136,19 +143,21 @@ export function RemoteStation() {
               <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
                 onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
               <button type="button" className="remote-button" disabled={busy}
-                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false })}>{t('remote.approveBrowser')}</button>
+                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approveBrowser')}</button>
             </>}
         {device.approved === 1 && <p>{device.renewsUntil
           ? t('remote.browserRenewsUntil', { until: utcDate(device.expiresAt), limit: utcDate(device.renewsUntil) })
           : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</p>}
-        {/* The last week before the end that use cannot move. Approving again is a NEW approval: it
-            grants station controls and logging again, and transmit only if ticked here. */}
-        {device.approved === 1 && (device.renewsUntil ?? device.expiresAt) - Date.now() <= APPROVAL_WARNING_MS && <>
-          <p className="remote-warning">{t('remote.browserApprovalEnding', { until: utcDate(device.renewsUntil ?? device.expiresAt) })}</p>
+        {/* The last week before the end that use cannot move, or a key not pinned here. Approving again
+            is a NEW approval: it grants station controls and logging again, transmit only if ticked
+            here, and pins the key shown above. */}
+        {(ending || unpinned) && <>
+          {ending && <p className="remote-warning">{t('remote.browserApprovalEnding', { until: utcDate(device.renewsUntil ?? device.expiresAt) })}</p>}
+          {unpinned && <p className="remote-warning">{t('remote.browserKeyNotPinned')}</p>}
           <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
             onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
           <button type="button" className="remote-button" disabled={busy}
-            onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false })}>{t('remote.approveAgain')}</button>
+            onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approveAgain')}</button>
         </>}
         {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
         {device.approved===1&&status.stationPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'stationPermission',deviceId:device.id,allow:!status.stationPermissions!.includes(device.id)})}>{status.stationPermissions.includes(device.id)?t('remote.controlRevoke'):t('remote.controlAllow')}</button>}
@@ -157,7 +166,7 @@ export function RemoteStation() {
           onClick={()=>void act({type:'transmitPermission',deviceId:device.id,allow:!status.transmitPermissions!.includes(device.id)})}>
           {status.transmitPermissions.includes(device.id)?t('remote.transmitRevoke'):t('remote.transmitAllow')}</button>}
         {status.loggingController===device.id&&<p role="status">{status.stationPermissions?.includes(device.id)?t('remote.controlActive'):t('remote.loggingController')}</p>}
-      </div>)}
+      </div> })}
       <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'forget' })}>{t('remote.revokeStation')}</button>
       </details>

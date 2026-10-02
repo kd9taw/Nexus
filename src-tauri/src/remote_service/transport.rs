@@ -94,6 +94,9 @@ impl Client {
             // the generation to it and renew the browser approvals it gives. A service without the
             // browser approval lifetime ignores the header and answers exactly as before.
             .header("x-nexus-device-lifetime", "1")
+            // This Nexus pins browsers' device keys (A5), so the service may list each browser's
+            // key to it. A service without them ignores the header.
+            .header("x-nexus-device-key", "1")
             .json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
@@ -200,6 +203,26 @@ enum ServerMessage {
         #[serde(rename = "leaseId")]
         lease_id: String,
     },
+    /// A browser's WebRTC signalling for a streamed session. The session and device are stamped
+    /// by the relay from its own admission record, never asserted by the browser, and the relay
+    /// sends one only to a station that advertised the stream (`x-nexus-stream-version`).
+    StreamSignal {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        payload: tempo_stream::protocol::BrowserSignal,
+    },
+    /// The relay ends a session's stream: Remote access was switched off (operator decision
+    /// 2026-09-27, "within about 2 s"), or another reason from the contract's closed set. Sent,
+    /// like `streamSignal`, only to a station that advertised the stream.
+    StreamEnd {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        reason: tempo_stream::protocol::StreamReason,
+    },
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -220,9 +243,13 @@ pub struct Feeds {
     /// — so a browser is never offered a control the station cannot honour.
     ///
     /// Holding this grants nothing: it is a read of already-captured receive audio, and
-    /// while nobody is listening it copies nothing.
+    /// while nobody is listening it copies nothing. It is the station's ONE encoder, shared by
+    /// the Listen lane here and every stream's `audio` channel (plan P5).
     #[cfg(feature = "radio")]
-    pub audio: Option<std::sync::Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
+    pub audio: Option<std::sync::Arc<super::audio::ReceiveFanout>>,
+    /// What a streamed session needs from the application: the window its input goes to, and
+    /// the held PTT the engine keys. Holding it grants nothing; a stream is admitted on its own.
+    pub stream: super::stream::Host,
 }
 pub async fn connected(
     client: &Client,
@@ -361,6 +388,19 @@ pub async fn connected(
             "1".parse().map_err(|_| "invalidResponse")?,
         );
     }
+    // Remote as a stream, advertised only by a build that can stream (Windows today), so a relay
+    // never hands another station a `streamSignal` it would refuse by closing this socket. It is
+    // advertised whether or not the operator has switched streaming on: an offer to a station
+    // with it off is answered `streamDisabled`, which tells the page why, where not advertising
+    // would only leave it guessing until Remote next reconnected.
+    #[cfg(windows)]
+    request.headers_mut().insert(
+        "x-nexus-stream-version",
+        tempo_stream::protocol::STREAM_VERSION
+            .to_string()
+            .parse()
+            .map_err(|_| "invalidResponse")?,
+    );
     let connect =
         tokio_tungstenite::connect_async_with_config(request, Some(socket_config()), false);
     let (socket, _) = tokio::select! {
@@ -452,9 +492,9 @@ where
     let mut stream = super::application::Stream::default();
     let mut application_tick = tokio::time::interval(Duration::from_millis(100));
     application_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The receive-audio lane. It holds no encoder until a browser asks to listen, and
-    // its select branch below is guarded on that, so on a station nobody is listening to
-    // this timer is never even polled.
+    // The receive-audio lane. It holds no share of the station's encoder until a browser
+    // asks to listen, and its select branch below is guarded on that, so on a station nobody
+    // is listening to this timer is never even polled.
     #[cfg(feature = "radio")]
     let mut audio_lane = super::audio::AudioLane::default();
     // A plain bool rather than `audio_lane.listening()`, because a `select!` branch
@@ -465,6 +505,36 @@ where
     let mut audio_listening = false;
     let mut audio_tick = tokio::time::interval(Duration::from_millis(AUDIO_TICK_MS));
     audio_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Remote as a stream. The lane routes `streamSignal`s to one session thread; what that thread
+    // has to tell the relay (its answer, its candidate, how the stream stands) comes back here and
+    // leaves through the one writer, like everything else.
+    let mut stream_lane = super::stream::StreamLane::default();
+    let (stream_out, mut stream_in) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // A5: what an offer is held to, from the operator's own record: this pairing's station id, and
+    // the device keys pinned at the radio, read at each admission so a pin or revoke made since
+    // this socket opened counts.
+    let station_id = status
+        .control
+        .lock()
+        .map_err(|_| "serviceUnavailable")?
+        .remembered
+        .binding
+        .as_ref()
+        .map(|binding| binding.station_id.clone())
+        .unwrap_or_default();
+    let pins = status.control.clone();
+    let stream_station = super::stream::Station {
+        authority: operation_connection.authority.clone(),
+        engine: engine.clone(),
+        connection: operation_connection.id,
+        host: feeds.stream.clone(),
+        #[cfg(feature = "radio")]
+        audio: feeds.audio.clone(),
+        station_id,
+        pinned: std::sync::Arc::new(move |device: &str| {
+            pins.lock().ok()?.remembered.pinned(device)
+        }),
+    };
     let result: Result<(), &'static str> = async { loop {
         tokio::select! {
             biased;
@@ -488,7 +558,19 @@ where
                             // for the times it cannot.
                             #[cfg(feature = "radio")]
                             { audio_lane.stop(Some(&session_id)); audio_listening = audio_lane.listening(); }
+                            // Nor can it still be streaming.
+                            stream_lane.session_gone(&session_id);
                             operation_connection.authority.disconnect_session(&session_id);
+                        },
+                        ServerMessage::StreamSignal{session_id,device_id,lease_id,payload}=>{
+                            if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
+                            if let Some(data) = stream_lane.signal(&stream_station, &stream_out, (session_id, device_id, lease_id), payload) {
+                                outbound.send(Message::Text(data.into()))?;
+                            }
+                        },
+                        ServerMessage::StreamEnd{session_id,reason}=>{
+                            if !identifier(&session_id){return Err("invalidResponse")}
+                            stream_lane.end(&stream_station, &session_id, reason);
                         },
                         ServerMessage::AudioListen{session_id,device_id,listening,lease_id}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
@@ -605,6 +687,13 @@ where
                 // browser still has its poll.
                 if let Ok(Some(data)) = event {
                     outbound.send(Message::Text(data.into()))?;
+                }
+            },
+            // A streamed session's signalling: an answer, a candidate, how the stream stands. Few
+            // and small; it never waits on the session thread, which only ever hands these over.
+            text = stream_in.recv() => {
+                if let Some(text) = text {
+                    outbound.send(Message::Text(text.into()))?;
                 }
             },
             _ = application_tick.tick(), if stream.active() => {
@@ -835,6 +924,8 @@ mod server_message_schema {
             json!({"type":"applicationRead","requestId":ID,"command":"get_snapshot","revision":null}),
             json!({"type":"watch","enabled":true,"requestId":ID}),
             json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID}),
+            json!({"type":"streamSignal","sessionId":ID,"deviceId":ID,"leaseId":ID,"payload":{"kind":"close"}}),
+            json!({"type":"streamEnd","sessionId":ID,"reason":"remoteOff"}),
         ]
     }
 
@@ -976,6 +1067,20 @@ mod server_message_schema {
         "#[serde(rename = \"leaseId\")]",
         "lease_id: String,",
         "},",
+        "StreamSignal {",
+        "#[serde(rename = \"sessionId\")]",
+        "session_id: String,",
+        "#[serde(rename = \"deviceId\")]",
+        "device_id: String,",
+        "#[serde(rename = \"leaseId\")]",
+        "lease_id: String,",
+        "payload: tempo_stream::protocol::BrowserSignal,",
+        "},",
+        "StreamEnd {",
+        "#[serde(rename = \"sessionId\")]",
+        "session_id: String,",
+        "reason: tempo_stream::protocol::StreamReason,",
+        "},",
         "}",
         "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]",
         "pub struct Request {",
@@ -1080,6 +1185,14 @@ mod server_message_schema {
         "operationRequest.operationVersion: optional",
         "operationRequest.request: required",
         "operationRequest.sessionId: required",
+        "streamEnd.<unknown key>: refused",
+        "streamEnd.reason: required",
+        "streamEnd.sessionId: required",
+        "streamSignal.<unknown key>: refused",
+        "streamSignal.deviceId: required",
+        "streamSignal.leaseId: required",
+        "streamSignal.payload: required",
+        "streamSignal.sessionId: required",
         "watch.<unknown key>: refused",
         "watch.enabled: required",
         "watch.requestId: optional",
@@ -1128,6 +1241,28 @@ mod server_message_schema {
              off on a message they cannot parse. It reads now:\n{}",
             now.join("\n")
         );
+    }
+
+    /// Remote as a stream's relay messages, read by the station's own parser from the contract
+    /// fixtures the relay and the page test against: every case the relay may send is taken, and
+    /// every case it must never send is refused. `streamSignal` and `streamEnd` joined this
+    /// snapshot on purpose (2026-09-27): a relay sends them only to a station that advertised the
+    /// stream, so no older station ever meets them.
+    #[test]
+    fn the_stream_contract_is_what_the_parser_takes() {
+        let file: Value = serde_json::from_str(include_str!(
+            "../../../remote/test/fixtures/stream/signal.json"
+        ))
+        .unwrap();
+        let mut taken = file["roomToStation"].as_array().unwrap().clone();
+        taken.extend(file["roomToStationEnd"].as_array().unwrap().iter().cloned());
+        assert!(taken.len() >= 6, "premise: the fixtures were found");
+        for case in &taken {
+            assert!(accepts(&case["message"]), "refused: {}", case["name"]);
+        }
+        for case in file["roomToStationRefused"].as_array().unwrap() {
+            assert!(!accepts(&case["message"]), "taken: {}", case["name"]);
+        }
     }
 
     #[test]

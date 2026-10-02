@@ -229,6 +229,8 @@ export const EN = {
   "remote.thisBrowserApprovedUntil": "This browser is approved until {{until}} UTC.",
   "remote.thisBrowserRenewsUntil": "This browser is approved until {{until}} UTC. Using the station from here keeps it approved, up to {{limit}} UTC.",
   "remote.thisBrowserApprovalEnding": "This browser’s approval ends {{until}} UTC. To keep using it, approve it again in Nexus at the shack.",
+  "remote.thisBrowserKey": "This browser’s key: {{key}}",
+  "remote.thisBrowserKeyCheck": "Nexus at the shack shows the same key beside this browser; check that they match when you approve it.",
   "remote.awaitDevice": "Approve this browser in Nexus at the shack. Browser code:",
   "remote.browserName": "Name this browser",
   "remote.requestApproval": "Request local approval",
@@ -382,6 +384,62 @@ export const EN = {
   'remote.stop.stopped': 'Stopped',
   'remote.stop.stopped.title': 'The station reports the transmitter free.',
   "remote.audio.unavailable": "The station has no audio to send right now.",
+  // The stream: Nexus at the shack as a live picture, operated from this browser. Stop TX and the
+  // TX indicator on that view stay the invariant tokens every cockpit uses (StreamView.tsx).
+  "remote.stream.open": "Stream Nexus",
+  "remote.stream.stage": "Nexus at the shack",
+  "remote.stream.picture": "Nexus at the shack. Click it, then use your mouse and keyboard to operate it. Tab leaves the picture.",
+  "remote.stream.start": "Start the stream",
+  "remote.stream.end": "End the stream",
+  "remote.stream.ptt": "Hold PTT",
+  "remote.stream.ptt.title": "Hold to talk: the rig keys when your microphone's audio arrives, and unkeys when you let go or the picture stops.",
+  "remote.stream.connecting": "Connecting to the station…",
+  "remote.stream.waiting": "Waiting for the station…",
+  "remote.stream.permission": "Station control is off for this browser. Allow it in Nexus at the station (Settings → Station → Remote access), then start the stream.",
+  "remote.stream.occupied": "Another browser controls the station. The stream can start once it lets go.",
+  "remote.stream.ready": "Ready. Start the stream to see and operate Nexus at the shack.",
+  "remote.stream.display": "The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.",
+  "remote.stream.starting": "Starting the stream…",
+  "remote.stream.waitingForPicture": "Waiting for the station's picture…",
+  "remote.stream.live": "Streaming Nexus at the shack",
+  "remote.stream.stalled": "The picture has stopped updating. The station will not transmit for this browser until it moves again.",
+  "remote.stream.noPresence": "The station is holding off transmitting for this browser until its picture here catches up.",
+  "remote.stream.mic.off": "Mic off",
+  "remote.stream.mic.on": "Mic on",
+  "remote.stream.mic.title": "Your microphone, for talking on the rig. It stays off until you turn it on, and your browser asks first. Then hold PTT and talk: the rig keys when your audio arrives.",
+  "remote.stream.mic.notes": "Microphone",
+  "remote.stream.mic.usb": "The rig must take its SSB audio from USB (its menu for the transmit audio source). Most radios come set to the front microphone, and then an over sends the shack's microphone instead of you.",
+  "remote.stream.mic.denied": "The browser did not allow the microphone. Allow it in the browser's settings for this site, then turn the microphone on again.",
+  "remote.stream.mic.unavailable": "This browser cannot send the microphone on this stream.",
+  "remote.stream.mic.processing": "The browser is still processing the microphone (echo cancellation, noise suppression or automatic gain), which can make your voice sound worse on the air.",
+  "remote.stream.mic.needed": "PTT is held but your microphone is off, so nothing is transmitted. Turn the microphone on to talk.",
+  "remote.stream.mic.noPower": "The rig shows no power out while your voice is arriving. Set its SSB audio source to USB (its menu for the transmit audio source).",
+  "remote.stream.mic.uplink": "Your connection stalled, so the transmission stopped.",
+  "remote.stream.mic.ended.audioGap": "Your audio stopped arriving, so the transmission stopped.",
+  "remote.stream.mic.ended.presence": "Control was lost, so the transmission stopped.",
+  "remote.stream.mic.ended.ceiling": "The transmission ended at its 10-minute limit. Press PTT again to carry on.",
+  "remote.stream.mic.ended.watchdog": "The TX watchdog stopped the transmission.",
+  "remote.stream.mic.ended.routeChanged": "The station's audio changed, so the transmission stopped. Press PTT again.",
+  "remote.stream.id.due": "Time to give your call sign.",
+  "remote.stream.id.end": "Remember to give your call sign at the end of the contact.",
+  "remote.stream.idle.prompt": "Still there? The stream ends in a minute unless you click.",
+  "remote.stream.idle.keep": "Keep streaming",
+  "remote.stream.idle.ended": "Nobody answered “Still there?”, so the stream ended.",
+  "remote.stream.ended.notController": "The stream ended because station control was lost.",
+  "remote.stream.ended.unavailable": "This station can't stream yet. Update Nexus at the shack and turn streaming on there.",
+  "remote.stream.ended.accessExpired": "Your Remote access has ended, so the stream can't start.",
+  "remote.stream.ended.remoteOff": "Remote access was switched off for this account, so the stream ended.",
+  "remote.stream.ended.tryLater": "Too many tries. Wait a minute, then start the stream again.",
+  "remote.stream.ended.station": "The station ended the stream.",
+  "remote.stream.ended.insecure": "The station's reply was not encrypted end to end, so the stream was refused.",
+  "remote.stream.ended.unsupported": "This browser can't show the stream. Use a current Chrome, Edge, Firefox or Safari.",
+  "remote.stream.ended.hidden": "The stream stops while this tab is in the background. Start it again when you're back.",
+  "remote.stream.ended.failed": "The connection to the station was lost. Start the stream again.",
+  "remote.stream.ended.disabled": "Streaming is turned off in Nexus at the shack. Turn it on there to stream this station.",
+  "remote.stream.ended.inUse": "Another browser is streaming this station.",
+  "remote.stream.ended.invalidOffer": "The station could not use this browser's stream request. Use a current Chrome, Edge, Firefox or Safari.",
+  "remote.stream.ended.notPinned": "Approve this browser again in Nexus at the shack, once, before it can stream. Check that the key shown there matches this browser’s key on the Remote page.",
+  "remote.stream.ended.keyChanged": "This browser’s key has changed, so approve it again in Nexus at the shack before streaming. Check that the key shown there matches this browser’s key on the Remote page.",
   "remote.b3.potaAlertsOlder": "POTA activation alerts need a newer Nexus at the station.",
   "remote.b3.awardsObserver": "Journey and uploads are not available remotely yet. Confirmation diagnostics come from the station.",
   "remote.b3.sstvSave": "Save",
@@ -455,6 +513,8 @@ export const EN = {
   "remote.browserRenewsUntil": "Approved until {{until}} UTC. Using the station from this browser keeps it approved, up to {{limit}} UTC.",
   "remote.browserApprovalEnding": "This approval ends {{until}} UTC. Approve the browser again to keep it.",
   "remote.approveAgain": "Approve again",
+  "remote.browserKey": "Key {{key}}",
+  "remote.browserKeyNotPinned": "This browser can’t stream until you approve it again here. First check this key matches the one the browser shows.",
 
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',
@@ -5998,6 +6058,18 @@ export const EN = {
   'settings.transmit.parsecStop.status.unreadable':
     'Nexus cannot find or read Parsec\u2019s log (it looks for log.txt in %APPDATA%\\Parsec and %ProgramData%\\Parsec), so nothing will be stopped until it can.',
 
+  // Remote as a stream (TX sign-off 2026-09-27): off by default. "Stream" is the picture sent
+  // over the internet, never a radio transmission; the hint names what is sent, what input can
+  // reach, and the stop: five seconds after the connection drops, seven after the picture freezes
+  // (a picture older than two seconds renews nothing, then the five-second lapse). `Nexus` and
+  // `Windows` are tokens.
+  'settings.remoteStream.label': 'Stream this window to an approved browser',
+  'settings.remoteStream.hint':
+    'A browser you approved for station control, while it holds control, is shown this Nexus window and can operate it. Its clicks and keys reach Nexus only, never anything else on this computer. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a minimized window sends nothing. The stream is encrypted end to end. While a browser is connected, every transmission stops within five seconds if its connection drops, and within seven if its picture freezes.',
+  'settings.remoteStream.display':
+    'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.',
+  'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
+
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
   'settings.transmit.note':
@@ -9381,6 +9453,7 @@ export const EN = {
   // toasts it raises, and a toast is neither a control nor anything a sweep can see.
   'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
+  'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
 
   // ── Phone ▸ the scope strip, its span chips and its zoom ─────────────────────────────
   // The strip is the rig's real RF panadapter when one streams and the receiver's audio

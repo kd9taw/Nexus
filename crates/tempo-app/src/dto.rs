@@ -999,6 +999,15 @@ impl From<&crate::engine::receivers::Receivers> for ReceiversDto {
     }
 }
 
+/// A streamed Remote operator's microphone over, as the Phone cockpit's PTT shows it: `Armed` by
+/// their press and waiting for their voice (the audio design's M1), then `Keyed` by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamMic {
+    Armed,
+    Keyed,
+}
+
 /// Current radio / slot-timing status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1258,6 +1267,13 @@ pub struct RadioStatus {
     /// is busy AND carries the sentence to show the operator; there is nothing to look up.
     #[serde(default)]
     pub tx_busy_reason: Option<String>,
+    /// The streamed Remote operator's microphone over, `None` without one. DISPLAY ONLY: the Phone
+    /// cockpit's PTT reads "Armed" for a press it made through the stream until this is `Keyed`,
+    /// and the header's ON AIR sign waits while it is `Armed`, which it is only while the armed over
+    /// owns the transmitter. The arbiter already counts an armed over as the owner
+    /// (`tx_busy_reason`), and nothing keys, refuses or releases on this.
+    #[serde(default)]
+    pub stream_mic: Option<StreamMic>,
     /// Whether the transmit watchdog has tripped (continuous-TX limit reached)
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]

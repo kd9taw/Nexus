@@ -13,6 +13,7 @@ use std::sync::{
 use std::time::Instant;
 
 pub mod amplifier;
+pub mod ptt_hold;
 pub mod transmit;
 
 #[derive(Default, Clone)]

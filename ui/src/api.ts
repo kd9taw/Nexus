@@ -1902,6 +1902,17 @@ export async function setPtt(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_ptt', { on })
 }
 
+/** A Phone PTT press made through the Remote stream's picture: ARMS the streamed operator's
+ *  microphone over, which only their audio keys. Resolves whether an over is armed. */
+export async function armStreamMic(): Promise<boolean> {
+  return invoke<boolean>('arm_stream_mic')
+}
+
+/** Let go of the microphone over a streamed press armed. */
+export async function releaseStreamMic(): Promise<void> {
+  await invoke<void>('release_stream_mic')
+}
+
 /** Set RF output power as a 0.0–1.0 fraction. */
 export async function setRfPower(power: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rf_power', { power })

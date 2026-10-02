@@ -107,8 +107,18 @@ permission back. Without any of these it can watch the station but not change it
   It also needs station controls, and it goes through the normal TX switch and TX
   watchdog. Allowing it arms nothing: whenever Nexus starts, the TX switch is off until
   the browser presses TX On. If the browser goes away the station stops transmitting
-  within five seconds, and **Revoke transmission permission** stops it at once. No other
-  mode transmits remotely.
+  within five seconds, and **Revoke transmission permission** stops it at once. Without
+  the stream below, no other mode transmits remotely.
+
+**Stream this window to an approved browser** is off by default, and on Windows only for
+now. With it on, a browser approved for station controls, while it holds control, can be
+shown this Nexus window and operate it, and hear the station's receive audio. Only this
+window is sent: a dialog that opens outside it, such as a file picker, is not, and a
+minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
+anything else on this computer. While a browser is attached, every transmission at the
+station stops within five seconds if its connection drops, and within seven if its picture
+freezes. In Phone, the browser can talk on the rig with its own microphone; see
+[Talk from Remote](phone.md#talk-from-remote).
 
 **How long a browser stays approved.** An approval lasts 30 days, and each time that browser
 opens the station it moves on to 30 days from then, up to 90 days after you approved it here.
@@ -118,7 +128,8 @@ the last 7 days before that latest date, both warn you, and **Approve again** he
 approval. A new approval gives station controls and logging again, and FT8/FT4 transmit only if
 its box is ticked. Browsers approved by an earlier Nexus keep a fixed 30 days until approved again.
 
-No audio reaches the browser. **Revoke browser approval** removes one browser.
+While it holds station control, a browser can press **Listen** to hear the station's receive
+audio. **Revoke browser approval** removes one browser.
 **Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
 gives each still-approved browser back what it had, with the TX switch off. **End remote
 control and clear permissions** and **Revoke browser approval** clear permissions for good.

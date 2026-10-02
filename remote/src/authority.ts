@@ -43,8 +43,21 @@ export function label(value: unknown): string {
     !/[\p{Cc}\p{Cf}]/u.test(value), 'invalidRequest', 400)
   return value.trim()
 }
+/** The browser's device key (security review M1; the stream's A5): an ECDSA P-256 public key as SPKI
+ *  DER in lowercase hex, 91 bytes, the only half of the key that ever leaves the browser. The shape is
+ *  the one fixed P-256 SPKI header and an uncompressed point; importing it is what proves the point is
+ *  on the curve. The station pins its SHA-256 at the radio: this side never admits anything on it. */
+const DEVICE_KEY = /^3059301306072a8648ce3d020106082a8648ce3d03010703420004[0-9a-f]{128}$/
+export async function publicKey(value: unknown): Promise<string> {
+  requireValue(typeof value === 'string' && DEVICE_KEY.test(value), 'invalidRequest', 400)
+  const der = new Uint8Array(value.length / 2).map((_, i) => parseInt(value.slice(2 * i, 2 * i + 2), 16))
+  try { await crypto.subtle.importKey('spki', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']) }
+  catch { throw new Refusal('invalidRequest', 400) }
+  return value
+}
 
-export async function body(request: Request, fields: string[]): Promise<Record<string, unknown>> {
+/** A JSON object carrying exactly `fields`, and any of `optional`, within 4 KiB. */
+export async function body(request: Request, fields: string[], optional: string[] = []): Promise<Record<string, unknown>> {
   requireValue(request.headers.get('content-type')?.split(';')[0] === 'application/json', 'invalidRequest', 400)
   const reader = request.body?.getReader()
   requireValue(reader, 'invalidRequest', 400)
@@ -64,7 +77,7 @@ export async function body(request: Request, fields: string[]): Promise<Record<s
   try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(buffer)) }
   catch { throw new Refusal('invalidRequest', 400) }
   requireValue(value && typeof value === 'object' && !Array.isArray(value), 'invalidRequest', 400)
-  requireValue(Object.keys(value).every(key => fields.includes(key)) && fields.every(key => key in value), 'invalidRequest', 400)
+  requireValue(Object.keys(value).every(key => fields.includes(key) || optional.includes(key)) && fields.every(key => key in value), 'invalidRequest', 400)
   return value as Record<string, unknown>
 }
 
@@ -362,15 +375,21 @@ export const APPROVAL_LIMIT_MS = 90 * 24 * 60 * 60 * 1000
 export function lifetime(request: Request): boolean {
   return request.headers.get('x-nexus-device-lifetime') === '1'
 }
+/** Sent by a Nexus that pins browsers' device keys (A5). Only that Nexus is listed them: 1.13 and older
+ *  parse the device list with deny_unknown_fields, so a key listed to them would fail every refresh. */
+export function deviceKeys(request: Request): boolean {
+  return request.headers.get('x-nexus-device-key') === '1'
+}
 /** The end that use cannot move, or null for an approval that never renews. */
 export function renewsUntil(row: Pick<DeviceRow, 'approved' | 'approved_at'>): number | null {
   return row.approved === 1 && row.approved_at !== null ? row.approved_at + APPROVAL_LIMIT_MS : null
 }
-export type DeviceRow = { id: string; name: string; generation: number; approved: number; approved_at: number | null; expires_at: number }
+export type DeviceRow = { id: string; name: string; generation: number; approved: number; approved_at: number | null; expires_at: number
+  public_key: string | null }
 export async function device(request: Request, env: RemoteEnv, stationId: string, owner: string, now: number): Promise<DeviceRow | null> {
   const credential = deviceCookie(request, stationId)
   if (!credential) return null
-  return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at FROM devices
+  return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
     WHERE station_id=? AND account_id=? AND credential_hash=? AND expires_at>?`)
     .bind(stationId, owner, await digest(credential), now).first<DeviceRow>()
 }

@@ -69,6 +69,7 @@
       "resources/deepcw/*": "resources/deepcw/",
       "resources/tles/*": "resources/tles/",
       "../licenses/remote/*": "resources/remote/",
+      "../licenses/stream/*": "resources/stream/",
       "../licenses/openssl/*": "resources/openssl/",
       "../COPYING": "COPYING",
       "../NOTICE": "NOTICE"
