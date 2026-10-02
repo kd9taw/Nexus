@@ -3198,7 +3198,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const actions=await evaluate(`[...document.querySelectorAll('.sat-track,.sat-work,input[name="sat-transponder"],.sat-chip.quiet')].map(e=>e.disabled)`)
         assert.ok(actions.length>0&&actions.every(Boolean),'station actions remain guarded until control is explicitly supported')
       }
-      const targets=connect?['.connect-header','.connect-map canvas','.connect-strip']:['.sats-head','.sats-arm-id','.sats-radio','.sats-search','.sats-favmgr li:last-child .sat-pick']
+      const targets=connect?['.connect-header','.connect-map canvas','.dash-bar']:['.sats-head','.sats-arm-id','.sats-radio','.sats-search','.sats-favmgr li:last-child .sat-pick']
       for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
