@@ -248,6 +248,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
     async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } if(operating)console.log('Operation diagnostic',expression,operationWire.slice(-30),loggedRequests.map(r=>({call:r.record.call,mode:r.record.mode})),await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,entries:[...document.querySelectorAll('.remote-log-entry')].map(e=>({text:e.textContent,error:e.dataset.operationError}))})`));throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
+    // At the small size (sm/xs) the top bar folds its eleven tier pills into one mode button with a menu (2026-10-01):
+    // there the reachable tier selector is that button, and a tier gesture opens it and picks the item in the pill's place.
+    const smallBar=`['xs','sm'].includes(document.documentElement.dataset.viewport)`
     // A logManual or stationControl reply clears the client's station state in the same update
     // that shows its outcome (operation-client.ts receive(): state:null beside controlResult or
     // resolved), and only the next heartbeat reply restores it. Until then every station control is
@@ -1154,7 +1157,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         ]){
           const before=stationRequests.length,context=controlContext(),entry=`document.querySelector('${selector}')`
           await until(`!!${entry}&&!${entry}.disabled`)
-          await measure(entry,'routed-decoder')
+          await measure(selector.startsWith('.topbar-group')?`(${smallBar}?document.querySelector('.topbar .tier-menu-btn'):${entry})`:entry,'routed-decoder')
           await fresh();await click(entry)
           await until(`${entry}?.getAttribute('aria-pressed')==='true'`)
           await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
@@ -2310,9 +2313,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }
         }
       }
-      // At the small size (sm/xs) the top bar folds its eleven pills into one mode button with a menu (2026-10-01):
-      // there the reachable tier selector is that button, and the gesture picks the menu item, which keeps the pill's place.
-      const smallBar=`['xs','sm'].includes(document.documentElement.dataset.viewport)`
       let tierGeometry=0
       for(const [tab,root,index,tier] of [
         ['FT','.operate-cockpit .cockpit-modes',2,'FT4'],['FT','.operate-cockpit .cockpit-modes',3,'FT2'],['FT','.operate-cockpit .cockpit-modes',1,'FT8'],
