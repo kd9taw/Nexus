@@ -4573,6 +4573,19 @@ export interface RepeaterSearchRow {
   /** On a route search: how far along the route the machine is, km from the start. The record's
    * distance and bearing are then from its nearest point of the route. */
   alongKm?: number | null
+  /** Where Program's map puts the machine: its hearham row's own place, callsign, output and town,
+   * never the record's (which may be RepeaterBook's or RSGB's). Absent when no hearham row lists
+   * it, and then the map leaves it off. */
+  map?: RepeaterMapPoint | null
+}
+
+/** A machine on Program's map, from its hearham row alone (propagation::repeaters::MapPoint). */
+export interface RepeaterMapPoint {
+  lat: number
+  lon: number
+  callsign: string
+  outputMhz: number
+  city: string
 }
 
 /** One directory a search read, and how old its list is. */

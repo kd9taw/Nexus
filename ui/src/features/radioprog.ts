@@ -4,7 +4,7 @@
 // auto-radius. The Channel/RepeaterRecord DTOs mirror the Rust serde camelCase
 // shapes exactly (see crates/propagation/src/{memchan,repeaters}.rs).
 
-import type { ProgChannel, RepeaterRecord } from '../types'
+import type { ProgChannel, RepeaterRecord, RepeaterSearchRow } from '../types'
 import type { Memory } from './memories'
 import { baseCall } from '../callsign'
 
@@ -257,4 +257,27 @@ export function repeaterMemory(
     lon: site?.lon,
     source: 'program',
   }
+}
+
+/** What Program's map makes of the rows it is given (the operator, 2026-09-30: "hearham-only map
+ * now"). The rows it plots are those with a hearham point (`row.map`, which the Rust merge fills
+ * from the machine's hearham row and nothing else), and the rest are counted by why they are left
+ * off: RepeaterBook's terms forbid a map, and the RSGB list is not mapped for now. */
+export interface MapSplit {
+  /** The rows on the map, in list order. */
+  mapped: RepeaterSearchRow[]
+  /** Rows only RepeaterBook lists (no hearham row). */
+  leftOffRb: number
+  /** Rows only the RSGB list has. */
+  leftOffRsgb: number
+}
+
+export function splitForMap(rows: readonly RepeaterSearchRow[]): MapSplit {
+  const out: MapSplit = { mapped: [], leftOffRb: 0, leftOffRsgb: 0 }
+  for (const row of rows) {
+    if (row.map) out.mapped.push(row)
+    else if (row.sources.some((s) => s.source === 'repeaterbook')) out.leftOffRb += 1
+    else if (row.sources.some((s) => s.source === 'rsgb')) out.leftOffRsgb += 1
+  }
+  return out
 }

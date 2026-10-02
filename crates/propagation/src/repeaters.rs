@@ -1131,6 +1131,23 @@ pub struct Disagreement {
     pub said: Vec<Said>,
 }
 
+/// Where Program's map may put a machine, and all it may say there: its hearham row's own
+/// position, callsign, output and town ([`Machine::map`]).
+///
+/// The map is hearham's alone (the operator, 2026-09-30): hearham invites map use, RepeaterBook's
+/// terms forbid putting its rows on one, and a coordinator's list is not mapped for now. So the
+/// point is never the merged [`Machine::record`], whose position and town can be RepeaterBook's or
+/// the coordinator's.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapPoint {
+    pub lat: f64,
+    pub lon: f64,
+    pub callsign: String,
+    pub output_mhz: f64,
+    pub city: String,
+}
+
 /// One machine after the merge.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1145,6 +1162,10 @@ pub struct Machine {
     /// km from the start. `None` on a radius search.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub along_km: Option<f64>,
+    /// The machine on the map ([`MapPoint`]): `None` when no hearham row lists it, and then it is
+    /// left off the map. Left out of the JSON then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map: Option<MapPoint>,
 }
 
 /// Merge every source's rows near `origin` into one row per machine within `radius_km`, nearest
@@ -1413,11 +1434,26 @@ fn machine(rows: Vec<RepeaterRecord>, origin: (f64, f64)) -> Machine {
             });
         }
     }
+    // The map's point is the machine's hearham row, never `rec`: hearham invites map use, and the
+    // merged record's place and town can be RepeaterBook's (whose terms forbid a map) or the
+    // coordinator's (not mapped for now). Rows of one source are nearest first, so this is
+    // hearham's nearest listing of the machine.
+    let map = rows
+        .iter()
+        .find(|r| r.source == RepeaterSource::Hearham)
+        .map(|h| MapPoint {
+            lat: h.lat,
+            lon: h.lon,
+            callsign: h.callsign.clone(),
+            output_mhz: h.output_mhz,
+            city: h.city.clone(),
+        });
     Machine {
         record: rec,
         sources,
         disagreements,
         along_km: None,
+        map,
     }
 }
 
@@ -3457,6 +3493,139 @@ mod tests {
                 corridor_km: CORRIDOR_KM,
             };
             assert_eq!(plan_rsgb_route(&route), RsgbPlan::default(), "{from:?}");
+        }
+    }
+
+    // ── the map: hearham's rows alone ────────────────────────────────────────
+
+    /// A machine is mapped from its hearham row (the operator, 2026-09-30: hearham invites map
+    /// use; RepeaterBook's terms forbid a map; a coordinator's list is not mapped for now): the
+    /// position, callsign, output and town hearham gives, never the merged record's, which here
+    /// are RepeaterBook's or the coordinator's.
+    #[test]
+    fn a_machine_is_mapped_from_its_hearham_row_alone() {
+        let rb = RepeaterRecord {
+            city: "Hartford, Talcott Mountain".into(),
+            ..row(RepeaterSource::Repeaterbook, "77", "W1ABC")
+        };
+        let hh = RepeaterRecord {
+            lat: 41.80,
+            lon: -72.80,
+            output_mhz: 146.9415,
+            city: "Avon".into(),
+            ..row(RepeaterSource::Hearham, "5", "W1ABC-R")
+        };
+        // hearham's second listing of it, farther out: the map takes hearham's nearest.
+        let far = RepeaterRecord {
+            lat: 42.0,
+            lon: -72.6,
+            city: "Somers".into(),
+            ..row(RepeaterSource::Hearham, "6", "W1ABC")
+        };
+        let ms = merged(&[rb.clone(), far, hh.clone()]);
+        assert_eq!(ms.len(), 1, "{ms:?}");
+        assert_eq!(ms[0].sources.len(), 3, "{ms:?}");
+        let m = &ms[0];
+        // The list places and programs it from RepeaterBook's row, as before...
+        assert_eq!(
+            (m.record.lat, m.record.city.as_str()),
+            (41.73, "Hartford, Talcott Mountain")
+        );
+        // ...and the map from hearham's.
+        assert_eq!(
+            m.map,
+            Some(MapPoint {
+                lat: 41.80,
+                lon: -72.80,
+                callsign: "W1ABC-R".into(),
+                output_mhz: 146.9415,
+                city: "Avon".into(),
+            })
+        );
+        // The same beside the coordinator's row.
+        let rsgb = RepeaterRecord {
+            source: RepeaterSource::Rsgb,
+            ..rb
+        };
+        let m = &merged(&[rsgb, hh])[0];
+        assert_eq!(m.record.source, RepeaterSource::Rsgb);
+        assert_eq!(
+            m.map.as_ref().map(|p| (p.lat, p.lon, p.city.as_str())),
+            Some((41.80, -72.80, "Avon"))
+        );
+        // In the JSON Program reads.
+        let json = serde_json::to_value(m).unwrap();
+        assert_eq!(json["map"]["outputMhz"], 146.9415, "{json}");
+        assert_eq!(json["map"]["callsign"], "W1ABC-R", "{json}");
+    }
+
+    /// A machine no hearham row lists is left off the map: RepeaterBook's alone never goes on one,
+    /// the coordinator's alone does not for now, and the two together are still neither hearham's.
+    #[test]
+    fn a_machine_no_hearham_row_lists_is_left_off_the_map() {
+        let ms = merged(&[
+            row(RepeaterSource::Repeaterbook, "77", "W1ABC"),
+            row(RepeaterSource::Rsgb, "8", "W1ABC"),
+            row(RepeaterSource::Rsgb, "9", "W1XYZ"),
+            row(RepeaterSource::Hearham, "5", "W1HHH"),
+        ]);
+        assert_eq!(ms.len(), 3, "{ms:?}");
+        let mapped = |call: &str| {
+            ms.iter()
+                .find(|m| m.record.callsign == call)
+                .unwrap()
+                .map
+                .is_some()
+        };
+        assert!(!mapped("W1ABC"), "RepeaterBook's and the coordinator's");
+        assert!(!mapped("W1XYZ"), "the coordinator's alone");
+        assert!(mapped("W1HHH"), "hearham's");
+        let json = serde_json::to_value(ms.iter().find(|m| m.record.callsign == "W1ABC")).unwrap();
+        assert!(json.get("map").is_none(), "{json}");
+    }
+
+    /// On the real Manchester listings, around a place and along a route alike: exactly the
+    /// machines with a hearham row are mapped, each where that row (hearham's nearest listing of
+    /// the machine) places it, so GB3CR and GB7PR, the coordinator's alone, are not.
+    #[test]
+    fn the_uk_merges_map_hearhams_listings_only() {
+        let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let layers: [&[RepeaterRecord]; 3] = [&coordinator, &[], &hearham];
+        let around = merge_nearby(&layers, MANCHESTER, 100.0);
+        let along = merge_route(
+            &layers,
+            &Route {
+                from: LIVERPOOL,
+                to: LEEDS,
+                corridor_km: CORRIDOR_KM,
+            },
+        );
+        for ms in [&around, &along] {
+            let mut unmapped = Vec::new();
+            for m in ms.iter() {
+                let first = m
+                    .sources
+                    .iter()
+                    .find(|s| s.source == RepeaterSource::Hearham);
+                match (first, &m.map) {
+                    (Some(s), Some(p)) => {
+                        let h = hearham.iter().find(|r| r.source_id == s.source_id).unwrap();
+                        let want = MapPoint {
+                            lat: h.lat,
+                            lon: h.lon,
+                            callsign: h.callsign.clone(),
+                            output_mhz: h.output_mhz,
+                            city: h.city.clone(),
+                        };
+                        assert_eq!(p, &want, "{}", m.record.callsign);
+                    }
+                    (None, None) => unmapped.push(m.record.callsign.as_str()),
+                    (first, map) => panic!("{}: {first:?} {map:?}", m.record.callsign),
+                }
+            }
+            unmapped.sort_unstable();
+            assert_eq!(unmapped, ["GB3CR", "GB7PR"]);
         }
     }
 }

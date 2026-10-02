@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ProgChannel } from '../types'
+import type { ProgChannel, RepeaterSearchRow } from '../types'
 import { emptyBank, findEquivalent, saveFavoriteFromDial } from './memories'
 import {
   autoRadiusMi,
@@ -13,6 +13,7 @@ import {
   repeaterMemory,
   rigRepeaterParams,
   sanitizeName,
+  splitForMap,
 } from './radioprog'
 
 describe('freqTail', () => {
@@ -300,5 +301,32 @@ describe('mhzLabel', () => {
     expect(mhzLabel(147.18)).toBe('147.18')
     expect(mhzLabel(438.5125)).toBe('438.5125')
     expect(mhzLabel(147)).toBe('147.0')
+  })
+})
+
+describe('splitForMap', () => {
+  /** A row behind `srcs` (the top one first), with a hearham point when `mapped`. Only the fields
+   *  the split reads are real. */
+  const row = (id: string, srcs: Array<'hearham' | 'repeaterbook' | 'rsgb'>, mapped: boolean) =>
+    ({
+      channel: { id },
+      sources: srcs.map((source) => ({ source, sourceId: id, channelId: id, updated: null })),
+      ...(mapped ? { map: { lat: 1, lon: 2, callsign: id, outputMhz: 146.94, city: '' } } : {}),
+    }) as unknown as RepeaterSearchRow
+
+  it("plots the rows with a hearham point and counts the rest by the directory that alone lists them", () => {
+    const rows = [
+      row('a', ['hearham'], true),
+      row('b', ['repeaterbook'], false),
+      row('c', ['repeaterbook', 'hearham'], true),
+      row('d', ['rsgb'], false),
+      row('e', ['rsgb', 'hearham'], true),
+      row('f', ['repeaterbook'], false),
+    ]
+    const s = splitForMap(rows)
+    expect(s.mapped.map((r) => r.channel.id)).toEqual(['a', 'c', 'e'])
+    expect([s.leftOffRb, s.leftOffRsgb]).toEqual([2, 1])
+    // CONTROL: hearham's list alone leaves nothing off.
+    expect(splitForMap(rows.filter((r) => r.map))).toEqual({ mapped: s.mapped, leftOffRb: 0, leftOffRsgb: 0 })
   })
 })

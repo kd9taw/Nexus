@@ -76,7 +76,9 @@ import {
   repeaterMemory,
   rigRepeaterParams,
   sanitizeName,
+  splitForMap,
 } from '../features/radioprog'
+import { RepeaterMap, type MapMarker } from './RepeaterMap'
 import { gridToLatLon, isValidGrid } from '../grid'
 import { fmtDistanceKm, useUnits } from '../units'
 import { Dialog } from './ui/Dialog'
@@ -198,8 +200,9 @@ interface Props {
  * pick → a curated channel list → CHIRP CSV / generic CSV (and, with CAT, tune
  * the rig to a machine right now). The CHANNEL LIST is the artifact; the
  * repeater results are a source feed that populates only on an explicit Fetch
- * (no auto-fetch, no polling, no map — this is a programming tool, not a
- * repeater directory).
+ * (no auto-fetch, no polling — this is a programming tool, not a repeater
+ * directory). Its one map, on request, shows hearham's listings alone
+ * (RepeaterMap.tsx).
  */
 export function RadioProgView({ myGrid, catOk = false }: Props) {
   const configuration=useNavigation<ProgrammingConfiguration>('programming')
@@ -245,6 +248,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
   // ── results ──
   const [result, setResult] = useState<RepeaterSearchResult | null>(null)
+  /** Where `result` was searched: the map draws the place and the area the list came from, not
+   *  what the origin fields say now. */
+  const [searched, setSearched] = useState<{
+    from: { lat: number; lon: number }
+    fromLabel: string
+    to: { lat: number; lon: number } | null
+    toLabel: string
+    km: number
+  } | null>(null)
+  /** The results as the list or on the map (hearham's listings only). */
+  const [view, setView] = useState<'list' | 'map'>('list')
   const [fetching, setFetching] = useState(false)
   const [fetchErr, setFetchErr] = useState('')
 
@@ -321,6 +335,12 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     return gridToLatLon(g)
   }, [originKind, myGrid, gridInput, cityPick])
 
+  const destLabel = useCallback((): string => {
+    if (toKind === 'station') return myGrid.toUpperCase()
+    if (toKind === 'grid') return toGrid.toUpperCase()
+    return toPick ? toPick.displayName.split(',').slice(0, 2).join(',') : toCity
+  }, [toKind, myGrid, toGrid, toPick, toCity])
+
   /** The route's other end, resolved the same way. */
   const dest = useMemo((): { lat: number; lon: number } | null => {
     if (toKind === 'city') return toPick ? { lat: toPick.lat, lon: toPick.lon } : null
@@ -338,9 +358,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     const query = routing && dest
       ? repeaterSearch(origin.lat, origin.lon, miToKm(corridorMi), dest)
       : repeaterSearch(origin.lat, origin.lon, miToKm(effRadiusMi))
+    const area = {
+      from: origin,
+      fromLabel: originLabel(),
+      to: routing && dest ? dest : null,
+      toLabel: routing && dest ? destLabel() : '',
+      km: miToKm(routing ? corridorMi : effRadiusMi),
+    }
     query
       .then((res) => {
         setResult(res)
+        setSearched(area)
         const label = originLabel()
         if (label && label !== '—') {
           pushRecent({
@@ -354,7 +382,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       })
       .catch((e) => setFetchErr(String(e)))
       .finally(() => setFetching(false))
-  }, [origin, fetching, routing, dest, corridorMi, effRadiusMi, originKind, originLabel])
+  }, [origin, fetching, routing, dest, corridorMi, effRadiusMi, originKind, originLabel, destLabel])
 
   const searchCity = useCallback(() => {
     const q = cityInput.trim()
@@ -421,6 +449,27 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
   const inList = useMemo(() => new Set(rows.map((r) => r.channel.id)), [rows])
   const isAdded = (row: RepeaterSearchRow) => rowIds(row).some((id) => inList.has(id))
+
+  // The map (the operator's pick, 2026-09-30: "hearham-only map now"): the shown rows hearham
+  // lists, each where its hearham row places it, and a count of the rest by why they are off it.
+  const mapSplit = useMemo(() => splitForMap(shown), [shown])
+  const markers = useMemo(
+    (): MapMarker[] =>
+      mapSplit.mapped.map((row) => {
+        const added = rowIds(row).some((id) => inList.has(id))
+        return {
+          id: row.channel.id,
+          lat: row.map!.lat,
+          lon: row.map!.lon,
+          call: row.map!.callsign,
+          mhz: row.map!.outputMhz,
+          city: row.map!.city,
+          added,
+          pickable: added || isProgrammable(row.record),
+        }
+      }),
+    [mapSplit, inList],
+  )
 
   // Which shown machines are already starred — live from the shared bank, so the
   // stars stay right when the operator unstars one in the Memories section.
@@ -1329,9 +1378,65 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   {t('program.addAll.label')}
                 </button>
               )}
+              <span className="rp-view" role="group" aria-label={t('program.view.aria')}>
+                <button disabled={remote}
+                  type="button"
+                  className={`filter-chip${view === 'list' ? ' active' : ''}`}
+                  aria-pressed={view === 'list'}
+                  onClick={() => setView('list')}
+                >
+                  {t('program.view.list')}
+                </button>
+                <button disabled={remote}
+                  type="button"
+                  className={`filter-chip${view === 'map' ? ' active' : ''}`}
+                  aria-pressed={view === 'map'}
+                  onClick={() => setView('map')}
+                  title={t('program.view.map.title', { hearham: SOURCE_HEARHAM })}
+                >
+                  {t('program.view.map')}
+                </button>
+              </span>
             </div>
           )}
 
+          {/* The map takes the list's place while there is something to show; with nothing shown,
+              the list's own empty words (and its Try wider) stand instead. */}
+          {view === 'map' && result && searched && shown.length > 0 ? (
+            <div className="rp-map">
+              <RepeaterMap
+                markers={markers}
+                from={searched.from}
+                fromLabel={searched.fromLabel}
+                to={searched.to}
+                toLabel={searched.toLabel}
+                reachKm={searched.km}
+                onPick={(id) => {
+                  const row = mapSplit.mapped.find((r) => r.channel.id === id)
+                  if (row) addRow(row)
+                }}
+              />
+              {/* What the map shows and what it leaves off, in words, under it. */}
+              <div className="rp-map-note" role="status">
+                <span>{t('program.map.shows', { count: markers.length, hearham: SOURCE_HEARHAM })}</span>
+                {(mapSplit.leftOffRb > 0 || result.lists.some((l) => l.source === 'repeaterbook')) && (
+                  <span>
+                    {mapSplit.leftOffRb > 0
+                      ? t('program.map.rb', { count: mapSplit.leftOffRb, rb: SOURCE_REPEATERBOOK })
+                      : t('program.map.rb.none', { rb: SOURCE_REPEATERBOOK, hearham: SOURCE_HEARHAM })}
+                  </span>
+                )}
+                {(mapSplit.leftOffRsgb > 0 || result.lists.some((l) => l.source === 'rsgb')) && (
+                  <span>
+                    {mapSplit.leftOffRsgb > 0
+                      ? t('program.map.rsgb', { count: mapSplit.leftOffRsgb, rsgb: SOURCE_RSGB })
+                      : t('program.map.rsgb.none', { rsgb: SOURCE_RSGB, hearham: SOURCE_HEARHAM })}
+                  </span>
+                )}
+                <span>{t('program.map.hint')}</span>
+              </div>
+            </div>
+          ) : (
           <div className="rp-results" role="table" aria-label={t('program.results.aria')}>
             {!result && !fetching && (
               <p className="aw-empty">
@@ -1483,6 +1588,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               )
             })}
           </div>
+          )}
 
           <div className="settings-hint rp-attribution">
             {(result ? result.lists.map((l) => l.source) : (['hearham'] as Directory[])).map(
