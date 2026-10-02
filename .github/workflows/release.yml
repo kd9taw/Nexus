@@ -31,11 +31,13 @@
 #
 # PINNED DOWNLOADS. Everything this workflow fetches to build with is pinned to a digest or a
 # commit: actions from outside GitHub's own (by commit SHA), the DeepCW model, FFTW, Hamlib, the
-# tauri bundler's AppImage tools and the AppImage runtime (scripts/build-linux.sh), epubcheck and
-# the manual's Python packages. A branch, a `continuous` release or a floating version lets a
-# release change with no commit here. scripts/release-secrets.test.mjs refuses a download it cannot
-# see pinned. What it cannot see: the package managers (apt, Homebrew), which verify what they
-# fetch but float its version, and the Pi container's own downloads (scripts/Dockerfile.pi).
+# tauri bundler's AppImage tools and the AppImage runtime (scripts/build-linux.sh), epubcheck,
+# the manual's Python packages, and the Pi container's images, Node.js and rustup-init
+# (scripts/Dockerfile.pi, which also takes npm at an exact version). A branch, a `continuous`
+# release or a floating version lets a release change with no commit here.
+# scripts/release-secrets.test.mjs refuses a download it cannot see pinned, here, in ci.yml and in
+# Dockerfile.pi. What it cannot see: the package managers (apt, Homebrew), which verify what they
+# fetch but float its version.
 
 name: Release
 

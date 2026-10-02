@@ -27,6 +27,9 @@
 // POTA/SOTA boxes are the two boards themselves, rendered with rows that put their words in every state. And
 // the NOW bar, above every section and so over Connect, letters its chips' words in their state colours: it
 // is rendered in each state as well.
+//
+// A need chip is no longer one: it letters in the ink in every theme, and NeedChip.contrast.test.tsx holds it on
+// Connect and on every other host.
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -278,7 +281,7 @@ function nodesOf(node: Element): Element[] {
 /** The state-word kinds this change is about, by the class that names them (nearest first). */
 const KIND_CLASSES = [
   'bbt-band', 'heatmap-band', 'swx-impact', 'cp-work', 'cp-mode', 'swsc-chip', 'go-snr', 'getout-summary', 'chase-open',
-  'cfeed-ends', 'need-chip', 'opening-band', 'opening-new', 'kp-line', 'sat-stale', 'sat-chip', 'rotor-slewing', 'rotor-stop', 'amp-link',
+  'cfeed-ends', 'opening-band', 'opening-new', 'kp-line', 'sat-stale', 'sat-chip', 'rotor-slewing', 'rotor-stop', 'amp-link',
   'amp-fault', 'prop-prov',
   // The Spots and POTA/SOTA boxes' boards, and the NOW bar.
   'np-mode-col', 'pota-badge', 'nb-chip', 'nb-src',
@@ -645,12 +648,11 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     'cfeed-ends: .cfeed-ends', 'chase-open: .chase-open.o-open', 'cp-mode: .cp-mode.fair', 'cp-mode: .cp-mode.good',
     'cp-work: .cp-work.w-excellent', 'cp-work: .cp-work.w-fair', 'cp-work: .cp-work.w-good', 'getout-summary: strong', 'go-snr: .go-snr',
     'heatmap-band: .heatmap-name [mark]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
-    'need-chip: .need-chip.need-band', 'need-chip: .need-chip.need-dxped', 'need-chip: .need-chip.need-mode',
-    'need-chip: .need-chip.need-state', 'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
+    'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
     'rotor-slewing: .rotor-slewing', 'rotor-stop: .rotor-stop', 'sat-chip: .sat-chip.dead', 'sat-chip: .sat-chip.stale',
     'sat-stale: .sat-stale', 'swsc-chip: .swsc-chip.swsc-major', 'swsc-chip: .swsc-chip.swsc-minor', 'swx-impact: .swx-impact [mark]',
-    // The Spots box's board (its WATCH tile, its mode badges), the POTA/SOTA box's, and the NOW bar.
-    'need-chip: .need-chip.need-watch',
+    // The Spots box's board (its mode badges: its WATCH tile is a need chip, NeedChip.contrast.test.tsx's), the
+    // POTA/SOTA box's, and the NOW bar.
     'np-mode-col: .np-mode-col.np-mode-cw', 'np-mode-col: .np-mode-col.np-mode-digital', 'np-mode-col: .np-mode-col.np-mode-phone',
     'pota-badge: .pota-badge.pota-badge-open',
     'nb-chip: .nb-v in .nb-chip.good', 'nb-chip: .nb-v in .nb-chip.ok', 'nb-chip: .nb-v in .nb-chip.nb-need.good',
@@ -721,7 +723,7 @@ describe('every state-coloured word on Connect reads in every light theme', () =
 
   // The chips whose own border says their state: with the word in ink, that border must stand 3:1 off what the
   // chip sits on. (Rows that carry it on their left edge, Chase's and the openings', are measured in the report.)
-  const CHIPS = ['need-chip', 'cp-mode', 'swsc-chip', 'cfeed-ends', 'sat-chip', 'pota-badge', 'nb-chip', 'nb-src']
+  const CHIPS = ['cp-mode', 'swsc-chip', 'cfeed-ends', 'sat-chip', 'pota-badge', 'nb-chip', 'nb-src']
   /** A border declaration's colour: the value itself, or a `border` shorthand without its width and style. */
   const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
   /** The chip's index in the word's chain: the word itself, or (the NOW bar's) the chip it sits in. */
@@ -839,10 +841,9 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
     // The storm line's own colour is the theme's warning now that --state-warn is (it was the fixed #f5a524, 1.69:1).
     expect(has(/ kpOutlook \.kp-line\.warn .* light: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
-    // Beside the cockpits, in the boxes' boards and on the NOW bar, before their light rules: a need chip in
-    // the rail, the POTA/SOTA box's BAND OPEN (1.65:1 here, 1.66:1 in Chrome: the badge's tint rounds a unit
-    // apart), and the bar's PROP CACHED.
-    expect(has(/^dash chase \.need-chip\.need-band "BAND" light: #a16207 on #d5c9b8 = 3\.02:1$/), "the rail's need chip").toBe(true)
+    // Beside the cockpits, in the boxes' boards and on the NOW bar, before their light rules: the POTA/SOTA box's
+    // BAND OPEN (1.65:1 here, 1.66:1 in Chrome: the badge's tint rounds a unit apart) and the bar's PROP CACHED.
+    // (A need chip, in the rail as anywhere, is NeedChip.contrast.test.tsx's.)
     expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
     expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
     // NEW PARK, which the census does not count (above): 3.37:1 here, 3.36:1 in Chrome.

@@ -996,6 +996,8 @@ impl AppState {
             log_store_problem: None,
             // Filled by the engine while the database has refused a change; None here.
             log_save_trouble: None,
+            // Filled by the engine from the files this run kept rather than save over; none here.
+            kept_files: Vec::new(),
             // Filled by the engine while Parsec presence mode is on; None here.
             parsec_presence: None,
         }

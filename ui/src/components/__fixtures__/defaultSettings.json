@@ -193,6 +193,7 @@
   "doubleClickSetsTx": true,
   "tuneTimeoutSecs": 12,
   "splitMode": "none",
+  "splitDetectEnabled": false,
   "decodeDepth": 3,
   "decodeFLowHz": 200,
   "decodeFHighHz": 2900,

@@ -50,13 +50,14 @@ beside the chips, so it never moves the search without telling you.
 **Fetch repeaters** is the one filled accent button on the screen and the only
 control that pulls repeater data; the City **Search** click is the section's
 only other network call, so nothing here reaches out unless you pressed
-something. After a fetch, the line beside it says which directory answered and
-how old the data is — "RepeaterBook · 3h ago", "hearham · 2d ago" — and adds
-"stale (fetch failed, cached data shown)" when you are looking at cache because
-the fetch did not land. Directory data caches for seven days per source and a
-RepeaterBook state re-tries at most every 15 minutes, so repeated fetches from
-the same spot are free and instant; a directory does not change hourly and this
-one does not pretend to.
+something. After a fetch, the line beside it names each directory that answered
+and how old its data is — "RSGB · 1d ago hearham · 2d ago", "RepeaterBook · 3h
+ago hearham · 2d ago" — and adds "stale (fetch failed, cached data shown)" to
+one you are seeing from cache because the fetch did not land. Directory data
+caches for seven days per source, and a RepeaterBook state or an RSGB locator
+square re-tries at most every 15 minutes, so repeated fetches from the same spot
+are free and instant; a directory does not change hourly and this one does not
+pretend to.
 
 **Where the data comes from.** With no token, hearham.com — an open, no-account
 directory pulled whole (~22,000 rows worldwide) and cached. Add your own
@@ -68,9 +69,36 @@ points at your radius and filters by distance locally — a search on a state li
 gets the neighbouring state too, rather than half a circle of results. Shared
 RepeaterBook access for every Nexus user is pending RepeaterBook's approval:
 until it is granted that path answers 503 and the search falls through to
-hearham, which is why an install with no token is a hearham install. The
-attribution line under the results names whichever source answered, and the
-exported file carries it as a trailing comment.
+hearham, which is why an install with no token is a hearham install.
+
+For a location in the UK, Program also reads the national coordinator's list:
+the RSGB's repeater list (ETCC, ukrepeater.net), asked about the 4-character
+locator squares your radius reaches, the nine nearest at most, one request per
+square, each cached for a week. When a wider radius reaches further, a note
+names the squares it did not ask about, where the machines are hearham's alone.
+The RSGB service is a beta: when it cannot be read, a note says so and the list
+is hearham's alone, never an empty one.
+
+**One row per machine.** Every directory a search reads is merged: two listings
+are one machine when they share a callsign (without a link suffix such as `-L`)
+and an output within 2.5 kHz, or, with no callsign, the same output and input
+within 2.5 kHz less than 5 km apart. Each field comes from the highest of the
+coordinator, then RepeaterBook, then hearham that has it, so a coordinator
+listing with no tone takes hearham's. Where they disagree about the tone, the
+input (the shift), the modes or a DMR colour code, the row programs the higher
+source's value and says so on a line of its own: **Sources differ** — "Tone
+RSGB 88.5 is programmed (also listed: hearham 82.5)". Around Manchester that is
+GB3BW's tone and GB3XN's input (hearham has it as simplex, so a radio
+programmed from hearham alone could not open it). A machine hearham lists only
+by its DMR side, like GB3XL, is one FM row with the coordinator's CTCSS tone and
+colour code, and a machine hearham lists once per mode or per linked node is
+one row.
+
+The attribution line under the results credits every directory that answered —
+"Repeater data: RSGB ETCC (ukrepeater.net)", "Data courtesy of
+RepeaterBook.com", "Repeater data from hearham.com" — and the exported file
+carries a comment line for each directory this search read and each one a
+channel in your list came from.
 
 hearham has real holes in rural country, so Program checks for one. When the
 results inside your radius carry nothing at all on 2 m, or nothing on 70 cm, a
@@ -90,7 +118,11 @@ under All. The count line reads "12 of 47 shown · nearest first" and grows a
 **A result row** is callsign, output frequency, offset (`-0.6`, `+5.0`, `→` and
 the absolute input for a true split, `—` for simplex), tone (`103.5`, `D023`,
 `—`), then distance in miles and compass octant from your origin, with the city
-and state on hover. FM machines carry ☆, **Tune** (only while CAT is up) and
+and state on hover. Under it, a line names the directories behind the machine
+and its date: the directory's own date when it gives one ("RepeaterBook ·
+updated 2026-05-14"), otherwise "no date" and the age of the list it came in
+("RSGB + hearham · no date · fetched 2d ago"; hearham and the RSGB list date no
+single machine). FM machines carry ☆, **Tune** (only while CAT is up) and
 **＋ Add**; the Add button reads "✓ Added" afterwards and clicking it again takes
 the channel back out. Digital-only machines are listed, greyed and badged DMR /
 D-STAR / YSF, with Add disabled — "Digital repeater — programming
@@ -252,10 +284,6 @@ handheld; ☆ on a result row is the one-machine version.
 - **Exports overwrite the same day's file.** The filename is date-stamped only,
   so a second export on the same day replaces the first in Downloads without
   asking.
-- **The attribution comment follows this session's fetch, not the channels.**
-  Export a list you built yesterday from RepeaterBook without fetching again
-  first and the trailing comment credits hearham.com, because nothing has
-  answered yet this session.
 - **One list, not named projects.** There is a single working list, auto-saved;
   the file format holds many, but nothing in the UI creates, names or switches
   between them.

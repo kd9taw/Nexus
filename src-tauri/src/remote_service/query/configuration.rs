@@ -184,10 +184,14 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "journeyStreakEnabled",
     "js8ActivityAgingMin",
     "js8Autoreply",
+    "js8AutoreplyAllow",
+    "js8AutoreplyConfirmation",
+    "js8AutoreplyDeny",
     "js8CallsignAgingMin",
     "js8CqIntervalMin",
     "js8Groups",
     "js8HbAck",
+    "js8HbAckDeny",
     "js8HbIntervalMin",
     "js8IdleWatchdogMin",
     "js8Info",
@@ -551,6 +555,10 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "js8CqIntervalMin",
     "js8HbAck",
     "js8Autoreply",
+    "js8AutoreplyConfirmation",
+    "js8AutoreplyAllow",
+    "js8AutoreplyDeny",
+    "js8HbAckDeny",
     "js8Relay",
     "js8IdleWatchdogMin",
     "js8Info",
@@ -794,6 +802,13 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("js8CqIntervalMin", &self.0.js8_cq_interval_min)?;
         out.serialize_field("js8HbAck", &self.0.js8_hb_ack)?;
         out.serialize_field("js8Autoreply", &self.0.js8_autoreply)?;
+        out.serialize_field(
+            "js8AutoreplyConfirmation",
+            &self.0.js8_autoreply_confirmation,
+        )?;
+        out.serialize_field("js8AutoreplyAllow", &self.0.js8_autoreply_allow)?;
+        out.serialize_field("js8AutoreplyDeny", &self.0.js8_autoreply_deny)?;
+        out.serialize_field("js8HbAckDeny", &self.0.js8_hb_ack_deny)?;
         out.serialize_field("js8Relay", &self.0.js8_relay)?;
         out.serialize_field("js8IdleWatchdogMin", &self.0.js8_idle_watchdog_min)?;
         out.serialize_field("js8CallsignAgingMin", &self.0.js8_callsign_aging_min)?;

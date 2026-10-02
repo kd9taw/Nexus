@@ -195,6 +195,34 @@ function overflowY(el: Element): string {
   return parts[1] ?? parts[0] // `overflow: <x> <y>` — one value sets both
 }
 
+/**
+ * The declaration that wins `prop` on `el`, computed the way overflowY() computes its one property:
+ * every rule of the real sheet that matches, then the inline style; importance, then specificity,
+ * then source order. jsdom expands the `flex` shorthand into `flex-basis`, so a basis declared
+ * either way is read here.
+ */
+function declWinner(el: Element, prop: string): { value: string; selector: string } | null {
+  let win: (Cand & { selector: string }) | null = null
+  const consider = (decl: CSSStyleDeclaration, spec: number, order: number, selector: string) => {
+    const value = decl.getPropertyValue(prop).trim()
+    if (!value) return
+    const cand = { prop, value, important: decl.getPropertyPriority(prop) === 'important', spec, order, selector }
+    if (better(cand, win)) win = cand
+  }
+  for (const { rule, order } of FLAT) {
+    let hit = false
+    try {
+      hit = el.matches(rule.selectorText)
+    } catch {
+      continue
+    }
+    if (hit) consider(rule.style, specificity(rule.selectorText), order, rule.selectorText)
+  }
+  consider((el as HTMLElement).style, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, '(inline style)')
+  const w = win as (Cand & { selector: string }) | null
+  return w && { value: w.value, selector: w.selector }
+}
+
 /** A box that lets its descendants' block-end overflow escape outward. */
 const escapes = (v: string) => v === 'visible'
 /** A box that can be SCROLLED to reach the overflow it holds. */
@@ -271,6 +299,79 @@ describe('.layout.single cannot own its deficit — so the .panel it wraps must'
           `scrollers and its deficit is ${fate === 'clip' ? `CLIPPED at ${at}` : 'owned by nothing'} ` +
           '— Export for CHIRP…, Export CSV, Save to Memory Bank and Clear all go off the bottom.',
       ).toBe('scroll')
+      cleanup()
+    }
+  })
+})
+
+describe("Program's narrow stack: neither half is ever shorter than what it holds", () => {
+  // THE DEFECT (2026-10-01). At a narrow effective width — data-viewport sm or xs, which is
+  // the 1024×768 floor at a 100 % scale, 1366×768 at 125 % and 1920×1080 at 175 % — the source
+  // pane and the channel list stack in one column. Its rows were `minmax(0, 1fr)`: two equal
+  // halves of whatever the panel had left, 187 px each at the floor, while the source half holds
+  // the origin, radius, fetch and filter rows above a results list floored at 120 px, 392 px in
+  // all. Nothing between the rows scrolls, so the source overflowed its row and the channel list,
+  // painted later, sat on top of the results: in Chrome `elementFromPoint` found `.rp-chan-rows`
+  // at all 24 Tune and Add buttons of a 12-machine search, scrolled or not. The panel's own
+  // scrollbar (the fate this file pins above) never fired, because a row that may shrink to zero
+  // never pushes on the panel.
+  //
+  // THE RULE. The narrow rows floor at their content, `minmax(min-content, 1fr)`, so the stack
+  // grows past the panel and the panel scrolls. That floor is only honest if each list puts its
+  // OWN floor into it and not its whole list: `flex: 1` is a 0 % basis, and a percentage basis in
+  // a column whose height is being worked out from its content resolves to `content` (CSS Flexbox
+  // §7.2.3), so the source row grew to the full list (669 px for 14 machines in Chrome) and the
+  // results stopped scrolling. A zero LENGTH basis on both lists keeps them scrollers at their
+  // 120 px floor. Both halves are computed here; whether the floor is big enough is geometry,
+  // which only a real browser can measure (it was, at the three narrow sizes above).
+  const NARROW = ['sm', 'xs'] as const
+  /** The minimum of a track size: `minmax(<min>, <max>)` → <min>; a single keyword is its own. */
+  const trackMin = (v: string) => /^minmax\(\s*([^,]+?)\s*,/.exec(v)?.[1] ?? v.trim()
+
+  afterEach(() => document.documentElement.removeAttribute('data-viewport'))
+
+  for (const vp of NARROW) {
+    it(`[data-viewport='${vp}']: the stacked rows floor at their content, and each list adds only its own floor`, async () => {
+      document.documentElement.setAttribute('data-viewport', vp)
+      const { container } = mountSingle(<RadioProgView myGrid="EN52" catOk={false} />)
+      const body = await waitFor(() => {
+        const b = container.querySelector('.rp-body')
+        expect(b, 'Program rendered no .rp-body').not.toBeNull()
+        return b!
+      })
+      const explicit = declWinner(body, 'grid-template-rows')
+      expect(
+        explicit === null || explicit.value === 'none',
+        `\`${explicit?.selector} { grid-template-rows: ${explicit?.value} }\` gives the stack an explicit row, ` +
+          'which the content floor on the implicit rows does not reach.',
+      ).toBe(true)
+      const rows = declWinner(body, 'grid-auto-rows')
+      expect(rows, 'no rule sizes the stacked rows').not.toBeNull()
+      expect(
+        trackMin(rows!.value),
+        `\`${rows!.selector} { grid-auto-rows: ${rows!.value} }\`: a stacked row may be shorter than the ` +
+          'half it holds, so the source spills under the channel list (Tune and Add unclickable).',
+      ).toBe('min-content')
+      for (const sel of ['.rp-results', '.rp-chan-rows']) {
+        const list = container.querySelector(sel)
+        expect(list, `Program rendered no ${sel}`).not.toBeNull()
+        const basis = declWinner(list!, 'flex-basis')
+        expect(
+          basis?.value,
+          `${sel} resolves flex-basis \`${basis?.value}\` (${basis?.selector}): a percentage or content basis puts ` +
+            'the WHOLE list into the stacked row, which then grows to it and the list stops scrolling.',
+        ).toMatch(/^0(px|em|rem)$/)
+      }
+    })
+  }
+
+  it('the wider tiers keep the two columns, and the narrow rows reach none of them', async () => {
+    for (const vp of ['md', 'lg', 'xl'] as const) {
+      document.documentElement.setAttribute('data-viewport', vp)
+      const { container } = mountSingle(<RadioProgView myGrid="EN52" catOk={false} />)
+      const body = await waitFor(() => container.querySelector('.rp-body')!)
+      expect(declWinner(body, 'grid-auto-rows'), `[data-viewport='${vp}'] .rp-body sizes rows it does not stack`).toBeNull()
+      expect(declWinner(body, 'grid-template-columns')?.value, `[data-viewport='${vp}']`).toBe('minmax(0, 1.3fr) minmax(320px, 1fr)')
       cleanup()
     }
   })

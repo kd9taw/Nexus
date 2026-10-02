@@ -314,7 +314,7 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
 
       // THE LAYOUT CONTRACT, as an assertion. `.cockpit-side` is the one container in this
       // cockpit that is already an interposed scroller; a card hung off the shell would sit
-      // above `.cockpit-lower` (flex:1, min-height:0) and crush the operating region — the
+      // above `.cockpit-lower` (flex:1, the region that gives) and crush the operating region — the
       // pre-overhaul failure this cockpit's four-child shell exists to prevent.
       const rail = container.querySelector('aside.cockpit-side')
       expect(rail, 'no side rail rendered').not.toBeNull()

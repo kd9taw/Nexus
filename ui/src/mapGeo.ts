@@ -595,7 +595,8 @@ export function mufCells(stepLat = 10, stepLon = 15): MufCell[] {
  * two RADIAL edges were each a SINGLE segment spanning the full `maxKm`. So walk out along one
  * radial, across the arc, and back down the other — every edge short.
  *
- * 2-D is unaffected because it projects to a plane, where a straight edge is straight.
+ * The 2-D map draws this same ring through `path`, which follows each edge on its projection and
+ * clips the ring at the Globe's horizon, so a wedge reaching behind the planet stops at its edge.
  *
  * Shared by the fill and the outline deliberately: they drew the same wedge from two copies of
  * the geometry, so a fix to one silently left the other torn.

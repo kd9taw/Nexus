@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,322 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,365 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,8 +20,8 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 124 | The program's name. |
-| QSO / QSOs | 97 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
+| Nexus | 131 | The program's name. |
+| QSO / QSOs | 98 / 55 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 84 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 79 / 73 | Transmit and receive. Printed on the radio itself. |
@@ -34,9 +34,9 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | ADIF | 49 | The log file format. |
 | WSJT-X | 47 | The program Nexus is compatible with. |
 | DXCC | 44 | The award programme and the entity list. |
-| SSTV | 41 | The mode. |
+| SSTV | 42 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
-| Field Day | 34 | The ARRL/RAC event's official name. |
+| Field Day | 35 | The ARRL/RAC event's official name. |
 | USB / LSB / SSB / FM | 34 / 10 / 27 / 21 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
 | FT8 / FT4 | 33 / 18 | Mode names. |
@@ -96,17 +96,17 @@ word in, and use only that word in the CSV.
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
 | band | 326 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 231 | The rig itself, and the radio list in Settings. | |
-| mode | 212 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
+| radio | 233 | The rig itself, and the radio list in Settings. | |
+| mode | 213 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
-| log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 122 | The Settings screen and every reference to it. | |
+| log / logbook | 141 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
+| settings | 125 | The Settings screen and every reference to it. | |
 | grid | 120 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 108 | Sound cards, levels, routing. | |
-| station | 109 | Both your own station and the one you are working. | |
-| port | 98 | Serial and network ports. | |
+| station | 114 | Both your own station and the one you are working. | |
+| port | 99 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 97 / 30 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 99 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 86 | A satellite pass. | |
 | callsign | 79 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |

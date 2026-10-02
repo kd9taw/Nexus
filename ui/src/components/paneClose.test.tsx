@@ -265,7 +265,6 @@ vi.mock('../api', async (importOriginal) => {
     js8SendCommand: vi.fn(async () => js8State),
     js8CallCq: vi.fn(async () => js8State),
     js8SetSpeed: vi.fn(async () => js8State),
-    js8Cancel: vi.fn(async () => js8State),
     js8DropQueue: vi.fn(async () => js8State),
     js8InboxMark: vi.fn(async () => js8State),
     js8InboxDelete: vi.fn(async () => js8State),

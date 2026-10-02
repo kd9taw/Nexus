@@ -15,8 +15,9 @@ import { saveDownload } from '../remote-web/chunked-file'
 // Anytone), which are tokens exactly as a callsign is.
 //
 // Four more things stay in the code as named constants, each for its own reason:
-//   • the DIRECTORY NAMES (`RepeaterBook`, `hearham`) — proper nouns;
-//   • the ATTRIBUTION lines the two directories require, which are also written verbatim into
+//   • the DIRECTORY NAMES (`RSGB`, `RepeaterBook`, `hearham`) — proper nouns — and the values a
+//     disagreement quotes (a tone, a frequency, a mode list, a colour code), which are tokens;
+//   • the ATTRIBUTION lines the three directories require, which are also written verbatim into
 //     the exported CSV, so they cannot be locale-dependent;
 //   • the example grid and frequency the origin field and the by-hand prompt offer;
 //   • `My channels`, the persisted project's name inside radioprog.json — a stored value, not a
@@ -28,6 +29,8 @@ import type {
   ProgChannel,
   RadioProgFileNotice,
   RadioProgProject,
+  RepeaterDisagreement,
+  RepeaterRecord,
   RepeaterSearchResult,
   RepeaterSearchRow,
 } from '../types'
@@ -79,13 +82,38 @@ import { parseChirpCsv, type Memory } from '../features/memories'
  * layer on later — the file format already holds many). */
 const WORKING_PROJECT_ID = 'working'
 
-/** The two directories' own names, and the attribution each requires. The attribution is not
+/** The three directories' own names, and the attribution each requires. The attribution is not
  * only shown here — `exportChannels` writes it into the CSV — so it is one invariant string in
  * both places, never a translated one in the interface and a different one in the file. */
 const SOURCE_REPEATERBOOK = 'RepeaterBook'
 const SOURCE_HEARHAM = 'hearham'
+const SOURCE_RSGB = 'RSGB'
 const ATTRIB_REPEATERBOOK = 'Data courtesy of RepeaterBook.com'
 const ATTRIB_HEARHAM = 'Repeater data from hearham.com'
+/** The UK coordinator's credit, on the operator's licence call: on screen and in every file. */
+const ATTRIB_RSGB = 'Repeater data: RSGB ETCC (ukrepeater.net)'
+
+type Directory = RepeaterRecord['source']
+/** Each directory's name, credit and home, in precedence order (the merge's: the coordinator,
+ * then RepeaterBook, then hearham). */
+const DIRECTORIES: Directory[] = ['rsgb', 'repeaterbook', 'hearham']
+const DIRECTORY: Record<Directory, { name: string; credit: string; href: string }> = {
+  rsgb: { name: SOURCE_RSGB, credit: ATTRIB_RSGB, href: 'https://ukrepeater.net' },
+  repeaterbook: {
+    name: SOURCE_REPEATERBOOK,
+    credit: ATTRIB_REPEATERBOOK,
+    href: 'https://www.repeaterbook.com',
+  },
+  hearham: { name: SOURCE_HEARHAM, credit: ATTRIB_HEARHAM, href: 'https://hearham.com' },
+}
+const isDirectory = (s: string | undefined): s is Directory =>
+  s === 'rsgb' || s === 'repeaterbook' || s === 'hearham'
+
+/** Every channel id a merged machine answers to — one per directory row behind it, the row it
+ * programs from first — so a channel saved from any of them shows as already added. */
+function rowIds(row: RepeaterSearchRow): string[] {
+  return row.sources.length > 0 ? row.sources.map((s) => s.channelId) : [row.channel.id]
+}
 /** The geocoder's required credit, for the same reason. */
 const ATTRIB_OSM = 'Geocoding © OpenStreetMap contributors'
 
@@ -328,6 +356,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }, [result, bands, showDigital, onAirOnly, search])
 
   const inList = useMemo(() => new Set(rows.map((r) => r.channel.id)), [rows])
+  const isAdded = (row: RepeaterSearchRow) => rowIds(row).some((id) => inList.has(id))
 
   // Which shown machines are already starred — live from the shared bank, so the
   // stars stay right when the operator unstars one in the Memories section.
@@ -419,16 +448,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }
 
   const addRow = (row: RepeaterSearchRow) => {
-    if (inList.has(row.channel.id)) {
-      setRows((rs) => rs.filter((r) => r.channel.id !== row.channel.id))
+    if (isAdded(row)) {
+      const ids = new Set(rowIds(row))
+      setRows((rs) => rs.filter((r) => !ids.has(r.channel.id)))
       return
     }
     setRows((rs) => [...rs, { channel: { ...row.channel }, nameEdited: false }])
   }
   const addAllShown = async () => {
-    const candidates = shown.filter(
-      (row) => isProgrammable(row.record) && !inList.has(row.channel.id),
-    )
+    const candidates = shown.filter((row) => isProgrammable(row.record) && !isAdded(row))
     if (candidates.length === 0) return
     if (
       candidates.length > 50 &&
@@ -512,7 +540,20 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     return new Set([...seen.entries()].filter(([, c]) => c > 1).map(([n]) => n))
   }, [displayRows, nameCap])
 
-  const attribution = result?.source === 'repeaterbook' ? ATTRIB_REPEATERBOOK : ATTRIB_HEARHAM
+  // Every directory the file's rows could carry data from, one credit line each: the lists this
+  // search read (a merged row takes fields from several) and the source of every channel in the
+  // list, which may have been added from an earlier search. hearham's alone when nothing says.
+  const attribution = useMemo(() => {
+    const used = new Set<Directory>(result ? result.lists.map((l) => l.source) : [])
+    for (const r of displayRows) {
+      const s = r.channel.source?.source
+      if (isDirectory(s)) used.add(s)
+    }
+    if (used.size === 0) used.add('hearham')
+    return DIRECTORIES.filter((d) => used.has(d))
+      .map((d) => DIRECTORY[d].credit)
+      .join('\n')
+  }, [result, displayRows])
 
   const exportList = (format: 'chirp' | 'csv') => {
     if(remote&&!exportClient)return
@@ -683,6 +724,38 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     if (c.duplex === 'split') return `→${c.offsetMhz.toFixed(3)}`
     return `${c.duplex === 'plus' ? '+' : '-'}${c.offsetMhz.toFixed(1)}`
   }
+  /** A row's directories and its date: the top row's own date when its directory gives one,
+   * otherwise "no date" and the age of the list it came in. */
+  const sourceLine = (row: RepeaterSearchRow): string => {
+    const names = [...new Set(row.sources.map((s) => DIRECTORY[s.source].name))].join(' + ')
+    const sources = names || DIRECTORY[row.record.source].name
+    const updated = row.sources[0]?.updated
+    if (updated) return t('program.row.source.updated', { sources, date: updated })
+    const list = result?.lists.find((l) => l.source === row.record.source)
+    return t('program.row.source.noDate', { sources, age: list ? fmtAge(list.fetchedUtc) : '—' })
+  }
+  /** One disagreement: the value the row programs, then what the others listed instead. */
+  const differText = (d: RepeaterDisagreement): string => {
+    const quote = (s: RepeaterDisagreement['said'][number]) =>
+      `${DIRECTORY[s.source].name} ${s.value}`
+    const [first, ...rest] = d.said
+    const used = first ? quote(first) : ''
+    const others = rest
+      .filter((s) => s.value !== first?.value)
+      .map(quote)
+      .join(' · ')
+    switch (d.field) {
+      case 'tone':
+        return t('program.row.differ.tone', { used, others })
+      case 'input':
+        return t('program.row.differ.input', { used, others })
+      case 'mode':
+        return t('program.row.differ.mode', { used, others })
+      case 'colorCode':
+        return t('program.row.differ.colorCode', { used, others })
+    }
+  }
+
   const toneLabel = (c: ProgChannel): string => {
     if (c.toneMode === 'none') return '—'
     if (c.toneMode === 'dtcs') return `D${String(c.dtcsCode).padStart(3, '0')}`
@@ -854,9 +927,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </button>
             {result && (
               <span className="rp-stamp" title={t('program.stamp.title')}>
-                {result.source === 'repeaterbook' ? SOURCE_REPEATERBOOK : SOURCE_HEARHAM} ·{' '}
-                {fmtAge(result.fetchedUtc)}
-                {result.stale ? t('program.stamp.stale') : ''}
+                {result.lists.map((l, i) => (
+                  <span key={l.source} className="rp-stamp-list">
+                    {i > 0 && ' '}
+                    {DIRECTORY[l.source].name} · {fmtAge(l.fetchedUtc)}
+                    {l.stale ? t('program.stamp.stale') : ''}
+                  </span>
+                ))}
               </span>
             )}
           </div>
@@ -885,6 +962,30 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 k="program.missingStates"
                 tags={{ b: <strong /> }}
                 vals={{ states: result.missingStates.join(', ') }}
+              />
+            </div>
+          )}
+          {/* The coordinator's list is a BETA endpoint: when it cannot be read, the list is
+              hearham's alone, and the panel says so rather than showing fewer machines quietly. */}
+          {result?.rsgbUnavailable && (
+            <div className="rp-note" role="status">
+              <T
+                k="program.rsgb.unavailable"
+                tags={{ b: <strong /> }}
+                vals={{ rsgb: SOURCE_RSGB, hearham: SOURCE_HEARHAM }}
+              />
+            </div>
+          )}
+          {result && result.rsgbBeyond.length > 0 && (
+            <div className="rp-note" role="status">
+              <T
+                k="program.rsgb.beyond"
+                tags={{ b: <strong /> }}
+                vals={{
+                  rsgb: SOURCE_RSGB,
+                  hearham: SOURCE_HEARHAM,
+                  squares: result.rsgbBeyond.join(', '),
+                }}
               />
             </div>
           )}
@@ -947,7 +1048,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           {result && (
             <div className="rp-count">
               {t('program.count', { shown: shown.length, total: result.rows.length })}
-              {shown.some((r) => isProgrammable(r.record) && !inList.has(r.channel.id)) && (
+              {shown.some((r) => isProgrammable(r.record) && !isAdded(r)) && (
                 <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
                   {t('program.addAll.label')}
                 </button>
@@ -993,7 +1094,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             {shown.map((row) => {
               const r = row.record
               const c = row.channel
-              const added = inList.has(c.id)
+              const added = isAdded(row)
               const programmable = isProgrammable(r)
               const badge = modeBadge(r)
               return (
@@ -1065,20 +1166,36 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                       {added ? t('program.row.added.label') : t('program.row.add.label')}
                     </button>
                   </span>
+                  <span className="rp-src" role="cell">
+                    {sourceLine(row)}
+                  </span>
+                  {/* The flag leads its own line, under the row: in the badge column it widened
+                      the row past the list at 1024 (48 px, measured). */}
+                  {row.disagreements.length > 0 && (
+                    <span className="rp-differ" role="cell">
+                      <span className="pota-badge rp-differ-badge" title={t('program.row.differ.title')}>
+                        {t('program.row.differ.label')}
+                      </span>
+                      {row.disagreements.map((d) => (
+                        <span key={d.field}>{differText(d)}</span>
+                      ))}
+                    </span>
+                  )}
                 </div>
               )
             })}
           </div>
 
           <div className="settings-hint rp-attribution">
-            {result?.source === 'hearham' || !result ? (
-              <a href="https://hearham.com" target="_blank" rel="noreferrer">
-                {ATTRIB_HEARHAM}
-              </a>
-            ) : (
-              <a href="https://www.repeaterbook.com" target="_blank" rel="noreferrer">
-                {ATTRIB_REPEATERBOOK}
-              </a>
+            {(result ? result.lists.map((l) => l.source) : (['hearham'] as Directory[])).map(
+              (d, i) => (
+                <span key={d}>
+                  {i > 0 && <span> · </span>}
+                  <a href={DIRECTORY[d].href} target="_blank" rel="noreferrer">
+                    {DIRECTORY[d].credit}
+                  </a>
+                </span>
+              ),
             )}
             {originKind === 'city' && <span> · {ATTRIB_OSM}</span>}
           </div>

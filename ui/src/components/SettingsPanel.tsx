@@ -881,11 +881,14 @@ const FD_WHO_EXAMPLES = {
  * The Confirmations placeholders that are TOKENS rather than prose — same rule as
  * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
  * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
- * placeholder is the bare number `1` and stays inline, as every number alone does.
+ * placeholder is the bare number `1` and stays inline, as every number alone does. `lanRanges`
+ * is the address ranges the plain-http note names (#378): addresses, written as an operator types
+ * them, interpolated into the prose rather than left in it.
  */
 const CONFIRMATION_EXAMPLES = {
   rbToken: 'rbuapp_…',
   cloudlogUrl: 'https://log.example.com',
+  lanRanges: '192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x',
 } as const
 
 /**
@@ -1961,6 +1964,16 @@ export function SettingsPanel({
   const setJs8Groups = (groups: string[]) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, js8Groups: groups } : prev))
+  }
+  // JS8Call's allow/deny lists, one comma-separated field each, upper-cased as JS8Call's
+  // `splitWords` reads them (Configuration.cpp:2416-2428).
+  const setJs8CallList = (key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny', raw: string) => {
+    markDirty()
+    const calls = raw
+      .split(',')
+      .map((c) => c.trim().toUpperCase())
+      .filter(Boolean)
+    setForm((prev) => (prev ? { ...prev, [key]: calls } : prev))
   }
   const parseJs8Groups = (raw: string): string[] =>
     raw
@@ -5443,6 +5456,26 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.rigControl.split.hint')}</span>
               </div>
 
+              {/* `splitDetectEnabled` shipped in 1.9.1 as "new in Settings" with no control at
+                  all, so only an edited settings.json could turn it on. Station-wide, beside
+                  Split operation because both are about the radio's split. Read-only from a
+                  browser: the station refuses the write (WRITE_DENIED_KEYS). */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.rigControl.splitDetect.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.splitDetectEnabled ?? false}
+                    className={`toggle${form.splitDetectEnabled ? ' on' : ''}`}
+                    onClick={() => updateBool('splitDetectEnabled', !form.splitDetectEnabled)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.rigControl.splitDetect.hint')}</span>
+              </div>
+
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.rigControl.wheel.label')}{' '}
@@ -8563,6 +8596,17 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">{t('settings.js8.hbAck.hint')}</span>
               </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.hbAckDeny.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8HbAckDeny ?? []}
+                  onText={(raw) => setJs8CallList('js8HbAckDeny', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.hbAckDeny.hint')}</span>
+              </label>
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
@@ -8579,6 +8623,44 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">{t('settings.js8.autoreply.hint')}</span>
               </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.autoreplyConfirmation.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    // `!== false`: on by default, as JS8Call ships AutoreplyConfirmation.
+                    aria-checked={form.js8AutoreplyConfirmation !== false}
+                    className={`toggle${form.js8AutoreplyConfirmation !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AutoreplyConfirmation', form.js8AutoreplyConfirmation === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.autoreplyConfirmation.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.autoreplyAllow.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8AutoreplyAllow ?? []}
+                  onText={(raw) => setJs8CallList('js8AutoreplyAllow', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.autoreplyAllow.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.autoreplyDeny.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8AutoreplyDeny ?? []}
+                  onText={(raw) => setJs8CallList('js8AutoreplyDeny', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.autoreplyDeny.hint')}</span>
+              </label>
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.relay.label')}</span>
@@ -11385,6 +11467,15 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.confirmations.cloudlog.url.hint')}
                   </span>
+                  {/* #378: plain http:// is accepted for an address on the operator's own network
+                      only, and the API key then travels unencrypted, so say so as it is typed. */}
+                  {/^http:\/\//i.test((form.cloudlogUrl ?? '').trim()) && (
+                    <span className="settings-note" role="note">
+                      {t('settings.confirmations.cloudlog.url.plainHttp', {
+                        ranges: CONFIRMATION_EXAMPLES.lanRanges,
+                      })}
+                    </span>
+                  )}
                 </label>
 
                 <label className="settings-field">

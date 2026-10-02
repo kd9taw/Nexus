@@ -315,6 +315,11 @@ html {
 }
 .ui-toast-msg {
   flex: 1;
+  /* A flex item never shrinks below its longest word on its own, and a file path is one long word:
+     the toast for a file Nexus kept pushed its own × out of the window. Let the message shrink,
+     and break a word that cannot fit. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ui-toast-close {
   /* The body is click-through (see .ui-toast); its controls are not. */
@@ -2641,12 +2646,11 @@ body.resizing-row {
 /* Words lettered in the accent (operator, 2026-09-30: "Ink, accent as the mark"): the MUF in Band Outlook and the
    path panel, Satellite Passes' next pass time and the scope's source badge. The accent was tuned as a mark, and
    as lettering it reads 4.25:1 on the light page, under the 4.5:1 floor. In the light themes each takes the
-   theme's ink, with the accent kept as its underline. The badge is Connect's scope's, on Connect and in the
-   dashboard rail's boxes; the same component in Settings is not part of this change. */
+   theme's ink, with the accent kept as its underline. The badge is the spectrum's, on Connect's scope, in the
+   dashboard rail's boxes and in Settings ▸ Audio alike (there it read 5.0:1 on the panel; it takes the same look). */
 [data-theme='light'] .connect-path .cp-muf strong,
 [data-theme='light'] .sat-when,
-[data-theme='light'] .connect .mini-spectrum-src,
-[data-theme='light'] .dash-boxes .mini-spectrum-src {
+[data-theme='light'] .mini-spectrum-src {
   color: var(--text);
   text-decoration-line: underline;
   text-decoration-color: var(--accent);
@@ -2753,18 +2757,15 @@ body.resizing-row {
 .conn-ev-name { color: var(--text-dim); min-width: 9ch; flex: none; }
 .conn-ev.ok .conn-ev-msg { color: var(--state-good); }
 .conn-ev.error .conn-ev-msg { color: var(--alert-critical, #e5484d); }
+.conn-ev.warn .conn-ev-msg { color: var(--state-warn); }
 .conn-ev.info .conn-ev-msg { color: var(--text); }
 
 /* DXpedition need chip + board filter + the DXpeditions section */
 .need-chip.need-dxped {
   background: color-mix(in srgb, #38bdf8 22%, transparent);
-  color: #38bdf8;
-  border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent);
 }
 .need-chip.need-state {
   background: color-mix(in srgb, var(--need-state) 20%, transparent);
-  color: var(--need-state);
-  border: 1px solid color-mix(in srgb, var(--need-state) 48%, transparent);
 }
 .np-filter {
   margin-left: 10px;
@@ -7480,15 +7481,34 @@ select optgroup {
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
 }
+/* A NEED CHIP, WHEREVER IT SITS (Band Activity, the Call Roster, the station cards, the WATCH tile, the Needed
+   board, Spots, the Satellites section and Connect), IN EVERY THEME: the word in the theme's ink, the need on the
+   chip's tint and on its border at full strength. Lettered in its need colour on its own tint, the word read
+   mostly under the 4.5:1 floor, as low as 1.37:1 in the light theme (a DXPED chip) and 2.49:1 in the dark one
+   (NEW ONE on a watched station's row), in Chrome; the border, a mix of the colour, as low as 1.4:1. POTA and SOTA
+   take the theme's own colours (a fixed green and purple, set for the Needed board, overrode them in dark). On a
+   Band Activity row in its own need's colour the chip drops its tint (with the rows' rules).
+   NeedChip.contrast.test.tsx holds it on every host. */
 .need-chip {
   font-size: calc(10.5px * var(--text-scale));
   font-weight: 800;
   letter-spacing: 0.04em;
   border-radius: 999px;
   padding: 2px var(--space-2);
-  color: var(--need-color, var(--accent));
+  color: var(--text);
   background: color-mix(in srgb, var(--need-color, var(--accent)) 24%, transparent);
-  border: 1px solid color-mix(in srgb, var(--need-color, var(--accent)) 70%, transparent);
+  border: 1px solid var(--need-color, var(--accent));
+}
+/* AT NIGHT A CHIP'S OWN TINT IS 10 % OF ITS NEED COLOUR (operator, 2026-09-30: "10 % fill"). The night ink is dimmer
+   than the bright need colours, so the day's 24 % tint, stacked on a row that is need-tinted, selected or dimmed, took
+   a word as low as 3.31:1 (a POTA chip on a watched station's row); at 10 % every chip reads 4.44:1 or better at night,
+   none worse than it shipped. The border keeps the colour at full strength and the day look is unchanged. No need
+   colour moves, so the night block's contract holds (styles-night-contrast.test.ts). NeedChip.contrast.test.tsx
+   holds it. */
+[data-night='1'] .need-chip,
+[data-night='1'] .need-chip.need-dxped,
+[data-night='1'] .need-chip.need-state {
+  background: color-mix(in srgb, var(--need-color, var(--accent)) 10%, transparent);
 }
 .need-entity {
   --need-color: var(--need-entity);
@@ -7522,32 +7542,6 @@ select optgroup {
 }
 .need-watch {
   --need-color: var(--need-watch);
-}
-/* NEW ONE letters in the theme's text colour in every theme: its magenta on its own tint read 4.27:1 on the dark
-   page and 2.49:1 on a watched station's row in Band Activity. The need stays on the chip's tint and border. */
-.need-chip.need-entity {
-  color: var(--text);
-}
-/* NEED CHIPS IN THE LIGHT THEMES, WHEREVER THEY SIT (Band Activity, the Call Roster, the station cards,
-   the WATCH tile, the Needed board, Spots, the Satellites section and Connect). Lettered in its need
-   colour on a tint of that colour, the word read mostly under the 4.5:1 floor in the standard light
-   theme, as low as 1.37:1 (Chrome: a DXPED chip; a new park 2.15:1). So the word takes the theme's ink,
-   and the border, a mix of the need colour that read as low as 1.4:1, takes it at full strength; the
-   tint stays. The DXpedition and state chips carry colours of their own, so they are named here to
-   outrank them, and the fixed POTA and SOTA colours (the rule further down, set for the Needed board's
-   chips, which also colours their marks on the band strip and the band map) give way to the theme's
-   own. Dark is untouched. NeedChip.contrast.test.tsx holds it on every host. */
-[data-theme='light'] .need-chip,
-[data-theme='light'] .need-chip.need-dxped,
-[data-theme='light'] .need-chip.need-state {
-  color: var(--text);
-  border-color: var(--need-color, var(--accent));
-}
-[data-theme='light'] .need-pota {
-  --need-color: var(--need-pota);
-}
-[data-theme='light'] .need-sota {
-  --need-color: var(--need-sota);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
@@ -14819,13 +14813,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    This DOES apply to the Tempo-chat header variant: at (0,3,0) it ties
    `.layout[data-three-pane].has-tempo-header` above and wins on order. The old
    @media body was (0,2,0) and lost, so chat collapsed into a hybrid — the header
-   rule's 5-column areas over a single 1fr column. Keep this block after it. */
+   rule's 5-column areas over a single 1fr column. Keep this block after it.
+   ROWS AT CONTENT HEIGHT (2026-10-01): they were minmax(0, auto) under cells declared
+   `min-height: 0`, so a cell could shrink below what it holds and spill over the next
+   one, and `.layout`'s `overflow-y: auto` (the stack's scroller) never fired. */
 [data-viewport='sm'] .layout[data-three-pane],
 [data-viewport='xs'] .layout[data-three-pane] {
   grid-template-columns: 1fr;
   grid-template-rows: none;
   grid-template-areas: none;
-  grid-auto-rows: minmax(0, auto);
+  grid-auto-rows: minmax(min-content, auto);
+}
+/* ...AND EVERY CELL GIVES UP ITS AREA NAME (2026-10-01). The block above deletes the template's
+   areas, but each cell still said `grid-area: stations` (and so on); a name with no area
+   resolves to the grid's implicit lines (CSS Grid §8.3.1), the SAME lines for every cell,
+   so the header, the stations rail, the conversation and the waterfall rail all landed in
+   ONE cell, painted over each other: the rail hid the station list and the conversation,
+   and the station search box sat over its first decode row. Placed `auto`, they stack in
+   source order as this collapse always meant. three-pane-collapse.test.tsx. */
+[data-viewport='sm'] .grid-header,
+[data-viewport='sm'] .grid-stations,
+[data-viewport='sm'] .grid-center,
+[data-viewport='sm'] .grid-waterfall,
+[data-viewport='xs'] .grid-header,
+[data-viewport='xs'] .grid-stations,
+[data-viewport='xs'] .grid-center,
+[data-viewport='xs'] .grid-waterfall {
+  grid-area: auto;
 }
 [data-viewport='sm'] .grid-stations,
 [data-viewport='sm'] .grid-center,
@@ -15039,6 +15053,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-row.need-confirm {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
+}
+/* THE LEAD CHIP ON ITS OWN ROW (operator, 2026-09-30: "Chip drops its tint there"). A row tinted in a need's colour
+   leads with that need's chip. With the word in the ink, the chip's own tint stacked on the row's, and in the night
+   modes, whose ink is dimmer than the bright need colours, WATCH on a watched station's row read 3.12:1 in Chrome. So
+   on its own row the chip is an outline in the need colour, in every theme, and the row carries the tint; every other
+   chip keeps its own. NeedChip.contrast.test.tsx holds it. */
+.decode-row.need-watch .need-chip.need-watch,
+.decode-row.need-entity .need-chip.need-entity,
+.decode-row.need-zone .need-chip.need-zone,
+.decode-row.need-band .need-chip.need-band,
+.decode-row.need-mode .need-chip.need-mode,
+.decode-row.need-grid .need-chip.need-grid,
+.decode-row.need-state .need-chip.need-state,
+.decode-row.need-confirm .need-chip.need-confirm {
+  background: transparent;
 }
 /* Need micro-icon cluster trailing the message text. */
 .decode-needs {
@@ -16194,7 +16223,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    a bare `.operate-cockpit` (0,1,0) and collapse the flex height chain — leaving
    the waterfall canvas ~0px tall (and its attribute-size feeding the auto-height
    parent → a ResizeObserver re-clear loop = the flicker). Match all three classes
-   (0,3,0) so the cockpit stays a definite-height flex column with no scroll. */
+   (0,3,0) so the cockpit stays a definite-height flex column.
+   THE DEFICIT VALVE (2026-10-01; the other cockpits' shells have had it since 2026-07-31). This was
+   `overflow: hidden`, which left the lower region (`.cockpit-lower`, unfloored) the only
+   box that could give: below md (a pinned 100 % at the 1024×768 floor, 125 % at 1366×768,
+   175 % at 1920×1080) the panes were crushed to their title bars, 0 px of them at
+   1366×768 at 125 %. The region now floors itself, the waterfall yields first, and past
+   the floor this scrolls. It never fires at the auto scale on a 1024×768 or larger window,
+   where the region is taller than its floor. Stop TX sits in the QSO strip directly above
+   the region, so the scroll's end, which shows the floor whole, still shows the strip on
+   any window taller than the floor plus the strip (Chrome: 1024×768 at 100 % and 125 %,
+   1366×768 at 125 % and 150 %, 1920×1080 at 175 %). Where the header alone pushes the strip
+   below the window (1366×768 at 175 %), this is what lets the mouse reach Stop TX at all.
+   cockpit-shells.test.ts computes the valve. */
 .layout.single.operate-cockpit {
   display: flex;
   flex-direction: column;
@@ -16202,7 +16243,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      five vertical gaps in the stack, and every reclaimed px is a decode row. */
   gap: var(--space-2);
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .cockpit-bar {
@@ -17063,7 +17105,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    content and leaves dead space below when the lists are short. */
 .cockpit-lower {
   flex: 1;
-  min-height: 0;
+  /* A FLOOR (2026-10-01), the pane grid's 18em (cockpit-panes.css `.cockpit-panes`) for the same
+     reason: unfloored, the region was the column's only box that could give, so a wrapped
+     header, a pinned scale or a tall waterfall drag crushed every pane toward its title bar
+     while the waterfall, built to yield, kept its height. With the floor the waterfall yields
+     first, and past it the shell's valve scrolls (`.layout.single.operate-cockpit` above). A
+     floor is legal here only because that shell scrolls; operate-classic-grid.test.ts.
+     It YIELDS to a short window, the hosted FT's own floor (`.remote-cockpit-lower`): at its
+     end the valve shows the floor whole, and the QSO strip with Stop TX sits right above it,
+     so a floor taller than the window can spare scrolls Stop TX away. A plain 18em did, at
+     1366×768 at 150 % (Chrome); with the share it stays on screen at every scroll position. */
+  min-height: min(18em, calc(0.35 * var(--vh-eff)));
   display: grid;
   /* Classic two-pane: Band Activity dominant on the left, a wider rail on the
      right now that it also carries the compact Tx1–Tx6 machine. */
@@ -17185,17 +17237,29 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      to), and a bare 1fr carries a min-content floor — a wide child in the
      panel-removed + narrow combination could force horizontal blow-out. */
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
+  /* THE STACK IS ITS OWN SCROLLER, ITS ROWS FLOORED (2026-10-01). The rows were equal
+     minmax(0, 1fr) shares of the region, so at the 1024×768 floor at 100 % two or
+     three panes split 109 px and none showed a row. Now every column group gets at
+     least 26em, room for the two panes Roster's rail and Classic's Rx column hold with
+     a head and three rows each, and shares any surplus, and the region scrolls between
+     them: the cockpit-panes.css column-scroller fate. The QSO strip with Stop TX is
+     outside the region, so this scroll never moves it. No explicit row: the base
+     rule's minmax(0, 1fr) first row would escape the floor. */
+  grid-template-rows: none;
+  grid-auto-rows: minmax(26em, 1fr);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* The classic data-cols overrides above are 3-specific selectors, so the narrow
    stack needs its own 3-specific rule AFTER them or the columns crush at phone /
-   pinned-zoom widths. Source order: BA → qsocol (Rx pane + Tx machine) → roster. */
+   pinned-zoom widths. Source order: BA → qsocol (Rx pane + Tx machine) → roster.
+   Columns only: no data-cols rule sizes rows, so the floored rows and the scroller
+   come from the rule above. A row declaration here would outrank them. */
 [data-viewport='sm'] .cockpit-lower.classic,
 [data-viewport='xs'] .cockpit-lower.classic,
 [data-viewport='sm'] .cockpit-lower.classic[data-rail='left'],
 [data-viewport='xs'] .cockpit-lower.classic[data-rail='left'] {
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
 }
 
 /* THE merged operating strip (decode-first rebuild 2026-08): ONE ~36px row at
@@ -20310,6 +20374,22 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--text-faint) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
 }
+/* The row's badges in the light themes, as HUNT and the reference: NEW PARK (the accent on its own tint, 3.36:1) and
+   BAND OPEN (a fixed green on its own, 1.66:1, in Chrome) take the ink with their colour on their border at full
+   strength, BAND OPEN's being the theme's open-band colour. WORKED TODAY, a fact about the log and not a mark, takes the
+   dim ink in every theme (the faint one read 3.93:1 on its tint in the light theme, 4.47:1 in the dark one). Dark is
+   otherwise untouched. PotaSotaView.contrast.test.tsx holds them. */
+[data-theme='light'] .pota-view .pota-badge-new {
+  color: var(--text);
+  border-color: var(--accent);
+}
+[data-theme='light'] .pota-view .pota-badge-open {
+  color: var(--text);
+  border-color: var(--band-open);
+}
+.pota-view .pota-badge-worked {
+  color: var(--text-dim);
+}
 .pota-spot-line2 {
   display: flex;
   align-items: baseline;
@@ -20370,13 +20450,36 @@ button.cq-skiptx1.on {
 .pota-hunt-btn:active {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
 }
-
-/* need-chip colors for Pota/Sota NeedTags in the Needed board */
-.need-pota {
-  --need-color: #16a34a; /* forest green — parks */
+/* THE BOARD'S HUNT AND PARK REFERENCE IN THE LIGHT THEMES (operator, 2026-09-30: "Separate fix, every host"). Both
+   are lettered in the accent, which was tuned as a mark: as lettering the HUNT read 3.45:1 on its own tint (3.21:1 on
+   the hunted row) and the reference 4.25:1 on the row, in Chrome. In the light themes each takes the theme's ink and
+   keeps the accent: HUNT on its tint and on its border, now at full strength, and the reference as its underline. The
+   board is the same in the POTA / SOTA view, its pop-out and the Remote page. Program's Tune and Add buttons borrow the
+   HUNT look and take its rule too (4.01:1 on their tint, Chrome; ADDED's own is with Program's). The Hunting line above
+   the list letters the hunted park and call in the accent too (4.12:1 on its tint); they take the reference's look. Dark
+   is untouched, but for the hunted row (below). PotaSotaView.contrast.test.tsx holds it. */
+[data-theme='light'] .pota-hunt-btn {
+  color: var(--text);
+  border-color: var(--accent);
 }
-.need-sota {
-  --need-color: #9333ea; /* purple — summits */
+[data-theme='light'] .pota-view .pota-spot-ref,
+[data-theme='light'] .pota-view .pota-hunt-text strong {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
+/* THE HUNTED ROW, IN EVERY THEME (operator, 2026-09-30, "Fix both"). On the row's accent tint the frequency line, in the
+   faint ink, read 3.64:1 in the dark theme and 4.40:1 on the paper one, and HUNT, the accent on its own tint over the
+   row's, 4.20:1 on Slate (Chrome). Both take the theme's ink; HUNT keeps the accent on its border at full strength, as
+   in the light themes. The rest of the board's dark look is unchanged. */
+.pota-view .pota-spot-v2.selected .pota-hunt-btn {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.pota-view .pota-spot-v2.selected .pota-spot-meta {
+  color: var(--text);
 }
 
 /* spin animation for the refresh button loading state */
@@ -23124,13 +23227,20 @@ button.sat-chip:disabled {
   gap: var(--gap);
   padding: var(--space-2) 10px;
 }
-/* Narrow (EFFECTIVE width) stack. Rows are minmax(0, 1fr) — Operate's idiom —
-   because minmax(0, auto) froze track 2 at the Builder's max-content (~270px)
-   and starved the source column above it down to its overflow-less minimum. */
+/* Narrow (EFFECTIVE width) stack: the source above the channel list. Each row floors at what
+   its half holds and shares any surplus, and past that the panel scrolls (the deficit's owner,
+   `.layout.single > .panel`). The rows were minmax(0, 1fr), two equal halves of whatever the
+   panel had left: 187 px each at the 1024×768 floor at 100 %, while the source half holds 392 px
+   (its rows plus the results' 120 px floor). With no scroller between them the source spilled
+   out of its row and the channel list, painted later, covered the results, so no Tune or Add
+   could be clicked (Chrome, 2026-10-01). The floor counts each list at its own 120 px, not its whole
+   list, because both lists take a zero LENGTH basis (below). Before that, minmax(0, auto) froze
+   track 2 at the Builder's max-content (~270px) and starved the source column above it.
+   layout-single-deficit.test.tsx computes both halves. */
 [data-viewport='sm'] .rp-body,
 [data-viewport='xs'] .rp-body {
   grid-template-columns: 1fr;
-  grid-auto-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(min-content, 1fr);
 }
 .rp-source {
   min-width: 0;
@@ -23226,9 +23336,13 @@ button.sat-chip:disabled {
   border-color: var(--state-weak);
 }
 
-/* Results: an ARIA div-table, nearest first. */
+/* Results: an ARIA div-table, nearest first. The basis is a zero LENGTH, not `flex: 1`'s 0 %: in
+   the narrow stack the row is sized from its content, and a percentage basis there resolves to
+   `content` (CSS Flexbox §7.2.3), so the whole list went into the row (669 px for 14 machines)
+   and the results stopped scrolling. Wherever the column has a height of its own, 0px and 0 %
+   are the same thing. The channel list below is the same. */
 .rp-results {
-  flex: 1;
+  flex: 1 1 0px;
   min-height: 120px;
   overflow-y: auto;
   border: 1px solid var(--border);
@@ -23252,12 +23366,25 @@ button.sat-chip:disabled {
   grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto auto;
   align-items: center;
   gap: var(--space-2);
+  /* The source line (and a disagreement) sit tight under the row they describe. */
+  row-gap: 0;
   padding: 3px var(--space-2);
   font-size: 0.8rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
+/* An off-air machine fades by COLOUR, not by see-through (2026-10-01), as closed bands do (.ba-row.is-closed). The row
+   was `opacity: 0.55`, which put every word on it under 4.5:1 (light: the call 3.73, Tune and Add
+   2.07; night: every word under 3.6). Its words take the dim ink, and Tune and Add go to outline
+   buttons in it: the dim ink is tuned for the row's surface, and on the buttons' accent tint it
+   fell to 4.43:1 in the dark Nebula theme. The OFF-AIR badge (.rp-offair-badge below) letters in
+   the ink with its warning colour on its border, so the row still reads as off the air at a
+   glance. RadioProgView.offair.contrast.test.tsx holds every word to 4.5:1 in every theme. */
 .rp-row.offair {
-  opacity: 0.55;
+  color: var(--text-dim);
+}
+.rp-row.offair .pota-hunt-btn {
+  color: var(--text-dim);
+  background: transparent;
 }
 .rp-row.digital .rp-call,
 .rp-row.digital .rp-freq {
@@ -23276,9 +23403,45 @@ button.sat-chip:disabled {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
+/* OFF-AIR: the ink, with the warning colour on its border at full strength. Lettered in the
+   warning colour itself it read 4.37 and 4.16:1 in the dark Slate and Lagoon themes (Chrome),
+   and its old `border-color` drew nothing: a .pota-badge has no border of its own. */
 .rp-offair-badge {
-  color: var(--state-weak);
-  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+  color: var(--text);
+  border: 1px solid var(--state-weak);
+}
+/* A machine its directories disagree about: a caution, in the warning hue. */
+.rp-differ-badge {
+  color: var(--state-warn);
+  border-color: color-mix(in srgb, var(--state-warn) 45%, transparent);
+}
+/* Under each row, across all its columns: the directories it came from with their date, and,
+   on a machine they disagree about, what each listed. */
+.rp-src,
+.rp-differ {
+  grid-column: 1 / -1;
+  font-size: var(--fs-micro);
+  line-height: 1.3;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.rp-differ {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  color: var(--state-warn);
+}
+/* In the light themes the warning hue is under 4.5:1 as small lettering (#a76d00 on the list's
+   #fbfcfe is 4.2:1), so the words take the ink and the badge keeps the hue on its border. */
+[data-theme='light'] .rp-differ,
+[data-theme='light'] .rp-differ-badge {
+  color: var(--text);
+}
+[data-theme='light'] .rp-differ-badge {
+  border-color: var(--state-warn);
+}
+.rp-stamp-list + .rp-stamp-list {
+  margin-left: var(--space-2);
 }
 .rp-actions {
   justify-self: end;
@@ -23288,6 +23451,13 @@ button.sat-chip:disabled {
 .rp-add.added {
   color: var(--state-good);
   border-color: color-mix(in srgb, var(--state-good) 50%, transparent);
+}
+/* In the light themes ADDED takes the HUNT look's rule (its green on the accent tint read 3.90:1 on the paper theme and
+   4.01:1 on the standard one, Chrome), with its green kept on its border at full strength. PotaSotaView.contrast.test.tsx
+   holds it. */
+[data-theme='light'] .rp-add.added {
+  color: var(--text);
+  border-color: var(--state-good);
 }
 /* ★ a machine straight into Memories favorites — same affordance as the
    Memories row star (.mv-star), so one star means one thing app-wide. */
@@ -23361,7 +23531,7 @@ button.sat-chip:disabled {
   width: 60px;
 }
 .rp-chan-rows {
-  flex: 1;
+  flex: 1 1 0px; /* a zero LENGTH basis, as .rp-results explains */
   min-height: 120px;
   overflow-y: auto;
   display: flex;

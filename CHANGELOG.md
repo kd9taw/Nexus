@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wavelog and Cloudlog on your own network over plain http (#378).** A Wavelog or Cloudlog on your
+  LAN with no certificate can now take uploads at an `http://` address, as long as that address is
+  on your own network: 192.168.x.x, 10.x.x.x, 172.16–31.x.x or 127.x.x.x (or a local IPv6
+  address), or a name whose every address is one of those. The upload goes to the address that was
+  checked and nowhere else. Your API key travels unencrypted on that network, so Settings says so
+  under the Base URL as soon as you type an `http://` address, and the Connections log says where
+  it went, once a session for each address. Any other `http://` address is refused before anything
+  is sent, as before; `https://` is unchanged; and Nexus never follows a redirect with your key.
+- **JS8: JS8Call's allow and deny lists.** Settings ▸ Digital ▸ JS8 has JS8Call's three lists,
+  comma-separated and empty by default as in JS8Call: **Only auto-reply to these callsigns**,
+  **Never auto-reply to these callsigns** and **Never acknowledge heartbeats from these
+  callsigns**. A station is matched by its call as heard or its base call, so W1AW covers
+  W1AW/P. A station the first two keep out is not acted on at all, as in JS8Call: no reply, no
+  relay, its message not filed, nothing held for it.
+- **JS8: each automatic reply asks you first, as JS8Call does.** JS8Call ships with "Ask for
+  confirmation before sending autoreply transmissions" on, and so does Nexus now (Settings ▸
+  Digital ▸ JS8). An answer to a query, an ACK, a relay or a heartbeat acknowledgement waits in
+  the dock as JS8Call's question, "A transmission is queued for autoreply … would you like to send
+  this transmission?", with **Yes** and **No**. Yes sends it in the next period, through every TX
+  check; No sends nothing, and so does no answer: after 89 seconds it is No, JS8Call's 90-second box
+  as it counts. A message held for another station is handed over only on Yes. Turn the setting
+  off and replies go by themselves, in the next period.
+- **UK repeaters from the coordinator's own list, one row per machine.** For a UK location,
+  Program reads the RSGB's repeater list (ETCC, ukrepeater.net) for the locator squares around
+  it, at most nine per search and each kept on your PC for a week, and merges it with hearham
+  into one row per machine. Where the two differ, the coordinator's values are programmed and
+  the row is flagged with what each listed. Around Manchester that fixes GB3BW's tone (88.5 Hz,
+  where hearham has 82.5) and GB3XN's input (438.525 MHz; hearham lists it as simplex, so a
+  radio programmed from it could not open the machine), and a machine hearham lists only by its
+  DMR side, like GB3XL, becomes one FM channel with its CTCSS tone and colour code. Every row
+  says where it came from and how old that is ("RSGB + hearham · no date · fetched 2d ago",
+  "RepeaterBook · updated 2026-05-14"). With a RepeaterBook token its rows and hearham's merge
+  the same way, and a machine hearham lists once per mode or per linked node is one row. The
+  RSGB list is a beta service: when it cannot be read, Program says so and shows hearham's
+  machines alone. The CSV and CHIRP files credit every directory their rows came from, one
+  comment line each, "Repeater data: RSGB ETCC (ukrepeater.net)" among them.
+
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
   reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this
@@ -138,6 +175,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or it has an unread message for you, and your automatic HEARING? replies leave it out. It is
   not saved with the heard list either, so it does not come back when Nexus restarts. Up to 1440
   minutes, a day, as in JS8Call. The Remote's Stations pane follows the station's setting.
+- **JS8: a message sent to you is acknowledged, as JS8Call acknowledges it.** When a MSG addressed
+  to you, or to a group you joined, lands in your Inbox, Nexus answers the sender with an ACK
+  (`W1AW ACK` for a message from W1AW), the reply a JS8Call station sends, so the sender sees that
+  it arrived; a message that came through a relay is acknowledged back along the same relay path.
+  It is an automatic reply like the others: it needs TX on and AUTOREPLY on (the default, as in
+  JS8Call), asks for your Yes first unless you turned that off, and is dropped, not sent later, if
+  TX is off, your locator is missing or the frequency is outside your privileges when its turn
+  comes. A message to @ALLCALL, to another station or to a group you have not joined is never
+  acknowledged, and a copy that arrives while the ACK is still waiting does not get a second one.
+- **JS8: a message you hold for another station is acknowledged, as JS8Call acknowledges it.** When a
+  station leaves a MSG TO: with you for someone else, Nexus now answers the sender with an ACK
+  (`W1AW ACK`), the reply a JS8Call station sends, so the sender knows you have it; one that came
+  through a relay is acknowledged back along that relay path. It is an automatic reply like the
+  acknowledgement of a message to you: it needs TX on and AUTOREPLY on, and asks for your Yes
+  first unless you turned that off.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -520,6 +572,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Best Band → Region** is **Bands by region**, so nothing else on Connect is called "Conditions"
   and the two band boxes no longer read alike. A box's picker and **⋯ ▸ Add a tab** list the boxes
   under **Bands**, **Space weather**, **Activity** and **Station** instead of Panels, B2 and B3.
+- **JS8: replies are skipped when JS8Call skips them.** No automatic reply is made while your
+  message box holds text (you are typing, a reply waits there, or a message of yours is going out)
+  or while a message to you is still arriving; a reply already queued waits until the box is
+  free. A heartbeat acknowledgement waits for no message to be arriving, as in JS8Call, rather
+  than for your own queue to be empty. While the idle watchdog stands nothing is filed or held
+  either, and a message to your call as you set it (a /P or a prefixed call) is yours, as JS8Call
+  reads "to me".
+- **JS8: with AUTOREPLY off, a reply goes in your message box for you to send, as in JS8Call.**
+  JS8Call still answers a query to you with AUTO unchecked: it types the answer (an SNR, GRID,
+  INFO, STATUS or HEARING reply, the ACK for a MSG, a relay) into its message box, and you send it
+  or not. Nexus did nothing. Now the answer is put in the JS8 message box, the To box and command
+  cleared, exactly as it would go out, once the box is empty and nothing of yours is going out; it
+  never keys by itself, and Send keys it as your own message. QUERY MSGS and heartbeats are still
+  answered only with AUTOREPLY on, as in JS8Call. A relay with AUTOREPLY off now waits in the box
+  too, where it used to go out by itself.
+- **JS8: an automatic reply goes out in the next period, as JS8Call sends it.** JS8Call keys a
+  reply in the period right after the one the query came in; Nexus first counted it down for one
+  period and two seconds and so answered two periods late, by which time the other station had
+  often moved on. Now a reply made by itself (the confirmation off) is queued as it is made, in
+  view in the dock's queue, and keys at the next boundary, through every TX check as before (the
+  TX latch, your callsign and locator, your privileges, the idle watchdog, one frame per period,
+  Stop TX, and Drop queue to take it back). A reply you confirm goes at the boundary after your
+  Yes. The countdown and its Cancel are gone; No is the veto now.
 - **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
   in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
   group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.
@@ -691,15 +766,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
   map picker arrived. It now says "Globe, need-colored, live openings", in every language.
 
+- **Program at a large zoom: Tune and Add can be clicked again.** With the app pinned at 100 % on
+  a 1024×768 screen (or 125 % on 1366×768, 175 % on 1920×1080), Program puts the search above the
+  channel list, and the channel list covered the search results, so no Tune or Add button in them
+  could be clicked. Each half now keeps room for what it holds and Program scrolls instead. At the
+  automatic zoom nothing moves.
+- **Operate at a large zoom: Call Roster, Band Activity and Rx Frequency show their rows.** With
+  the app pinned at 100 % on a 1024×768 screen, Operate squeezed the decode panes down to their
+  title bars with nothing to scroll, and at 125 % on 1366×768 they disappeared. Now the waterfall
+  gives way first, each pane keeps a usable box that you scroll between, and past that the cockpit
+  scrolls. The QSO strip with Stop TX and Tune stays on screen while you scroll. At 175 % on
+  1366×768 the strip used to sit below the bottom of the window, where the mouse could not reach
+  it; the cockpit now scrolls to it. At the automatic zoom on a 1024×768 or larger screen nothing
+  moves, except that a very tall waterfall drag now stops short of squeezing the panes below it.
+- **Tempo at a large zoom: the station list, the conversation and the waterfall rail no longer
+  sit on top of each other.** With the app pinned at 100 % on a 1024×768 screen (or 125 % on
+  1366×768, 175 % on 1920×1080), all of Tempo's panes landed in the same place: the waterfall rail
+  covered the station list and the conversation, and the station search box sat over the first
+  Band Activity rows. They now stack one under another and Tempo scrolls.
+- **Program: an off-air repeater fades by colour and stays readable.** With "On-air only" off, a
+  repeater listed as off the air was drawn see-through, which made every word on its row hard to
+  read. Its call, frequency and buttons are now in the dimmer text colour, Tune and Add lose their
+  tint, and the OFF-AIR tag is in the normal text colour with its warning colour as an outline, so
+  the row reads clearly in every theme and still stands out as off the air.
+- **On the Globe map, an opening's wedge no longer shows through the planet.** The Opening sectors
+  layer drew each opening's wedge from its corners, so a part of it behind the planet was drawn on
+  the side facing you, where a line from it straight through the Earth comes out. On a globe
+  centred on the US Midwest, a 20 m F2 opening 15,000 km long toward Southeast Asia ended over the
+  Arctic, tagged "20m F2" there, and with the globe turned to Australia a 2 m tropo opening at home
+  still showed, tag and all, over the western Pacific. Now the wedge stops at the edge of the
+  globe, as range rings and satellite footprints do, and its band and mode tag shows only while the
+  wedge's far end is on your side of the planet. On the Flat map a long wedge now follows its
+  bearings as well: that F2 wedge, which runs over the pole, was drawn as a thin sliver straight
+  across the Atlantic and Africa. The Beam map and the 3D globe are unchanged.
+- **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
+  own split and said to turn it on in Settings, but there was never a switch for it: the only way
+  was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
+  beside Split operation, off by default. Turn it on and a split you set at the radio is the one
+  Nexus checks your licence privileges against; if the radio says it is split but not where it
+  transmits, Nexus will not transmit. Nexus never asks a radio whose split can only be read by
+  moving it. From a browser the switch is shown but cannot be changed.
+- **Settings says which Rig & CAT controls belong to every radio.** With two or more radios, the
+  note over the radio cards said that editing another radio would not change the one you are
+  operating, and the manual said every Rig & CAT control is per radio. Seven are station-wide, one
+  setting for all your radios: Interface keys RTS on the CAT port, Split operation, Follow the
+  radio's split, Wheel tuning sensitivity, and under Advanced, Sharing port, Serial handshake and
+  Keying line at startup. The note and the manual now name them, so changing one while you edit
+  another radio no longer surprises the radio you are operating.
+- **Less work for the computer while nothing is happening.** The main window redrew itself two and
+  a half times a second on a timer, even with nothing new to show, on top of the redraw that each
+  new reading from the radio already brings. It now redraws only when something has changed. The
+  unread counts in the Tempo station list update exactly as before.
 - **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
   you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
   relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of
   the list, just under any station you pinned with ★, and a notice says a new message arrived.
   Mark it read or delete it in the Inbox. Before, a message to you went by in the activity list
-  and was kept nowhere, although the Inbox said such messages appear there. Nothing is sent back:
-  JS8Call also answers such a message with an ACK, and Nexus does not. Messages to you stay until
-  you delete them (the newest 100 are kept); messages held for other stations still go after 48
-  hours, and a flood of messages to you can never push one of those out.
+  and was kept nowhere, although the Inbox said such messages appear there. Nexus now also answers
+  it with an ACK, as JS8Call does (see Added). Messages to you stay until you delete them (the
+  newest 100 are kept); messages held for other stations still go after 48 hours, and a flood of
+  messages to you can never push one of those out.
 - **JS8: the Stations pane shows each station's offset the way JS8Call does.** The offset is whole
   hertz with the fraction dropped, so a station at 1508.9 Hz reads 1508 Hz, where it used to be
   rounded up to 1509. It now matches the Band activity pane and JS8Call's own call list.
@@ -759,6 +885,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before it started) or when the dial left your privileges used to be held, and it played by
   itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
   transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
+- **JS8: an automatic reply or heartbeat that comes due outside your privileges is dropped, not
+  sent later.** The rule CW, RTTY and PSK keep. With TX on and the frequency outside your license
+  privileges, a reply counting down (to an SNR?, INFO? or other query) or a heartbeat that came due
+  was held, and it went out by itself as soon as you tuned back inside them. It is now dropped, as
+  it already was with TX off or with no locator in Settings, and the JS8 screen says why.
+- **JS8: what is queued is dropped when transmit goes off or the dial leaves your privileges, not
+  sent later.** The same rule as CW, RTTY and PSK. A message you sent, the rest of a message
+  already going out and a repeating CQ's call used to wait while TX was off or the frequency was
+  outside your license privileges, and went out by themselves as soon as TX came back on or you
+  tuned back inside them. They are now dropped, and the JS8 screen says why (with TX off, when a
+  message of yours was among them). The frame on the air when you turn TX off still finishes, as
+  before, and a repeating CQ keeps its schedule.
+- **JS8: with RELAY off, a message left for another station is no longer held.** Holding MSG TO:
+  messages for the stations they are addressed to is what Settings lists under Relay, and JS8Call
+  holds them only with relaying on; Nexus held them with Relay off too, and offered and delivered
+  them later. Holding another station's message is third-party traffic, so with RELAY off it is now
+  neither held nor acknowledged.
+- **JS8: replies to a portable station keep its /P, as JS8Call's do.** Every automatic reply
+  (SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS, a message delivered from your store, and the
+  heartbeat acknowledgement) named a station heard as W1AW/P as W1AW. Each now names the station as
+  it was heard, as a JS8Call station's reply does, and a message delivered from your store names
+  its sender as it was heard too. A message held for W1AW is still offered and delivered to W1AW/P.
+- **JS8: a message left for a station with a prefix or suffix is held for its base call, as in
+  JS8Call.** A MSG TO: for VE3/W1AW or W1AW/MM was held under that whole call, so W1AW asking
+  QUERY MSGS was told NO, and a message held for W1AW was never offered to VE3/W1AW. JS8Call holds
+  every such message under the base call, W1AW, and offers it to a station by the call it is heard
+  under or by its base call; Nexus now does the same, in the heartbeat acknowledgement's MSG ID,
+  the answer to QUERY MSGS, QUERY MSG and the count in the Stations list. A message already held
+  is still found under the call it was held for.
+- **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
+  When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
+  put those switches back on underneath while the watchdog still stood, so a query heard then
+  counted down a reply, and the reply went out after your next send. Now nothing is answered,
+  relayed or delivered while the watchdog stands, as JS8Call does, and nothing heard meanwhile goes
+  out later.
+- **JS8: what you do in the JS8 screen restarts the idle watchdog, as in JS8Call.** After the idle
+  watchdog had turned auto-reply, relay and the heartbeat off, turning a switch or the repeating CQ
+  back on ended it for one second only: the watchdog still counted from your last send and tripped
+  again, with its notice. Now each send, each switch on or off, Drop queue, Yes or No, Read or
+  Delete in the Inbox and a speed choice starts the idle count again, as each key press or click
+  does in JS8Call. A send did end the watchdog, but left auto-reply and relay off while the dock
+  showed them on: a query heard afterwards waited in your message box instead of being answered,
+  and a MSG TO: for another station was not held. They now come back on, as the dock shows them.
+  The heartbeat and the repeating CQ stay off until you turn them on.
+- **JS8: the Auto-reply hint and tooltip say what is answered.** Settings' Auto-reply hint now
+  names the ACK for a message to you or a group you joined and for a MSG TO: you hold, and says
+  that on @ALLCALL only QUERY MSGS is answered; the cockpit's AUTOREPLY tooltip no longer says
+  @ALLCALL queries are answered, which stopped being true when JS8 stopped answering them, as
+  JS8Call does. In all five languages.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
@@ -798,6 +973,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of Program where the kept file is. If the file cannot be moved aside, it stays where it is
   and Program saves nothing until it is moved or repaired. A file from a newer Nexus that only adds
   new fields opens as it always has.
+- **A QSO waiting in the “Log this QSO?” popup is no longer lost to a file Nexus cannot read.**
+  Nexus keeps the QSOs waiting for your confirmation in a file, so a crash or a power cut does not
+  lose them. When that file could not be read (damaged, or written by a newer Nexus with a value
+  this one does not know), Nexus restored nothing and wrote the next waiting QSO over it, and every
+  contact in it was gone. Now Nexus keeps that file, untouched, under a new dated name beside it
+  (such as `pending_qso.unreadable-20260930-142233.json`), and says where, once, when it starts.
+  If the file cannot be moved aside, Nexus leaves it where it is and does not write over it.
+- **Field Day and contest contacts are no longer lost to a backup Nexus cannot read in full.**
+  Nexus keeps a backup of the contest log beside your settings and rewrites it with every contact,
+  so a restart mid-event loses nothing. When part of that backup could not be read (cut off by a
+  crash, or damaged), Nexus restored what it could and the next contact rewrote the backup
+  without the rest; a backup it could not open at all restored nothing, and the next contact
+  replaced every earlier contact of the event. Now Nexus restores the contacts it can read and
+  keeps the backup itself, untouched, under a new dated name beside it, and says where. If the
+  backup cannot be moved aside, Nexus leaves it where it is, does not write over it, and keeps
+  this session's contest contacts in memory, where switching between Run and S&P keeps them.
+- **The JS8 inbox is no longer lost to a file Nexus cannot read.** When the file that keeps your
+  stored JS8 messages could not be read (damaged, or written by a newer Nexus with a value this one
+  does not know), Nexus started an empty inbox and the next message that arrived wrote over the
+  file. Now Nexus keeps that file, untouched, under a new dated name beside it, and says where. If
+  it cannot be moved aside, Nexus leaves it where it is and does not write over it.
+- **Tempo messages waiting to send are no longer lost to a file Nexus cannot read.** When the file
+  that holds them could not be read (damaged, or written by a newer Nexus in a way this one cannot
+  read), Nexus started with none waiting and the next message you sent wrote over the file. Now
+  Nexus keeps that file, untouched, under a new dated name beside it, and says where. If it cannot
+  be moved aside, Nexus leaves it where it is and does not write over it.
+- **The Assistance record is no longer lost to a file Nexus cannot read.** The record of which
+  QSO-finding assistance was running, and when (Settings ▸ Contesting ▸ Contest Category), is
+  evidence for an unassisted entry. When its file could not be read, Nexus started an empty record
+  and wrote over the file the moment it started. Now Nexus keeps that file, untouched, under a new
+  dated name beside it, and says where. If it cannot be moved aside, Nexus leaves it where it is
+  and does not write over it.
+- **Tempo conversations are no longer lost to a file Nexus cannot read.** When the file that keeps
+  your Tempo chat history could not be read, Nexus started with no conversations and wrote over
+  the file a few seconds later. Now Nexus keeps that file, untouched, under a new dated name
+  beside it, and says where. If it cannot be moved aside, Nexus leaves it where it is and does not
+  write over it.
+- **A settings file Nexus cannot read is kept under a name of its own, and Nexus says so.** Nexus
+  already set an unreadable `settings.json` aside as `settings.json.corrupt` before starting from
+  the default settings, but always under that one name, so a second set-aside replaced the first,
+  and nothing on screen said it had happened. Now each one is kept under a new dated name beside
+  it (such as `settings.unreadable-20260930-142233.json`), never replacing an earlier one, and
+  Nexus says where, once, when it starts. If the file cannot be moved aside, Nexus leaves it where
+  it is and saves no setting over it, rather than writing the default settings over yours.
+- **Armed satellite and DXpedition alarms survive a reset of Nexus's window storage.** They were
+  meant to be kept with your settings, like the satellites and DXpeditions you chase, but were
+  kept only in the window's own storage, which a reinstall or a reset of the webview's data clears.
+  They now live with your settings, so an armed alarm, and a pass or a window that already fired,
+  survive both.
+- **A notice that names a long file path wraps it instead of pushing its × off the screen.** A
+  path has no spaces to break at, so a notice naming one grew wider than the notice column and its
+  × close button ended up outside the window. The path now wraps inside the notice, and the × stays
+  where you can reach it.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
@@ -814,6 +1042,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digital mode) while a picture waits drops it too, and the warning line says so; before, CW, RTTY
   and PSK held it, and it went out when you came back to Phone. A picture already going out is
   untouched, and Stop, Stop TX and the TX switch work as they did.
+- **SSTV: a picture stops going out when its transmission stops.** Leaving the SSTV screen for FT8
+  while a picture was being sent turned transmit off and dropped PTT, but Nexus went on feeding
+  the rest of the picture to the sound card. On a radio keyed by its audio (VOX, or a data port
+  that keys on audio) that put the radio straight back on the air, and the rest of the picture, up
+  to five minutes of it, went out with transmit off. The same happened when a tune, a radio switch
+  or another screen's Stop ended the transmission part-way through a picture. Now the picture
+  stops with the transmission, at once, and the warning line beside Send says it was stopped and
+  why. SSTV's own Stop, TX Off and Stop TX work as before, and a picture that plays out ends
+  exactly as it did.
+- **SSTV: a picture you stop is announced as stopped, not finished.** With a screen reader, a
+  picture stopped part-way with TX Off or Stop TX used to be announced as "SSTV transmit
+  finished", and SSTV's own Stop said "SSTV transmit stopped" and then "finished". Now a picture
+  that ends before its end is announced once, as "SSTV transmit stopped", and "finished" is said
+  only when the whole picture went out. A picture Nexus stopped for you still shows its warning
+  line beside Send instead. Nothing about when or how a picture is sent or stopped changed.
 - **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
   beacon, a message or an automatic ack waits a moment until the radio is free to key it.
   Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was
@@ -1231,18 +1474,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every light theme they now take the theme's text colour, with the colour kept on the chip's
   border. The same goes for Connect's boxes in the dashboard rail beside the cockpits, and for the
   BAND OPEN and NEW PARK badges in the POTA/SOTA box. The dark themes look exactly as before.
-- **Need chips are easy to read in the light themes, wherever they appear.** The NEW ONE, ZONE,
-  BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the Call
-  Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
-  lettered their word in the need's own colour, which was hard to read in every light theme; a
-  DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
-  Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
-  before.
+- **Need chips are easy to read in the light and dark themes, wherever they appear.** The NEW ONE,
+  ZONE, BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the
+  Call Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
+  lettered their word in the need's own colour, which was hard to read in every light theme and
+  in many places in the dark ones; a DXPED chip nearly vanished. The word now takes the theme's
+  text colour everywhere, as on Connect, and the need's colour stays on the chip's border. On a
+  Band Activity row already in a need's colour, that need's chip is an outline in the colour and
+  the row carries the tint. In night mode a chip's own fill is fainter, so its word stays easy to
+  read on the dimmed screen, and its border keeps the full colour. In the dark themes the POTA and
+  SOTA chips, and their marks on the band strip, the band map and the spot legend, now take the
+  theme's own green and purple, as in the light themes.
 - **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
   Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
   source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
-  page. In the light themes they now take the theme's text colour, underlined in the accent. The
-  dark themes look exactly as before.
+  page. In the light themes they now take the theme's text colour, underlined in the accent, and so
+  does the same AUDIO badge on the audio spectrum in Settings ▸ Audio. The dark themes look exactly
+  as before.
 - **Closed bands and the NEW ONE chip are easy to read in the dark themes.** The Band Advisor
   faded a closed band's row, and Band Outlook a closed mode chip, by making them see-through, which
   left the row's "Closed" and its reason and the struck-through mode very hard to read in the dark
@@ -1255,6 +1503,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   red in every theme, whatever the theme or the amber colour picked in Settings. They now take the
   theme's warning and critical colours: in the dark themes the amber is a little lighter and the
   storm red becomes the critical orange, and in the light themes the bars are dark enough to see.
+- **The POTA / SOTA board's HUNT button and park reference are easy to read in the light themes.**
+  In the POTA / SOTA view, its pop-out and on the Remote page, HUNT and each spot's park or summit
+  reference were lettered in the accent colour, which was hard to read on the light page, and HUNT
+  on its own tint harder still. They now take the theme's text colour, with the accent kept on
+  HUNT's border and as the reference's underline. So do the board's NEW PARK and BAND OPEN badges,
+  with their colour kept on their border, and its WORKED TODAY badge reads in the dim text colour.
+  The park and call in the Hunting line above the list take the text colour too, underlined in the
+  accent.
+- **The hunted POTA / SOTA row, WORKED TODAY and Program's Tune and Add buttons are easy to read in
+  every theme.** On the hunted row the frequency was hard to read on the paper theme and in the dark
+  themes, and HUNT on the Slate and Lagoon themes and at night; WORKED TODAY was dim in the dark
+  themes. Both words on the hunted row now take the theme's text colour, HUNT with the accent kept
+  on its border, and WORKED TODAY takes the dim text colour. Program's Tune and Add buttons, which
+  look like HUNT, take its light-theme look, and ✓ Added keeps its green on its border.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

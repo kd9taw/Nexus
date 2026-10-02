@@ -15,6 +15,7 @@
 
 import { doubleBeep } from '../alerts'
 import { pushToast } from '../toast'
+import { durableGet, durableSet } from './durableStore'
 import { t } from '../i18n'
 import type { SatPass } from '../types'
 
@@ -32,7 +33,7 @@ export interface SatAlarm {
 /** All armed alarms by UPPERCASE bird name. Empty when storage is blocked/corrupt. */
 export function satAlarmMap(): Record<string, SatAlarm> {
   try {
-    const raw = localStorage.getItem(ALARMS_KEY)
+    const raw = durableGet(ALARMS_KEY)
     if (!raw) return {}
     const obj = JSON.parse(raw)
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {}
@@ -49,7 +50,7 @@ export function satAlarmMap(): Record<string, SatAlarm> {
 
 function saveAlarms(map: Record<string, SatAlarm>): void {
   try {
-    localStorage.setItem(ALARMS_KEY, JSON.stringify(map))
+    durableSet(ALARMS_KEY, JSON.stringify(map))
   } catch {
     /* storage blocked — the toggle still applies this session via module reads */
   }
@@ -95,7 +96,7 @@ export function passKey(name: string, aosUnix: number): string {
 /** Persisted fired keys (see [`passKey`]) — "never fire twice". */
 function firedSet(): Set<string> {
   try {
-    const arr = JSON.parse(localStorage.getItem(FIRED_KEY) ?? '[]')
+    const arr = JSON.parse(durableGet(FIRED_KEY) ?? '[]')
     return new Set(Array.isArray(arr) ? arr.map(String) : [])
   } catch {
     return new Set()
@@ -107,7 +108,7 @@ function markFired(key: string): void {
     const arr = [...firedSet(), key]
     // Bounded: a busy favorites list sees ~a dozen passes a day — 100 keys is
     // over a week of history.
-    localStorage.setItem(FIRED_KEY, JSON.stringify(arr.slice(-100)))
+    durableSet(FIRED_KEY, JSON.stringify(arr.slice(-100)))
   } catch {
     /* storage blocked — the in-session dedup below still holds */
   }

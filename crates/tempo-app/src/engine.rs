@@ -17,6 +17,9 @@
 #[cfg(test)]
 mod by_id_tests;
 mod field_day_display;
+/// The journals when the file there cannot be read: kept, never written over.
+#[cfg(test)]
+mod kept_files_tests;
 mod mode_entry;
 pub mod parsec_presence;
 pub mod radio_selection;
@@ -1204,6 +1207,14 @@ const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside 
 const SSTV_LEFT_SECTION: &str = "SSTV stopped: you moved to another mode's screen, so the \
      picture that was waiting was dropped, not held for your return. Send it again when you are \
      ready.";
+/// …and when the radio loop ends a picture already going out ([`Engine::sstv_tx_cut`]): transmit
+/// went off under it, or another stop ended its transmission. Never for SSTV's own Stop, TX Off or
+/// Stop TX, which cut it through the SSTV abort as they always did.
+const SSTV_STOPPED_TX_OFF: &str = "SSTV stopped: transmit was turned off while the picture was \
+     going out, so the rest of it was not sent. Send it again when you are ready.";
+const SSTV_STOPPED_CUT: &str = "SSTV stopped: the transmission was ended elsewhere (a tune, a \
+     radio switch or another stop) while the picture was going out, so the rest of it was not \
+     sent. Send it again when you are ready.";
 /// …and the APRS cockpit's status line, when what was queued (beacons, messages, automatic acks)
 /// is dropped: by TX Off ([`Engine::set_tx_enabled`]), or refused at [`Engine::poll_aprs_tx`].
 const APRS_REFUSED_TX_OFF: &str = "APRS stopped: transmit was turned off, so what was still \
@@ -3428,8 +3439,9 @@ pub struct Engine {
     /// `None` = no image queued or sending.
     sstv_tx_progress: Option<(f64, f64)>,
     /// Why the last picture that waited for the transmitter was DROPPED instead of sent (see
-    /// [`Engine::poll_sstv_tx`]): the SSTV cockpit's warning line. Cleared when the next picture
-    /// keys. `None` = nothing dropped since.
+    /// [`Engine::poll_sstv_tx`]), or why the radio loop cut short the one going out
+    /// ([`Engine::sstv_tx_cut`]): the SSTV cockpit's warning line. Cleared when the next picture
+    /// keys. `None` = nothing to say since.
     sstv_tx_notice: Option<String>,
     /// Parsec presence mode — the state machine the watcher's verdicts drive, and the last
     /// stop it made. See `engine/parsec_presence.rs`.
@@ -4787,7 +4799,10 @@ impl Engine {
             info: String::new(),
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
-            reply_delay_ms: 17_000,
+            autoreply_confirmation: true,
+            autoreply_allow: Vec::new(),
+            autoreply_deny: Vec::new(),
+            hb_ack_deny: Vec::new(),
         };
         Self {
             app,
@@ -10201,6 +10216,11 @@ impl Engine {
         let Some(path) = &self.station.pending_msgs_path else {
             return;
         };
+        // A journal this run could not read and could not move aside holds messages waiting to
+        // send: it is neither written over nor removed (`restore_pending_msgs`).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
         let items = self.app.export_pending();
         if items.is_empty() {
             self.station.journals.remove(path);
@@ -10233,6 +10253,29 @@ impl Engine {
         );
     }
 
+    /// Restore the journaled queue at launch, from the path the shell set
+    /// ([`Self::set_pending_msgs_path`]); call it where [`Self::load_pending_msgs`] is called. A
+    /// queue this build cannot read — torn, or from a newer build with a value this one cannot
+    /// hold — keeps messages waiting to send, so it is kept aside ([`tempo_core::keep_aside`])
+    /// and the screen says where, rather than starting empty and letting the next queue change
+    /// write over it.
+    pub fn restore_pending_msgs(&mut self, now_unix: i64) {
+        let Some(path) = self.station.pending_msgs_path.clone() else {
+            return;
+        };
+        let items = tempo_core::keep_aside::read_or_keep("pendingMsgs", &path, now_unix, |text| {
+            serde_json::from_str::<Vec<PendingMsgJournal>>(text).map_err(|e| e.to_string())
+        });
+        if let Some(items) = items {
+            self.app.restore_pending(
+                items
+                    .into_iter()
+                    .map(PendingMsgJournal::into_pending)
+                    .collect(),
+            );
+        }
+    }
+
     /// Journal (or clear) the QSO held by the prompt-to-log popup.
     ///
     /// Written the MOMENT the hold changes, not at exit: a finished contact — exchange
@@ -10248,6 +10291,11 @@ impl Engine {
         let Some(path) = &self.station.pending_qso_path else {
             return;
         };
+        // A journal this run could not read and could not move aside holds contacts: it is
+        // neither written over nor removed (the screen says so — `restore_pending_qso_journal`).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
         if self.pending_logs.is_empty() {
             let _ = std::fs::remove_file(path);
             return;
@@ -10366,8 +10414,16 @@ impl Engine {
     /// copy of a contest contact on disk, so an OPERATOR's contest logging still waits for it
     /// before it answers — after the lock is released ([`Self::journal_mark`]).
     pub fn persist_fd_log(&self) {
-        let (Some(path), Some(text)) = (&self.station.fd_log_path, self.field_day_log_adif())
-        else {
+        let Some(path) = &self.station.fd_log_path else {
+            return;
+        };
+        // A journal this run could not read and could not move aside holds the event's earlier
+        // contacts: it is never written over (`restore_fd_journal`, which carries the live log
+        // across a rebuild instead).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
+        let Some(text) = self.field_day_log_adif() else {
             return;
         };
         self.station.journals.replace(
@@ -12220,6 +12276,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // One flush closes it for every future "I moved" action without that action
         // having to know it exists. A no-op outside Field Day, and when no journal path
         // is set.
+        //
+        // A journal kept in place (it could not be read, nor moved aside) is never written, so
+        // the flush cannot carry the live log's rows across; they cross in memory instead.
+        let carried = self
+            .station
+            .fd_log_path
+            .as_deref()
+            .filter(|path| tempo_core::keep_aside::refuses(path))
+            .and_then(|_| self.field_day_log_adif());
         self.persist_fd_log();
         let band = self.settings.band.clone();
         let next_mode = match spec {
@@ -12288,9 +12353,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // The flush at the top of this call handed the journal to its thread; read it
                 // back once it is on disk. The wait is the one the write used to make here.
                 self.station.journals.settle();
-                station.log.merge_adif(
-                    &std::fs::read_to_string(path).unwrap_or_default(),
+                restore_fd_journal(
+                    &mut station.log,
+                    path,
                     now_unix_secs().saturating_sub(4 * 86_400),
+                    carried.as_deref(),
+                    now_unix_secs() as i64,
                 );
             }
             // ⚠️ A RESTART MUST NOT SHORTEN THE SESSION. The session above starts at
@@ -13303,8 +13371,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // command takes any member of `Tier::ALL`, which now includes `"JS8"` — so the
         // companion/UDP path, the rig-share broker, or any later UI change reaches the tier
         // without that verb. Seeding at the transition closes the class instead of one door.
+        // A trip that stood when the tier was left ends here too, and the station gets back the
+        // autoreply and relay it turned off, as the dock shows them (`js8_restart_idle_clock`).
         if tier == Tier::Js8 {
-            self.js8_station.mark_active(now_unix_secs() * 1000);
+            self.js8_restart_idle_clock(now_unix_secs() * 1000);
         }
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
@@ -14070,6 +14140,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             }
             self.tx_queue.clear();
             self.broadcast_queue.clear();
+            // …and JS8's queue, which this used to leave HELD, to key the moment TX came back,
+            // the rest of a message already going out included (the operator, 2026-09-30: "a
+            // refused JS8 queue is dropped with a notice, never sent later"). JS8Call's TX
+            // button drops it too (mainwindow.cpp:2855-2861).
+            self.js8_tx_off();
             // `transmitting` is deliberately NOT stamped false: the over in flight
             // is still leaving the antenna, and `tx_owner()` must keep reporting
             // Slot while it drains (no other keying source may grab the rig).
@@ -19021,10 +19096,31 @@ contact yourself."
         self.sstv_tx.take()
     }
 
-    /// Why the last picture that waited for the transmitter was dropped instead of sent, for
-    /// the SSTV cockpit's warning line; `None` once a picture keys.
+    /// Why the last picture that waited for the transmitter was dropped instead of sent, or why
+    /// the one going out was cut short ([`Self::sstv_tx_cut`]), for the SSTV cockpit's warning
+    /// line; `None` once a picture keys.
     pub fn sstv_tx_notice(&self) -> Option<&str> {
         self.sstv_tx_notice.as_deref()
+    }
+
+    /// The radio loop ended the picture on the air before its end, and not through the SSTV
+    /// abort (loop-only): transmit went off under it (`tx_off`: leaving Phone lowers the latch
+    /// without arming the abort), or another stop ended the transmission it keyed (a tune, a
+    /// radio switch, another cockpit's Stop). The picture is left as [`Self::sstv_stop`] leaves
+    /// it — nothing queued, no mode, no progress, not sending — and the SSTV cockpit's warning
+    /// line says why ([`Self::sstv_tx_notice`]), until the next picture keys.
+    pub fn sstv_tx_cut(&mut self, tx_off: bool) {
+        let (why, notice) = if tx_off {
+            ("transmit went off under it", SSTV_STOPPED_TX_OFF)
+        } else {
+            ("its transmission was ended elsewhere", SSTV_STOPPED_CUT)
+        };
+        tempo_core::applog::info("tx", &format!("SSTV picture stopped before its end: {why}"));
+        self.sstv_tx = None;
+        self.sstv_sending = false;
+        self.sstv_tx_mode = None;
+        self.sstv_tx_progress = None;
+        self.sstv_tx_notice = Some(notice.to_string());
     }
 
     /// Stop SSTV now: drop the queued image and abort the over in progress — the radio loop
@@ -20928,6 +21024,10 @@ contact yourself."
         s.log_tick = self.station.log_tick();
         s.log_store_problem = self.station.store_problem.clone();
         s.log_save_trouble = self.station.store.save_trouble();
+        s.kept_files = tempo_core::keep_aside::kept()
+            .into_iter()
+            .map(Into::into)
+            .collect();
         s.parsec_presence = self.parsec_presence_dto();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
@@ -24505,6 +24605,51 @@ pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
 pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
     sync_shared_log(engine);
     engine_lock(engine).station_mut().log_plan()
+}
+
+/// Restore the Field Day journal at `path` into the fresh contest log `log` (rows from before
+/// `min_when_unix` self-expire). A journal this build cannot read in full, whether cut off
+/// mid-record, a record with no call, bytes that are not UTF-8, or a file it cannot open, is
+/// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
+/// rewrites the journal from the log, which would drop the rest for good.
+///
+/// A journal kept in place is not read again; `carried`, the live log's own rows, crosses the
+/// rebuild instead (see `set_mode_with_decoder`).
+fn restore_fd_journal(
+    log: &mut tempo_core::fieldday::FieldDayLog,
+    path: &std::path::Path,
+    min_when_unix: u64,
+    carried: Option<&str>,
+    now_unix: i64,
+) {
+    if tempo_core::keep_aside::refuses(path) {
+        if let Some(rows) = carried {
+            log.merge_adif(rows, min_when_unix);
+        }
+        return;
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            tempo_core::keep_aside::keep_aside("fieldDay", path, now_unix, &e.to_string());
+            return;
+        }
+    };
+    // Lossy on purpose, as the logbook's own load: the ADIF structure is ASCII, so every record
+    // survives a bad byte, and the file itself is kept below.
+    let text = String::from_utf8_lossy(&bytes);
+    let merged = log.merge_adif(&text, min_when_unix);
+    let why = if matches!(text, std::borrow::Cow::Owned(_)) {
+        Some("it is not UTF-8".to_string())
+    } else if merged.unreadable > 0 {
+        Some(format!("{} record(s) could not be read", merged.unreadable))
+    } else {
+        None
+    };
+    if let Some(why) = why {
+        tempo_core::keep_aside::keep_aside("fieldDay", path, now_unix, &why);
+    }
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
@@ -28775,6 +28920,46 @@ mod tests {
             e.sstv_tx_notice(),
             None,
             "leaving said a picture on the air was dropped"
+        );
+    }
+
+    /// ⛔ A picture the radio loop cut short on the air is left as Stop leaves it, and the SSTV
+    /// cockpit is told why, in words that tell the latch going down under it from another stop
+    /// ending its transmission (N57, 2026-09-30). The reason stands until the next picture keys,
+    /// as a drop's does.
+    #[test]
+    fn a_picture_the_loop_cut_short_is_left_as_stop_leaves_it_and_says_why() {
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        // The radio loop takes the picture, keys it and stamps it on the air, as it does.
+        assert!(e.poll_sstv_tx().is_some());
+        e.set_sstv_sending(true);
+        e.set_sstv_tx_progress(36_000.0, 120_000.0);
+        assert_eq!(e.sstv_tx_notice(), None, "nothing to say while it goes out");
+
+        e.sstv_tx_cut(true);
+        assert!(!e.sstv_sending(), "not sending");
+        assert_eq!(e.sstv_tx_mode(), None, "no mode");
+        assert_eq!(e.sstv_tx_progress(), None, "no progress");
+        assert_eq!(e.sstv_tx_notice(), Some(SSTV_STOPPED_TX_OFF));
+        assert!(
+            !e.take_sstv_abort(),
+            "the loop is already cutting: no abort is left for it to take a second time"
+        );
+        e.sstv_tx_cut(false);
+        assert_eq!(
+            e.sstv_tx_notice(),
+            Some(SSTV_STOPPED_CUT),
+            "another stop is named as one"
+        );
+
+        // The next picture that keys clears it.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e.poll_sstv_tx().is_some(), "a new picture keys as before");
+        assert_eq!(
+            e.sstv_tx_notice(),
+            None,
+            "…and the picture that keys clears the reason"
         );
     }
 
@@ -46047,11 +46232,11 @@ mod tests {
         assert!(waves[0].len() < 15 * 12_000, "bounded by its period");
     }
 
-    /// B5's config builder is the ONE settings → station seam; B7 depends on two of its
-    /// numbers: the idle-watchdog floor of 5 minutes (JS8Call's minimum; 0 stays "off") and
-    /// the autoreply countdown of one period + 2 s.
+    /// B5's config builder is the ONE settings → station seam; B7 depends on its idle-watchdog
+    /// floor of 5 minutes (JS8Call's minimum; 0 stays "off"). (The autoreply countdown it also
+    /// built is gone: a reply keys in the next period, as JS8Call's does.)
     #[test]
-    fn js8_station_config_applies_the_idle_floor_and_the_reply_countdown() {
+    fn js8_station_config_applies_the_idle_floor() {
         let mut s = Settings {
             mycall: "KD9TAW".to_string(),
             js8_speed: modes::Js8Speed::Slow.index(),
@@ -46060,7 +46245,6 @@ mod tests {
         };
         let cfg = Engine::js8_station_config(&s);
         assert_eq!(cfg.idle_watchdog_min, 5, "floor 5");
-        assert_eq!(cfg.reply_delay_ms, 30_000 + 2_000, "one Slow period + 2 s");
         assert_eq!(cfg.allcall_reply_interval_ms, 15 * 60 * 1000);
         s.js8_idle_watchdog_min = 0;
         assert_eq!(
@@ -46074,41 +46258,49 @@ mod tests {
     /// G3 default — would key on launch. At launch the latch is down; a query still gets a
     /// visible countdown ("would have replied"), never a frame; the expired countdown is
     /// CANCELLED, so arming TX later cannot fire a stale reply.
+    ///
+    /// Both ways a reply waits: asking for the operator's Yes (JS8Call's default, which says No
+    /// by itself after 89 s) and, with the confirmation off, counting down to go by itself.
     #[test]
     fn js8_autoreply_never_keys_at_launch() {
-        let mut e = Engine::with_settings(Settings {
-            mycall: "KD9TAW".to_string(),
-            mygrid: "EN52".to_string(),
-            js8_autoreply: true, // the G3 default, spelled out
-            js8_relay: true,
-            ..Settings::default()
-        });
-        e.js8_enter();
-        assert!(!e.tx_enabled(), "launch is listen-only");
-        let s0 = js8_slot_now();
-        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
-        let st = e.js8_state();
-        assert!(
-            st.pending_reply.is_some(),
-            "the station still computes the reply (shown, not sent)"
-        );
-        assert!(!st.armed.autoreply, "…and reports it as NOT armed");
-        for s in s0..s0 + 4 {
-            assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
-        }
-        assert!(!e.tx_enabled());
-        // The countdown expires while the latch is down → cancelled, never carried.
-        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
-        assert!(
-            e.js8_state().pending_reply.is_none(),
-            "an expired unarmed reply is cancelled"
-        );
-        e.set_tx_enabled(true);
-        for s in s0 + 4..s0 + 8 {
+        for asks in [true, false] {
+            let mut e = Engine::with_settings(Settings {
+                mycall: "KD9TAW".to_string(),
+                mygrid: "EN52".to_string(),
+                js8_autoreply: true, // the G3 default, spelled out
+                js8_relay: true,
+                js8_autoreply_confirmation: asks,
+                ..Settings::default()
+            });
+            e.js8_enter();
+            assert!(!e.tx_enabled(), "launch is listen-only");
+            let s0 = js8_slot_now();
+            e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+            let st = e.js8_state();
             assert!(
-                e.poll_tx(s).is_empty(),
-                "arming later must not fire the stale reply"
+                st.pending_reply.is_some() || !st.queue.is_empty(),
+                "the station still computes the reply (shown, not sent; asks: {asks})"
             );
+            assert!(!st.armed.autoreply, "…and reports it as NOT armed");
+            for s in s0..s0 + 4 {
+                assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
+            }
+            assert!(!e.tx_enabled());
+            // With the latch down the queued reply is dropped, and the question is No by
+            // itself: never carried.
+            e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
+            let st = e.js8_state();
+            assert!(
+                st.pending_reply.is_none() && st.queue.is_empty(),
+                "an unarmed reply is gone, never carried (asks: {asks})"
+            );
+            e.set_tx_enabled(true);
+            for s in s0 + 4..s0 + 8 {
+                assert!(
+                    e.poll_tx(s).is_empty(),
+                    "arming later must not fire the stale reply (asks: {asks})"
+                );
+            }
         }
     }
 
@@ -46157,10 +46349,12 @@ mod tests {
         );
     }
 
-    /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second.
+    /// Both acts: EXACTLY ONE reply, in the next period, never a second. The confirmation off,
+    /// so it goes by itself; `both_acts_and_a_yes_yield_exactly_one_reply` is the asking path.
     #[test]
-    fn both_acts_present_yield_exactly_one_reply_after_the_countdown() {
+    fn both_acts_present_yield_exactly_one_reply_in_the_next_period() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_autoreply_confirmation = false;
         e.js8_enter();
         e.set_tx_enabled(true); // act 1 (session)
         assert!(
@@ -46169,16 +46363,19 @@ mod tests {
         );
         let s0 = js8_slot_now();
         e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
-        let pending = e.js8_state().pending_reply.expect("a countdown is shown");
-        assert!(pending.display.contains("W1AW SNR"), "{}", pending.display);
+        let queued = e
+            .js8_state()
+            .queue
+            .first()
+            .cloned()
+            .expect("the reply is queued, shown");
+        assert!(queued.display.contains("W1AW SNR"), "{}", queued.display);
         assert!(e.js8_state().armed.autoreply);
-        let keyed: Vec<u64> = (s0..s0 + 6).filter(|&s| !e.poll_tx(s).is_empty()).collect();
-        assert_eq!(keyed.len(), 1, "exactly one reply: keyed on {keyed:?}");
-        assert!(
-            keyed[0] >= s0 + 2,
-            "…and only after the countdown (keyed on {})",
-            keyed[0]
-        );
+        // The radio loop plans each period at its boundary; the next one is s0 + 1.
+        let keyed: Vec<u64> = (s0 + 1..s0 + 7)
+            .filter(|&s| !e.poll_tx(s).is_empty())
+            .collect();
+        assert_eq!(keyed, [s0 + 1], "exactly one reply, in the next period");
         assert!(e.js8_state().pending_reply.is_none());
         assert!(e
             .snapshot()
@@ -46187,16 +46384,53 @@ mod tests {
             .any(|d| d.mine && d.message.contains("W1AW SNR")));
     }
 
-    /// Cancel is the operator's veto on the countdown.
+    /// Both acts, at JS8Call's default (the reply asks first): nothing keys until the operator's
+    /// Yes, and then EXACTLY ONE reply, never a second.
     #[test]
-    fn js8_cancel_stops_a_pending_reply() {
+    fn both_acts_and_a_yes_yield_exactly_one_reply() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true); // act 1 (session)
+        assert!(e.settings.js8_autoreply && e.settings.js8_autoreply_confirmation);
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        let p = e.js8_state().pending_reply.expect("the reply asks");
+        assert!(p.display.contains("W1AW SNR"), "{}", p.display);
+        for s in s0..s0 + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "nothing keys before the Yes (slot {s})"
+            );
+        }
+        e.js8_answer_reply(true, p.display, p.fires_at_ms)
+            .expect("Yes");
+        let keyed: Vec<u64> = (s0 + 4..s0 + 10)
+            .filter(|&s| !e.poll_tx(s).is_empty())
+            .collect();
+        assert_eq!(
+            keyed,
+            [s0 + 4],
+            "exactly one reply, the period after the Yes"
+        );
+        assert!(e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .any(|d| d.mine && d.message.contains("W1AW SNR")));
+    }
+
+    /// No is the operator's veto on an automatic reply (it replaced the countdown's Cancel):
+    /// the reply it names never keys.
+    #[test]
+    fn a_no_stops_a_pending_reply() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.js8_enter();
         e.set_tx_enabled(true);
         let s0 = js8_slot_now();
         e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
-        assert!(e.js8_state().pending_reply.is_some());
-        e.js8_cancel();
+        let p = e.js8_state().pending_reply.expect("the reply asks");
+        e.js8_answer_reply(false, p.display, p.fires_at_ms)
+            .expect("No");
         assert!(e.js8_state().pending_reply.is_none());
         for s in s0..s0 + 6 {
             assert!(e.poll_tx(s).is_empty());
@@ -46340,12 +46574,14 @@ mod tests {
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        // The query first: no reply is made while a message is going out (JS8Call's box
+        // holds it, mainwindow.cpp:9364), and this wants one waiting beside the queue.
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
         e.js8_send(
             None,
             "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
         )
         .expect("queues");
-        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
         let st = e.js8_state();
         assert!(
             st.hb_on && !st.queue.is_empty() && st.pending_reply.is_some(),

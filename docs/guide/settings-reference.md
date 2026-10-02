@@ -170,8 +170,8 @@ Run more than one rig. Always shown — with one radio it is just a card and an
 ![Three radio cards stacked. The first, named Yeasu, is outlined and badged ACTIVE, its meta line reading Yaesu FTDX10, CAT COM3, audio Line 3, CAT helper port 4532, with band chips 160m through 6m lit. The second, 9700, has Edit, Make active and Remove buttons and lights 2m and 70cm. The third, 991a, lights 6m and 2m. An "+ Add radio" button sits below.](../img/manual/settings-radios.webp)
 
 *A three-radio roster in Nexus 1.10.3. The outlined card is the **active** radio;
-the form further down the tab edits whichever card you last pressed **Edit** on,
-which need not be the same one.*
+the per-radio settings further down the tab edit whichever card you last pressed
+**Edit** on, which need not be the same one.*
 
 With two or more radios, three more controls appear:
 
@@ -272,8 +272,13 @@ the rig that ends up active.
 
 ### Rig & CAT
 
-Every control here is **per radio**: it belongs to whichever card you pressed
-**Edit** on, not to the station.
+Most controls here are **per radio**: they belong to whichever card you pressed
+**Edit** on, not to the station. These are **station-wide** instead, one setting
+for all your radios: **Interface keys RTS on the CAT port**, **Split operation**,
+**Follow the radio's split** and **Wheel tuning sensitivity**, and under
+Advanced, **Sharing port**, **Serial handshake** and **Keying line at startup**.
+Changing one while you edit another radio changes it for the radio you are
+operating too.
 
 ![The left half of the Rig & CAT row: PTT Method set to CAT (via rigctld), an unticked "Interface keys RTS on the CAT port" box, a Zero-config setup group with a "Detect my radio" button, and Rig Model with a search box above a dropdown reading Yaesu FTDX10.](../img/manual/settings-rig-cat.webp)
 
@@ -337,6 +342,12 @@ Baud continue across to the right.*
   harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B
   split. Fake It = retunes the VFO around each over (works on any CAT rig). None
   = stock WSJT-X default."
+- **Follow the radio's split** — off by default. Turn it on and Nexus reads the
+  radio's own split, so a split you set at the radio is the one it checks your
+  licence privileges against; if the radio says it is split but not where it
+  transmits, Nexus will not transmit. Nexus first asks each radio whether its
+  split can be read without moving it, and never asks one that cannot. Station-wide,
+  like Split operation.
 - **Wheel tuning sensitivity** — how far the dial moves per mouse-wheel notch.
   Lower it if a free-spin mouse tunes too far per flick. Applies to the frequency
   readout and the Phone/CW scope wheel.
@@ -369,6 +380,23 @@ Baud continue across to the right.*
   file. It keeps running while you're on other screens.
 - **Flex radio IP (native panadapter)** — the FlexRadio's own LAN IP (SmartSDR
   API, port 4992). "This is the *radio's* address, not the SmartSDR-CAT port."
+- **Serial handshake** — **Auto** (the default), **None**,
+  **Hardware (RTS/CTS)** or **XON/XOFF**. It tells Nexus what your cable actually
+  does, instead of letting it guess. On Auto, Nexus goes by what your rig's
+  Hamlib driver declares, as it always has; any other choice is passed to rigctld
+  as your cable's handshake and replaces that guess. Leave it on Auto unless your
+  rig keys at launch. If CAT stops working after a change, put it back on Auto:
+  on some rigs Hamlib quietly refuses the setting and then answers without ever
+  having opened the radio, so you get a CAT light and a rig that ignores you.
+  Station-wide.
+- **Keying line at startup** — **Auto** (the default), **Never touch it**,
+  **Hold it low** or **Hold it high**: what the serial line that keys your
+  transmitter (RTS or DTR) is held at while you are not transmitting. It exists
+  for one fault, a rig that keys at launch before you have touched anything, so
+  leave it on Auto unless that is happening to you. Auto changes nothing about
+  how your station works today. If CAT stops working after a change, put it back
+  on Auto. Only you can see whether the rig unkeys, so try it on a rig you are
+  watching. Station-wide.
 
 **Test CAT** saves, launches the bundled `rigctld` (Hamlib ships with Nexus on
 Windows — no separate install), and reads the rig's frequency to confirm the
@@ -1132,13 +1160,26 @@ nothing until you enable TX in the cockpit, every session.
   free slot between 500 and 1000 Hz. The HB chip itself is session-only.
 - **Answer heartbeats** — off by default, as in JS8Call. On, a heard heartbeat gets your
   signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
-  that station is offered to it.
+  that station is offered to it. **Never acknowledge heartbeats from these callsigns**,
+  comma-separated and empty by default, leaves those stations unanswered.
 - **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
-  `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered after a
-  one-period countdown you can cancel in the cockpit. `@ALLCALL` queries are answered at
-  most once per station every 15 minutes.
+  `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
+  or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On
+  `@ALLCALL` only `QUERY MSGS` is answered, when a message waits for that station, at most
+  once every 15 minutes. Off, a reply is put in the cockpit's message box for you to send,
+  as JS8Call does, and `QUERY MSGS` is not answered.
+- **Ask for confirmation before sending automatic replies** — on by default, as in
+  JS8Call. Every automatic reply (to a query, an `ACK`, a relay, a heartbeat
+  acknowledgement) waits in the cockpit for your **Yes**; **No**, or no answer within 89
+  seconds, sends nothing. Off, each goes by itself in the next period.
+- **Only auto-reply to these callsigns** / **Never auto-reply to these callsigns** —
+  JS8Call's allow and deny lists, comma-separated, empty by default. A station is matched by
+  its call as heard or its base call (`W1AW` covers `W1AW/P`). Empty, the allow list lets
+  everyone in; set, anyone not on it, like anyone on the deny list, is not acted on at all: no
+  reply, no relay, its message not filed, nothing held for it.
 - **Relay for other stations** — on by default, as in JS8Call: a message routed through
-  your callsign is passed along, and `MSG TO:` messages are held in your inbox until the
+  your callsign is passed along (with Auto-reply off it is put in the message box for you
+  to send), and `MSG TO:` messages are held in your inbox until the
   addressee asks for them. This is third-party traffic; whether it is permitted where
   you operate is your call.
 - **Idle watchdog (minutes)** — after this long with nothing typed, heartbeats,
@@ -1733,7 +1774,11 @@ placeholder — a stored key is never displayed back.*
 Auto-forward each logged QSO to your self-hosted Cloudlog or Wavelog logbook over
 HTTP.
 
-- **Base URL** — your site root. "Leave blank to disable."
+- **Base URL** — your site root. "Leave blank to disable." It must be `https://`, except
+  for an instance on your own network: a 192.168.x.x, 10.x.x.x, 172.16–31.x.x or
+  127.x.x.x address (or a local IPv6 one), or a name whose every address is one of those,
+  may use plain `http://`. The API key then travels unencrypted, so a note under the field
+  says so, and the Connections log says where it went, once a session for each address.
 - **Station profile id** — "Your station location number — in Wavelog or Cloudlog
   ▸ Station Locations, it is the number at the end of that location's Edit link
   (…/station/edit/3 means 3). Not your callsign." A value that isn't a number is

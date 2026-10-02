@@ -372,6 +372,21 @@ impl Reassembler {
         self.open.clear();
     }
 
+    /// A buffer is open: a message is still arriving (JS8Call's `!m_messageBuffer.isEmpty()`,
+    /// mainwindow.cpp:9062).
+    pub fn has_open(&self) -> bool {
+        !self.open.is_empty()
+    }
+
+    /// The destination of each open buffer that carries a directed command, as its head frame
+    /// named it (JS8Call's `buffer.cmd.to`, `hasExistingMessageBufferToMe`, mainwindow.cpp:4176-
+    /// 4190).
+    pub fn open_heads_to(&self) -> impl Iterator<Item = &str> {
+        self.open
+            .iter()
+            .filter_map(|b| b.head.as_ref().map(|h| h.to.as_str()))
+    }
+
     #[cfg(test)]
     fn open_len(&self) -> usize {
         self.open.len()
@@ -877,5 +892,30 @@ mod tests {
             "the <....> from resolved from the compound announcer"
         );
         assert_eq!(render_directed(&closed[0]), "KD9TAW/QRP: W1AW SNR?");
+    }
+
+    /// What the station's "a message still arriving" rules read (JS8Call's `m_messageBuffer`,
+    /// mainwindow.cpp:9062, and `hasExistingMessageBufferToMe`, :4176-4190): whether a buffer is
+    /// open and the destination its directed head names; nothing once the message has closed.
+    #[test]
+    fn open_buffers_say_a_message_is_arriving_and_to_whom() {
+        let mut r = Reassembler::new();
+        assert!(!r.has_open() && r.open_heads_to().next().is_none());
+        let seq = frames(
+            "W1AW",
+            Some(&CallRef::Base("KD9TAW".into())),
+            "MSG HELLO FROM OHIO, THE BAND IS OPEN",
+            Speed::Normal,
+        )
+        .unwrap();
+        assert!(seq.len() > 2, "control: a multi-frame message");
+        let (first, i3) = &seq[0];
+        r.feed(&raw(first, *i3, Speed::Normal, 1500.0), 0);
+        assert!(r.has_open(), "its first frame opens a buffer");
+        assert_eq!(r.open_heads_to().collect::<Vec<_>>(), ["KD9TAW"]);
+        for (k, (f, i3)) in seq.iter().enumerate().skip(1) {
+            r.feed(&raw(f, *i3, Speed::Normal, 1500.0), k as u64 * 15_000);
+        }
+        assert!(!r.has_open(), "its last frame closes it");
     }
 }

@@ -833,6 +833,25 @@ pub struct Settings {
     /// joined group. JS8Call default ON (G3). Second act of the two-act rule.
     #[serde(default = "default_js8_autoreply")]
     pub js8_autoreply: bool,
+    /// JS8Call's `AutoreplyConfirmation`, "Ask for confirmation before sending autoreply
+    /// transmissions": ON by default, as JS8Call ships it (Configuration.cpp:1949), and what a
+    /// file from before this setting loads as. On, every automatic reply waits in the cockpit for
+    /// your Yes and is not sent after 89 s without one; off, replies go by themselves.
+    #[serde(default = "default_js8_autoreply_confirmation")]
+    pub js8_autoreply_confirmation: bool,
+    /// JS8Call's "Only autoreply to these callsigns" (`AutoWhitelist`): empty, its default,
+    /// answers everyone; otherwise only a station on it, by its call as heard or its base call.
+    /// A station kept out is acted on in no way: no reply, relay, delivery, filing or storing.
+    #[serde(default)]
+    pub js8_autoreply_allow: Vec<String>,
+    /// JS8Call's "Never autoreply to these callsigns" (`AutoBlacklist`, default empty): a
+    /// station on it, as heard or by its base call, is acted on in no way.
+    #[serde(default)]
+    pub js8_autoreply_deny: Vec<String>,
+    /// JS8Call's "Never acknowledge heartbeats from these callsigns" (`HBBlacklist`, default
+    /// empty): a heartbeat from one draws no HB-ACK.
+    #[serde(default)]
+    pub js8_hb_ack_deny: Vec<String>,
     /// Relay `>` traffic for other stations (third-party traffic — §97.115 is the operator's).
     /// JS8Call default ON (G3). Second act of the two-act rule.
     #[serde(default = "default_js8_relay")]
@@ -4053,6 +4072,11 @@ fn default_js8_autoreply() -> bool {
     true
 }
 
+/// JS8Call ships AutoreplyConfirmation ON. See [`Settings::js8_autoreply_confirmation`].
+fn default_js8_autoreply_confirmation() -> bool {
+    true
+}
+
 /// JS8Call ships relay ON (G3). See [`Settings::js8_relay`].
 fn default_js8_relay() -> bool {
     true
@@ -4109,6 +4133,10 @@ impl Default for Settings {
             js8_cq_interval_min: 0,
             js8_hb_ack: false,
             js8_autoreply: default_js8_autoreply(),
+            js8_autoreply_confirmation: default_js8_autoreply_confirmation(),
+            js8_autoreply_allow: Vec::new(),
+            js8_autoreply_deny: Vec::new(),
+            js8_hb_ack_deny: Vec::new(),
             js8_relay: default_js8_relay(),
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
             js8_callsign_aging_min: 0,
@@ -5112,9 +5140,19 @@ impl Settings {
     /// present-but-CORRUPT file is NOT silently defaulted — that would be
     /// indistinguishable from a first run, wiping the operator's identity/rig config
     /// and resetting `license_class` to `Open` (re-opening TX privileges). Instead the
-    /// bad file is set aside as a sibling `.corrupt` file for recovery, then defaults
-    /// apply.
+    /// bad file is kept aside ([`tempo_core::keep_aside`]: renamed, untouched, to
+    /// `settings.unreadable-YYYYMMDD-HHMMSS.json` beside it, never replacing an earlier one,
+    /// and named on the screen), then defaults apply. When it cannot be moved, it stays where
+    /// it is and [`Self::save`] refuses to write over it for the rest of the run.
     pub fn load(path: &Path) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        Self::load_at(path, now)
+    }
+
+    /// [`Self::load`] with the clock given: `now_unix` dates a file kept aside.
+    pub(crate) fn load_at(path: &Path, now_unix: i64) -> Self {
         // The RETIRED `satDoppler` opt-in, read from the raw file before serde
         // discards it as an unknown key. It is dead as a switch (the downlink
         // no longer asks), but it is the one signal that separates a pre-0.26
@@ -5133,15 +5171,11 @@ impl Settings {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
             // Present but UNREADABLE (permissions, an AV/backup tool's exclusive
-            // lock): NOT a first run — set the intact file aside so a later save()
-            // of the defaults can't clobber it (best-effort; a held lock can make
-            // the rename fail too, but then the file survives in place).
+            // lock): NOT a first run — keep the intact file aside so a later save()
+            // of the defaults can't clobber it. A held lock can make the rename fail
+            // too: then the file stays where it is, and save() refuses to write over it.
             Err(e) => {
-                eprintln!(
-                    "tempo: cannot read {} ({e}); setting it aside as .corrupt and starting from defaults",
-                    path.display()
-                );
-                let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
+                tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
                 Settings::default()
             }
             Ok(text) => match serde_json::from_str(&text) {
@@ -5166,13 +5200,9 @@ impl Settings {
                     s
                 }
                 Err(e) => {
-                    // Corrupt file: preserve the evidence (best-effort — defaults are
-                    // still the right fallback even if the rename fails).
-                    eprintln!(
-                        "tempo: {} is corrupt ({e}); setting it aside as .corrupt and starting from defaults",
-                        path.display()
-                    );
-                    let _ = std::fs::rename(path, path.with_extension("json.corrupt"));
+                    // Corrupt file: keep the evidence (defaults are still the right fallback,
+                    // and when the rename fails save() refuses to write over the file).
+                    tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
                     Settings::default()
                 }
             },
@@ -5408,6 +5438,14 @@ impl Settings {
     /// aside, before any writer exists): a command hands the writer a snapshot under the Engine
     /// lock and its thread writes it, and every write of one file holds that writer's file lock.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        // A settings file this run could not read and could not move aside is the operator's
+        // real configuration: every save, the launch's own included, refuses to write over it
+        // ([`Self::load`]).
+        if tempo_core::keep_aside::refuses(path) {
+            return Err(std::io::Error::other(
+                "settings.json could not be read and could not be moved aside, so it was not saved over",
+            ));
+        }
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -5814,6 +5852,25 @@ mod tests {
     /// so each caller keeps whatever create/remove/chmod dance it needs.
     fn scratch_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("tempo_settings_{label}_{}", std::process::id()))
+    }
+
+    /// The settings files `load` kept aside in `dir` (`settings.unreadable-<UTC>[-n].json`).
+    fn kept_aside_in(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| {
+                        p.file_name().is_some_and(|n| {
+                            let n = n.to_string_lossy();
+                            n.starts_with("settings.unreadable-") && n.ends_with(".json")
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        found
     }
 
     /// ⭐⭐ **The link that makes §2.5's every-sent-slot-has-a-source rule real.**
@@ -8468,7 +8525,7 @@ mod tests {
 
         let back = Settings::load(&path);
         assert!(
-            !path.with_extension("json.corrupt").exists(),
+            kept_aside_in(&dir).is_empty(),
             "one bad macro set the WHOLE settings file aside"
         );
         assert_eq!(back.mycall, "W9XYZ", "identity survived");
@@ -8496,7 +8553,7 @@ mod tests {
         file["dialMhz"] = serde_json::json!("fourteen");
         std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
         assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
-        assert!(path.with_extension("json.corrupt").exists());
+        assert_eq!(kept_aside_in(&dir).len(), 1, "the file was kept aside");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8626,7 +8683,7 @@ mod tests {
 
         let back = Settings::load(&path);
         assert!(
-            !path.with_extension("json.corrupt").exists(),
+            kept_aside_in(&dir).is_empty(),
             "one bad macro set the WHOLE settings file aside"
         );
         assert_eq!(back.mycall, "W9XYZ", "identity survived");
@@ -8653,7 +8710,7 @@ mod tests {
         file["dialMhz"] = serde_json::json!("fourteen");
         std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
         assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
-        assert!(path.with_extension("json.corrupt").exists());
+        assert_eq!(kept_aside_in(&dir).len(), 1, "the file was kept aside");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8693,6 +8750,16 @@ mod tests {
             s.js8_activity_aging_min, 2,
             "JS8Call ActivityAging default: 2 minutes"
         );
+        assert!(
+            s.js8_autoreply_confirmation,
+            "JS8Call AutoreplyConfirmation default: on"
+        );
+        assert!(
+            s.js8_autoreply_allow.is_empty()
+                && s.js8_autoreply_deny.is_empty()
+                && s.js8_hb_ack_deny.is_empty(),
+            "JS8Call AutoWhitelist / AutoBlacklist / HBBlacklist default: empty"
+        );
         assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
 
         let json = serde_json::to_string(&s).unwrap();
@@ -8703,6 +8770,10 @@ mod tests {
             "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
             "\"js8Autoreply\":true",
+            "\"js8AutoreplyConfirmation\":true",
+            "\"js8AutoreplyAllow\":[]",
+            "\"js8AutoreplyDeny\":[]",
+            "\"js8HbAckDeny\":[]",
             "\"js8Relay\":true",
             "\"js8IdleWatchdogMin\":60",
             "\"js8CallsignAgingMin\":0",
@@ -8718,6 +8789,20 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
+        assert!(
+            old.js8_autoreply_confirmation,
+            "an upgrader's file asks before each automatic reply, as JS8Call ships"
+        );
+        assert!(
+            old.js8_autoreply_allow.is_empty() && old.js8_hb_ack_deny.is_empty(),
+            "an upgrader's file keeps nobody out"
+        );
+        let unasked: Settings =
+            serde_json::from_str(r#"{"js8AutoreplyConfirmation":false}"#).unwrap();
+        assert!(
+            !unasked.js8_autoreply_confirmation,
+            "an explicit no-confirmation survives the load"
+        );
         assert_eq!(
             old.js8_callsign_aging_min, 0,
             "an upgrader's file ages nothing"
@@ -8755,6 +8840,10 @@ mod tests {
             "js8CqIntervalMin",
             "js8HbAck",
             "js8Autoreply",
+            "js8AutoreplyConfirmation",
+            "js8AutoreplyAllow",
+            "js8AutoreplyDeny",
+            "js8HbAckDeny",
             "js8Relay",
             "js8IdleWatchdogMin",
             "js8CallsignAgingMin",
@@ -9172,6 +9261,34 @@ mod tests {
         ] {
             assert_eq!(tx_audio_source_is_rear(v), rear, "{v:?}");
         }
+    }
+
+    /// "Follow the radio's split": the Settings switch writes `splitDetectEnabled`, which must be
+    /// the exact key this field serialises as (a mismatch is a switch that does nothing). A file
+    /// written before the switch loads as off, and a stored value survives a save and a load.
+    #[test]
+    fn split_detect_enabled_is_off_by_default_and_round_trips_on_its_wire_key() {
+        assert!(!Settings::default().split_detect_enabled);
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            !old.split_detect_enabled,
+            "a file from before the switch loads as off"
+        );
+        let on: Settings = serde_json::from_str(r#"{"splitDetectEnabled":true}"#).unwrap();
+        assert!(
+            on.split_detect_enabled,
+            "the key the switch writes is the key read"
+        );
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(
+            json.contains("\"splitDetectEnabled\":true"),
+            "…and the key it is saved under"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.split_detect_enabled,
+            "a stored value survives a save and a load"
+        );
     }
 
     #[test]
@@ -9794,15 +9911,16 @@ mod tests {
         let back = Settings::load(&path);
         assert_eq!(back.mycall, "", "corrupt file falls back to defaults");
         assert_eq!(back.license_class, LicenseClass::Open);
-        let corrupt = path.with_extension("json.corrupt");
-        assert!(
-            corrupt.exists(),
+        let kept = kept_aside_in(&dir);
+        assert_eq!(
+            kept.len(),
+            1,
             "corrupt settings.json set aside for recovery, not discarded"
         );
         assert_eq!(
-            std::fs::read_to_string(&corrupt).unwrap(),
+            std::fs::read_to_string(&kept[0]).unwrap(),
             truncated,
-            "the .corrupt file holds the original bad bytes"
+            "the kept file holds the original bad bytes"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -9829,12 +9947,154 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         let back = Settings::load(&path);
         assert_eq!(back.mycall, "", "unreadable file falls back to defaults");
-        let corrupt = path.with_extension("json.corrupt");
-        assert!(
-            corrupt.exists(),
+        let kept = kept_aside_in(&dir);
+        assert_eq!(
+            kept.len(),
+            1,
             "the intact-but-unreadable file is set aside, not left for save() to clobber"
         );
-        let _ = std::fs::set_permissions(&corrupt, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(&kept[0], std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-09-30 14:22:33 UTC, for the dated names of the files kept below.
+    const KEPT_AT: i64 = 1_790_778_153;
+
+    /// The settings files kept this run under `dir`, as the screen is told of them (the list is
+    /// the whole process's, and tests run in parallel).
+    fn kept_for(dir: &std::path::Path) -> Vec<tempo_core::keep_aside::Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    /// ⭐ A SECOND set-aside never replaces the first. The one fixed name, `settings.json.corrupt`,
+    /// did: a rename onto an existing file replaces it on every platform, so a second unreadable
+    /// file took the first one's place, and the first, the operator's real settings, was gone.
+    #[test]
+    fn a_second_unreadable_settings_file_never_replaces_the_first_one_kept() {
+        let dir = scratch_dir("kept_twice");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let first = br#"{"mycall":"W9XYZ","licenseClass":"#.to_vec();
+        let second = br#"{"mycall":"K1ABC""#.to_vec();
+        std::fs::write(&path, &first).unwrap();
+        let _ = Settings::load_at(&path, KEPT_AT);
+        std::fs::write(&path, &second).unwrap();
+        let _ = Settings::load_at(&path, KEPT_AT);
+
+        let one = dir.join("settings.unreadable-20260930-142233.json");
+        let two = dir.join("settings.unreadable-20260930-142233-2.json");
+        assert_eq!(
+            std::fs::read(&one).ok(),
+            Some(first),
+            "the first kept file must survive a second set-aside, byte for byte"
+        );
+        assert_eq!(
+            std::fs::read(&two).ok(),
+            Some(second),
+            "the second one kept beside it"
+        );
+        let said: Vec<(std::path::PathBuf, bool)> = kept_for(&dir)
+            .into_iter()
+            .map(|k| (k.path, k.kept_in_place))
+            .collect();
+        assert_eq!(
+            said,
+            vec![(one, false), (two, false)],
+            "the screen is told where each one is"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settings file that cannot be moved aside stays where it is, and the launch's save of the
+    /// defaults, like every save, refuses to write over the operator's real configuration.
+    #[test]
+    fn a_settings_file_that_cannot_be_moved_aside_is_never_saved_over() {
+        let dir = scratch_dir("kept_in_place");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let bytes = br#"{"mycall":"W9XYZ","licenseClass":"techn"#.to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        // Every name a set-aside could use is taken: the old fixed one by a folder, the dated ones
+        // by files, in a folder every writer can write to.
+        std::fs::create_dir_all(path.with_extension("json.corrupt")).unwrap();
+        std::fs::write(
+            dir.join("settings.unreadable-20260930-142233.json"),
+            b"taken",
+        )
+        .unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!("settings.unreadable-20260930-142233-{n}.json")),
+                b"taken",
+            )
+            .unwrap();
+        }
+
+        let loaded = Settings::load_at(&path, KEPT_AT);
+        assert_eq!(loaded.mycall, "", "defaults apply");
+        let saved = loaded.save(&path);
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable settings file must never be saved over"
+        );
+        assert!(saved.is_err(), "the save says it did not happen");
+        let said: Vec<(std::path::PathBuf, bool)> = kept_for(&dir)
+            .into_iter()
+            .map(|k| (k.path, k.kept_in_place))
+            .collect();
+        assert_eq!(
+            said,
+            vec![(path.clone(), true)],
+            "the screen is told it was left in place"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settings file from a newer build that only ADDED fields loads as it always has, and
+    /// nothing is kept aside or said.
+    #[test]
+    fn a_settings_file_whose_only_news_is_fields_loads_as_it_always_has() {
+        let dir = scratch_dir("kept_fields");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut file = serde_json::to_value(Settings {
+            mycall: "W9XYZ".into(),
+            ..Settings::default()
+        })
+        .unwrap();
+        file["aSettingFromANewerBuild"] = serde_json::json!(7);
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let loaded = Settings::load_at(&path, KEPT_AT);
+        assert_eq!(
+            (
+                loaded.mycall.as_str(),
+                kept_aside_in(&dir).len(),
+                kept_for(&dir).len()
+            ),
+            ("W9XYZ", 0, 0),
+            "loaded as it always has, with nothing kept and nothing to say"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_settings_file_is_a_first_run_with_nothing_kept() {
+        let dir = scratch_dir("kept_none");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let loaded = Settings::load_at(&dir.join("settings.json"), KEPT_AT);
+        assert_eq!(
+            (loaded.mycall.as_str(), kept_for(&dir).len()),
+            ("", 0),
+            "no file: defaults, and nothing to say"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

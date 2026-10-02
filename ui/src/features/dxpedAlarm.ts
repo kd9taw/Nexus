@@ -2,9 +2,10 @@
 // arms an alarm per expedition call (⏰ on the calendar); at window-start minus a
 // per-alarm lead we fire a repeating beep (~60 s or until dismissed) plus a
 // persistent prominent banner (ttl 0 — it stays until the operator acts). Armed
-// alarms persist in localStorage and survive restarts; each modelled window fires
-// at most once ever (fired keys are persisted too — never twice, even across a
-// restart). In-app only by design: no OS notification plugin (locked decision).
+// alarms persist in the durable store (ui-state.json beside the settings, with
+// localStorage as its live copy) and survive restarts and a reset of the
+// webview's storage; each modelled window fires at most once ever (fired keys are
+// persisted too — never twice, even across a restart). In-app only by design: no OS notification plugin (locked decision).
 //
 // The window start comes from the same data the calendar shows — the top band's
 // 24 h hourly profile in DxpedWindow.outlook — using the shared 0.3 open
@@ -17,6 +18,7 @@
 
 import { doubleBeep } from '../alerts'
 import { pushToast } from '../toast'
+import { durableGet, durableSet } from './durableStore'
 import type { DxpedWindow } from '../types'
 import { t } from '../i18n'
 
@@ -36,7 +38,7 @@ export interface DxpedAlarm {
 /** All armed alarms by UPPERCASE call. Empty when storage is blocked/corrupt. */
 export function alarmMap(): Record<string, DxpedAlarm> {
   try {
-    const raw = localStorage.getItem(ALARMS_KEY)
+    const raw = durableGet(ALARMS_KEY)
     if (!raw) return {}
     const obj = JSON.parse(raw)
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {}
@@ -53,7 +55,7 @@ export function alarmMap(): Record<string, DxpedAlarm> {
 
 function saveAlarms(map: Record<string, DxpedAlarm>): void {
   try {
-    localStorage.setItem(ALARMS_KEY, JSON.stringify(map))
+    durableSet(ALARMS_KEY, JSON.stringify(map))
   } catch {
     /* storage blocked — the toggle still applies this session via module reads */
   }
@@ -82,7 +84,7 @@ export function setAlarmLead(call: string, leadMin: number): void {
 /** Persisted fired keys (`CALL|windowStartUnix`) — "never fire twice". */
 function firedSet(): Set<string> {
   try {
-    const arr = JSON.parse(localStorage.getItem(FIRED_KEY) ?? '[]')
+    const arr = JSON.parse(durableGet(FIRED_KEY) ?? '[]')
     return new Set(Array.isArray(arr) ? arr.map(String) : [])
   } catch {
     return new Set()
@@ -93,7 +95,7 @@ function markFired(key: string): void {
   try {
     const arr = [...firedSet(), key]
     // Bounded: windows are day-scale, so 50 keys is weeks of history.
-    localStorage.setItem(FIRED_KEY, JSON.stringify(arr.slice(-50)))
+    durableSet(FIRED_KEY, JSON.stringify(arr.slice(-50)))
   } catch {
     /* storage blocked — the in-session dedup below still holds */
   }
