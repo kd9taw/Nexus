@@ -152,11 +152,17 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     // disarm and the pass's bail-out were caught on adjacent lines, named by thread). A rule
     // enforced over a subset of the files it applies to is the shape of every flake this guard
     // was built to stop, so the list is now every file that has a test reaching the badge.
-    const SOURCES: [(&str, &str); 5] = [
+    // The stream's tests are a sixth (2026-10-03): their Stops on the data channel reach
+    // `stop_station` as any other does, and three of them ran unguarded outside this list.
+    const SOURCES: [(&str, &str); 6] = [
         ("transmit_tests.rs", include_str!("transmit_tests.rs")),
         ("satellite_tests.rs", include_str!("satellite_tests.rs")),
         ("rotator_tests.rs", include_str!("rotator_tests.rs")),
         ("remote_service/tests.rs", include_str!("../tests.rs")),
+        (
+            "remote_service/stream/tests.rs",
+            include_str!("../stream/tests.rs"),
+        ),
         ("lib.rs", include_str!("../../lib.rs")),
     ];
     /// The two ways a test's outcome depends on the process-wide badge. Named for the rule, not
@@ -215,11 +221,13 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
         "the scan found only {} tests reaching the badge",
         stopping.len()
     );
-    // …and it sees the two specific tests this rule was written about, one per file.
+    // …and it sees the two specific tests this rule was written about, one per file, and a Stop
+    // the stream's page sends on its data channel.
     for named in [
         "a_delayed_stop_still_stops_what_is_on_the_air_now",
         "a_remote_stop_ends_an_active_satellite_track_and_hands_the_dial_back",
         "rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock",
+        "blind_input_is_refused_and_a_blind_stop_still_stops",
     ] {
         assert!(
             stopping.iter().any(|(_, name, _)| name == named),

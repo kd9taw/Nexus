@@ -634,6 +634,7 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
 /// operation version 4, stamped with the session's own identity.
 #[test]
 fn state_and_stop_answer_as_they_do_on_the_relay() {
+    let _alone = alone();
     let now = Instant::now();
     let f = fixture(now);
     let mut streaming = verified_stream(&f, now);
@@ -969,6 +970,7 @@ fn a_socket_heartbeat_keeps_the_lease_and_not_presence() {
 /// delivered (`input_is_delivered_only_while_presence_is_live`).
 #[test]
 fn blind_input_is_refused_and_a_blind_stop_still_stops() {
+    let _alone = alone();
     let now = Instant::now();
     let f = fixture(now);
     let mut streaming = verified_stream(&f, now);
@@ -997,6 +999,7 @@ fn blind_input_is_refused_and_a_blind_stop_still_stops() {
 /// `state` hands an expired controller as it does a live one.
 #[test]
 fn a_stop_after_the_lease_lapsed_still_stops() {
+    let _alone = alone();
     let t0 = Instant::now();
     let f = fixture(t0);
     let mut streaming = verified_stream(&f, t0);
