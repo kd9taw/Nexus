@@ -4663,6 +4663,11 @@ export const EN = {
   // directories' own names and `{{squares}}` a list of 4-character locator squares: tokens.
   'program.rsgb.unavailable':
     "The {{rsgb}} repeater list could not be read just now, so these are <b>{{hearham}}'s machines alone</b>. Fetch again later to add the coordinator's.",
+  // hearham is the list under the others (`{{hearham}}`, its own name: a token). Said when its list
+  // could not be read while another directory answered, and in place of "No repeaters within …"
+  // when nothing is shown, since the area is then not known to be empty.
+  'program.hearham.unavailable':
+    'The {{hearham}} repeater list could not be read just now, so <b>its machines are missing from this list</b>. Fetch again in a few minutes.',
   'program.rsgb.beyond':
     "{{rsgb}} is asked about the locator squares nearest you, not every one this radius reaches, so the machines in <b>{{squares}}</b> are {{hearham}}'s alone.",
   'program.rsgb.beyond.route':

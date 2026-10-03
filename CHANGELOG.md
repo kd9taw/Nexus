@@ -920,6 +920,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Program never shows a repeater list it could not read as "no repeaters".** A search could
+  come back saying "No FM repeaters within 50 mi." where there are plenty, with nothing to say
+  why: the hearham list kept on this PC was whatever hearham's address had last answered, an
+  error page included, and it was read as an empty list for up to a week. Now only a list that
+  reads is kept, a kept one that does not is fetched again on the next search, and a list that
+  still cannot be read is an error with Retry, not an empty area. When RepeaterBook answered but
+  hearham's list could not be read, the machines shown are RepeaterBook's and Program says that
+  hearham's are missing (in the list's place when nothing is shown), where before they went
+  missing without a word.
+
 - **Connect: the Space Wx gauges sit two to a row.** They were meant to, but stood one per row,
   so the box ran six gauges deep and its 30-day lines were out of sight below them. Now the
   gauges take three rows, and at 1920 × 1080 and larger the lines show in the box's usual place

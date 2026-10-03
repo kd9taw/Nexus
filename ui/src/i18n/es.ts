@@ -3398,6 +3398,7 @@ export const ES: PartialCatalog = {
   "program.map.card.close": "Cerrar",
   "program.missingStates": "RepeaterBook no respondió para <b>{{states}}</b>, así que faltan en esta lista los repetidores de esa zona. Es una consulta que falló, no una zona vacía — vuelve a consultar en unos minutos.",
   "program.rsgb.unavailable": "No se pudo leer ahora la lista de repetidores de {{rsgb}}, así que estos son <b>solo los equipos de {{hearham}}</b>. Vuelva a buscar más tarde para añadir los del coordinador.",
+  "program.hearham.unavailable": "No se pudo leer ahora la lista de repetidores de {{hearham}}, así que <b>faltan en esta lista sus repetidores</b>. Vuelva a buscar en unos minutos.",
   "program.rsgb.beyond": "A {{rsgb}} solo se le pregunta por los cuadrados de localizador más cercanos, no por todos los que alcanza este radio, así que los equipos de <b>{{squares}}</b> son solo de {{hearham}}.",
   "program.rsgb.beyond.route": "A {{rsgb}} solo se le pregunta por los cuadrados de localizador del comienzo de esta ruta, no por todos los que cruza, así que los equipos de <b>{{squares}}</b> son solo de {{hearham}}.",
   "program.route.rbBeyond": "A {{rb}} solo se le pregunta por los estados del comienzo de esta ruta, no por todos los que cruza, así que los equipos de <b>{{states}}</b> son solo de {{hearham}}. Busca el resto del viaje como una ruta aparte.",

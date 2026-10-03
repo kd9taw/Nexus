@@ -3398,6 +3398,7 @@ export const FR: PartialCatalog = {
   "program.map.card.close": "Fermer",
   "program.missingStates": "RepeaterBook n'a pas répondu pour <b>{{states}}</b>, les relais de cette zone manquent donc dans cette liste. C'est une requête qui a échoué, pas une zone vide — réessayez dans quelques minutes.",
   "program.rsgb.unavailable": "La liste de relais de {{rsgb}} n'a pas pu être lue pour l'instant ; ce sont donc <b>les relais de {{hearham}} seuls</b>. Relancez la recherche plus tard pour ajouter ceux du coordinateur.",
+  "program.hearham.unavailable": "La liste de relais de {{hearham}} n'a pas pu être lue pour l'instant ; <b>ses relais manquent donc dans cette liste</b>. Relancez la recherche dans quelques minutes.",
   "program.rsgb.beyond": "{{rsgb}} n'est interrogé que sur les carrés locator les plus proches, pas sur tous ceux qu'atteint ce rayon ; les relais de <b>{{squares}}</b> viennent donc de {{hearham}} seul.",
   "program.rsgb.beyond.route": "{{rsgb}} n'est interrogé que sur les carrés locator du début de cet itinéraire, pas sur tous ceux qu'il traverse ; les relais de <b>{{squares}}</b> viennent donc de {{hearham}} seul.",
   "program.route.rbBeyond": "{{rb}} n'est interrogé que sur les États du début de cet itinéraire, pas sur tous ceux qu'il traverse ; les relais de <b>{{states}}</b> viennent donc de {{hearham}} seul. Cherchez le reste du trajet comme un itinéraire à part.",
