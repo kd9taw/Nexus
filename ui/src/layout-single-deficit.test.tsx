@@ -42,15 +42,18 @@
 // (data-viewport='sm' plus --vh-eff 667.8px / 640px), which is what a `[data-viewport]` rule
 // could re-clip under. THAT the deficit exists at those sizes is an operator observation;
 // that it has somewhere to go is what this file computes.
-import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Logbook } from './components/Logbook'
 import { RadioProgView } from './components/RadioProgView'
 import { ContestView } from './components/ContestView'
-import type { FieldDayStatus } from './types'
+import type { FieldDayStatus, RepeaterSearchResult, RepeaterSearchRow } from './types'
 import { classifyViewport } from './useViewport'
+
+/** Repeaters' search: unanswered unless a case sets what it returns (the wide-window cases fetch a map). */
+const repeaterSearch = vi.hoisted(() => vi.fn())
 
 vi.mock('./api', () => {
   const fn = () => vi.fn().mockResolvedValue(undefined)
@@ -68,7 +71,8 @@ vi.mock('./api', () => {
     clublogPushQso: fn(), hrdlogPushQso: fn(),
     downloadLotwReport: fn(), syncQrz: fn(), importPotaAdif: fn(),
     saveTextToDownloads: fn(),
-    exportChannels: fn(), geocodeCity: fn(), repeaterSearch: fn(), repeaterTune: fn(),
+    exportChannels: fn(), geocodeCity: fn(), repeaterTune: fn(),
+    repeaterSearch: (...a: unknown[]) => repeaterSearch(...a),
     radioprogListProjects: vi.fn().mockResolvedValue([]),
     radioprogFileNotice: vi.fn().mockResolvedValue(null),
     radioprogSaveProject: fn(), radioprogDeleteProject: fn(),
@@ -353,8 +357,9 @@ describe("Program's narrow stack: neither half is ever shorter than what it hold
           'half it holds, so the source spills under the channel list (Tune and Add unclickable).',
       ).toBe('min-content')
       // The results card and its body (2026-10-02, the cards) sit between the list and the stacked row, so they
-      // carry the same zero LENGTH basis: a percentage there would hand the row the whole list just the same.
-      for (const sel of ['.rp-results', '.rp-chan-rows', '.rp-found', '.rp-found-body']) {
+      // carry the same zero LENGTH basis: a percentage there would hand the row the whole list just the same. So do
+      // the box the map and the list share and the list's own column (2026-10-03, side by side on a wide window).
+      for (const sel of ['.rp-results', '.rp-chan-rows', '.rp-found', '.rp-found-body', '.rp-split', '.rp-list']) {
         const list = container.querySelector(sel)
         expect(list, `Program rendered no ${sel}`).not.toBeNull()
         const basis = declWinner(list!, 'flex-basis')
@@ -368,15 +373,114 @@ describe("Program's narrow stack: neither half is ever shorter than what it hold
   }
 
   it('the wider tiers keep the two columns, and the narrow rows reach none of them', async () => {
+    // From lg the source column holds the map and the list side by side, so it takes the room, and the channel
+    // list's column keeps a width of its own: a floor its rows fit in (the Remote page's Tune included) and a measure.
+    const COLUMNS = { md: 'minmax(0, 1.3fr) minmax(320px, 1fr)', lg: 'minmax(0, 1fr) clamp(520px, 26%, 600px)', xl: 'minmax(0, 1fr) clamp(520px, 26%, 600px)' }
     for (const vp of ['md', 'lg', 'xl'] as const) {
       document.documentElement.setAttribute('data-viewport', vp)
       const { container } = mountSingle(<RadioProgView myGrid="EN52" catOk={false} />)
       const body = await waitFor(() => container.querySelector('.rp-body')!)
       expect(declWinner(body, 'grid-auto-rows'), `[data-viewport='${vp}'] .rp-body sizes rows it does not stack`).toBeNull()
-      expect(declWinner(body, 'grid-template-columns')?.value, `[data-viewport='${vp}']`).toBe('minmax(0, 1.3fr) minmax(320px, 1fr)')
+      expect(declWinner(body, 'grid-template-columns')?.value, `[data-viewport='${vp}']`).toBe(COLUMNS[vp])
       cleanup()
     }
   })
+})
+
+describe('Repeaters on a wide window: the map and the list side by side, each the whole height', () => {
+  // THE REPORT (the operator, testing 2026-10-03): "the screen is narrow and in the middle and you have a lot of
+  // room on the screen to resize everything, the list is at the bottom and could be bigger." THE RULING: "On a wide
+  // window the map and the list sit side by side, each the full height, so the list shows many more rows. On a
+  // narrow window: the map above, the list below filling the rest." Wide is lg and xl, an effective width of 1600
+  // px and up (1366×768 at the default 85 %, 1920×1080, 2560×1440, 3440×1440); md and below are narrow. Before, the
+  // map took two parts of the column to the list's one and the list sat at its 120 px floor (2.5 rows at 1366×768).
+  // This computes what the winning rules say; what Chrome lays out from them was measured at those four sizes.
+  const WIDE = ['lg', 'xl'] as const
+  const NARROW = ['md', 'sm', 'xs'] as const
+  const ZERO = /^0(px|em|rem)$/
+
+  /** hearham's, with its map pin, so the map is drawn above (or beside) the list. */
+  const machine = (call: string, mhz: number, dLat: number): RepeaterSearchRow => ({
+    record: {
+      source: 'hearham', sourceId: `hh-${call}`, callsign: call, outputMhz: mhz, inputMhz: mhz + 0.6,
+      ctcssEncHz: 103.5, ctcssDecHz: null, dcs: null, lat: 42.3 + dLat, lon: -89.0, city: 'Rockford', county: '',
+      state: 'IL', fm: true, dmr: false, dstar: false, fusion: false, dmrColorCode: null, bandwidthKhz: null,
+      operational: true, openUse: true, updated: null, distanceKm: 10, bearingDeg: 90,
+    },
+    channel: {
+      id: `hearham:${call}`, name: call, rxMhz: mhz, duplex: 'plus', offsetMhz: 0.6, toneMode: 'tone',
+      rtoneHz: 103.5, ctoneHz: 103.5, dtcsCode: 23, mode: 'fm', comment: 'Rockford',
+      source: { source: 'hearham', sourceId: `hh-${call}`, callsign: call },
+    },
+    sources: [{ source: 'hearham', sourceId: `hh-${call}`, channelId: `hearham:${call}`, updated: null }],
+    disagreements: [],
+    map: { lat: 42.3 + dLat, lon: -89.0, callsign: call, outputMhz: mhz, city: 'Rockford' },
+  })
+  const RESULT: RepeaterSearchResult = {
+    lists: [{ source: 'hearham', fetchedUtc: Math.floor(Date.now() / 1000) - 3600, stale: false }],
+    coverageGap: null, missingStates: [], rsgbUnavailable: false, rsgbBeyond: [],
+    rows: [machine('W9AAA', 146.94, 0), machine('W9BBB', 147.18, 0.1), machine('W9CCC', 444.35, 0.2)],
+  }
+
+  /** The view at `vp`, fetched, with its map drawn: the split, its map and its list, and the Search card's body. */
+  async function fetchedAt(vp: string) {
+    document.documentElement.setAttribute('data-viewport', vp)
+    repeaterSearch.mockResolvedValue(RESULT)
+    const { getByRole, container } = mountSingle(<RadioProgView myGrid="EN52" catOk={false} />)
+    getByRole('button', { name: /Fetch repeaters/ }).click()
+    const map = await waitFor(() => {
+      const m = container.querySelector('.rp-map')
+      expect(m, `[data-viewport='${vp}']: no map after a fetch`).not.toBeNull()
+      return m!
+    })
+    const split = map.parentElement!
+    const list = container.querySelector('.rp-results')!.parentElement!
+    expect(split.classList.contains('rp-split'), 'the map is not in the box it shares with the list').toBe(true)
+    expect(list.classList.contains('rp-list') && list.parentElement === split, 'the list is not in its own column beside the map').toBe(true)
+    return { split, map, list, stage: map.querySelector('.rp-map-stage')!, search: container.querySelector('.rp-query > .rp-card-body')! }
+  }
+  const grows = (el: Element) => Number(declWinner(el, 'flex-grow')?.value ?? '0') > 0
+
+  // jsdom has no 2-D canvas; the map draws nothing here, and its box is all this reads.
+  let canvas: { mockRestore(): void } | undefined
+  beforeAll(() => {
+    canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+  })
+  afterAll(() => canvas?.mockRestore())
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-viewport')
+    repeaterSearch.mockReset()
+  })
+
+  for (const vp of WIDE) {
+    it(`[data-viewport='${vp}']: the map and the list share one row, each taking the whole height; the Search card flows`, async () => {
+      const { split, map, list, stage, search } = await fetchedAt(vp)
+      expect(declWinner(split, 'flex-direction')?.value, `[data-viewport='${vp}']: the map is not beside the list`).toBe('row')
+      for (const [name, el] of [['the split', split], ['the map', map], ['the list', list]] as const) {
+        expect(grows(el), `[data-viewport='${vp}']: ${name} does not take the room it is given`).toBe(true)
+        expect(declWinner(el, 'flex-basis')?.value, `[data-viewport='${vp}']: ${name}'s basis`).toMatch(ZERO)
+      }
+      expect(grows(stage), `[data-viewport='${vp}']: the drawing does not take the map's whole height`).toBe(true)
+      // A reading width inside the card: the list's rows stop growing where a row reads as one line.
+      expect(declWinner(list, 'max-width')?.value ?? 'none', `[data-viewport='${vp}']: the list's rows stretch across the window`).toMatch(/^\d+px$/)
+      // Compact: the Search card's rows flow along its width instead of stacking one under another.
+      expect(declWinner(search, 'flex-direction')?.value, `[data-viewport='${vp}']: the Search card stacks its rows`).toBe('row')
+      expect(declWinner(search, 'flex-wrap')?.value, `[data-viewport='${vp}']: the Search card's rows cannot wrap`).toBe('wrap')
+    })
+  }
+
+  for (const vp of NARROW) {
+    it(`[data-viewport='${vp}']: the map above at a height of its own, the list below taking the rest`, async () => {
+      const { split, map, list, stage, search } = await fetchedAt(vp)
+      expect(declWinner(split, 'flex-direction')?.value, `[data-viewport='${vp}']: the map is not above the list`).toBe('column')
+      expect(grows(map), `[data-viewport='${vp}']: the map shares the surplus the list should take`).toBe(false)
+      expect(grows(list), `[data-viewport='${vp}']: the list does not take the height left under the map`).toBe(true)
+      expect(declWinner(list, 'flex-basis')?.value, `[data-viewport='${vp}']: the list's basis`).toMatch(ZERO)
+      // The map's height is its drawing's floor, never nothing: a map that short is no map (2026-10-02).
+      expect(declWinner(stage, 'min-height')?.value ?? '0px', `[data-viewport='${vp}']: the drawing has no floor`).not.toMatch(/^0(px)?$/)
+      expect(declWinner(search, 'flex-direction')?.value ?? 'column', `[data-viewport='${vp}']`).toBe('column')
+    })
+  }
 })
 
 describe('the .panel-rooted views of .layout.single, as a class', () => {

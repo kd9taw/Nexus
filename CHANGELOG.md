@@ -715,9 +715,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lights while its carrier is up, as on FT. FT's transmit buttons are now the same size as
   everyone else's. On the Remote, the row follows the contact in the Quick layout, and for a
   browser watching without station control it scrolls with the screen, as the transmit bar does.
-- **Repeaters: the map comes first, the list under it, and a dot and its row are linked.** After a
-  fetch the map of the machines hearham lists sits above the list of every machine; the List and Map
-  chips are gone. Point at a dot and its row lights up; point at a row and its dot is ringed. A click on
+- **Repeaters uses the whole window, with the map and the list side by side.** The page fills the
+  width instead of sitting in a column in the middle. On a wide window (1920×1080, and 1366×768 at the
+  default scale) the Search card is a compact strip across the top, and under it the map and the list
+  sit side by side, each the full height: the list scrolls by itself and shows many more rows, about
+  seven at 1920×1080 where it showed two, and twenty from 2560×1440 where it showed five. The channel
+  list keeps its own column. On a narrower window the map sits above the list, and the list takes the
+  rest of the height.
+- **Repeaters: the map comes first, and a dot and its row are linked.** After a fetch the map of the
+  machines hearham lists sits beside the list of every machine (above it on a narrower window); the
+  List and Map chips are gone. Point at a dot and its row lights up; point at a row and its dot is ringed. A click on
   a dot brings its row into view and opens a card with **Save to Memories** and **＋ Add**, so a click on
   a dot no longer adds the machine by itself. The map still shows hearham's listings only, never a
   RepeaterBook row, and says under it what it leaves off.
@@ -739,8 +746,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Results** (the count, Save all shown and ＋ Add all shown in its header, then the filters, the map
   and the list) and **Channel list**. The lists a search read show as chips with their age, a
   repeater's callsign leads its row in heavier type, and the row you point at or select carries an
-  accent bar. From a 1920×1080 window (and 1366×768 at the default scale) the page uses up to 1600 px
-  of width instead of 1100, so the map is wider. Every word reads at 4.5:1 or better in every theme.
+  accent bar. Every word reads at 4.5:1 or better in every theme.
 - **Program is now Repeaters.** The view the navigation bar called **Program** is called **Repeaters**
   everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
   window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel

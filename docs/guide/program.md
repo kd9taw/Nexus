@@ -28,7 +28,12 @@ and what you want; the **Channel list** on the right is what you are building.
 They sit side by side from about 1100 px of effective width. Below that —
 1024×768 included — they stack, the list under the source, and the panel itself
 scrolls, so the delivery row at the bottom is reached by scrolling rather than
-lost off the edge.
+lost off the edge. The page uses the whole width of the window. From about
+1600 px of effective width (1920×1080, and 1366×768 at the default scale) the
+Search card is a compact strip across the top of the source column, and under
+it the map and the results list sit side by side, each the full height, the
+list scrolling by itself; narrower, the map sits above the list and the list
+takes the rest of the height.
 
 **Near** is the one place that says where to search. **My station** carries
 your grid from [Settings ▸ Station](settings-reference.md#station) and needs no
@@ -128,7 +133,7 @@ otherwise cry wolf. A short list is not flagged; a one-sided list is.
 segmented control (All, 2m, 70cm, 1.25m, 6m, 10m — 2 m and 70 cm lit to start,
 and they multi-select), and **Show** (**FM** or **+Digital**, and **On-air
 only**). A machine on a band with no button of its own — 33 cm, say — shows
-only under All. The list's own text filter sits with the list, under the map:
+only under All. The list's own text filter sits with the list, at its top:
 **Filter: call or MHz**, with a ✕ that clears it. It narrows the list you
 have, by callsign or town; it never searches somewhere else, and if what you
 type there looks like a place ("woodstock, il"), it offers **Search near
@@ -283,8 +288,8 @@ the same with RSGB's locator squares.
 
 ### See the repeaters on a map
 
-1. Fetch repeaters around a place or along a route. The map comes first, with
-   the list under it: the place you searched (or the two ends of the route)
+1. Fetch repeaters around a place or along a route. The map comes first, beside
+   the list on a wide window and above it on a narrower one: the place you searched (or the two ends of the route)
    marked with a cross, the radius as a ring (or the corridor as a band along
    the straight line), and each machine as a dot with its callsign beside it.
    The band, FM, on-air and search filters apply to the map as they do to the
