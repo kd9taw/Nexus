@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
-import { AudioLink, resample } from './audio-listen'
+import { AudioLink, listenGain, listenVolume, resample } from './audio-listen'
 import type { AudioEnvironment, DecodedFrame } from './audio-listen'
+import { AUDIO_VOLUME_DB } from './audio-worklet'
 
 const LEASE = '8aa041cb-c642-459c-83f3-11a5b720647d'
 const EPOCH = '0000000000000001'
@@ -12,13 +13,16 @@ function bundle(seq: number, count = 3, epoch = EPOCH) {
   return { type: 'audioRx', seq, epoch, firstFrameMs: seq * 20, frameMs: 20, count, payload: btoa(String.fromCharCode(...bytes)) }
 }
 
-function harness(options: { supported?: boolean; contextRate?: number } = {}) {
+function harness(options: { supported?: boolean; contextRate?: number; stored?: unknown } = {}) {
   let clock = 1000
   const sent: Record<string, unknown>[] = []
   const pushed: Float32Array[] = []
   const resets: number[] = []
   const decoded: Uint8Array[] = []
   const mutes: boolean[] = []
+  // What the player was handed, in order: decoded audio, known losses and the listener's gain.
+  const played: string[] = []
+  const saved: number[] = []
   const closes = { decoder: 0, playback: 0 }
   let handlers: { output: (f: DecodedFrame) => void; error: () => void } | null = null
   const rate = options.contextRate ?? 48000
@@ -29,10 +33,12 @@ function harness(options: { supported?: boolean; contextRate?: number } = {}) {
     decoderAvailable: () => options.supported !== false,
     context: () => Promise.resolve({
       sampleRate: rate,
-      push: samples => { pushed.push(samples) },
+      push: samples => { pushed.push(samples); played.push(`pcm:${samples.length}`) },
       reset: () => { resets.push(clock) },
       close: () => { closes.playback++; return Promise.resolve() },
       mute: muted => { mutes.push(muted) },
+      gap: samples => { played.push(`gap:${samples}`) },
+      gain: linear => { played.push(`gain:${linear.toFixed(4)}`) },
     }),
     decoder: h => {
       handlers = h
@@ -47,10 +53,11 @@ function harness(options: { supported?: boolean; contextRate?: number } = {}) {
       addEventListener: (_type, f) => listeners.visibility.push(f),
       removeEventListener: (_type, f) => { listeners.visibility = listeners.visibility.filter(g => g !== f) },
     },
+    volume: { load: () => options.stored ?? null, save: db => { saved.push(db) } },
   }
   const link = new AudioLink(message => sent.push(message as Record<string, unknown>), env)
   return {
-    link, sent, pushed, resets, decoded, closes, mutes,
+    link, sent, pushed, resets, decoded, closes, mutes, played, saved,
     advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms) },
     hide: () => { visibilityState = 'hidden'; for (const f of listeners.visibility) f() },
     // Opus ALWAYS decodes at 48 kHz whatever the output device runs at, which is the
@@ -143,6 +150,86 @@ it('surfaces a sequence gap as concealment the operator can see, never as silenc
   // And it recovers on its own: the next bundle in sequence goes back to live.
   h.link.receive(bundle(15))
   expect(h.link.getSnapshot().phase).toBe('live')
+})
+
+it('hands a known loss to the player as a gap of its own length, in its own place', async () => {
+  const h = harness()
+  h.link.listen(LEASE)
+  await settle()
+  h.link.receive(bundle(0))
+  await settle()
+  h.render(960); h.render(960)
+  // Frames 3-5 lost on the way. The station's sequence is dense, so the page knows exactly how
+  // much audio is missing and where: it goes to the player as a gap of that length, after the
+  // audio before the loss and before the audio after it. Played straight on instead, the lost
+  // 60 ms came out of the buffer and came back seconds later as an underrun.
+  h.link.receive(bundle(6))
+  await settle()
+  h.render(960); h.render(960)
+  expect(h.played.filter(p => !p.startsWith('gain'))).toEqual(['pcm:960', 'pcm:960', 'pcm:960', 'gap:2880', 'pcm:960'])
+  // At the device's own rate, as the audio is.
+  const slow = harness({ contextRate: 44100 })
+  slow.link.listen(LEASE)
+  await settle()
+  slow.link.receive(bundle(0))
+  slow.link.receive(bundle(9))
+  await settle()
+  for (let i = 0; i < 4; i++) slow.render(960)
+  expect(slow.played.filter(p => p.startsWith('gap'))).toEqual(['gap:5292'])
+  // The control: an unbroken sequence hands over audio and nothing else.
+  const whole = harness()
+  whole.link.listen(LEASE)
+  await settle()
+  whole.link.receive(bundle(0)); whole.link.receive(bundle(3))
+  await settle()
+  for (let i = 0; i < 6; i++) whole.render(960)
+  expect(whole.played.filter(p => !p.startsWith('pcm') && !p.startsWith('gain'))).toEqual([])
+})
+
+it('plays at the listener\'s volume: the remembered one, or a default that makes the shack\'s level a normal listen', async () => {
+  const h = harness()
+  expect(h.link.volume).toBe(AUDIO_VOLUME_DB.default)
+  h.link.listen(LEASE)
+  await settle()
+  // Applied the moment the player opens, before any audio reaches it.
+  expect(h.played).toEqual([`gain:${listenGain(AUDIO_VOLUME_DB.default).toFixed(4)}`])
+  h.link.setVolume(30)
+  expect(h.link.volume).toBe(30)
+  expect(h.played[h.played.length - 1]).toBe(`gain:${(10 ** 1.5).toFixed(4)}`)
+  expect(h.saved).toEqual([30])
+  // Remembered by this browser: a new link starts where the listener left it.
+  const again = harness({ stored: 30 })
+  expect(again.link.volume).toBe(30)
+  // Turned while not listening, it is kept for the next listen.
+  again.link.setVolume(6)
+  again.link.listen(LEASE)
+  await settle()
+  expect(again.played).toEqual([`gain:${listenGain(6).toFixed(4)}`])
+})
+
+it('keeps the volume inside what the control offers, whatever was stored or asked', () => {
+  expect(listenVolume(null)).toBe(AUDIO_VOLUME_DB.default)
+  expect(listenVolume('loud')).toBe(AUDIO_VOLUME_DB.default)
+  expect(listenVolume(Number.NaN)).toBe(AUDIO_VOLUME_DB.default)
+  expect(listenVolume('12')).toBe(12)
+  expect(listenVolume(12.4)).toBe(12)
+  expect(listenVolume(-20)).toBe(AUDIO_VOLUME_DB.min)
+  expect(listenVolume(1e9)).toBe(AUDIO_VOLUME_DB.max)
+  expect(harness({ stored: '99' }).link.volume).toBe(AUDIO_VOLUME_DB.max)
+  const h = harness()
+  h.link.setVolume(-5)
+  expect(h.link.volume).toBe(AUDIO_VOLUME_DB.min)
+  expect(h.saved).toEqual([AUDIO_VOLUME_DB.min])
+})
+
+it('turns dB of volume into the gain the player applies', () => {
+  expect(listenGain(0)).toBe(1)
+  expect(listenGain(20)).toBeCloseTo(10, 12)
+  expect(listenGain(40)).toBeCloseTo(100, 10)
+  expect(listenGain(6)).toBeCloseTo(1.9953, 4)
+  // The default lifts the band noise of a receiver set where Nexus's meter asks (~30 dB on it,
+  // -60.3 dBFS RMS) to about -36 dBFS: heard at a normal system volume, with room over it.
+  expect(20 * Math.log10((10 ** ((30 - 90.3) / 20)) * listenGain(AUDIO_VOLUME_DB.default))).toBeCloseTo(-36.3, 1)
 })
 
 it('drops a replayed or reordered bundle instead of playing it late', async () => {

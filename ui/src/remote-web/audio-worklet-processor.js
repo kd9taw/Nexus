@@ -14,7 +14,16 @@
 // is a dead band and an operator must be able to tell that from a dead link without
 // reading the screen. The bed is deliberately dull and far below any real signal - it is
 // not comfort noise shaped to sound like the band, and it must never be mistaken for
-// propagation.
+// propagation. A loss the page KNOWS of (the station's sequence skipped) is a gap of exactly
+// the audio that was lost, played as the bed where the audio would have been: what follows it
+// plays when it would have, so a lost bundle never eats into the buffer and comes back seconds
+// later as an underrun.
+//
+// THE LISTENER'S GAIN, AND NEVER A CLIPPED SAMPLE. The shack sets its RX level for the
+// decoders, some 40 dB under a normal listen, so the page lifts it by the listener's volume.
+// The bed stands in for that same audio and gets the same gain. A sample the gain would carry
+// past the peak is brought down to it at once, and the gain comes back over 100 ms: audio
+// under the peak passes untouched.
 //
 // A FILE OF ITS OWN, served exactly as written. An AudioWorklet module can only be fetched,
 // never imported, and the hosted page's policy (`script-src 'self'`) refuses one built from a
@@ -31,7 +40,11 @@ class NexusReceiveAudio extends AudioWorkletProcessor {
     this.capacity = Math.max(1, o.capacity | 0)
     this.prefill = Math.max(1, o.prefill | 0)
     this.ceiling = Math.max(this.prefill, o.ceiling | 0)
-    this.level = typeof o.level === 'number' ? o.level : 0.01 // AUDIO_BED_LEVEL; the page passes it
+    this.level = typeof o.level === 'number' ? o.level : 0.0006 // AUDIO_BED_LEVEL; the page passes it
+    this.peak = typeof o.peak === 'number' && o.peak > 0 ? o.peak : 0.9 // AUDIO_PEAK; the page passes it
+    this.gain = 1
+    this.limit = 1
+    this.release = 1 - Math.exp(-1 / (0.1 * (typeof sampleRate === 'number' ? sampleRate : 48000)))
     this.ring = new Float32Array(this.capacity)
     this.read = 0
     this.write = 0
@@ -48,10 +61,19 @@ class NexusReceiveAudio extends AudioWorkletProcessor {
       const message = event.data
       if (!message) return
       if (message.pcm) this.push(new Float32Array(message.pcm))
+      else if (message.gap) this.hole(message.gap)
+      else if (typeof message.gain === 'number' && message.gain >= 0) this.gain = message.gain
       // A real end (the station's capture source changed, or listening stopped): throw
       // the buffer away rather than playing out audio from a receiver that is gone.
       else if (message.reset) { this.read = this.write = this.held = 0; this.playing = false }
     }
+  }
+  // A known loss, as long as the audio that was lost, marked NaN (no decoder makes one) and
+  // played as the bed. Only while playing: once the ring has run dry, the bed has already stood
+  // in for the lost audio, and the refill starts the timeline again.
+  hole(samples) {
+    const n = Math.min(this.ceiling, Math.floor(samples) || 0)
+    if (this.playing && n > 0) this.push(new Float32Array(n).fill(NaN))
   }
   push(samples) {
     for (let i = 0; i < samples.length; i++) {
@@ -75,7 +97,13 @@ class NexusReceiveAudio extends AudioWorkletProcessor {
     this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff
     const white = (this.seed / 0x3fffffff) - 1
     this.bedState = this.bedState * 0.85 + white * 0.15
-    return this.bedState * this.level * 4
+    return this.bedState * this.level * 4 * this.gain
+  }
+  limited(sample) {
+    const v = sample * this.gain
+    const size = v < 0 ? -v : v
+    this.limit = Math.min(size > this.peak ? this.peak / size : 1, this.limit + (1 - this.limit) * this.release)
+    return v * this.limit
   }
   process(inputs, outputs) {
     const channel = outputs[0] && outputs[0][0]
@@ -83,7 +111,8 @@ class NexusReceiveAudio extends AudioWorkletProcessor {
     if (!this.playing && this.held >= this.prefill) this.playing = true
     for (let i = 0; i < channel.length; i++) {
       if (this.playing && this.held > 0) {
-        channel[i] = this.ring[this.read]
+        const sample = this.ring[this.read]
+        channel[i] = sample === sample ? this.limited(sample) : this.bed()
         this.read = (this.read + 1) % this.capacity
         this.held--
       } else {

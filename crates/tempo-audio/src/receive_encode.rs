@@ -665,6 +665,36 @@ mod tests {
         );
     }
 
+    /// The test above polls with the publication's own clock. The stream's loop does not: it
+    /// reads `now` once per turn and polls later in that turn, and the RX DSP thread publishes
+    /// whenever its own tick comes round, sometimes in between. Measured end to end (2026-10-03),
+    /// 1.3% of the receive audio was then thrown away as stale: a 20 ms hole every second and a
+    /// half, each taking 20 ms out of the listener's buffer until it ran dry.
+    #[test]
+    fn a_loop_that_reads_its_clock_before_the_publication_keeps_pace_for_minutes() {
+        const TICKS: usize = 9_000; // three minutes
+
+        let (feed, source, base) = fixture();
+        let mut encoder = ReceiveEncoder::start(&feed, source).unwrap();
+        let mut frames = 0;
+        for k in 0..TICKS {
+            let turn = base + TICK * (k as u32);
+            // One publication in 37 lands between the loop's clock read and its poll.
+            let published = if k % 37 == 36 {
+                turn + Duration::from_micros(300)
+            } else {
+                turn
+            };
+            feed.publish(source, published, &tick_signal(k));
+            frames += encoder.poll(turn).expect("the feed is alive").len();
+        }
+        // The feed's `primed` discard and the resampler's warm-up, as above, and nothing else.
+        assert!(
+            frames >= TICKS - 3,
+            "kept {frames} of {TICKS} frames over three minutes"
+        );
+    }
+
     #[test]
     fn the_producer_never_waits_for_the_encoder() {
         // The guarantee itself is `receive_audio.rs`'s `try_lock` (its own

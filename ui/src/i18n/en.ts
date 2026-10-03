@@ -352,6 +352,7 @@ export const EN = {
   // exists so a dead LINK never reads as a dead BAND.
   "remote.audio.start": "Listen",
   "remote.audio.stop": "Stop listening",
+  "remote.audio.volume": "Volume",
   "remote.audio.connecting": "Connecting audio",
   "remote.audio.live": "Listening to the station",
   "remote.audio.gap": "Audio gap - the link is losing packets",

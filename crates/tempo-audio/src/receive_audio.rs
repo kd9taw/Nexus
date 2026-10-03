@@ -240,14 +240,22 @@ impl ReceiveAudioReader {
             return Err(ReceiveError::Ended);
         }
         while let Some(block) = state.pop() {
-            if now
-                .checked_duration_since(block.published_at)
-                .is_some_and(|age| age < MAX_MEDIA_AGE)
-            {
+            if fresh(now, block.published_at) {
                 return Ok(Some(block));
             }
         }
         Ok(None)
+    }
+}
+
+/// A caller reads its clock and then reads the feed, so the RX DSP thread can publish in between:
+/// a block stamped after `now` is the newest audio there is, not stale. Throwing it away cost a
+/// listener a 20 ms hole about every second and a half (2026-10-03). A stamp further ahead of the
+/// reader's clock than the media age is refused, as an old one is.
+fn fresh(now: Instant, published_at: Instant) -> bool {
+    match now.checked_duration_since(published_at) {
+        Some(age) => age < MAX_MEDIA_AGE,
+        None => published_at.duration_since(now) < MAX_MEDIA_AGE,
     }
 }
 impl Drop for ReceiveAudioReader {
@@ -406,6 +414,37 @@ mod tests {
         }
         feed.publish(source, now + Duration::from_secs(1), &[0.3; 960]);
         assert!(reader.read(now).unwrap().is_none());
+    }
+
+    /// A reader takes its clock, then reads: the stream's loop reads `now` once per turn and polls
+    /// the audio later in the same turn. A block the RX DSP thread published in between is the
+    /// freshest audio there is. Refused as stale, it was a 20 ms hole in the listener's audio about
+    /// once a second and a half on a real streamed session (2026-10-03).
+    #[test]
+    fn a_block_published_after_the_readers_clock_is_fresh_audio_never_a_hole() {
+        let (feed, source, now) = fixture();
+        let reader = feed.subscribe(source).unwrap();
+        feed.publish(source, now, &[0.0; 960]);
+        feed.publish(source, now + Duration::from_micros(300), &[0.5; 960]);
+        assert_eq!(
+            reader.read(now).unwrap().map(|block| block.samples),
+            Some(vec![0.5; 960]),
+            "a block published after the reader's clock was thrown away as stale"
+        );
+        // The same, as the stream's loop meets it: every turn's clock is read just before the
+        // DSP thread publishes, and every publication must still come out as frames.
+        let (feed, source, now) = fixture();
+        let reader = feed.subscribe(source).unwrap();
+        feed.publish(source, now, &[0.0; 960]);
+        let mut read = 0;
+        for k in 0..50u32 {
+            let turn = now + Duration::from_millis(20) * k;
+            feed.publish(source, turn + Duration::from_micros(50), &[0.25; 960]);
+            while let Some(block) = reader.read(turn).unwrap() {
+                read += block.samples.len();
+            }
+        }
+        assert_eq!(read, 50 * 960, "audio published mid-turn was lost");
     }
 
     #[test]

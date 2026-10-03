@@ -21,7 +21,7 @@ import {
   audioPackets, parseAudioBundle, parseAudioState,
 } from './audio-protocol'
 import {
-  AUDIO_BED_LEVEL, AUDIO_CEILING_MS, AUDIO_PREFILL_MS, AUDIO_WORKLET_NAME,
+  AUDIO_BED_LEVEL, AUDIO_CEILING_MS, AUDIO_PEAK, AUDIO_PREFILL_MS, AUDIO_VOLUME_DB, AUDIO_WORKLET_NAME,
 } from './audio-worklet'
 
 /** What the operator is shown. Each one is a different thing to do about it. */
@@ -59,6 +59,8 @@ export type AudioEnvironment = {
   context: () => Promise<AudioPlayback>
   decoder: (handlers: { output: (frame: DecodedFrame) => void; error: () => void }) => AudioDecoderLike
   document?: { visibilityState: string; addEventListener: (type: string, f: () => void) => void; removeEventListener: (type: string, f: () => void) => void }
+  /** Where this browser keeps the listener's volume. */
+  volume?: { load: () => unknown; save: (db: number) => void }
 }
 /** The worklet, behind the two things this file does to it. */
 export type AudioPlayback = {
@@ -68,6 +70,10 @@ export type AudioPlayback = {
   sampleRate: number
   /** Silence the output, or let it through again, without touching the buffer. */
   mute?: (muted: boolean) => void
+  /** The listener's gain, as a multiplier on the station's own level. */
+  gain?: (linear: number) => void
+  /** Audio known to be lost, this many samples of it: played as a gap, in its place. */
+  gap?: (samples: number) => void
 }
 export type DecodedFrame = { sampleRate: number; frames: number; copyTo: (target: Float32Array, options: { planeIndex: number; format: string }) => void; close: () => void }
 export type AudioDecoderLike = {
@@ -94,6 +100,12 @@ export class AudioLink {
   private stopVisibility: (() => void) | undefined
   /** Frames decoded, only ever counted up: the decoder's timestamps must be monotonic. */
   private frames = 0
+  /** Decoded frames handed to the player, and the known losses waiting for their place among
+   *  them: before the frame at `at`, which is the first one after the loss. */
+  private outputs = 0
+  private holes: { at: number; frames: number }[] = []
+  /** The listener's volume in dB, remembered by this browser. */
+  private level: number
   private closed = false
   /** Muted while the operator's own over is on the air (the audio design's M9). Applied, never
    *  decided, here: the caller derives it from the over on every change, so no flag of this
@@ -105,11 +117,26 @@ export class AudioLink {
     private readonly env: AudioEnvironment,
   ) {
     this.view = { phase: 'off', reason: null, supported: env.decoderAvailable() }
+    let stored: unknown = null
+    try { stored = env.volume?.load() } catch { /* the default, then */ }
+    this.level = listenVolume(stored)
   }
 
   subscribe = (f: () => void): (() => void) => { this.listeners.add(f); return () => { this.listeners.delete(f) } }
   getSnapshot = (): AudioView => this.view
   get supported(): boolean { return this.view.supported }
+  get volume(): number { return this.level }
+
+  /** The listener's volume, kept by this browser and applied at once. It changes nothing but the
+   *  gain: the buffer, the sequence and what the station sends are the same at every volume. */
+  setVolume(db: number): void {
+    const level = listenVolume(db)
+    if (level === this.level) return
+    try { this.env.volume?.save(level) } catch { /* this session only */ }
+    this.level = level
+    this.playback?.gain?.(listenGain(level))
+    for (const f of this.listeners) f()
+  }
 
   /** Ask the station to start feeding this browser. `leaseId` is the browser's claim to
    *  station control; the station re-checks it against its own authority and refuses a
@@ -118,7 +145,7 @@ export class AudioLink {
     if (this.closed) return
     if (!this.view.supported) { this.set('unsupported', 'audioUnsupported'); return }
     if (this.phase !== 'off' && this.phase !== 'ended') return
-    this.expected = null; this.epoch = null; this.frames = 0
+    this.expected = null; this.epoch = null; this.frames = 0; this.outputs = 0; this.holes = []
     this.heardAt = this.env.now()
     this.set('connecting', null)
     if (!this.tell({ type: 'audioListen', listening: true, leaseId })) { this.set('ended', 'audioUnavailable'); return }
@@ -213,13 +240,16 @@ export class AudioLink {
     } else if (this.phase === 'connecting' || this.phase === 'gap' || this.phase === 'stalled') {
       this.set('live', null)
     }
-    void this.play(bundle.payload, bundle.count)
+    void this.play(bundle.payload, bundle.count, concealed)
     return true
   }
 
-  private async play(payload: string, count: number): Promise<void> {
+  private async play(payload: string, count: number, lost: number): Promise<void> {
     await this.opening
     if (!this.decoder || this.closed) return
+    // The lost frames' place: before this bundle's first frame. Played straight on instead, the
+    // lost audio came out of the buffer and came back seconds later as an underrun.
+    if (lost > 0) this.holes.push({ at: this.frames, frames: lost })
     let packets: Uint8Array[]
     try {
       const bytes = Uint8Array.from(atob(payload), character => character.charCodeAt(0))
@@ -247,6 +277,7 @@ export class AudioLink {
       if (this.phase === 'off' || this.closed) { void playback.close(); return }
       this.playback = playback
       playback.mute?.(this.muted)
+      playback.gain?.(listenGain(this.level))
       const decoder = this.env.decoder({
         output: frame => this.rendered(frame),
         error: () => this.fail('audioUnavailable'),
@@ -263,6 +294,11 @@ export class AudioLink {
     try {
       const playback = this.playback
       if (!playback) return
+      while (this.holes.length && this.holes[0].at <= this.outputs) {
+        const hole = this.holes.shift()!
+        playback.gap?.(Math.round((hole.frames * AUDIO_FRAME_MS * playback.sampleRate) / 1000))
+      }
+      this.outputs++
       const samples = new Float32Array(frame.frames)
       frame.copyTo(samples, { planeIndex: 0, format: 'f32-planar' })
       // The context's rate is a REQUEST, not a guarantee, so it is read back and adapted
@@ -294,6 +330,7 @@ export class AudioLink {
     this.playback?.reset()
     try { this.decoder?.close() } catch { /* already closed */ }
     this.decoder = null
+    this.holes = []
     const playback = this.playback
     this.playback = null
     this.opening = null
@@ -312,6 +349,22 @@ export class AudioLink {
  *  but the wire shape states one, so a stop carries a well-formed placeholder rather than
  *  a second message shape nobody else uses. */
 const BLANK_LEASE = '00000000-0000-0000-0000-000000000000'
+
+/** The listener's volume in whole dB, inside what the control offers. Anything unreadable - nothing
+ *  stored yet, a value from another version, a typo - is the default, never silence or a blast. */
+export function listenVolume(value: unknown): number {
+  const db = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+  if (!Number.isFinite(db)) return AUDIO_VOLUME_DB.default
+  return Math.min(AUDIO_VOLUME_DB.max, Math.max(AUDIO_VOLUME_DB.min, Math.round(db)))
+}
+
+/** dB of volume to the multiplier the player applies. */
+export function listenGain(db: number): number {
+  return 10 ** (db / 20)
+}
+
+/** Where a browser keeps the listener's volume. */
+const VOLUME_KEY = 'nexus.remote.listenVolume'
 
 /** Fixed-ratio linear interpolation, for the uncommon device that is not at 48 kHz. Not
  *  adaptive and never driven by buffer depth: the ratio is a property of the hardware. */
@@ -372,6 +425,7 @@ export function browserAudio(): AudioEnvironment {
           prefill: Math.ceil((rate * AUDIO_PREFILL_MS) / 1000),
           ceiling: Math.ceil((rate * AUDIO_CEILING_MS) / 1000),
           level: AUDIO_BED_LEVEL,
+          peak: AUDIO_PEAK,
         },
       })
       // Through a gain the page can close to silence while the operator's own over is on the air.
@@ -387,9 +441,12 @@ export function browserAudio(): AudioEnvironment {
         push: samples => node.port.postMessage({ pcm: samples.buffer }, [samples.buffer]),
         reset: () => node.port.postMessage({ reset: true }),
         mute: muted => { gain.gain.value = muted ? 0 : 1 },
+        gain: linear => node.port.postMessage({ gain: linear }),
+        gap: samples => node.port.postMessage({ gap: samples }),
         close: async () => { node.disconnect(); gain.disconnect(); await context.close() },
       }
     },
     document: typeof document === 'undefined' ? undefined : document,
+    volume: { load: () => localStorage.getItem(VOLUME_KEY), save: db => localStorage.setItem(VOLUME_KEY, String(db)) },
   }
 }

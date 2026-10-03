@@ -144,6 +144,7 @@ export const JA: PartialCatalog = {
   "remote.b3.potaAlertsStale": "局に新しいPOTAスポットが今ありません。局のPOTAボードまたは地図が更新すると通知を再開します。",
   "remote.audio.start": "受信音を聞く",
   "remote.audio.stop": "受信音を止める",
+  "remote.audio.volume": "音量",
   "remote.audio.connecting": "音声を接続中",
   "remote.audio.live": "局の受信音を聞いています",
   "remote.audio.gap": "音声の欠落 - 回線がパケットを落としています",

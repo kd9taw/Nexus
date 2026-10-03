@@ -2,8 +2,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { AudioListen } from './AudioListen'
-import { AudioLink } from './audio-listen'
+import { AudioLink, browserAudio } from './audio-listen'
 import type { AudioEnvironment } from './audio-listen'
+import { AUDIO_VOLUME_DB } from './audio-worklet'
 import { OperationClient } from './operation-client'
 import { pendingControlStorage } from './control-storage'
 import type { ControlCapability } from './station-operation'
@@ -167,6 +168,34 @@ it("shows the station's own word for why it stopped, and offers a start again", 
   // operator told only that it ended has nothing to press.
   expect(screen.getByRole('button', { name: 'Listen' })).toBeTruthy()
   expect(screen.queryByRole('status')).toBeNull()
+})
+
+it('offers a volume while listening, reads it out in dB, and turns the sound up or down at once', async () => {
+  const h = fixture()
+  // Nothing to turn before there is anything to hear.
+  expect(screen.queryByRole('slider')).toBeNull()
+  await act(async () => { fireEvent.click(listen()) })
+  const volume = screen.getByRole('slider', { name: 'Volume' }) as HTMLInputElement
+  expect(volume.value).toBe(String(AUDIO_VOLUME_DB.default))
+  expect(volume.getAttribute('aria-valuetext')).toBe(`+${AUDIO_VOLUME_DB.default} dB`)
+  await act(async () => { fireEvent.change(volume, { target: { value: '30' } }) })
+  expect(h.link.volume).toBe(30)
+  expect((screen.getByRole('slider', { name: 'Volume' }) as HTMLInputElement).value).toBe('30')
+  expect(screen.getByRole('slider', { name: 'Volume' }).getAttribute('aria-valuetext')).toBe('+30 dB')
+  // Stopping takes the control away and keeps the choice.
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Stop listening' })) })
+  expect(screen.queryByRole('slider')).toBeNull()
+  expect(h.link.volume).toBe(30)
+})
+
+it('keeps the volume in this browser, so the next listen starts where this one was left', () => {
+  localStorage.removeItem('nexus.remote.listenVolume')
+  const first = new AudioLink(() => {}, browserAudio())
+  expect(first.volume).toBe(AUDIO_VOLUME_DB.default)
+  first.setVolume(33)
+  expect(new AudioLink(() => {}, browserAudio()).volume).toBe(33)
+  localStorage.removeItem('nexus.remote.listenVolume')
+  expect(new AudioLink(() => {}, browserAudio()).volume).toBe(AUDIO_VOLUME_DB.default)
 })
 
 function bundle(seq: number) {
