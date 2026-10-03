@@ -70,14 +70,21 @@ Remote lets you use this station from a web browser. It is an early pilot on a t
 service that may be reset. The shack PC keeps the radio and stays in charge: what
 you click and type in the browser goes to the station, the browser shows what the
 station reports back, and your log, settings and radio never leave this computer.
+Remote streaming is a beta feature, and access could be revoked at any time; the card says
+so beside its switch. The card holds the streaming switch, where the station stands with
+the Remote service, and your browsers with their keys. The pairing's transmit option and
+the per-browser permissions are folded under **Advanced**.
 
 **Pairing.** Give the station a **Station name** and start **Pair a station**. In the
 browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
 that starts the account's 14-day trial, turns Remote on, and approves the browser you
-paired from. Tick **Also allow FT8/FT4 transmit** first if that browser should be able to
-transmit. Any other browser requests its own approval; compare its name and code before
-**Approve browser**, which has the same transmit tick.
+paired from. Tick **Also allow FT8/FT4 transmit** (under **Advanced**) first if that browser
+should be able to transmit. Any other browser asks with the Remote site's **Stream** button,
+and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this station?**,
+with the browser's key. Approve it only if the key matches the one the browser shows.
+**Approve** there is **Approve browser** without the transmit tick; **Deny** refuses the
+request, and Escape closes the question and answers nothing.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
 forwarding is required. Pairing stays in the operating system's credential store, and
@@ -95,8 +102,8 @@ say yes.
 station controls and remote logging, and FT8/FT4 transmit too when the approval's transmit
 box is ticked. All of it is kept when Nexus restarts, until you revoke it, for as long as
 that browser stays approved: a browser whose approval was revoked, or given again, starts
-with nothing kept. The switches under each approved browser limit it, or give a
-permission back. Without any of these it can watch the station but not change it.
+with nothing kept. The switches under each approved browser, under **Advanced**, limit it,
+or give a permission back. Without any of these it can watch the station but not change it.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
@@ -110,7 +117,7 @@ permission back. Without any of these it can watch the station but not change it
   within five seconds, and **Revoke transmission permission** stops it at once. Without
   the stream below, no other mode transmits remotely.
 
-**Stream this window to an approved browser** is off by default, and on Windows only for
+**Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
 shown this Nexus window and operate it, and hear the station's receive audio. Only this
 window is sent: a dialog that opens outside it, such as a file picker, is not, and a

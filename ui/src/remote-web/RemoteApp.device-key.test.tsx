@@ -26,7 +26,7 @@ function account(): AccountSession {
 }
 function client(session: AccountSession) {
   const post = vi.fn(async (_path: string, _body?: object): Promise<unknown> => structuredClone(session))
-  const service = { post, authenticated: async () => true, signIn: vi.fn(async () => {}), signOut: vi.fn(async () => {}), signInRefusal: null }
+  const service = { post, authenticated: async () => true, signIn: vi.fn(async () => {}), signOut: vi.fn(async () => {}), signInRefusal: null, streamVersion: 1 }
   vi.spyOn(BrowserClient, 'load').mockResolvedValue(service as unknown as BrowserClient)
   return service
 }
@@ -43,14 +43,13 @@ it('A5: asks for its device with its key, and shows the key while it waits, for 
     return structuredClone(session)
   })
   render(<RemoteApp />)
-  const input = await screen.findByLabelText('Name this browser')
-  fireEvent.change(input, { target: { value: 'Laptop' } })
-  fireEvent.submit(input.closest('form')!)
+  // Stream is the ask: the browser names itself, so there is nothing to type first.
+  fireEvent.click(await screen.findByRole('button', { name: 'Stream' }))
   const key = (await deviceKey(stationId))!
   // The one request that makes the device carries the key: nothing has to be sent after it.
-  await waitFor(() => expect(devicePosts(service.post)).toEqual([[`stations/${stationId}/device`, { name: 'Laptop', publicKey: key.publicKey }]]))
-  expect(await screen.findByText(new RegExp(`This browser’s key: ${shortFingerprint(key.fingerprint)}`))).toBeTruthy()
-  expect(screen.getByText(/shows the same key beside this browser/)).toBeTruthy()
+  await waitFor(() => expect(devicePosts(service.post)).toEqual([[`stations/${stationId}/device`, { name: 'Web browser', publicKey: key.publicKey }]]))
+  // While it waits, the card says what the shack asks, with the same key, to compare.
+  expect(await screen.findByText(new RegExp(`Approve it if it shows this key: ${shortFingerprint(key.fingerprint)}\\.$`))).toBeTruthy()
   expect(devicePosts(service.post), 'no second request').toHaveLength(1)
 })
 

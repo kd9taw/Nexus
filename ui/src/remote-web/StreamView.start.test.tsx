@@ -17,8 +17,8 @@ const READY = 'Ready. Start the stream to see and operate Nexus at the shack.'
 const WAITING = 'Waiting for the station…'
 const STARTING = 'Starting the stream…'
 const REFUSED = "The station couldn't start the stream just now. Start the stream again."
-const PERMISSION = 'Station control is off for this browser. Allow it in Nexus at the station (Settings → Station → Remote access), then start the stream.'
-const OCCUPIED = 'Another browser controls the station. The stream can start once it lets go.'
+const PERMISSION = 'Station control is off for this browser. Allow it in Nexus at the shack (Settings → Station → Remote access → Advanced), then try again.'
+const OCCUPIED = 'Another browser is using this station. You can start once it lets go.'
 
 const clients: OperationClient[] = []
 afterEach(() => { cleanup(); clients.splice(0).forEach(c => c.disconnected()); vi.useRealTimers() })

@@ -221,6 +221,10 @@ const SHARED = [
   // same reason (remote-web/useRareDxAlerts, remote-web/usePotaAlerts).
   'nexus.remote.potaAlerts',
   'nexus.remote.rareDxAlerts',
+  // The Remote page's flag that shows the old watch/control workspace again, hidden while streaming
+  // is proven (remote-web/RemoteApp, 2026-10-02). Set by hand or by the compiled sweep, for the whole
+  // browser: SHARED, like the alert opt-ins.
+  'nexus.remote.workspace',
   'nexus.operate.tuneStep',
   'nexus.panels.wfDetached.v1',
   'nexus.phone.tuneStep',

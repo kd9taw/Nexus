@@ -5,7 +5,10 @@ import { BrowserClient, HostedConnection, RemoteError } from './client'
 import type { AccountSession } from './client'
 import { RemoteApp } from './RemoteApp'
 
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.removeItem(WORKSPACE_FLAG) })
+// The old watch/control workspace and observer are hidden behind this flag while streaming is proven;
+// the tests of those views set it, which is how the hidden workspace stays covered.
+const WORKSPACE_FLAG = 'nexus.remote.workspace'
 function account(entitled = true): AccountSession {
   const accountId = crypto.randomUUID()
   const now = Date.now()
@@ -243,13 +246,13 @@ it('browser enrollment displays the local comparison code and does not imply app
     if (path.endsWith('/device')) session.stations[0].device = { id: deviceId, name: 'Test browser', approved: 0 }
     return { ...session, stations: session.stations.map(station => ({ ...station })) }
   })
+  localStorage.setItem(WORKSPACE_FLAG, 'on')
   render(<RemoteApp />)
-  const input = await screen.findByLabelText('Name this browser')
-  fireEvent.change(input, { target: { value: 'Test browser' } })
-  fireEvent.submit(input.closest('form')!)
-  await screen.findByText(deviceId.slice(-6))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
+  await screen.findByText(`Browser code: ${deviceId.slice(-6)}`)
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
-  expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, { name: 'Test browser' })
+  expect(screen.queryByRole('button', { name: 'Listen' })).toBeNull()
+  expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, { name: 'Web browser' })
 })
 
 // Before sign-in there is no station to list, so the page is the product's front door: its name, one
@@ -289,7 +292,7 @@ it('shows how long this browser stays approved, and warns in its last seven days
       expires_at: session.serverNow + expires * day, renewsUntil: cap === null ? null : session.serverNow + cap * day } })
     client(session)
     render(<RemoteApp />)
-    await screen.findByRole('button', { name: 'Open Nexus' })
+    await screen.findByRole('button', { name: 'Listen' })
     const text = document.body.textContent ?? ''
     expect(text, label).toContain(`This browser is approved until ${date(session.serverNow + expires * day)} UTC`)
     if (cap !== null) expect(text, label).toContain(`up to ${date(session.serverNow + cap * day)} UTC`)
@@ -436,7 +439,7 @@ it('tells an approved browser that signing out does not remove its approval', as
   pending.stations.push({ id: crypto.randomUUID(), name: 'Home', device: null })
   client(pending)
   render(<RemoteApp />)
-  await screen.findByLabelText('Name this browser')
+  await screen.findByText(/isn't approved for this station yet/)
   // Control: nothing approved, nothing to remove.
   expect(screen.queryByText(/signing out keeps this browser approved/i)).toBeNull()
   cleanup()
@@ -453,6 +456,7 @@ function openableStation() {
   const session = account()
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
   const service = client(session)
+  localStorage.setItem(WORKSPACE_FLAG, 'on')
   let refuse: ((error: RemoteError) => void) | undefined
   vi.spyOn(HostedConnection.prototype, 'start').mockImplementation(function (this: HostedConnection) {
     refuse = error => this.onRefused?.(error)
@@ -475,7 +479,9 @@ it('goes back to the stations page and names the end when an open session is ref
   act(() => h.refuse(new RemoteError(403, 'trialRequired')))
   expect((await screen.findByRole('alert')).textContent).toMatch(/Remote access to this station ended/)
   expect(screen.getByRole('heading', { name: 'Your stations' })).toBeTruthy()
-  expect(await screen.findByText(/Your trial ended/)).toBeTruthy()
+  // Said where the trial is said, and on the station's card beside its greyed Stream and Listen.
+  await waitFor(() => expect(document.querySelector('.remote-site-status--stopped')?.textContent).toMatch(/Your trial ended/))
+  expect(document.querySelector('.remote-station-state')?.textContent).toMatch(/^Your trial ended/)
   expect(screen.queryByText(/check the connection|check that Nexus is running/i)).toBeNull()
   expect(h.stop).toHaveBeenCalled()
 })

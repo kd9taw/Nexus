@@ -9,8 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Remote as a stream, the station's half (Windows, off by default).** With **Stream this window
-  to an approved browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
+- **Remote: one way into streaming.** Each station card on the Remote site now has one big
+  **Stream** button and a small **Listen** for the station's audio alone, and says in one
+  sentence where this browser stands and what to do next. Stream starts the stream straight
+  away, with no second button to press. A browser that is not approved yet asks with that same
+  Stream button, under its own name (such as "Chrome on Windows"), and Nexus at the shack pops
+  up **Let Chrome on Windows stream this station?** with the browser's key, the same key the site
+  shows, and **Approve** or **Deny**: no hunting through Settings. Approve gives what approving in
+  Settings gives with the transmit tick off. The question never approves by default: Deny holds
+  the keyboard, so Enter alone denies, Escape answers nothing, and Approve takes no click for its
+  first second. The stream page now also says when the station is not online, when streaming is
+  off at the shack (naming the switch), when another browser is streaming, and when the shack is
+  asking to approve this browser, with its key. Settings ▸ Station ▸ Remote access is one card:
+  the streaming switch, renamed **Stream this station from my browser**, where the station stands
+  with the Remote service, and your browsers with their keys and Approve or Remove; the pairing's
+  transmit option and the per-browser permissions fold under **Advanced**, unchanged. Remote
+  streaming is marked **Beta** on the card, on every station card and on the stream page:
+  access could be revoked at any time. The old watch-and-control workspace is hidden on the site
+  while streaming is proven; its code stays. Leases, permits, heartbeats, the stop rules and what
+  an approval grants are unchanged.
+- **Remote as a stream, the station's half (Windows, off by default).** With **Stream this
+  station from my browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
   station controls, while it holds control, can be shown this Nexus window and operate it, and
   hear the station's receive audio. Only the Nexus window is sent, cropped to its contents: a
   dialog that opens outside it, such as a file picker, is not, and a minimized window sends
@@ -20,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection drops, and within seven if its picture freezes. The picture is VP8 over encrypted
   WebRTC, at most 30 frames a second.
 - **Remote: stream Nexus from the shack (first test build).** Each station on the Remote page has
-  a **Stream Nexus** button: the Nexus window at the shack, live in your browser, worked with your
+  a **Stream** button: the Nexus window at the shack, live in your browser, worked with your
   own mouse and keyboard. It needs a Nexus at the shack with streaming turned on, and the page says
   so when that is missing. Only the Nexus window is sent,
   never the rest of the PC's screen, and what you click and type reaches Nexus and no other

@@ -184,6 +184,36 @@ describe('on a Windows station', () => {
   })
 })
 
+// Remote streaming is a beta (the operator, 2026-10-02: "we need a clear warning that this is a beta
+// feature in nexus and access could be revoked at any time"): a visible mark and one plain line, in the
+// Remote access card beside the streaming switch, never behind a click.
+describe('the beta line', () => {
+  const BETA = `${EN['remote.beta.mark']} ${EN['remote.beta.notice']}`
+  const line = () => document.getElementById('settings-remote-access')?.querySelector('.remote-beta') ?? null
+  it('is in the Remote access card, in words, just before the streaming switch', async () => {
+    renderPanel()
+    await openStationTab()
+    const sw = await waitFor(() => theSwitch()!)
+    expect(line()?.textContent).toBe(BETA)
+    expect(line()!.compareDocumentPosition(sw) & Node.DOCUMENT_POSITION_FOLLOWING, 'the line comes before the switch').toBeTruthy()
+    // Nothing between them but the switch's own row: it is beside the switch, not elsewhere in the card.
+    expect(line()!.nextElementSibling?.contains(sw)).toBe(true)
+  })
+  it('is there on a station that cannot stream yet, too', async () => {
+    platform.windows = false
+    renderPanel()
+    await openStationTab()
+    await waitFor(() => expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy())
+    expect(line()?.textContent).toBe(BETA)
+  })
+  it('is not on the Remote page\'s copy of Settings, which streams nothing (the site says it on each station)', async () => {
+    renderPanel(true)
+    await openStationTab()
+    await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
+    expect(line()).toBeNull()
+  })
+})
+
 describe('where the switch is not offered', () => {
   it('explains on a station that cannot capture its window, instead of a dead switch', async () => {
     platform.windows = false

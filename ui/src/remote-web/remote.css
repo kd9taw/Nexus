@@ -37,3 +37,26 @@
 .remote-session-info .remote-feed { display: none; }
 [data-viewport='xs'] .remote-session-row .remote-feed { display: none; }
 [data-viewport='xs'] .remote-session-info .remote-feed { display: flex; }
+
+/* The beta mark and its line (the operator, 2026-10-02: Remote streaming is a beta, and access could
+   be revoked at any time): on the Remote access card in Nexus, every station card and the stream
+   page. Plain text in the page's own colours, with a small outlined mark; never behind a click. */
+.remote-beta { margin: 0; color: var(--text-dim); font-size: var(--fs-label, 12px); overflow-wrap: anywhere; }
+.remote-beta-mark {
+  display: inline-block; margin-right: 4px; padding: 0 6px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  color: var(--accent); font-size: .85em; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; vertical-align: 1px;
+}
+
+/* Settings ▸ Remote access: the browsers, one row each (name, key, where it stands, its action), and
+   the old panel's options folded under Advanced. */
+.remote-native-browsers { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.remote-native-browser { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.remote-native-browser-name { font-weight: 600; overflow-wrap: anywhere; }
+.remote-native-browser-key { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.remote-native-browser-state { flex: 1 1 16em; min-width: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+.remote-native .remote-native-browser .remote-actions { margin-top: 0; gap: 8px; }
+.remote-native-advanced { display: grid; gap: 8px; min-width: 0; }
+
+/* The question at the shack: the key large enough to compare group by group with the browser's. */
+.remote-approval-key { margin: 12px 0; }
+.remote-approval-key code { font-family: var(--font-mono); font-size: 1.5em; font-weight: 700; letter-spacing: .08em; overflow-wrap: anywhere; }

@@ -47,12 +47,12 @@ export function AudioListen({ audio, client }: { audio: AudioLink; client?: Oper
     {/* The state is its own line and it never disappears while listening: "connecting",
         "live", "gap" and "stalled" are four different things to do about it, and a
         control that only said on/off would make a dead link look like a dead band. */}
-    {on && <span className={`remote-audio-state remote-audio-state--${view.phase}`} role="status">{caption(view.phase)}</span>}
-    {view.phase === 'ended' && <span className="remote-audio-state remote-audio-state--ended" role="alert">{ended(view.reason)}</span>}
+    {on && <span className={`remote-audio-state remote-audio-state--${view.phase}`} role="status">{audioCaption(view.phase)}</span>}
+    {view.phase === 'ended' && <span className="remote-audio-state remote-audio-state--ended" role="alert">{audioEnded(view.reason)}</span>}
   </span>
 }
 
-function caption(phase: AudioPhase): string {
+export function audioCaption(phase: AudioPhase): string {
   return phase === 'connecting' ? t('remote.audio.connecting')
     : phase === 'gap' ? t('remote.audio.gap')
     : phase === 'stalled' ? t('remote.audio.stalled')
@@ -60,7 +60,7 @@ function caption(phase: AudioPhase): string {
 }
 /** Written out rather than looked up in a map: the catalog's orphan check scans for
  *  literal t() calls, so a dynamic lookup reads as "nobody uses these keys". */
-function ended(reason: string | null): string {
+export function audioEnded(reason: string | null): string {
   return reason === 'sourceChanged' ? t('remote.audio.sourceChanged')
     : reason === 'audioInUse' ? t('remote.audio.inUse')
     : reason === 'notController' ? t('remote.audio.notController')
