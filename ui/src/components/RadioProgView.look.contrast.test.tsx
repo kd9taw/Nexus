@@ -24,6 +24,7 @@ import {
   baseTheme,
   withRoles,
   chainOf,
+  compoundMatches,
   contrast,
   expandWith,
   parseRules,
@@ -35,6 +36,7 @@ import {
   type El,
   type Mode,
   type Rgb,
+  type Rule,
 } from '../cssCascade'
 
 const api = vi.hoisted(() => {
@@ -159,8 +161,27 @@ function once<T>(key: string, make: () => T): T {
   return memo.get(key) as T
 }
 const keyOf = (mode: Mode, at: El[]) => `${mode}|${JSON.stringify(at)}`
-const tokens = (mode: Mode, at: El[]) => once(`t|${keyOf(mode, at)}`, () => tokensAt(RULES, mode, at))
-const win = (mode: Mode, at: El[], ...props: string[]) => once(`w|${keyOf(mode, at)}|${props.join()}`, () => winnerAt(RULES, mode, at, ...props))
+/** The compound a rule puts on the element itself, split off its selector the way reachesChain splits it. */
+const SUBJECT = new WeakMap<Rule, string | undefined>()
+function subjectOf(rule: Rule): string | undefined {
+  if (!SUBJECT.has(rule)) SUBJECT.set(rule, rule.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop())
+  return SUBJECT.get(rule)
+}
+/** The rules that can win `props` on `el`: those that declare one and whose subject matches `el` (reachesChain gives up on any
+ *  other before it reads an ancestor or the theme), cut once per element instead of once per theme, as NativeControls.contrast
+ *  does; winnerAt over the cut names the same winner as over every rule. The word-by-word walk over every rule took 107-123 s
+ *  of its 120 s budget in the full suite (2026-10-03). */
+const cutFor = (el: El, props: string[]) => once(`c|${JSON.stringify(el)}|${props.join()}`, () =>
+  RULES.filter((r) => {
+    const subject = subjectOf(r)
+    return r.decls.some((d) => props.includes(d.prop)) && !!subject && compoundMatches(subject, el)
+  }),
+)
+/** Only a rule that declares a custom property can set one: tokensAt over those alone gives the same tokens. */
+const TOKEN_RULES = RULES.filter((r) => r.decls.some((d) => d.prop.startsWith('--')))
+const tokens = (mode: Mode, at: El[]) => once(`t|${keyOf(mode, at)}`, () => tokensAt(TOKEN_RULES, mode, at))
+const win = (mode: Mode, at: El[], ...props: string[]) =>
+  once(`w|${keyOf(mode, at)}|${props.join()}`, () => winnerAt(cutFor(at[at.length - 1], props), mode, at, ...props))
 const BLANK = /^(inherit|transparent|none|initial|unset)$/i
 const colourOf = (mode: Mode, at: El[], value: string, under: Rgb): Rgb => {
   const c = toRgb(expandWith(tokens(mode, at), value), under)
