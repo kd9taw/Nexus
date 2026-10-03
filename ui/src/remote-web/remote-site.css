@@ -292,6 +292,14 @@
 }
 .remote-site .remote-button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ── A station card's two ways in: Stream, the one big amber thing to do, and a small Listen beside
+   it (the operator, 2026-10-02: "one big "Stream" button and a small "Listen" for audio only"). */
+/* The floor yields: on a phone at 175% zoom a card is narrower than 12rem. */
+.remote-site .remote-button.remote-station-stream { min-width: min(12rem, 100%); min-height: 3.25rem; padding: 0.75rem 2rem; font-size: 1rem; }
+.remote-site .remote-station-state { margin: 0; }
+.remote-site .remote-beta { color: var(--rs-muted); font-size: 0.8125rem; }
+.remote-site .remote-beta-mark { border-color: var(--rs-ink); color: var(--rs-ink); border-radius: var(--rs-radius-control); font-family: var(--font-mono); }
+
 /* ── Disclosures: a ▸ in the site's signal green that turns when open. */
 .remote-site details > summary {
   display: flex;
@@ -351,6 +359,8 @@
    quiet Rename stays beside the station name. */
 [data-viewport='xs'] .remote-site .remote-actions > .remote-button:not(.remote-button--quiet),
 [data-viewport='xs'] .remote-site .remote-section form > .remote-button { flex: 1 1 100%; justify-self: stretch; }
+/* …except Listen, which stays the small one beside the full-width Stream. */
+[data-viewport='xs'] .remote-site .remote-station-actions > .remote-button.remote-station-listen { flex: 0 1 auto; }
 
 /* Motion: follow the OS preference, and Nexus's own forced reduce. */
 @media (prefers-reduced-motion: reduce) {

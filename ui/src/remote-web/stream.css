@@ -75,5 +75,8 @@
 }
 .remote-stream-idle p { margin: 0; max-width: 32em; overflow-wrap: anywhere; }
 
+/* The beta line closes the header, on a row of its own: on screen the whole time the page is. */
+.remote-stream-beta { flex: 1 1 100%; }
+
 [data-viewport='xs'] .remote-stream-header { padding: 6px 8px; }
 [data-viewport='xs'] .remote-stream-status { flex-basis: 100%; }

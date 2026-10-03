@@ -187,6 +187,7 @@ import { RoamPanel } from './components/RoamPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
 import { ConfirmHost, confirmDialog } from './confirm'
+import { RemoteApprovalPrompt } from './remote-native/RemoteApprovalPrompt'
 import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
@@ -3767,6 +3768,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       {/* Quitting while the logbook is still saving: the station holds this window and says so
           here (src-tauri quit.rs). The desktop's alone — a browser has no quit to report. */}
       {!remote && <LogbookSaving />}
+      {/* A browser asking to stream this station: Nexus asks here, with the browser's key, wherever
+          the operator is in the app (src/remote-native/RemoteApprovalPrompt.tsx). The shack's alone. */}
+      {!remote && <RemoteApprovalPrompt />}
       <Announcer />
 
       {radioPicker?.showPicker && (

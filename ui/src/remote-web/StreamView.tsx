@@ -2,13 +2,15 @@ import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } fro
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { initialState, startMonitor } from '../remote-monitor/session'
-import { AudioListen } from './AudioListen'
+import { AudioListen, audioCaption, audioEnded } from './AudioListen'
+import { BetaNote } from './BetaNote'
 import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
 import type { StopTarget, StreamLink, StreamView as LinkView } from './stream-link'
-import type { StreamKey, StreamPointer } from './stream-protocol'
+import type { AudioView } from './audio-listen'
+import { shortFingerprint, type StreamKey, type StreamPointer } from './stream-protocol'
 import '../remote-monitor/monitor.css'
 import './remote.css'
 import './stream.css'
@@ -19,6 +21,11 @@ import './stream.css'
 const STOP_TX = 'Stop TX'
 const TX = '▲ TX'
 const BRAND = 'Nexus'
+// How long a connection may take before the page says the station is not online. The relay refuses a
+// browser whose station is not connected (`stationOffline`) before the session starts, and a browser
+// cannot read why a socket was refused, so a session that has not started by now is reported as the
+// station being away; the connection keeps retrying underneath and the sentence goes when it lands.
+const OFFLINE_MS = 8000
 
 /** The stream: Nexus at the shack as a picture, operated with this browser's mouse and keyboard.
  *
@@ -27,14 +34,28 @@ const BRAND = 'Nexus'
  *  always on screen while this view is, outside the picture, and reaches the station two ways at
  *  once - on the stream's own control channel and on the observe socket - so a stream that has
  *  frozen or died still leaves a way to unkey the rig. */
-export function StreamView({ connection, station, disconnect, signOut }: {
+export function StreamView({ connection, station, disconnect, signOut, autostart = false, browserKey = null, mode = 'stream' }: {
   connection: HostedConnection; station: string; disconnect: () => void; signOut: () => void
+  /** Opened by the station card's Stream or Listen: that press is the operator asking, so the view
+   *  starts once, the first moment Start could be pressed, and never again on its own. */
+  autostart?: boolean
+  /** This browser's device key for the station (its fingerprint), for the approval sentence. */
+  browserKey?: string | null
+  /** `listen`: the station's receive audio with no picture, under the same lease, Stop and checks. */
+  mode?: 'stream' | 'listen'
 }) {
   useViewport(1, true)
   const operations = connection.operations, link = connection.stream
   const ops = useSyncExternalStore(operations.subscribe, operations.getSnapshot)
   const stream = useSyncExternalStore(link.subscribe, link.getSnapshot)
   const [observation, setObservation] = useState(initialState)
+  const listen = mode === 'listen'
+  // Listen's audio is the relay's audio lane, the one the workspace's Listen used; the stream's own
+  // audio rides its WebRTC channel and is the stream's.
+  const relayAudio = connection.audio
+  const heard = useSyncExternalStore(listen ? relayAudio.subscribe : idleSubscribe, listen ? relayAudio.getSnapshot : idleAudio)
+  const audioOn = heard.phase === 'connecting' || heard.phase === 'live' || heard.phase === 'gap' || heard.phase === 'stalled'
+  const offline = useOffline(ops.connected)
   useEffect(() => startMonitor(connection.source, setObservation), [connection.source])
   const [wanted, setWanted] = useState(false)
   // The last stream ended because nobody answered "Still there?".
@@ -60,8 +81,21 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   // operator's request is CONSUMED by the start, so a stream that ends - the station said so, control
   // went, the link failed - stays ended until they ask again; it is never re-offered on its own.
   useEffect(() => {
-    if (wanted && lease && (stream.phase === 'idle' || stream.phase === 'ended')) { setWanted(false); void link.start(lease) }
-  }, [wanted, lease, stream.phase, link])
+    if (listen || !(wanted && lease && (stream.phase === 'idle' || stream.phase === 'ended'))) return
+    setWanted(false); void link.start(lease)
+  }, [listen, wanted, lease, stream.phase, link])
+  // Listen's half: the audio starts under the held lease. A browser may refuse sound that a press did
+  // not start just now (Safari keeps it for the press itself), so it starts here only while that press
+  // is still the browser's current activation; otherwise the lease is held and Listen waits for a press.
+  useEffect(() => {
+    if (!listen || !wanted || !lease || audioOn) return
+    setWanted(false)
+    if (pressStillCurrent()) relayAudio.listen(lease)
+  }, [listen, wanted, lease, audioOn, relayAudio])
+  // Listening is given under station control, so losing control ends it at once (AudioListen's rule,
+  // on the same reading of the lease): the station stops on its own re-check too.
+  const audioLease = state?.phase === 'controlling' ? state.leaseId : null
+  useEffect(() => { if (listen && audioOn && !audioLease) relayAudio.release('notController') }, [listen, audioOn, audioLease, relayAudio])
   // Control gone - released, taken over, or the socket lost - ends the stream here at once, rather
   // than on the station's word a moment later.
   useEffect(() => { if (running && controlling === false) link.close('notController') }, [running, controlling, link])
@@ -69,6 +103,7 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   useInput(video, connection, stream.phase === 'live')
 
   const start = () => {
+    if (listen && lease) { relayAudio.listen(lease); return }
     setWanted(true)
     setIdled(false)
     setRefused(null)
@@ -80,13 +115,28 @@ export function StreamView({ connection, station, disconnect, signOut }: {
     })
   }
   const end = () => { setWanted(false); link.close(); void operations.release() }
+  // The card's press, carried in: the view starts the first moment Start could be pressed. A station
+  // that refuses (control off for this browser, another browser in control) consumes it, and the page
+  // says why with Start beside it.
+  const autostarting = useRef(autostart)
+  const begin = useRef(start)
+  begin.current = start
+  useEffect(() => {
+    if (!autostarting.current || !ops.connected || !ops.fresh) return
+    if (state?.phase === 'occupied' || state?.phase === 'localPermissionRequired') { autostarting.current = false; return }
+    if ((state?.phase !== 'available' && state?.phase !== 'controlling') || (ops.busy && !ops.reading)) return
+    autostarting.current = false
+    begin.current()
+  }, [ops.connected, ops.fresh, ops.busy, ops.reading, state?.phase])
   // Unanswered, "Still there?" ends the stream as End the stream does, and says why afterwards.
   const asking = useStillThere(running, link, () => { end(); setIdled(true) })
   const stopTx = () => {
     link.stopTransmit(target)
     if (ops.stopAvailable) void operations.stopTransmit().catch(() => {})
   }
-  const status = statusLine(ops.connected, state?.phase ?? null, stream.phase, stream.reason, wanted, refused)
+  const status = statusLine(ops.connected, state?.phase ?? null, stream.phase, stream.reason, wanted, refused, offline, listen)
+  // The station offers its receive audio only from a build that has it (AudioListen's own rule).
+  const audioOffered = !!state?.controls?.capabilities.includes('audioListen')
   // M9: receive audio is MUTED, not ducked, while the operator's own over may be on the air. Derived
   // on every change - this page holding PTT, the station saying its over is keyed, or the observed
   // rig keyed - so it lets go on every way an over ends and can never stick.
@@ -130,20 +180,36 @@ export function StreamView({ connection, station, disconnect, signOut }: {
           onClick={() => void link.setMic(stream.mic !== 'on')}>
           {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
         {running && <button type="button" className="remote-button" onClick={end}>{t('remote.stream.end')}</button>}
+        {listen && audioOn && <button type="button" className="remote-button" onClick={() => relayAudio.release()}>{t('remote.audio.stop')}</button>}
         <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
         <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>
       </div>
+      <BetaNote className="remote-stream-beta" />
     </header>
     <main className="remote-stream-stage" aria-label={t('remote.stream.stage')}>
-      <video ref={video} className="remote-stream-video" tabIndex={0} muted autoPlay playsInline aria-label={t('remote.stream.picture')} />
+      {!listen && <video ref={video} className="remote-stream-video" tabIndex={0} muted autoPlay playsInline aria-label={t('remote.stream.picture')} />}
       {stream.phase === 'stalled' && <p className="remote-stream-stalled" role="alert">{t('remote.stream.stalled')}</p>}
       {/* The station's own word, on its last heartbeat reply: it is not holding transmit presence for
           this browser, whatever the picture here looks like (its clock says the picture is late). */}
       {stream.phase === 'live' && stream.presence === false && <p className="remote-stream-stalled" role="alert">{t('remote.stream.noPresence')}</p>}
       {running && <MicNotes stream={stream} identify={identify} />}
-      {stream.phase !== 'live' && stream.phase !== 'stalled' && <div className="remote-stream-placeholder">
+      {listen && <div className="remote-stream-placeholder">
+        {/* Listen: the station's receive audio and no picture. One sentence for where it stands, and
+            one button: Listen, or Stop listening while it plays. */}
+        <p role="status">{!heard.supported ? t('remote.audio.unsupported')
+          : audioOn ? audioCaption(heard.phase)
+          : (state?.phase === 'available' || state?.phase === 'controlling') && !audioOffered ? t('remote.listen.unavailable')
+          : status}</p>
+        {heard.phase === 'ended' && <p role="alert">{audioEnded(heard.reason)}</p>}
+        {!audioOn && heard.supported && audioOffered && (state?.phase === 'available' || state?.phase === 'controlling') &&
+          <button type="button" className="remote-button remote-button--primary" disabled={wanted || (ops.busy && !ops.reading)} onClick={start}>{t('remote.listen.open')}</button>}
+      </div>}
+      {!listen && stream.phase !== 'live' && stream.phase !== 'stalled' && <div className="remote-stream-placeholder">
         {!running && idled && <p role="note">{t('remote.stream.idle.ended')}</p>}
         <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
+        {/* A5: the station asks for this browser to be approved there with its key; this is the key to compare. */}
+        {!running && browserKey && (stream.reason === 'deviceNotPinned' || stream.reason === 'deviceKeyMismatch') && stream.phase === 'ended' &&
+          <p>{t('remote.thisBrowserKey', { key: shortFingerprint(browserKey) })}</p>}
         {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
         {!running && (state?.phase === 'available' || state?.phase === 'controlling') && <>
           {/* Lit through the once-a-second read, as Release is: a press then waits it out (acquire). */}
@@ -274,7 +340,8 @@ function useIdReminder(running: boolean, keyed: boolean): 'due' | 'end' | null {
 
 /** One sentence for where things stand. Written out rather than looked up in a map: the catalog's
  *  orphan check reads literal t() calls, so a lookup table reads as keys nobody uses. */
-function statusLine(connected: boolean, phase: string | null, stream: string, reason: string | null, wanted: boolean, refused: string | null): string {
+function statusLine(connected: boolean, phase: string | null, stream: string, reason: string | null, wanted: boolean, refused: string | null,
+  offline: boolean, listen: boolean): string {
   if (stream === 'live') return t('remote.stream.live')
   if (stream === 'stalled') return t('remote.stream.stalled')
   if (stream === 'connecting') return t('remote.stream.starting')
@@ -283,14 +350,38 @@ function statusLine(connected: boolean, phase: string | null, stream: string, re
   if (refused && connected && phase !== 'localPermissionRequired' && phase !== 'occupied') {
     return refused === 'localPermissionRequired' ? t('remote.stream.permission')
       : refused === 'controllerBusy' ? t('remote.stream.occupied')
-      : t('remote.stream.refused')
+      : listen ? t('remote.listen.refused') : t('remote.stream.refused')
   }
   if (stream === 'ended') return ended(reason)
-  if (!connected) return t('remote.stream.connecting')
+  // The station away (Nexus closed, Remote off, the PC asleep) and a slow link read the same from
+  // here; past OFFLINE_MS the first is the likely one, and it is the one with a next step.
+  if (!connected) return offline ? t('remote.stream.offline') : t('remote.stream.connecting')
   if (phase === null) return t('remote.stream.waiting')
   if (phase === 'localPermissionRequired') return t('remote.stream.permission')
   if (phase === 'occupied') return t('remote.stream.occupied')
+  if (listen) return wanted ? t('remote.audio.connecting') : t('remote.listen.ready')
   return wanted ? t('remote.stream.starting') : t('remote.stream.ready')
+}
+// The stream page never reads the relay's audio lane: Listen is its own view.
+const IDLE_AUDIO: AudioView = { phase: 'off', reason: null, supported: true }
+const idleSubscribe = () => () => {}
+const idleAudio = () => IDLE_AUDIO
+/** True once the page has gone OFFLINE_MS without a session; false again the moment it has one. */
+function useOffline(connected: boolean): boolean {
+  const [offline, setOffline] = useState(false)
+  useEffect(() => {
+    setOffline(false)
+    if (connected) return
+    const timer = setTimeout(() => setOffline(true), OFFLINE_MS)
+    return () => clearTimeout(timer)
+  }, [connected])
+  return offline
+}
+/** Whether the press that asked for sound is still the browser's current user activation. Where the
+ *  browser cannot say, the press is taken as current (the page starts sound as it always has). */
+function pressStillCurrent(): boolean {
+  const activation = (globalThis.navigator as (Navigator & { userActivation?: { isActive: boolean } }) | undefined)?.userActivation
+  return activation ? activation.isActive : true
 }
 function ended(reason: string | null): string {
   return reason === 'notController' ? t('remote.stream.ended.notController')

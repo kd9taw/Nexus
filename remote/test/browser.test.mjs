@@ -319,6 +319,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // Signed out, the page offers "Sign in" and "Create an account" (the site restyle); both open the
     // same SDK flow, so the PKCE exchange below is unchanged.
     await until(`!!${button('Sign in')}&&!!${button('Create an account')}`)
+    // The old watch/control workspace and observer are hidden behind a flag while streaming is proven
+    // (2026-10-02). Every scenario but the stream's sets it, which is how the hidden workspace stays
+    // covered here; the stream's runs without it and asserts the entry points are gone.
+    if(!stream)await evaluate(`localStorage.setItem('nexus.remote.workspace','on');true`)
     await geometry(390,844)
     await browser.call('Fetch.enable',{patterns:[{urlPattern:'https://identity.remote-test.invalid/*'}]},session)
     await click(button('Sign in'))
@@ -330,21 +334,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     assert.equal((await app.db.prepare('SELECT COUNT(*) AS count FROM devices WHERE station_id=?').bind(pair.stationId).first()).count,0,'nothing is approved before the shack approves')
     await shack.post('enroll/approve',{id:enrollment.id,proof:enrollment.proof,credential:stationCredential})
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
-    // One approval: the confirming browser can observe with no request and no approve-device call.
-    await until(`!!${button('Observe station')}`)
-    assert.equal(await evaluate(`!!${button('Request local approval')}||document.body.textContent.includes('Approve this browser')`),false,'the pairing browser is never asked to request a separate approval')
+    // One approval: the confirming browser is approved with no request and no approve-device call.
+    await until(`!!${button('Remove this browser’s approval')}`)
+    assert.equal(await evaluate(`document.body.textContent.includes("isn't approved for this station yet")||document.body.textContent.includes('Waiting for approval at the shack')`),false,'the pairing browser is never asked to request a separate approval')
+    assert.equal(await evaluate(`!!${button('Observe station')}&&!!${button('Open Nexus')}`),!stream,'the old workspace entry points show only behind the flag')
     const pairedDevices=(await app.db.prepare('SELECT id,approved FROM devices WHERE station_id=?').bind(pair.stationId).all()).results
     assert.equal(pairedDevices.length,1);assert.equal(pairedDevices[0].approved,1,'approving the pairing approved the browser that confirmed it')
     // Any OTHER browser still needs its own approval at the shack. Removing this browser's approval
-    // makes Chrome one: the request form comes back and nothing opens until the station approves.
+    // makes Chrome one: the card's Stream asks the shack (under the browser's own name and key, with
+    // nothing to type), and nothing opens until the station approves.
     await click(button('Remove this browser’s approval'))
-    // The pairing-code form also has an input once a station is listed, so name the request form's own.
-    const browserName=`${button('Request local approval')}?.form?.querySelector('input')`
-    await until(`!!${browserName}`)
-    await click(browserName)
-    await browser.call('Input.insertText',{text:'Synthetic browser'},session)
-    await click(button('Request local approval'))
-    await until(`document.body.textContent.includes('Approve this browser') || document.body.textContent.includes('Waiting for approval') || !document.querySelector('input')`)
+    await until(`document.body.textContent.includes("isn't approved for this station yet")&&!!${button('Stream')}`)
+    await click(button('Stream'))
+    await until(`document.body.textContent.includes('Waiting for approval at the shack')`)
+    assert.equal(await evaluate(`!!document.querySelector('.remote-stream-app')`),false,'asking opens nothing')
     const device=await app.db.prepare('SELECT id FROM devices WHERE station_id=? AND id<>? AND approved=0').bind(pair.stationId,pairedDevices[0].id).first()
     assert.ok(device,'the browser must enroll through its own HTTP-only cookie')
     // Deterministically exercise a frame that arrives after the former sleep.
@@ -352,7 +355,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await geometry(360,740,1.75,'light',260)
     await evaluate('window.__frameDelay=0')
     await pair.native.post(`stations/${pair.stationId}/native/approve-device`,{deviceId:device.id})
-    await until(`!!${button('Observe station')}`)
+    await until(`!!${button('Remove this browser’s approval')}`)
     for(const [w,h] of [[360,740],[390,844],[844,390],[1024,768],[1280,800],[1366,768],[3440,1440]])for(const theme of ['dark','light'])await geometry(w,h,1,theme)
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
@@ -841,12 +844,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         browser.on('Log.entryAdded',(event,from)=>{if(from===session&&event.entry.text.includes('Content Security Policy'))refused.push(event.entry.text.slice(0,160))})
         await browser.call('Log.enable',{},session)
         await evaluate(`window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.violatedDirective+' '+e.blockedURI));true`)
-        await click(button('Stream Nexus'))
-        await until(`!!document.querySelector('.remote-stream-app')&&!!${button('Start the stream')}`,15000)
-        assert.equal(offers.length,0,'A3: nothing is offered before the operator starts it, even with station control available')
-        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'stream-ready.png'),Buffer.from(shot.data,'base64'))}
+        assert.equal(offers.length,0,'A3: nothing is offered before the operator asks, even with station control available')
+        // The card's Stream IS the ask (2026-10-02): the page it opens starts the stream once, on its own.
+        await click(button('Stream'))
         const streamDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const o=c.operations.getSnapshot();return {status:document.querySelector('.remote-stream-status')?.textContent,link:c.stream.getSnapshot(),ops:{connected:o.connected,fresh:o.fresh,busy:o.busy,error:o.error,phase:o.state?.phase,lease:o.state?.leaseId}}}f=f.return}return null})()`)
-        await click(button('Start the stream'))
         try{await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='live'&&document.querySelector('.remote-stream-video')?.videoWidth>0`,20000)}
         catch(error){console.log('Stream diagnostic',JSON.stringify({page:await streamDiagnostic(),offers:offers.length,shack:await atShack('({state:window.__pc?.connectionState,received:__shack.received,candidates:__shack.candidates.length})').catch(e=>String(e))}));throw error}
         assert.equal(offers.length,1,'one offer, under the lease the station issued')
@@ -971,6 +972,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`)
         for(let i=0;i<30&&!closes.length;i++)await sleep(100)
         assert.equal(closes.length,1,'the station is told the stream ended')
+        // A3: the card's ask was spent by that start, so an ended stream is never re-offered on its own.
+        await until(`!!${button('Start the stream')}`)
+        await sleep(1500)
+        assert.equal(offers.length,1,'A3: nothing is offered again until the operator asks again')
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'stream-ready.png'),Buffer.from(shot.data,'base64'))}
         // "STILL THERE?" (the operator's picks "15 min + prompt" and "Only clicks, keys, PTT"), in real
         // layout and real hit-testing. The stream starts again and this TEST puts a clock of its own on
         // the page's idle watch; nothing in the product changes the fifteen minutes. At 15:00 the prompt

@@ -79,6 +79,11 @@ const MIGRATED = [
   'remote-web/control-failure.ts',
   'remote-native/RemoteStation.tsx',
   'remote-native/stream-input.ts',
+  // One clean way into streaming (2026-10-02) — born migrated: the beta line, the name a browser
+  // gives itself, and the question Nexus asks at the shack.
+  'remote-web/BetaNote.tsx',
+  'remote-web/browser-label.ts',
+  'remote-native/RemoteApprovalPrompt.tsx',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',

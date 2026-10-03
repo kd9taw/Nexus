@@ -6,6 +6,7 @@ import { useReceiverGain } from '../remote-web/useReceiverGain'
 import { useRemotePreferences } from '../remote-web/useRemotePreferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
+import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
@@ -4446,7 +4447,10 @@ export function SettingsPanel({
           {tab === 'station' && (
           <fieldset className="settings-section" id="settings-remote-access">
             <legend>{t('remote.settingsLegend')}</legend>
-            {remote ? <p className="settings-note">{t('remote.configurationLocal')}</p> : <RemoteStation />}
+            {/* One card (the operator, 2026-10-02): the streaming switch first, with the beta line beside
+                it ("access could be revoked at any time"), then where this station stands with the
+                Remote service and its browsers (RemoteStation, with the old options under Advanced). */}
+            {!remote && <BetaNote />}
             {/* REMOTE AS A STREAM (TX sign-off 2026-09-27, "Session permit"): an approved browser
                 holding station control is shown this window and operates it; while one is
                 attached, every transmission stops within five seconds of it going away, and
@@ -4480,6 +4484,7 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.remoteStream.unavailable')}</span>
               </div>
             )}
+            {remote ? <p className="settings-note">{t('remote.configurationLocal')}</p> : <RemoteStation />}
           </fieldset>
           )}
 

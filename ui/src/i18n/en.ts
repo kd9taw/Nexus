@@ -230,10 +230,6 @@ export const EN = {
   "remote.thisBrowserRenewsUntil": "This browser is approved until {{until}} UTC. Using the station from here keeps it approved, up to {{limit}} UTC.",
   "remote.thisBrowserApprovalEnding": "This browser’s approval ends {{until}} UTC. To keep using it, approve it again in Nexus at the shack.",
   "remote.thisBrowserKey": "This browser’s key: {{key}}",
-  "remote.thisBrowserKeyCheck": "Nexus at the shack shows the same key beside this browser; check that they match when you approve it.",
-  "remote.awaitDevice": "Approve this browser in Nexus at the shack. Browser code:",
-  "remote.browserName": "Name this browser",
-  "remote.requestApproval": "Request local approval",
   "remote.stationAccess": "Station access",
   "remote.revokeHint": "Revoking access disconnects this station and removes the approval of every browser that used it. To use it again, pair it again at the shack and approve your browsers there again.",
   "remote.revokeStation": "Revoke station access",
@@ -386,7 +382,7 @@ export const EN = {
   "remote.audio.unavailable": "The station has no audio to send right now.",
   // The stream: Nexus at the shack as a live picture, operated from this browser. Stop TX and the
   // TX indicator on that view stay the invariant tokens every cockpit uses (StreamView.tsx).
-  "remote.stream.open": "Stream Nexus",
+  "remote.stream.open": "Stream",
   "remote.stream.stage": "Nexus at the shack",
   "remote.stream.picture": "Nexus at the shack. Click it, then use your mouse and keyboard to operate it. Tab leaves the picture.",
   "remote.stream.start": "Start the stream",
@@ -395,8 +391,8 @@ export const EN = {
   "remote.stream.ptt.title": "Hold to talk: the rig keys when your microphone's audio arrives, and unkeys when you let go or the picture stops.",
   "remote.stream.connecting": "Connecting to the station…",
   "remote.stream.waiting": "Waiting for the station…",
-  "remote.stream.permission": "Station control is off for this browser. Allow it in Nexus at the station (Settings → Station → Remote access), then start the stream.",
-  "remote.stream.occupied": "Another browser controls the station. The stream can start once it lets go.",
+  "remote.stream.permission": "Station control is off for this browser. Allow it in Nexus at the shack (Settings → Station → Remote access → Advanced), then try again.",
+  "remote.stream.occupied": "Another browser is using this station. You can start once it lets go.",
   "remote.stream.ready": "Ready. Start the stream to see and operate Nexus at the shack.",
   "remote.stream.display": "The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.",
   "remote.stream.starting": "Starting the stream…",
@@ -436,11 +432,30 @@ export const EN = {
   "remote.stream.ended.unsupported": "This browser can't show the stream. Use a current Chrome, Edge, Firefox or Safari.",
   "remote.stream.ended.hidden": "The stream stops while this tab is in the background. Start it again when you're back.",
   "remote.stream.ended.failed": "The connection to the station was lost. Start the stream again.",
-  "remote.stream.ended.disabled": "Streaming is turned off in Nexus at the shack. Turn it on there to stream this station.",
-  "remote.stream.ended.inUse": "Another browser is streaming this station.",
+  "remote.stream.ended.disabled": "Streaming is off at the shack. In Nexus there, turn on “Stream this station from my browser” (Settings → Station → Remote access), then start the stream again.",
+  "remote.stream.ended.inUse": "Another browser is streaming this station. You can stream once it ends.",
   "remote.stream.ended.invalidOffer": "The station could not use this browser's stream request. Use a current Chrome, Edge, Firefox or Safari.",
-  "remote.stream.ended.notPinned": "Approve this browser again in Nexus at the shack, once, before it can stream. Check that the key shown there matches this browser’s key on the Remote page.",
-  "remote.stream.ended.keyChanged": "This browser’s key has changed, so approve it again in Nexus at the shack before streaming. Check that the key shown there matches this browser’s key on the Remote page.",
+  "remote.stream.ended.notPinned": "Nexus at the shack is asking you to approve this browser. Approve it there if it shows this browser’s key, below, then start the stream again.",
+  "remote.stream.ended.keyChanged": "This browser’s key has changed, so Nexus at the shack asks you to approve it again. Approve it there if it shows this browser’s key, below, then start the stream again.",
+  "remote.stream.offline": "The station isn't online. Check that Nexus is running at the shack with Remote turned on, and that the computer is awake.",
+  // The station card (the operator, 2026-10-02: "Each station card has one big "Stream" button and a
+  // small "Listen" for audio only"): one sentence for where this browser stands, then the next step.
+  "remote.listen.open": "Listen",
+  "remote.listen.ready": "Ready. Press Listen to hear the station's receive audio.",
+  "remote.listen.refused": "The station couldn't start just now. Press Listen again.",
+  "remote.listen.unavailable": "This station isn't sending its receive audio. Check that Nexus at the shack is up to date and has the radio's audio input set.",
+  "remote.card.ready": "Ready. Stream to see and operate Nexus at the shack, or Listen for its audio only.",
+  "remote.card.notApproved": "This browser isn't approved for this station yet. Press Stream, and Nexus at the shack asks you to approve it.",
+  "remote.card.waiting": "Waiting for approval at the shack: Nexus there asks whether to let “{{browser}}” stream. Approve it if it shows this key: {{key}}.",
+  "remote.card.waitingNoKey": "Waiting for approval at the shack: Nexus there asks whether to let “{{browser}}” stream. Approve it there.",
+  "remote.card.browserCode": "Browser code: {{code}}",
+  // The name a browser gives itself when it asks for approval, shown at the shack. `browser` and
+  // `system` are product names (Chrome, Windows), never translated.
+  "remote.browserLabel": "{{browser}} on {{system}}",
+  "remote.browserLabelUnknown": "Web browser",
+  // Remote streaming is a beta (the operator, 2026-10-02): the mark and the line, on every surface it is entered from.
+  "remote.beta.mark": "Beta",
+  "remote.beta.notice": "Remote streaming is a beta feature. Access could be revoked at any time.",
   "remote.b3.potaAlertsOlder": "POTA activation alerts need a newer Nexus at the station.",
   "remote.b3.awardsObserver": "Journey and uploads are not available remotely yet. Confirmation diagnostics come from the station.",
   "remote.b3.sstvSave": "Save",
@@ -516,6 +531,19 @@ export const EN = {
   "remote.approveAgain": "Approve again",
   "remote.browserKey": "Key {{key}}",
   "remote.browserKeyNotPinned": "This browser can’t stream until you approve it again here. First check this key matches the one the browser shows.",
+  // Settings ▸ Remote access as one card: the streaming switch, the browsers with their keys, and the
+  // sign-in status; the pairing's options and the permissions fold under Advanced.
+  "remote.native.browsers": "Your browsers",
+  "remote.native.asks": "Asks to stream this station.",
+  "remote.native.remove": "Remove",
+  "remote.native.advanced": "Advanced",
+  "remote.approve": "Approve",
+  // The question Nexus asks at the shack when a browser asks to stream. Never approved by default:
+  // Deny holds the keyboard, and Escape or a click outside answers nothing.
+  "remote.approval.title": "Let {{browser}} stream this station?",
+  "remote.approval.body": "A browser signed in to your Remote account asks to stream and operate this station. Approve it only if this key matches the one the browser shows: {{key}}.",
+  "remote.approval.bodyAgain": "This browser was approved before, but it can’t stream until you approve it again here. Approve it only if this key matches the one the browser shows: {{key}}.",
+  "remote.approval.deny": "Deny",
 
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',
@@ -6097,7 +6125,7 @@ export const EN = {
   // reach, and the stop: five seconds after the connection drops, seven after the picture freezes
   // (a picture older than two seconds renews nothing, then the five-second lapse). `Nexus` and
   // `Windows` are tokens.
-  'settings.remoteStream.label': 'Stream this window to an approved browser',
+  'settings.remoteStream.label': 'Stream this station from my browser',
   'settings.remoteStream.hint':
     'A browser you approved for station control, while it holds control, is shown this Nexus window and can operate it. Its clicks and keys reach Nexus only, never anything else on this computer. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a minimized window sends nothing. The stream is encrypted end to end. While a browser is connected, every transmission stops within five seconds if its connection drops, and within seven if its picture freezes.',
   'settings.remoteStream.display':
