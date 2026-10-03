@@ -30,6 +30,14 @@
 // as long as the page has focus (a blurred window stops it, M8) and the station takes it only
 // while an over is armed (M5: no voice activation, ever). What the station's over is doing comes
 // back as `micState`.
+//
+// THE RELAY (the operator, 2026-10-03: "Turn on the TURN relay (Cloudflare) for networks that block a
+// direct path"). Every stream has a STUN server, and the page also asks the service for a relay:
+// Cloudflare TURN credentials minted for this stream, added beside STUN. ICE prefers a direct path to
+// a relayed one, so the relay carries the stream only where nothing direct works. Whatever keeps the
+// page from getting one - signed out, not entitled, no relay key at the service, the provider down,
+// no answer within STREAM_RELAY_WAIT_MS - leaves the stream direct, as it was before the relay.
+// RELAY_FLAG is a test switch that makes a stream use the relay alone.
 import { AudioLink, browserAudio, type AudioEnvironment } from './audio-listen'
 import { IdleWatch } from './stream-idle'
 import {
@@ -122,9 +130,14 @@ export type VideoLike = {
   requestVideoFrameCallback?: (callback: (now: number, metadata: { rtpTimestamp?: number }) => void) => number
   cancelVideoFrameCallback?: (handle: number) => void
 }
+/** An ICE server, as RTCPeerConnection takes one. */
+export type IceServerLike = { urls: string | string[]; username?: string; credential?: string }
 export type StreamEnvironment = {
   now: () => number
-  peer: () => PeerLike
+  peer: (iceServers: IceServerLike[]) => PeerLike
+  /** The service's answer to this station's relay request, read by `parseRelayServers`. Absent,
+   *  the stream is direct only. */
+  relayServers?: () => Promise<unknown>
   /** The browser's VP8 codec entries (with the retransmission format that goes with them), or null
    *  where the browser cannot say - the offer then carries its defaults and the station picks VP8. */
   videoCodecs: () => CodecLike[] | null
@@ -149,10 +162,29 @@ export type StreamEnvironment = {
   hasFocus?: () => boolean
 }
 
-/** One ICE server, no credentials: a direct connection first (the operator's pick, "Direct first,
- *  TURN later"). The contract asks the page for a STUN server so it has a reflexive candidate of its
- *  own; TURN arrives later with its own Worker route and short-lived credentials. */
-export const STREAM_ICE_SERVERS = [{ urls: 'stun:stun.cloudflare.com:3478' }]
+/** The ICE server every stream has, with no credentials: the contract asks the page for a STUN server
+ *  so it has a reflexive candidate of its own. The relay is added beside it, per stream, when the
+ *  service gives one: its own Worker route and short-lived credentials. */
+export const STREAM_ICE_SERVERS: IceServerLike[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
+/** How long a stream waits for its relay before it goes without one. The service bounds its own call
+ *  to the provider below this, so it is reached only when the service itself is slow to answer. */
+export const STREAM_RELAY_WAIT_MS = 4000
+/** The relay as the service hands it over: TURN URLs, and the short-lived username and credential
+ *  minted for them. */
+export type RelayServer = { urls: string[]; username: string; credential: string }
+const RELAY_URL = /^turns?:\S{1,256}$/
+const relayText = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 1024
+/** The service's answer, as far as the page hands it to the browser: whole TURN entries, at most a
+ *  few. Anything else - a refusal, an older service, a shape this page does not know - is no relay. */
+export function parseRelayServers(value: unknown): RelayServer[] {
+  const servers = (value as { iceServers?: unknown } | null)?.iceServers
+  if (!Array.isArray(servers) || servers.length > 4) return []
+  return servers.flatMap(server => {
+    const { urls, username, credential } = (server ?? {}) as Record<string, unknown>
+    return Array.isArray(urls) && urls.length > 0 && urls.length <= 8 && urls.every(url => typeof url === 'string' && RELAY_URL.test(url))
+      && relayText(username) && relayText(credential) ? [{ urls: urls as string[], username, credential }] : []
+  })
+}
 /** The control channel's own send budget for things that can wait: past it, a heartbeat or a move
  *  is dropped rather than queued. Stop and a release are sent past it, always. */
 const CONTROL_BUDGET_BYTES = 16 * 1024
@@ -195,6 +227,8 @@ export class StreamLink {
   /** The station's last word on receive audio, replayed to the player when the operator asks. */
   private audioState: Record<string, unknown> | null = null
   private closed = false
+  /** Counts `start`s, so one that waited on its relay can tell it is no longer the current one. */
+  private attempts = 0
   /** Removes the hidden/pagehide/blur listeners; set while a stream is running. */
   private unwatchPage: (() => void) | undefined
   /** The microphone's line and, while it is on, its track. */
@@ -237,8 +271,15 @@ export class StreamLink {
     this.idle.active()
     this.set({ ...OFF, phase: 'connecting' })
     this.watchPage()
-    let peer: PeerLike
-    try { peer = this.env.peer() } catch { this.end('streamUnsupported'); return }
+    // The relay first, when there is one to ask for: a peer takes its servers when it is built. A
+    // stream ended, or started again, while it was asked for goes no further (its phase read fresh).
+    const attempt = ++this.attempts
+    const relay = this.env.relayServers ? await this.relay(this.env.relayServers) : []
+    if (this.closed || attempt !== this.attempts || this.getSnapshot().phase !== 'connecting') return
+    const build = (servers: IceServerLike[]) => { try { return this.env.peer(servers) } catch { return null } }
+    // A browser that will not build a peer with the relay's entries still streams direct.
+    const peer = (relay.length ? build([...STREAM_ICE_SERVERS, ...relay]) : null) ?? build([...STREAM_ICE_SERVERS])
+    if (!peer) { this.end('streamUnsupported'); return }
     this.peer = peer
     peer.onicecandidate = event => {
       // The contract carries no end-of-candidates marker, and every browser candidate names its media.
@@ -433,6 +474,16 @@ export class StreamLink {
   }
   /** Permanent. */
   dispose(): void { this.closed = true; this.teardown(); this.audio.close(); this.set(OFF) }
+
+  /** This stream's relay, or none: what the service answers within STREAM_RELAY_WAIT_MS, read by
+   *  `parseRelayServers`. A refusal, a failure or no answer in time is no relay; this never throws. */
+  private async relay(ask: () => Promise<unknown>): Promise<RelayServer[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), STREAM_RELAY_WAIT_MS) })
+    try { return parseRelayServers(await Promise.race([ask(), late])) }
+    catch { return [] }
+    finally { clearTimeout(timer) }
+  }
 
   private wireChannels(peer: PeerLike): void {
     const channels = this.channels!
@@ -693,11 +744,21 @@ export class StreamLink {
   }
 }
 
+// The relay's test switch, for proving the relay on a network where a direct path works. Set it in the
+// browser's console on this page, then start a stream: localStorage.setItem('nexus.remote.relay', 'force').
+// The browser then offers relay candidates alone (ICE policy `relay`), so a live picture can only have
+// come through the relay, and a stream the service gives no relay cannot connect at all, which is what
+// such a test needs to see. Anything else, or nothing, is the default: direct first, the relay only where
+// nothing direct works. Read as each peer is built, so it never needs a reload; removeItem undoes it.
+const RELAY_FLAG = 'nexus.remote.relay'
+const relayForced = () => { try { return localStorage.getItem(RELAY_FLAG) === 'force' } catch { return false } }
+
 /** The real browser. Split out so the link above can be driven without WebRTC. */
 export function browserStream(): StreamEnvironment {
   return {
     now: () => performance.now(),
-    peer: () => new RTCPeerConnection({ iceServers: STREAM_ICE_SERVERS, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' }) as unknown as PeerLike,
+    peer: iceServers => new RTCPeerConnection({ iceServers, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require',
+      ...(relayForced() ? { iceTransportPolicy: 'relay' as const } : {}) }) as unknown as PeerLike,
     videoCodecs: () => {
       const codecs = typeof RTCRtpReceiver !== 'undefined' ? RTCRtpReceiver.getCapabilities?.('video')?.codecs : undefined
       if (!codecs) return null

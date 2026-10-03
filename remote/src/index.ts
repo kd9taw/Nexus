@@ -8,6 +8,10 @@ import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
 export { StationRoom } from './room'
 
+/** How long a station's connection is admitted before it has to connect again. A stream is a lane of
+ *  one station connection and ends with it, so this is also the longest a stream can last. */
+const STATION_ADMISSION_MS = 86400000
+
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   const result = new Response(JSON.stringify(value), { status, headers })
   result.headers.set('content-type', 'application/json')
@@ -76,7 +80,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // The stream's signalling lane, on the same terms: a station that does not send this header
         // is never handed a `streamSignal`.
         streamVersion: request.headers.get('x-nexus-stream-version') === '1' ? 1 : 0,
-        identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
+        identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + STATION_ADMISSION_MS } })
     }
     browserOrigin(request, env)
     const protocols = (request.headers.get('sec-websocket-protocol') ?? '').split(',').map(s => s.trim())
@@ -434,7 +438,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     requireValue(inserted, 'deviceLimit', 409)
     return json({ deviceId, approved: false }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
-  if (verb === 'ticket' || verb === 'renew') {
+  if (verb === 'ticket' || verb === 'renew' || verb === 'turn') {
     const input = await body(request, verb === 'renew' ? ['sessionId'] : [])
     const current = await device(request, env, row.id, identity.accountId, now)
     requireValue(current?.approved === 1, 'deviceNotApproved')
@@ -442,6 +446,13 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       expiresAt: Math.min(identity.expiresAt, current.expires_at) }
     const policy = await access(env, row, now)
     observerDeadline(policy, browser, entitlement, now)
+    // The stream's relay, for exactly the browser a ticket is for, past exactly the same checks.
+    // It renews no approval: a page asks for a relay as a stream starts, and that is not use. The
+    // credential lasts the longest session, and never past the entitlement that a stream needs.
+    if (verb === 'turn') {
+      await rate(env, `turn:${row.id}:${current.id}`, now, 12)
+      return json({ iceServers: await relayServers(env, Math.min(STATION_ADMISSION_MS, entitlement.expiresAt - now)) })
+    }
     if (verb === 'renew') {
       const response = await room(env, row.id, 'renew', { access: policy,
         sessionId: id(input.sessionId), identity: browser, entitlement })
@@ -491,6 +502,44 @@ async function renewApproval(request: Request, env: RemoteEnv, stationId: string
     .bind(until, current.id, stationId, current.generation, current.approved_at, current.expires_at, now).first()
   const credential = deviceCookie(request, stationId)
   return renewed && credential ? { 'set-cookie': cookie(stationId, credential, Math.floor((until - now) / 1000)) } : undefined
+}
+
+// THE STREAM'S RELAY. Cloudflare Realtime TURN credentials, minted with the service's own key for
+// one stream, lasting `ttlMs`. The page adds them beside its STUN server, and ICE prefers a direct path,
+// so the relay carries a stream only where nothing direct works. The key's id and token are Worker
+// secrets and go nowhere but the provider; the page is handed the TURN entries alone. Without the key
+// this refuses `relayNotConfigured`; a provider that fails, is slow or answers anything else,
+// `relayUnavailable`. Either way the page streams direct, as it did before the relay.
+const RELAY_API = 'https://rtc.live.cloudflare.com/v1/turn/keys/'
+/** The provider's answer within this, or no relay. Below the page's own wait for the route. */
+const RELAY_DEADLINE_MS = 3000
+const RELAY_URL = /^turns?:[0-9a-z.-]{1,253}:(\d{1,5})(\?transport=(udp|tcp))?$/i
+async function relayServers(env: RemoteEnv, ttlMs: number): Promise<{ urls: string[]; username: string; credential: string }[]> {
+  const keyId = env.TURN_KEY_ID ?? '', token = env.TURN_KEY_TOKEN ?? ''
+  requireValue(/^[0-9A-Za-z_-]{1,128}$/.test(keyId) && token.length > 0, 'relayNotConfigured', 503)
+  let answer: unknown
+  try {
+    const response = await fetch(`${RELAY_API}${keyId}/credentials/generate-ice-servers`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ttl: Math.ceil(ttlMs / 1000) }), signal: AbortSignal.timeout(RELAY_DEADLINE_MS),
+    })
+    if (!response.ok) throw new Error('relayUnavailable')
+    answer = await response.json()
+  } catch { throw new Refusal('relayUnavailable', 503) }
+  // The TURN entries and nothing else: the page has its own STUN server. A URL on port 53 is left out:
+  // browsers may refuse TURN on the DNS port, and the provider offers the same transports on others.
+  const servers = (answer as { iceServers?: unknown } | null)?.iceServers
+  const relay = (Array.isArray(servers) ? servers.slice(0, 4) : []).flatMap(server => {
+    const { urls, username, credential } = (server ?? {}) as Record<string, unknown>
+    const turn = (Array.isArray(urls) ? urls : [urls]).filter((url): url is string => {
+      const port = typeof url === 'string' ? RELAY_URL.exec(url)?.[1] : undefined
+      return port !== undefined && Number(port) !== 53
+    }).slice(0, 8)
+    return turn.length > 0 && typeof username === 'string' && typeof credential === 'string' && username.length > 0
+      && credential.length > 0 && username.length <= 1024 && credential.length <= 1024 ? [{ urls: turn, username, credential }] : []
+  })
+  requireValue(relay.length > 0, 'relayUnavailable', 503)
+  return relay
 }
 
 export default {
