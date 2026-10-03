@@ -20,15 +20,19 @@
 //!   station receives). The microphone's packets are handed on as they arrived
 //!   ([`SessionEvent::Mic`]), undecoded and unjudged: what may reach a transmitter, and when, is
 //!   `tempo_app::mic`'s to decide, and the session keys nothing.
-//! - **No LAN address leaves the shack (A8).** The only candidate the station ever signals is the
-//!   server-reflexive address a STUN server reported ([`Session::add_reflexive`]), whose `raddr`
-//!   str0m writes as `0.0.0.0 0`. str0m does need the socket's own (host) address as a local
-//!   candidate: it answers connectivity checks only on a host or relay candidate, and discards
-//!   every other one as an unknown interface (measured: srflx alone never connects). So the host
-//!   candidate is added AFTER the answer is written, and is never trickled; nothing re-negotiates,
-//!   so no later SDP can carry it, and ICE's own messages carry no local address. Every SDP and
-//!   candidate line is read by [`crate::lan::leaks`] before it is handed out, and a leak is never
-//!   handed out.
+//! - **The shack's own LAN address, and no other (A8, as the operator ruled on 2026-10-03).** The
+//!   station signals two candidates: the server-reflexive address a STUN server reported
+//!   ([`Session::add_reflexive`]), whose `raddr` str0m writes as `0.0.0.0 0`, and, when its socket's
+//!   own address is the shack's LAN address ([`crate::lan::host`]), a host candidate for exactly
+//!   that address ([`Session::host_candidate`]), so a browser on the same network connects directly.
+//!   Before that ruling no LAN address was signalled, and a browser on the shack's own network found
+//!   no path to it. str0m needs the socket's own address as a local candidate either way: it answers
+//!   connectivity checks only on a host or relay candidate, and discards every other one as an
+//!   unknown interface (measured: srflx alone never connects). It is added AFTER the answer is
+//!   written, so the answer carries no candidate; nothing re-negotiates, so no later SDP can carry
+//!   one, and ICE's own messages carry no local address. Every SDP and candidate line is read by
+//!   [`crate::lan::leaks`] before it is handed out, and a leak (any other LAN address, or this one
+//!   anywhere but its own candidate) is never handed out.
 //! - **The page's certificate must match its offer.** str0m verifies the peer's DTLS certificate
 //!   against the offer's fingerprint by default; [`Session::accept`] asserts that default rather than
 //!   assuming it. The device-key binding (security test A5) signs that same fingerprint, read with
@@ -157,8 +161,11 @@ pub struct Transmit {
 
 pub struct Session {
     rtc: Rtc,
-    /// The local socket address. Never signalled: it is only the base of the reflexive candidate.
+    /// The local socket address: the base of the reflexive candidate, and the station's host
+    /// candidate when it is the shack's LAN address.
     base: SocketAddr,
+    /// That host candidate's line, to trickle to the page: `None` when the station offers none.
+    host: Option<String>,
     /// The first bundled media id, which trickled candidates name.
     mid: String,
     video: Option<(Mid, Pt)>,
@@ -196,8 +203,8 @@ impl Session {
     }
 
     /// The session behind [`Session::accept`], past the checks that must come before it.
-    /// `host` exists for one test: A8's positive control, which shows what a host candidate WOULD
-    /// put in the answer.
+    /// `host` exists for one test: A8's positive control, which shows what a host candidate for an
+    /// address other than the socket's own WOULD put in the answer.
     fn build(
         sdp: &str,
         base: SocketAddr,
@@ -227,13 +234,16 @@ impl Session {
             .accept_offer(parsed)
             .map_err(|_| Refusal::Offer(OfferRefusal::Unparseable))?
             .to_sdp_string();
-        if host.is_none() && crate::lan::leaks(&answer) {
+        if host.is_none() && crate::lan::leaks(&answer, None) {
             return Err(Refusal::Unavailable);
         }
-        // Only now, with the answer written: the socket's own address, for ICE to use and never to
-        // signal (see the module header for why str0m needs it and why it cannot leak from here).
+        // Only now, with the answer written: the socket's own address, which ICE needs to use the
+        // socket at all, and which is signalled, as its own candidate, only when it is the shack's
+        // LAN address (see the module header).
         let own = Candidate::host(base, "udp").map_err(|_| Refusal::Unavailable)?;
-        rtc.add_local_candidate(own);
+        let line = rtc.add_local_candidate(own).map(Candidate::to_sdp_string);
+        let lan = crate::lan::host(base);
+        let offered = lan.and(line).filter(|line| !crate::lan::leaks(line, lan));
         let mid = sdp
             .lines()
             .find_map(|l| l.trim().strip_prefix("a=mid:"))
@@ -242,6 +252,7 @@ impl Session {
         let mut session = Session {
             rtc,
             base,
+            host: offered,
             mid,
             video: None,
             mic: None,
@@ -270,7 +281,14 @@ impl Session {
         let candidate = Candidate::server_reflexive(public, self.base, "udp").ok()?;
         let line = self.rtc.add_local_candidate(candidate)?.to_sdp_string();
         self.pump(now);
-        (!crate::lan::leaks(&line)).then_some(line)
+        (!crate::lan::leaks(&line, None)).then_some(line)
+    }
+
+    /// The station's own LAN address as a host candidate line, to trickle to the page with the
+    /// answer: what lets a browser on the shack's network connect directly. `None` when the
+    /// socket's address is not one the station offers ([`crate::lan::host`]).
+    pub fn host_candidate(&self) -> Option<&str> {
+        self.host.as_deref()
     }
 
     /// The media id a trickled candidate names.
@@ -646,11 +664,13 @@ mod tests {
         use str0m::channel::ChannelConfig;
         use str0m::media::Direction;
 
-        /// The station's LAN address (never signalled) and what its NAT maps it to.
+        /// The station's LAN address (its host candidate) and what its NAT maps it to.
         const BASE: &str = "10.0.0.5:61000";
         const PUBLIC: &str = "203.0.113.7:61000";
         /// The page's own (public) candidate.
         const PAGE: &str = "198.51.100.23:51234";
+        /// A page on the shack's own network, behind the same router.
+        const NEIGHBOUR: &str = "10.0.0.9:51234";
 
         /// A page the way the contract describes it: VP8 video it receives, and the three
         /// channels with their reliability.
@@ -661,12 +681,21 @@ mod tests {
 
         /// The same page, and with `mic` its microphone too: an Opus line it sends (S6).
         fn page_with(now: Instant, mic: bool) -> (Page, String, SdpPendingOffer, Option<Mid>) {
+            page_on(now, mic, PAGE)
+        }
+
+        /// The same page, at the address `at`.
+        fn page_on(
+            now: Instant,
+            mic: bool,
+            at: &str,
+        ) -> (Page, String, SdpPendingOffer, Option<Mid>) {
             let mut rtc = Rtc::builder()
                 .clear_codecs()
                 .enable_vp8(true)
                 .enable_opus(mic, false)
                 .build(now);
-            rtc.add_local_candidate(Candidate::host(PAGE.parse().unwrap(), "udp").unwrap());
+            rtc.add_local_candidate(Candidate::host(at.parse().unwrap(), "udp").unwrap());
             let mut change = rtc.sdp_api();
             change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
             let mic = mic
@@ -688,6 +717,7 @@ mod tests {
                 rtc,
                 events: Vec::new(),
                 outbox: Vec::new(),
+                lost: Vec::new(),
             };
             page.drain();
             (page, offer.to_sdp_string(), pending, mic)
@@ -698,6 +728,8 @@ mod tests {
             events: Vec<Event>,
             /// Datagrams the page has sent and the network has not yet delivered.
             outbox: Vec<(SocketAddr, Vec<u8>)>,
+            /// Where the page sent datagrams that the network did not deliver.
+            lost: Vec<SocketAddr>,
         }
 
         impl Page {
@@ -721,15 +753,32 @@ mod tests {
         }
 
         /// Run both peers for `span` of simulated time through a NAT that maps the station's
-        /// BASE to PUBLIC, the way a home router would.
+        /// BASE to PUBLIC, the way a home router would, for a page elsewhere (at PAGE): it can
+        /// reach the station only at PUBLIC.
         fn run(page: &mut Page, station: &mut Session, now: &mut Instant, span: Duration) {
-            let public: SocketAddr = PUBLIC.parse().unwrap();
-            let page_addr: SocketAddr = PAGE.parse().unwrap();
+            travel(page, station, now, span, PUBLIC, PAGE);
+        }
+
+        /// Run both peers on a network where the page, at `page_at`, reaches the station only at
+        /// `station_at`, and the station's datagrams reach the page from there. Everything else
+        /// the page sends is lost.
+        fn travel(
+            page: &mut Page,
+            station: &mut Session,
+            now: &mut Instant,
+            span: Duration,
+            station_at: &str,
+            page_at: &str,
+        ) {
+            let public: SocketAddr = station_at.parse().unwrap();
+            let page_addr: SocketAddr = page_at.parse().unwrap();
             let end = *now + span;
             while *now < end {
                 for (destination, packet) in std::mem::take(&mut page.outbox) {
                     if destination == public {
                         station.receive(*now, page_addr, &packet);
+                    } else {
+                        page.lost.push(destination);
                     }
                 }
                 for t in station.take_transmits() {
@@ -764,6 +813,13 @@ mod tests {
                 .accept_answer(pending, SdpAnswer::from_sdp_string(&answer).unwrap())
                 .unwrap();
             page.drain();
+            // The page is handed every candidate the station signals, in its order: the LAN
+            // address with the answer, the reflexive one once STUN answers.
+            if let Some(host) = station.host_candidate() {
+                page.rtc
+                    .add_remote_candidate(Candidate::from_sdp_string(host).unwrap());
+                page.drain();
+            }
             let line = station
                 .add_reflexive(PUBLIC.parse().unwrap(), *now)
                 .expect("a public reflexive address is advertised");
@@ -952,30 +1008,42 @@ mod tests {
             assert!(Session::build(&bare, BASE.parse().unwrap(), None, now).is_err());
         }
 
-        /// ★ A8: no LAN address in anything the station signals; the control shows a host
-        /// candidate WOULD have put one in the answer.
+        /// ★ A8, as the operator ruled on 2026-10-03: the one LAN address the station signals is
+        /// its socket's own, as its own host candidate, and nothing else it signals names one: not
+        /// the answer, not the reflexive candidate's `raddr`. An address that is not the shack's
+        /// LAN (an overlay VPN's, a public one) is not offered. CONTROL: a host candidate for
+        /// another address puts that address in the answer, and the leak check catches it.
         #[test]
-        fn no_lan_address_leaves_the_shack() {
+        fn the_shack_offers_its_own_lan_address_and_no_other() {
             let mut now = Instant::now();
             let (_page, station, answer, line) = connect(&mut now);
-            assert!(
-                station.is_connected(),
-                "premise: the session connected on srflx alone"
-            );
+            assert!(station.is_connected(), "premise: the session connected");
+            let base: SocketAddr = BASE.parse().unwrap();
+            let host = station
+                .host_candidate()
+                .expect("the station offers its LAN address");
+            assert!(host.contains(" 10.0.0.5 61000 typ host"), "{host}");
+            assert!(!crate::lan::leaks(host, Some(base)), "{host}");
             for text in [&answer, &line] {
                 assert!(!text.contains("10.0.0.5"), "the LAN base leaked: {text}");
-                assert!(!crate::lan::leaks(text), "{text}");
+                assert!(!crate::lan::leaks(text, None), "{text}");
             }
+            assert!(!answer.contains("a=candidate:"), "{answer}");
             assert!(
                 line.contains(" typ srflx ") && line.contains("raddr 0.0.0.0 rport 0"),
                 "{line}"
             );
-            // CONTROL: with a host candidate on, the answer carries a 192.168 address, and the
-            // leak check catches it.
+            for elsewhere in ["100.101.102.103:61000", "203.0.113.7:61000"] {
+                let (_page, offer, _pending) = page(now);
+                let (other, _) = Session::accept(&offer, elsewhere.parse().unwrap(), now).unwrap();
+                assert_eq!(other.host_candidate(), None, "{elsewhere}");
+            }
+            // CONTROL: with a host candidate for another address on, the answer carries a 192.168
+            // address, and the leak check catches it.
             let (_page, offer, _pending) = page(now);
             let (_s, leaky) = Session::build(
                 &offer,
-                BASE.parse().unwrap(),
+                base,
                 Some("192.168.1.20:61000".parse().unwrap()),
                 now,
             )
@@ -984,7 +1052,78 @@ mod tests {
                 leaky.contains("192.168.1.20"),
                 "control: no host candidate in {leaky}"
             );
-            assert!(crate::lan::leaks(&leaky));
+            assert!(crate::lan::leaks(&leaky, Some(base)));
+        }
+
+        /// A browser on the shack's own network, behind the same router, which does not loop a
+        /// packet sent to its own public address back in: the page reaches the station only at its
+        /// LAN address, and, as Chrome hides its own behind an mDNS name, the station learns the
+        /// page's address only from its checks. With the station's LAN address signalled, that is
+        /// the path, and the session connects over it. Before 2026-10-03 this page never did.
+        #[test]
+        fn a_browser_on_the_shacks_network_connects_to_its_lan_address() {
+            let mut now = Instant::now();
+            let (mut page, offer, pending, _) = page_on(now, false, NEIGHBOUR);
+            // As Chrome: no candidate in the offer, and none the station can use trickled after
+            // it but its reflexive one, at the router's public address.
+            let offer: String = offer
+                .split_inclusive("\r\n")
+                .filter(|line| !line.starts_with("a=candidate:"))
+                .collect();
+            let (mut station, answer) =
+                Session::accept(&offer, BASE.parse().unwrap(), now).unwrap();
+            page.rtc
+                .sdp_api()
+                .accept_answer(pending, SdpAnswer::from_sdp_string(&answer).unwrap())
+                .unwrap();
+            page.drain();
+            if let Some(host) = station.host_candidate() {
+                page.rtc
+                    .add_remote_candidate(Candidate::from_sdp_string(host).unwrap());
+            }
+            let line = station.add_reflexive(PUBLIC.parse().unwrap(), now).unwrap();
+            page.rtc
+                .add_remote_candidate(Candidate::from_sdp_string(&line).unwrap());
+            page.drain();
+            let reflexive =
+                "candidate:1 1 udp 1686052607 203.0.113.7 51234 typ srflx raddr 0.0.0.0 rport 0";
+            assert!(station.add_remote_candidate(reflexive, now));
+            for _ in 0..40 {
+                travel(
+                    &mut page,
+                    &mut station,
+                    &mut now,
+                    Duration::from_millis(250),
+                    BASE,
+                    NEIGHBOUR,
+                );
+                if station.is_connected() {
+                    break;
+                }
+            }
+            assert!(
+                station.is_connected(),
+                "a browser on the shack's network found no path: {:?}",
+                station.take_events()
+            );
+            assert!(page.rtc.is_connected());
+        }
+
+        /// A browser elsewhere is handed the shack's LAN address too, and cannot reach it: its
+        /// checks there are lost. It connects over the reflexive candidate, as every browser did
+        /// before the station offered its LAN address.
+        #[test]
+        fn a_browser_that_cannot_reach_the_lan_address_connects_over_the_reflexive_one() {
+            let mut now = Instant::now();
+            let (page, station, _, _) = connect(&mut now);
+            let base: SocketAddr = BASE.parse().unwrap();
+            assert!(
+                page.lost.contains(&base),
+                "premise: the page tried the LAN address, {:?}",
+                page.lost
+            );
+            assert!(station.is_connected(), "the session never connected");
+            assert!(page.rtc.is_connected());
         }
 
         /// ★ S6: the page's microphone is answered as an Opus line the station RECEIVES, and its

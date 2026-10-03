@@ -920,8 +920,8 @@ mod tests {
     fn every_signalling_case_round_trips_on_its_hop() {
         assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 5);
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 5);
-        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 13);
-        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 13);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 14);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 14);
         // The relay's own: it ends a station's stream, and it answers a page by itself.
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStationEnd"), 2);
         assert_eq!(

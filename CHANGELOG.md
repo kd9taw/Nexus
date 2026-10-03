@@ -703,6 +703,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Remote streaming: a browser on the shack's own network now streams directly.** Nexus at the
+  shack now gives the browser its address on your home network as well as its internet address,
+  so a browser on the same Wi-Fi or wired network connects straight to it, with no relay. Until
+  now such a browser sat on "Waiting for the station's picture" and then gave up, because most
+  home routers do not pass a connection from your own network back in through their internet
+  address. A browser on any other network connects as before. What Nexus shares is the one
+  address it streams from (such as 192.168.1.20), only when it is a private address (10.x,
+  172.16–31.x or 192.168.x), and only to a browser whose stream it has admitted, through the
+  Remote service: never a VPN's 100.x address, and nothing else about your network. It needs the
+  new Nexus at the shack; the Remote site is unchanged.
 - **The transmit buttons are in one place on every screen: FT's strip, under the scope.** TX
   On/Off, Tune, ATU and Stop TX now sit in one row under the scope or waterfall on Phone, CW, RTTY,
   PSK, JS8 and SSTV, in FT's order and at the size the header's buttons had, so Stop TX is in the

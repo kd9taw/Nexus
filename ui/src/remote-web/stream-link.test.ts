@@ -131,13 +131,30 @@ it('trickles candidates in the contract\'s shape, and holds one that overtakes i
   h.peer.onicecandidate?.({ candidate: { candidate: 'candidate:1 1 udp 1 192.0.2.1 5000 typ host', sdpMid: null } })
   expect(h.signals.slice(1).map(s => ({ type: 'streamSignal', leaseId: s.leaseId, payload: s.payload })))
     .toEqual([byName(SIGNAL.browserToRoom, 'candidate (reflexive)')])
-  const early = byName(SIGNAL.roomToBrowser, 'candidate (reflexive; never host)')
+  const early = byName(SIGNAL.roomToBrowser, 'candidate (reflexive)')
   h.link.receive(early)
   expect(h.peer.candidates).toHaveLength(0)
   h.link.receive(byName(SIGNAL.roomToBrowser, 'answer'))
   await Promise.resolve(); await Promise.resolve()
   const payload = early.payload as { candidate: string; sdpMid: string }
   expect(h.peer.candidates).toEqual([{ candidate: payload.candidate, sdpMid: payload.sdpMid }])
+})
+
+it('hands the browser the station\'s LAN address as it is, so a browser on the shack\'s network can connect to it', async () => {
+  const h = harness()
+  await h.link.start(LEASE)
+  h.link.receive(byName(SIGNAL.roomToBrowser, 'answer'))
+  await Promise.resolve(); await Promise.resolve()
+  const lan = byName(SIGNAL.roomToBrowser, 'candidate (host: the shack\'s own LAN address, for a browser on its network)')
+  const reflexive = byName(SIGNAL.roomToBrowser, 'candidate (reflexive)')
+  const line = (c: typeof lan) => c.payload as { candidate: string; sdpMid: string }
+  // Premise: a host candidate naming a private address, which a page filtering the shack's
+  // network out would refuse.
+  expect(line(lan).candidate).toMatch(/ 10\.0\.0\.5 61000 typ host /)
+  h.link.receive(lan)
+  h.link.receive(reflexive)
+  expect(h.peer.candidates).toEqual([line(lan), line(reflexive)].map(c => ({ candidate: c.candidate, sdpMid: c.sdpMid })))
+  expect(h.link.getSnapshot().phase).toBe('connecting')
 })
 
 it('reads every station message the contract names, and refuses the ones it says a page must refuse', async () => {
