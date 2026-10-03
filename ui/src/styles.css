@@ -23575,7 +23575,7 @@ button.sat-chip:disabled {
   gap: var(--space-2);
   /* The source line (and a disagreement) sit tight under the row they describe. */
   row-gap: 0;
-  padding: 4px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   font-size: 0.8rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
