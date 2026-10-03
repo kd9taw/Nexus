@@ -61,12 +61,12 @@ it('one card: the sign-in status, then each browser with its key and the one thi
   const advanced = document.querySelector('details.remote-native-advanced') as HTMLDetailsElement
   expect(advanced.open).toBe(false)
   expect(advanced.querySelector('summary')?.textContent).toBe('Advanced')
-  for (const name of ['Revoke logging permission', 'Revoke station controls', 'Allow FT8/FT4 transmission', 'Refresh browser requests',
+  for (const name of ['Revoke logging permission', 'Revoke station controls', 'Allow FT8/FT4 transmission from the Remote page', 'Refresh browser requests',
     'Revoke station access', 'Approve browser', 'Approve again', 'Revoke browser approval']) {
     expect(within(advanced).getAllByRole('button', { name }).length, `${name} is kept under Advanced`).toBeGreaterThan(0)
     expect(within(main()).queryByRole('button', { name }), `${name} is not in the card itself`).toBeNull()
   }
-  expect(within(advanced).getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' }).length).toBeGreaterThan(0)
+  expect(within(advanced).getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }).length).toBeGreaterThan(0)
   expect(within(main()).queryByRole('checkbox')).toBeNull()
 })
 
@@ -76,7 +76,7 @@ it('the approve in the card honours the transmit tick under Advanced, exactly as
     accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null, pinnedDevices: [],
     devices: [{ id: waiting, name: 'Phone', approved: 0, expiresAt: Date.now() + 600000, key: fingerprint('d') }] })
   const row = (await screen.findAllByRole('listitem'))[0]
-  fireEvent.click(within(document.querySelector('.remote-native-advanced') as HTMLElement).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' }))
+  fireEvent.click(within(document.querySelector('.remote-native-advanced') as HTMLElement).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
   fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
   await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: waiting, approve: true, transmit: true, key: fingerprint('d') }]))
 })

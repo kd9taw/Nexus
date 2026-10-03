@@ -103,10 +103,10 @@ word in, and use only that word in the CSV.
 | settings | 127 | The Settings screen and every reference to it. | |
 | grid | 125 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 114 | Sound cards, levels, routing. | |
-| station | 132 | Both your own station and the one you are working. | |
+| station | 143 | Both your own station and the one you are working. | |
 | port | 99 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 102 / 30 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 105 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 87 | A satellite pass. | |
 | callsign | 81 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |

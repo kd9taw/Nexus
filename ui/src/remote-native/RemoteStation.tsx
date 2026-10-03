@@ -18,7 +18,9 @@ export function RemoteStation() {
   const [busy, setBusy] = useState(false)
   const [offer, setOffer] = useState(false)
   const [offerFailed, setOfferFailed] = useState(false)
-  // "Also allow FT8/FT4 transmit" on the pairing approval and on each browser's approval. Off unless ticked.
+  // "Also allow FT8/FT4 transmit from the Remote page" on the pairing approval and on each browser's approval. Off unless
+  // ticked. It limits only the Remote page's own FT8/FT4: a stream needs station controls alone, and a streaming browser
+  // is the operator at the shack, transmit included (the operator, 2026-10-03), so the card's words say so.
   const [pairingTransmit, setPairingTransmit] = useState(false)
   const [browserTransmit, setBrowserTransmit] = useState<Record<string, boolean>>({})
   const pending = useRef(false), mounted = useRef(true), requestEpoch = useRef(0)
@@ -166,7 +168,7 @@ export function RemoteStation() {
           return <div key={device.id}>
           {/* The browser's key beside its name: the page shows the same one, for the operator to compare. */}
           <p>{device.name} <code>{device.id.slice(-6)}</code>{key && <> <span>{t('remote.browserKey', { key: shortFingerprint(key) })}</span></>}</p>
-          {/* One approval: approving grants station controls and logging, plus transmit if ticked.
+          {/* One approval: approving grants station controls and logging, plus the Remote page's FT8/FT4 transmit if ticked.
               The switches below then only restrict (or give back) what an approved browser holds. */}
           {device.approved === 1
             ? <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.revokeBrowser')}</button>
@@ -180,8 +182,8 @@ export function RemoteStation() {
             ? t('remote.browserRenewsUntil', { until: utcDate(device.expiresAt), limit: utcDate(device.renewsUntil) })
             : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</p>}
           {/* The last week before the end that use cannot move, or a key not pinned here. Approving again
-              is a NEW approval: it grants station controls and logging again, transmit only if ticked
-              here, and pins the key shown above. */}
+              is a NEW approval: it grants station controls and logging again, the Remote page's FT8/FT4
+              transmit only if ticked here, and pins the key shown above. */}
           {(ending || unpinned) && <>
             {ending && <p className="remote-warning">{t('remote.browserApprovalEnding', { until: utcDate(device.renewsUntil ?? device.expiresAt) })}</p>}
             {unpinned && <p className="remote-warning">{t('remote.browserKeyNotPinned')}</p>}

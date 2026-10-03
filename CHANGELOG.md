@@ -29,6 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (station control taken back at the radio, for example), the stream page says **Could not stop
   transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
 
+### Changed
+
+- **Remote access says what a streaming browser can do.** A browser approved for station
+  controls that streams this station operates Nexus as you would at the shack, transmit
+  included, whether or not its FT8/FT4 transmit box is ticked. Settings ▸ Station ▸ Remote
+  access, the streaming switch's hint, the question that pops up when a browser asks to stream,
+  and the guide now say so. The tick reads **Also allow FT8/FT4 transmit from the Remote page**,
+  and the FT8/FT4 switches under each browser say "from the Remote page" too, because that is
+  all they cover. The hints add that revoking a browser's station controls ends its stream. On
+  the Remote page, Settings says that accounts, backups, remote access and the station's own
+  settings change in Nexus at the station, in person or streamed to that browser. Only the words
+  changed: what an approval grants and every transmit rule stay as they were.
+
 ## [1.16.0] — 2026-10-03
 
 ### Added

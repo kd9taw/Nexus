@@ -79,8 +79,10 @@ the per-browser permissions are folded under **Advanced**.
 browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
 that starts the account's 14-day trial, turns Remote on, and approves the browser you
-paired from. Tick **Also allow FT8/FT4 transmit** (under **Advanced**) first if that browser
-should be able to transmit. Any other browser asks with the Remote site's **Stream** button,
+paired from. Tick **Also allow FT8/FT4 transmit from the Remote page** (under **Advanced**)
+first if that browser should also send FT8/FT4 from the Remote page's own controls. A
+browser streaming this station does not need it: it uses Nexus as you would here, transmit
+included. Any other browser asks with the Remote site's **Stream** button,
 and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this station?**,
 with the browser's key. Approve it only if the key matches the one the browser shows.
 **Approve** there is **Approve browser** without the transmit tick; **Deny** refuses the
@@ -104,22 +106,27 @@ box is ticked. All of it is kept when Nexus restarts, until you revoke it, for a
 that browser stays approved: a browser whose approval was revoked, or given again, starts
 with nothing kept. The switches under each approved browser, under **Advanced**, limit it,
 or give a permission back. Without any of these it can watch the station but not change it.
+With streaming on, station controls alone let a browser stream this window and use Nexus as
+you would here, transmit included; the transmit box is only for the Remote page's own FT8/FT4.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
-  active. One browser holds control at a time.
+  active. One browser holds control at a time. Revoking them also ends that browser's stream.
 - **Allow remote logging** — the browser's Log QSO form writes to your logbook. Field
   Day contacts still log at the station.
-- **Allow FT8/FT4 transmission** — calling CQ, answering and sending FT8/FT4 messages.
-  It also needs station controls, and it goes through the normal TX switch and TX
-  watchdog. Allowing it arms nothing: whenever Nexus starts, the TX switch is off until
-  the browser presses TX On. If the browser goes away the station stops transmitting
-  within five seconds, and **Revoke transmission permission** stops it at once. Without
-  the stream below, no other mode transmits remotely.
+- **Allow FT8/FT4 transmission from the Remote page** — calling CQ, answering and sending
+  FT8/FT4 messages with the Remote page's own controls. It also needs station controls, and
+  it goes through the normal TX switch and TX watchdog. Allowing it arms nothing: whenever
+  Nexus starts, the TX switch is off until the browser presses TX On. If the browser goes
+  away the station stops transmitting within five seconds, and
+  **Revoke FT8/FT4 transmission from the Remote page** stops it at once. Without the stream
+  below, no other mode transmits remotely. A browser streaming this station does not need
+  this permission: through the stream it transmits as you would here, in any mode.
 
 **Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
-shown this Nexus window and operate it, and hear the station's receive audio. Only this
+shown this Nexus window and operate it as you would here, transmit included, and hear the
+station's receive audio. It needs no FT8/FT4 transmit permission for that. Only this
 window is sent: a dialog that opens outside it, such as a file picker, is not, and a
 minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
 anything else on this computer. While a browser is attached, every transmission at the
