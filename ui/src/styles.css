@@ -23936,9 +23936,16 @@ button.sat-chip:disabled {
   display: flex;
   flex-direction: column;
 }
+/* A channel row is a line that wraps, not a grid (2026-10-03). The Remote page puts a Tune among a row's buttons that the
+   desktop does not, and at md those rows ran past the list under a sideways scrollbar: by 1 px at 1280×800, 27 px at
+   1200×1390 and 80 px at md's narrowest (1100 px wide), in Chrome. Now a row whose buttons do not fit beside its figures
+   carries them on a line of their own, at the right, and the list never scrolls sideways. A row that fits is laid out
+   as the grid laid it: the figures keep their widths and the name takes what is left. The name asks for 80 px before
+   the buttons move (the grid's floor was 90), so 1280×800 keeps one line. The page's columns (.rp-body) are untouched:
+   at the 1024×768 floor nothing moves. */
 .rp-chan-row {
-  display: grid;
-  grid-template-columns: 30px minmax(90px, 1fr) 74px 56px 48px auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: 2px var(--space-1);
@@ -23949,12 +23956,23 @@ button.sat-chip:disabled {
   border-color: var(--state-weak);
 }
 .rp-chan-num {
+  flex: 0 0 30px;
   color: var(--text-faint);
   text-align: right;
 }
 .rp-chan-name {
+  flex: 1 1 80px;
   min-width: 0;
   padding: 2px 6px;
+}
+.rp-chan-freq {
+  flex: 0 0 74px;
+}
+.rp-chan-off {
+  flex: 0 0 56px;
+}
+.rp-chan-tone {
+  flex: 0 0 48px;
 }
 .rp-chan-freq,
 .rp-chan-off,
@@ -23963,6 +23981,8 @@ button.sat-chip:disabled {
 }
 .rp-chan-btns {
   display: inline-flex;
+  flex: none;
+  margin-left: auto;
   gap: 2px;
 }
 .rp-chan-btns button {

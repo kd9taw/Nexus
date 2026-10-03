@@ -3596,10 +3596,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         try{await until(held,30000)}catch(error){if(error.message!=='Expected browser state did not appear')throw error;assert.fail(`${label}: the station's document was not back within 30 s of a lapsed session (${where}): ${JSON.stringify(await sessionDiagnostic())}`)}
         console.log(`${label} sweep: the session lapsed (no station sample for 3 s); the station's document was back after ${Math.round(performance.now()-started)} ms, reading ${where} with it`,JSON.stringify(await evaluate('window.__socketClosures.slice(-2)')))
       }
+      // THE CHANNEL LIST NEVER SCROLLS SIDEWAYS (2026-10-03). Here its rows carry a Tune the desktop's do not, and they ran
+      // past the list under a sideways scrollbar: by 1 px at 1280×800, 27 px at 1200×1390 and 152 px and more on a phone.
+      // Read at every size, with the Tune present.
+      const sideways=[]
+      let tuned=0
       for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout();await settledLayout()
+        if(!settings){
+          const side=await evaluate(`(()=>{const e=document.querySelector('.rp-chan-rows');return {client:e?.clientWidth??0,scroll:e?.scrollWidth??0,tune:!!e?.querySelector('.rp-chan-row .rp-tune'),viewport:document.documentElement.dataset.viewport}})()`)
+          if(side.tune)tuned++
+          if(side.client>0&&side.scroll>side.client)sideways.push({width,height,zoom,theme,...side})
+        }
         for(const target of targets){
           const where=`${target} at ${width}x${height} zoom ${zoom} ${theme}`
           let shape,good
@@ -3623,6 +3633,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.ok(good,`${label} content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape})}`)
           results.push({navigation:label,width,height,zoom,theme,target,shape})
         }
+      }
+      if(!settings){
+        assert.ok(tuned>0,'premise: the hosted channel rows carry Tune')
+        assert.deepEqual(sideways,[],"Repeaters' channel list scrolls sideways")
       }
       await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('.remote-workspace').scrollTop=0;for(const e of document.querySelectorAll('.remote-workspace *'))if(/auto|scroll/.test(getComputedStyle(e).overflowY))e.scrollTop=0`)

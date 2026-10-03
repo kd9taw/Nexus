@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lettered too dim for small text (down to 4.2:1, under the 4.5:1 it needs). They now take the
   same lighter shade of the accent as HUNT, wherever the board shows: the POTA / SOTA screen, its
   pop-out, a Connect or dashboard-rail box and the Remote page.
+- **Remote: the Repeaters channel list no longer scrolls sideways.** On the Remote page each FM
+  channel carries a Tune button the desktop does not, and in a medium-width window, or on a phone,
+  the rows ran past the list under a sideways scrollbar. A row whose buttons do not fit beside its
+  name and figures now carries them on a line of their own, at the right.
 
 ### Changed
 
