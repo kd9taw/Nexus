@@ -173,8 +173,10 @@ release, disconnect, connection replacement and local revocation retire it.
 Grant admission shares the local Disable lock, preventing a stale status snapshot
 from installing a grant after local shutdown. FT boundary and immediate keying
 recheck authority before and after blocking PTT I/O, and deny audio on loss.
-Operation v4 adds a dedicated Stop request scoped to the station boot, controller
-lease and transmit generation. Browser receipt storage and pending commands do
+Operation v4 adds a dedicated Stop request scoped to the station boot and controller
+lease. It carries the transmit generation its browser was shown, never refused for
+its age (operator ruling, 2026-10-03): a Stop pressed before the last halt still
+stops, and retires the current generation. Browser receipt storage and pending commands do
 not block Stop. The relay retains one extra bounded Stop route across hibernation;
 native transport admits it without waiting for the Engine or a file operation.
 The acknowledgement confirms permission revocation, not RF cessation. A separate

@@ -1388,3 +1388,100 @@ fn a_connected_stream_keeps_the_shack_awake_until_it_is_gone() {
         "the stream's end did not release it"
     );
 }
+
+// ── Stop TX is never refused (operator ruling, 2026-10-03) ─────────────────────────────────────
+// "Stop TX always stops whatever is transmitting, even if it was pressed before the last halt."
+// Every halt at the station runs `Engine::halt_tx`, which retires the remote transmit generation
+// (`remote_transmit_stand_down` is `Authority::transmit_revocation`), and that generation is the
+// `transmitEpoch` the page's Stop carries. Until this ruling the Stop was refused `staleContext`
+// for carrying the one it was shown before the halt, so a transmission started in the second
+// before the page re-read its token stayed up through the press, and the page said nothing.
+
+/// Exclusive use of the process-wide satellite track badge, which every Stop reaches (it ends a
+/// live track): the crate's one implementation, as the operations tests take it.
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    crate::sat_track_alone()
+}
+
+/// The scene: a streamed operator holding control and presence, the stop token as the page holds
+/// it from its last state reply, then a halt at the station (`cause`), then a Tune started through
+/// the picture before the page has re-read the token. Returns the Stop the page sends.
+fn tuned_after_a_halt(f: &Fixture, streaming: &mut Streaming, cause: u8, now: Instant) -> Vec<u8> {
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    // The page re-reads its token from the relay heartbeat's reply, about once a second.
+    let held = stop_request(streaming, &f.lease, now);
+    let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+    e.set_operating_mode("phone", false);
+    match cause {
+        // The shack's Esc, which an Esc typed over the picture is (Phone: halt_tx, then stop_voice).
+        0 => {
+            e.halt_tx();
+            e.stop_voice();
+        }
+        // A band change through the picture or at the rig: the context halt every QSY runs.
+        _ => e.halt_tx_for_context_change("band change"),
+    }
+    // The operator reaches for Tune at once, through the picture: a local press.
+    e.set_tune(true);
+    assert!(e.tuning(), "premise: the carrier is up");
+    held
+}
+
+const HALTS_AT_THE_STATION: [(&str, u8); 2] = [
+    (
+        "an Esc over the picture (the shack's halt_tx + stop_voice)",
+        0,
+    ),
+    ("a band change (halt_tx_for_context_change)", 1),
+];
+
+/// CONTROL: the same Stop carrying the token as re-read after the halt (the page's next heartbeat
+/// reply) is accepted and the carrier comes down. It passed under the old rule too, so the test
+/// below differs from it in the token's age alone.
+#[test]
+fn a_stop_with_the_token_reread_after_the_halt_stops_the_tune() {
+    let _alone = alone();
+    for (cause, halt) in HALTS_AT_THE_STATION {
+        let now = Instant::now();
+        let f = fixture(now);
+        let mut streaming = verified_stream(&f, now);
+        let _held = tuned_after_a_halt(&f, &mut streaming, halt, now);
+        let fresh = stop_request(&mut streaming, &f.lease, now);
+        let (answer, _) = streaming.control(&fresh, |_| true, now);
+        assert_eq!(
+            reply_of(&answer.unwrap())["value"]["stop"],
+            "accepted",
+            "{cause}"
+        );
+        assert!(
+            !tempo_app::engine::engine_lock(&f.station.engine).tuning(),
+            "{cause}: the carrier stayed up"
+        );
+    }
+}
+
+/// ★ Stop TX pressed after a halt at the station, and before the page has re-read its stop token,
+/// stops the carrier started since. Both of the page's paths carry the same token; this is the
+/// stream's. The only difference from the control above is the token's age.
+#[test]
+fn a_stop_pressed_after_a_station_side_halt_stops_what_started_since() {
+    let _alone = alone();
+    let mut failures = Vec::new();
+    for (cause, halt) in HALTS_AT_THE_STATION {
+        let now = Instant::now();
+        let f = fixture(now);
+        let mut streaming = verified_stream(&f, now);
+        let held = tuned_after_a_halt(&f, &mut streaming, halt, now);
+        let (answer, _) = streaming.control(&held, |_| true, now);
+        let answer = reply_of(&answer.unwrap());
+        let tuning = tempo_app::engine::engine_lock(&f.station.engine).tuning();
+        if answer["value"]["stop"] != "accepted" || tuning {
+            failures.push(format!(
+                "{cause}: Stop TX left the carrier {}; the station answered {}",
+                if tuning { "UP" } else { "down" },
+                answer.get("error").unwrap_or(&answer["value"])
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

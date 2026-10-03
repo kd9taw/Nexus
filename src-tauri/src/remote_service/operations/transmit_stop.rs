@@ -1,11 +1,15 @@
 //! Stop admission stays independent of Engine, file writes and ordinary commands.
 //! The mirror is updated only under Core; its own lock never contains I/O or
-//! acquires Core/Engine. Atomic permit generation checks reject delayed Stops.
+//! acquires Core/Engine. An admitted Stop retires the current transmit generation at once.
 //!
 //! STOP ANYTHING (operator decision 2026-09-14). Any browser holding station control may stop, with
 //! or without FT8/FT4 transmit permission (that permission is needed only to START), and an admitted
 //! Stop stops every transmission at the station, however it started (`stop_station`). A browser
 //! without station control is refused and changes nothing.
+//!
+//! NEVER REFUSED FOR ITS AGE (operator ruling 2026-10-03: "Stop TX always stops whatever is
+//! transmitting, even if it was pressed before the last halt"). The stop token is checked for its
+//! shape, never against the current generation; see `stop_transmit`.
 use super::*;
 
 pub(super) struct Owner {
@@ -132,10 +136,8 @@ impl Authority {
     /// Does this browser hold the station's stop token right now?
     ///
     /// `state` hands it the transmit epoch on the strength of this, a controller and an expired
-    /// controller alike. The expired one needs a CURRENT epoch: dropping its lease revoked the
-    /// generation it was last shown, so a Stop carrying that one would be refused `staleContext`
-    /// and the ruling above would never reach the rig. Replay safety is untouched — a Stop still
-    /// retires only the generation it displayed, and a delayed one is still refused.
+    /// controller alike: the page sends a Stop only with a token the station issued it. The
+    /// token's age is no reason to refuse that Stop (operator ruling, 2026-10-03; `stop_transmit`).
     pub(super) fn holds_stop_token(&self, session: &str, device: &str) -> bool {
         self.stop_owner.lock().is_ok_and(|o| {
             o.as_ref()
@@ -177,7 +179,6 @@ impl Authority {
         {
             return Err("invalidRequest");
         }
-        let generation = u64::from_str_radix(transmit_epoch, 16).map_err(|_| "invalidRequest")?;
         let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
         let owner = owner.as_ref().ok_or("localPermissionRequired")?;
         if owner.connection != connection
@@ -197,9 +198,20 @@ impl Authority {
         // that held station control still stops after its lease runs out: an unnecessary unkey is a
         // smaller harm than a keyed rig and a button that reported a refusal. It cannot start
         // anything — every arming path needs the live lease this browser no longer has.
-        if !self.transmit.revoke_generation(generation) {
-            return Err("staleContext");
-        }
+        //
+        // ⛔ AND NO CHECK ON THE TOKEN'S AGE (operator ruling, 2026-10-03). The token is the
+        // transmit generation this browser was last shown, and every halt at the station moves
+        // it (`Engine::halt_tx` retires remote transmit too): an Esc over the picture, a band
+        // change, the SWR cutoff, a Stop or a logger's HaltTx at the shack. Refusing an older one
+        // (`staleContext`, the 2026-09-15 rule) refused a fresh Stop for something the operator
+        // never did, and a transmission started in the second before the page re-read its token
+        // survived the press. So the age is never a reason to refuse: a late Stop from this
+        // browser, a duplicated frame included, stops whatever is on the air when it lands, the
+        // smaller harm again. WHO may stop is everything above, unchanged.
+        //
+        // It still retires the CURRENT generation, here, before the engine is free, so an arming
+        // gesture held under it dies with the Stop: arming needs the generation shown next.
+        self.transmit.revoke();
         // This accepts the Stop, not a claim that RF has stopped: `stop_station` raises the
         // engine's stop, and the native radio loop performs the already-tested flush/unkey.
         Ok(())

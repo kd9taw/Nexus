@@ -350,6 +350,33 @@ it('sends Stop in the contract\'s shape on the control channel, past every budge
   expect(h.link.stopTransmit(null)).toBe(false)
 })
 
+// The station answers a Stop on `control` as it answers one on the socket. The page used to drop
+// that answer, so a Stop refused there was shown as nothing at all.
+it('reads the station\'s answer to its own Stop on the control channel: accepted, or refused', async () => {
+  const h = harness()
+  await h.live()
+  const control = h.peer.channel('control')
+  const answer = (requestId: unknown, reply: Record<string, unknown>) => { control.deliver({ ...reply, requestId }) }
+  const accepted = byName(CHANNEL.controlStationToBrowser, 'stop accepted'), refusal = byName(CHANNEL.controlStationToBrowser, 'refusal')
+  expect(h.link.getSnapshot().stop).toBe('idle')
+  expect(h.link.stopTransmit(TARGET)).toBe(true)
+  expect(h.link.getSnapshot().stop).toBe('sending')
+  // Another request's answer, the contract's refusal included, is not this Stop's.
+  answer('10000000-0000-4000-8000-0000000000ff', refusal)
+  expect(h.link.getSnapshot().stop).toBe('sending')
+  answer(last(control.sent)!.requestId, refusal)
+  expect(h.link.getSnapshot().stop, 'the refusal went unread').toBe('refused')
+  // The next press starts again, and its acceptance is read as such.
+  expect(h.link.stopTransmit(TARGET)).toBe(true)
+  expect(h.link.getSnapshot().stop).toBe('sending')
+  answer(last(control.sent)!.requestId, accepted)
+  expect(h.link.getSnapshot().stop).toBe('accepted')
+  // A press the channel cannot carry leaves no earlier answer standing for it.
+  control.close()
+  expect(h.link.stopTransmit(TARGET)).toBe(false)
+  expect(h.link.getSnapshot().stop).toBe('idle')
+})
+
 it('sends input only in shapes the contract accepts, and the contract\'s refused input never passes', () => {
   const inputs = CHANNEL.controlBrowserToStation.filter(c => ['pointer', 'wheel', 'key', 'text'].includes(c.message.type as string))
   expect(inputs.length).toBeGreaterThanOrEqual(10)
@@ -429,7 +456,7 @@ it('an operator\'s own close tells the station, lets go of PTT, and returns to i
   expect(last(h.signals)?.payload).toEqual({ kind: 'close' })
   expect(last(ptt.sent)).toMatchObject({ type: 'pttRelease' })
   expect(h.link.getSnapshot()).toEqual({ phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null,
-    mic: 'off', micProcessing: false, station: null, uplinkStalled: false })
+    mic: 'off', micProcessing: false, station: null, uplinkStalled: false, stop: 'idle' })
   expect(h.video.srcObject).toBeNull()
   const sent = control.sent.length + ptt.sent.length
   h.advance(5000)

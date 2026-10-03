@@ -217,7 +217,7 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     );
     // …and it sees the two specific tests this rule was written about, one per file.
     for named in [
-        "a_replayed_stop_transmit_has_no_further_effect",
+        "a_delayed_stop_still_stops_what_is_on_the_air_now",
         "a_remote_stop_ends_an_active_satellite_track_and_hands_the_dial_back",
         "rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock",
     ] {

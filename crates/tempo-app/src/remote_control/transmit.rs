@@ -32,18 +32,6 @@ impl TransmitAuthority {
         self.0.clone()
     }
 
-    /// A delayed Stop can retire only the generation it displayed. Atomic
-    /// comparison prevents it racing a newer controller or transmission.
-    pub fn revoke_generation(&self, expected: u64) -> bool {
-        use std::sync::atomic::Ordering;
-        expected != u64::MAX
-            && self
-                .0
-                 .0
-                .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-    }
-
     /// Bind an arming gesture to the generation the browser displayed. A Stop
     /// racing issuance invalidates the returned permit before Engine admission.
     pub fn permit_generation(&self, expected: u64, deadline: Instant) -> Option<TransmitPermit> {

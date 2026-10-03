@@ -115,8 +115,8 @@ it('keeps Stop available after the lease runs out, and ends it when the station 
   expect(request.transmitEpoch).toBe('000000000000002b')
   h.c.receive({ type: 'operationResponse', requestId: request.requestId, value: { stop: 'accepted' } })
   await expect(stopped).resolves.toEqual({ stop: 'accepted' })
-  // A successful Stop retires the token it used, so Stop waits for the next one the station issues
-  // — and it is issued to this browser with its lease still gone.
+  // The station goes on issuing this browser a token with its lease still gone, and the newest
+  // replaces the one it holds.
   await answer(lapsed('000000000000002c'))
   expect(h.c.getSnapshot().stopAvailable).toBe(true)
   // POSITIVE CONTROL: the availability really can end. The station stops issuing a token — the
@@ -129,12 +129,33 @@ it('keeps Stop available after the lease runs out, and ends it when the station 
   h.c.disconnected()
 })
 
+// Stop TX is never refused for its token's age (operator ruling, 2026-10-03). After an accepted
+// Stop the browser keeps the token it holds, and the next press goes on it at once rather than
+// waiting for the station to issue a new one: the station honours it whatever its age.
+it('keeps Stop available after an accepted Stop, and the next press goes at once on the token it holds', async () => {
+  const h = client()
+  const first = h.c.stopTransmit(), sent = h.sent[h.sent.length - 1].request
+  h.c.receive({ type: 'operationResponse', requestId: sent.requestId, value: { stop: 'accepted' } })
+  await expect(first).resolves.toEqual({ stop: 'accepted' })
+  // No state has been read since: nothing here waits for the station's next token.
+  expect(h.sent.filter(w => w.request.type !== 'stopTransmit')).toHaveLength(1)
+  expect(h.c.getSnapshot().stopAvailable, 'Stop withheld after an accepted Stop').toBe(true)
+  const second = h.c.stopTransmit()
+  const again = h.sent[h.sent.length - 1].request
+  expect(again.type).toBe('stopTransmit')
+  expect(again.requestId).not.toBe(sent.requestId)
+  expect(again.transmitEpoch).toBe(h.s.transmitEpoch)
+  h.c.receive({ type: 'operationResponse', requestId: again.requestId, value: { stop: 'accepted' } })
+  await expect(second).resolves.toEqual({ stop: 'accepted' })
+  h.c.disconnected()
+})
+
 it.each(['timeout', 'disconnect', 'refused'])('does not retry or claim RF stopped after %s', async cause => {
   const h = client(), stopped = h.c.stopTransmit(), requestId = h.sent[h.sent.length - 1].request.requestId
-  const rejected = expect(stopped).rejects.toThrow(cause === 'refused' ? 'staleContext' : 'operationUnknown')
+  const rejected = expect(stopped).rejects.toThrow(cause === 'refused' ? 'notController' : 'operationUnknown')
   if (cause === 'timeout') await vi.advanceTimersByTimeAsync(7500)
   else if (cause === 'disconnect') h.c.disconnected()
-  else h.c.receive({ type: 'operationResponse', requestId, error: 'staleContext' })
+  else h.c.receive({ type: 'operationResponse', requestId, error: 'notController' })
   await rejected
   expect(h.sent.filter(w => w.request.type === 'stopTransmit')).toHaveLength(1)
   expect(h.c.getSnapshot().stopSending).toBe(false)

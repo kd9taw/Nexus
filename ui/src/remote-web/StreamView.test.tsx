@@ -177,6 +177,44 @@ it('Stop, outside the picture, still reaches the station when the picture is fro
   expect(stops(), 'the dead stream carried nothing more').toHaveLength(1)
 })
 
+// A Stop the station refused used to be shown as nothing: the socket's refusal fell back to no
+// word at all, and the stream's own answer was never read. Either path may carry the answer, and
+// the first acceptance is it; a Stop that no path accepted says it failed.
+it('a refused Stop says so, on either path, and an acceptance on either path is the answer', async () => {
+  const FAILED = 'Could not stop transmit'
+  const v = view({ ...controlling, stopAvailable: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control')
+  const stop = () => fireEvent.click(screen.getByRole('button', { name: 'Stop TX' }))
+  const answer = (reply: Record<string, unknown>) => act(() => {
+    control.deliver({ type: 'operationResponse', requestId: last(control.sent.filter(m => m.type === 'stopTransmit'))!.requestId, ...reply })
+  })
+  const word = () => document.querySelector('.remote-stream-stopstate')?.textContent ?? null
+  // Both paths refuse.
+  stop()
+  v.set({ stopSending: true })
+  answer({ error: 'staleConnection' })
+  expect(word(), 'still waiting on the socket').toBe('Sending stop…')
+  v.set({ stopSending: false, stopError: 'notController' })
+  expect(word(), 'a Stop refused on both paths was shown as nothing').toBe(FAILED)
+  // The socket refuses, the stream accepts: the acceptance is the answer.
+  stop()
+  v.set({ stopError: 'remoteBusy' })
+  answer({ value: { stop: 'accepted' } })
+  expect(word()).toBe('Stop sent')
+  // The stream path alone (the socket carried nothing), refused.
+  v.set({ stopAvailable: false, stopError: null, stopAccepted: false })
+  stop()
+  expect(word()).toBe('Sending stop…')
+  answer({ error: 'staleConnection' })
+  expect(word(), 'the stream\'s refusal went unread').toBe(FAILED)
+  // CONTROL: the same path's acceptance reads as one, and never as a failure.
+  stop()
+  answer({ value: { stop: 'accepted' } })
+  expect(word()).toBe('Stop sent')
+})
+
 it('A2 (the page\'s half): only input aimed at the focused picture is sent; the rest of the page sends nothing', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
