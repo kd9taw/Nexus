@@ -96,7 +96,7 @@ word in, and use only that word in the CSV.
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
 | band | 326 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 236 | The rig itself, and the radio list in Settings. | |
+| radio | 237 | The rig itself, and the radio list in Settings. | |
 | mode | 213 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 157 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 141 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
