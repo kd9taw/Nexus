@@ -906,6 +906,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   press ended with "The station has no audio to send right now." while the station was sending
   audio. Behind that, the player also failed on the first packet it was given. Now Listen starts
   when you press it, and you hear the station.
+- **The older Remote page, hidden in 1.16 while streaming is in Beta, has its fixes too.** For the browser in control, Esc stops
+  transmit on FT, CW, RTTY, PSK and JS8 the way Stop TX does, and a Remote Stop says "Stopped" only when nothing is transmitting.
+  Turning the beam keeps an az/el rotator's elevation, and pointing the antenna at a station works again.
 - **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to you,
   or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was relayed
   along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of the
