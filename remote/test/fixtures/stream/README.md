@@ -141,6 +141,8 @@ point on the curve, and their `signature` is not a signature. No key material is
 - Candidates trickle one per message. The station advertises its own LAN address as a host
   candidate, straight after its answer, when its stream socket's address is a private IPv4 one
   (10/8, 172.16/12, 192.168/16): a browser on the shack's own network connects to it directly.
+  A public IPv4 address on that socket (a shack with no NAT in front of it) is advertised the same
+  way, since 2026-10-03: its reflexive candidate would be that same address, dropped as a duplicate.
   Then its server-reflexive candidate (and, once TURN exists, relay ones), whose `raddr`/`rport`
   are `0.0.0.0 0`. No other LAN address leaves the shack: never a link-local or 100.64/10 one,
   never another host's, and never the station's own anywhere but its host candidate. (Until the

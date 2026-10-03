@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure. If the station does refuse a Stop
   (station control taken back at the radio, for example), the stream page says **Could not stop
   transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
+- **Remote streaming: a shack with a public internet address of its own streams.** When the
+  shack's computer holds a public address itself, with no router in front of it, Nexus offered the
+  browser no address to connect to, and a browser behind a router never got the picture. Nexus at
+  the shack now offers that address, the one the internet already sees it at. It needs the new
+  Nexus at the shack.
 
 ### Changed
 
@@ -50,9 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   home routers do not pass a connection from your own network back in through their internet
   address. A browser on any other network connects as before. What Nexus shares is the one
   address it streams from (such as 192.168.1.20), only when it is a private address (10.x,
-  172.16–31.x or 192.168.x), and only to a browser whose stream it has admitted, through the
-  Remote service: never a VPN's 100.x address, and nothing else about your network. It needs the
-  new Nexus at the shack; the Remote site is unchanged.
+  172.16–31.x or 192.168.x) or the computer's own public one, and only to a browser whose stream
+  it has admitted, through the Remote service: never a VPN's 100.x address, and nothing else about
+  your network. It needs the new Nexus at the shack; the Remote site is unchanged.
 
 ### Added
 

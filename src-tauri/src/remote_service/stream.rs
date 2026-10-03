@@ -2,8 +2,8 @@
 //! the relay socket feeds, and the one thread that carries a streamed session end to end.
 //!
 //! A streamed session shows the remote operator the station's own Nexus window over WebRTC and
-//! carries their input back into it. The WebRTC session itself (the offer check, the one LAN address
-//! it offers, the page's certificate) is `tempo_stream::session`; this file is where it meets the
+//! carries their input back into it. The WebRTC session itself (the offer check, the one address of
+//! its own it offers, the page's certificate) is `tempo_stream::session`; this file is where it meets the
 //! station.
 //!
 //! ## Where each rule is kept
@@ -769,8 +769,8 @@ impl Reflexive {
 }
 
 /// The session socket: bound to the address the station reaches the internet from, which is the
-/// base of its reflexive candidate, and its host candidate when it is the shack's LAN address
-/// (`tempo_stream::lan::host`).
+/// base of its reflexive candidate, and its host candidate when it is the shack's LAN address or a
+/// public one (`tempo_stream::lan::host`).
 fn open_socket() -> Option<(UdpSocket, Reflexive)> {
     let server = tempo_stream::stun::SERVER
         .to_socket_addrs()
@@ -859,8 +859,8 @@ fn run(
     );
     tempo_core::applog::info("remote", "stream: offer answered");
     // The shack's own LAN address, straight after the answer, so a browser on the same network
-    // connects directly (the operator's ruling of 2026-10-03, `tempo_stream::lan`). The reflexive
-    // candidate follows once STUN answers.
+    // connects directly (the operator's ruling of 2026-10-03, `tempo_stream::lan`), or its public
+    // address when no NAT stands in front of it. The reflexive candidate follows once STUN answers.
     if let Some(candidate) = session.host_candidate() {
         send(
             StationToRoom::StreamSignal {

@@ -9,10 +9,14 @@
 //!
 //! So the station signals two candidates. One is server-reflexive, the address a STUN server saw,
 //! whose `raddr` str0m writes as `0.0.0.0 0`. The other is a host candidate for its stream socket's
-//! own address, when that is a LAN address ([`host`]). The socket is bound to the address of the
-//! interface the route to the STUN server leaves by, and can be reached at no other, so that is one
-//! address, and only:
+//! own address, when that is a LAN address or a public one ([`host`]). The socket is bound to the
+//! address of the interface the route to the STUN server leaves by, and can be reached at no other,
+//! so that is one address, and only:
 //! - a private IPv4 address (10/8, 172.16/12, 192.168/16): the home network's. It is offered.
+//! - a public IPv4 address, a shack with no NAT in front of it. It is offered too (2026-10-03). It is
+//!   the very address a STUN server reports, so it names nothing the reflexive candidate would not,
+//!   and str0m drops that reflexive candidate as the host one's duplicate: without the host
+//!   candidate such a shack signalled no candidate at all, and no browser behind a router reached it.
 //! - loopback, link-local (169.254/16) and the unspecified address are not.
 //! - nor is the shared space 100.64/10. It is a carrier-grade NAT's, or an overlay VPN's (Tailscale
 //!   numbers its interfaces there), which is where the route leaves while such a VPN carries all
@@ -28,9 +32,9 @@
 //!
 //! [`leaks`] is still the last lock: every SDP and candidate the station is about to send is read
 //! for a host candidate or a private, link-local, carrier-NAT or unique-local address, and a leak is
-//! never sent. The one thing it lets through is the station's own LAN address, as the address of
-//! that one host candidate. A `raddr`, any other host's address, a host candidate for any other
-//! address, and the station's own address anywhere else are still leaks.
+//! never sent. The one thing it lets through is the station's own address, as the address of that
+//! one host candidate. A `raddr`, any other host's address, a host candidate for any other address,
+//! and the station's own LAN address anywhere else are still leaks.
 //!
 //! The page and the relay hand every candidate the station names to the browser as it is. A page
 //! that refused private or host candidates (one way to stop a relay that forges the station's
@@ -61,11 +65,21 @@ pub fn private(ip: IpAddr) -> bool {
 }
 
 /// The host candidate the station offers for its stream socket at `base`: the socket's own address,
-/// when that is a private IPv4 address, the shack's own network. `None` for anything else (see the
-/// module header for what is not offered, and why): the station then offers only its reflexive one.
+/// when that is a private IPv4 address, the shack's own network, or a public one, the shack's own
+/// address on the internet. `None` for anything else (see the module header for what is not offered,
+/// and why): the station then offers only its reflexive one.
 pub fn host(base: SocketAddr) -> Option<SocketAddr> {
     match base.ip() {
         IpAddr::V4(v4) if v4.is_private() => Some(base),
+        IpAddr::V4(v4)
+            if !private(base.ip())
+                && !v4.is_loopback()
+                && !v4.is_unspecified()
+                && !v4.is_broadcast()
+                && !v4.is_multicast() =>
+        {
+            Some(base)
+        }
         _ => None,
     }
 }
@@ -225,36 +239,69 @@ mod tests {
         }
     }
 
-    /// Which address is offered: the socket's own, when it is a private IPv4 address. Not loopback,
-    /// link-local or the unspecified address; not the shared 100.64/10 (a carrier NAT's, or an
-    /// overlay VPN's); not a public address (the reflexive candidate is that one); and nothing on
-    /// IPv6, mapped or not.
+    /// Which address is offered: the socket's own, when it is a private IPv4 address, or a public
+    /// one (a shack with no NAT in front of it, 2026-10-03). Not loopback, link-local, broadcast,
+    /// multicast or the unspecified address; not the shared 100.64/10 (a carrier NAT's, or an
+    /// overlay VPN's); and nothing on IPv6, mapped or not.
     #[test]
-    fn only_a_private_ipv4_socket_address_is_offered() {
-        for lan in [
+    fn a_private_or_public_ipv4_socket_address_is_offered() {
+        for offered in [
             "10.0.0.5:61000",
             "172.16.3.1:5",
             "172.31.255.254:5",
             "192.168.1.20:61000",
+            "203.0.113.7:61000",
+            "172.32.0.1:5",
+            "8.8.4.4:5",
         ] {
-            let base: SocketAddr = lan.parse().unwrap();
-            assert_eq!(host(base), Some(base), "{lan}");
+            let base: SocketAddr = offered.parse().unwrap();
+            assert_eq!(host(base), Some(base), "{offered}");
         }
         for other in [
             "127.0.0.1:5",
             "169.254.10.1:5",
             "0.0.0.0:5",
+            "255.255.255.255:5",
+            "224.0.0.251:5",
             "100.64.0.1:5",
             "100.101.102.103:5",
             "100.127.255.254:5",
-            "172.32.0.1:5",
-            "203.0.113.7:61000",
             "[fd00::1]:5",
             "[fe80::1]:5",
             "[2001:db8::1]:5",
             "[::ffff:192.168.1.20]:5",
+            "[::ffff:203.0.113.7]:5",
         ] {
             assert_eq!(host(other.parse().unwrap()), None, "{other}");
+        }
+    }
+
+    /// The guard, for a shack whose socket holds a public address: that address passes as its own
+    /// host candidate and as nothing else, and every other host, every LAN address and every
+    /// `raddr` naming one is still caught. CONTROL: offering none, the same line is a leak.
+    #[test]
+    fn a_public_socket_address_passes_as_its_own_host_candidate_only() {
+        let own = Some("203.0.113.7:61000".parse().unwrap());
+        for fine in [
+            "candidate:1 1 udp 2130706431 203.0.113.7 61000 typ host",
+            "a=candidate:1 1 udp 2130706431 203.0.113.7 61000 typ host ufrag cgyb7Q0Lvq0tP3Ko",
+        ] {
+            assert!(!leaks(fine, own), "refused: {fine}");
+            assert!(leaks(fine, None), "control: {fine}");
+        }
+        for leak in [
+            "candidate:1 1 udp 2130706431 203.0.113.8 61000 typ host",
+            "candidate:1 1 udp 2130706431 203.0.113.7 61001 typ host",
+            "candidate:1 1 udp 2130706431 10.0.0.5 61000 typ host",
+            "candidate:1 1 udp 2130706431 169.254.10.1 61000 typ host",
+            "candidate:1 1 udp 2130706431 100.101.102.103 61000 typ host",
+            "candidate:1 1 udp 2130706431 fd00::1 61000 typ host",
+            "candidate:1 1 udp 2130706431 203.0.113.7 61000 typ host raddr 10.0.0.5 rport 61000",
+            "candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 192.168.1.20 rport 5",
+            "o=- 1 2 IN IP4 192.168.1.20",
+            "c=IN IP4 10.1.2.3",
+        ] {
+            assert!(leaks(leak, own), "missed: {leak}");
         }
     }
 }

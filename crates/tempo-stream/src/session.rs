@@ -25,6 +25,8 @@
 //!   ([`Session::add_reflexive`]), whose `raddr` str0m writes as `0.0.0.0 0`, and, when its socket's
 //!   own address is the shack's LAN address ([`crate::lan::host`]), a host candidate for exactly
 //!   that address ([`Session::host_candidate`]), so a browser on the same network connects directly.
+//!   A public address on the socket (no NAT in front of the shack) is offered the same way: the
+//!   reflexive candidate would be that same address, which str0m drops as the host one's duplicate.
 //!   Before that ruling no LAN address was signalled, and a browser on the shack's own network found
 //!   no path to it. str0m needs the socket's own address as a local candidate either way: it answers
 //!   connectivity checks only on a host or relay candidate, and discards every other one as an
@@ -239,7 +241,7 @@ impl Session {
         }
         // Only now, with the answer written: the socket's own address, which ICE needs to use the
         // socket at all, and which is signalled, as its own candidate, only when it is the shack's
-        // LAN address (see the module header).
+        // LAN address or a public one (see the module header).
         let own = Candidate::host(base, "udp").map_err(|_| Refusal::Unavailable)?;
         let line = rtc.add_local_candidate(own).map(Candidate::to_sdp_string);
         let lan = crate::lan::host(base);
@@ -284,9 +286,10 @@ impl Session {
         (!crate::lan::leaks(&line, None)).then_some(line)
     }
 
-    /// The station's own LAN address as a host candidate line, to trickle to the page with the
-    /// answer: what lets a browser on the shack's network connect directly. `None` when the
-    /// socket's address is not one the station offers ([`crate::lan::host`]).
+    /// The station's own address as a host candidate line, to trickle to the page with the answer:
+    /// what lets a browser on the shack's network connect directly, and any browser reach a shack
+    /// with a public address and no NAT. `None` when the socket's address is not one the station
+    /// offers ([`crate::lan::host`]).
     pub fn host_candidate(&self) -> Option<&str> {
         self.host.as_deref()
     }
@@ -1010,9 +1013,10 @@ mod tests {
 
         /// ★ A8, as the operator ruled on 2026-10-03: the one LAN address the station signals is
         /// its socket's own, as its own host candidate, and nothing else it signals names one: not
-        /// the answer, not the reflexive candidate's `raddr`. An address that is not the shack's
-        /// LAN (an overlay VPN's, a public one) is not offered. CONTROL: a host candidate for
-        /// another address puts that address in the answer, and the leak check catches it.
+        /// the answer, not the reflexive candidate's `raddr`. An overlay VPN's address is not
+        /// offered; a public one on the socket is, as its own host candidate (2026-10-03).
+        /// CONTROL: a host candidate for another address puts that address in the answer, and the
+        /// leak check catches it.
         #[test]
         fn the_shack_offers_its_own_lan_address_and_no_other() {
             let mut now = Instant::now();
@@ -1033,11 +1037,19 @@ mod tests {
                 line.contains(" typ srflx ") && line.contains("raddr 0.0.0.0 rport 0"),
                 "{line}"
             );
-            for elsewhere in ["100.101.102.103:61000", "203.0.113.7:61000"] {
-                let (_page, offer, _pending) = page(now);
-                let (other, _) = Session::accept(&offer, elsewhere.parse().unwrap(), now).unwrap();
-                assert_eq!(other.host_candidate(), None, "{elsewhere}");
-            }
+            let (_page, offer, _pending) = page(now);
+            let (overlay, _) =
+                Session::accept(&offer, "100.101.102.103:61000".parse().unwrap(), now).unwrap();
+            assert_eq!(overlay.host_candidate(), None);
+            let public: SocketAddr = PUBLIC.parse().unwrap();
+            let (_page, offer, _pending) = page(now);
+            let (open, open_answer) = Session::accept(&offer, public, now).unwrap();
+            let line = open
+                .host_candidate()
+                .expect("a public socket address is offered");
+            assert!(line.contains(" 203.0.113.7 61000 typ host"), "{line}");
+            assert!(!crate::lan::leaks(line, Some(public)), "{line}");
+            assert!(!open_answer.contains("a=candidate:"), "{open_answer}");
             // CONTROL: with a host candidate for another address on, the answer carries a 192.168
             // address, and the leak check catches it.
             let (_page, offer, _pending) = page(now);
@@ -1123,6 +1135,75 @@ mod tests {
                 page.lost
             );
             assert!(station.is_connected(), "the session never connected");
+            assert!(page.rtc.is_connected());
+        }
+
+        /// A shack with a public address on its own interface, no NAT in front of it: a STUN
+        /// server reports that same address, so the reflexive candidate is the host one's
+        /// duplicate and str0m drops it. The station's host candidate is then the only way to it,
+        /// and a browser elsewhere connects there. The browser sits behind a home router, which
+        /// lets a datagram in only from an address the browser has sent to, so the station's own
+        /// checks reach it only once the browser has tried the station. Before 2026-10-03 such a
+        /// station signalled no candidate at all, the browser never tried it, and no browser
+        /// behind a router ever connected.
+        #[test]
+        fn a_shack_with_a_public_address_on_its_interface_is_reached_there() {
+            let mut now = Instant::now();
+            let (mut page, offer, pending, _) = page_on(now, false, PAGE);
+            // As Chrome: no candidate in the offer; its own arrives trickled, as a reflexive one.
+            let offer: String = offer
+                .split_inclusive("\r\n")
+                .filter(|line| !line.starts_with("a=candidate:"))
+                .collect();
+            let (mut station, answer) =
+                Session::accept(&offer, PUBLIC.parse().unwrap(), now).unwrap();
+            page.rtc
+                .sdp_api()
+                .accept_answer(pending, SdpAnswer::from_sdp_string(&answer).unwrap())
+                .unwrap();
+            page.drain();
+            assert_eq!(
+                station.add_reflexive(PUBLIC.parse().unwrap(), now),
+                None,
+                "premise: the reflexive candidate duplicates the host one"
+            );
+            if let Some(host) = station.host_candidate() {
+                page.rtc
+                    .add_remote_candidate(Candidate::from_sdp_string(host).unwrap());
+                page.drain();
+            }
+            let reflexive =
+                "candidate:1 1 udp 1686052607 198.51.100.23 51234 typ srflx raddr 0.0.0.0 rport 0";
+            assert!(station.add_remote_candidate(reflexive, now));
+            let (station_at, page_at): (SocketAddr, SocketAddr) =
+                (PUBLIC.parse().unwrap(), PAGE.parse().unwrap());
+            let mut opened = false;
+            let end = now + Duration::from_secs(10);
+            while now < end && !station.is_connected() {
+                for (destination, packet) in std::mem::take(&mut page.outbox) {
+                    if destination == station_at {
+                        opened = true;
+                        station.receive(now, page_at, &packet);
+                    } else {
+                        page.lost.push(destination);
+                    }
+                }
+                for t in station.take_transmits() {
+                    if t.destination == page_at && opened {
+                        let receive =
+                            Receive::new(Protocol::Udp, station_at, page_at, &t.contents).unwrap();
+                        page.input(Input::Receive(now, receive));
+                    }
+                }
+                now += Duration::from_millis(5);
+                page.input(Input::Timeout(now));
+                station.timeout(now);
+            }
+            assert!(
+                station.is_connected(),
+                "a shack with a public address found no path: {:?}",
+                station.take_events()
+            );
             assert!(page.rtc.is_connected());
         }
 
