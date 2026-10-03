@@ -299,6 +299,28 @@ describe("Program's map: hearham's listings only", () => {
     expect(rowOf('W9AAA').classList.contains('selected')).toBe(false)
   })
 
+  it('under the UI zoom, the dot under the pointer is the one it names, lights and selects', async () => {
+    // THE DEFECT (Chrome, 2026-10-03): `.app { zoom: var(--ui-zoom) }` makes the pointer's clientX and the canvas's rect
+    // VISUAL px while the dots are placed in LAYOUT px (the box's clientWidth), and the hit test compared the two
+    // unscaled. At 85 %, the default on 1366×768 and 1024×768, a pointer on the station's own dot lit another machine's
+    // row, and a click there opened that machine's card, Save to Memories and Add with it. MapView's canvasXY undoes the
+    // zoom by the rect's ratio; this is the same. The cases above are the unzoomed control (jsdom's rect is 0 × 0).
+    await fetched(result([HH, BOTH], ['hearham']))
+    const canvas = screen.getByRole('img', { name: t('program.map.aria', { count: 2 }) })
+    const Z = 0.85
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+      x: 10, y: 20, left: 10, top: 20, width: W * Z, height: H * Z, right: 10 + W * Z, bottom: 20 + H * Z, toJSON: () => ({}),
+    } as DOMRect)
+    // W9AAA's dot is the map's centre: on screen, the rect's corner plus half its zoomed size.
+    const at = { clientX: 10 + (W / 2) * Z, clientY: 20 + (H / 2) * Z }
+    fireEvent.pointerMove(canvas, at)
+    await waitFor(() => expect(rowOf('W9AAA').classList.contains('linked')).toBe(true))
+    expect(rowOf('W9BBB').classList.contains('linked')).toBe(false)
+    fireEvent.click(canvas, at)
+    await waitFor(() => expect(rowOf('W9AAA').classList.contains('selected')).toBe(true))
+    expect(card()?.textContent).toContain('W9AAA')
+  })
+
   it("a dot's card saves the machine to Memories, then shows the row's badge", async () => {
     await fetched(result([HH, BOTH], ['hearham']))
     const canvas = screen.getByRole('img', { name: t('program.map.aria', { count: 2 }) })
