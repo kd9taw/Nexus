@@ -896,6 +896,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote as a stream: the stream no longer ends the moment it starts (Windows).** Every
+  **Start the stream** was answered by the shack and then ended in the same second, and the page
+  went back to **Start the stream** saying the connection to the station was lost. While the
+  station and the browser look for a way through each other's routers, some of their first tries
+  are refused, and Windows reports such a refusal as if the station's connection had failed. The
+  station took it at its word and ended the stream before anything could connect. A browser whose
+  network has IPv6 could end the same way. Now the station keeps looking for its usual 20 seconds,
+  and the stream connects when there is a way through.
 - **Remote: Listen plays the station's audio.** Since Listen arrived in 1.13.0 it never played on
   the hosted page: the page's own security policy refused the audio player the page builds, so
   every press ended with "The station has no audio to send right now." while the station was

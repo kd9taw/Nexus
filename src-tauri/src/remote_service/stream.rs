@@ -60,7 +60,7 @@ use tempo_stream::protocol::{
     self, BrowserSignal, ControlIn, ControlOut, PttIn, PttReason, StationSignal, StationToRoom,
     StreamReason, WebviewInput,
 };
-use tempo_stream::session::{Lane, Session, SessionEvent};
+use tempo_stream::session::{receive_ends_session, Lane, Session, SessionEvent};
 
 use super::operations::{Authority, Request};
 
@@ -872,11 +872,7 @@ fn run(
                     }
                 }
             }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
+            Err(e) if !receive_ends_session(&e) => {}
             Err(_) => session.close(StreamReason::ConnectionFailed, Instant::now()),
         }
         let now = Instant::now();
