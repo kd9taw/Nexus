@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure. If the station does refuse a Stop
   (station control taken back at the radio, for example), the stream page says **Could not stop
   transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
+- **Remote streaming: text in the picture is sharp.** A Nexus window larger than 2560×1600, a
+  3440×1440 ultrawide's for one, went out at half its width and height and the browser enlarged it
+  again, so every letter on the stream read soft. Now the Remote page tells Nexus at the shack how
+  many screen pixels it has for the picture, and Nexus scales its window down to exactly that, once
+  and never up, so the page draws it one pixel to one screen pixel. A window smaller than the page
+  is sent whole and enlarged by the browser as before. On the shack's own network a page that has
+  not said gets the whole window (up to 3840×2160); over the internet or the relay the ceiling
+  stays where it was (2560×1600's worth of pixels, 4 Mbit/s). A very large picture gets fewer frames
+  a second rather than more of the shack's processor. It needs the new Nexus at the shack, and the
+  Remote page's update for the picture to follow the browser's size.
 - **Remote streaming: a shack with a public internet address of its own streams.** When the
   shack's computer holds a public address itself, with no router in front of it, Nexus offered the
   browser no address to connect to, and a browser behind a router never got the picture. Nexus at

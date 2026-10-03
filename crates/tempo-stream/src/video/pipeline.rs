@@ -3,7 +3,10 @@
 //! - **Drop, never queue.** The capture writes into a one-picture [`Mailbox`]; a picture the
 //!   encoder has not reached yet is replaced by the next one, so a slow encoder shows the page the
 //!   newest picture late rather than every picture later and later.
-//! - **At most 30 frames a second** ([`FRAME_INTERVAL`]), however often the window changes.
+//! - **At most 30 frames a second** ([`FRAME_INTERVAL`]), however often the window changes, and
+//!   fewer for a picture so large that 30 would pass [`PIXEL_RATE`] ([`frame_interval`]): the most
+//!   the encoder took before the picture followed the page's size, so a larger picture costs the
+//!   station's CPU frames a second, not more of the CPU.
 //! - **A still window is sent at least twice a second** ([`STILL_FRAME_MS`]). The capture delivers
 //!   a picture only when the window changes, and the page's freshness rule (S9) needs frames to
 //!   echo, so the last picture is encoded again, stamped now. That is honest because nothing
@@ -16,6 +19,12 @@
 //!   after a lost one decodes wrong until a keyframe arrives.
 //! - **The capture instant rides with each frame**, strictly increasing, because it becomes the RTP
 //!   timestamp the page echoes and the freshness rule reads (`frame_clock`).
+//! - **At the size the page shows** ([`Pipeline::set_bound`], `picture::Bound`). Each picture is
+//!   converted at the window's size, then scaled once to what the page's view and the path allow;
+//!   the scaled copy is kept for a still window's resends. A new bound takes effect on the next
+//!   frame, a still window's resend included, and a new size or bit rate opens a new encoder, whose
+//!   first frame is a keyframe. Nothing about the bound can stop the frames: the still-window floor
+//!   holds through every change.
 //! - **Below the radio.** The thread lowers its own priority on Windows (the caller's `lower`).
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -23,11 +32,20 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::picture::{self, Bgra, I420};
+use super::picture::{self, Bgra, Bound, I420};
 use crate::protocol::STILL_FRAME_MS;
 
 /// The shortest time between two encoded frames: 30 a second.
 pub const FRAME_INTERVAL: Duration = Duration::from_micros(33_334);
+/// The most pixels a second the encoder is given: 2560×1600 at 30 frames a second.
+pub const PIXEL_RATE: u64 = 2560 * 1600 * 30;
+
+/// The shortest time between two frames of a `width`×`height` picture: [`FRAME_INTERVAL`], or
+/// longer when 30 a second would pass [`PIXEL_RATE`]. A still window's floor is far inside it.
+pub fn frame_interval(width: u32, height: u32) -> Duration {
+    let pixels = u64::from(width) * u64::from(height);
+    FRAME_INTERVAL.max(Duration::from_nanos(pixels * 1_000_000_000 / PIXEL_RATE))
+}
 /// The longest a still window goes without a frame.
 pub const STILL_FRAME: Duration = Duration::from_millis(STILL_FRAME_MS);
 /// Frames the transport has not taken yet, before the next one is dropped.
@@ -47,8 +65,12 @@ pub trait Encode: Send {
     fn encode(&mut self, picture: &I420, at: Duration, keyframe: bool) -> Option<Vec<Packet>>;
 }
 
-/// Makes an encoder for a picture size. Called again whenever the size changes.
-pub type MakeEncoder = Box<dyn FnMut(u32, u32) -> Option<Box<dyn Encode>> + Send>;
+/// Makes an encoder for a picture's width and height and a bit rate in kbit/s. Called again
+/// whenever any of them changes.
+pub type MakeEncoder = Box<dyn FnMut(u32, u32, u32) -> Option<Box<dyn Encode>> + Send>;
+
+/// The width, height and bit rate an encoder was opened for.
+type Opening = (u32, u32, u32);
 
 /// One encoded frame, ready for the transport.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,6 +159,7 @@ impl Mailbox {
 struct Shared {
     stop: AtomicBool,
     keyframe: AtomicBool,
+    bound: Mutex<Bound>,
 }
 
 /// The running encoder thread. Dropping it stops the thread and waits for it.
@@ -159,6 +182,7 @@ impl Pipeline {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             keyframe: AtomicBool::new(false),
+            bound: Mutex::new(Bound::default()),
         });
         let (out, frames) = mpsc::sync_channel(OUTPUT_DEPTH);
         let thread = {
@@ -177,6 +201,12 @@ impl Pipeline {
             frames,
             thread: Some(thread),
         })
+    }
+
+    /// What the picture may be encoded at from the next frame on: the page's view and the path's
+    /// budget. Until the first call, the bound of a page whose view and path are not known yet.
+    pub fn set_bound(&self, bound: Bound) {
+        *self.shared.bound.lock().unwrap_or_else(|p| p.into_inner()) = bound;
     }
 
     /// The page lost a frame and asked for a keyframe (PLI/FIR).
@@ -209,9 +239,13 @@ impl Drop for Pipeline {
 /// The encoder thread's own state.
 struct Encoder {
     make: MakeEncoder,
-    current: Option<(Box<dyn Encode>, u32, u32, Instant)>,
-    /// The last picture encoded, kept to send again while the window is still.
+    /// The encoder, what it was opened for, and when.
+    current: Option<(Box<dyn Encode>, Opening, Instant)>,
+    /// The last picture captured, at the window's size, kept to send again while the window is
+    /// still.
     last: Option<I420>,
+    /// `last` scaled to the size it was last sent at, when that is not the window's own.
+    scaled: Option<I420>,
     last_sent: Option<Instant>,
     last_captured: Option<Instant>,
     keyframe: bool,
@@ -223,6 +257,7 @@ impl Encoder {
             make,
             current: None,
             last: None,
+            scaled: None,
             last_sent: None,
             last_captured: None,
             keyframe: true,
@@ -238,9 +273,13 @@ impl Encoder {
     ) {
         while !shared.stop.load(Ordering::Relaxed) {
             let now = Instant::now();
-            // Pace: nothing sooner than a frame interval after the last one.
+            // Pace: nothing sooner than a frame interval after the last one, at the size it was.
             if let Some(sent) = self.last_sent {
-                let ready = sent + FRAME_INTERVAL;
+                let ready = sent
+                    + self
+                        .current
+                        .as_ref()
+                        .map_or(FRAME_INTERVAL, |(_, (w, h, _), _)| frame_interval(*w, *h));
                 if now < ready {
                     std::thread::sleep(ready - now);
                     continue;
@@ -259,6 +298,7 @@ impl Encoder {
                         continue;
                     };
                     self.last = Some(picture);
+                    self.scaled = None;
                     self.send(shared, captured.captured_at, out);
                 }
                 Taken::Nothing => {
@@ -276,10 +316,29 @@ impl Encoder {
         }
     }
 
-    /// Encode the last picture as captured at `captured_at`, and hand it to the transport.
+    /// Encode the last picture as captured at `captured_at`, at the size the bound allows, and hand
+    /// it to the transport.
     fn send(&mut self, shared: &Shared, captured_at: Instant, out: &SyncSender<Encoded>) {
-        let Some(picture) = self.last.as_ref() else {
+        let Some(source) = self.last.as_ref() else {
             return;
+        };
+        let bound = *shared.bound.lock().unwrap_or_else(|p| p.into_inner());
+        let Some((width, height)) = picture::encoded_size(source.width(), source.height(), &bound)
+        else {
+            return;
+        };
+        let whole = (width, height) == (source.width(), source.height());
+        if !whole
+            && self
+                .scaled
+                .as_ref()
+                .is_none_or(|s| (s.width(), s.height()) != (width, height))
+        {
+            self.scaled = Some(picture::scale(source, width, height));
+        }
+        let picture = match &self.scaled {
+            Some(scaled) if !whole => scaled,
+            _ => source,
         };
         // Strictly increasing capture instants: a still-window resend can be stamped a moment
         // after a picture that was captured just before it but taken just after.
@@ -287,12 +346,13 @@ impl Encoder {
             Some(previous) if captured_at <= previous => previous + Duration::from_millis(1),
             _ => captured_at,
         };
-        let (width, height) = (picture.width(), picture.height());
-        if !matches!(&self.current, Some((_, w, h, _)) if (*w, *h) == (width, height)) {
-            self.current = (self.make)(width, height).map(|e| (e, width, height, captured_at));
+        let opening = (width, height, bound.kbps(width, height));
+        if !matches!(&self.current, Some((_, opened, _)) if *opened == opening) {
+            self.current =
+                (self.make)(opening.0, opening.1, opening.2).map(|e| (e, opening, captured_at));
             self.keyframe = true;
         }
-        let Some((encoder, _, _, opened)) = self.current.as_mut() else {
+        let Some((encoder, _, opened)) = self.current.as_mut() else {
             return;
         };
         // The page's request is consumed either way, so a frame that was already going to be a
@@ -326,6 +386,7 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video::picture::{Path, MIN_KBPS};
 
     /// An encoder that encodes nothing: one packet per picture, naming the picture's size, its
     /// first luma byte and whether it was asked for a keyframe.
@@ -345,7 +406,7 @@ mod tests {
     }
 
     fn fake() -> MakeEncoder {
-        Box::new(|_, _| Some(Box::new(Fake) as Box<dyn Encode>))
+        Box::new(|_, _, _| Some(Box::new(Fake) as Box<dyn Encode>))
     }
 
     fn grey(v: u8, side: u32, at: Instant) -> Bgra {
@@ -359,6 +420,31 @@ mod tests {
     }
 
     fn no_priority() {}
+
+    /// A picture of `width`×`height`, all one grey.
+    fn sized(v: u8, width: u32, height: u32, at: Instant) -> Bgra {
+        Bgra {
+            width,
+            height,
+            stride: width as usize * 4,
+            pixels: [v, v, v, 255].repeat((width * height) as usize),
+            captured_at: at,
+        }
+    }
+
+    /// What every encoder a maker opened was opened for.
+    type Opened = Arc<Mutex<Vec<Opening>>>;
+
+    /// An encoder maker that records the width, height and bit rate of every encoder it opens.
+    fn logged() -> (MakeEncoder, Opened) {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let log = opened.clone();
+        let make: MakeEncoder = Box::new(move |w, h, kbps| {
+            log.lock().unwrap().push((w, h, kbps));
+            Some(Box::new(Fake) as Box<dyn Encode>)
+        });
+        (make, opened)
+    }
 
     fn wait_for(pipeline: &Pipeline, n: usize, within: Duration) -> Vec<Encoded> {
         let until = Instant::now() + within;
@@ -445,6 +531,57 @@ mod tests {
         assert!(pipeline.take().is_empty(), "a hidden window was sent again");
     }
 
+    /// The operator's case at the encoder (2026-10-03): a 3440×1440 window and a page on the shack's
+    /// network that has not said its view. The encoder is opened for the whole window, at the
+    /// network's bit rate, where it used to get half of each side.
+    #[test]
+    fn a_wide_window_reaches_the_encoder_whole_on_the_shacks_network() {
+        let mailbox = Arc::new(Mailbox::default());
+        let (make, opened) = logged();
+        let pipeline =
+            Pipeline::start(mailbox.clone(), Box::new(|| true), make, no_priority).unwrap();
+        pipeline.set_bound(Bound::new(Some(Path::Lan), None));
+        mailbox.put(sized(0, 3440, 1440, Instant::now()));
+        assert_eq!(wait_for(&pipeline, 1, Duration::from_secs(5)).len(), 1);
+        assert_eq!(*opened.lock().unwrap(), vec![(3440, 1440, 4953)]);
+    }
+
+    /// The page says its view: the next frame, a still window's resend, is at the size that fits
+    /// it, from a new encoder, and is a keyframe. The still-window floor holds through the change.
+    /// CONTROL: the same bound again opens nothing, and the resends after it are ordinary frames.
+    #[test]
+    fn a_new_bound_resizes_the_next_frame_and_the_frames_keep_coming() {
+        let mailbox = Arc::new(Mailbox::default());
+        let (make, opened) = logged();
+        let pipeline =
+            Pipeline::start(mailbox.clone(), Box::new(|| true), make, no_priority).unwrap();
+        mailbox.put(sized(0, 960, 540, Instant::now()));
+        let mut got = wait_for(&pipeline, 1, Duration::from_secs(2));
+        assert!(got[0].keyframe);
+        pipeline.set_bound(Bound::new(Some(Path::Lan), Some((480, 480))));
+        let resized = wait_for(&pipeline, 1, STILL_FRAME * 3);
+        assert!(
+            resized[0].keyframe,
+            "the first frame at a new size is not a keyframe"
+        );
+        pipeline.set_bound(Bound::new(Some(Path::Lan), Some((480, 480))));
+        let still = wait_for(&pipeline, 2, STILL_FRAME * 3);
+        assert!(
+            still.len() >= 2 && still.iter().all(|f| !f.keyframe),
+            "{still:?}"
+        );
+        assert_eq!(
+            *opened.lock().unwrap(),
+            vec![(960, 540, 518), (480, 270, MIN_KBPS)]
+        );
+        got.extend(resized);
+        got.extend(still);
+        for pair in got.windows(2) {
+            let gap = pair[1].captured_at - pair[0].captured_at;
+            assert!(gap <= STILL_FRAME + Duration::from_millis(250), "{gap:?}");
+        }
+    }
+
     /// The page's keyframe request is honoured on the next frame, once.
     #[test]
     fn a_keyframe_request_is_answered_once() {
@@ -466,13 +603,28 @@ mod tests {
         assert!(!wait_for(&pipeline, 1, Duration::from_secs(2))[0].keyframe);
     }
 
+    /// Up to 2560×1600, 30 frames a second; past it, fewer, so the encoder never takes more pixels
+    /// a second than that. Every one of them far inside the still window's twice a second.
+    #[test]
+    fn a_picture_past_the_pixel_rate_gets_fewer_frames() {
+        assert_eq!(frame_interval(1920, 1080), FRAME_INTERVAL);
+        assert_eq!(frame_interval(2560, 1600), FRAME_INTERVAL);
+        assert_eq!(frame_interval(3440, 1440), Duration::from_nanos(40_312_500));
+        assert_eq!(frame_interval(3840, 2160), Duration::from_nanos(67_500_000));
+        let lan = Bound::new(Some(Path::Lan), None);
+        for (w, h) in [(3440, 1440), (3840, 2160), (7680, 4320)] {
+            let (w, h) = picture::encoded_size(w, h, &lan).unwrap();
+            assert!(frame_interval(w, h) * 4 < STILL_FRAME, "{w}x{h}");
+        }
+    }
+
     /// A new window size opens a new encoder, and its first frame is a keyframe.
     #[test]
     fn a_new_size_opens_a_new_encoder_with_a_keyframe() {
         let mailbox = Arc::new(Mailbox::default());
         let opened = Arc::new(Mutex::new(Vec::new()));
         let log = opened.clone();
-        let make: MakeEncoder = Box::new(move |w, h| {
+        let make: MakeEncoder = Box::new(move |w, h, _| {
             log.lock().unwrap().push((w, h));
             Some(Box::new(Fake) as Box<dyn Encode>)
         });

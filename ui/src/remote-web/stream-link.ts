@@ -43,8 +43,9 @@ import { IdleWatch } from './stream-idle'
 import {
   MIC_CONSTRAINTS, STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS,
   STREAM_HELD_REASSERT_MS, STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, STREAM_UPLINK_BUDGET_BYTES,
-  STREAM_UPLINK_STALL_MS, parseHeld, parseMicState, parsePttState, parseReceivedMessage, parseStreamInput, secureAnswer,
-  type BrowserStreamPayload, type MicEnded, type OfferSignature, type StreamInput, type StreamWheel,
+  STREAM_UPLINK_STALL_MS, STREAM_VIEW_SETTLE_MS, parseHeld, parseMicState, parsePttState, parseReceivedMessage,
+  parseStreamInput, secureAnswer, viewMessage, type BrowserStreamPayload, type MicEnded, type OfferSignature, type StreamInput,
+  type StreamViewSize, type StreamWheel,
 } from './stream-protocol'
 
 /** The page's microphone. `asking` is the browser's permission prompt; `denied` and `unavailable`
@@ -164,6 +165,11 @@ export type StreamEnvironment = {
   window?: { addEventListener: (type: string, f: () => void) => void; removeEventListener: (type: string, f: () => void) => void }
   /** Whether this page has the focus now (a microphone turned on sends only while it does). */
   hasFocus?: () => boolean
+  /** Reports the picture area's size in device pixels, now and whenever it changes, until the
+   *  function it returns is called: the box that holds the video, which the video's own size never
+   *  changes. Absent, the page never says (`view`), and the station sends the picture at the size
+   *  its path allows. */
+  watchSize?: (video: VideoLike, report: (width: number, height: number) => void) => () => void
 }
 
 /** The ICE server every stream has, with no credentials: the contract asks the page for a STUN server
@@ -210,6 +216,12 @@ export class StreamLink {
   private unsent: { kind: 'candidate'; candidate: string; sdpMid: string }[] | null = []
   private pendingCandidates: CandidateLike[] = []
   private video: VideoLike | null = null
+  /** The picture area's size as the station hears it (`view`), the last one it was sent on this
+   *  stream, the timer that waits for a new size to settle, and what stops the watching. */
+  private size: StreamViewSize | null = null
+  private sizeSent: string | null = null
+  private sizeTimer: ReturnType<typeof setTimeout> | undefined
+  private unwatchSize: (() => void) | undefined
   private media: unknown = null
   private receiver: ReceiverLike | null = null
   private frameHandle: number | null = null
@@ -377,7 +389,9 @@ export class StreamLink {
   attachVideo(video: VideoLike | null): void {
     if (this.video === video) return
     this.unbindVideo()
+    this.unwatchSize?.(); this.unwatchSize = undefined
     this.video = video
+    if (video && this.env.watchSize) this.unwatchSize = this.env.watchSize(video, (width, height) => this.resized(width, height))
     this.bindVideo()
   }
 
@@ -509,6 +523,7 @@ export class StreamLink {
       this.sendHeartbeat()
       clearInterval(this.heartbeat)
       this.heartbeat = setInterval(() => this.sendHeartbeat(), STREAM_HEARTBEAT_MS)
+      this.sendView()
     }
     channels.control.onclose = () => { if (this.peer === peer) this.end('connectionFailed', false) }
     channels.control.onmessage = event => { if (this.peer === peer) this.fromControl(event.data) }
@@ -694,6 +709,18 @@ export class StreamLink {
     if (ptt?.readyState !== 'open') return false
     try { ptt.send(JSON.stringify(message)); return true } catch { return false }
   }
+  /** The picture area changed size: the station hears of it once the new size has settled. */
+  private resized(width: number, height: number): void {
+    this.size = viewMessage(width, height)
+    clearTimeout(this.sizeTimer)
+    this.sizeTimer = setTimeout(() => { this.sizeTimer = undefined; this.sendView() }, STREAM_VIEW_SETTLE_MS)
+  }
+  /** The size the picture is shown at, unless this stream's station has already heard it. */
+  private sendView(): void {
+    const text = this.size && JSON.stringify(this.size)
+    if (!text || text === this.sizeSent) return
+    if (this.sendControl(this.size!, false)) this.sizeSent = text
+  }
   /** `budgeted` messages can wait and are dropped past the channel's budget; the rest never are. */
   private sendControl(message: object, budgeted: boolean): boolean {
     const control = this.channels?.control
@@ -744,6 +771,7 @@ export class StreamLink {
     this.releasePtt()
     clearInterval(this.heldTimer); this.heldTimer = undefined; this.heldSet = null
     clearTimeout(this.flushTimer); this.flushTimer = undefined
+    clearTimeout(this.sizeTimer); this.sizeTimer = undefined; this.sizeSent = null
     this.pendingMove = null; this.pendingWheel = null
     this.heartbeats.clear(); this.stopRequest = null; this.audioState = null
     this.micOff(); this.micSender = null; this.backedUpSince = null
@@ -767,6 +795,37 @@ export class StreamLink {
     this.view = next
     for (const f of this.listeners) f()
   }
+}
+
+/** Calls `report` with `element`'s content box in device pixels, now and whenever it changes, until
+ *  the function it returns is called: the exact pixels where the browser gives them (they follow a
+ *  change of zoom or of screen too), otherwise CSS pixels times the device pixel ratio. */
+export function observeDeviceSize(element: Element, report: (width: number, height: number) => void): () => void {
+  if (typeof ResizeObserver === 'undefined') return () => {}
+  const observer = new ResizeObserver(entries => {
+    const entry = entries[entries.length - 1]
+    const box = entry.devicePixelContentBoxSize?.[0]
+    if (box) report(box.inlineSize, box.blockSize)
+    else report(Math.round(entry.contentRect.width * devicePixelRatio), Math.round(entry.contentRect.height * devicePixelRatio))
+  })
+  try { observer.observe(element, { box: 'device-pixel-content-box' }) } catch { observer.observe(element) }
+  return () => observer.disconnect()
+}
+
+/** How far short of its area, in device pixels, a picture may fall on the side it reaches first and
+ *  still be drawn at its own size: the station cuts its sides to even, and the area's own edge can
+ *  round either way. */
+export const STREAM_EXACT_PX = 2
+/** The size, in CSS pixels, to draw a decoded `picture` at so each of its pixels is one device pixel,
+ *  when it fits `area` (device pixels) and falls short of it by at most STREAM_EXACT_PX on the side
+ *  it reaches first: the station sized it to the area (`view`), and a picture the browser stretches
+ *  by a hair, 1919 pixels for 1918, reads as soft as one it resizes for real. Null for anything
+ *  else, which is fitted to the area as before: enlarged when the shack's window is smaller than
+ *  the area, shrunk when it is larger (a station from before `view`, or one that has not caught up). */
+export function exactSize(picture: { width: number; height: number }, area: { width: number; height: number }, ratio: number): { width: number; height: number } | null {
+  if (!(picture.width > 0 && picture.height > 0 && ratio > 0) || picture.width > area.width || picture.height > area.height) return null
+  if (area.width - picture.width > STREAM_EXACT_PX && area.height - picture.height > STREAM_EXACT_PX) return null
+  return { width: picture.width / ratio, height: picture.height / ratio }
 }
 
 // The relay's test switch, for proving the relay on a network where a direct path works. Set it in the
@@ -809,5 +868,11 @@ export function browserStream(): StreamEnvironment {
     document: typeof document === 'undefined' ? undefined : document,
     window: typeof window === 'undefined' ? undefined : window,
     hasFocus: () => typeof document === 'undefined' || document.hasFocus(),
+    // The video's box, not the video: the view draws the picture at its own size, which would
+    // otherwise come back as the area the station is told to fit.
+    watchSize: (video, report) => {
+      const element = video as unknown as Element
+      return observeDeviceSize(element.parentElement ?? element, report)
+    },
   }
 }

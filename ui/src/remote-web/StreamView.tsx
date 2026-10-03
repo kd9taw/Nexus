@@ -8,7 +8,7 @@ import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
-import type { StopTarget, StreamLink, StreamView as LinkView } from './stream-link'
+import { exactSize, observeDeviceSize, type StopTarget, type StreamLink, type StreamView as LinkView } from './stream-link'
 import type { AudioView } from './audio-listen'
 import { shortFingerprint, type StreamKey, type StreamPointer } from './stream-protocol'
 import '../remote-monitor/monitor.css'
@@ -106,6 +106,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   useEffect(() => { if (running && controlling === false) link.close('notController') }, [running, controlling, link])
   // Blind means no authority, for a click as much as for PTT: a frozen picture takes no input.
   useInput(video, connection, stream.phase === 'live')
+  useExactPicture(video)
 
   const start = () => {
     if (listen && lease) { relayAudio.listen(lease); return }
@@ -406,6 +407,27 @@ function ended(reason: string | null): string {
     : reason === 'streamUnsupported' ? t('remote.stream.ended.unsupported')
     : reason === 'streamHidden' ? t('remote.stream.ended.hidden')
     : t('remote.stream.ended.failed')
+}
+
+/** The picture at its own size in device pixels when it fills the stage to within a pixel or two
+ *  (`exactSize`): the station sizes it to the stage (`view`), and the browser stretching it by a hair
+ *  would soften every letter. Anything else the stylesheet fits to the stage, as it always has. The
+ *  input bridge reads the video's box as it is drawn, so a point maps to the frame either way. */
+function useExactPicture(video: RefObject<HTMLVideoElement | null>): void {
+  useEffect(() => {
+    const element = video.current, stage = element?.parentElement
+    if (!element || !stage) return
+    let area: { width: number; height: number } | null = null
+    const apply = () => {
+      const size = area && exactSize({ width: element.videoWidth, height: element.videoHeight }, area, window.devicePixelRatio || 1)
+      element.style.width = size ? `${size.width}px` : ''
+      element.style.height = size ? `${size.height}px` : ''
+      element.toggleAttribute('data-exact', size !== null)
+    }
+    const unobserve = observeDeviceSize(stage, (width, height) => { area = { width, height }; apply() })
+    element.addEventListener('resize', apply)
+    return () => { unobserve(); element.removeEventListener('resize', apply) }
+  }, [video])
 }
 
 /** The input bridge's page half (S11, A2). Listeners go on the PICTURE and nowhere else: a pointer

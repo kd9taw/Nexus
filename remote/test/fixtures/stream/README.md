@@ -159,7 +159,7 @@ shown, and one audio line it sends, for its microphone. The station identifies t
 
 | Label | Reliability | Carries |
 |---|---|---|
-| `control` | reliable, ordered | today's operation requests (`state`, `heartbeat`, `release`, `stopTransmit`), input, their replies, `pttState`, `micState` |
+| `control` | reliable, ordered | today's operation requests (`state`, `heartbeat`, `release`, `stopTransmit`), input, `view`, their replies, `pttState`, `micState` |
 | `ptt` | unordered, `maxRetransmits: 0` | `pttHold`, `pttRelease`, `held` |
 | `audio` | unordered, `maxRetransmits: 0` | receive audio, exactly the relay's `audioRx` bundle and `audioState` |
 
@@ -251,6 +251,17 @@ anything held and not re-asserted within 200 ms; `held` never presses anything; 
 | `wheel` | `x`, `y` in 0 to 1; `deltaX`, `deltaY` finite, magnitude at most 10,000; `deltaMode` 0 pixel, 1 line, 2 page; `modifiers` |
 | `key` | `action` down or up; `key` (DOM key value, 1 to 32 characters, no control characters); `code` (DOM code, 0 to 32 ASCII letters and digits); `modifiers`; `repeat` |
 | `text` | `text`: 1 to 256 characters of committed text, no control characters |
+
+**`view`: the size the page shows the picture at.** `view { width, height }` is the page's
+picture area in its own device pixels (CSS pixels times the device pixel ratio), whole numbers from
+1 to 16,384. The page sends it on `control` when the channel opens and again whenever the area
+settles at a new size. The station encodes the picture no larger than that, keeping its shape,
+scaled once from the window (never enlarged), so the page can show it pixel for pixel; it also
+holds it within its own budget for the path, more on the shack's own network than on the internet
+or a relay. It treats a side under 240 as 240, so a page never loses its picture to the size it
+reported. `view` is not input and needs no presence. A station from before `view` drops it, as it
+drops any `control` message it cannot read, and sends the picture at its own size; a page that
+never sends one gets the path's budget alone.
 
 Every `control` message from the page is at most 1,024 bytes.
 

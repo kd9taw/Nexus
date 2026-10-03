@@ -164,6 +164,14 @@
         "type": "text",
         "text": "W1AW"
       }
+    },
+    {
+      "name": "view (the page's picture area, in its own device pixels)",
+      "message": {
+        "type": "view",
+        "width": 1920,
+        "height": 896
+      }
     }
   ],
   "controlStationToBrowser": [
@@ -727,6 +735,37 @@
       "message": {
         "type": "text",
         "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "view with a side of zero",
+      "message": {
+        "type": "view",
+        "width": 0,
+        "height": 896
+      }
+    },
+    {
+      "name": "view wider than 16384",
+      "message": {
+        "type": "view",
+        "width": 16385,
+        "height": 896
+      }
+    },
+    {
+      "name": "view with a fractional side",
+      "message": {
+        "type": "view",
+        "width": 1920.5,
+        "height": 896
+      }
+    },
+    {
+      "name": "view without a height",
+      "message": {
+        "type": "view",
+        "width": 1920
       }
     }
   ],

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { STREAM_ICE_SERVERS, STREAM_RELAY_WAIT_MS, StreamLink, browserStream } from './stream-link'
+import { STREAM_EXACT_PX, STREAM_ICE_SERVERS, STREAM_RELAY_WAIT_MS, StreamLink, browserStream, exactSize } from './stream-link'
 import type { AudioEnvironment } from './audio-listen'
 import {
-  MIC_CONSTRAINTS, MIC_ENDED, STREAM_UPLINK_BUDGET_BYTES, parseHeld, parseMicState, parseReceivedMessage, parseStreamInput,
-  secureAnswer,
+  MIC_CONSTRAINTS, MIC_ENDED, STREAM_UPLINK_BUDGET_BYTES, STREAM_VIEW_MAX, STREAM_VIEW_SETTLE_MS, parseHeld, parseMicState,
+  parseReceivedMessage, parseStreamInput, secureAnswer, viewMessage,
 } from './stream-protocol'
 import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
@@ -204,6 +204,72 @@ it('S9: heartbeats are the contract\'s shape and carry the RTP timestamp of the 
   h.advance(3000)
   expect(last(control.sent)).toMatchObject({ type: 'heartbeat', decodedFrameAt: decoded })
   expect(control.sent.filter(m => m.type === 'heartbeat')).toHaveLength(8)
+})
+
+it('view: tells the station the size it shows the picture at when control opens, then once each new size settles', async () => {
+  const h = harness()
+  h.resize(1920, 896)
+  await h.link.start(LEASE)
+  h.link.receive(byName(SIGNAL.roomToBrowser, 'answer'))
+  await Promise.resolve()
+  h.advance(1000)
+  const control = h.peer.channel('control')
+  control.open()
+  const views = () => control.sent.filter(m => m.type === 'view')
+  // After the heartbeat, which is still the first thing the station hears; in the contract's shape.
+  expect(control.sent[0]).toMatchObject({ type: 'heartbeat' })
+  expect(views()).toEqual([byName(CHANNEL.controlBrowserToStation, "view (the page's picture area, in its own device pixels)")])
+  // A window being dragged is told once, where it stops.
+  for (const width of [1800, 1700, 1600]) { h.resize(width, 896); h.advance(100) }
+  expect(views()).toHaveLength(1)
+  h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(views()).toEqual([expect.anything(), { type: 'view', width: 1600, height: 896 }])
+  // The same size again is not news, and a size the contract cannot carry is never sent.
+  for (const [width, height] of [[1600, 896], [0, 0], [1600.5, 896], [STREAM_VIEW_MAX + 1, 896]]) { h.resize(width, height); h.advance(1000) }
+  expect(views()).toHaveLength(2)
+  // CONTROL: a good size after a bad one goes.
+  h.resize(2560, 1256); h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(last(views())).toEqual({ type: 'view', width: 2560, height: 1256 })
+})
+
+it('view: a new stream\'s station is told the size again, and a detached picture is no longer watched', async () => {
+  const h = harness()
+  h.resize(1920, 896)
+  await h.live()
+  expect(h.peer.channel('control').sent.filter(m => m.type === 'view')).toHaveLength(1)
+  h.link.close()
+  await h.live()
+  expect(h.peer.channel('control').sent.filter(m => m.type === 'view')).toEqual([{ type: 'view', width: 1920, height: 896 }])
+  expect(h.watching).toBe(true)
+  h.link.attachVideo(null)
+  expect(h.watching).toBe(false)
+})
+
+it('view: a picture sized to its area is drawn one pixel to a device pixel, and nothing else is', () => {
+  // The station cut 1919 to 1918; the area's edge rounded the other way. Both drawn at their own size.
+  expect(exactSize({ width: 1918, height: 802 }, { width: 1919, height: 896 }, 1)).toEqual({ width: 1918, height: 802 })
+  expect(exactSize({ width: 1920, height: 802 }, { width: 1920, height: 897 }, 1)).toEqual({ width: 1920, height: 802 })
+  // In CSS pixels: a Retina screen's 2880 device pixels are 1440, a 125 % screen's 1918 are 1534.4.
+  expect(exactSize({ width: 2880, height: 1204 }, { width: 2880, height: 1590 }, 2)).toEqual({ width: 1440, height: 602 })
+  expect(exactSize({ width: 1918, height: 802 }, { width: 1919, height: 884 }, 1.25)).toEqual({ width: 1534.4, height: 641.6 })
+  // Limited by its height this time.
+  expect(exactSize({ width: 1592, height: 896 }, { width: 1920, height: 896 }, 1)).toEqual({ width: 1592, height: 896 })
+  for (const [picture, area, what] of [
+    [{ width: 1920, height: 1080 }, { width: 2560, height: 1256 }, 'a smaller window: fitted, enlarged, as before'],
+    [{ width: 3440, height: 1440 }, { width: 1920, height: 896 }, 'a larger picture: fitted, shrunk'],
+    [{ width: 1921, height: 802 }, { width: 1920, height: 896 }, 'a pixel too wide: shrunk, never cut'],
+    [{ width: 1920 - STREAM_EXACT_PX - 1, height: 800 }, { width: 1920, height: 896 }, 'short of both sides'],
+    [{ width: 0, height: 0 }, { width: 1920, height: 896 }, 'no picture yet'],
+  ] as const) expect(exactSize(picture, area, 1), what).toBeNull()
+})
+
+it('view: the builder carries exactly what the contract does', () => {
+  expect(viewMessage(1920, 896)).toEqual(byName(CHANNEL.controlBrowserToStation, "view (the page's picture area, in its own device pixels)"))
+  for (const refused of CHANNEL.controlRefused.filter(c => c.message.type === 'view')) {
+    const { width, height } = refused.message as { width: number; height?: number }
+    expect(viewMessage(width, height as number), refused.name).toBeNull()
+  }
+  expect(viewMessage(1, STREAM_VIEW_MAX)).toEqual({ type: 'view', width: 1, height: STREAM_VIEW_MAX })
 })
 
 it('S9: without a frame timestamp it falls back to the receiver\'s, and only while frames are shown', async () => {

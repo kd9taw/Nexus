@@ -680,6 +680,43 @@ fn the_contract_messages_are_taken_and_a_malformed_one_is_dropped() {
     }
 }
 
+// ----- The picture's size -----
+
+fn view(width: u32, height: u32) -> Vec<u8> {
+    format!(r#"{{"type":"view","width":{width},"height":{height}}}"#).into_bytes()
+}
+
+/// The page's picture area reaches the picture with no presence needed, since it is not input,
+/// and never reaches the window. A5 comes first: a page whose certificate has not been checked is
+/// heard on nothing, this included. A later view replaces an earlier one, and one out of the
+/// contract's bounds is dropped with the last good one standing.
+#[test]
+fn the_pages_view_reaches_the_picture_and_not_the_window() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut unverified = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert_eq!(
+        unverified.control(&view(1920, 896), |_| true, now),
+        (None, false)
+    );
+    assert_eq!(unverified.view(), None, "taken before A5");
+    let mut streaming = verified_stream(&f, now);
+    assert!(!streaming.presence.live(now), "premise: no presence");
+    assert_eq!(
+        streaming.control(&view(1920, 896), |_| true, now),
+        (None, false)
+    );
+    assert_eq!(streaming.view(), Some((1920, 896)));
+    streaming.control(&view(2560, 1256), |_| true, now);
+    assert_eq!(streaming.view(), Some((2560, 1256)));
+    streaming.control(&view(0, 896), |_| true, now);
+    assert_eq!(streaming.view(), Some((2560, 1256)));
+    assert!(
+        f.delivered.lock().unwrap().is_empty(),
+        "a view reached the window as input"
+    );
+}
+
 // ----- The relay ends a stream: Remote access switched off -----
 
 /// A running stream's lane, as `StreamLane::signal` leaves it: a session thread waiting on its

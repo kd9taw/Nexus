@@ -1,7 +1,8 @@
 //! The stream's picture (S1, S2): the station's Nexus window, captured, converted to I420 and
 //! encoded as VP8, on threads of its own below the radio's priority.
 //!
-//! - [`picture`] — the captured BGRA and the I420 the encoder takes (every platform).
+//! - [`picture`] — the captured BGRA, the I420 the encoder takes, and the size and bit rate it is
+//!   sent at: no larger than the page shows, within what the path carries (every platform).
 //! - [`pipeline`] — the encoder thread: drop-not-queue, 30 frames a second at most, a still window
 //!   twice a second, keyframes when the page asks (every platform, tested with a stand-in encoder).
 //! - `capture` — Windows Graphics Capture of the one window (Windows).
@@ -53,8 +54,9 @@ impl Video {
         {
             use std::sync::Arc;
             let mailbox = Arc::new(pipeline::Mailbox::default());
-            let make: pipeline::MakeEncoder = Box::new(|width, height| {
-                vp8::Vp8::open(width, height).map(|e| Box::new(e) as Box<dyn pipeline::Encode>)
+            let make: pipeline::MakeEncoder = Box::new(|width, height, kbps| {
+                vp8::Vp8::open(width, height, kbps)
+                    .map(|e| Box::new(e) as Box<dyn pipeline::Encode>)
             });
             let pipeline = pipeline::Pipeline::start(
                 mailbox.clone(),
@@ -79,6 +81,13 @@ impl Video {
     /// The frames encoded since the last call, oldest first.
     pub fn take(&self) -> Vec<Encoded> {
         self.pipeline.take()
+    }
+
+    /// Where the page is and how large it shows the picture, in its own device pixels: from the
+    /// next frame on, the picture is encoded no larger than that, within the path's budget
+    /// ([`picture::Bound`]). `None` for what is not known yet.
+    pub fn fit(&self, path: Option<picture::Path>, view: Option<(u32, u32)>) {
+        self.pipeline.set_bound(picture::Bound::new(path, view));
     }
 
     /// The page asked for a keyframe.

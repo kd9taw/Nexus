@@ -49,13 +49,6 @@ pub fn version() -> String {
         .into_owned()
 }
 
-/// The bit rate for a picture size: 1 Mbit/s per million pixels (2 Mbit/s at 1920×1080), never
-/// below 300 kbit/s nor above 4 Mbit/s.
-pub fn kbps(width: u32, height: u32) -> u32 {
-    let pixels = u64::from(width) * u64::from(height);
-    (pixels / 1000).clamp(300, 4000) as u32
-}
-
 /// One VP8 encoder, for one picture size.
 pub struct Vp8 {
     raw: NonNull<Raw>,
@@ -69,10 +62,11 @@ pub struct Vp8 {
 unsafe impl Send for Vp8 {}
 
 impl Vp8 {
-    /// An encoder for `width`×`height` pictures, or `None` if libvpx refused the configuration.
-    pub fn open(width: u32, height: u32) -> Option<Self> {
+    /// An encoder for `width`×`height` pictures at `kbps` kilobits a second (the picture's
+    /// `Bound::kbps`), or `None` if libvpx refused the configuration.
+    pub fn open(width: u32, height: u32, kbps: u32) -> Option<Self> {
         // SAFETY: plain values in; a null return is handled.
-        let raw = unsafe { nexus_vp8_open(width, height, kbps(width, height)) };
+        let raw = unsafe { nexus_vp8_open(width, height, kbps) };
         NonNull::new(raw).map(|raw| Self {
             raw,
             width,
@@ -158,7 +152,7 @@ impl Drop for Vp8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::video::picture::{to_i420, Bgra};
+    use crate::video::picture::{to_i420, Bgra, Bound};
     use std::time::Instant;
 
     fn picture(width: u32, height: u32, shade: u8) -> I420 {
@@ -191,7 +185,8 @@ mod tests {
     #[test]
     fn frames_are_vp8_and_a_keyframe_comes_when_asked() {
         let (w, h) = (640u32, 360u32);
-        let mut enc = Vp8::open(w, h).expect("libvpx refused a plain configuration");
+        let mut enc = Vp8::open(w, h, Bound::default().kbps(w, h))
+            .expect("libvpx refused a plain configuration");
         let first = enc.encode(&picture(w, h, 0), Duration::ZERO, true).unwrap();
         assert_eq!(first.len(), 1);
         let key = &first[0];
@@ -226,7 +221,8 @@ mod tests {
     #[test]
     fn a_still_window_costs_a_small_part_of_the_budget() {
         let (w, h) = (1280u32, 720u32);
-        let mut enc = Vp8::open(w, h).unwrap();
+        let kbps = Bound::default().kbps(w, h);
+        let mut enc = Vp8::open(w, h, kbps).unwrap();
         let still = picture(w, h, 3);
         let mut sizes = Vec::new();
         for n in 0..30u64 {
@@ -234,7 +230,7 @@ mod tests {
             let packets = enc.encode(&still, at, n == 0).unwrap();
             sizes.push(packets.iter().map(|p| p.data.len()).sum::<usize>());
         }
-        let half_second = kbps(w, h) as usize * 1000 / 8 / 2;
+        let half_second = kbps as usize * 1000 / 8 / 2;
         let settled = &sizes[20..];
         assert!(
             settled.iter().all(|&s| s < half_second / 4),
@@ -245,7 +241,7 @@ mod tests {
     /// A picture of another size is refused rather than read out of bounds.
     #[test]
     fn a_picture_of_the_wrong_size_is_refused() {
-        let mut enc = Vp8::open(640, 360).unwrap();
+        let mut enc = Vp8::open(640, 360, 300).unwrap();
         assert!(enc
             .encode(&picture(320, 180, 0), Duration::ZERO, true)
             .is_none());
@@ -253,12 +249,5 @@ mod tests {
         assert!(enc
             .encode(&picture(640, 360, 0), Duration::ZERO, true)
             .is_some());
-    }
-
-    #[test]
-    fn the_bit_rate_follows_the_picture() {
-        assert_eq!(kbps(1920, 1080), 2073);
-        assert_eq!(kbps(320, 180), 300);
-        assert_eq!(kbps(2560, 1600), 4000);
     }
 }
