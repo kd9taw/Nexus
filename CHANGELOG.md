@@ -982,6 +982,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   router's "time exceeded" answer to one of the station's checks for a way through. Windows
   reports each as an error on the station's connection, though it is about that one packet. The
   station now drops the packet and carries on, as it already did for a refused check.
+- **Remote as a stream: turning off "Stream this station from my browser" at the shack ends a
+  stream that is running.** The switch (Settings → Station → Remote access) was read only when a
+  stream started, so a browser already streaming kept the picture, its control of Nexus and its
+  hold on the transmitter until it left. Now turning it off and saving ends a running stream
+  within about a second, the same way revoking the browser does: anything it was transmitting
+  stops, and the page says streaming is off at the shack.
 - **Remote: Listen plays the station's audio.** Since Listen arrived in 1.13.0 it never played on
   the hosted page: the page's own security policy refused the audio player the page builds, so
   every press ended with "The station has no audio to send right now." while the station was
