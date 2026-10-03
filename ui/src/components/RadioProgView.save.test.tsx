@@ -173,4 +173,14 @@ describe('Save to Memories', () => {
     expect(memories().find((m) => m.callsign === 'K9DCS')).toMatchObject({ favorite: true, notes: 'Beloit', toneMode: 'dtcs' })
     await waitFor(() => expect(badgeIn('K9DCS')).not.toBeNull())
   })
+
+  it("the ★ never stars another machine's memory that only shares the output and tone", async () => {
+    // K9TWN's memory: W9ABC's output and tone, the bank's own frequency+tone key, another machine.
+    memoriesStore.set({ ...emptyBank(), memories: [
+      { id: 'twin', name: 'K9TWN', kind: 'repeater', rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5, groups: [], favorite: false, source: 'user', callsign: 'K9TWN' },
+    ] })
+    await fetched([machine('W9ABC', 146.94)])
+    fireEvent.click(within(rowOf('W9ABC')).getByRole('button', { name: '☆' }))
+    expect(Object.fromEntries(memories().map((m) => [m.callsign, m.favorite]))).toEqual({ W9ABC: true, K9TWN: false })
+  })
 })

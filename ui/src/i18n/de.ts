@@ -2702,6 +2702,8 @@ export const DE: PartialCatalog = {
   "memories.strip.manage.title": "Speicher öffnen — Kanäle, Gruppen und Runden verwalten, CHIRP-Import/-Export",
   "memories.strip.manage.title.overflow": { "one": "Speicher öffnen — {{count}} weiterer Favorit jenseits der {{limit}}, die diese Leiste zeigt. Reihenfolge mit ▲▼ unter ★ Favoriten ändern.", "other": "Speicher öffnen — {{count}} weitere Favoriten jenseits der {{limit}}, die diese Leiste zeigt. Reihenfolge mit ▲▼ unter ★ Favoriten ändern." },
   "program.title": "Relais",
+  "program.card.search": "Suche",
+  "program.card.results": "Ergebnisse",
   "program.sub": "Kanallisten für die eigenen Funkgeräte erstellen — Relais in der Nähe eines Ortes, für CHIRP exportiert oder direkt am Gerät abgestimmt",
   "program.origin.aria": "Suchmittelpunkt",
   "program.origin.label": "Nahe",

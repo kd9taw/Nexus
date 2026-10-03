@@ -699,6 +699,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dot brings its row into view and opens a card with **Save to Memories** and **＋ Add**, so a click on
   a dot no longer adds the machine by itself. The map still shows hearham's listings only, never a
   RepeaterBook row, and says under it what it leaves off.
+- **Repeaters has the Conditions look.** The page is three cards on the app's ground, each with a
+  section header as the Conditions boxes have: **Search** (where to look and Fetch repeaters),
+  **Results** (the count, Save all shown and ＋ Add all shown in its header, then the filters, the map
+  and the list) and **Channel list**. The lists a search read show as chips with their age, a
+  repeater's callsign leads its row in heavier type, and the row you point at or select carries an
+  accent bar. From a 1920×1080 window (and 1366×768 at the default scale) the page uses up to 1600 px
+  of width instead of 1100, so the map is wider. Every word reads at 4.5:1 or better in every theme.
 - **Program is now Repeaters.** The view the navigation bar called **Program** is called **Repeaters**
   everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
   window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel

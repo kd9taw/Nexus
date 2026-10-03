@@ -3522,6 +3522,8 @@ export const FR: PartialCatalog = {
   "program.star.unstarred": "{{name}} retiré des favoris — toujours dans les Mémoires",
   "program.sub": "Créez des listes de canaux pour vos radios — les relais proches d'un lieu, exportés pour CHIRP ou réglés sur votre radio",
   "program.title": "Relais",
+  "program.card.search": "Recherche",
+  "program.card.results": "Résultats",
   "program.tune.done": "Réglé sur {{freq}} {{mode}} — {{shift}}{{tone}}",
   "program.tune.simplex": "simplex",
   "program.tune.tone": "· tonalité {{hz}}",

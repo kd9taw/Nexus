@@ -1010,6 +1010,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       <div className="rp-body" hidden={remote&&!configuration.value}>
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">
+          {/* THE CONDITIONS LOOK (the operator's pick, 2026-10-02: "Conditions' look"): each block is a card with
+              a section header, as the dashboard's boxes are. The cards are content, not panes: the view keeps
+              its one grid, its two columns and its scrollers. */}
+          <section className="rp-card rp-query" aria-label={t('program.card.search')}>
+          <header className="rp-card-head">
+            <span className="rp-card-title">{t('program.card.search')}</span>
+          </header>
+          <div className="rp-card-body">
           <div className="rp-origin" role="group" aria-label={t('program.origin.aria')}>
             <span className="rp-lbl">{routing ? t('program.route.from') : t('program.origin.label')}</span>
             <button disabled={remote}
@@ -1286,6 +1294,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               </span>
             )}
           </div>
+          </div>
+          </section>
           {fetchErr && (
             <div className="rp-error" role="alert">
               {fetchErr}{' '}
@@ -1366,6 +1376,46 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </div>
           )}
 
+          <section className="rp-card rp-found" aria-label={t('program.card.results')}>
+          <header className="rp-card-head">
+            <span className="rp-card-title">{t('program.card.results')}</span>
+          {result && (
+            <div className="rp-count">
+              {searchMhz !== null
+                ? result.route
+                  ? t('program.count.freq.route', {
+                      shown: shown.length,
+                      freq: mhzLabel(searchMhz),
+                      tol: FREQ_TOL_KHZ,
+                    })
+                  : t('program.count.freq', {
+                      shown: shown.length,
+                      freq: mhzLabel(searchMhz),
+                      tol: FREQ_TOL_KHZ,
+                    })
+                : result.route
+                  ? t('program.count.route', { shown: shown.length, total: result.rows.length })
+                  : t('program.count', { shown: shown.length, total: result.rows.length })}
+              {shown.some((r) => isProgrammable(r.record) && !isAdded(r)) && (
+                <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
+                  {t('program.addAll.label')}
+                </button>
+              )}
+              {shown.some((r) => isProgrammable(r.record) && !savedById.has(r.channel.id)) && (
+                <button
+                  disabled={remote}
+                  type="button"
+                  className="filter-chip rp-save-all"
+                  onClick={() => void saveAllShown()}
+                  title={t('program.saveAll.title')}
+                >
+                  {t('program.saveAll.label')}
+                </button>
+              )}
+            </div>
+          )}
+          </header>
+          <div className="rp-card-body rp-found-body">
           <div className="rp-filters" role="group" aria-label={t('program.filters.aria')}>
             <button disabled={remote}
               type="button"
@@ -1421,42 +1471,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-
-          {result && (
-            <div className="rp-count">
-              {searchMhz !== null
-                ? result.route
-                  ? t('program.count.freq.route', {
-                      shown: shown.length,
-                      freq: mhzLabel(searchMhz),
-                      tol: FREQ_TOL_KHZ,
-                    })
-                  : t('program.count.freq', {
-                      shown: shown.length,
-                      freq: mhzLabel(searchMhz),
-                      tol: FREQ_TOL_KHZ,
-                    })
-                : result.route
-                  ? t('program.count.route', { shown: shown.length, total: result.rows.length })
-                  : t('program.count', { shown: shown.length, total: result.rows.length })}
-              {shown.some((r) => isProgrammable(r.record) && !isAdded(r)) && (
-                <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
-                  {t('program.addAll.label')}
-                </button>
-              )}
-              {shown.some((r) => isProgrammable(r.record) && !savedById.has(r.channel.id)) && (
-                <button
-                  disabled={remote}
-                  type="button"
-                  className="filter-chip rp-save-all"
-                  onClick={() => void saveAllShown()}
-                  title={t('program.saveAll.title')}
-                >
-                  {t('program.saveAll.label')}
-                </button>
-              )}
-            </div>
-          )}
 
           {/* Map first, the list under it (the operator's pick, 2026-10-02): after a fetch with something
               shown, the map of hearham's listings above the list of every machine. With nothing
@@ -1694,6 +1708,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               )
             })}
           </div>
+          </div>
+          </section>
 
           <div className="settings-hint rp-attribution">
             {(result ? result.lists.map((l) => l.source) : (['hearham'] as Directory[])).map(
@@ -1711,9 +1727,9 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         </div>
 
         {/* ── CHANNEL LIST pane: the artifact ── */}
-        <aside className="rp-builder">
-          <div className="rp-builder-head">
-            <span className="rp-builder-title">
+        <aside className="rp-builder rp-card">
+          <div className="rp-builder-head rp-card-head">
+            <span className="rp-builder-title rp-card-title">
               {t('program.builder.title')} <span className="np-count">{rows.length}</span>
             </span>
             <label className="rp-cap">

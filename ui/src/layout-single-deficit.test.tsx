@@ -352,7 +352,9 @@ describe("Program's narrow stack: neither half is ever shorter than what it hold
         `\`${rows!.selector} { grid-auto-rows: ${rows!.value} }\`: a stacked row may be shorter than the ` +
           'half it holds, so the source spills under the channel list (Tune and Add unclickable).',
       ).toBe('min-content')
-      for (const sel of ['.rp-results', '.rp-chan-rows']) {
+      // The results card and its body (2026-10-02, the cards) sit between the list and the stacked row, so they
+      // carry the same zero LENGTH basis: a percentage there would hand the row the whole list just the same.
+      for (const sel of ['.rp-results', '.rp-chan-rows', '.rp-found', '.rp-found-body']) {
         const list = container.querySelector(sel)
         expect(list, `Program rendered no ${sel}`).not.toBeNull()
         const basis = declWinner(list!, 'flex-basis')

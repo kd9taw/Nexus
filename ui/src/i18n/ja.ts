@@ -2957,6 +2957,8 @@ export const JA: PartialCatalog = {
   "memories.strip.manage.title": "メモリーを開く — チャンネル、グループ、ネット、CHIRPのインポート／エクスポートを管理",
   "memories.strip.manage.title.overflow": "メモリーを開く — このストリップに表示される{{limit}}件のほかにお気に入りが{{count}}件あります。★ お気に入りの▲▼で並べ替えてください。",
   "program.title": "レピータ",
+  "program.card.search": "検索",
+  "program.card.results": "結果",
   "program.sub": "無線機用のチャンネルリストを作成 — 周辺のレピータをCHIRP向けにエクスポート、またはそのまま無線機に設定",
   "program.origin.aria": "検索の起点",
   "program.origin.label": "起点",

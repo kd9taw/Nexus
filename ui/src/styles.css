@@ -5886,6 +5886,13 @@ body.resizing {
 [data-viewport='xl'] .layout.single > .panel.radioprog {
   max-width: 1600px;
 }
+/* Repeaters takes the room from lg (effective width ≥ 1600, which is 1920×1080 and 1366×768 at
+   the default 85 %): its map is as wide as its column, and at 1100 px 1920 left two 400 px bands
+   of nothing beside it (the operator, 2026-10-02: "This page looks bland compared to the rest of
+   nexus"). At md the window is barely wider than 1100, so nothing changes there. */
+[data-viewport='lg'] .layout.single > .panel.radioprog {
+  max-width: 1600px;
+}
 /* THE FIELD DAY DASHBOARD is a board, not prose — and it arrives here from somewhere else.
    Until 2026-08-30 it was drawn in the three-pane operating workspace (App.tsx), which put a
    waterfall and the stations rail on a scoreboard and left it a ~1180px centre column at
@@ -23283,14 +23290,66 @@ button.sat-chip:disabled {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* The cards sit on the app's own ground, as Conditions' boxes do, so they read as cards in both
+     themes: white on grey in the light ones, a lifted face on the night sky in the dark ones. */
+  background: var(--bg);
+}
+/* THE CARDS (the operator's pick, 2026-10-02: "Conditions' look"): the dashboard box's face and its
+   section header (.pane-frame / .pane-head / .pane-title), drawn here because these are content
+   blocks of one view, not slots: no picker, no ✕, no share. They size nothing: their parts do, as
+   before (the zero-LENGTH bases and floors below). */
+.rp-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elev-2);
+}
+.rp-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  min-height: 34px;
+  border-bottom: 1px solid var(--border);
+}
+.rp-card-title {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.rp-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+/* The results card is the column's grower, and its body the box the map and the list share. Both
+   take a zero LENGTH basis for the reason .rp-results gives: in the narrow stack a percentage basis
+   resolves to content, the row grows to the whole list, and the list stops scrolling. And neither
+   may shrink under what it holds (no `min-height: 0`): a zero minimum hands the column a zero
+   contribution, the column comes out shorter than the map's and the list's floors, and the list
+   paints over the credits under the card (1366×768 at 85 %, Chrome, 2026-10-02). Their automatic
+   minimum is their content's, which counts each scroller at its own floor, not its whole list. */
+.rp-found {
+  flex: 1 1 0px;
+}
+.rp-found-body {
+  flex: 1 1 0px;
 }
 .rp-body {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr);
-  gap: var(--gap);
-  padding: var(--space-2) 10px;
+  /* Conditions' spacing: its grid's gap and its edge. */
+  gap: var(--space-3);
+  padding: var(--space-3);
 }
 /* Narrow (EFFECTIVE width) stack: the source above the channel list. Each row floors at what
    its half holds and shares any surplus, and past that the panel scrolls (the deficit's owner,
@@ -23309,10 +23368,20 @@ button.sat-chip:disabled {
 }
 .rp-source {
   min-width: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
+}
+/* Beside the channel list (md and up) the source column owns its own deficit: where its cards and
+   the map's and the list's floors do not fit (1024×768 and 1366×768 at 85 %), it scrolls, and the
+   channel list beside it keeps its Export buttons in view. The panel's own scroll, the stacked
+   layout's fate, would have carried them off the bottom with it (Chrome, 2026-10-02). Its cards
+   never shrink under their floors (.rp-found below), so nothing inside paints over anything. */
+[data-viewport='md'] .rp-source,
+[data-viewport='lg'] .rp-source,
+[data-viewport='xl'] .rp-source {
+  min-height: 0;
+  overflow-y: auto;
 }
 .rp-origin,
 .rp-recents,
@@ -23391,11 +23460,12 @@ button.sat-chip:disabled {
   padding: var(--space-1) var(--space-2);
 }
 .rp-count {
-  font-size: 0.75rem;
+  font-size: var(--fs-label);
   color: var(--text-dim);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
 }
 .settings-input.invalid {
   border-color: var(--state-weak);
@@ -23407,10 +23477,10 @@ button.sat-chip:disabled {
    and the results stopped scrolling. Wherever the column has a height of its own, 0px and 0 %
    are the same thing. The channel list below is the same. */
 .rp-results {
-  flex: 4 1 0px;
+  flex: 1 1 0px;
   min-height: 120px;
   overflow-y: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
 }
@@ -23426,33 +23496,36 @@ button.sat-chip:disabled {
 .rp-chan-rows > .aw-empty {
   margin: auto;
 }
-/* The map (RepeaterMap.tsx; the operator's picks: a hearham-only map, 2026-09-30; map first and
-   the list below it, 2026-10-02) sits over the list and shares the column with it, five parts to
-   the list's four, each from a zero LENGTH basis (as .rp-results explains) over a floor of its
-   own: a map under 200 px is no map. The canvas fills the stage out of flow, and the words under
-   it say what the map shows and what it leaves off. */
+/* The map (RepeaterMap.tsx; the operator's picks: a hearham-only map, 2026-09-30; "A large map on
+   top, the list underneath", 2026-10-02) sits over the list and takes two parts of the column to
+   the list's one, each from a zero LENGTH basis (as .rp-results explains) over a floor of its own.
+   The canvas fills the stage out of flow, and the words under it say what the map shows and what
+   it leaves off. */
 .rp-map {
-  flex: 5 1 0px;
-  min-height: 200px;
+  flex: 2 1 0px;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
 }
 /* In the stacked layout the list sits at its 120 px floor and the panel scrolls, but a map that
    short is no map: at 1024×768 its canvas was 53 px tall under its words (Chrome, 2026-10-02). So
-   there the map floors at two fifths of the window, and the panel scrolls a little further. */
-[data-viewport='sm'] .rp-map,
-[data-viewport='xs'] .rp-map {
-  min-height: max(200px, calc(0.42 * var(--vh-eff, 100vh)));
+   there the drawing floors at a third of the window, and the panel scrolls a little further. */
+[data-viewport='sm'] .rp-map-stage,
+[data-viewport='xs'] .rp-map-stage {
+  min-height: max(200px, calc(0.34 * var(--vh-eff, 100vh)));
 }
+/* The floor is the STAGE's, the drawing itself: the words under it take two to five lines by
+   language and width, and a floor on the whole box gave them the map's height (an 85 px stage
+   under four lines at 1024×768, Chrome, 2026-10-02). */
 .rp-map-stage {
   position: relative;
   flex: 1 1 0px;
-  min-height: 0;
+  min-height: 220px;
   overflow: hidden;
   background: var(--map-ocean);
+  border-radius: calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0 0;
 }
 .rp-map-note {
   display: flex;
@@ -23502,9 +23575,30 @@ button.sat-chip:disabled {
   gap: var(--space-2);
   /* The source line (and a disagreement) sit tight under the row they describe. */
   row-gap: 0;
-  padding: 3px var(--space-2);
+  padding: 4px var(--space-2);
   font-size: 0.8rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.rp-row:hover {
+  background: var(--bg-elev-2);
+}
+/* Where the list is narrowest — md, where the panel stops at 1100 px and the column is ~590 px, and
+   xs — a row's buttons (★, Save to Memories, Tune, ＋ Add: ~330 px) do not fit beside its figures,
+   and they ran 97 to 146 px out of the list at 1024×768 (Chrome, 2026-10-02). There they take the
+   row's last line, at its right; their place in the reading order is unchanged. */
+[data-viewport='md'] .rp-row,
+[data-viewport='xs'] .rp-row {
+  grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto;
+}
+[data-viewport='md'] .rp-actions,
+[data-viewport='xs'] .rp-actions {
+  grid-column: 1 / -1;
+  order: 1;
+  padding-top: 2px;
+}
+/* The callsign leads the row, as a call leads a Conditions row: in the ink, heavier. */
+.rp-call {
+  font-weight: 700;
 }
 /* An off-air machine fades by COLOUR, not by see-through (2026-10-01), as closed bands do (.ba-row.is-closed). The row
    was `opacity: 0.55`, which put every word on it under 4.5:1 (light: the call 3.73, Tune and Add
@@ -23579,6 +23673,14 @@ button.sat-chip:disabled {
 .rp-stamp-list + .rp-stamp-list {
   margin-left: var(--space-2);
 }
+/* Each list the search read, as a chip: its name and its age, the accent on its edge. */
+.rp-stamp-list {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 999px;
+  color: var(--text-dim);
+}
 .rp-actions {
   justify-self: end;
   display: inline-flex;
@@ -23647,28 +23749,18 @@ button.sat-chip:disabled {
 .rp-builder {
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
   gap: var(--space-2);
-  border-left: 1px solid var(--border);
-  padding-left: var(--gap);
+  padding-bottom: var(--space-2);
 }
-[data-viewport='sm'] .rp-builder,
-[data-viewport='xs'] .rp-builder {
-  border-left: none;
-  border-top: 1px solid var(--border);
-  padding-left: 0;
-  padding-top: var(--space-2);
+/* Inside the channel-list card, its rows and its buttons keep the card's inner margin. */
+.rp-builder > .rp-chan-rows,
+.rp-builder > .rp-deliver {
+  margin: 0 var(--space-2);
 }
 .rp-builder-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
 }
 .rp-builder-title {
-  font-weight: 800;
-  letter-spacing: 0.03em;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -23742,6 +23834,8 @@ button.sat-chip:disabled {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
 }
 .rp-clear {
   margin-left: auto;

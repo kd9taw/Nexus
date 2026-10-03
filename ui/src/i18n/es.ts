@@ -3522,6 +3522,8 @@ export const ES: PartialCatalog = {
   "program.star.unstarred": "{{name}} sin destacar — sigue en Memorias",
   "program.sub": "Crea listas de canales para tus equipos — repetidores cerca de un punto, exportados para CHIRP o sintonizados en el equipo",
   "program.title": "Repetidores",
+  "program.card.search": "Búsqueda",
+  "program.card.results": "Resultados",
   "program.tune.done": "Sintonizado {{freq}} {{mode}} — {{shift}}{{tone}}",
   "program.tune.simplex": "simplex",
   "program.tune.tone": "· tono {{hz}}",

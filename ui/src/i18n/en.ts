@@ -4590,6 +4590,10 @@ export const EN = {
   // persisted project name. The rig models in the "Max name" list are tokens in
   // `features/radioprog.ts`.
   'program.title': 'Repeaters',
+  // The view's three cards, headed the way the Conditions boxes are: where to look, what was found, and the
+  // channel list (program.builder.title).
+  'program.card.search': 'Search',
+  'program.card.results': 'Results',
   'program.sub':
     'Build channel lists for your radios — repeaters near a location, exported for CHIRP or tuned on your rig',
 
