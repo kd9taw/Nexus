@@ -2,7 +2,8 @@
 //! no-auth fallback/development source for the "Program" section (and the
 //! primary source for non-US locations, which RepeaterBook state planning
 //! doesn't cover). One GET returns the whole worldwide directory (~22k rows,
-//! ~1 MB gzipped); the shell caches it beside settings.json with a 7-day TTL.
+//! 9.49 MB, sent uncompressed: no gzip on 2026-10-02); the shell caches it
+//! beside settings.json with a 7-day TTL.
 //! Parsing lives in [`crate::repeaters::parse_hearham_json`].
 
 use super::neterr;
