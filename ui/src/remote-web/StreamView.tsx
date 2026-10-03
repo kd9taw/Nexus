@@ -74,7 +74,12 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   const target: StopTarget | null = state?.phase === 'controlling' && state.leaseId && transmitEpoch(state.transmitEpoch)
     ? { stationBootId: state.stationBootId, leaseId: state.leaseId, transmitEpoch: state.transmitEpoch } : null
   const canStop = !!ops.stopAvailable || (stream.control && !!target)
-  const stopProgress = ops.stopSending ? 'sending' : ops.stopAccepted ? keyed === false ? 'stopped' : 'sent' : 'idle'
+  // How far the last Stop got. Both paths carry it and the first acceptance is the answer; a Stop
+  // that no path accepted and none is still carrying says it failed. It used to say nothing.
+  const stopAccepted = ops.stopAccepted || stream.stop === 'accepted'
+  const stopProgress = stopAccepted ? keyed === false ? 'stopped' : 'sent'
+    : ops.stopSending || stream.stop === 'sending' ? 'sending'
+    : ops.stopError || stream.stop === 'refused' ? 'failed' : 'idle'
 
   useEffect(() => { link.attachVideo(video.current); return () => link.attachVideo(null) }, [link])
   // A3, the page's half: the offer goes only under the lease this session holds right now. The
@@ -156,7 +161,8 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
         <button type="button" className="remote-button remote-stream-stop" disabled={!canStop} onClick={stopTx}
           title={stopProgress === 'stopped' ? t('remote.stop.stopped.title') : stopProgress === 'sent' ? t('remote.stop.sent.title') : undefined}>{STOP_TX}</button>
         {stopProgress !== 'idle' && <span className="remote-stream-stopstate" role="status">
-          {stopProgress === 'stopped' ? t('remote.stop.stopped') : stopProgress === 'sent' ? t('remote.stop.sent') : t('remote.stop.sending')}</span>}
+          {stopProgress === 'stopped' ? t('remote.stop.stopped') : stopProgress === 'sent' ? t('remote.stop.sent')
+            : stopProgress === 'failed' ? t('shell.halt.failed') : t('remote.stop.sending')}</span>}
         {keyed === true && <span className="remote-stream-tx" role="status">{TX}</span>}
         {stream.control && <AudioListen audio={link.audio} client={operations} />}
         {stream.control && <button type="button" className="remote-button remote-stream-ptt" aria-pressed={stream.ptt}

@@ -78,6 +78,10 @@ export type StreamView = {
   station: StationMic | null
   /** The page let go of the over because its uplink backed up (M6), until the backlog clears. */
   uplinkStalled: boolean
+  /** The station's answer, on `control`, to the last Stop this link was asked to carry: none, still
+   *  waiting, accepted (acceptance, never a claim that RF stopped) or refused. `idle` too when the
+   *  channel could not carry that Stop, so no earlier answer stands for it. */
+  stop: 'idle' | 'sending' | 'accepted' | 'refused'
 }
 
 /** Stop, addressed as the station's own Stop is: its boot, the lease the token was issued under, and
@@ -159,7 +163,7 @@ const CONTROL_BUDGET_BYTES = 16 * 1024
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const OFF: StreamView = {
   phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null,
-  mic: 'off', micProcessing: false, station: null, uplinkStalled: false,
+  mic: 'off', micProcessing: false, station: null, uplinkStalled: false, stop: 'idle',
 }
 
 export class StreamLink {
@@ -181,6 +185,8 @@ export class StreamLink {
   private frame: { at: number; rtp: number | null } | null = null
   /** Heartbeats in flight, so a reply is read as the answer to one of ours. */
   private heartbeats = new Set<string>()
+  /** The last Stop sent on `control`, so its answer is read as that Stop's (`stop`). */
+  private stopRequest: string | null = null
   private press: { holdId: string; seq: number } | null = null
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private watch: ReturnType<typeof setInterval> | undefined
@@ -335,12 +341,22 @@ export class StreamLink {
   }
 
   /** Stop, on the control channel whenever it is open, past every budget. The caller sends it over
-   *  the socket as well; the first acceptance is the answer, the second is harmless. */
+   *  the socket as well; the first acceptance is the answer, the second is harmless. The station's
+   *  answer on this channel is `stop` in the view, so a refusal here is said, not dropped. */
   stopTransmit(target: StopTarget | null): boolean {
+    this.stopRequest = null
     const control = this.channels?.control
-    if (!target || control?.readyState !== 'open') return false
-    try { control.send(JSON.stringify({ type: 'stopTransmit', requestId: this.env.uuid(), ...target })); return true }
-    catch { return false }
+    if (target && control?.readyState === 'open') {
+      const requestId = this.env.uuid()
+      try {
+        control.send(JSON.stringify({ type: 'stopTransmit', requestId, ...target }))
+        this.stopRequest = requestId
+        this.set({ stop: 'sending' })
+        return true
+      } catch { /* not carried, as below */ }
+    }
+    this.set({ stop: 'idle' })
+    return false
   }
 
   /** Turn the page's microphone on or off. On is the only place the browser is asked for it, so its
@@ -458,7 +474,8 @@ export class StreamLink {
   }
 
   /** The station's replies and reports on `control`: its answer to a heartbeat (with whether it
-   *  still holds presence), and the state of the current PTT press. Nothing else here is acted on. */
+   *  still holds presence), its answer to this link's last Stop, and the state of the current PTT
+   *  press. Nothing else here is acted on. */
   private fromControl(data: unknown): void {
     if (typeof data !== 'string') return
     let message: Record<string, unknown>
@@ -475,6 +492,14 @@ export class StreamLink {
       let state
       try { state = parseMicState(message) } catch { return }
       this.set({ station: { armed: state.armed, keyed: state.keyed, noPowerOut: state.noPowerOut, ended: state.ended ?? null } })
+      return
+    }
+    if (message.type === 'operationResponse' && this.stopRequest !== null && message.requestId === this.stopRequest) {
+      this.stopRequest = null
+      // Anything but the station's acceptance is read as a refusal: the direction that has the
+      // operator press again, never the one that tells them a Stop took.
+      const value = message.value as Record<string, unknown> | undefined
+      this.set({ stop: !('error' in message) && value?.stop === 'accepted' ? 'accepted' : 'refused' })
       return
     }
     if (message.type === 'operationResponse' && typeof message.requestId === 'string' && this.heartbeats.delete(message.requestId)) {
@@ -669,7 +694,7 @@ export class StreamLink {
     clearInterval(this.heldTimer); this.heldTimer = undefined; this.heldSet = null
     clearTimeout(this.flushTimer); this.flushTimer = undefined
     this.pendingMove = null; this.pendingWheel = null
-    this.heartbeats.clear(); this.audioState = null
+    this.heartbeats.clear(); this.stopRequest = null; this.audioState = null
     this.micOff(); this.micSender = null; this.backedUpSince = null
     this.audio.disconnected()
     const peer = this.peer, channels = this.channels

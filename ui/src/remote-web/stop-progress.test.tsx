@@ -150,7 +150,7 @@ it('a refused Stop claims nothing, and a control with no station reading never c
   fireEvent.click(screen.getByRole('button', { name: /^stop tx$/i }))
   await settle()
   await act(async () => {
-    h.client.receive({ type: 'operationResponse', requestId: h.stops()[0].requestId, error: 'staleContext' })
+    h.client.receive({ type: 'operationResponse', requestId: h.stops()[0].requestId, error: 'notController' })
   })
   await settle()
   expect(shown('remote.stop.sent'), 'a refusal is not an acceptance').toBeNull()

@@ -124,9 +124,14 @@ export class OperationClient {
   private stopTarget: { stationBootId: string; leaseId: string; transmitEpoch: string } | null = null
   /** The lease this browser's stop token was first issued under. Remembered separately because it
    * outlives both the lease itself (the station keeps matching a Stop against it after the lease
-   * runs out — expired-lease stop, 2026-09-15) and `stopTarget`, which a successful Stop clears,
-   * its epoch having been retired. Cleared only on disconnect. */
+   * runs out — expired-lease stop, 2026-09-15) and any one `stopTarget`. Cleared only on
+   * disconnect. */
   private stopLeaseId: string | null = null
+  /** The epoch an FT gesture may still leave under: the stop token's, until a Stop from this browser
+   * is accepted. Apart from `stopTarget` because only arming retires on a Stop now — the station
+   * honours a Stop whatever its token's age (operator ruling, 2026-10-03), so the Stop keeps its
+   * token, while a gesture captured before the Stop must still never leave after it. */
+  private armEpoch: string | null = null
   // A successful mutation invalidates command context, not the controller's
   // lease. Refresh with a heartbeat so continuous use cannot starve renewal.
   // This token permits only renewal/release; actions still require fresh state.
@@ -214,10 +219,11 @@ export class OperationClient {
     this.resultIntent = null
     this.stopTarget = null
     this.stopLeaseId = null
+    this.armEpoch = null
     this.heartbeatLeaseId = null
     const stop = this.pendingStop
     this.pendingStop = null
-    this.update({ stopAccepted: false })
+    this.update({ stopAccepted: false, stopError: null })
     if (stop) { clearTimeout(stop.timer); stop.reject(new Error('operationUnknown')) }
     const p = this.pending
     this.pending = null
@@ -357,7 +363,8 @@ export class OperationClient {
   }
   /** Stop uses the last station-issued owner token, even while an ordinary
    * request or receipt is unresolved. Native authority alone decides if it is
-   * still valid. Acceptance is revocation, not confirmation that RF stopped. */
+   * still valid. Acceptance is revocation, not confirmation that RF stopped.
+   * An accepted Stop keeps the token: the next press goes on it at once. */
   stopTransmit(): Promise<OperationValue> {
     if (this.operationVersion < 4) return Promise.reject(new Error('stationUnsupported'))
     if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
@@ -400,9 +407,10 @@ export class OperationClient {
         this.update({ stopError: r.error, stopAccepted: false })
         stop.reject(new Error(r.error))
       } else {
-        // ACCEPTANCE, never a claim that RF stopped — see `stopAccepted`.
+        // ACCEPTANCE, never a claim that RF stopped — see `stopAccepted`. It retires arming on the
+        // token it used (`armEpoch`), never the Stop's own: see `stopTransmit`.
         this.probe?.confirmed(r.requestId, 'accepted')
-        this.stopTarget = null
+        this.armEpoch = null
         this.polledAt = -Infinity
         this.update({ stopError: null, stopAccepted: true })
         stop.resolve(r.value)
@@ -605,6 +613,7 @@ export class OperationClient {
     if (value.phase === 'controlling' && value.leaseId) this.stopLeaseId = value.leaseId
     this.stopTarget = this.operationVersion >= 4 && this.stopLeaseId && value.transmitEpoch
       ? { stationBootId: value.stationBootId, leaseId: this.stopLeaseId, transmitEpoch: value.transmitEpoch } : null
+    this.armEpoch = this.stopTarget?.transmitEpoch ?? null
     this.stateUntil = started + Math.min(1200, value.leaseRemainingMs ?? 1200)
     this.leaseUntil = value.phase === 'controlling' && value.leaseRemainingMs != null ? started + value.leaseRemainingMs : 0
     this.update({
@@ -1010,7 +1019,7 @@ export class OperationClient {
         if (this.now() >= until) throw Error('windowExpired')
         if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
         if (!sameConnection(this.view.state.controls?.context)) throw Error('staleContext')
-        if ('transmitEpoch' in intent && (intent.transmitEpoch !== this.view.state.transmitEpoch || intent.transmitEpoch !== this.stopTarget?.transmitEpoch)) throw Error('staleContext')
+        if ('transmitEpoch' in intent && (intent.transmitEpoch !== this.view.state.transmitEpoch || intent.transmitEpoch !== this.armEpoch)) throw Error('staleContext')
         this.requireRequestCapacity()
         const saved = { operationId: request.requestId, action: intent }
         this.controlStorage!.write(saved)
