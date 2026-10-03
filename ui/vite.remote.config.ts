@@ -17,5 +17,7 @@ export default defineConfig({
         readFileSync(new URL('./src/data/cqzones.LICENSE.txt', import.meta.url), 'utf8') + '\n\n' + bundledLicenses(modules) })
     },
   }], publicDir: false,
-  build: { outDir: '../dist-remote', emptyOutDir: true },
+  // Never a script inlined as a data: URL, whatever its size: the page's `script-src 'self'`
+  // refuses one. The receive-audio worklet is a file of the page's own origin for that reason.
+  build: { outDir: '../dist-remote', emptyOutDir: true, assetsInlineLimit: file => file.endsWith('.js') ? false : undefined },
 })

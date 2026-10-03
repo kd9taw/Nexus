@@ -450,7 +450,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
     let qsoPrompt=true
     const qsoRecord={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.0755,mode:'FT8',rstSent:'-10',rstRcvd:'-12',name:null,qth:null,comment:null,notes:null,whenUnix:1700000000,confirmed:false,awardConfirmed:false}
-    let stationControls=false,loseSpotReply=false,unknownResults=0,transmitAllowed=false,transmitEpoch='0000000000000001'
+    let stationControls=false,listenOffered=false,loseSpotReply=false,unknownResults=0,transmitAllowed=false,transmitEpoch='0000000000000001'
     const stopRequests=[],ftTxLog=[]
     if(workSpot){
       const original=collections.needs.rows[0]
@@ -702,7 +702,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl'){value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'};unknownResults++}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating||stream?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating||stream?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[]),...(listenOffered?['audioListen']:[])]:['decoder','amplifier']}}:{})}
         // A slow link answers heartbeats late; the station's own reply content is unchanged.
         if(r.type==='heartbeat'&&(heartbeatReplyDelayMs||heartbeatReplyJitterMs))await sleep(heartbeatReplyDelayMs+Math.random()*heartbeatReplyJitterMs)
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
@@ -792,7 +792,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // relay lane. The station's WebRTC end is a second Chrome window standing in for str0m: it answers
       // the page's offer with a canvas picture and records what reaches each data channel. Nothing of
       // the page is faked. The wire contract is fixtures/stream/; this proves the page speaks it.
-      stationControls=true;transmitAllowed=true
+      // A station built with its audio lane advertises Listen, as the operator's does.
+      stationControls=true;transmitAllowed=true;listenOffered=true
       let shackLive=true
       const shackWindow=(await browser.call('Target.createTarget',{url:'about:blank',newWindow:true})).targetId
       const shack=(await browser.call('Target.attachToTarget',{targetId:shackWindow,flatten:true})).sessionId
@@ -822,6 +823,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const typeKey=async(key,code,text)=>{await browser.call('Input.dispatchKeyEvent',{type:text?'keyDown':'rawKeyDown',key,code,text,windowsVirtualKeyCode:key==='Tab'?9:key.toUpperCase().charCodeAt(0)},session);await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:key==='Tab'?9:key.toUpperCase().charCodeAt(0)},session);await sleep(50)}
       try{
         await geometry(1280,800)
+        // The policy's refusals as Chrome reports them, beside the page's own event: a refused worklet
+        // module fires no securitypolicyviolation at all (measured, Chrome 140), and its one trace is this
+        // console line. That gap is how a Listen the policy refused shipped with this check green.
+        const refused=[]
+        browser.on('Log.entryAdded',(event,from)=>{if(from===session&&event.entry.text.includes('Content Security Policy'))refused.push(event.entry.text.slice(0,160))})
+        await browser.call('Log.enable',{},session)
         await evaluate(`window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.violatedDirective+' '+e.blockedURI));true`)
         await click(button('Stream Nexus'))
         await until(`!!document.querySelector('.remote-stream-app')&&!!${button('Start the stream')}`,15000)
@@ -852,9 +859,22 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await untilShack(`__shack.received.control.some(m=>m.type==='heartbeat'&&Number.isInteger(m.decodedFrameAt))`)
         assert.deepEqual(await atShack(`Object.keys(__shack.received.control.find(m=>m.type==='heartbeat')).sort()`),['decodedFrameAt','leaseId','requestId','type'])
         // W3: the whole stream ran under the Worker's policy without one violation.
-        assert.deepEqual(await evaluate('window.__csp'),[],'no CSP violation while negotiating and streaming')
+        assert.deepEqual({events:await evaluate('window.__csp'),console:refused},{events:[],console:[]},'no CSP violation while negotiating and streaming')
         if(artifacts)for(const theme of ['dark','light']){await evaluate(`document.documentElement.dataset.theme='${theme}';true`);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`stream-live-${theme}.png`),Buffer.from(shot.data,'base64'))}
         await evaluate(`document.documentElement.dataset.theme='dark';true`)
+        // LISTEN, on the stream, under the same policy. The player's AudioWorklet is a module script, and
+        // the Worker's `script-src 'self'` refuses one made from a blob: - so Listen said "no audio"
+        // against a station that was sending it (the operator's rc2 test, 2026-10-02), and nothing here
+        // pressed it. The worklet has to load as a file of the page's own origin. The browser API is
+        // watched, never replaced: each call goes through to Chrome's own.
+        await evaluate(`window.__worklets=[];const add=AudioWorklet.prototype.addModule;AudioWorklet.prototype.addModule=function(url,...rest){const w={url:String(url)};window.__worklets.push(w);return add.call(this,url,...rest).then(v=>{w.ok=true;return v},e=>{w.ok=false;w.error=String(e);throw e})};true`)
+        const audioButton=label=>`[...document.querySelectorAll('.remote-stream-app button')].find(e=>e.textContent===${JSON.stringify(label)})`
+        await click(audioButton('Listen'))
+        await until(`window.__worklets.length>0&&window.__worklets.every(w=>'ok' in w)`,10000)
+        const worklets=await evaluate(`window.__worklets.map(w=>{const u=new URL(w.url,location.href);return {ok:w.ok,error:w.error??null,scheme:u.protocol,sameOrigin:u.origin===location.origin,asset:u.pathname.startsWith('/assets/')&&u.pathname.endsWith('.js')}})`)
+        assert.deepEqual({worklets,events:await evaluate('window.__csp'),console:refused},{worklets:[{ok:true,error:null,scheme:'http:',sameOrigin:true,asset:true}],events:[],console:[]},'Listen: the audio worklet loads as a file of the page\'s own origin, under the Worker\'s policy')
+        await click(audioButton('Stop listening'))
+        await until(`!!${audioButton('Listen')}`,5000)
         // S11 / A2, the page's half: a click on the picture arrives as a pointer at the frame's own
         // coordinates; a key typed on the focused picture arrives; Tab stays here and leaves the picture.
         await press(await center('.remote-stream-video'))
@@ -992,6 +1012,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`fetch('https://example.invalid/').catch(()=>{});true`)
         for(let i=0;i<30&&!(await evaluate('window.__csp.length'));i++)await sleep(100)
         assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
+        // And the console half sees what that event cannot: a worklet module made from a blob:, refused.
+        const seen=refused.length,blobRefused=()=>refused.slice(seen).some(text=>text.includes("'blob:"))
+        await evaluate(`new AudioContext().audioWorklet.addModule(URL.createObjectURL(new Blob([''],{type:'text/javascript'}))).catch(()=>{});true`)
+        for(let i=0;i<30&&!blobRefused();i++)await sleep(100)
+        assert.ok(blobRefused(),'control: a blob: worklet module is reported as refused: '+JSON.stringify(refused.slice(seen)))
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
         console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, "Still there?" at 15:00 with Stop TX unmoved and reachable at 12 layouts and its press reaching nothing at the shack, the idle end at 16:00 as close and release, no CSP violation`)

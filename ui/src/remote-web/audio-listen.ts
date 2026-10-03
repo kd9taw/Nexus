@@ -1,5 +1,5 @@
 // Listening, from the browser's side: feature detection, the decoder, the sequence
-// rules, and the state an operator reads. The buffer itself is in `audio-worklet.ts`,
+// rules, and the state an operator reads. The buffer itself is in `audio-worklet-processor.js`,
 // where the audio clock is.
 //
 // WHY WEBCODECS AND NOT WEBRTC. A WebRTC receive leg would give Opus everywhere with
@@ -21,7 +21,7 @@ import {
   audioPackets, parseAudioBundle, parseAudioState,
 } from './audio-protocol'
 import {
-  AUDIO_CEILING_MS, AUDIO_PREFILL_MS, AUDIO_WORKLET_NAME, AUDIO_WORKLET_SOURCE,
+  AUDIO_BED_LEVEL, AUDIO_CEILING_MS, AUDIO_PREFILL_MS, AUDIO_WORKLET_NAME,
 } from './audio-worklet'
 
 /** What the operator is shown. Each one is a different thing to do about it. */
@@ -342,10 +342,11 @@ export function browserAudio(): AudioEnvironment {
     }) as unknown as AudioDecoderLike,
     context: async () => {
       const context = new AudioContext({ sampleRate: DECODE_RATE, latencyHint: 'interactive' })
-      // A blob URL, because an AudioWorklet module can only be fetched and a separate
-      // file would be a build asset to keep in step with the source it came from.
-      const url = URL.createObjectURL(new Blob([AUDIO_WORKLET_SOURCE], { type: 'text/javascript' }))
-      try { await context.audioWorklet.addModule(url) } finally { URL.revokeObjectURL(url) }
+      // A file of the page's own origin. An AudioWorklet module can only be fetched, and the
+      // hosted page's `script-src 'self'` refuses one made from a blob: URL, so Listen said the
+      // station had no audio while it was sending some. The build emits the file beside the
+      // page's scripts and never inlines it (vite.remote.config.ts).
+      await context.audioWorklet.addModule(new URL('./audio-worklet-processor.js', import.meta.url).href)
       const rate = context.sampleRate
       const node = new AudioWorkletNode(context, AUDIO_WORKLET_NAME, {
         numberOfInputs: 0,
@@ -354,6 +355,7 @@ export function browserAudio(): AudioEnvironment {
           capacity: Math.ceil((rate * (AUDIO_CEILING_MS + AUDIO_PREFILL_MS * 2)) / 1000),
           prefill: Math.ceil((rate * AUDIO_PREFILL_MS) / 1000),
           ceiling: Math.ceil((rate * AUDIO_CEILING_MS) / 1000),
+          level: AUDIO_BED_LEVEL,
         },
       })
       // Through a gain the page can close to silence while the operator's own over is on the air.

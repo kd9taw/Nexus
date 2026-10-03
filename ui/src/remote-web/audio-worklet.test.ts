@@ -1,5 +1,7 @@
 import { expect, it, vi } from 'vitest'
-import { AUDIO_WORKLET_NAME, AUDIO_WORKLET_SOURCE, AUDIO_BED_LEVEL } from './audio-worklet'
+import { AUDIO_WORKLET_NAME, AUDIO_BED_LEVEL } from './audio-worklet'
+// The file exactly as it ships: the build copies it unchanged.
+import AUDIO_WORKLET_SOURCE from './audio-worklet-processor.js?raw'
 
 // The worklet source is evaluated and driven here rather than approximated, because the
 // rules it holds - never time-stretch, a gap is audible - live nowhere else. jsdom has no
