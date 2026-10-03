@@ -54,6 +54,9 @@ pub const PTT_GAP_MS: u64 = 200;
 pub const HELD_KEYS: usize = 16;
 /// The oldest decoded frame that still renews transmit presence.
 pub const FRESH_FRAME_MS: u64 = 2000;
+/// The largest side a page may say its picture area has (`view`), in device pixels. VP8's own
+/// limit is 16,383.
+pub const MAX_VIEW: u32 = 16_384;
 /// The video track's RTP clock.
 pub const VIDEO_CLOCK_HZ: u64 = 90_000;
 /// The longest the station goes without sending a video frame, so that a still window never reads
@@ -463,6 +466,12 @@ pub enum ControlIn {
     Wheel(WheelInput),
     Key(KeyInput),
     Text(TextInput),
+    /// The page's picture area, in its own device pixels: the most the station encodes the
+    /// picture at, so the page can show it pixel for pixel. Not input, and needs no presence.
+    View {
+        width: u32,
+        height: u32,
+    },
 }
 
 impl Validate for ControlIn {
@@ -478,6 +487,9 @@ impl Validate for ControlIn {
             Self::Wheel(input) => input.valid(),
             Self::Key(input) => input.valid(),
             Self::Text(input) => input.valid(),
+            Self::View { width, height } => {
+                (1..=MAX_VIEW).contains(width) && (1..=MAX_VIEW).contains(height)
+            }
         }
     }
 }
@@ -1061,7 +1073,7 @@ mod tests {
     fn every_data_channel_case_round_trips() {
         assert_eq!(
             round_trip::<ControlIn>(CHANNEL, "controlBrowserToStation"),
-            15
+            16
         );
         assert_eq!(
             round_trip::<ControlOut>(CHANNEL, "controlStationToBrowser"),

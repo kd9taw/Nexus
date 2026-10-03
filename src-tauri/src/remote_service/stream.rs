@@ -46,7 +46,9 @@
 //! - **The picture (S1, S2) is the main window's, and nothing else's (A1).** The application
 //!   resolves its `main` window's handle through [`Host::window`]; the station checks it can be
 //!   captured before it opens a socket, starts capturing when the session connects, and stops when
-//!   the session ends. `tempo_stream::video` does the capture and the encoding.
+//!   the session ends. `tempo_stream::video` does the capture and the encoding, no larger than the
+//!   page says it shows the picture (`view` on `control`, [`Streaming::view`]) and within the
+//!   budget of the path the picture takes (`Session::path`): only its size and bit rate change.
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
@@ -409,6 +411,8 @@ pub(super) struct Streaming {
     /// The shack held awake from the connection on. Dropped with this state, which the session
     /// loop drops however the stream ends, a panic included.
     awake: Option<tempo_stream::keep_awake::Attached>,
+    /// The page's picture area in its own device pixels, once it has said (`view`).
+    view: Option<(u32, u32)>,
 }
 
 impl Streaming {
@@ -429,7 +433,13 @@ impl Streaming {
             mic: tempo_audio::mic_decode::MicDecoder::new().ok(),
             mic_told,
             awake: None,
+            view: None,
         }
+    }
+
+    /// The size the page last said it shows the picture at, in its own device pixels.
+    pub fn view(&self) -> Option<(u32, u32)> {
+        self.view
     }
 
     /// The microphone over's state for the page, when it has changed since the page was last told.
@@ -586,6 +596,11 @@ impl Streaming {
                     now,
                 );
                 (Some(reply(request_id, result, None)), false)
+            }
+            // The size the page shows the picture at: not input, so it needs no presence.
+            ControlIn::View { width, height } => {
+                self.view = Some((width, height));
+                (None, false)
             }
             input => {
                 // S11: into Nexus only, and only while presence is live.
@@ -1005,6 +1020,7 @@ fn run(
             session.send(Lane::Audio, &audio, now);
         }
         if let Some(picture) = &video {
+            picture.fit(session.path(), streaming.view());
             for frame in picture.take() {
                 // A frame the transport could not take leaves the page's decoder without its
                 // reference: the next frame is a keyframe, as when the page asks for one.

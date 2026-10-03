@@ -42,6 +42,8 @@
 //! That threat is for a station-signed answer to settle, not for a candidate filter.
 use std::net::{IpAddr, SocketAddr};
 
+use crate::video::picture::Path;
+
 /// Is this an address that belongs to the shack's own network rather than the internet?
 pub fn private(ip: IpAddr) -> bool {
     match ip {
@@ -81,6 +83,22 @@ pub fn host(base: SocketAddr) -> Option<SocketAddr> {
             Some(base)
         }
         _ => None,
+    }
+}
+
+/// Where a page is that the station sends its picture to at `peer`, the selected ICE pair's remote
+/// address: on the shack's own network when that is a private IPv4 address, the ranges [`host`]
+/// offers as the shack's own; anywhere else (the internet, a relay, a carrier's or an overlay
+/// network's shared 100.64/10) otherwise. It sizes the picture and decides nothing else.
+pub fn path(peer: SocketAddr) -> Path {
+    let v4 = match peer.ip() {
+        IpAddr::V4(v4) => Some(v4),
+        IpAddr::V6(v6) => v6.to_ipv4_mapped(),
+    };
+    if v4.is_some_and(|v4| v4.is_private()) {
+        Path::Lan
+    } else {
+        Path::Internet
     }
 }
 
@@ -279,6 +297,25 @@ mod tests {
     /// The guard, for a shack whose socket holds a public address: that address passes as its own
     /// host candidate and as nothing else, and every other host, every LAN address and every
     /// `raddr` naming one is still caught. CONTROL: offering none, the same line is a leak.
+    /// The picture's path: the shack's own network only for the private IPv4 ranges, so a page
+    /// reached through a carrier's or an overlay network's shared space gets the internet's budget.
+    #[test]
+    fn only_a_private_ipv4_peer_is_on_the_shacks_network() {
+        for (peer, want) in [
+            ("192.168.1.20:58503", Path::Lan),
+            ("10.0.0.6:61000", Path::Lan),
+            ("172.20.1.2:5000", Path::Lan),
+            ("[::ffff:192.168.1.20]:5000", Path::Lan),
+            ("203.0.113.9:3478", Path::Internet),
+            ("100.85.1.2:41641", Path::Internet),
+            ("169.254.10.1:5000", Path::Internet),
+            ("[2001:db8::1]:5000", Path::Internet),
+            ("[fd00::1]:5000", Path::Internet),
+        ] {
+            assert_eq!(path(peer.parse().unwrap()), want, "{peer}");
+        }
+    }
+
     #[test]
     fn a_public_socket_address_passes_as_its_own_host_candidate_only() {
         let own = Some("203.0.113.7:61000".parse().unwrap());

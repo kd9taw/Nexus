@@ -48,6 +48,9 @@
 //!   [`CONNECT_TIMEOUT`] does.
 //! - **Control must be reliable and ordered.** A `control` channel opened any other way is not used:
 //!   a Stop that the channel is allowed to drop is not a Stop.
+//! - **Where the picture goes** ([`Session::path`]): the selected pair's remote address, from
+//!   str0m's own statistics every [`PATH_EVERY`], read by [`crate::lan::path`]. The picture's size
+//!   and bit rate follow it (`video::picture::Bound`); nothing else does.
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -61,9 +64,12 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use crate::frame_clock::VideoClock;
 use crate::offer::{self, OfferRefusal};
 use crate::protocol::{StreamReason, AUDIO_CHANNEL, CONTROL_CHANNEL, PTT_CHANNEL};
+use crate::video::picture::Path;
 
 /// How long ICE and DTLS may take before the session is given up on.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// How often the session reads where the picture goes ([`Session::path`]).
+pub const PATH_EVERY: Duration = Duration::from_millis(500);
 
 /// Windows' WSAEMSGSIZE on a receive: the datagram was longer than the buffer it was read into.
 const WSAEMSGSIZE: i32 = 10040;
@@ -177,6 +183,8 @@ pub struct Session {
     ptt: Option<ChannelId>,
     audio: Option<ChannelId>,
     clock: VideoClock,
+    /// Where the picture goes, once ICE has selected a pair.
+    path: Option<Path>,
     started: Instant,
     connected: bool,
     closed: bool,
@@ -220,7 +228,9 @@ impl Session {
             .enable_vp8(true)
             // The page's microphone (S6). No RED: the page sends plain Opus.
             .enable_opus(true, false)
-            .set_ice_lite(false);
+            .set_ice_lite(false)
+            // The selected pair arrives with the statistics, and it is all they are read for.
+            .set_stats_interval(Some(PATH_EVERY));
         // The peer's certificate is checked against its offer's fingerprint. str0m's default, and
         // the lock A4 and A5 stand on, so it is asserted rather than assumed.
         if !config.fingerprint_verification() {
@@ -262,6 +272,7 @@ impl Session {
             ptt: None,
             audio: None,
             clock: VideoClock::new(now),
+            path: None,
             started: now,
             connected: false,
             closed: false,
@@ -400,6 +411,12 @@ impl Session {
             .is_some_and(|mut channel| channel.write(false, text.as_bytes()).unwrap_or(false));
         self.pump(now);
         sent
+    }
+
+    /// Where the picture goes: the page's network as seen from the selected ICE pair, `None` until
+    /// there is one. Read every [`PATH_EVERY`], so it follows a pair ICE selects later.
+    pub fn path(&self) -> Option<Path> {
+        self.path
     }
 
     /// S9: is the picture the page says it last showed fresh enough to renew transmit presence?
@@ -542,6 +559,11 @@ impl Session {
                 }
             }
             Event::KeyframeRequest(_) => self.events.push(SessionEvent::KeyframeRequest),
+            Event::PeerStats(stats) => {
+                if let Some(pair) = stats.selected_candidate_pair {
+                    self.path = Some(crate::lan::path(pair.remote.addr));
+                }
+            }
             _ => {}
         }
     }
@@ -1119,6 +1141,17 @@ mod tests {
                 station.take_events()
             );
             assert!(page.rtc.is_connected());
+            // The picture goes to the page's LAN address: the shack network's budget, once the
+            // statistics have read the selected pair.
+            travel(
+                &mut page,
+                &mut station,
+                &mut now,
+                PATH_EVERY * 2,
+                BASE,
+                NEIGHBOUR,
+            );
+            assert_eq!(station.path(), Some(Path::Lan));
         }
 
         /// A browser elsewhere is handed the shack's LAN address too, and cannot reach it: its
@@ -1127,7 +1160,7 @@ mod tests {
         #[test]
         fn a_browser_that_cannot_reach_the_lan_address_connects_over_the_reflexive_one() {
             let mut now = Instant::now();
-            let (page, station, _, _) = connect(&mut now);
+            let (mut page, mut station, _, _) = connect(&mut now);
             let base: SocketAddr = BASE.parse().unwrap();
             assert!(
                 page.lost.contains(&base),
@@ -1136,6 +1169,9 @@ mod tests {
             );
             assert!(station.is_connected(), "the session never connected");
             assert!(page.rtc.is_connected());
+            // The picture goes to the page's public address: the internet's budget.
+            run(&mut page, &mut station, &mut now, PATH_EVERY * 2);
+            assert_eq!(station.path(), Some(Path::Internet));
         }
 
         /// A shack with a public address on its own interface, no NAT in front of it: a STUN
