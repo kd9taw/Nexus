@@ -896,6 +896,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote: Listen plays the station's audio.** Since Listen arrived in 1.13.0 it never played on
+  the hosted page: the page's own security policy refused the audio player the page builds, so
+  every press ended with "The station has no audio to send right now." while the station was
+  sending audio. Behind that, the player also failed on the first packet it was given, and in a
+  stream the Listen button turned itself on, showing "Listening to the station" over silence
+  before anyone pressed it. Now Listen starts only when you press it, on the Remote page and in a
+  stream, and you hear the station.
+
 - **Connect: the Space Wx gauges sit two to a row.** They were meant to, but stood one per row,
   so the box ran six gauges deep and its 30-day lines were out of sight below them. Now the
   gauges take three rows, and at 1920 × 1080 and larger the lines show in the box's usual place

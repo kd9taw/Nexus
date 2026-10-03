@@ -801,6 +801,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const atShack=async expression=>{const v=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},shack);if(v.exceptionDetails)throw new Error('Station evaluation failed: '+String(v.exceptionDetails.exception?.description??v.exceptionDetails.text).split('\n')[0]);return v.result?.value}
       const untilShack=async(expression,timeout=12000)=>{for(let i=0;i<Math.ceil(timeout/100);i++){if(await atShack(expression))return;await sleep(100)}console.log('Station diagnostic',JSON.stringify(await atShack('({received:__shack.received,state:window.__pc?.connectionState})')));throw new Error('Expected station state did not appear: '+expression)}
       await atShack(`window.__shack={received:{control:[],ptt:[],audio:[]},candidates:[]};(()=>{const c=document.createElement('canvas');c.width=640;c.height=360;document.body.appendChild(c);const x=c.getContext('2d');let n=0;setInterval(()=>{x.fillStyle='hsl('+(n*7%360)+' 55% 35%)';x.fillRect(0,0,640,360);x.fillStyle='#fff';x.font='40px sans-serif';x.fillText('Nexus at the shack '+(n++),24,190)},50);window.__picture=c.captureStream(20)})();true`)
+      // The station's receive audio, as the contract has it on `audio`: when the channel opens it says
+      // "audio started", then sends `audioRx` bundles of five 20 ms Opus frames every 100 ms for the
+      // whole stream. The Opus is a tone from this Chrome's own encoder, run on a page of its own
+      // because WebCodecs needs a secure context and the station's window is about:blank.
+      const encoderWindow=(await browser.call('Target.createTarget',{url:app.origin+'/remote-licenses.txt',background:true})).targetId
+      const encoder=(await browser.call('Target.attachToTarget',{targetId:encoderWindow,flatten:true})).sessionId
+      let packets
+      for(let i=0;i<50&&!packets;i++){const v=await browser.call('Runtime.evaluate',{expression:`isSecureContext&&document.readyState==='complete'&&typeof AudioEncoder==='function'&&(async()=>{const out=[];const enc=new AudioEncoder({output:c=>{const b=new Uint8Array(c.byteLength);c.copyTo(b);out.push(btoa(String.fromCharCode(...b)))},error:()=>{}});enc.configure({codec:'opus',sampleRate:48000,numberOfChannels:1,bitrate:24000});for(let f=0;f<50;f++){const d=new Float32Array(960);for(let i=0;i<960;i++)d[i]=0.3*Math.sin(2*Math.PI*440*(f*960+i)/48000);enc.encode(new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:960,numberOfChannels:1,timestamp:f*20000,data:d}))}await enc.flush();enc.close();return out})()`,returnByValue:true,awaitPromise:true},encoder).catch(()=>null);if(Array.isArray(v?.result?.value)&&v.result.value.length)packets=v.result.value;else await sleep(100)}
+      await browser.call('Target.closeTarget',{targetId:encoderWindow})
+      assert.ok(packets?.length>=40,'the station stand-in encoded its tone')
+      await atShack(`__shack.largestBundle=0;__shack.feeds=0;__shack.feed=ch=>{__shack.feeds++;ch.send(JSON.stringify({type:'audioState',listening:true}));const packets=${JSON.stringify(packets)};let frame=0;const id=setInterval(()=>{if(ch.readyState!=='open'){if(ch.readyState==='closed')clearInterval(id);return}const bytes=[];for(let i=0;i<5;i++){const p=atob(packets[(frame+i)%packets.length]);bytes.push(p.length>>8,p.length&255,...[...p].map(c=>c.charCodeAt(0)))}const m=JSON.stringify({type:'audioRx',seq:frame,epoch:'00000000000000a1',firstFrameMs:frame*20,frameMs:20,count:5,payload:btoa(String.fromCharCode(...bytes))});__shack.largestBundle=Math.max(__shack.largestBundle,m.length);ch.send(m);frame+=5},100)};true`)
       let streamSession=null
       const offers=[],closes=[]
       const signalling=(async()=>{while(producing&&shackLive){const source=station;let signal;try{signal=await source.take(value=>value.type==='streamSignal',500)}catch{continue}
@@ -809,7 +820,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.equal(signal.deviceId,device.id,'the relay stamps the approved device')
           if(signal.payload.kind==='offer'){
             offers.push(signal)
-            const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data))};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
+            const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data));if(ch.label==='audio'){if(ch.readyState==='open')__shack.feed(ch);else ch.onopen=()=>__shack.feed(ch)}};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
             source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp}})
             source.send({type:'streamState',sessionId:signal.sessionId,streaming:true})
           }else if(signal.payload.kind==='candidate')await atShack(`__pc?.addIceCandidate(${JSON.stringify({candidate:signal.payload.candidate,sdpMid:signal.payload.sdpMid})}).then(()=>true,()=>false)`)
@@ -865,14 +876,25 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // LISTEN, on the stream, under the same policy. The player's AudioWorklet is a module script, and
         // the Worker's `script-src 'self'` refuses one made from a blob: - so Listen said "no audio"
         // against a station that was sending it (the operator's rc2 test, 2026-10-02), and nothing here
-        // pressed it. The worklet has to load as a file of the page's own origin. The browser API is
-        // watched, never replaced: each call goes through to Chrome's own.
-        await evaluate(`window.__worklets=[];const add=AudioWorklet.prototype.addModule;AudioWorklet.prototype.addModule=function(url,...rest){const w={url:String(url)};window.__worklets.push(w);return add.call(this,url,...rest).then(v=>{w.ok=true;return v},e=>{w.ok=false;w.error=String(e);throw e})};true`)
+        // pressed it. The worklet has to load as a file of the page's own origin, and the station's
+        // audio has to play through it. Both browser APIs are watched, never replaced: each call
+        // goes through to Chrome's own.
+        await evaluate(`window.__worklets=[];const add=AudioWorklet.prototype.addModule;AudioWorklet.prototype.addModule=function(url,...rest){const w={url:String(url)};window.__worklets.push(w);return add.call(this,url,...rest).then(v=>{w.ok=true;return v},e=>{w.ok=false;w.error=String(e);throw e})};window.__audioReports=[];const Node=AudioWorkletNode;window.AudioWorkletNode=class extends Node{constructor(...a){super(...a);this.port.addEventListener('message',e=>window.__audioReports.push(e.data));this.port.start()}};true`)
         const audioButton=label=>`[...document.querySelectorAll('.remote-stream-app button')].find(e=>e.textContent===${JSON.stringify(label)})`
+        // The station has been sending since the channel opened. Nobody has asked to listen, so the
+        // control still offers Listen, with no state line: its "audio started" turns nothing on.
+        assert.equal(await atShack('__shack.feeds'),1,'the station started its audio when the channel opened')
+        assert.deepEqual(await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const a=document.querySelector('.remote-stream-app .remote-audio');return {heard:c.stream.audioState,button:a?.querySelector('button')?.textContent,state:a?.querySelector('.remote-audio-state')?.textContent??null}}f=f.return}return null})()`),{heard:{type:'audioState',listening:true},button:'Listen',state:null},'nobody asked to listen: the station\'s word arrived and turned nothing on')
         await click(audioButton('Listen'))
         await until(`window.__worklets.length>0&&window.__worklets.every(w=>'ok' in w)`,10000)
         const worklets=await evaluate(`window.__worklets.map(w=>{const u=new URL(w.url,location.href);return {ok:w.ok,error:w.error??null,scheme:u.protocol,sameOrigin:u.origin===location.origin,asset:u.pathname.startsWith('/assets/')&&u.pathname.endsWith('.js')}})`)
         assert.deepEqual({worklets,events:await evaluate('window.__csp'),console:refused},{worklets:[{ok:true,error:null,scheme:'http:',sameOrigin:true,asset:true}],events:[],console:[]},'Listen: the audio worklet loads as a file of the page\'s own origin, under the Worker\'s policy')
+        await until(`!!document.querySelector('.remote-stream-app .remote-audio-state--live')||!!document.querySelector('.remote-stream-app .remote-audio-state--ended')`,10000)
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-app .remote-audio-state')?.textContent`),'Listening to the station','Listen: the station\'s audio is playing')
+        // Through the worklet, in the audio thread: its own report says the buffer filled and it plays.
+        await until(`window.__audioReports.some(r=>r.playing&&r.held>0)`,10000)
+        assert.ok(await atShack('__shack.largestBundle')<=1024,'every bundle within the contract\'s 1024 bytes')
+        assert.deepEqual({events:await evaluate('window.__csp'),console:refused},{events:[],console:[]},'no CSP violation while listening')
         await click(audioButton('Stop listening'))
         await until(`!!${audioButton('Listen')}`,5000)
         // S11 / A2, the page's half: a click on the picture arrives as a pointer at the frame's own

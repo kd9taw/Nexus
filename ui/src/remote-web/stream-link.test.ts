@@ -457,6 +457,20 @@ it('plays receive audio from the audio channel through the existing player, mute
   expect(h.peer.channel('control').types().filter(type => type !== 'heartbeat')).toEqual([])
 })
 
+it('the station saying its audio started turns nothing on: Listen waits for the operator', async () => {
+  const h = harness()
+  await h.live()
+  // Every stream's station says this the moment the audio channel opens. Nobody has asked to
+  // listen, so nothing may play and the control must still offer Listen - not "Stop listening"
+  // over a player that was never opened.
+  h.peer.channel('audio').deliver(byName(CHANNEL.audioStationToBrowser, 'audio started'))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(h.link.audio.getSnapshot().phase).toBe('off')
+  h.link.audio.listen(LEASE)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(h.link.audio.getSnapshot().phase).toBe('connecting')
+})
+
 it('a refusal the station already sent is what the operator hears about when they ask to listen', async () => {
   const h = harness()
   await h.live()

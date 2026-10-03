@@ -172,11 +172,11 @@ export class AudioLink {
     if (raw.type === 'audioState') {
       let state
       try { state = parseAudioState(raw) } catch { this.fail('audioUnavailable'); return true }
-      if (state.listening) {
-        // The station agreed. The phase stays `connecting` until audio actually plays -
-        // an agreement is not a sound.
-        if (this.phase === 'ended' || this.phase === 'off') this.set('connecting', null)
-      } else if (this.phase !== 'off') {
+      // The station agreeing starts nothing: only the operator's press opens the player, and
+      // `connecting` lasts until audio actually plays - an agreement is not a sound. A stream's
+      // station says it the moment the audio channel opens, and it can land after the page's
+      // own player gave up; taken as a start, either read "Listening" over silence.
+      if (!state.listening && this.phase !== 'off') {
         this.teardown()
         this.set('ended', state.reason ?? 'audioStopped')
       }
@@ -336,10 +336,26 @@ export function browserAudio(): AudioEnvironment {
     // `window.AudioDecoder`, NOT a WebCodecs check: Safari shipped WebCodecs video-only
     // for two years, and a WebCodecs check would have said yes to every one of them.
     decoderAvailable: () => typeof AudioDecoder !== 'undefined',
-    decoder: handlers => new AudioDecoder({
-      output: frame => handlers.output(frame as unknown as DecodedFrame),
-      error: handlers.error,
-    }) as unknown as AudioDecoderLike,
+    // The browser's own types, here and nowhere else: decode() takes an EncodedAudioChunk, never
+    // a plain object, and a decoded AudioData counts its samples in `numberOfFrames`. Both were
+    // cast past here, and in a real browser the first packet threw, so Listen ended saying the
+    // station had no audio.
+    decoder: handlers => {
+      const decoder = new AudioDecoder({
+        output: data => handlers.output({
+          sampleRate: data.sampleRate,
+          frames: data.numberOfFrames,
+          copyTo: (target, options) => data.copyTo(target, options as AudioDataCopyToOptions),
+          close: () => data.close(),
+        }),
+        error: handlers.error,
+      })
+      return {
+        configure: config => decoder.configure(config),
+        decode: chunk => decoder.decode(new EncodedAudioChunk(chunk)),
+        close: () => decoder.close(),
+      }
+    },
     context: async () => {
       const context = new AudioContext({ sampleRate: DECODE_RATE, latencyHint: 'interactive' })
       // A file of the page's own origin. An AudioWorklet module can only be fetched, and the
