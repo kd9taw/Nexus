@@ -107,11 +107,22 @@ export async function verifyLive({ manifest, config }, fetcher = fetch, row = ta
       const csp = result.headers.get('content-security-policy') ?? ''
       requireValue(csp.includes("frame-ancestors 'none'") && csp.includes(new URL(config.vars.AUTH0_ISSUER).origin)
         && result.headers.get('cache-control') === 'no-store'
-        && result.headers.get('referrer-policy') === 'no-referrer', 'The live document is missing its security headers')
+        && result.headers.get('referrer-policy') === 'no-referrer'
+        && result.headers.get('strict-transport-security') === 'max-age=31536000', 'The live document is missing its security headers')
     }
     count++
   }
   requireValue(count >= 3, 'No complete browser artifact was checked')
+  // Plain HTTP is sent to the same path and query on https:// before any route runs. Not followed: the
+  // 301 itself is the evidence, whoever sends it - the Worker, or a zone setting in front of it.
+  const plainProbe = '/?nexus-transport-check'
+  let plain
+  try {
+    plain = await fetcher(`${origin.replace(/^https:/, 'http:')}${plainProbe}`, { ...options, redirect: 'manual', signal: AbortSignal.timeout(20000) })
+    await plain.body?.cancel()
+  } catch { throw new Error('Plain HTTP check failed before a complete response') }
+  requireValue(plain.status === 301 && plain.headers.get('location') === `${origin}${plainProbe}`,
+    'The live service answers plain HTTP instead of sending it to https://')
   for (const [originHeader, status, error] of [[origin, 401, 'signInRequired'], ['https://other.invalid', 403, 'originDenied']]) {
     const response = await requestBytes(`${origin}/api/remote/session`, {
       method: 'POST', headers: { origin: originHeader, 'content-type': 'application/json' }, body: '{}',
@@ -120,7 +131,8 @@ export async function verifyLive({ manifest, config }, fetcher = fetch, row = ta
     try { value = JSON.parse(response.bytes.toString('utf8')) } catch { throw new Error('Admission check returned invalid JSON') }
     requireValue(response.status === status && value.error === error, 'The live service did not enforce authentication and Origin')
   }
-  return { revision: manifest.revision, source: manifest.source, assetsChecked: count, admission: 'anonymous and foreign Origin refused' }
+  return { revision: manifest.revision, source: manifest.source, assetsChecked: count, admission: 'anonymous and foreign Origin refused',
+    transport: 'plain HTTP sent to https://, HSTS on the document' }
 }
 
 // A fresh upload takes a few seconds to reach every edge, so the live check is retried before it is

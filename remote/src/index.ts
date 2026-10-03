@@ -493,11 +493,33 @@ async function renewApproval(request: Request, env: RemoteEnv, stationId: string
   return renewed && credential ? { 'set-cookie': cookie(stationId, credential, Math.floor((until - now) / 1000)) } : undefined
 }
 
+// Every response sent over TLS tells the browser to keep to https:// here for a year, so after one
+// visit an address typed or linked as http:// never leaves the browser in the clear. No
+// includeSubDomains: it would reach only hosts under this one, and there are none. No preload: that
+// binds the whole registrable domain. Never over plain HTTP, where a browser ignores it and the
+// standard forbids it. Not on a WebSocket's 101 either: the page that opens a socket has already
+// been told, and the relay's handshake stays exactly what it was.
+function hsts(request: Request, response: Response): Response {
+  if (!request.url.startsWith('https:') || response.status === 101) return response
+  // A room's response has immutable headers; a copy of it does not.
+  const result = new Response(response.body, response)
+  result.headers.set('strict-transport-security', 'max-age=31536000')
+  return result
+}
+
 export default {
   async fetch(request: Request, env: RemoteEnv): Promise<Response> {
     try {
       const url = new URL(request.url)
-      if (url.pathname.startsWith('/api/')) return await api(request, env)
+      // Plain HTTP reaches no route, no database and no sign-in. A read is sent to the same path and
+      // query on the service's https:// origin. Anything else is refused as the API refuses a wrong
+      // origin: its body and credentials have already crossed in the clear, and a 308 would resend
+      // them as if all were well. A local http:// service (wrangler dev, the tests) has nowhere to send it.
+      if (url.protocol === 'http:' && env.PUBLIC_REMOTE_ORIGIN.startsWith('https:')) {
+        requireValue(request.method === 'GET' || request.method === 'HEAD', 'originDenied')
+        return Response.redirect(`${env.PUBLIC_REMOTE_ORIGIN}${url.pathname}${url.search}`, 301)
+      }
+      if (url.pathname.startsWith('/api/')) return hsts(request, await api(request, env))
       // HTML normalization is disabled so /index.html cannot redirect around
       // these response headers. Resolve the home page explicitly, retaining
       // the browser's original callback URL for the SDK's PKCE completion.
@@ -521,10 +543,10 @@ export default {
       // site can. The browser still asks the operator. The camera and location stay off.
       response.headers.set('permissions-policy', 'camera=(), microphone=(self), geolocation=()')
       response.headers.set('cache-control', 'no-store')
-      return response
+      return hsts(request, response)
     } catch (error) {
       // Never serialize exception details, provider responses, URLs or headers.
-      return json({ error: error instanceof Refusal ? error.code : 'serviceUnavailable' }, error instanceof Refusal ? error.status : 503)
+      return hsts(request, json({ error: error instanceof Refusal ? error.code : 'serviceUnavailable' }, error instanceof Refusal ? error.status : 503))
     }
   },
 }

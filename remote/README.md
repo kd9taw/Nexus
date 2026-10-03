@@ -133,7 +133,8 @@ on `.github/workflows/remote-staging.yml` with one of `inspect`, `provision`,
 `deploy` checks the public identity configuration, verifies the exact source is
 anonymously reachable, runs the gates above, packages the tested bytes with a source
 receipt, validates the upload without deploying, **applies D1 migrations**, uploads,
-and then verifies the live Worker and its admission refusals. Schema and code ship
+and then verifies the live Worker, its admission refusals, and that plain HTTP is sent
+to https:// under HSTS. Schema and code ship
 together or not at all. Nothing else — no test, no build — performs any of it.
 
 Account credentials come through normal provider tooling, never this repository and

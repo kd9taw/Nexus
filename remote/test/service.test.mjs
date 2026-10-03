@@ -998,6 +998,105 @@ test('the hosted page\'s policy is exactly what it was before the stream: no med
   assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(self), geolocation=()')
 })
 
+// THE HOSTED SERVICE STAYS ON https:// (security review, 2026-10-03). The live page answered plain
+// http:// with the whole document and no redirect, and no response told a browser to keep to
+// https://, so a typed or linked http:// address put the sign-in page in the clear, where anyone on
+// the network path could swap it. A service whose public origin is https:// now answers plain HTTP
+// before any route, database or sign-in runs, and sends HSTS on everything else. Every other test in
+// this file runs the local http:// origin, where nothing changes: there is nowhere to redirect to.
+// `redirect: 'manual'` throughout: a followed 301 would leave this box for the real network.
+const HOSTED = 'https://remote.remote-test.invalid', HSTS = 'max-age=31536000'
+const rowCounts = async (db, tables) => Object.fromEntries(await Promise.all(tables.map(async table =>
+  [table, (await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first()).n])))
+test('plain HTTP to the hosted service is sent to https:// before any route, database or sign-in', async () => {
+  const hosted = await runtime({ origin: HOSTED })
+  try {
+    const pair = await hosted.paired(), plain = HOSTED.replace('https:', 'http:'), connect = `/api/remote/stations/${pair.stationId}/connect`
+    const tables = ['accounts', 'enrollments', 'stations', 'tickets', 'rate_limits'], before = await rowCounts(hosted.db, tables)
+    // A read goes to the same path and query on the service's https:// origin: the page, the sign-in
+    // callback's query, the API, a station socket with a good credential.
+    for (const [method, path, headers] of [['GET', '/'], ['HEAD', '/'], ['GET', '/index.html?code=synthetic&state=synthetic'],
+      ['GET', '/api/remote/config'], ['HEAD', '/api/remote/config'], ['GET', connect, { ...pair.native.headers(), upgrade: 'websocket' }]]) {
+      const response = await hosted.mf.dispatchFetch(`${plain}${path}`, { method, headers, redirect: 'manual' })
+      assert.equal(response.status, 301, `${method} ${path}`)
+      assert.equal(response.headers.get('location'), `${HOSTED}${path}`, `${method} ${path}`)
+      assert.equal(response.headers.get('strict-transport-security'), null, 'HSTS is never sent in the clear')
+      await response.body?.cancel()
+    }
+    // Anything else is refused by name, with the API's own answer to a cleartext write: its body and
+    // credentials have already crossed in the clear, and a 308 would resend them as if all were well.
+    for (const [method, path, headers, body] of [['POST', '/api/remote/session', pair.browser.headers(), '{}'],
+      ['POST', '/api/remote/enroll', { 'content-type': 'application/json', 'cf-connecting-ip': '198.51.100.250' }, JSON.stringify({ name: 'Synthetic test station' })],
+      ['POST', `/api/remote/stations/${pair.stationId}/ticket`, pair.browser.headers(), '{}'],
+      ['POST', '/'], ['PUT', '/index.html'], ['DELETE', '/api/remote/config'], ['OPTIONS', '/api/remote/session']]) {
+      const response = await hosted.mf.dispatchFetch(`${plain}${path}`, { method, headers, body, redirect: 'manual' })
+      assert.equal(response.status, 403, `${method} ${path}`)
+      assert.deepEqual(await response.json(), { error: 'originDenied' }, `${method} ${path}`)
+      assert.equal(response.headers.get('location'), null)
+      assert.equal(response.headers.get('strict-transport-security'), null, 'HSTS is never sent in the clear')
+    }
+    assert.deepEqual(await rowCounts(hosted.db, tables), before, 'plain HTTP wrote nothing: no account, enrollment, ticket or rate-limit hit')
+    // Positive control: the same socket and enrollment over TLS do write, so the counts can see it.
+    const station = await hosted.mf.dispatchFetch(`${HOSTED}${connect}`, { headers: { ...pair.native.headers(), upgrade: 'websocket' } })
+    assert.equal(station.status, 101)
+    station.webSocket.accept()
+    station.webSocket.close(1000, 'testComplete')
+    await hosted.client().post('enroll', { name: 'Synthetic test station' })
+    const after = await rowCounts(hosted.db, tables)
+    assert.ok(after.rate_limits > before.rate_limits && after.enrollments > before.enrollments, 'positive control: over TLS the same requests write')
+  } finally { await hosted.mf.dispose() }
+})
+
+test('the hosted document, API and refusals carry Strict-Transport-Security over TLS, and are otherwise unchanged', async () => {
+  const hosted = await runtime({ origin: HOSTED })
+  try {
+    const document = await hosted.mf.dispatchFetch(HOSTED)
+    assert.equal(document.status, 200)
+    // A year, as the site is meant to stay on https:// for good. No includeSubDomains: it reaches only
+    // hosts under this one, and there are none. No preload: that binds the whole registrable domain.
+    assert.equal(document.headers.get('strict-transport-security'), HSTS)
+    // Control: the https:// document is the local one byte for byte, under the same headers but the
+    // socket origin its policy names, and HSTS is the only header added.
+    const local = await app.mf.dispatchFetch(app.origin)
+    assert.equal(local.status, 200)
+    assert.equal(await document.text(), await local.text())
+    const headers = response => Object.fromEntries([...response.headers].filter(([name]) => name !== 'date'))
+    const expected = { ...headers(local), 'strict-transport-security': HSTS }
+    expected['content-security-policy'] = expected['content-security-policy'].replace(app.origin.replace(/^http/, 'ws'), HOSTED.replace(/^http/, 'ws'))
+    assert.deepEqual(headers(document), expected)
+    for (const path of ['/index.html', '/api/remote/config']) {
+      const response = await hosted.mf.dispatchFetch(`${HOSTED}${path}`)
+      assert.equal(response.status, 200, path)
+      assert.equal(response.headers.get('strict-transport-security'), HSTS, path)
+      await response.body?.cancel()
+    }
+    // The Worker's own refusals, and the relay's passed through: an observer for a station that is
+    // not connected is the room's answer.
+    const pair = await hosted.paired()
+    await hosted.approved(pair)
+    const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
+    for (const [path, init, status, error] of [
+      ['/api/remote/config?probe', {}, 403, 'originDenied'],
+      ['/api/remote/session', { method: 'POST', headers: { origin: HOSTED, 'content-type': 'application/json' }, body: '{}' }, 401, 'signInRequired'],
+      [`/api/remote/stations/${pair.stationId}/observe`, { headers: { ...pair.browser.headers(), upgrade: 'websocket',
+        'sec-websocket-protocol': `nexus-observe-v1, ticket.${ticket.ticket}` } }, 403, 'stationOffline']]) {
+      const response = await hosted.mf.dispatchFetch(`${HOSTED}${path}`, init)
+      assert.equal(response.status, status, path)
+      assert.deepEqual(await response.json(), { error }, path)
+      assert.equal(response.headers.get('strict-transport-security'), HSTS, path)
+    }
+    // Control: a station's socket still opens over TLS, and the relay's handshake is what it was.
+    const station = await hosted.mf.dispatchFetch(`${HOSTED}/api/remote/stations/${pair.stationId}/connect`,
+      { headers: { ...pair.native.headers(), upgrade: 'websocket' } })
+    assert.equal(station.status, 101)
+    assert.equal(station.headers.get('strict-transport-security'), null, "the relay's handshake is untouched")
+    station.webSocket.accept()
+    station.webSocket.close(1000, 'testComplete')
+    // Control: the local http:// service redirects nothing and sends no HSTS in the clear.
+    assert.equal(local.headers.get('strict-transport-security'), null)
+  } finally { await hosted.mf.dispose() }
+})
+
 test('an in-flight publication survives the last browser disconnect and hibernation', async () => {
   const pair = await app.paired(), live = await admitted(pair)
   const pending = await live.station.take(value => value.type === 'watch' && value.enabled)
