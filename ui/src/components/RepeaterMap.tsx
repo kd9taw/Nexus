@@ -11,6 +11,12 @@
 // on-air state (those can be another directory's): the one thing it adds is the operator's own —
 // whether the machine is in the channel list. Program says what is left off beside the map.
 //
+// A DOT AND ITS ROW ARE ONE MACHINE (the operator's pick, 2026-10-02: "Map first, list below"). The map sits over the
+// list, and the two are linked: pointing at a dot lights its row and pointing at a row rings its dot (`linkedId`); a
+// click on a dot selects it, which brings its row into view and opens a card on the dot with the row's two actions,
+// Save to Memories and ＋ Add. The card's words are the dot's own (hearham's); what the buttons save or add is the
+// machine, exactly as its row's buttons do.
+//
 // It reuses the 2-D map's rendering (mapGeo: the azimuthal-equidistant projection, the bundled
 // basemap and state lines, range rings) and its rules (the MAP BASEMAP tokens, `markerScaleFor`,
 // `placeHoverCard`, the dark marker halo), not MapView itself: that component is Connect's, with
@@ -36,8 +42,14 @@ export interface MapMarker {
   city: string
   /** In the channel list: the one state the map shows that is not hearham's. */
   added: boolean
-  /** A click adds it or takes it off (the row's ＋ rule). */
+  /** Its card's ＋ adds it or takes it off (the row's ＋ rule). */
   pickable: boolean
+  /** An FM machine, which Save to Memories can save (the row's rule). */
+  savable: boolean
+  /** Already in Memories: the card shows the row's badge instead of the button. */
+  saved: boolean
+  /** The memory's name, for the badge's tooltip. */
+  savedAs?: string
 }
 
 interface Props {
@@ -50,7 +62,18 @@ interface Props {
   toLabel?: string
   /** The radius, or a route's corridor, km. */
   reachKm: number
+  /** The machine whose row the pointer is over, or the selected one: its dot is ringed. */
+  linkedId?: string | null
+  /** The selected machine: its dot carries the card. */
+  selectedId?: string | null
+  /** A dot pointed at (its row lights), or none. */
+  onHover?: (id: string | null) => void
+  /** A dot clicked (null: the empty map), which selects it. */
+  onSelect: (id: string | null) => void
+  /** The card's ＋: add the machine to the channel list or take it off. */
   onPick: (id: string) => void
+  /** The card's Save to Memories. */
+  onSave: (id: string) => void
 }
 
 const R_EARTH_KM = 6371
@@ -65,6 +88,9 @@ const MACHINE = '#ffcc44'
 const AREA = '#8fb8d8'
 const AREA_FILL = 'rgba(143, 184, 216, 0.14)'
 const INK = '#eef3f6'
+/** The ring on a linked or selected dot: white over the dark halo, so it reads on the basemap in every theme
+ *  (the basemap is dark in both) and on the amber dot it circles. */
+const LINK_RING = '#ffffff'
 /** MapView's MARKER_HALO: a dark edge that lifts a marker or a label off whatever it lands on. */
 const HALO = 'rgba(2, 7, 12, 0.9)'
 
@@ -132,7 +158,20 @@ export function spreadSites<P extends { x: number; y: number }>(placed: P[], spr
 const cssVar = (name: string, fallback: string): string =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
 
-export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, onPick }: Props) {
+export function RepeaterMap({
+  markers,
+  from,
+  fromLabel,
+  to,
+  toLabel,
+  reachKm,
+  linkedId = null,
+  selectedId = null,
+  onHover,
+  onSelect,
+  onPick,
+  onSave,
+}: Props) {
   const units = useUnits()
   const skin = useSkinActive()
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -141,9 +180,11 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
   useEffect(() => {
     const el = wrapRef.current
     if (!el) return
+    setSize({ w: el.clientWidth, h: el.clientHeight })
+    // The app's idiom (useRegionCols, BandMap, PaneSeam): no observer, no live resize, nothing thrown.
+    if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }))
     ro.observe(el)
-    setSize({ w: el.clientWidth, h: el.clientHeight })
     return () => ro.disconnect()
   }, [])
   // Device px per layout px, from `devicePixelContentBoxSize`: under `.app`'s CSS zoom it is not
@@ -160,6 +201,10 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
       if (dev && css && css.inlineSize > 0) s = dev.inlineSize / css.inlineSize
       if (!Number.isFinite(s) || s <= 0) s = 1
       setDevScale((prev) => (Math.abs(prev - s) < 1e-3 ? prev : s))
+    }
+    if (typeof ResizeObserver === 'undefined') {
+      apply()
+      return
     }
     const ro = new ResizeObserver((entries) => apply(entries[0]))
     try {
@@ -282,6 +327,20 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
       ctx.strokeStyle = MACHINE
       ctx.stroke()
     }
+    // The linked dot (its row is pointed at, or it is selected) and the selected one: a ring, over the halo that
+    // lifts it off the basemap, so the machine the operator is reading about is the one they can see.
+    for (const id of new Set([linkedId, selectedId])) {
+      const p = id ? placed.find((q) => q.m.id === id) : undefined
+      if (!p) continue
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, r + 4.5 * ms, 0, Math.PI * 2)
+      ctx.lineWidth = Math.max(3.5, 4 * ms)
+      ctx.strokeStyle = HALO
+      ctx.stroke()
+      ctx.lineWidth = Math.max(1.8, 2 * ms)
+      ctx.strokeStyle = LINK_RING
+      ctx.stroke()
+    }
     // Callsigns, nearest first, each only where it does not cover one already written.
     ctx.textAlign = 'left'
     ctx.fillStyle = INK
@@ -324,9 +383,9 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
         haloText(label, p[0], p[1] + arm + 8 * ms)
       }
     }
-  }, [size, devScale, proj, placed, ms, from, to, fromLabel, toLabel, reachKm, units, skin])
+  }, [size, devScale, proj, placed, ms, from, to, fromLabel, toLabel, reachKm, units, skin, linkedId, selectedId])
 
-  // ── pointer: hover names a machine, a click adds it or takes it off ──
+  // ── pointer: hover names a machine and lights its row, a click selects it ──
   const [hover, setHover] = useState<{ m: MapMarker; x: number; y: number } | null>(null)
   const hit = (e: { clientX: number; clientY: number }) => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -357,9 +416,35 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
     el.style.left = `${left}px`
     el.style.top = `${top}px`
   }, [hover, size.w, size.h, ms])
+  const selected = selectedId ? placed.find((p) => p.m.id === selectedId) : undefined
+  const cardRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = cardRef.current
+    if (!el || !selected) return
+    const { left, top } = placeHoverCard({
+      ax: selected.x,
+      ay: selected.y,
+      cw: el.offsetWidth,
+      ch: el.offsetHeight,
+      vw: size.w,
+      vh: size.h,
+      clear: 10 * ms,
+    })
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [selected, size.w, size.h, ms])
+  /** Tell the host which dot the pointer is on, once per change: a pointer move over the same dot (or over empty
+   *  map) must not re-render the list under it. */
+  const hoverIdRef = useRef<string | null>(null)
+  const pointAt = (id: string | null) => {
+    if (id !== hoverIdRef.current) {
+      hoverIdRef.current = id
+      onHover?.(id)
+    }
+  }
 
   return (
-    <div ref={wrapRef} className="rp-map-stage">
+    <div ref={wrapRef} className="rp-map-stage" data-linked={linkedId ?? undefined}>
       <canvas
         ref={canvasRef}
         role="img"
@@ -368,26 +453,73 @@ export function RepeaterMap({ markers, from, fromLabel, to, toLabel, reachKm, on
         onPointerMove={(e) => {
           const b = hit(e)
           setHover((cur) => (b ? (cur?.m.id === b.m.id ? cur : { m: b.m, x: b.x, y: b.y }) : null))
+          pointAt(b ? b.m.id : null)
         }}
-        onPointerLeave={() => setHover(null)}
-        onClick={(e) => {
-          const b = hit(e)
-          if (b?.m.pickable) onPick(b.m.id)
+        onPointerLeave={() => {
+          setHover(null)
+          pointAt(null)
         }}
+        onClick={(e) => onSelect(hit(e)?.m.id ?? null)}
       />
-      {hover && (
+      {hover && hover.m.id !== selected?.m.id && (
         <div
           ref={hoverRef}
           className="map-hover"
           style={placeHoverCard({ ax: hover.x, ay: hover.y, cw: 0, ch: 0, vw: size.w, vh: size.h, clear: 10 * ms })}
         >
           {`${hover.m.call || '—'} ${mhzLabel(hover.m.mhz)}${hover.m.city ? ` · ${hover.m.city}` : ''}`}
-          {hover.m.pickable && (
-            <>
-              <br />
-              {hover.m.added ? t('program.row.remove.title') : t('program.row.add.title')}
-            </>
-          )}
+        </div>
+      )}
+      {/* The selected dot's card: its words, and the row's two actions on the machine. */}
+      {selected && (
+        <div
+          ref={cardRef}
+          className="map-hover rp-map-card"
+          role="group"
+          aria-label={selected.m.call || mhzLabel(selected.m.mhz)}
+          style={placeHoverCard({ ax: selected.x, ay: selected.y, cw: 0, ch: 0, vw: size.w, vh: size.h, clear: 10 * ms })}
+        >
+          <div className="rp-map-card-head">
+            <span>{`${selected.m.call || '—'} ${mhzLabel(selected.m.mhz)}${selected.m.city ? ` · ${selected.m.city}` : ''}`}</span>
+            <button
+              type="button"
+              className="rp-map-card-close"
+              onClick={() => onSelect(null)}
+              aria-label={t('program.map.card.close')}
+              title={t('program.map.card.close')}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="rp-map-card-acts">
+            {selected.m.savable &&
+              (selected.m.saved ? (
+                <span
+                  className="pota-badge rp-saved-badge"
+                  title={selected.m.savedAs ? t('program.row.saved.title', { name: selected.m.savedAs }) : undefined}
+                >
+                  {t('program.row.saved.label')}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="pota-hunt-btn rp-save"
+                  onClick={() => onSave(selected.m.id)}
+                  title={t('program.row.save.title')}
+                >
+                  {t('program.row.save.label')}
+                </button>
+              ))}
+            <button
+              type="button"
+              className={`pota-hunt-btn rp-add${selected.m.added ? ' added' : ''}`}
+              disabled={!selected.m.pickable}
+              onClick={() => onPick(selected.m.id)}
+              title={selected.m.added ? t('program.row.remove.title') : t('program.row.add.title')}
+            >
+              {selected.m.added ? t('program.row.added.label') : t('program.row.add.label')}
+            </button>
+          </div>
         </div>
       )}
       {/* The plotted machines as words, for a screen reader: the canvas draws them, this names

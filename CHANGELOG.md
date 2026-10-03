@@ -693,6 +693,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lights while its carrier is up, as on FT. FT's transmit buttons are now the same size as
   everyone else's. On the Remote, the row follows the contact in the Quick layout, and for a
   browser watching without station control it scrolls with the screen, as the transmit bar does.
+- **Repeaters: the map comes first, the list under it, and a dot and its row are linked.** After a
+  fetch the map of the machines hearham lists sits above the list of every machine; the List and Map
+  chips are gone. Point at a dot and its row lights up; point at a row and its dot is ringed. A click on
+  a dot brings its row into view and opens a card with **Save to Memories** and **＋ Add**, so a click on
+  a dot no longer adds the machine by itself. The map still shows hearham's listings only, never a
+  RepeaterBook row, and says under it what it leaves off.
 - **Program is now Repeaters.** The view the navigation bar called **Program** is called **Repeaters**
   everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
   window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel

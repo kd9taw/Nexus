@@ -257,8 +257,20 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     toLabel: string
     km: number
   } | null>(null)
-  /** The results as the list or on the map (hearham's listings only). */
-  const [view, setView] = useState<'list' | 'map'>('list')
+  /** A dot and its row are one machine: the one the pointer is on (in the list or on the map), and the
+   *  one selected by a click on either. The map rings both; the list lights both. */
+  const [linkedId, setLinkedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const rowEls = useRef(new Map<string, HTMLDivElement>())
+  /** A dot clicked on the map brings its row into view in the list under it (and only then: a row the
+   *  operator clicked is already where they are looking). */
+  const scrollToRow = useRef<string | null>(null)
+  useEffect(() => {
+    const id = scrollToRow.current
+    if (!id || id !== selectedId) return
+    scrollToRow.current = null
+    rowEls.current.get(id)?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
   const [fetching, setFetching] = useState(false)
   const [fetchErr, setFetchErr] = useState('')
 
@@ -369,6 +381,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       .then((res) => {
         setResult(res)
         setSearched(area)
+        setSelectedId(null)
+        setLinkedId(null)
         const label = originLabel()
         if (label && label !== '—') {
           pushRecent({
@@ -450,27 +464,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const inList = useMemo(() => new Set(rows.map((r) => r.channel.id)), [rows])
   const isAdded = (row: RepeaterSearchRow) => rowIds(row).some((id) => inList.has(id))
 
-  // The map (the operator's pick, 2026-09-30: "hearham-only map now"): the shown rows hearham
-  // lists, each where its hearham row places it, and a count of the rest by why they are off it.
-  const mapSplit = useMemo(() => splitForMap(shown), [shown])
-  const markers = useMemo(
-    (): MapMarker[] =>
-      mapSplit.mapped.map((row) => {
-        const added = rowIds(row).some((id) => inList.has(id))
-        return {
-          id: row.channel.id,
-          lat: row.map!.lat,
-          lon: row.map!.lon,
-          call: row.map!.callsign,
-          mhz: row.map!.outputMhz,
-          city: row.map!.city,
-          added,
-          pickable: added || isProgrammable(row.record),
-        }
-      }),
-    [mapSplit, inList],
-  )
-
   // The memory each shown machine already is, live from the shared bank, so the badge and the
   // star stay right when the operator edits, unstars or deletes one in the Memories section. "The
   // same machine" is the merge's own rule (`sameMachine`), the one identity Save to Memories, Save
@@ -488,6 +481,31 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     () => new Set([...savedById].filter(([, m]) => m.favorite).map(([id]) => id)),
     [savedById],
   )
+
+  // The map (the operator's pick, 2026-09-30: "hearham-only map now"): the shown rows hearham
+  // lists, each where its hearham row places it, and a count of the rest by why they are off it.
+  const mapSplit = useMemo(() => splitForMap(shown), [shown])
+  const markers = useMemo(
+    (): MapMarker[] =>
+      mapSplit.mapped.map((row) => {
+        const added = rowIds(row).some((id) => inList.has(id))
+        return {
+          id: row.channel.id,
+          lat: row.map!.lat,
+          lon: row.map!.lon,
+          call: row.map!.callsign,
+          mhz: row.map!.outputMhz,
+          city: row.map!.city,
+          added,
+          pickable: added || isProgrammable(row.record),
+          savable: isProgrammable(row.record),
+          saved: savedById.has(row.channel.id),
+          savedAs: savedById.get(row.channel.id)?.name,
+        }
+      }),
+    [mapSplit, inList, savedById],
+  )
+
 
   // ── builder ops ──
   /** A Memory (a CHIRP CSV row) as a Program channel — the reverse of `saveToBank`. Manual
@@ -1437,31 +1455,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   {t('program.saveAll.label')}
                 </button>
               )}
-              <span className="rp-view" role="group" aria-label={t('program.view.aria')}>
-                <button disabled={remote}
-                  type="button"
-                  className={`filter-chip${view === 'list' ? ' active' : ''}`}
-                  aria-pressed={view === 'list'}
-                  onClick={() => setView('list')}
-                >
-                  {t('program.view.list')}
-                </button>
-                <button disabled={remote}
-                  type="button"
-                  className={`filter-chip${view === 'map' ? ' active' : ''}`}
-                  aria-pressed={view === 'map'}
-                  onClick={() => setView('map')}
-                  title={t('program.view.map.title', { hearham: SOURCE_HEARHAM })}
-                >
-                  {t('program.view.map')}
-                </button>
-              </span>
             </div>
           )}
 
-          {/* The map takes the list's place while there is something to show; with nothing shown,
-              the list's own empty words (and its Try wider) stand instead. */}
-          {view === 'map' && result && searched && shown.length > 0 ? (
+          {/* Map first, the list under it (the operator's pick, 2026-10-02): after a fetch with something
+              shown, the map of hearham's listings above the list of every machine. With nothing
+              shown, the list's own empty words (and its Try wider) stand alone. */}
+          {result && searched && shown.length > 0 && (
             <div className="rp-map">
               <RepeaterMap
                 markers={markers}
@@ -1470,9 +1470,20 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 to={searched.to}
                 toLabel={searched.toLabel}
                 reachKm={searched.km}
+                linkedId={linkedId ?? selectedId}
+                selectedId={selectedId}
+                onHover={setLinkedId}
+                onSelect={(id) => {
+                  scrollToRow.current = id
+                  setSelectedId(id)
+                }}
                 onPick={(id) => {
                   const row = mapSplit.mapped.find((r) => r.channel.id === id)
                   if (row) addRow(row)
+                }}
+                onSave={(id) => {
+                  const row = mapSplit.mapped.find((r) => r.channel.id === id)
+                  if (row) saveRow(row)
                 }}
               />
               {/* What the map shows and what it leaves off, in words, under it. */}
@@ -1495,7 +1506,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 <span>{t('program.map.hint')}</span>
               </div>
             </div>
-          ) : (
+          )}
           <div className="rp-results" role="table" aria-label={t('program.results.aria')}>
             {!result && !fetching && (
               <p className="aw-empty">
@@ -1558,8 +1569,22 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               return (
                 <div
                   key={c.id}
+                  ref={(el) => {
+                    if (el) rowEls.current.set(c.id, el)
+                    else rowEls.current.delete(c.id)
+                  }}
                   role="row"
-                  className={`rp-row${!r.operational ? ' offair' : ''}${!programmable ? ' digital' : ''}`}
+                  className={`rp-row${!r.operational ? ' offair' : ''}${!programmable ? ' digital' : ''}${
+                    c.id === selectedId ? ' selected' : c.id === linkedId ? ' linked' : ''
+                  }`}
+                  onPointerEnter={() => setLinkedId(c.id)}
+                  onPointerLeave={() => setLinkedId((cur) => (cur === c.id ? null : cur))}
+                  // A click on the row (not on one of its buttons) selects the machine: its dot is ringed
+                  // and carries its card. A second click lets it go.
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('button, a, input, select')) return
+                    setSelectedId((cur) => (cur === c.id ? null : c.id))
+                  }}
                 >
                   <span className="rp-call mono" role="cell">
                     {r.callsign || '—'}
@@ -1669,7 +1694,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               )
             })}
           </div>
-          )}
 
           <div className="settings-hint rp-attribution">
             {(result ? result.lists.map((l) => l.source) : (['hearham'] as Directory[])).map(

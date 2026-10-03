@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,483 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,480 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -128,7 +128,7 @@ word in, and use only that word in the CSV.
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |
 | antenna | 31 | | |
-| memories | 35 | Saved channels — the Memories screen. | |
+| memories | 36 | Saved channels — the Memories screen. | |
 | cockpit | 33 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
 | pane / panel | 24 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |

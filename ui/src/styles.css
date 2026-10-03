@@ -23275,10 +23275,9 @@ button.sat-chip:disabled {
   color: var(--alert-warning);
 }
 
-/* ── Program (radio programming workbench): SOURCE pane (query + results) left,
-   CHANNEL LIST (the artifact) right. List-first by design: it is a programming tool,
-   not a repeater directory. Its one map (.rp-map, below) shows hearham's listings
-   alone and only when asked. ──────────────────────────────────────────────────── */
+/* ── Repeaters (the radio-programming workbench; the code still calls it Program): SOURCE pane
+   (query + results) left, CHANNEL LIST (the artifact) right. After a fetch the results are a map
+   of hearham's listings (.rp-map, below) over the list of every machine, the two linked. ──── */
 .radioprog {
   flex: 1;
   min-height: 0;
@@ -23408,7 +23407,7 @@ button.sat-chip:disabled {
    and the results stopped scrolling. Wherever the column has a height of its own, 0px and 0 %
    are the same thing. The channel list below is the same. */
 .rp-results {
-  flex: 1 1 0px;
+  flex: 4 1 0px;
   min-height: 120px;
   overflow-y: auto;
   border: 1px solid var(--border);
@@ -23427,13 +23426,14 @@ button.sat-chip:disabled {
 .rp-chan-rows > .aw-empty {
   margin: auto;
 }
-/* The map (RepeaterMap.tsx; the operator's pick, 2026-09-30: a hearham-only map) takes the list's
-   place with the list's own sizing, the same zero LENGTH basis and 120 px floor, so nothing around
-   it moves when the operator switches. The canvas fills the stage out of flow, and the words under
+/* The map (RepeaterMap.tsx; the operator's picks: a hearham-only map, 2026-09-30; map first and
+   the list below it, 2026-10-02) sits over the list and shares the column with it, five parts to
+   the list's four, each from a zero LENGTH basis (as .rp-results explains) over a floor of its
+   own: a map under 200 px is no map. The canvas fills the stage out of flow, and the words under
    it say what the map shows and what it leaves off. */
 .rp-map {
-  flex: 1 1 0px;
-  min-height: 120px;
+  flex: 5 1 0px;
+  min-height: 200px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -23445,7 +23445,7 @@ button.sat-chip:disabled {
    there the map floors at two fifths of the window, and the panel scrolls a little further. */
 [data-viewport='sm'] .rp-map,
 [data-viewport='xs'] .rp-map {
-  min-height: max(120px, calc(0.42 * var(--vh-eff, 100vh)));
+  min-height: max(200px, calc(0.42 * var(--vh-eff, 100vh)));
 }
 .rp-map-stage {
   position: relative;
@@ -23464,10 +23464,35 @@ button.sat-chip:disabled {
   line-height: var(--lh-normal);
   color: var(--text-dim);
 }
-/* List or Map, at the end of the count line. */
-.rp-view {
-  margin-left: auto;
+/* The selected dot's card (RepeaterMap): the hover card's face, but it takes the pointer, for
+   its two buttons and its ✕. */
+.rp-map-card {
+  pointer-events: auto;
+  font-family: inherit;
   display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.rp-map-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+}
+.rp-map-card-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0 2px;
+  cursor: pointer;
+}
+.rp-map-card-close:hover {
+  color: var(--text);
+}
+.rp-map-card-acts {
+  display: flex;
+  align-items: center;
   gap: var(--space-1);
 }
 .rp-row {
@@ -23569,6 +23594,24 @@ button.sat-chip:disabled {
 [data-theme='light'] .rp-add.added {
   color: var(--text);
   border-color: var(--state-good);
+}
+/* A machine linked to its dot (RepeaterMap): pointed at, in the list or on the map, or selected by a
+   click on either. An accent rule on the row's leading edge over a faint accent wash, so the eye finds
+   it while its words keep their own colours. */
+.rp-row.linked,
+.rp-row.selected {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* Saved (Save to Memories): the state green on its border and the ink inside, as OFF-AIR wears its
+   warning colour, so the word reads in every theme. It stands where the button was. */
+.rp-saved-badge {
+  color: var(--text);
+  border: 1px solid var(--state-good);
+  white-space: nowrap;
+}
+.rp-save {
+  white-space: nowrap;
 }
 /* ★ a machine straight into Memories favorites — same affordance as the
    Memories row star (.mv-star), so one star means one thing app-wide. */

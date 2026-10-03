@@ -264,15 +264,19 @@ the same with RSGB's locator squares.
 
 ### See the repeaters on a map
 
-1. Fetch repeaters around a place or along a route, then press **Map** at the
-   end of the count line. The map takes the list's place: the place you searched
-   (or the two ends of the route) marked with a cross, the radius as a ring (or
-   the corridor as a band along the straight line), and each machine as a dot
-   with its callsign beside it. The band, FM, on-air and search filters apply to
-   the map as they do to the list.
-2. Point at a dot for its callsign, output and town. A filled dot is in your
-   channel list; click a dot to add the machine, click it again to take it off.
-3. **List** goes back to the list.
+1. Fetch repeaters around a place or along a route. The map comes first, with
+   the list under it: the place you searched (or the two ends of the route)
+   marked with a cross, the radius as a ring (or the corridor as a band along
+   the straight line), and each machine as a dot with its callsign beside it.
+   The band, FM, on-air and search filters apply to the map as they do to the
+   list.
+2. A dot and its row are linked. Point at a dot for its callsign, output and
+   town, and its row in the list lights up; point at a row and its dot is
+   ringed. A filled dot is in your channel list.
+3. Click a dot to select it: its row comes into view, and a card on the dot
+   offers **Save to Memories** and **＋ Add** (or **✓ Added**, which takes it off
+   the channel list again). A click on a row selects it the same way; **✕** or
+   a click on empty map closes the card.
 
 The map shows **hearham's listings only**, each where hearham places it, with
 hearham's own callsign and town: hearham invites map use, RepeaterBook's terms
@@ -283,8 +287,8 @@ list and off the map.
 
 ### Save repeaters to Memories
 
-1. Press **Save to Memories** on a repeater's row. It goes into Memories as a
-   channel, not starred: its frequency,
+1. Press **Save to Memories** on a repeater's row, or on the card of its dot
+   on the map. It goes into Memories as a channel, not starred: its frequency,
    offset, tone or DCS code, narrow FM where the directory says the machine is
    narrow, its callsign and site, and in its notes the town, the links (AllStar,
    IRLP, DMR ID) and the DMR colour code, written the way the CHIRP export's

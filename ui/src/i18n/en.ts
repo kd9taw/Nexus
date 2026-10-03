@@ -4695,10 +4695,6 @@ export const EN = {
   // THE MAP (the operator's pick, 2026-09-30: "hearham-only map now"). Every dot is a hearham
   // listing, so the words say so, and say what is left off when RepeaterBook or the RSGB list
   // filled the list too: RepeaterBook's terms forbid a map, and the RSGB list is not mapped yet.
-  'program.view.aria': 'Show the repeaters as a list or on a map',
-  'program.view.list': 'List',
-  'program.view.map': 'Map',
-  'program.view.map.title': "The machines shown, on a map: {{hearham}}'s listings only",
   'program.map.aria': {
     one: 'Map of {{count}} repeater',
     other: 'Map of {{count}} repeaters',
@@ -4719,7 +4715,10 @@ export const EN = {
   },
   'program.map.rsgb.none':
     'The {{rsgb}} list is not mapped for now. Every machine shown is one {{hearham}} lists too.',
-  'program.map.hint': 'A filled dot is in your channel list. Click a dot to add the machine or take it off.',
+  'program.map.hint':
+    'A filled dot is in your channel list. Point at a dot to find its row; click one to save the machine to Memories or add it.',
+  // The selected dot's card: its ✕.
+  'program.map.card.close': 'Close',
   'program.addAll.label': '＋ Add all shown',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',

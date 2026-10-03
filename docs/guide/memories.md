@@ -201,7 +201,7 @@ The **Repeaters** section searches repeaters near your grid and builds channel
 lists. Three paths land here:
 
 1. **Save to Memories** on a repeater's row (or **Save all shown** for every FM
-   repeater the list shows) — the machine
+   repeater the list shows, or the button on the card of its dot on the map) — the machine
    comes in as a channel, not starred: its frequency, offset, tone or DCS code,
    narrow FM when the directory says so, its callsign and site, and in its
    notes the town, the links (AllStar, IRLP, DMR ID) and the DMR colour code,
