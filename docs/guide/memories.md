@@ -198,14 +198,22 @@ sits at the right-hand end of that header row, off this crop.*
 ### Send repeaters over from Repeaters
 
 The **Repeaters** section searches repeaters near your grid and builds channel
-lists. Two paths land here:
+lists. Three paths land here:
 
-1. **★ a machine in the results list** — it goes straight into Memories as a
-   favorite, with its shift, tone and site coordinates, and appears on the
+1. **Save to Memories** on a repeater's row (or **Save all shown** for every FM
+   repeater the list shows) — the machine
+   comes in as a channel, not starred: its frequency, offset, tone or DCS code,
+   narrow FM when the directory says so, its callsign and site, and in its
+   notes the town, the links (AllStar, IRLP, DMR ID) and the DMR colour code,
+   the way the CHIRP export's comment writes them (`Seattle; IRLP 3570; CC1`).
+   A machine already here shows **✓ In Memories** on its row instead, and is
+   never saved twice.
+2. **★ a machine in the results list** — it goes straight into Memories as a
+   favorite, with the same fields, and appears on the
    cockpit MEM strip without a trip through the list builder. The star toggles
    back off, and starring a machine the bank already holds stars *that* row
    rather than duplicating it.
-2. **Save to Memory Bank** in the channel-list builder writes the whole list in
+3. **Save to Memory Bank** in the channel-list builder writes the whole list in
    one go — analog rows only (digital-only machines are skipped), deduped,
    unstarred, and each one lands as FM. Star the ones you want on the strips.
    Rows saved this way carry shift and tone but no site coordinates (the builder
@@ -286,6 +294,12 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
 - **Duplicate detection is frequency (to 100 Hz) + mode + CTCSS encode tone.**
   Two channels that differ only by offset, name, group or DTCS code count as the
   same channel, so the second one is skipped on import or on a channel-list save from Repeaters.
+  **Save to Memories, Save all shown and the ★ in Repeaters go by the machine instead**, with
+  the rule the repeater lists are merged by: the same output (within 2.5 kHz) and the same
+  callsign (`W9ABC/R` is `W9ABC`), or, for a memory with no callsign, the same input too and a
+  site within 5 km. So a machine saved from one directory is found again from another, and a
+  second machine on the same output and tone in the next county is saved as a channel of its
+  own. A memory with neither a callsign nor a site is never taken for a directory's machine.
 - **＋ New saves before you type.** The channel exists in the bank from the press, and the
   count moves with it. **Escape keeps it; Discard is the only way out that removes it.** See
   [Enter a repeater by hand](#enter-a-repeater-by-hand).

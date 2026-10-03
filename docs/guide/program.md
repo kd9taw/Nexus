@@ -281,6 +281,29 @@ RepeaterBook token, or around a UK place, the words under the map say how many
 of the machines shown only RepeaterBook or the RSGB list has; those stay in the
 list and off the map.
 
+### Save repeaters to Memories
+
+1. Press **Save to Memories** on a repeater's row. It goes into Memories as a
+   channel, not starred: its frequency,
+   offset, tone or DCS code, narrow FM where the directory says the machine is
+   narrow, its callsign and site, and in its notes the town, the links (AllStar,
+   IRLP, DMR ID) and the DMR colour code, written the way the CHIRP export's
+   comment writes them (`Seattle; IRLP 3570; CC1`). It is named the way it is
+   said out loud (`W9ABC 94`).
+2. **Save all shown**, beside **＋ Add all shown**, saves every FM repeater the
+   list shows. More than 50 asks first, and one press saves at most 200.
+3. A repeater already in Memories shows **✓ In Memories** on its row instead of
+   the button; point at it for the memory's name. Nothing is saved twice. The
+   same machine is the one the repeater lists are merged by: the same output
+   (within 2.5 kHz) and the same callsign (`W9ABC/R` is `W9ABC`), or, where a
+   side has no callsign, the same input too and a site within 5 km. A machine
+   saved from hearham is found again in RepeaterBook's list, and another
+   machine on the same output and tone in the next county is saved as its own
+   channel. A memory you typed in with neither a callsign nor a site is never
+   taken for a directory's machine.
+4. The memory is yours from then on: edit or delete it in Memories, and the row
+   follows (the badge goes when the memory does).
+
 ### Star one machine onto the cockpit strip
 
 1. Press ☆ on the result row of the machine you actually want on the radio in
@@ -288,7 +311,8 @@ list and off the map.
 2. Nexus saves it to Memories as a proper FM channel — shift, offset and access
    tone — named the way it is said out loud (`W9ABC 94`), and puts it on the MEM
    strip in the Phone, CW and Operate cockpits. Starring a machine Memories
-   already holds stars *that* row rather than adding a second one.
+   already holds (the same machine, as above) stars *that* memory rather than
+   adding a second one.
 3. Recall it from the MEM strip when you want it. The star saves the machine's
    coordinates too, so Memories shows distance and bearing recomputed from
    wherever you are operating today.

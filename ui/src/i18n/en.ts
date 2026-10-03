@@ -4723,6 +4723,12 @@ export const EN = {
   'program.addAll.label': '＋ Add all shown',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',
+  // Save all shown: every FM repeater the list shows into Memories, each once.
+  'program.saveAll.label': 'Save all shown',
+  'program.saveAll.title':
+    'Save every FM repeater shown to Memories, once each: the ones already there are left as they are',
+  'program.saveAll.confirm.title': 'Save {{count}} repeaters to Memories?',
+  'program.saveAll.confirm.ok': 'Save them',
 
   // The results list, and what it says when it has nothing. Two whole sentences for the
   // empty case: where the mode word sits belongs to the translator.
@@ -4765,6 +4771,13 @@ export const EN = {
     'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
   'program.row.unstar.title':
     'Unstar — keeps the channel in Memories, drops it off the cockpit strip',
+  // Save to Memories: the machine as a memory, not starred. Once saved the row shows the badge
+  // instead; {{name}} is the memory's name ("W9ABC 94", a callsign and a frequency: a token).
+  'program.row.save.label': 'Save to Memories',
+  'program.row.save.title':
+    'Save this repeater to Memories: frequency, offset, tone or DCS, callsign, town and links. Not starred, so it stays off the cockpit strip',
+  'program.row.saved.label': '✓ In Memories',
+  'program.row.saved.title': 'In Memories as {{name}}',
   // Tune is a RETUNE of the CAT rig — frequency, shift, offset and tone. It never transmits.
   'program.row.tune.label': 'Tune',
   'program.row.tune.title': 'Tune your CAT rig to this repeater now (FM + shift + offset + tone)',
@@ -4844,6 +4857,7 @@ export const EN = {
   'program.star.unstarred': '{{name}} unstarred — still in Memories',
   'program.star.starred': '{{name}} starred — already in Memories',
   'program.star.saved': '{{name}} ★ — on the cockpit MEM strip and in Memories',
+  'program.save.done': '{{name}} saved to Memories',
   // The already-there clause is INTERPOLATED into the sentence, not glued after it: it
   // carries the second count, which one message cannot pluralise beside the first.
   'program.saveBank.done': {

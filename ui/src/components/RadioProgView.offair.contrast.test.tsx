@@ -154,12 +154,12 @@ describe("Program's off-air row fades by colour and every word on it reads, in e
 
   it('finds every word an off-air row letters, on both off-air rows (the census cannot silently empty out)', () => {
     const kinds = new Set(offair().map((w) => w.own))
-    for (const k of ['.rp-src', '.rp-links.mono', '.rp-call.mono', '.rp-freq.mono', '.rp-off.mono', '.rp-tone.mono', '.rp-dist.mono', '.pota-badge.rp-offair-badge', '.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-add', '.pota-hunt-btn.rp-add.added']) {
+    for (const k of ['.rp-src', '.rp-links.mono', '.rp-call.mono', '.rp-freq.mono', '.rp-off.mono', '.rp-tone.mono', '.rp-dist.mono', '.pota-badge.rp-offair-badge', '.pota-hunt-btn.rp-save', '.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-add', '.pota-hunt-btn.rp-add.added']) {
       expect(kinds.has(k), `no ${k} on an off-air row: ${[...kinds].join(' ')}`).toBe(true)
     }
-    // 10 words a row since P1 added the row's source and date line (`.rp-src`) and P2 its links line
-    // (`.rp-links`), on each of the two off-air rows.
-    expect(offair().length).toBe(20)
+    // 11 words a row: P1 added the row's source and date line (`.rp-src`), P2 its links line (`.rp-links`) and
+    // Save to Memories its button (2026-10-02), on each of the two off-air rows.
+    expect(offair().length).toBe(22)
   })
 
   it('nothing dims an off-air row by opacity: the row and everything on it composites at full strength', () => {

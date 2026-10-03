@@ -48,10 +48,9 @@ import {
 } from '../api'
 import {
   addMemoryDeduped,
-  findEquivalent,
   isSendOnlyDcs,
   memoriesStore,
-  saveFavoriteFromDial,
+  starMemory,
   updateMemory,
   useMemories,
 } from '../features/memories'
@@ -62,7 +61,6 @@ import {
   CORRIDOR_CHIPS_MI,
   DEFAULT_CORRIDOR_MI,
   deriveNames,
-  favoriteName,
   FREQ_MATCH_MHZ,
   frequencyQuery,
   isProgrammable,
@@ -76,6 +74,8 @@ import {
   repeaterMemory,
   rigRepeaterParams,
   sanitizeName,
+  savedMemoryOf,
+  saveRepeater,
   splitForMap,
 } from '../features/radioprog'
 import { RepeaterMap, type MapMarker } from './RepeaterMap'
@@ -471,22 +471,23 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     [mapSplit, inList],
   )
 
-  // Which shown machines are already starred — live from the shared bank, so the
-  // stars stay right when the operator unstars one in the Memories section.
+  // The memory each shown machine already is, live from the shared bank, so the badge and the
+  // star stay right when the operator edits, unstars or deletes one in the Memories section. "The
+  // same machine" is the merge's own rule (`sameMachine`), the one identity Save to Memories, Save
+  // all shown and the ★ share: a machine is saved once, whichever of them saved it.
   const bank = useMemories()
-  const starredIds = useMemo(() => {
-    const out = new Set<string>()
+  const savedById = useMemo(() => {
+    const out = new Map<string, Memory>()
     for (const row of shown) {
-      const input = repeaterMemory(row.channel, '')
-      const hit = findEquivalent(bank, {
-        rxMhz: input.rxMhz,
-        mode: input.mode,
-        ctcssEncHz: input.ctcssEncHz,
-      })
-      if (hit?.favorite) out.add(row.channel.id)
+      const hit = savedMemoryOf(bank, row)
+      if (hit) out.set(row.channel.id, hit)
     }
     return out
   }, [shown, bank])
+  const starredIds = useMemo(
+    () => new Set([...savedById].filter(([, m]) => m.favorite).map(([id]) => id)),
+    [savedById],
+  )
 
   // ── builder ops ──
   /** A Memory (a CHIRP CSV row) as a Program channel — the reverse of `saveToBank`. Manual
@@ -748,36 +749,83 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
   /** ★ one machine straight into the favorites list — the whole point of the
    * feature: fetch, star, and it's on the cockpit MEM strip and in Memories
-   * without a trip through the channel-list builder. Starring an equivalent
-   * channel the bank already holds stars THAT row rather than duplicating it
-   * (memoryKey identity), and the star toggles back off. */
+   * without a trip through the channel-list builder. Starring a machine the bank
+   * already holds (the merge's rule, `savedMemoryOf`) stars THAT memory rather than
+   * adding a second, and the star toggles back off. */
   const toggleStar = (row: RepeaterSearchRow) => {
-    // The name is bound here rather than read back off `input`, whose type makes every
-    // Memory field optional — it is `input.name` by construction, and a string.
-    const favName = favoriteName(row.channel)
-    const input = repeaterMemory(row.channel, favName, {
-      lat: row.record.lat,
-      lon: row.record.lon,
-    })
     let msg = ''
     memoriesStore.update((bank) => {
-      const existing = findEquivalent(bank, {
-        rxMhz: input.rxMhz,
-        mode: input.mode,
-        ctcssEncHz: input.ctcssEncHz,
-      })
+      const existing = savedMemoryOf(bank, row)
       if (existing?.favorite) {
         msg = t('program.star.unstarred', { name: existing.name })
         return updateMemory(bank, existing.id, { favorite: false })
       }
-      const res = saveFavoriteFromDial(bank, input)
-      msg =
-        res.result === 'starred'
-          ? t('program.star.starred', { name: existing?.name ?? favName })
-          : t('program.star.saved', { name: favName })
-      return res.bank
+      if (existing) {
+        msg = t('program.star.starred', { name: existing.name })
+        return starMemory(bank, existing.id)
+      }
+      const saved = saveRepeater(bank, row)
+      if (!saved.memory) return bank
+      msg = t('program.star.saved', { name: saved.memory.name })
+      return starMemory(saved.bank, saved.memory.id)
     })
-    pushToast(msg, 'success', 4000)
+    if (msg) pushToast(msg, 'success', 4000)
+  }
+
+  /** Save to Memories (the operator's pick, 2026-10-02: "Save buttons + all fields"): the machine
+   * into the bank as a memory, not starred, with every field `repeaterMemory` maps — frequency,
+   * offset, tone or DCS, narrow, the callsign, and the town, links and colour code in its notes. A
+   * machine the bank already holds is never saved twice: its row shows the badge instead. */
+  const saveRow = (row: RepeaterSearchRow) => {
+    let name = ''
+    memoriesStore.update((bank) => {
+      const saved = saveRepeater(bank, row)
+      if (saved.result === 'saved') name = saved.memory!.name
+      return saved.bank
+    })
+    if (name) pushToast(t('program.save.done', { name }), 'success', 4000)
+  }
+
+  /** Save all shown: every FM machine the list shows into Memories, each once, in list order. More
+   * than 50 asks first and at most 200 go in one press, as ＋ Add all shown does. */
+  const saveAllShown = async () => {
+    const candidates = shown.filter((row) => isProgrammable(row.record))
+    if (candidates.length === 0) {
+      pushToast(t('program.saveBank.noFm'), 'info', 5000)
+      return
+    }
+    const fresh = candidates.filter((row) => !savedMemoryOf(memoriesStore.get(), row))
+    if (
+      fresh.length > 50 &&
+      !(await confirmDialog({
+        title: t('program.saveAll.confirm.title', { count: fresh.length }),
+        confirmLabel: t('program.saveAll.confirm.ok'),
+      }))
+    )
+      return
+    let n = 0
+    let dup = 0
+    memoriesStore.update((bank) => {
+      let next = bank
+      for (const row of candidates) {
+        if (n >= 200) break
+        const saved = saveRepeater(next, row)
+        next = saved.bank
+        if (saved.result === 'saved') n += 1
+        else if (saved.result === 'exists') dup += 1
+      }
+      return next
+    })
+    pushToast(
+      n
+        ? t('program.saveBank.done', {
+            count: n,
+            dupes: dup ? t('program.saveBank.dupes', { count: dup }) : '',
+          })
+        : t('program.saveBank.allDupes'),
+      n ? 'success' : 'info',
+      5000,
+    )
   }
 
   /** Save the whole list into the shared Memories store (with the FM repeater
@@ -1378,6 +1426,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   {t('program.addAll.label')}
                 </button>
               )}
+              {shown.some((r) => isProgrammable(r.record) && !savedById.has(r.channel.id)) && (
+                <button
+                  disabled={remote}
+                  type="button"
+                  className="filter-chip rp-save-all"
+                  onClick={() => void saveAllShown()}
+                  title={t('program.saveAll.title')}
+                >
+                  {t('program.saveAll.label')}
+                </button>
+              )}
               <span className="rp-view" role="group" aria-label={t('program.view.aria')}>
                 <button disabled={remote}
                   type="button"
@@ -1495,6 +1554,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               const programmable = isProgrammable(r)
               const badge = modeBadge(r)
               const links = linkParts(r)
+              const saved = savedById.get(c.id)
               return (
                 <div
                   key={c.id}
@@ -1538,6 +1598,27 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                         {starredIds.has(c.id) ? '★' : '☆'}
                       </button>
                     )}
+                    {/* Saved: the badge stands where the button was, so the row keeps its shape. It
+                        is no button: the memory is the operator's now, and only Memories edits or
+                        deletes it. */}
+                    {programmable &&
+                      (saved ? (
+                        <span
+                          className="pota-badge rp-saved-badge"
+                          title={t('program.row.saved.title', { name: saved.name })}
+                        >
+                          {t('program.row.saved.label')}
+                        </span>
+                      ) : (
+                        <button disabled={remote}
+                          type="button"
+                          className="pota-hunt-btn rp-save"
+                          onClick={() => saveRow(row)}
+                          title={t('program.row.save.title')}
+                        >
+                          {t('program.row.save.label')}
+                        </button>
+                      ))}
                     {catOk && programmable && (
                       <button disabled={remote && !repeaterControl}
                         type="button"

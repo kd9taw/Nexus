@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import type { ProgChannel, RepeaterSearchRow } from '../types'
-import { emptyBank, findEquivalent, saveFavoriteFromDial } from './memories'
+import { addMemory, emptyBank, findEquivalent, saveFavoriteFromDial, toChirpRow, type Memory } from './memories'
 import {
   autoRadiusMi,
   bandOfMhz,
   deriveNames,
+  exportComment,
   favoriteName,
   freqTail,
   frequencyQuery,
+  machineCall,
   mhzLabel,
   onFrequency,
   repeaterMemory,
   rigRepeaterParams,
+  sameMachine,
   sanitizeName,
+  savedMemoryOf,
+  saveRepeater,
   splitForMap,
 } from './radioprog'
+import type { RepeaterRecord } from '../types'
 
 describe('freqTail', () => {
   it('drops trailing zeros from the kHz fraction', () => {
@@ -328,5 +334,110 @@ describe('splitForMap', () => {
     expect([s.leftOffRb, s.leftOffRsgb]).toEqual([2, 1])
     // CONTROL: hearham's list alone leaves nothing off.
     expect(splitForMap(rows.filter((r) => r.map))).toEqual({ mapped: s.mapped, leftOffRb: 0, leftOffRsgb: 0 })
+  })
+})
+
+describe('exportComment', () => {
+  it("is Channel::export_comment's: the town, then the links, then the colour code, joined with '; '", () => {
+    expect(exportComment(chan({ comment: 'Seattle', links: ['IRLP 3570', 'AllStar 2462'], dmrColorCode: 1 }))).toBe(
+      'Seattle; IRLP 3570; AllStar 2462; CC1',
+    )
+    // An empty part is left out, never written as an empty field.
+    expect(exportComment(chan({ comment: '', links: ['DMR ID 314158'], dmrColorCode: null }))).toBe('DMR ID 314158')
+    expect(exportComment(chan({ comment: 'Janesville' }))).toBe('Janesville')
+    expect(exportComment(chan({ comment: '' }))).toBe('')
+  })
+})
+
+/** A directory record for `chan()`'s machine: W9ABC, out 146.94, in 146.34, at Janesville. */
+const rec = (over: Partial<RepeaterRecord> = {}): RepeaterRecord => ({
+  source: 'repeaterbook', sourceId: '55-1', callsign: 'W9ABC', outputMhz: 146.94, inputMhz: 146.34,
+  ctcssEncHz: 103.5, ctcssDecHz: null, dcs: null, lat: 42.68, lon: -89.02, city: 'Janesville', county: '', state: 'WI',
+  fm: true, dmr: false, dstar: false, fusion: false, dmrColorCode: null, bandwidthKhz: null,
+  operational: true, openUse: true, distanceKm: 10, bearingDeg: 90, ...over,
+})
+const searchRow = (c: ProgChannel, r: RepeaterRecord): RepeaterSearchRow =>
+  ({ record: r, channel: c, sources: [], disagreements: [] }) as RepeaterSearchRow
+/** A memory as the bank holds one. */
+const mem = (over: Partial<Memory>): Memory =>
+  ({ id: 'm1', name: 'X', kind: 'repeater', rxMhz: 146.94, mode: 'FM', groups: [], favorite: false, source: 'user', ...over }) as Memory
+
+describe('repeaterMemory carries the town and the links in its notes', () => {
+  it('writes the export comment into the notes, so the bank and its CHIRP export keep them', () => {
+    const m = repeaterMemory(chan({ links: ['AllStar 2462', 'IRLP 3570', 'DMR ID 314158'], dmrColorCode: 1 }), 'W9ABC 94')
+    expect(m.notes).toBe('Janesville; AllStar 2462; IRLP 3570; DMR ID 314158; CC1')
+    // ...and the bank's CHIRP row carries them as its Comment.
+    const bank = addMemory(emptyBank(), m)
+    expect(toChirpRow(bank.memories[0], 1).split(',')[13]).toBe('Janesville; AllStar 2462; IRLP 3570; DMR ID 314158; CC1')
+    // CONTROL: a channel with no town and no links has no notes at all, not an empty one.
+    expect(repeaterMemory(chan({ comment: '' }), 'W9ABC 94').notes).toBeUndefined()
+  })
+})
+
+describe('the same machine: the merge rule', () => {
+  it('reads a machine callsign as the merge does', () => {
+    expect(['GB7DZ-L', 'K1ABC-R', 'w1xyz/r', ' W9ABC ', 'W9ABC 94'].map(machineCall)).toEqual(['GB7DZ', 'K1ABC', 'W1XYZ', 'W9ABC', 'W9ABC'])
+  })
+
+  it('is the same output (2.5 kHz) and the same machine callsign, whatever the mode or the tone stored', () => {
+    expect(sameMachine(mem({ callsign: 'W9ABC/R', rxMhz: 146.9415 }), rec())).toBe(true)
+    expect(sameMachine(mem({ callsign: 'W9ABC', mode: 'NFM', ctcssEncHz: 88.5 }), rec())).toBe(true)
+    // CONTROLS, one term at a time: 3 kHz off is the next channel; another callsign is another machine.
+    expect(sameMachine(mem({ callsign: 'W9ABC', rxMhz: 146.943 }), rec())).toBe(false)
+    expect(sameMachine(mem({ callsign: 'W9XYZ' }), rec())).toBe(false)
+  })
+
+  it('with no callsign on one side, the same input (2.5 kHz) and a site within 5 km', () => {
+    const near = mem({ offsetDir: 'minus', offsetMhz: 0.6, lat: 42.70, lon: -89.02 }) // 2.2 km north
+    expect(sameMachine(near, rec())).toBe(true)
+    expect(sameMachine(mem({ callsign: 'W9ABC', offsetDir: 'minus', offsetMhz: 0.6, lat: 42.70, lon: -89.02 }), rec({ callsign: '' }))).toBe(true)
+    // The band's standard offset stands in for an offset the memory does not store, as in its CHIRP export.
+    expect(sameMachine(mem({ offsetDir: 'minus', lat: 42.70, lon: -89.02 }), rec())).toBe(true)
+    // CONTROLS: a site 6 km off; another input; and no site at all, which the rule cannot place.
+    expect(sameMachine(mem({ offsetDir: 'minus', offsetMhz: 0.6, lat: 42.734, lon: -89.02 }), rec())).toBe(false)
+    expect(sameMachine(mem({ offsetDir: 'plus', offsetMhz: 0.6, lat: 42.70, lon: -89.02 }), rec())).toBe(false)
+    expect(sameMachine(mem({ offsetDir: 'minus', offsetMhz: 0.6 }), rec())).toBe(false)
+  })
+})
+
+describe('saveRepeater', () => {
+  const row = searchRow(chan({ links: ['IRLP 3570'], dmrColorCode: 1, mode: 'nfm' }), rec())
+
+  it('saves every field the operator asked for, not as a favourite', () => {
+    const { bank, memory, result } = saveRepeater(emptyBank(), row)
+    expect(result).toBe('saved')
+    expect(bank.memories).toHaveLength(1)
+    expect(memory).toMatchObject({
+      name: 'W9ABC 94', rxMhz: 146.94, mode: 'NFM', kind: 'repeater', offsetDir: 'minus', offsetMhz: 0.6,
+      toneMode: 'tone', ctcssEncHz: 103.5, callsign: 'W9ABC', notes: 'Janesville; IRLP 3570; CC1',
+      lat: 42.68, lon: -89.02, source: 'program', favorite: false,
+    })
+  })
+
+  it('carries a DCS code instead of a tone', () => {
+    const dcs = searchRow(chan({ toneMode: 'dtcs', dtcsCode: 23 }), rec({ ctcssEncHz: null, dcs: 23 }))
+    expect(saveRepeater(emptyBank(), dcs).memory).toMatchObject({ toneMode: 'dtcs', dtcsCode: 23 })
+    expect(saveRepeater(emptyBank(), dcs).memory?.ctcssEncHz).toBeUndefined()
+  })
+
+  it('adds nothing for a machine the bank already holds, even saved under another reading of it', () => {
+    const once = saveRepeater(emptyBank(), row)
+    // The same machine again, as hearham writes it: a decorated call, 1 kHz off.
+    const again = saveRepeater(once.bank, searchRow(chan(), rec({ source: 'hearham', callsign: 'W9ABC-R', outputMhz: 146.941 })))
+    expect(again.result).toBe('exists')
+    expect(again.bank).toBe(once.bank)
+    expect(again.memory?.id).toBe(once.memory?.id)
+    expect(savedMemoryOf(once.bank, row)?.id).toBe(once.memory?.id)
+  })
+
+  it('saves another machine on the same output and tone: the merge rule, not the bank\'s frequency+tone key', () => {
+    const once = saveRepeater(emptyBank(), row)
+    const other = searchRow(chan({ source: { source: 'hearham', sourceId: '9', callsign: 'K9OTH' } }), rec({ callsign: 'K9OTH', lat: 43.5 }))
+    // The bank's own key calls the two the same channel...
+    expect(findEquivalent(once.bank, repeaterMemory(other.channel, 'K9OTH 94'))?.id).toBe(once.memory?.id)
+    // ...but they are two machines, so the second is saved too.
+    const two = saveRepeater(once.bank, other)
+    expect(two.result).toBe('saved')
+    expect(two.bank.memories.map((m) => m.callsign)).toEqual(['W9ABC', 'K9OTH'])
   })
 })

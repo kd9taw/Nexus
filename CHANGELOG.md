@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Repeaters: Save to Memories.** Every FM repeater's row has a **Save to Memories** button, and
+  **Save all shown** beside **＋ Add all shown** saves every FM repeater the list shows. The memory
+  carries the frequency, offset, tone or DCS code, narrow FM, the callsign and the site, and in its
+  notes the town, the links (AllStar, IRLP, DMR ID) and the DMR colour code, as the CHIRP export's
+  comment writes them. A repeater already in Memories shows **✓ In Memories** instead, and nothing
+  is saved twice: the same machine is the one the repeater lists are merged by (the same output
+  within 2.5 kHz and the same callsign, or the same input and a site within 5 km where a side has
+  no callsign), so a machine saved from one directory is found again in another. The ★ goes by the
+  same rule, and a starred repeater now carries the town and links in its notes too.
 - **Remote as a stream, the station's half (Windows, off by default).** With **Stream this window
   to an approved browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
   station controls, while it holds control, can be shown this Nexus window and operate it, and

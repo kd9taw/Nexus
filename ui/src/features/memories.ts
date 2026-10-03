@@ -468,6 +468,12 @@ export function saveFavoriteFromDial(
   return { bank: starAtRankOne(addMemory(bank, { ...input, id }), id), result: 'added' }
 }
 
+/** Star the memory `id` at rank 1, as [`saveFavoriteFromDial`] stars one: Program's ★ on a machine
+ * the bank already holds, found by the machine rather than by [`memoryKey`]. */
+export function starMemory(bank: MemoriesBank, id: string): MemoriesBank {
+  return starAtRankOne(bank, id)
+}
+
 export function updateMemory(bank: MemoriesBank, id: string, patch: Partial<Memory>): MemoriesBank {
   return {
     ...bank,

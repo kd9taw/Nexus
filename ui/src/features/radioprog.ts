@@ -5,8 +5,9 @@
 // shapes exactly (see crates/propagation/src/{memchan,repeaters}.rs).
 
 import type { ProgChannel, RepeaterRecord, RepeaterSearchRow } from '../types'
-import type { Memory } from './memories'
+import { addMemory, newMemoryId, standardOffsetMhz, type MemoriesBank, type Memory } from './memories'
 import { baseCall } from '../callsign'
+import { haversineKm } from '../grid'
 
 /** Per-radio channel-name display caps (the header "Max name" select). */
 export const NAME_CAPS = [
@@ -253,10 +254,86 @@ export function repeaterMemory(
     ctcssEncHz: toneHz || undefined,
     dtcsCode: dtcs ? c.dtcsCode : undefined,
     callsign: c.source?.callsign || undefined,
+    // The town, the links and the DMR colour code, in the words both exports write them: Memories
+    // has no column for any of the three, and its CHIRP export carries the notes as the comment.
+    notes: exportComment(c) || undefined,
     lat: site?.lat,
     lon: site?.lon,
     source: 'program',
   }
+}
+
+/** The comment both of Program's exports write for a channel, mirrored from `Channel::export_comment`
+ * (memchan.rs): its own comment (the town, or the callsign when the directory gives no town), then
+ * its links and its DMR colour code, the parts there are joined with "; " ("Seattle; IRLP 3570;
+ * AllStar 2462; CC1"). */
+export function exportComment(c: ProgChannel): string {
+  return [c.comment, ...(c.links ?? []), ...(c.dmrColorCode != null ? [`CC${c.dmrColorCode}`] : [])]
+    .filter((part) => part !== '')
+    .join('; ')
+}
+
+/** How far apart two sites may be and still be one machine when neither row names it: the merge's
+ * `SAME_SITE_KM` (repeaters.rs). */
+export const SAME_SITE_KM = 5
+
+/** The callsign a machine is known by, without the decoration a list adds for a link or a node
+ * ("GB7DZ-L", "K1ABC-R", "W1XYZ/R"): upper case, up to the first `-`, `/` or space. The merge's
+ * `machine_call`. */
+export function machineCall(call: string): string {
+  return call.trim().toUpperCase().split(/[-/ ]/)[0] ?? ''
+}
+
+/** Where a memory transmits, MHz: its split's TX, or its output moved by its offset (the band's
+ * standard one when it stores none, as the bank's own CHIRP export does). */
+function memoryInputMhz(m: Memory): number {
+  if (m.offsetDir === 'split') return m.txMhz ?? m.rxMhz
+  const shift = m.offsetMhz ?? standardOffsetMhz(m.rxMhz)
+  if (m.offsetDir === 'plus') return m.rxMhz + shift
+  if (m.offsetDir === 'minus') return m.rxMhz - shift
+  return m.rxMhz
+}
+
+/** Is this memory the machine `r` is? THE MERGE'S OWN RULE (`same_machine` in repeaters.rs), so a
+ * repeater counts as saved exactly when the merge would have made the two one row: outputs within
+ * 2.5 kHz (`FREQ_MATCH_MHZ`) and the same machine callsign; or, with no callsign on either, inputs
+ * within 2.5 kHz too and sites within 5 km. A memory that names no callsign and no site cannot pass
+ * the second test, so it is never taken for a directory's machine: two machines can share an output
+ * and a tone a county apart. The mode does not enter into it (one machine is one row, whatever its
+ * modes), and neither does the tone the memory stores. */
+export function sameMachine(m: Memory, r: RepeaterRecord): boolean {
+  if (!onFrequency(m.rxMhz, r.outputMhz)) return false
+  const [a, b] = [machineCall(m.callsign ?? ''), machineCall(r.callsign)]
+  if (a && b) return a === b
+  if (m.lat == null || m.lon == null) return false
+  return (
+    onFrequency(memoryInputMhz(m), r.inputMhz) &&
+    haversineKm({ lat: m.lat, lon: m.lon }, { lat: r.lat, lon: r.lon }) < SAME_SITE_KM
+  )
+}
+
+/** The memory that already is this search row's machine, if the bank holds one ([`sameMachine`]). */
+export function savedMemoryOf(bank: MemoriesBank, row: RepeaterSearchRow): Memory | undefined {
+  return bank.memories.find((m) => sameMachine(m, row.record))
+}
+
+/** A search row saved into the bank as a memory (not a favourite): every field `repeaterMemory`
+ * maps, named the way it is said out loud ([`favoriteName`]), with the machine's site. A machine the
+ * bank already holds ([`savedMemoryOf`]) is left as it is, so saving twice adds nothing. `refused`:
+ * the bank would not take the channel (`coerceMemory` — no frequency or no mode), and nothing changed. */
+export function saveRepeater(
+  bank: MemoriesBank,
+  row: RepeaterSearchRow,
+): { bank: MemoriesBank; memory: Memory | undefined; result: 'saved' | 'exists' | 'refused' } {
+  const have = savedMemoryOf(bank, row)
+  if (have) return { bank, memory: have, result: 'exists' }
+  const id = newMemoryId()
+  const next = addMemory(bank, {
+    ...repeaterMemory(row.channel, favoriteName(row.channel), { lat: row.record.lat, lon: row.record.lon }),
+    id,
+  })
+  const memory = next.memories.find((m) => m.id === id)
+  return memory ? { bank: next, memory, result: 'saved' } : { bank, memory: undefined, result: 'refused' }
 }
 
 /** What Program's map makes of the rows it is given (the operator, 2026-09-30: "hearham-only map

@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,474 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,483 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -37,7 +37,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | SSTV | 42 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
 | Field Day | 35 | The ARRL/RAC event's official name. |
-| USB / LSB / SSB / FM | 36 / 10 / 29 / 22 | Mode names, as marked on the radio. |
+| USB / LSB / SSB / FM | 36 / 10 / 29 / 23 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
 | FT8 / FT4 | 33 / 18 | Mode names. |
 | HF / VHF / UHF | 32 / 18 / 4 | Band ranges. |
@@ -108,9 +108,9 @@ word in, and use only that word in the CSV.
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 102 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 87 | A satellite pass. | |
-| callsign | 80 | Appears constantly. Whatever you choose, choose it once. | |
+| callsign | 81 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
-| frequency | 77 | | |
+| frequency | 78 | | |
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 53 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
@@ -128,8 +128,8 @@ word in, and use only that word in the CSV.
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |
 | antenna | 31 | | |
-| memories | 28 | Saved channels — the Memories screen. | |
-| cockpit | 32 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
+| memories | 35 | Saved channels — the Memories screen. | |
+| cockpit | 33 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
 | pane / panel | 24 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
