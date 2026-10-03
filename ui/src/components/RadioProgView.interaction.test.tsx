@@ -129,7 +129,10 @@ describe('(1) one place says where; the list filter is a filter of the list', ()
   it('the filter sits with the list, says it filters it, and one ✕ clears it', async () => {
     await fetched()
     const box = filterBox()
-    expect(box.getAttribute('placeholder')).toBe(t('program.filters.search.placeholder'))
+    // The words the operator was given (2026-10-02), read as written: a placeholder compared with its own
+    // catalog entry would pass whatever the entry said. It never asks for a place.
+    expect(box.getAttribute('placeholder')).toBe('Filter: call or MHz')
+    expect(box.getAttribute('placeholder')).not.toMatch(/city|town|place|near/i)
     // Not with the place: outside the Search card, right above the list.
     expect(box.closest('.rp-query')).toBeNull()
     expect(box.closest('.rp-list-tools')?.nextElementSibling?.classList.contains('rp-results')).toBe(true)
