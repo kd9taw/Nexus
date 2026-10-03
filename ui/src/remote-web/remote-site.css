@@ -294,7 +294,6 @@
 
 /* ── A station card's two ways in: Stream, the one big amber thing to do, and a small Listen beside
    it (the operator, 2026-10-02: "one big "Stream" button and a small "Listen" for audio only"). */
-.remote-site .remote-station-actions { align-items: stretch; }
 /* The floor yields: on a phone at 175% zoom a card is narrower than 12rem. */
 .remote-site .remote-button.remote-station-stream { min-width: min(12rem, 100%); min-height: 3.25rem; padding: 0.75rem 2rem; font-size: 1rem; }
 .remote-site .remote-station-state { margin: 0; }

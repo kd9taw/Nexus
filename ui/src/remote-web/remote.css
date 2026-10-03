@@ -56,6 +56,11 @@
 .remote-native-browser-state { flex: 1 1 16em; min-width: 0; color: var(--text-dim); overflow-wrap: anywhere; }
 .remote-native .remote-native-browser .remote-actions { margin-top: 0; gap: 8px; }
 .remote-native-advanced { display: grid; gap: 8px; min-width: 0; }
+/* The panel's summaries are flex rows, which drops the browser's own disclosure triangle: Advanced
+   says it opens with a marker of its own, turned when open. */
+.remote-native-advanced > summary { gap: 8px; font-weight: 600; }
+.remote-native-advanced > summary::before { content: '▸'; display: inline-block; }
+.remote-native-advanced[open] > summary::before { transform: rotate(90deg); }
 
 /* The question at the shack: the key large enough to compare group by group with the browser's. */
 .remote-approval-key { margin: 12px 0; }
