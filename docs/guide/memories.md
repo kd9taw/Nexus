@@ -208,7 +208,7 @@ lists. Two paths land here:
    the way the CHIRP export's comment writes them (`Seattle; IRLP 3570; CC1`).
    A machine already here shows **✓ In Memories** on its row instead, and is
    never saved twice.
-2. **Save to Memory Bank** in the channel-list builder writes the whole list in
+2. **Save list to Memories** in the channel-list builder writes the whole list in
    one go — analog rows only (digital-only machines are skipped), deduped,
    unstarred, and each one lands as FM. Star the ones you want on the strips.
    Rows saved this way carry shift and tone but no site coordinates (the builder
@@ -331,8 +331,8 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
 
 ## Related guides
 
-- [Repeaters](program.md) — building a repeater list for a location, and **Save to
-  Memory Bank**, which drops it straight into this bank
+- [Repeaters](program.md) — building a repeater list for a location, and **Save
+  list to Memories**, which drops it straight in here
 - [Phone (SSB)](phone.md)
 - [CW](cw.md)
 - [Operate — FT8/FT4 digital](operate-digital.md)

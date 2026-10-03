@@ -8,7 +8,8 @@
 //       place up and fetches around it, as Fetch would.
 //   (2) The count line says what the filters hide and by which, with one tap that shows everything.
 //   (4) A row's actions say what they do, each with its own icon: Tune, Save to Memories, Add to channel list. The ☆ is
-//       gone (the saved badge took its place), and the channel list says it is for programming a radio.
+//       gone (the saved badge took its place), and the channel list says it is for programming a radio. Its own save
+//       writes into the same Memories, so it says so: Save list to Memories, not "Memory Bank" (2026-10-03).
 // Every case is a PAIR: what the control does, beside the case that must not trigger it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -18,6 +19,13 @@ import { gridToLatLon } from '../grid'
 import { miToKm } from '../features/radioprog'
 import { emptyBank, memoriesStore } from '../features/memories'
 import { subscribeToasts } from '../toast'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { EN } from '../i18n/en'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
 
 const repeaterSearch = vi.fn()
 const geocodeCity = vi.fn()
@@ -308,4 +316,30 @@ describe('(4) a row says what each action does, and Memories and the channel lis
     expect(within(rowOf('W9BBB')).getByRole('button', { name: t('program.row.add.label') })).toBeTruthy()
   })
 
+  it('the channel list saves into Memories by that name, apart from a row’s Save to Memories, in every language and the kit', async () => {
+    await fetched(ROWS, true)
+    fireEvent.click(within(rowOf('W9AAA')).getByRole('button', { name: t('program.row.add.label') }))
+    // It writes the list into the Memories a row's Save to Memories writes to: the words as written.
+    const save = within(document.querySelector<HTMLElement>('.rp-deliver')!).getByRole('button', { name: 'Save list to Memories' })
+    fireEvent.click(save)
+    expect(memoriesStore.get().memories.map((m) => m.rxMhz)).toEqual([146.94])
+    // Each language names it with its own name for Memories (the nav's), says it is the list, and never calls it a bank;
+    // a row's Save to Memories is another button, so it is another name.
+    const BANK: Record<string, RegExp> = { en: /bank/i, de: /bank/i, es: /banco/i, fr: /banque/i, ja: /バンク/ }
+    const LIST: Record<string, RegExp> = { en: /\blist\b/i, de: /Liste/, es: /\blista\b/i, fr: /\bliste\b/i, ja: /リスト/ }
+    const wrong: string[] = []
+    for (const [loc, cat] of Object.entries({ en: EN, de: DE, es: ES, fr: FR, ja: JA } as Record<string, Record<string, unknown>>)) {
+      const label = String(cat['program.deliver.saveBank.label'])
+      const title = String(cat['program.deliver.saveBank.title'])
+      if (!label.includes(String(cat['nav.memories.label'])) || !LIST[loc].test(label)) wrong.push(`${loc}: "${label}"`)
+      if (label === cat['program.row.save.label']) wrong.push(`${loc}: the row's own name`)
+      if (BANK[loc].test(label) || BANK[loc].test(title)) wrong.push(`${loc}: a bank in "${label}" / "${title}"`)
+    }
+    expect(wrong).toEqual([])
+    // The pt-BR kit carries the English word for word.
+    const kit = readFileSync(resolve(process.cwd(), '../translations/pt-BR/nexus-ptbr-translation.csv'), 'utf8')
+    const english = (key: string) => kit.match(new RegExp(`^"\\d","${key.replace(/\./g, '\\.')}","((?:[^"]|"")*)"`, 'm'))?.[1].replace(/""/g, '"')
+    expect(english('program.deliver.saveBank.label')).toBe(EN['program.deliver.saveBank.label'])
+    expect(english('program.deliver.saveBank.title')).toBe(EN['program.deliver.saveBank.title'])
+  })
 })

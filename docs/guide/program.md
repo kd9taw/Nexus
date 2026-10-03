@@ -209,7 +209,7 @@ list is empty:
 - **Export CSV** writes `nexus-channels-YYYY-MM-DD.csv`: a plain sheet with RX
   *and* TX frequency both spelled out, for spreadsheets, Anytone CPS and RT
   Systems. It is not the CHIRP format.
-- **Save to Memory Bank** puts the channels into Nexus's own Memories with the
+- **Save list to Memories** puts the channels into Nexus's own Memories with the
   machine's shift, offset and tone, deduped on frequency + mode + tone so
   re-saving the same list never piles up duplicates. A recall from a cockpit MEM
   strip then retunes the rig as a repeater, not just to a frequency.
@@ -359,7 +359,7 @@ list and off the map.
 Use this when the channels are for operating from Nexus rather than for a
 handheld; **Save to Memories** on a result row is the one-machine version.
 
-1. Build the channel list, then press **Save to Memory Bank**.
+1. Build the channel list, then press **Save list to Memories**.
 2. Read what it reports — "6 channels saved to Memories (2 already there) —
    star ★ the ones you want on the cockpit MEM strip".
 3. In [Memories](memories.md), star the channels you want reachable from a
@@ -395,13 +395,13 @@ handheld; **Save to Memories** on a result row is the one-machine version.
   that matches the preview.
 - **Nothing merges two rows that program the same machine.** Rows are tracked by
   their directory id, so a linked system listed once per node adds once per
-  node. Save to Memory Bank does dedupe (on frequency + mode + tone); the
+  node. Save list to Memories does dedupe (on frequency + mode + tone); the
   builder list does not.
 - **Max name and Start at reset each launch**, and a list restored after a
   restart keeps the names it had — those rows count as hand-edited, so changing
   Max name afterwards does not re-derive them. The CHIRP export still truncates
   to the current cap.
-- **Save to Memory Bank does not carry the machine's coordinates**, so channels
+- **Save list to Memories does not carry the machine's coordinates**, so channels
   saved that way show no distance or bearing in Memories. **Save to Memories**
   on a result row is the path that carries them.
 - **Exports overwrite the same day's file.** The filename is date-stamped only,
@@ -428,7 +428,7 @@ handheld; **Save to Memories** on a result row is the one-machine version.
 
 ## Related guides
 
-- [Memories](memories.md) — where **Save to Memory Bank** puts the channel list,
+- [Memories](memories.md) — where **Save list to Memories** puts the channel list,
   and what the cockpit MEM strip recalls
 - [Phone (SSB)](phone.md) — working FM and repeaters once the channels are in
 - [Field Day & POTA/SOTA](contesting-pota.md)

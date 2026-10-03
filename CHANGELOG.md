@@ -745,6 +745,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
   window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel
   list, your settings and the RepeaterBook token are unchanged.
+- **The channel list's Save to Memory Bank is Save list to Memories.** It always wrote the list into
+  Memories, the same place a repeater row's **Save to Memories** writes to, and its name now says so, in
+  all five languages.
 - **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
   **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
   the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After
