@@ -22,10 +22,15 @@ Read this part before changing anything here.
   by a press at the shack. There is no path that pairs a station you are not
   standing at, and that is deliberate rather than unfinished.
 - **Every browser is approved at the shack.** Approving one browser approves only
-  that browser, for that station. Station control and FT8/FT4 transmit are distinct
-  permissions. What an approved browser was allowed is kept across a Nexus restart
-  for as long as it stays approved, but nothing transmits after a restart until the
-  browser is allowed to and presses TX On.
+  that browser, for that station. On the Remote page, station control and FT8/FT4
+  transmit are distinct permissions. A browser streaming the shack, where streaming
+  is turned on, needs station control and not the FT8/FT4 permission: through the
+  stream it operates Nexus as you would at the shack, transmit included (the
+  operator's ruling of 2026-10-03: an approved, streaming browser is you at the
+  shack). Revoking its station control ends its stream. What an approved browser was
+  allowed is kept across a Nexus restart for as long as it stays approved, but
+  nothing transmits after a restart until the operator starts it from the browser:
+  TX On on the Remote page, or Nexus's own transmit controls through a stream.
 - **The shack can end remote control.** One button in Nexus at the shack ends remote
   control and clears the remote permissions. Nothing hands the radio back on its own
   just because someone sits down at the shack.
