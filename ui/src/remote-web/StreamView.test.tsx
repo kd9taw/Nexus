@@ -74,6 +74,38 @@ function view(initial: Partial<OperationView>, options: Parameters<typeof harnes
 }
 const controlling = { state: state('controlling'), fresh: true }
 
+it('draws a picture the station sized to the stage one pixel to a device pixel, and fits any other as before', () => {
+  let observed: { element: Element; report: (entries: unknown[]) => void } | null = null
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(private readonly report: (entries: unknown[]) => void) {}
+    observe(element: Element) { observed = { element, report: this.report } }
+    disconnect() { observed = null }
+  })
+  try {
+    const { video } = view({})
+    expect(observed, 'nothing watched').not.toBeNull()
+    expect(observed!.element, 'the stage is watched, not the picture: its drawn size never feeds back').toBe(video.parentElement)
+    const stage = (width: number, height: number) => act(() => {
+      observed!.report([{ devicePixelContentBoxSize: [{ inlineSize: width, blockSize: height }], contentRect: { width, height } }])
+    })
+    const drawn = () => [video.style.width, video.style.height, video.hasAttribute('data-exact')]
+    // The 1920×1080 picture in a stage a pixel wider than it: its own size, not stretched by a hair.
+    stage(1921, 1200)
+    expect(drawn()).toEqual(['1920px', '1080px', true])
+    // A stage far larger (the shack's window is the smaller): fitted to it, as before.
+    stage(2560, 1440)
+    expect(drawn()).toEqual(['', '', false])
+    // A stage smaller than the picture (the station has not caught up): fitted, shrunk.
+    stage(1600, 900)
+    expect(drawn()).toEqual(['', '', false])
+    // The station catches up: the next picture is the stage's size, drawn at its own.
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 1600 })
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 900 })
+    act(() => { video.dispatchEvent(new Event('resize')) })
+    expect(drawn()).toEqual(['1600px', '900px', true])
+  } finally { vi.unstubAllGlobals() }
+})
+
 it('A3: offers nothing until the operator asks, and then only under a fresh controlling lease', async () => {
   const v = view({ state: state('available'), fresh: true })
   expect(v.peers).toHaveLength(0)

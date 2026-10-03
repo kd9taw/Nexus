@@ -110,6 +110,8 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
   /** Every time the page asked the browser for the microphone, with what it asked for. */
   const micAsks: unknown[] = []
   const micTracks: FakeMicTrack[] = []
+  /** Where the page's picture area reports its size, while the link watches it. */
+  let report: ((width: number, height: number) => void) | null = null
   let ids = 0
   const env: StreamEnvironment = {
     now: () => clock,
@@ -133,6 +135,7 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
     uuid: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
     // A5: signs as the contract's offer is signed, unless a test asks otherwise.
     signOffer: options.sign === false ? undefined : options.sign ?? (async () => OFFER_SIGNATURE),
+    watchSize: (_video, f) => { report = f; return () => { report = null } },
   }
   const link = new StreamLink((payload, leaseId) => signals.push({ payload, leaseId }), env)
   const video = new FakeVideo()
@@ -143,6 +146,10 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
     advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms) },
     /** Move the link's clock only, for tests on real timers. */
     tick: (ms: number) => { clock += ms },
+    /** The picture area takes a new size, in device pixels, as the browser reports it. */
+    resize: (width: number, height: number) => report?.(width, height),
+    /** Is the link watching the picture area's size? */
+    get watching() { return report !== null },
     /** Offer, answer securely, open the channels and present a first frame: a live stream. */
     async live(rtp = 1000) {
       await link.start(LEASE)
