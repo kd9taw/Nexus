@@ -11,8 +11,9 @@
 //!   audio lane's rule, one definition in the operations authority: the operator's local control
 //!   grant plus this browser's own live lease. Then the operator's switch, then the device key
 //!   (A5), then the offer check and the platform. Only after all of them does the station open a
-//!   socket, and only after that does a WebRTC session exist. It is asked again every second while
-//!   the stream runs, so a lapsed lease or a revoked device ends it.
+//!   socket, and only after that does a WebRTC session exist. The grant, the lease and the switch
+//!   are asked again every second while the stream runs, so a lapsed lease, a revoked device or the
+//!   switch turned off at the shack ends it ([`Streaming::still_admitted`]).
 //! - **The browser's own device key (security test A5): [`verify`], then [`Streaming::connected`].**
 //!   The relay stamps the device and session on every signal, so without this a relay could offer
 //!   in any granted browser's name (security review M1). The operator pinned this browser's key
@@ -387,6 +388,9 @@ pub(super) struct Streaming {
     pub offer: Offer,
     pub presence: Presence,
     checked: Instant,
+    /// When the operator's switch was last read. A busy engine leaves it as it was, so the switch
+    /// is read again next tick.
+    switch_checked: Instant,
     /// Was presence live at the last look? Its lapse is when the window lets go of anything the
     /// streamed operator was holding down.
     was_live: bool,
@@ -415,6 +419,7 @@ impl Streaming {
             offer,
             presence: Presence::default(),
             checked: now,
+            switch_checked: now,
             was_live: false,
             verified: false,
             #[cfg(feature = "radio")]
@@ -646,20 +651,38 @@ impl Streaming {
             .collect()
     }
 
-    /// Does the browser still control the station? Asked once a second; a busy authority is not
-    /// a refusal.
-    pub fn still_admitted(&mut self, now: Instant) -> bool {
-        if now.saturating_duration_since(self.checked) < RECHECK {
-            return true;
+    /// Does the browser still control the station, and is the operator's switch ("Stream this
+    /// station from my browser") still on? Each is asked once a second. A busy authority is not a
+    /// refusal, and a busy engine is not the switch turned off: this thread only tries the engine's
+    /// lock, as for presence, and tries again next tick. The switch turned off at the shack ends the
+    /// stream as a revoked device does, and the page is told `streamDisabled`.
+    pub fn still_admitted(&mut self, now: Instant) -> Result<(), StreamReason> {
+        if now.saturating_duration_since(self.checked) >= RECHECK {
+            self.checked = now;
+            let admitted = self.station.authority.stream_admitted(
+                &self.offer.session,
+                &self.offer.device,
+                &self.offer.lease,
+                now,
+            );
+            if matches!(admitted, Err(reason) if reason != "remoteBusy") {
+                return Err(StreamReason::NotController);
+            }
         }
-        self.checked = now;
-        let admitted = self.station.authority.stream_admitted(
-            &self.offer.session,
-            &self.offer.device,
-            &self.offer.lease,
-            now,
-        );
-        !matches!(admitted, Err(reason) if reason != "remoteBusy")
+        if now.saturating_duration_since(self.switch_checked) < RECHECK {
+            return Ok(());
+        }
+        let engine = match tempo_app::engine::engine_try_lock(&self.station.engine) {
+            Ok(engine) => engine,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+        };
+        self.switch_checked = now;
+        if engine.settings().remote_stream {
+            Ok(())
+        } else {
+            Err(StreamReason::StreamDisabled)
+        }
     }
 
     /// The page opened its `audio` channel: start feeding it, and say whether that worked.
@@ -872,6 +895,8 @@ fn run(
                     }
                 }
             }
+            // A report about one datagram. One too long for `buf` is dropped here: the part of it
+            // Windows hands back with the error never reaches the session.
             Err(e) if !receive_ends_session(&e) => {}
             Err(_) => session.close(StreamReason::ConnectionFailed, Instant::now()),
         }
@@ -975,8 +1000,8 @@ fn run(
                 session.close(StreamReason::StreamUnavailable, now);
             }
         }
-        if !streaming.still_admitted(now) {
-            session.close(StreamReason::NotController, now);
+        if let Err(reason) = streaming.still_admitted(now) {
+            session.close(reason, now);
         }
         for transmit in session.take_transmits() {
             let _ = socket.send_to(&transmit.contents, transmit.destination);

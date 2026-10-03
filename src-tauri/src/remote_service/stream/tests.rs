@@ -260,13 +260,15 @@ fn revoking_the_device_ends_a_running_stream() {
     let f = fixture(now);
     let mut streaming = verified_stream(&f, now);
     let tick = now + RECHECK;
-    assert!(
+    assert_eq!(
         streaming.still_admitted(tick),
+        Ok(()),
         "control: admitted while granted"
     );
     f.station.authority.permit_station(DEVICE, false).unwrap();
-    assert!(
-        !streaming.still_admitted(tick + RECHECK),
+    assert_eq!(
+        streaming.still_admitted(tick + RECHECK),
+        Err(StreamReason::NotController),
         "the stream outlived its device's revocation"
     );
 }
@@ -286,6 +288,60 @@ fn an_offer_to_a_station_with_streaming_off_is_refused() {
     assert_eq!(
         admit(&f.station, &offer(&f.lease), now),
         Err(StreamReason::StreamDisabled)
+    );
+}
+
+/// The operator's switch, turned off at the shack.
+fn turn_streaming_off(f: &Fixture) {
+    let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+    let mut s = e.settings().clone();
+    s.remote_stream = false;
+    e.apply_settings(s);
+}
+
+/// The operator's kill switch: turning streaming off at the shack ends the stream already running,
+/// at its next recheck, under the reason the page shows as "Streaming is off at the shack". The
+/// control is the same stream while the switch is on.
+#[test]
+fn turning_streaming_off_at_the_shack_ends_a_running_stream() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut streaming = verified_stream(&f, now);
+    let tick = now + RECHECK;
+    assert_eq!(
+        streaming.still_admitted(tick),
+        Ok(()),
+        "control: admitted while the switch is on"
+    );
+    turn_streaming_off(&f);
+    assert_eq!(
+        streaming.still_admitted(tick + RECHECK),
+        Err(StreamReason::StreamDisabled),
+        "the stream outlived the operator's switch"
+    );
+}
+
+/// The session thread never waits for the engine. A busy engine at the recheck is not the switch
+/// turned off, and the switch is read again on the next tick, not a whole recheck later.
+#[test]
+fn a_busy_engine_is_not_the_switch_turned_off_and_is_asked_again_next_tick() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut streaming = verified_stream(&f, now);
+    turn_streaming_off(&f);
+    let tick = now + RECHECK;
+    {
+        let _busy = tempo_app::engine::engine_lock(&f.station.engine);
+        assert_eq!(
+            streaming.still_admitted(tick),
+            Ok(()),
+            "a busy engine read as the switch turned off"
+        );
+    }
+    assert_eq!(
+        streaming.still_admitted(tick + TICK),
+        Err(StreamReason::StreamDisabled),
+        "a busy engine put the switch off for a whole recheck"
     );
 }
 
