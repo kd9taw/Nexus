@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   browser no address to connect to, and a browser behind a router never got the picture. Nexus at
   the shack now offers that address, the one the internet already sees it at. It needs the new
   Nexus at the shack.
+- **POTA / SOTA: the park reference, NEW PARK and the Hunting line read clearly in the dark
+  themes.** At night under the Blue and Violet accents, and the Nebula theme's own, they were
+  lettered too dim for small text (down to 4.2:1, under the 4.5:1 it needs). They now take the
+  same lighter shade of the accent as HUNT, wherever the board shows: the POTA / SOTA screen, its
+  pop-out, a Connect or dashboard-rail box and the Remote page.
 
 ### Changed
 

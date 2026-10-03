@@ -33,6 +33,11 @@
 // #7bd4f2); its tint and border are unchanged. The board's two other hosts, the Connect box and the dashboard rail beside
 // a cockpit, are swept here too, and so are Program's Save to Memories (the third of its buttons in the look) and a
 // selected row, where its buttons sit on the row's accent wash.
+//
+// AND (2026-10-03, by the operator's rule of 2026-09-30: "fix them by the same rule if they're under 4.5:1"): the board's
+// other accent words, the park reference, NEW PARK and the Hunting line's park and call, read 4.23 to 4.46:1 at night under
+// the same dim accents, the hunted row's reference the lowest. They take the look's dark lettering, and are held in every
+// dark theme under every preset, in every host, as the look is.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -233,8 +238,8 @@ const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')
 /** This change's rules: the light ones on the HUNT look (the board's and Program's), the reference, the badges, the Hunting
  *  line and ADDED; and, in every theme, the hunted row's HUNT and frequency line and WORKED TODAY's dim ink. */
 const OURS = /^\[data-theme='light'\] (\.pota-view )?\.pota-(hunt-btn|hunt-text|spot-ref|badge-(new|open|worked))\b|^\[data-theme='light'\] \.rp-add\.added$|^\.pota-view \.pota-(spot-v2\.selected \.pota-(hunt-btn|spot-meta)|badge-worked)$/
-/** The look's dark lettering (2026-10-03). */
-const DARK_MIX = /^\[data-theme='dark'\] \.pota-hunt-btn$/
+/** The look's dark lettering (2026-10-03), and the board's other accent words', which took the same. */
+const DARK_MIX = /^\[data-theme='dark'\] (\.pota-hunt-btn|\.pota-view \.pota-(spot-ref|badge-new|hunt-text strong))$/
 /** The board and Program's buttons as they shipped: this change's rules removed, and the look's dark lettering too. */
 const SHIPPED = RULES.filter((r) => !OURS.test(r.selector) && !DARK_MIX.test(r.selector))
 /** The look as it was before 2026-10-03: its dark lettering removed. */
@@ -356,14 +361,19 @@ const onHunted = (w: Word) => w.what.includes(' pota-spot.pota-spot-v2.selected 
 const huntedInk = (w: Word) => onHunted(w) && (w.own === '.pota-hunt-btn' || w.own === '.pota-spot-meta')
 /** The HUNT look itself: HUNT, and Program's Tune, Save to Memories and Add (ADDED letters in its own green). */
 const huntLook = (w: Word) => KINDS[w.own].base === '.pota-hunt-btn'
-/** What letters a word in the dark themes: the ink on the hunted row, the look's dark lettering on the rest of the look, else
- *  the dark batch's colour for its kind, else its own base rule. */
+/** The board's other words in the accent: the park reference, NEW PARK and the Hunting line's park and call. */
+const accentWord = (w: Word) => ['.pota-spot-ref', '.pota-badge.pota-badge-new', '.pota-hunt-text strong'].includes(w.own)
+/** What letters a word in the dark themes: the ink on the hunted row, the look's dark lettering on the rest of the look and
+ *  the same on the board's other accent words, else the dark batch's colour for its kind, else its own base rule. */
 const darkInk = (w: Word) =>
-  huntedInk(w) ? 'var(--text)' : huntLook(w) ? baseInk("[data-theme='dark'] .pota-hunt-btn") : (KINDS[w.own].dark ?? baseInk(KINDS[w.own].base))
-/** The themes a word is held in: the HUNT look in every theme; the board's other words in the ones they were held to (in
- *  dark, under the Blue and Violet accents and the Nebula theme's own, the park reference, NEW PARK and the Hunting line
- *  read 4.23 to 4.46:1, measured 2026-10-03 and left for a ruling of their own). */
-const themesOf = (w: Word, base: 'light' | 'dark') => (huntLook(w) ? (base === 'light' ? EVERY_LIGHT : EVERY_DARK) : base === 'light' ? LIGHT : DARK)
+  huntedInk(w) ? 'var(--text)' : huntLook(w) ? baseInk("[data-theme='dark'] .pota-hunt-btn")
+    : accentWord(w) ? baseInk(`[data-theme='dark'] .pota-view ${KINDS[w.own].base}`)
+      : (KINDS[w.own].dark ?? baseInk(KINDS[w.own].base))
+/** The themes a word is held in: the HUNT look in every theme; the board's other accent words in every dark theme too
+ *  (2026-10-03: under the Blue and Violet accents and the Nebula theme's own they read 4.23 to 4.46:1); the rest in the
+ *  ones they were held to. In light every accent word is lettered in the ink, and LIGHT holds them under every preset. */
+const themesOf = (w: Word, base: 'light' | 'dark') =>
+  base === 'light' ? (huntLook(w) ? EVERY_LIGHT : LIGHT) : huntLook(w) || accentWord(w) ? EVERY_DARK : DARK
 const BOARD_HOSTS = HOSTS.filter(([h]) => h !== 'the Program view')
 /** A border declaration's colour: the value itself, or a `border` shorthand without its width and style. */
 const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
@@ -523,5 +533,27 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
     const hunt = words.find((w) => w.what.startsWith('the POTA / SOTA view pota-spot.pota-spot-v2 .pota-hunt-btn '))!
     expect(hex(wordOf(BEFORE, 'dark', hunt).fg)).toBe('#4cc9f0')
     expect(hex(wordOf(RULES, 'dark', hunt).fg)).toBe('#7bd4f2')
+  }, 60_000)
+
+  // The board's other accent words as they were before 2026-10-03, in dark (the resolver's ratios): caught at night under
+  // the dim accents, the hunted row's reference the lowest. And the same cost to the standard accent as the look's.
+  it('FIRES: the reference, NEW PARK and the Hunting line as they were are caught at night under the dim accents', () => {
+    const word = (prefix: string) => words.find((w) => w.what.startsWith(prefix))!
+    const at = (w: Word, prefix: string) => {
+      const mode = EVERY_DARK.find((m) => m === prefix || m.startsWith(`${prefix} `))!
+      const { fg, bg, ratio } = wordOf(BEFORE, mode, w)
+      return `${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`
+    }
+    const view = 'the POTA / SOTA view'
+    const hunted = word(`${view} pota-spot.pota-spot-v2.selected .pota-spot-ref `)
+    const park = word(`${view} pota-spot.pota-spot-v2.pota-spot-new .pota-badge.pota-badge-new `)
+    const hunting = word(`${view} pota-hunt-banner .pota-hunt-text strong `)
+    expect(at(hunted, 'dark-night accent=violet'), 'the hunted reference, Violet at night').toBe('#8c75ca on #261e2b = 4.23:1')
+    expect(at(hunted, 'dark-night accent=blue'), 'the hunted reference, Blue at night').toBe('#5a86ce on #1d212c = 4.39:1')
+    expect(at(park, 'dark-night accent=violet'), 'NEW PARK, Violet at night').toBe('#8c75ca on #211a28 = 4.43:1')
+    expect(at(hunting, 'dark-night skin=nebula'), "the Hunting line, Nebula's own at night").toBe('#8c75ca on #211a23 = 4.46:1')
+    const plain = word(`${view} pota-spot.pota-spot-v2 .pota-spot-ref `)
+    expect(hex(wordOf(BEFORE, 'dark', plain).fg)).toBe('#4cc9f0')
+    expect(hex(wordOf(RULES, 'dark', plain).fg)).toBe('#7bd4f2')
   }, 60_000)
 })

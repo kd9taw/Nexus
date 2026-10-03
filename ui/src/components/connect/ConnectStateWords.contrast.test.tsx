@@ -617,8 +617,9 @@ const accentAt = (rules: Rule[], mode: Mode, w: Word, at: number) => hex(colourA
 const NEUTRAL = ['--text', '--text-dim', '--text-faint', '--accent', '--accent-ink', '--readout']
 const neutralAt = (rules: Rule[], mode: Mode, w: Word, at: number) =>
   new Set(NEUTRAL.map((t) => hex(colourAt(rules, mode, w, at, `var(${t})`, [0, 0, 0]))))
-/** The POTA/SOTA board's HUNT button, the HUNT look. */
-const huntLook = (w: Word) => w.nodes[w.nodes.length - 1].classList.contains('pota-hunt-btn')
+/** The POTA/SOTA board's words that letter in dark in the accent mixed toward the ink (2026-10-03): its HUNT button (the
+ *  HUNT look), the park reference and NEW PARK. */
+const boardMix = (w: Word) => ['pota-hunt-btn', 'pota-spot-ref', 'pota-badge-new'].some((c) => w.nodes[w.nodes.length - 1].classList.contains(c))
 
 function unreadable(rules: Rule[], words: Word[], modes: readonly Mode[]): string[] {
   const out: string[] = []
@@ -637,9 +638,9 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   let accent: Word[] = []
   beforeAll(async () => {
     all = await renderAll()
-    // The POTA/SOTA box's HUNT is neither: in dark it letters in the accent mixed toward the ink (2026-10-03), and
-    // PotaSotaView.contrast.test.tsx holds it in this box and in the rail's.
-    state = all.filter((w) => shown(RULES, 'dark', w) && !huntLook(w) && !neutralAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at).has(hex(wordOf(RULES, 'dark', w).raw)))
+    // The POTA/SOTA box's HUNT, park reference and NEW PARK are neither: in dark they letter in the accent mixed toward
+    // the ink (2026-10-03), and PotaSotaView.contrast.test.tsx holds them in this box and in the rail's.
+    state = all.filter((w) => shown(RULES, 'dark', w) && !boardMix(w) && !neutralAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at).has(hex(wordOf(RULES, 'dark', w).raw)))
     accent = all.filter((w) => shown(RULES, 'dark', w) && hex(wordOf(RULES, 'dark', w).raw) === accentAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at))
   }, 120_000)
 
@@ -773,14 +774,13 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   // the accent, and it is exact.
   const ACCENT_INVENTORY = [
     '.mini-spectrum-src', '.opening-note', '.sat-when', 'strong',
-    // The two boards in the Spots and POTA/SOTA boxes (their screens' own palette).
-    '.np-filter-toggle.active', '.np-th.active', '.pota-badge.pota-badge-new', '.pota-spot-ref',
+    // The board in the Spots box (its screen's own palette).
+    '.np-filter-toggle.active', '.np-th.active',
   ].sort()
-  // Of the boards' accent words, the Spots board's Filter toggle and sorted heading read as they are. NEW PARK is a
-  // chip: its accent went to its edge, held with BAND OPEN by the badges' test above. The POTA/SOTA board's park
-  // reference (4.25:1) is that board's on every screen that shows it (2026-09-30): named here, and held there. Its HUNT
-  // no longer letters in the accent in dark (2026-10-03), so it is not here at all.
-  const ACCENT_HELD_ELSEWHERE = ['.pota-badge.pota-badge-new', '.pota-spot-ref']
+  // Of the boards' accent words, the Spots board's Filter toggle and sorted heading read as they are. The POTA/SOTA
+  // board's HUNT, NEW PARK and park reference no longer letter in the accent in dark (2026-10-03), so they are not here
+  // at all: PotaSotaView.contrast.test.tsx holds them on every screen that shows the board, and NEW PARK's light look is
+  // held with BAND OPEN by the badges' test above too.
   /** The light themes, and the standard light theme under each accent preset: the accent is these words' own colour. */
   const ACCENT_LIGHT: Mode[] = [...LIGHT, ...role('accent').presets.slice(1).map((p) => withRoles('light', { accent: p.id }))]
   const ownOf = (w: Word) => {
@@ -790,7 +790,7 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   it('every word lettered in the accent reads 4.5:1 in every light theme and accent, and one that left it keeps the accent as its underline', () => {
     expect([...new Set(accent.map(ownOf))].sort()).toEqual(ACCENT_INVENTORY)
     const low: string[] = []
-    for (const w of accent.filter((x) => !ACCENT_HELD_ELSEWHERE.includes(ownOf(x))))
+    for (const w of accent)
       for (const mode of ACCENT_LIGHT) {
         if (!shown(RULES, mode, w)) continue
         const { fg, bg, ratio, raw, ink } = wordOf(RULES, mode, w)

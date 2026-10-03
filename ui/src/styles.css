@@ -20548,6 +20548,16 @@ button.cq-skiptx1.on {
 [data-theme='dark'] .pota-hunt-btn {
   color: color-mix(in srgb, var(--accent) 70%, var(--text));
 }
+/* THE BOARD'S OTHER ACCENT WORDS IN DARK (2026-10-03), by the operator's rule of 2026-09-30 ("fix them by the same rule if
+   they're under 4.5:1"). The park reference, NEW PARK and the Hunting line's park and call letter in the accent too, and
+   at night under the dim accents (Blue, Violet, Nebula's own) read 4.23 to 4.46:1, the hunted row's reference the lowest.
+   They take the HUNT look's dark lettering, the accent mixed 30% toward the ink, in every host the board shows in. Their
+   tints, borders and light looks are unchanged. PotaSotaView.contrast.test.tsx holds them. */
+[data-theme='dark'] .pota-view .pota-spot-ref,
+[data-theme='dark'] .pota-view .pota-badge-new,
+[data-theme='dark'] .pota-view .pota-hunt-text strong {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
+}
 [data-theme='light'] .pota-view .pota-spot-ref,
 [data-theme='light'] .pota-view .pota-hunt-text strong {
   color: var(--text);
