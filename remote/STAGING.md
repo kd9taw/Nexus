@@ -166,7 +166,11 @@ Cloudflare dashboard's Realtime section, then add both to the GitHub `production
 way it applies `ADMIN_SUBJECT`, and neither ever reaches the browser.
 
 **Until both are set, the deploy refuses** before it migrates or uploads anything: `wrangler.jsonc`
-declares them under `secrets.required`, and the preflight names each one that is missing. A Worker
+declares them under `secrets.required`, and the preflight names each one that is missing. It refuses
+as early when the key does not work: the preflight mints one credential with it, lasting a minute,
+and stops the run unless Cloudflare answers 201 with a TURN server, so a swapped or mistyped value is
+caught there rather than on the first stream that needs the relay. It prints Cloudflare's HTTP status
+and never a value. A Worker
 running without them (locally, in the tests) refuses the route as `relayNotConfigured`, and the page
 then streams direct, as it did before the relay.
 

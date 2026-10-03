@@ -162,16 +162,20 @@ jobs:
       # Before the gates and before any write. Run 34789356296 applied migrations and only then failed
       # at upload on a missing ADMIN_SUBJECT. This reads the Worker's ownership, database and secret
       # binding TYPES (never a value) and stops the run first. migrate and deploy repeat it against
-      # the packaged artifact, so neither relies on this step having run.
+      # the packaged artifact, so neither relies on this step having run. It also mints one relay
+      # credential with the TURN key, lasting a minute, and stops the run unless Cloudflare answers
+      # 201 with a TURN server (relayKeyCheck): a wrong key would otherwise show only on a relayed
+      # stream. It prints Cloudflare's HTTP status and no value.
       - name: Check deploy preconditions, including required Worker secrets, before any write
         if: inputs.operation == 'deploy'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
-          # Presence only ('true'/'false'). The values go to the upload step and nowhere else.
+          # Presence only ('true'/'false'). Its value goes to the upload step and nowhere else.
           REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
-          REMOTE_TURN_KEY_ID_PRESENT: ${{ secrets.REMOTE_TURN_KEY_ID != '' }}
-          REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
+          # The relay key's values, for the one credential this step mints with them.
+          REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
+          REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
         run: node remote/scripts/cloudflare-staging.mjs preflight
 
       - name: Run the canonical local Remote gates before packaging
@@ -236,7 +240,8 @@ jobs:
           REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
         run: node remote/scripts/deploy-staging.mjs migrate
 
-      # The only step that holds a Worker secret's value. It is applied as an encrypted secret on every
+      # The only step that applies a Worker secret's value (the preflight holds the relay key's too, to
+      # mint one credential with it, and applies nothing). It is applied as an encrypted secret on every
       # upload (wrangler --secrets-file, a 0600 temporary file removed when wrangler exits), so it
       # cannot be forgotten or left as a plain var, and it is redacted from any diagnostic printed.
       - name: Upload the verified Worker and browser bytes

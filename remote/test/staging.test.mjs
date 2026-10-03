@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { STAGING, TARGETS, deployable, identity, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
-import { cloudflare, workerDigest } from '../scripts/cloudflare-staging.mjs'
+import { cloudflare, relayKeyCheck, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
 import { uploadArtifact, compareSchema, redactedDiagnostic, runWrangler, schemaQuery, settleUpload, withSecretsFile, wranglerLogLevel } from '../scripts/deploy-staging.mjs'
@@ -422,6 +422,61 @@ test('migrate and deploy each run the preflight themselves, so neither writes wi
     await assert.rejects(uploadArtifact(scratch, mode, { ...p.env, PATH: process.env.PATH, GITHUB_SHA: ids.revision }, p.fetcher),
       /REMOTE_ADMIN_SUBJECT, REMOTE_TURN_KEY_ID, REMOTE_TURN_KEY_TOKEN not set in this GitHub environment/)
     assert.equal(p.writes.length, 0, mode)
+  }
+})
+
+// GitHub never hands a secret back, so a swapped or mistyped relay key would show only on the first
+// stream that needs the relay. The preflight mints one credential with it, lasting a minute, before
+// anything is migrated or uploaded, and refuses the deploy unless Cloudflare answers 201 with a TURN
+// server. It reports the HTTP status and nothing else (2026-10-03).
+test('the deploy preflight proves the relay key by minting one short credential, and refuses without printing a value', async () => {
+  const minted = randomBytes(12).toString('hex'), body = randomBytes(12).toString('hex')
+  const served = { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: ['turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'], username: `u${minted}`, credential: `c${minted}` }] }
+  const relay = (status, answer) => {
+    const calls = []
+    const fetcher = async (input, options) => {
+      calls.push({ url: String(input), options })
+      return new Response(typeof answer === 'string' ? answer : JSON.stringify(answer), { status })
+    }
+    return { calls, fetcher }
+  }
+  // Not firing: Cloudflare mints it. One request, to the key's own endpoint, with its token, for a minute.
+  const good = relay(201, served)
+  assert.deepEqual(await relayKeyCheck(relaySecrets, good.fetcher), { status: 201 })
+  assert.equal(good.calls.length, 1)
+  assert.equal(good.calls[0].url, `https://rtc.live.cloudflare.com/v1/turn/keys/${relaySecrets.REMOTE_TURN_KEY_ID}/credentials/generate-ice-servers`)
+  assert.equal(good.calls[0].options.method, 'POST')
+  assert.equal(good.calls[0].options.headers.authorization, `Bearer ${relaySecrets.REMOTE_TURN_KEY_TOKEN}`)
+  assert.deepEqual(JSON.parse(good.calls[0].options.body), { ttl: 60 })
+  assert.equal(good.calls[0].options.redirect, 'error')
+
+  // Firing: every other answer, with its status and no value in the message.
+  for (const [status, answer, said] of [
+    [401, { errors: [{ code: 10000, message: body }] }, /HTTP 401/],
+    [403, body, /HTTP 403/],
+    [404, { errors: [{ code: 10007, message: body }] }, /HTTP 404/],
+    [200, served, /HTTP 200/],
+    [201, { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] }, /201 without a TURN server/],
+    [201, { iceServers: [{ urls: 'turn:turn.cloudflare.com:3478', username: '', credential: `c${minted}` }] }, /201 without a TURN server/],
+    [201, { iceServers: { urls: 'turn:turn.cloudflare.com:3478', username: `u${minted}`, credential: `c${minted}` } }, /201 without a TURN server/],
+    [201, body, /201 without a TURN server/],
+  ]) {
+    const bad = relay(status, answer)
+    await assert.rejects(relayKeyCheck(relaySecrets, bad.fetcher), error => {
+      assert.match(error.message, said)
+      assert.match(error.message, /nothing was migrated or uploaded$/)
+      for (const value of [...Object.values(relaySecrets), minted, body]) assert.ok(!error.message.includes(value), `${status}: a value was printed`)
+      return true
+    })
+    assert.equal(bad.calls.length, 1)
+  }
+  // Firing before any request: a step holding the key's presence alone cannot mint, and neither can a
+  // key id that would not stay one path segment.
+  for (const env of [relayPresent, { ...relaySecrets, REMOTE_TURN_KEY_ID: `${relaySecrets.REMOTE_TURN_KEY_ID}/../x` }]) {
+    const unsent = relay(201, served)
+    await assert.rejects(relayKeyCheck(env, unsent.fetcher), /REMOTE_TURN_KEY_ID is not/)
+    assert.equal(unsent.calls.length, 0)
   }
 })
 

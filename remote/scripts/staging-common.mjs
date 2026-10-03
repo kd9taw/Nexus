@@ -50,7 +50,8 @@ export function target(env = process.env) {
 // A Worker's required secret NAME reaches a deploy as the GitHub environment secret REMOTE_<NAME>,
 // and every deploy applies it, so it cannot be forgotten or left as a plain var. Steps that only need
 // to know it EXISTS receive REMOTE_<NAME>_PRESENT ('true'/'false', from `secrets.X != ''`); the value
-// itself is handed to the one upload step and nowhere else.
+// itself is handed to the one upload step, and the relay key's also to the preflight, which mints one
+// credential with it (cloudflare-staging.mjs `relayKeyCheck`) and nothing else.
 export const secretVariable = name => `REMOTE_${name}`
 export function secretValue(env, name) {
   const variable = secretVariable(name), value = env[variable]

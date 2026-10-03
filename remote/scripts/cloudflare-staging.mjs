@@ -3,7 +3,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { databaseId, deployable, revision, identityFromEnv, secretSupplied, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
+import { databaseId, deployable, revision, identityFromEnv, secretSupplied, secretValue, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
 import { trialGrant } from './grant-trial.mjs'
 
 // The two fixed assets, plus one or more D1 migrations matched by PATTERN - deliberately not a
@@ -259,6 +259,32 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
   return { inspect, preflight, provision, confirmUpload, markUpload, attachDomain, recover, grantTrial }
 }
 
+// The stream's relay key, proved before any write (2026-10-03). GitHub never hands a secret back,
+// so a swapped or mistyped key id or token would otherwise surface only on the first stream that
+// needs the relay, as a `relayUnavailable` nobody sees. This mints ONE credential with the key, the
+// way the Worker's `turn` route mints them, lasting a minute, and refuses unless Cloudflare answers
+// 201 with a TURN server among its iceServers. Only the HTTP status is ever reported: the key, the
+// token and the minted credential stay out of every message and the log.
+export async function relayKeyCheck(env = process.env, fetcher = fetch) {
+  const keyId = secretValue(env, 'TURN_KEY_ID'), token = secretValue(env, 'TURN_KEY_TOKEN')
+  requireValue(/^[0-9A-Za-z_-]{1,128}$/.test(keyId),
+    `${secretVariable('TURN_KEY_ID')} is not a usable key id, so nothing was migrated or uploaded`)
+  const response = await requestBytes(`https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ ttl: 60 }),
+  }, fetcher, 'The relay key check')
+  requireValue(response.status === 201, `Cloudflare did not mint a relay credential with ${secretVariable('TURN_KEY_ID')} `
+    + `and ${secretVariable('TURN_KEY_TOKEN')} (HTTP ${response.status}), so nothing was migrated or uploaded`)
+  let servers
+  try { servers = JSON.parse(response.bytes.toString('utf8')).iceServers } catch {}
+  requireValue(Array.isArray(servers) && servers.some(server =>
+    [server?.urls].flat().some(url => typeof url === 'string' && /^turns?:/i.test(url))
+      && typeof server.username === 'string' && server.username.length > 0
+      && typeof server.credential === 'string' && server.credential.length > 0),
+  'Cloudflare answered the relay key check 201 without a TURN server, so nothing was migrated or uploaded')
+  return { status: response.status }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2]
@@ -268,9 +294,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (mode === 'preflight') {
       // Before the gates and before any write: the secrets the checked-in template requires. The
       // artifact's database is compared again, at migrate and at upload, once an artifact exists.
+      // Then the relay key itself, which this step alone holds besides the upload: one minted
+      // credential, reported as Cloudflare's status.
       const { readFile } = await import('node:fs/promises')
       const template = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
       result = await api.preflight(template.secrets?.required ?? [])
+      result = { ...result, relayKey: (await relayKeyCheck()).status }
     } else if (mode === 'recover') {
       const { readFile } = await import('node:fs/promises')
       const { verifyPublicSource } = await import('./staging-artifact.mjs')
