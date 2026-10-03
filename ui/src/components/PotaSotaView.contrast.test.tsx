@@ -24,6 +24,15 @@
 // with the app's own resolver (cssCascade.ts). Program (RadioProgView, the desktop's Program view) is the fourth host: its
 // results with a machine to Tune and Add and one already ADDED. An off-air row (dimmed whole, by opacity) and a digital one
 // (its Add disabled) are left out: neither is a word this rule reads.
+//
+// THEN (2026-10-03): the look in every theme under every preset, in every host. Held to fewer themes than the rest of the
+// app (in dark no accent preset, and only the standard dark theme's worst cases), the look read under 4.5:1 in the dark
+// themes under both non-default accent presets, Blue and Violet (down to 3.65:1, Violet on Lagoon), and under the two
+// themes whose own accent is that dim (Nebula, and Blue VFD at night). A preset may only set tokens, so in every dark theme
+// the look now letters in the accent mixed 30% toward the ink, under every accent (the standard cyan, #4cc9f0, letters
+// #7bd4f2); its tint and border are unchanged. The board's two other hosts, the Connect box and the dashboard rail beside
+// a cockpit, are swept here too, and so are Program's Save to Memories (the third of its buttons in the look) and a
+// selected row, where its buttons sit on the row's accent wash.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -35,6 +44,8 @@ import { PALETTE_ROLES } from '../features/paletteRoles'
 import { SKINS } from '../features/skins'
 import {
   BASE_MODES,
+  MODES,
+  PALETTE_SETS,
   SENTINEL_MODES,
   baseTheme,
   chainOf,
@@ -42,6 +53,7 @@ import {
   expandWith,
   parseRules,
   rgbHex as hex,
+  skinBaseModes,
   toRgb,
   tokensAt,
   winnerAt,
@@ -66,7 +78,8 @@ const SPOTS: OtaSpot[] = [
   spot('W8WKD', 'US-0005', { freqKhz: 3_860, huntedToday: true }),
 ]
 const api = vi.hoisted(() => {
-  /** A repeater search with two FM machines (Program's Tune and Add on each; the second is added below, so it reads ADDED). */
+  /** A repeater search with three FM machines (Program's Tune, Save to Memories and Add on each): the second is added below,
+   *  so it reads ADDED, and the first is selected, so its buttons sit on the selected row's accent wash. */
   const machine = (callsign: string, outputMhz: number) => ({
     record: {
       source: 'repeaterbook', sourceId: callsign, callsign, outputMhz, inputMhz: outputMhz - 0.6, ctcssEncHz: null, ctcssDecHz: null, dcs: null,
@@ -81,7 +94,7 @@ const api = vi.hoisted(() => {
     disagreements: [],
   })
   const result = { lists: [{ source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false }], coverageGap: null,
-    missingStates: [], rsgbUnavailable: false, rsgbBeyond: [], rows: [machine('W3ZGD', 146.865), machine('K3RLN', 147.09)] } as unknown as RepeaterSearchResult
+    missingStates: [], rsgbUnavailable: false, rsgbBeyond: [], rows: [machine('W3ZGD', 146.865), machine('K3RLN', 147.09), machine('N3PLN', 147.24)] } as unknown as RepeaterSearchResult
   return {
     getOtaSpots: vi.fn(async (): Promise<OtaSpot[]> => []),
     getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
@@ -101,6 +114,8 @@ vi.mock('../api', async (importOriginal) => ({
 
 import { PotaSotaView } from './PotaSotaView'
 import { RadioProgView } from './RadioProgView'
+import { PaneFrame } from './connect/PaneFrame'
+import type { PaneContext } from './connect/paneContext'
 
 beforeAll(() => {
   ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
@@ -115,6 +130,8 @@ const OBSERVED: ObservedOta = {
   parkCount: 0,
   huntedCount: 0,
 }
+/** The box's board reads only its wiring from Connect's context. */
+const BOX = { otaBoard: { snap, onHunt: () => {}, onSnap: () => {} } } as unknown as PaneContext
 /** Each host, and what it needs done once it has rendered (Program's search is fetched, and its second machine added). */
 const HOSTS: Array<[string, () => ReactNode, ((c: HTMLElement) => Promise<void>)?]> = [
   ['the POTA / SOTA view', () => <div className="app"><main className="layout single"><PotaSotaView snap={snap} onHunt={() => {}} onSnap={() => {}} /></main></div>],
@@ -128,15 +145,44 @@ const HOSTS: Array<[string, () => ReactNode, ((c: HTMLElement) => Promise<void>)
       </div>
     </div>
   )],
+  // The Connect box (Connect's rails) and the dashboard rail beside a cockpit: the board as a box, in each one's chain.
+  ['the Connect box', () => (
+    <div className="app">
+      <main className="layout single">
+        <div className="connect-shell">
+          <div className="connect" data-rails="both">
+            <div className="connect-rail" data-side="left">
+              <PaneFrame slotId="left1" paneId="pota" ctx={BOX} onAssign={() => {}} onHide={() => {}} />
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  )],
+  ['the dashboard rail', () => (
+    <div className="app">
+      <div className="shell" data-dash-rail="on">
+        <aside className="dash-rail">
+          <div className="dash-rail-col dash-boxes">
+            <PaneFrame slotId="rail1" slotName="rail1" paneId="pota" ctx={BOX} onAssign={() => {}} onHide={() => {}} share={1} />
+          </div>
+        </aside>
+      </div>
+    </div>
+  )],
   ['the Program view', () => <div className="app"><main className="layout single"><RadioProgView myGrid="FN31" catOk /></main></div>, async (c) => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /fetch/i }))
     })
-    await waitFor(() => expect(c.querySelectorAll('.rp-row .rp-add').length).toBe(2))
+    await waitFor(() => expect(c.querySelectorAll('.rp-row .rp-add').length).toBe(3))
     await act(async () => {
       fireEvent.click(c.querySelectorAll<HTMLButtonElement>('.rp-row .rp-add')[1])
     })
     await waitFor(() => expect(c.querySelector('.rp-row .rp-add.added')).toBeTruthy())
+    await act(async () => {
+      fireEvent.click(c.querySelector('.rp-row .rp-call')!)
+    })
+    await waitFor(() => expect(c.querySelector('.rp-row.selected')).toBeTruthy())
   }],
 ]
 
@@ -152,6 +198,7 @@ async function renderWords(): Promise<Word[]> {
   for (const [host, make, prepare] of HOSTS) {
     api.getOtaSpots.mockResolvedValue(SPOTS)
     localStorage.setItem('nexus.ota.hideWorked', '0')
+    localStorage.setItem('nexus.connect.ota.hideWorked', '0')
     let r!: ReturnType<typeof render>
     await act(async () => {
       r = render(<>{make()}</>)
@@ -185,8 +232,12 @@ const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')
 /** This change's rules: the light ones on the HUNT look (the board's and Program's), the reference, the badges, the Hunting
  *  line and ADDED; and, in every theme, the hunted row's HUNT and frequency line and WORKED TODAY's dim ink. */
 const OURS = /^\[data-theme='light'\] (\.pota-view )?\.pota-(hunt-btn|hunt-text|spot-ref|badge-(new|open|worked))\b|^\[data-theme='light'\] \.rp-add\.added$|^\.pota-view \.pota-(spot-v2\.selected \.pota-(hunt-btn|spot-meta)|badge-worked)$/
-/** The board and Program's buttons as they shipped: this change's rules removed. */
-const SHIPPED = RULES.filter((r) => !OURS.test(r.selector))
+/** The look's dark lettering (2026-10-03). */
+const DARK_MIX = /^\[data-theme='dark'\] \.pota-hunt-btn$/
+/** The board and Program's buttons as they shipped: this change's rules removed, and the look's dark lettering too. */
+const SHIPPED = RULES.filter((r) => !OURS.test(r.selector) && !DARK_MIX.test(r.selector))
+/** The look as it was before 2026-10-03: its dark lettering removed. */
+const BEFORE = RULES.filter((r) => !DARK_MIX.test(r.selector))
 /** The colour a kind's own base rule letters it in (the last such rule wins its ties). */
 const baseInk = (selector: string) => [...RULES].reverse().find((r) => r.selector === selector && r.decls.some((d) => d.prop === 'color'))!.decls.find((d) => d.prop === 'color')!.value
 
@@ -198,13 +249,23 @@ const LIGHT: Mode[] = [
   ...accent.presets.slice(1).map((p) => withRoles('light', { accent: p.id })),
 ]
 const DARK: Mode[] = [...BASE_MODES.filter((b) => baseTheme(b) === 'dark'), ...SENTINEL_MODES.filter((m) => m.startsWith('dark skin='))]
+/** Every theme (2026-10-03): each one bare, the standard ones under every colour-role preset (MODES), and the worst-case
+ *  ones (SENTINEL_MODES) under every preset too, since a preset's colour on the lightest dark surfaces (the darkest light
+ *  ones) is the worst it reads anywhere. The HUNT look is held in all of them. */
+const EVERY: Mode[] = [...new Set<Mode>([
+  ...MODES,
+  ...SKINS.flatMap((s) => skinBaseModes(s.id).map((b): Mode => `${b} skin=${s.id}`)),
+  ...SENTINEL_MODES.flatMap((m) => PALETTE_SETS.map((set): Mode => `${m} ${set}`)),
+])]
+const EVERY_LIGHT: Mode[] = EVERY.filter((m) => baseTheme(m) === 'light')
+const EVERY_DARK: Mode[] = EVERY.filter((m) => baseTheme(m) === 'dark')
 
 const memo = new Map<string, unknown>()
 function once<T>(key: string, make: () => T): T {
   if (!memo.has(key)) memo.set(key, make())
   return memo.get(key) as T
 }
-const keyOf = (rules: Rule[], mode: Mode, at: El[]) => `${rules === SHIPPED ? 's' : 'r'}|${mode}|${JSON.stringify(at)}`
+const keyOf = (rules: Rule[], mode: Mode, at: El[]) => `${rules === SHIPPED ? 's' : rules === BEFORE ? 'b' : 'r'}|${mode}|${JSON.stringify(at)}`
 const tokens = (rules: Rule[], mode: Mode, at: El[]) => once(`t|${keyOf(rules, mode, at)}`, () => tokensAt(rules, mode, at))
 const win = (rules: Rule[], mode: Mode, at: El[], ...props: string[]) => once(`w|${keyOf(rules, mode, at)}|${props.join()}`, () => winnerAt(rules, mode, at, ...props))
 const BLANK = /^(inherit|transparent|none|initial|unset)$/i
@@ -252,15 +313,23 @@ const KINDS: Record<string, { mark: 'border' | 'underline' | 'none'; colour?: st
   '.pota-hunt-text strong': { mark: 'underline', colour: 'var(--accent)', base: '.pota-hunt-text strong' },
   '.pota-spot-meta': { mark: 'none', base: '.pota-spot-meta' },
   '.pota-hunt-btn.rp-tune': { mark: 'border', colour: 'var(--accent)', base: '.pota-hunt-btn' },
+  '.pota-hunt-btn.rp-save': { mark: 'border', colour: 'var(--accent)', base: '.pota-hunt-btn' },
   '.pota-hunt-btn.rp-add': { mark: 'border', colour: 'var(--accent)', base: '.pota-hunt-btn' },
   '.pota-hunt-btn.rp-add.added': { mark: 'border', colour: 'var(--state-good)', base: '.rp-add.added' },
 }
 /** The hunted row, where HUNT and the frequency line take the ink in every theme (HUNT with the accent on its border). */
 const onHunted = (w: Word) => w.what.includes(' pota-spot.pota-spot-v2.selected ')
 const huntedInk = (w: Word) => onHunted(w) && (w.own === '.pota-hunt-btn' || w.own === '.pota-spot-meta')
-/** What letters a word in the dark themes: the ink on the hunted row, else the dark batch's colour for its kind, else its own
- *  base rule. */
-const darkInk = (w: Word) => (huntedInk(w) ? 'var(--text)' : (KINDS[w.own].dark ?? baseInk(KINDS[w.own].base)))
+/** The HUNT look itself: HUNT, and Program's Tune, Save to Memories and Add (ADDED letters in its own green). */
+const huntLook = (w: Word) => KINDS[w.own].base === '.pota-hunt-btn'
+/** What letters a word in the dark themes: the ink on the hunted row, the look's dark lettering on the rest of the look, else
+ *  the dark batch's colour for its kind, else its own base rule. */
+const darkInk = (w: Word) =>
+  huntedInk(w) ? 'var(--text)' : huntLook(w) ? baseInk("[data-theme='dark'] .pota-hunt-btn") : (KINDS[w.own].dark ?? baseInk(KINDS[w.own].base))
+/** The themes a word is held in: the HUNT look in every theme; the board's other words in the ones they were held to (in
+ *  dark, under the Blue and Violet accents and the Nebula theme's own, the park reference, NEW PARK and the Hunting line
+ *  read 4.23 to 4.46:1, measured 2026-10-03 and left for a ruling of their own). */
+const themesOf = (w: Word, base: 'light' | 'dark') => (huntLook(w) ? (base === 'light' ? EVERY_LIGHT : EVERY_DARK) : base === 'light' ? LIGHT : DARK)
 const BOARD_HOSTS = HOSTS.filter(([h]) => h !== 'the Program view')
 /** A border declaration's colour: the value itself, or a `border` shorthand without its width and style. */
 const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
@@ -291,7 +360,8 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
         ...Object.entries(BADGE_ROWS).map(([k, r]) => `${h} ${r} ${k}`),
         `${h} pota-hunt-banner .pota-hunt-text strong`,
       ]),
-      ...['.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-add', '.pota-hunt-btn.rp-add.added'].map((k) => `the Program view rp-row ${k}`),
+      ...['.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-save', '.pota-hunt-btn.rp-add', '.pota-hunt-btn.rp-add.added'].map((k) => `the Program view rp-row ${k}`),
+      ...['.pota-hunt-btn.rp-tune', '.pota-hunt-btn.rp-save', '.pota-hunt-btn.rp-add'].map((k) => `the Program view rp-row.selected ${k}`),
     ].sort()
     expect(seen).toEqual(want)
   })
@@ -299,7 +369,7 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
   it('in every light theme and under every accent each reads 4.5:1, in the ink with its colour kept on its border or as its underline, 3:1', () => {
     const low: string[] = []
     for (const w of words)
-      for (const mode of LIGHT) {
+      for (const mode of themesOf(w, 'light')) {
         const { fg, bg, ratio } = wordOf(RULES, mode, w)
         if (ratio < 4.5) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
         const kind = KINDS[w.own]
@@ -327,11 +397,12 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
   }, 120_000)
 
   // THE DARK THEMES. Every word reads 4.5:1 in every dark theme: the dark batch took the three that did not (WORKED TODAY 4.47:1,
-  // the hunted row's HUNT 4.20:1 on Slate and its frequency line 3.64:1).
+  // the hunted row's HUNT 4.20:1 on Slate and its frequency line 3.64:1), and the HUNT look's rule under the dim accents took
+  // Program's buttons (2026-10-03).
   it('in every dark theme each reads 4.5:1', () => {
     const low: string[] = []
     for (const w of words)
-      for (const mode of DARK) {
+      for (const mode of themesOf(w, 'dark')) {
         const { fg, bg, ratio } = wordOf(RULES, mode, w)
         if (ratio < 4.5) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
       }
@@ -340,11 +411,12 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
 
   // And dark keeps its look apart from that batch: each word is lettered by its own base rule, or the batch's ink where it set
   // one (so a light rule that escaped its theme would show here); the reference has no underline; a bordered word keeps its
-  // mixed border, but the hunted row's HUNT, which keeps the accent at full strength on its border.
+  // mixed border, but the hunted row's HUNT, which keeps the accent at full strength on its border. The rest of the HUNT look
+  // is lettered by its dark rule (2026-10-03), in every host and under every accent.
   it("in every dark theme each is lettered by its own rule or the dark batch's ink, the reference with no underline, the rest with their borders", () => {
     const moved: string[] = []
     for (const w of words)
-      for (const mode of DARK) {
+      for (const mode of themesOf(w, 'dark')) {
         const kind = KINDS[w.own]
         const { fg, bg } = wordOf(RULES, mode, w)
         const want = colourOf(RULES, mode, w.chain, darkInk(w), bg)
@@ -367,7 +439,8 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
       if (ratio < 4.5) shipped.push(`${w.what}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
     }
     const has = (re: RegExp) => shipped.some((m) => re.test(m))
-    for (const [h] of BOARD_HOSTS) {
+    // The hosts Chrome measured (the Connect box and the dashboard rail joined the sweep on 2026-10-03).
+    for (const h of ['the POTA / SOTA view', 'the pop-out', 'the Remote page']) {
       expect(has(new RegExp(`^${h} pota-spot\\.pota-spot-v2 \\.pota-hunt-btn "HUNT": #0174ab on #c1d7e5 = 3\\.45:1$`)), `${h}: HUNT`).toBe(true)
       expect(has(new RegExp(`^${h} pota-spot\\.pota-spot-v2 \\.pota-spot-ref "US-0001": #0174ab on #e5eaf0 = 4\\.25:1$`)), `${h}: the reference`).toBe(true)
       // The Hunting line's park and call, on its accent tint (Chrome: 4.12:1, the same pair).
@@ -397,5 +470,24 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
     expect(at('dark', /^the POTA \/ SOTA view pota-spot\.pota-spot-v2\.selected \.pota-spot-meta "7\.1850 MHz": #7c8ca3 on #1c3747 = 3\.64:1$/), 'the hunted frequency line, dark').toBe(true)
     expect(at('dark skin=slate' as Mode, /^the POTA \/ SOTA view pota-spot\.pota-spot-v2\.selected \.pota-hunt-btn "HUNT": #88c4d6 on #3d535f = 4\.20:1$/), 'the hunted HUNT, Slate').toBe(true)
     expect(at('light skin=paper' as Mode, /^the POTA \/ SOTA view pota-spot\.pota-spot-v2\.selected \.pota-spot-meta "7\.1850 MHz": #6a6353 on #d5dfe6 = 4\.4[01]:1$/), 'the hunted frequency line, paper').toBe(true)
+  }, 60_000)
+
+  // The look as it was before 2026-10-03, in dark (the resolver's ratios; Blue at night on the selected row is the 3.93:1 the
+  // Repeaters page reported): the accent on its tint, caught under the four dim accents. And what the change costs the
+  // standard accent, which read 4.5:1: its lettering is a lighter cyan.
+  it('FIRES: the HUNT look as it was is caught in dark under the four dim accents, and the standard cyan letters lighter now', () => {
+    const tune = words.find((w) => w.what.startsWith('the Program view rp-row.selected .pota-hunt-btn.rp-tune '))!
+    const at = (prefix: string) => {
+      const mode = EVERY_DARK.find((m) => m === prefix || m.startsWith(`${prefix} `))!
+      const { fg, bg, ratio } = wordOf(BEFORE, mode, tune)
+      return `${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`
+    }
+    expect(at('dark skin=lagoon accent=violet'), 'Violet, Lagoon').toBe('#ac8ff8 on #2d4766 = 3.65:1')
+    expect(at('dark-night accent=blue'), 'Blue at night').toBe('#5a86ce on #232a38 = 3.93:1')
+    expect(at('dark skin=nebula'), "Nebula's own").toBe('#b79bfa on #483f62 = 4.20:1')
+    expect(at('dark-night skin=blue-vfd'), "Blue VFD's own, at night").toBe('#5f94db on #232d3b = 4.47:1')
+    const hunt = words.find((w) => w.what.startsWith('the POTA / SOTA view pota-spot.pota-spot-v2 .pota-hunt-btn '))!
+    expect(hex(wordOf(BEFORE, 'dark', hunt).fg)).toBe('#4cc9f0')
+    expect(hex(wordOf(RULES, 'dark', hunt).fg)).toBe('#7bd4f2')
   }, 60_000)
 })

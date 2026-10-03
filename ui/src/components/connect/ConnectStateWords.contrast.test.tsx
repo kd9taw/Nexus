@@ -617,6 +617,8 @@ const accentAt = (rules: Rule[], mode: Mode, w: Word, at: number) => hex(colourA
 const NEUTRAL = ['--text', '--text-dim', '--text-faint', '--accent', '--accent-ink', '--readout']
 const neutralAt = (rules: Rule[], mode: Mode, w: Word, at: number) =>
   new Set(NEUTRAL.map((t) => hex(colourAt(rules, mode, w, at, `var(${t})`, [0, 0, 0]))))
+/** The POTA/SOTA board's HUNT button, the HUNT look. */
+const huntLook = (w: Word) => w.nodes[w.nodes.length - 1].classList.contains('pota-hunt-btn')
 
 function unreadable(rules: Rule[], words: Word[], modes: readonly Mode[]): string[] {
   const out: string[] = []
@@ -635,7 +637,9 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   let accent: Word[] = []
   beforeAll(async () => {
     all = await renderAll()
-    state = all.filter((w) => shown(RULES, 'dark', w) && !neutralAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at).has(hex(wordOf(RULES, 'dark', w).raw)))
+    // The POTA/SOTA box's HUNT is neither: in dark it letters in the accent mixed toward the ink (2026-10-03), and
+    // PotaSotaView.contrast.test.tsx holds it in this box and in the rail's.
+    state = all.filter((w) => shown(RULES, 'dark', w) && !huntLook(w) && !neutralAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at).has(hex(wordOf(RULES, 'dark', w).raw)))
     accent = all.filter((w) => shown(RULES, 'dark', w) && hex(wordOf(RULES, 'dark', w).raw) === accentAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at))
   }, 120_000)
 
@@ -770,13 +774,13 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   const ACCENT_INVENTORY = [
     '.mini-spectrum-src', '.opening-note', '.sat-when', 'strong',
     // The two boards in the Spots and POTA/SOTA boxes (their screens' own palette).
-    '.np-filter-toggle.active', '.np-th.active', '.pota-badge.pota-badge-new', '.pota-hunt-btn', '.pota-spot-ref',
+    '.np-filter-toggle.active', '.np-th.active', '.pota-badge.pota-badge-new', '.pota-spot-ref',
   ].sort()
   // Of the boards' accent words, the Spots board's Filter toggle and sorted heading read as they are. NEW PARK is a
-  // chip: its accent went to its edge, held with BAND OPEN by the badges' test above. The POTA/SOTA board's HUNT
-  // (3.45:1) and park reference (4.25:1) are that board's on every screen that shows it, and N54's (2026-09-30):
-  // named here, and held to the floor once that lands.
-  const ACCENT_HELD_ELSEWHERE = ['.pota-badge.pota-badge-new', '.pota-hunt-btn', '.pota-spot-ref']
+  // chip: its accent went to its edge, held with BAND OPEN by the badges' test above. The POTA/SOTA board's park
+  // reference (4.25:1) is that board's on every screen that shows it (2026-09-30): named here, and held there. Its HUNT
+  // no longer letters in the accent in dark (2026-10-03), so it is not here at all.
+  const ACCENT_HELD_ELSEWHERE = ['.pota-badge.pota-badge-new', '.pota-spot-ref']
   /** The light themes, and the standard light theme under each accent preset: the accent is these words' own colour. */
   const ACCENT_LIGHT: Mode[] = [...LIGHT, ...role('accent').presets.slice(1).map((p) => withRoles('light', { accent: p.id }))]
   const ownOf = (w: Word) => {

@@ -20534,6 +20534,15 @@ button.cq-skiptx1.on {
   color: var(--text);
   border-color: var(--accent);
 }
+/* THE HUNT LOOK IN DARK (2026-10-03). In dark the look letters in the accent on its own tint, and under four accents that
+   was too dim to read: Blue and Violet, and the Nebula and Blue VFD themes' own. Repeaters' Tune, Save to Memories and Add
+   read down to 3.65:1 (Violet, on the selected row, Lagoon). A preset may only set tokens, so the lettering cannot be named
+   per accent: in every dark theme it is the accent mixed 30% toward the ink, which reads 4.64:1 or better under every
+   preset, in every host the look is worn in (the POTA board's HUNT too), and keeps each accent's own hue: the standard
+   cyan, #4cc9f0, letters #7bd4f2. The tint and the border are unchanged. PotaSotaView.contrast.test.tsx holds it. */
+[data-theme='dark'] .pota-hunt-btn {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
+}
 [data-theme='light'] .pota-view .pota-spot-ref,
 [data-theme='light'] .pota-view .pota-hunt-text strong {
   color: var(--text);

@@ -748,6 +748,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The channel list's Save to Memory Bank is Save list to Memories.** It always wrote the list into
   Memories, the same place a repeater row's **Save to Memories** writes to, and its name now says so, in
   all five languages.
+- **The HUNT look reads under every accent in the dark themes.** Repeaters' **Tune**, **Save to
+  Memories** and **Add to channel list**, and the POTA / SOTA board's **HUNT** that shares their look
+  wherever the board shows, letter in the accent on its own tint, and under the Blue and Violet accents
+  and the Nebula and Blue VFD themes that read as low as 3.65:1 in the dark themes. There they now letter
+  in a lighter shade of the accent (the standard cyan a little paler), at least 4.6:1 under every accent;
+  the tint and the border are as they were.
 - **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
   **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
   the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After
