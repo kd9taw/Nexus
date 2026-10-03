@@ -188,6 +188,7 @@ export const FR: PartialCatalog = {
   "remote.stream.ready": "Prêt. Démarrez le direct pour voir et utiliser Nexus à la station.",
   "remote.stream.display": "Le direct est la fenêtre Nexus telle que Windows la dessine à la station : Nexus doit donc y rester ouvert, et non réduit.",
   "remote.stream.starting": "Démarrage du direct…",
+  "remote.stream.refused": "La station n’a pas pu démarrer le direct pour l’instant. Redémarrez le direct.",
   "remote.stream.waitingForPicture": "En attente de l’image de la station…",
   "remote.stream.live": "Nexus de la station en direct",
   "remote.stream.stalled": "L’image ne se met plus à jour. La station n’émettra pas pour ce navigateur tant qu’elle ne bouge pas à nouveau.",

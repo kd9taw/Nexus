@@ -400,6 +400,7 @@ export const EN = {
   "remote.stream.ready": "Ready. Start the stream to see and operate Nexus at the shack.",
   "remote.stream.display": "The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.",
   "remote.stream.starting": "Starting the stream…",
+  "remote.stream.refused": "The station couldn't start the stream just now. Start the stream again.",
   "remote.stream.waitingForPicture": "Waiting for the station's picture…",
   "remote.stream.live": "Streaming Nexus at the shack",
   "remote.stream.stalled": "The picture has stopped updating. The station will not transmit for this browser until it moves again.",

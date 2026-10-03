@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so when that is missing. Only the Nexus window is sent,
   never the rest of the PC's screen, and what you click and type reaches Nexus and no other
   program. Nothing streams until you press **Start the stream**, and only with station control
-  allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
+  allowed for that browser at the radio. If the station does not take the start, the page says
+  why (station control off for this browser, another browser in control, or try again) instead of
+  going back to the button without a word. **Stop TX** stays at the top of the page the whole time
   and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
   or let the picture freeze, and it lets go. In Phone the space bar over the picture is push-to-talk
   for your own microphone, and a space typed into a Nexus field still types. Anything you hold down
