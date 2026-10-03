@@ -4,10 +4,12 @@
 // experience". So:
 //   (1) ONE place says where to search: My station, or one box that takes a grid or a city (and Route to…). The list's
 //       own filter sits with the list, reads as a filter of it, clears with one ✕, and a place typed into it anyway is
-//       offered to Near instead of silently emptying the list.
+//       offered to Near instead of silently emptying the list. The offer is the search (2026-10-03): its tap looks the
+//       place up and fetches around it, as Fetch would.
 //   (2) The count line says what the filters hide and by which, with one tap that shows everything.
 //   (4) A row's actions say what they do, each with its own icon: Tune, Save to Memories, Add to channel list. The ☆ is
-//       gone (the saved badge took its place), and the channel list says it is for programming a radio.
+//       gone (the saved badge took its place), and the channel list says it is for programming a radio. Its own save
+//       writes into the same Memories, so it says so: Save list to Memories, not "Memory Bank" (2026-10-03).
 // Every case is a PAIR: what the control does, beside the case that must not trigger it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -16,6 +18,14 @@ import { t } from '../i18n'
 import { gridToLatLon } from '../grid'
 import { miToKm } from '../features/radioprog'
 import { emptyBank, memoriesStore } from '../features/memories'
+import { subscribeToasts } from '../toast'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { EN } from '../i18n/en'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
 
 const repeaterSearch = vi.fn()
 const geocodeCity = vi.fn()
@@ -145,22 +155,104 @@ describe('(1) one place says where; the list filter is a filter of the list', ()
     expect(calls()).toEqual(['W9AAA', 'W9BBB', 'K9CCC', 'K9DDD'])
   })
 
-  it('a place typed into the filter is offered to Near, which looks it up; a callsign is not', async () => {
-    geocodeCity.mockResolvedValue([])
+  const offer = (place: string) => screen.queryByRole('button', { name: t('program.filters.place.offer', { place }) })
+
+  it('a place typed into the filter is offered, and the tap is the search: around it, as Fetch would, the filter cleared', async () => {
+    geocodeCity.mockResolvedValue([{ displayName: 'Woodstock, McHenry County, Illinois, United States', lat: 42.31, lon: -88.45 }])
     await fetched()
-    const offer = (place: string) => screen.queryByRole('button', { name: t('program.filters.place.offer', { place }) })
     // CONTROL: a callsign fragment filters, and nothing is offered.
     fireEvent.change(filterBox(), { target: { value: 'W9' } })
     expect(offer('W9')).toBeNull()
+    // The bands shown set the reach: 70cm alone reaches 25 mi, where 2m reached 50.
+    fireEvent.click(within(screen.getByRole('group', { name: t('program.filters.bands.label') })).getByRole('button', { name: '2m' }))
     fireEvent.change(filterBox(), { target: { value: 'woodstock, il' } })
     expect(calls()).toEqual([])
+    repeaterSearch.mockResolvedValue(result([machine('W9WDS', 442.5)]))
     fireEvent.click(offer('woodstock, il')!)
-    await waitFor(() => expect(geocodeCity).toHaveBeenCalledWith('woodstock, il'))
+    await waitFor(() => expect(repeaterSearch).toHaveBeenCalledTimes(2))
+    expect(geocodeCity).toHaveBeenCalledWith('woodstock, il')
+    expect(repeaterSearch.mock.calls[1]).toEqual([42.31, -88.45, miToKm(25)])
     expect(placeBox()).toHaveProperty('value', 'woodstock, il')
-    // The filter is cleared: the list is whole again, and nothing was fetched behind the operator's back.
+    // The filter is cleared, and the list is the new search's.
     expect(filterBox()).toHaveProperty('value', '')
-    expect(calls()).toEqual(['W9AAA', 'W9BBB', 'K9CCC', 'K9DDD'])
+    await waitFor(() => expect(calls()).toEqual(['W9WDS']))
+    // Exactly what Fetch sends from here.
+    fireEvent.click(fetchButton())
+    await waitFor(() => expect(repeaterSearch).toHaveBeenCalledTimes(3))
+    expect(repeaterSearch.mock.calls[2]).toEqual(repeaterSearch.mock.calls[1])
+  })
+
+  it('words that match no place say so where the offer was, and nothing is fetched', async () => {
+    geocodeCity.mockResolvedValue([])
+    await fetched()
+    const toasts: string[] = []
+    const off = subscribeToasts((all) => toasts.push(...all.map((x) => x.message)))
+    fireEvent.change(filterBox(), { target: { value: 'nowhere, zz' } })
+    fireEvent.click(offer('nowhere, zz')!)
+    await waitFor(() => expect(geocodeCity).toHaveBeenCalledWith('nowhere, zz'))
+    const tools = document.querySelector<HTMLElement>('.rp-list-tools')!
+    await waitFor(() => expect(within(tools).getByText(t('program.city.noMatch'))).toBeTruthy())
+    off()
+    // Said there, not in a corner as well.
+    expect(toasts).not.toContain(t('program.city.noMatch'))
+    expect(offer('nowhere, zz')).toBeNull()
     expect(repeaterSearch).toHaveBeenCalledTimes(1)
+    // The words stay in the filter as typed; new words take the message away and are offered in their turn.
+    expect(filterBox()).toHaveProperty('value', 'nowhere, zz')
+    fireEvent.change(filterBox(), { target: { value: 'woodstock, il' } })
+    expect(within(tools).queryByText(t('program.city.noMatch'))).toBeNull()
+    expect(offer('woodstock, il')).toBeTruthy()
+  })
+
+  it('a name that is several places waits for the pick, and the pick is the search', async () => {
+    geocodeCity.mockResolvedValue([
+      { displayName: 'Springfield, Illinois, United States', lat: 39.8, lon: -89.65 },
+      { displayName: 'Springfield, Missouri, United States', lat: 37.21, lon: -93.29 },
+    ])
+    await fetched()
+    fireEvent.change(filterBox(), { target: { value: 'springfield' } })
+    fireEvent.click(offer('springfield')!)
+    const picks = await screen.findByRole('listbox', { name: t('program.city.matches.aria') })
+    // CONTROL: nothing is fetched while the place is not one yet.
+    expect(repeaterSearch).toHaveBeenCalledTimes(1)
+    fireEvent.click(within(picks).getByRole('button', { name: 'Springfield, Missouri, United States' }))
+    await waitFor(() => expect(repeaterSearch).toHaveBeenCalledTimes(2))
+    expect(repeaterSearch.mock.calls[1].slice(0, 2)).toEqual([37.21, -93.29])
+    expect(filterBox()).toHaveProperty('value', '')
+  })
+
+  it('a lookup that fails drops the request: the offer stands, and Near’s own Search later fetches nothing', async () => {
+    geocodeCity.mockRejectedValueOnce(new Error('offline'))
+    await fetched()
+    fireEvent.change(filterBox(), { target: { value: 'woodstock, il' } })
+    fireEvent.click(offer('woodstock, il')!)
+    await waitFor(() => expect(offer('woodstock, il')).toHaveProperty('disabled', false))
+    expect(repeaterSearch).toHaveBeenCalledTimes(1)
+    // The same words looked up from Near, by its own Search: the town is found, and Fetch stays the operator's.
+    geocodeCity.mockResolvedValue([{ displayName: 'Woodstock, McHenry County, Illinois, United States', lat: 42.31, lon: -88.45 }])
+    fireEvent.click(within(screen.getByRole('group', { name: t('program.origin.aria') })).getByRole('button', { name: t('program.city.search') }))
+    await waitFor(() => expect(fetchButton()).toHaveProperty('disabled', false))
+    expect(repeaterSearch).toHaveBeenCalledTimes(1)
+    expect(filterBox()).toHaveProperty('value', 'woodstock, il')
+  })
+
+  it('Near changed by hand while the tapped place waits is the operator’s own: nothing is fetched until Fetch', async () => {
+    geocodeCity.mockResolvedValue([
+      { displayName: 'Springfield, Illinois, United States', lat: 39.8, lon: -89.65 },
+      { displayName: 'Springfield, Missouri, United States', lat: 37.21, lon: -93.29 },
+    ])
+    await fetched()
+    fireEvent.change(filterBox(), { target: { value: 'springfield' } })
+    fireEvent.click(offer('springfield')!)
+    await screen.findByRole('listbox', { name: t('program.city.matches.aria') })
+    fireEvent.change(placeBox(), { target: { value: 'FN31' } })
+    expect(repeaterSearch).toHaveBeenCalledTimes(1)
+    expect(filterBox()).toHaveProperty('value', 'springfield')
+    // CONTROL: Fetch searches there.
+    fireEvent.click(fetchButton())
+    await waitFor(() => expect(repeaterSearch).toHaveBeenCalledTimes(2))
+    const fn31 = gridToLatLon('FN31')!
+    expect(repeaterSearch.mock.calls[1].slice(0, 2)).toEqual([fn31.lat, fn31.lon])
   })
 })
 
@@ -222,5 +314,32 @@ describe('(4) a row says what each action does, and Memories and the channel lis
     // CONTROL: the other rows are untouched.
     expect(within(rowOf('W9BBB')).getByRole('button', { name: t('program.row.save.label') })).toBeTruthy()
     expect(within(rowOf('W9BBB')).getByRole('button', { name: t('program.row.add.label') })).toBeTruthy()
+  })
+
+  it('the channel list saves into Memories by that name, apart from a row’s Save to Memories, in every language and the kit', async () => {
+    await fetched(ROWS, true)
+    fireEvent.click(within(rowOf('W9AAA')).getByRole('button', { name: t('program.row.add.label') }))
+    // It writes the list into the Memories a row's Save to Memories writes to: the words as written.
+    const save = within(document.querySelector<HTMLElement>('.rp-deliver')!).getByRole('button', { name: 'Save list to Memories' })
+    fireEvent.click(save)
+    expect(memoriesStore.get().memories.map((m) => m.rxMhz)).toEqual([146.94])
+    // Each language names it with its own name for Memories (the nav's), says it is the list, and never calls it a bank;
+    // a row's Save to Memories is another button, so it is another name.
+    const BANK: Record<string, RegExp> = { en: /bank/i, de: /bank/i, es: /banco/i, fr: /banque/i, ja: /バンク/ }
+    const LIST: Record<string, RegExp> = { en: /\blist\b/i, de: /Liste/, es: /\blista\b/i, fr: /\bliste\b/i, ja: /リスト/ }
+    const wrong: string[] = []
+    for (const [loc, cat] of Object.entries({ en: EN, de: DE, es: ES, fr: FR, ja: JA } as Record<string, Record<string, unknown>>)) {
+      const label = String(cat['program.deliver.saveBank.label'])
+      const title = String(cat['program.deliver.saveBank.title'])
+      if (!label.includes(String(cat['nav.memories.label'])) || !LIST[loc].test(label)) wrong.push(`${loc}: "${label}"`)
+      if (label === cat['program.row.save.label']) wrong.push(`${loc}: the row's own name`)
+      if (BANK[loc].test(label) || BANK[loc].test(title)) wrong.push(`${loc}: a bank in "${label}" / "${title}"`)
+    }
+    expect(wrong).toEqual([])
+    // The pt-BR kit carries the English word for word.
+    const kit = readFileSync(resolve(process.cwd(), '../translations/pt-BR/nexus-ptbr-translation.csv'), 'utf8')
+    const english = (key: string) => kit.match(new RegExp(`^"\\d","${key.replace(/\./g, '\\.')}","((?:[^"]|"")*)"`, 'm'))?.[1].replace(/""/g, '"')
+    expect(english('program.deliver.saveBank.label')).toBe(EN['program.deliver.saveBank.label'])
+    expect(english('program.deliver.saveBank.title')).toBe(EN['program.deliver.saveBank.title'])
   })
 })

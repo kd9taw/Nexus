@@ -4857,7 +4857,7 @@ export const EN = {
   'program.chan.moveDown.aria': 'Move down',
   'program.chan.remove.aria': 'Remove',
 
-  // Getting the list out — by hand, by CSV, or into Nexus's own memory bank.
+  // Getting the list out — by hand, by CSV, or into Nexus's Memories.
   'program.deliver.byHand.label': 'Add by hand…',
   'program.deliver.byHand.title':
     "Type in a repeater or simplex channel the directory doesn't have (or has wrong)",
@@ -4869,9 +4869,9 @@ export const EN = {
     'Save a CHIRP-ready CSV — CHIRP (free) flashes nearly every radio from it',
   'program.deliver.exportCsv.label': 'Export CSV',
   'program.deliver.exportCsv.title': 'Plain CSV — spreadsheets, Anytone CPS, RT Systems',
-  'program.deliver.saveBank.label': 'Save to Memory Bank',
+  'program.deliver.saveBank.label': 'Save list to Memories',
   'program.deliver.saveBank.title':
-    "Save these channels into Nexus's own memory bank (the Phone cockpit's MEMORY recall list) — recall retunes the rig with shift + tone",
+    "Save these channels into Nexus's Memories (the Phone cockpit's MEMORY recall list) — recall retunes the rig with shift + tone",
   'program.deliver.clear.label': 'Clear',
   'program.clear.confirm.title': 'Clear the whole channel list?',
   'program.clear.confirm.ok': 'Clear list',

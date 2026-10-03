@@ -724,8 +724,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Repeaters is simpler to work.** **Near** is the one place that says where to search: My station,
   or one box that takes a grid square or a city (the Grid and City chips are gone), and Route to….
   The list's own filter sits with the list, reads **Filter: call or MHz** and clears with one ✕; a place
-  typed into it is offered to Near ("Search near "woodstock, il" instead?") instead of quietly emptying
-  the list. The count line says what the filters hide and by which, with one tap to show it all:
+  typed into it is offered instead of quietly emptying the list ("Search near "woodstock, il" instead?"),
+  and that tap is the search: Near looks the place up and the list is fetched around it with the radius
+  and bands you have set, the filter cleared. Words that are no place say so where the offer was, and a
+  name that is several places waits for your pick. The count line says what the filters hide and by
+  which, with one tap to show it all:
   "21 of 25 shown · nearest first — 4 hidden by On-air only · Show all". The bands are one segmented
   control and FM / +Digital / On-air only one **Show** group, and Auto says its radius in words
   ("50 mi: about how far 2m+70cm reach from a car or a handheld"). A row's actions say what they do,
@@ -742,6 +745,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
   window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel
   list, your settings and the RepeaterBook token are unchanged.
+- **The channel list's Save to Memory Bank is Save list to Memories.** It always wrote the list into
+  Memories, the same place a repeater row's **Save to Memories** writes to, and its name now says so, in
+  all five languages.
+- **The HUNT look reads under every accent in the dark themes.** Repeaters' **Tune**, **Save to
+  Memories** and **Add to channel list**, and the POTA / SOTA board's **HUNT** that shares their look
+  wherever the board shows, letter in the accent on its own tint, and under the Blue and Violet accents
+  and the Nebula and Blue VFD themes that read as low as 3.65:1 in the dark themes. There they now letter
+  in a lighter shade of the accent (the standard cyan a little paler), at least 4.6:1 under every accent;
+  the tint and the border are as they were.
 - **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
   **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
   the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After

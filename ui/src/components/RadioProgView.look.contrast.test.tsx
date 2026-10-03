@@ -16,13 +16,8 @@ import type { RepeaterSearchResult } from '../types'
 import { SKINS } from '../features/skins'
 import { emptyBank, memoriesStore } from '../features/memories'
 import { t } from '../i18n'
-import { PALETTE_ROLES } from '../features/paletteRoles'
 import {
-  BASE_MODES,
   MODES,
-  SENTINEL_MODES,
-  baseTheme,
-  withRoles,
   chainOf,
   compoundMatches,
   contrast,
@@ -140,20 +135,10 @@ const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
 const ALL: Mode[] = [...new Set<Mode>([...MODES, ...SKINS.flatMap((s) => skinBaseModes(s.id).map((b): Mode => `${b} skin=${s.id}`))])]
-/** Save to Memories, Tune and ＋ Add wear the POTA board's HUNT look, accent lettering on an accent tint, which the
- *  board's own suite (PotaSotaView.contrast.test.tsx) holds and pins: every light theme and the light theme under each
- *  accent preset, every dark theme, and in dark the HUNT look itself ("dark is untouched", 2026-09-30). These buttons are
- *  held to exactly those themes. Under two accent presets at night the look itself reads 3.93 and 4.44:1, on the POTA
- *  board as here: the look's fix belongs to every host at once, not to one view. */
-const skinsOf = (theme: 'light' | 'dark') => ['', ...SKINS.filter((s) => s.base === theme).map((s) => s.id)]
-const accent = PALETTE_ROLES.find((r) => r.id === 'accent')!
-const HUNT_MODES: Mode[] = [
-  ...BASE_MODES.filter((b) => baseTheme(b) === 'light').flatMap((b) => skinsOf('light').map((skin) => (skin ? withRoles(b, { skin }) : b))),
-  ...accent.presets.slice(1).map((p) => withRoles('light', { accent: p.id })),
-  ...BASE_MODES.filter((b) => baseTheme(b) === 'dark'),
-  ...SENTINEL_MODES.filter((m) => m.startsWith('dark skin=')),
-]
-const huntLook = (w: { own: string }) => w.own.includes('.pota-hunt-btn') && !w.own.includes('.added')
+/** Save to Memories, Tune and ＋ Add wear the POTA board's HUNT look, accent lettering on an accent tint, and are held here
+ *  like every other word. Held to fewer themes until 2026-10-03, they read under 4.5:1 in dark under both non-default accent
+ *  presets and two themes' own accents. The board's own suite (PotaSotaView.contrast.test.tsx) holds the look in every host
+ *  and under every preset on the worst-case themes too. */
 
 const memo = new Map<string, unknown>()
 function once<T>(key: string, make: () => T): T {
@@ -246,10 +231,10 @@ describe('the Repeaters look: every word reads 4.5:1 in every theme', () => {
     expect(words.length).toBeGreaterThan(40)
   })
 
-  it('every word is 4.5:1 or better on what it sits on, in every theme (the HUNT look in its own suite\'s themes)', () => {
+  it('every word is 4.5:1 or better on what it sits on, in every theme', () => {
     const low: string[] = []
     for (const w of words) {
-      for (const mode of huntLook(w) ? HUNT_MODES : ALL) {
+      for (const mode of ALL) {
         const { fg, bg, ratio } = ratioOf(mode, w)
         if (ratio < 4.5) low.push(`${mode}: ${w.own} "${w.text.slice(0, 30)}" ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
       }

@@ -14,7 +14,7 @@
 // is then a hard clip with nothing between it and the content, so whatever the flex column
 // could not shrink went off the bottom and stayed there: Logbook's "Log" submit at 1024×768
 // with the manual form open, Program's whole delivery row (Export for CHIRP…/Export CSV/Save
-// to Memory Bank/Clear). Five views had already escaped that rule one at a time — the two
+// list to Memories/Clear). Five views had already escaped that rule one at a time — the two
 // `:has()` rules, `.aprs-cockpit`, the triple-class cockpit shells, and POTA's own
 // `overflow-y: auto` — which is the tell that the base rule, not the views, was wrong.
 //
@@ -286,7 +286,7 @@ describe('.layout.single cannot own its deficit — so the .panel it wraps must'
     }
   })
 
-  it('Program: the delivery row (Export for CHIRP…/CSV/Memory Bank/Clear) stays reachable', async () => {
+  it('Program: the delivery row (Export for CHIRP…/CSV/Save list to Memories/Clear) stays reachable', async () => {
     for (const zoom of ZOOMS) {
       applyViewport(zoom)
       const { getByRole, container } = mountSingle(<RadioProgView myGrid="EN52" catOk={false} />)
@@ -297,7 +297,7 @@ describe('.layout.single cannot own its deficit — so the .panel it wraps must'
         fate,
         `1024×768 @ ${Math.round(zoom * 100)}%: the delivery row sits below two 120px-floored ` +
           `scrollers and its deficit is ${fate === 'clip' ? `CLIPPED at ${at}` : 'owned by nothing'} ` +
-          '— Export for CHIRP…, Export CSV, Save to Memory Bank and Clear all go off the bottom.',
+          '— Export for CHIRP…, Export CSV, Save list to Memories and Clear all go off the bottom.',
       ).toBe('scroll')
       cleanup()
     }
