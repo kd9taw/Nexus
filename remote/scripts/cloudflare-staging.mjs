@@ -271,7 +271,9 @@ export async function relayKeyCheck(env = process.env, fetcher = fetch) {
     `${secretVariable('TURN_KEY_ID')} is not a usable key id, so nothing was migrated or uploaded`)
   const response = await requestBytes(`https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`, {
     method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ ttl: 60 }),
+    // An hour, never used: Cloudflare documents no minimum lifetime and uses a day in its own example, so a short
+    // probe stays well clear of any floor it may enforce (2026-10-03).
+    body: JSON.stringify({ ttl: 3600 }),
   }, fetcher, 'The relay key check')
   requireValue(response.status === 201, `Cloudflare did not mint a relay credential with ${secretVariable('TURN_KEY_ID')} `
     + `and ${secretVariable('TURN_KEY_TOKEN')} (HTTP ${response.status}), so nothing was migrated or uploaded`)

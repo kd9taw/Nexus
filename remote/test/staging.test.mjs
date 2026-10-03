@@ -448,7 +448,7 @@ test('the deploy preflight proves the relay key by minting one short credential,
   assert.equal(good.calls[0].url, `https://rtc.live.cloudflare.com/v1/turn/keys/${relaySecrets.REMOTE_TURN_KEY_ID}/credentials/generate-ice-servers`)
   assert.equal(good.calls[0].options.method, 'POST')
   assert.equal(good.calls[0].options.headers.authorization, `Bearer ${relaySecrets.REMOTE_TURN_KEY_TOKEN}`)
-  assert.deepEqual(JSON.parse(good.calls[0].options.body), { ttl: 60 })
+  assert.deepEqual(JSON.parse(good.calls[0].options.body), { ttl: 3600 })
   assert.equal(good.calls[0].options.redirect, 'error')
 
   // Firing: every other answer, with its status and no value in the message.
