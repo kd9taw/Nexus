@@ -26881,7 +26881,65 @@ struct RepeaterSearchResult {
     /// a route asks about the nine it reaches first, no more than a radius search can. Empty on a
     /// radius search, and when RepeaterBook answered nothing.
     rb_beyond: Vec<String>,
+    /// The hearham list could not be read for this search (its fetch failed with no list on this
+    /// PC, or it sent something that is not the list) while another directory answered: the rows
+    /// are that directory's alone, and the panel says so. With no other directory the search is an
+    /// error instead, never an empty list.
+    hearham_unavailable: bool,
     rows: Vec<RepeaterSearchRow>,
+}
+
+/// Everything a repeater search reaches outside itself: the operator's stored token, the cache
+/// beside settings.json, the per-query retry throttle and the three directories over the network.
+/// The app's is [`LiveDirectories`]; a test's answers from fixtures, so a search runs end to end
+/// (cache, fetch, parse, merge) on a real-shaped list without the network.
+trait RepeaterDirectories {
+    /// The operator's own RepeaterBook token (`rbuapp_…`), or "" when none is stored.
+    fn token(&self) -> String;
+    fn cached(&self, name: &str) -> Option<RepeaterCacheFile>;
+    fn store(&self, name: &str, body: &str);
+    /// May this directory query be fetched now? Asking records the attempt.
+    fn may_fetch(&self, query: &str, now: i64) -> bool;
+    /// One state's export through the Nexus proxy (no token on this side).
+    fn repeaterbook_proxy(&self, state_id: &str) -> Result<String, String>;
+    /// One state's export straight from RepeaterBook, under the operator's own token.
+    fn repeaterbook(&self, token: &str, state_id: &str) -> Result<String, String>;
+    fn rsgb(&self, square: &str) -> Result<String, String>;
+    fn hearham(&self) -> Result<String, String>;
+}
+
+/// The directories as the app reaches them: the OS keychain, `radioprog_cache/`, the shared
+/// retry throttle and the `live` fetchers.
+struct LiveDirectories;
+
+impl RepeaterDirectories for LiveDirectories {
+    fn token(&self) -> String {
+        repeaterbook_keychain()
+            .ok()
+            .and_then(|e| e.get_password().ok())
+            .unwrap_or_default()
+    }
+    fn cached(&self, name: &str) -> Option<RepeaterCacheFile> {
+        read_repeater_cache(name)
+    }
+    fn store(&self, name: &str, body: &str) {
+        write_repeater_cache(name, body)
+    }
+    fn may_fetch(&self, query: &str, now: i64) -> bool {
+        directory_throttle_ok(query, now)
+    }
+    fn repeaterbook_proxy(&self, state_id: &str) -> Result<String, String> {
+        propagation::live::repeaterbook::fetch_state_proxy(state_id)
+    }
+    fn repeaterbook(&self, token: &str, state_id: &str) -> Result<String, String> {
+        propagation::live::repeaterbook::fetch_state(token, state_id)
+    }
+    fn rsgb(&self, square: &str) -> Result<String, String> {
+        propagation::live::rsgb::fetch_square(square)
+    }
+    fn hearham(&self) -> Result<String, String> {
+        propagation::live::hearham::fetch_all()
+    }
 }
 
 fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSearchRow> {
@@ -26910,7 +26968,9 @@ fn search_rows(machines: Vec<propagation::repeaters::Machine>) -> Vec<RepeaterSe
 ///   is stored, else through the Nexus proxy (rb.hamradiotools.io, the centralized model: the
 ///   app token lives server-side only). Cached TTL 7d, per-state throttle, stale cache on
 ///   failure/429. Its rows stay on this PC: they reach this panel and nothing else.
-/// - **hearham**: every search (one global feed, cached 7d), the floor under the others.
+/// - **hearham**: every search (one global feed, cached 7d), the floor under the others. Only a
+///   payload that reads as its list is cached ([`hearham_list`]); when it cannot be read while
+///   another directory answered, `hearham_unavailable` says so.
 ///
 /// **A route** (`to_lat`/`to_lon` given): the machines within `radius_km` of the line from the
 /// origin to there, in order along it (propagation::repeaters::merge_route). It asks each
@@ -26929,222 +26989,259 @@ async fn repeater_search(
     to_lon: Option<f64>,
 ) -> Result<RepeaterSearchResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        use propagation::repeaters::{self as rpt, RepeaterSource};
-        let origin = (lat, lon);
-        let radius = radius_km.clamp(1.0, 500.0);
-        let route = to_lat.zip(to_lon).map(|to| rpt::Route {
-            from: origin,
-            to,
-            corridor_km: radius,
-        });
-        let token = repeaterbook_keychain()
-            .ok()
-            .and_then(|e| e.get_password().ok())
-            .unwrap_or_default();
-        let (states, mut rb_beyond) = match &route {
-            Some(r) => {
-                let plan = rpt::plan_route_states(r);
-                (plan.ask, plan.beyond)
-            }
-            None => (rpt::plan_states(origin, radius), Vec::new()),
-        };
-        let now = now_unix();
-        let mut lists: Vec<ListStamp> = Vec::new();
-        let mut missing_states = Vec::new();
-
-        let mut rb_records = Vec::new();
-        if !states.is_empty() {
-            // One entry per PLANNED state, whether or not it answered — a state that
-            // yields nothing has to survive as far as the result, or the search reports
-            // itself complete while a whole state's repeaters are absent (#241).
-            let mut fetches: Vec<rpt::StateFetch> = Vec::new();
-            let mut last_err = String::new();
-            for st in &states {
-                let cache_name = format!("rb_{st}.json");
-                let cached = read_repeater_cache(&cache_name);
-                let fresh = cached
-                    .as_ref()
-                    .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
-                let body = if fresh {
-                    cached
-                        .as_ref()
-                        .map(|c| (c.body.clone(), c.fetched_utc, false))
-                } else if directory_throttle_ok(st, now) {
-                    // A stored personal token goes straight to RepeaterBook; otherwise the
-                    // Nexus proxy (which holds the app token server-side + an edge cache).
-                    let fetched = if token.is_empty() {
-                        propagation::live::repeaterbook::fetch_state_proxy(st)
-                    } else {
-                        propagation::live::repeaterbook::fetch_state(&token, st)
-                    };
-                    match fetched {
-                        Ok(b) => {
-                            write_repeater_cache(&cache_name, &b);
-                            Some((b, now, false))
-                        }
-                        Err(e) => {
-                            last_err = e;
-                            // Failure/429/dormant proxy → serve whatever cache exists, stale.
-                            cached
-                                .as_ref()
-                                .map(|c| (c.body.clone(), c.fetched_utc, true))
-                        }
-                    }
-                } else {
-                    cached
-                        .as_ref()
-                        .map(|c| (c.body.clone(), c.fetched_utc, true))
-                };
-                let (body, fetched_utc, was_stale) = match body {
-                    Some((b, at, s)) => (Some(b), at, s),
-                    None => (None, 0, false),
-                };
-                fetches.push(rpt::StateFetch {
-                    state_id: st.clone(),
-                    body,
-                    fetched_utc,
-                    stale: was_stale,
-                });
-            }
-            let cov = rpt::fold_state_fetches(&fetches);
-            if cov.any_served() {
-                lists.push(ListStamp {
-                    source: RepeaterSource::Repeaterbook,
-                    fetched_utc: cov.oldest_utc,
-                    stale: cov.stale,
-                });
-                missing_states = cov.missing;
-                rb_records = cov.records;
-            } else {
-                // No RepeaterBook list at all, so nothing to say about the states it was not
-                // asked about.
-                rb_beyond.clear();
-                if !last_err.is_empty() {
-                    // Every state failed with no cache (e.g. the proxy is dormant pre-approval):
-                    // hearham carries the search; log the RB reason for the Connections panel.
-                    conn_log("RepeaterBook", "info", &last_err);
-                }
-            }
-        }
-
-        // RSGB: the UK coordinator's list, one square at a time. A payload that does not read
-        // as the RSGB shape is never cached, so it cannot replace a good list with one this
-        // build cannot read; a stale good list is served instead, as for the other sources.
-        let plan = match &route {
-            Some(r) => rpt::plan_rsgb_route(r),
-            None => rpt::plan_rsgb_squares(origin, radius),
-        };
-        let mut rsgb_records = Vec::new();
-        let mut rsgb_unavailable = false;
-        if !plan.ask.is_empty() {
-            let mut fetches: Vec<rpt::SquareFetch> = Vec::new();
-            let mut last_err = String::new();
-            for sq in &plan.ask {
-                let cache_name = format!("rsgb_{sq}.json");
-                let (fetch, err) = rsgb_square(
-                    sq,
-                    now,
-                    read_repeater_cache(&cache_name),
-                    || directory_throttle_ok(&cache_name, now),
-                    propagation::live::rsgb::fetch_square,
-                    |body| write_repeater_cache(&cache_name, body),
-                );
-                if let Some(e) = err {
-                    last_err = e;
-                }
-                fetches.push(fetch);
-            }
-            if !last_err.is_empty() {
-                conn_log("RSGB", "info", &last_err);
-            }
-            match rpt::fold_rsgb_squares(&fetches) {
-                Ok(layer) => {
-                    lists.push(ListStamp {
-                        source: RepeaterSource::Rsgb,
-                        fetched_utc: layer.oldest_utc,
-                        stale: layer.stale,
-                    });
-                    rsgb_records = layer.records;
-                }
-                Err(why) => {
-                    conn_log(
-                        "RSGB",
-                        "info",
-                        format!("the RSGB list was not used for this search: {why}"),
-                    );
-                    rsgb_unavailable = true;
-                }
-            }
-        }
-
-        // hearham: every search, the no-token default and the floor under the other two.
-        let cached = read_repeater_cache("hearham.json");
-        let fresh = cached
-            .as_ref()
-            .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
-        let hearham = if fresh {
-            let c = cached.as_ref().unwrap();
-            Ok((c.body.clone(), c.fetched_utc, false))
-        } else {
-            match propagation::live::hearham::fetch_all() {
-                Ok(b) => {
-                    write_repeater_cache("hearham.json", &b);
-                    Ok((b, now, false))
-                }
-                Err(e) => match cached.as_ref() {
-                    Some(c) => Ok((c.body.clone(), c.fetched_utc, true)),
-                    None => Err(e),
-                },
-            }
-        };
-        let hh_records = match hearham {
-            Ok((body, at, stale)) => {
-                lists.push(ListStamp {
-                    source: RepeaterSource::Hearham,
-                    fetched_utc: at,
-                    stale,
-                });
-                rpt::parse_hearham_json(&body)
-            }
-            // Nothing answered at all: the error is the result, as it always was.
-            Err(e) if lists.is_empty() => return Err(e),
-            Err(e) => {
-                conn_log("hearham", "info", &e);
-                Vec::new()
-            }
-        };
-
-        let layers: [&[rpt::RepeaterRecord]; 3] = [&rsgb_records, &rb_records, &hh_records];
-        let machines = match &route {
-            Some(r) => rpt::merge_route(&layers, r),
-            None => rpt::merge_nearby(&layers, origin, radius),
-        };
-        // Judged on what's inside the radius, and only for a list that is hearham's alone.
-        let coverage_gap = if lists.iter().all(|l| l.source == RepeaterSource::Hearham) {
-            let records: Vec<rpt::RepeaterRecord> =
-                machines.iter().map(|m| m.record.clone()).collect();
-            rpt::missing_major_band(&records)
-        } else {
-            None
-        };
-        lists.sort_by_key(|l| l.source);
-        Ok(RepeaterSearchResult {
-            route: route.is_some(),
-            lists,
-            coverage_gap,
-            missing_states,
-            rsgb_beyond: if rsgb_unavailable {
-                Vec::new()
-            } else {
-                plan.beyond
-            },
-            rsgb_unavailable,
-            rb_beyond,
-            rows: search_rows(machines),
-        })
+        search_directories(
+            &LiveDirectories,
+            now_unix(),
+            (lat, lon),
+            radius_km,
+            to_lat.zip(to_lon),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// [`repeater_search`]'s search, with what it reaches outside itself named (`dirs`) and the clock
+/// given (`now`), so a test runs the whole of it on fixtures.
+fn search_directories(
+    dirs: &impl RepeaterDirectories,
+    now: i64,
+    origin: (f64, f64),
+    radius_km: f64,
+    to: Option<(f64, f64)>,
+) -> Result<RepeaterSearchResult, String> {
+    use propagation::repeaters::{self as rpt, RepeaterSource};
+    let radius = radius_km.clamp(1.0, 500.0);
+    let route = to.map(|to| rpt::Route {
+        from: origin,
+        to,
+        corridor_km: radius,
+    });
+    let token = dirs.token();
+    let (states, mut rb_beyond) = match &route {
+        Some(r) => {
+            let plan = rpt::plan_route_states(r);
+            (plan.ask, plan.beyond)
+        }
+        None => (rpt::plan_states(origin, radius), Vec::new()),
+    };
+    let mut lists: Vec<ListStamp> = Vec::new();
+    let mut missing_states = Vec::new();
+
+    let mut rb_records = Vec::new();
+    if !states.is_empty() {
+        // One entry per PLANNED state, whether or not it answered — a state that
+        // yields nothing has to survive as far as the result, or the search reports
+        // itself complete while a whole state's repeaters are absent (#241).
+        let mut fetches: Vec<rpt::StateFetch> = Vec::new();
+        let mut last_err = String::new();
+        for st in &states {
+            let cache_name = format!("rb_{st}.json");
+            let cached = dirs.cached(&cache_name);
+            let fresh = cached
+                .as_ref()
+                .is_some_and(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS);
+            let body = if fresh {
+                cached
+                    .as_ref()
+                    .map(|c| (c.body.clone(), c.fetched_utc, false))
+            } else if dirs.may_fetch(st, now) {
+                // A stored personal token goes straight to RepeaterBook; otherwise the
+                // Nexus proxy (which holds the app token server-side + an edge cache).
+                let fetched = if token.is_empty() {
+                    dirs.repeaterbook_proxy(st)
+                } else {
+                    dirs.repeaterbook(&token, st)
+                };
+                match fetched {
+                    Ok(b) => {
+                        dirs.store(&cache_name, &b);
+                        Some((b, now, false))
+                    }
+                    Err(e) => {
+                        last_err = e;
+                        // Failure/429/dormant proxy → serve whatever cache exists, stale.
+                        cached
+                            .as_ref()
+                            .map(|c| (c.body.clone(), c.fetched_utc, true))
+                    }
+                }
+            } else {
+                cached
+                    .as_ref()
+                    .map(|c| (c.body.clone(), c.fetched_utc, true))
+            };
+            let (body, fetched_utc, was_stale) = match body {
+                Some((b, at, s)) => (Some(b), at, s),
+                None => (None, 0, false),
+            };
+            fetches.push(rpt::StateFetch {
+                state_id: st.clone(),
+                body,
+                fetched_utc,
+                stale: was_stale,
+            });
+        }
+        let cov = rpt::fold_state_fetches(&fetches);
+        if cov.any_served() {
+            lists.push(ListStamp {
+                source: RepeaterSource::Repeaterbook,
+                fetched_utc: cov.oldest_utc,
+                stale: cov.stale,
+            });
+            missing_states = cov.missing;
+            rb_records = cov.records;
+        } else {
+            // No RepeaterBook list at all, so nothing to say about the states it was not
+            // asked about.
+            rb_beyond.clear();
+            if !last_err.is_empty() {
+                // Every state failed with no cache (e.g. the proxy is dormant pre-approval):
+                // hearham carries the search; log the RB reason for the Connections panel.
+                conn_log("RepeaterBook", "info", &last_err);
+            }
+        }
+    }
+
+    // RSGB: the UK coordinator's list, one square at a time. A payload that does not read
+    // as the RSGB shape is never cached, so it cannot replace a good list with one this
+    // build cannot read; a stale good list is served instead, as for the other sources.
+    let plan = match &route {
+        Some(r) => rpt::plan_rsgb_route(r),
+        None => rpt::plan_rsgb_squares(origin, radius),
+    };
+    let mut rsgb_records = Vec::new();
+    let mut rsgb_unavailable = false;
+    if !plan.ask.is_empty() {
+        let mut fetches: Vec<rpt::SquareFetch> = Vec::new();
+        let mut last_err = String::new();
+        for sq in &plan.ask {
+            let cache_name = format!("rsgb_{sq}.json");
+            let (fetch, err) = rsgb_square(
+                sq,
+                now,
+                dirs.cached(&cache_name),
+                || dirs.may_fetch(&cache_name, now),
+                |square| dirs.rsgb(square),
+                |body| dirs.store(&cache_name, body),
+            );
+            if let Some(e) = err {
+                last_err = e;
+            }
+            fetches.push(fetch);
+        }
+        if !last_err.is_empty() {
+            conn_log("RSGB", "info", &last_err);
+        }
+        match rpt::fold_rsgb_squares(&fetches) {
+            Ok(layer) => {
+                lists.push(ListStamp {
+                    source: RepeaterSource::Rsgb,
+                    fetched_utc: layer.oldest_utc,
+                    stale: layer.stale,
+                });
+                rsgb_records = layer.records;
+            }
+            Err(why) => {
+                conn_log(
+                    "RSGB",
+                    "info",
+                    format!("the RSGB list was not used for this search: {why}"),
+                );
+                rsgb_unavailable = true;
+            }
+        }
+    }
+
+    // hearham: every search, the no-token default and the floor under the other two.
+    let mut hearham_unavailable = false;
+    let hh_records = match hearham_list(dirs, now) {
+        Ok((records, at, stale)) => {
+            lists.push(ListStamp {
+                source: RepeaterSource::Hearham,
+                fetched_utc: at,
+                stale,
+            });
+            records
+        }
+        // Nothing answered at all: the error is the result, as it always was.
+        Err(e) if lists.is_empty() => return Err(e),
+        // The others answered, so their machines are listed. hearham is the floor under them, so
+        // its absence is said: unsaid, it read as fewer repeaters, or none (2026-10-02).
+        Err(e) => {
+            conn_log("hearham", "info", &e);
+            hearham_unavailable = true;
+            Vec::new()
+        }
+    };
+
+    let layers: [&[rpt::RepeaterRecord]; 3] = [&rsgb_records, &rb_records, &hh_records];
+    let machines = match &route {
+        Some(r) => rpt::merge_route(&layers, r),
+        None => rpt::merge_nearby(&layers, origin, radius),
+    };
+    // Judged on what's inside the radius, and only for a list that is hearham's alone.
+    let coverage_gap = if lists.iter().all(|l| l.source == RepeaterSource::Hearham) {
+        let records: Vec<rpt::RepeaterRecord> = machines.iter().map(|m| m.record.clone()).collect();
+        rpt::missing_major_band(&records)
+    } else {
+        None
+    };
+    lists.sort_by_key(|l| l.source);
+    Ok(RepeaterSearchResult {
+        route: route.is_some(),
+        lists,
+        coverage_gap,
+        missing_states,
+        rsgb_beyond: if rsgb_unavailable {
+            Vec::new()
+        } else {
+            plan.beyond
+        },
+        rsgb_unavailable,
+        rb_beyond,
+        hearham_unavailable,
+        rows: search_rows(machines),
+    })
+}
+
+/// The hearham list for a search, read: the cache while it is fresh; else a fetch, `store`d only
+/// when it reads as the list ([`propagation::repeaters::parse_hearham_json`]), so a payload that is
+/// not the list never replaces one that is; else, when the fetch fails or sends something else,
+/// the cache, stale. A cache that does not read is no list, fresh or not: until 2026-10-02 whatever
+/// hearham's address answered was stored, an error page included, and read as "no repeaters" for
+/// the rest of its week. It is fetched again at once instead. `Err` says why there is no list.
+fn hearham_list(
+    dirs: &impl RepeaterDirectories,
+    now: i64,
+) -> Result<(Vec<propagation::repeaters::RepeaterRecord>, i64, bool), String> {
+    use propagation::repeaters::parse_hearham_json as read;
+    let cached = dirs.cached("hearham.json");
+    if let Some(c) = cached
+        .as_ref()
+        .filter(|c| now - c.fetched_utc < RADIOPROG_TTL_SECS)
+    {
+        if let Ok(records) = read(&c.body) {
+            return Ok((records, c.fetched_utc, false));
+        }
+    }
+    let why = match dirs
+        .hearham()
+        .and_then(|body| read(&body).map(|records| (body, records)))
+    {
+        Ok((body, records)) => {
+            dirs.store("hearham.json", &body);
+            return Ok((records, now, false));
+        }
+        Err(why) => why,
+    };
+    cached
+        .and_then(|c| {
+            read(&c.body)
+                .ok()
+                .map(|records| (records, c.fetched_utc, true))
+        })
+        .ok_or(why)
 }
 
 /// One planned RSGB square for a search: the cache while it is fresh; else, when the retry
@@ -27319,6 +27416,260 @@ mod rsgb_square_tests {
             |_| panic!("stored"),
         );
         assert_eq!(f.body, None, "nothing to serve");
+    }
+}
+
+#[cfg(test)]
+mod repeater_search_tests {
+    //! A search end to end, as the Program panel runs it: the cache, the fetches, the parse and the
+    //! merge, on real directory rows. Only the disk and the network are stood in for
+    //! ([`Fixture`]), so what is asserted is what the panel is sent.
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    /// hearham's own rows within 92 km of EN52's centre (the 50 mi radius and the merge's margin),
+    /// read from its whole list on 2026-10-02 with their free text blanked: the list Program
+    /// searched when it showed no repeaters. Repeater data from hearham.com.
+    const HEARHAM_EN52: &str = include_str!("../tests/fixtures/hearham-en52-2026-10-02.json");
+    /// Real RepeaterBook export rows near EN52 (IL and WI), as the direct path returns them.
+    const RB_EXPORT: &str =
+        include_str!("../../crates/propagation/tests/fixtures/repeaterbook_export.json");
+    /// Real hearham rows around Manchester, for the UK path.
+    const HEARHAM_MANCHESTER: &str =
+        include_str!("../../crates/propagation/tests/fixtures/hearham_uk_sample.json");
+    const NOW: i64 = 1_800_000_000;
+    const DAY: i64 = 24 * 3600;
+    const EN52: (f64, f64) = (42.5, -89.0);
+    const IO83: (f64, f64) = (53.5, -3.0);
+    const MI50: f64 = 50.0 * 1.609344;
+    /// What hearham's whole list gives within 50 mi of EN52 (2026-10-02, measured on the full
+    /// 9.49 MB list through this search): the trimmed fixture must give the same.
+    const EN52_MACHINES: usize = 25;
+    /// What a proxy or a server answers as a success when it is not the list.
+    const ERROR_PAGE: &str = "<html><body>502 Bad Gateway</body></html>";
+
+    /// One PC's directories: what its cache holds, and what each directory answers.
+    struct Fixture {
+        token: String,
+        cache: RefCell<HashMap<String, (i64, String)>>,
+        hearham: Result<String, String>,
+        repeaterbook: Result<String, String>,
+        proxy: Result<String, String>,
+        rsgb: Result<String, String>,
+        /// Every directory query fetched, in order.
+        fetched: RefCell<Vec<String>>,
+    }
+
+    impl Fixture {
+        /// No token, an empty cache, and hearham answering `hearham`; RepeaterBook's proxy as this
+        /// build has it (no client key), RSGB not reachable.
+        fn new(hearham: Result<&str, &str>) -> Self {
+            Fixture {
+                token: String::new(),
+                cache: RefCell::new(HashMap::new()),
+                hearham: hearham.map(str::to_string).map_err(str::to_string),
+                repeaterbook: Err("RepeaterBook: not asked in this test".into()),
+                proxy: Err("RepeaterBook: this build has no proxy client key".into()),
+                rsgb: Err("RSGB: not reachable in this test".into()),
+                fetched: RefCell::new(Vec::new()),
+            }
+        }
+        fn cache(self, name: &str, age_secs: i64, body: &str) -> Self {
+            self.cache
+                .borrow_mut()
+                .insert(name.into(), (NOW - age_secs, body.into()));
+            self
+        }
+        fn stored(&self, name: &str) -> Option<String> {
+            self.cache.borrow().get(name).map(|(_, b)| b.clone())
+        }
+        fn search(&self, origin: (f64, f64)) -> Result<serde_json::Value, String> {
+            search_directories(self, NOW, origin, MI50, None)
+                .map(|r| serde_json::to_value(r).expect("the result serializes"))
+        }
+    }
+
+    impl RepeaterDirectories for Fixture {
+        fn token(&self) -> String {
+            self.token.clone()
+        }
+        fn cached(&self, name: &str) -> Option<RepeaterCacheFile> {
+            self.cache
+                .borrow()
+                .get(name)
+                .map(|(at, body)| RepeaterCacheFile {
+                    fetched_utc: *at,
+                    body: body.clone(),
+                })
+        }
+        fn store(&self, name: &str, body: &str) {
+            self.cache
+                .borrow_mut()
+                .insert(name.into(), (NOW, body.into()));
+        }
+        fn may_fetch(&self, _query: &str, _now: i64) -> bool {
+            true
+        }
+        fn repeaterbook_proxy(&self, state_id: &str) -> Result<String, String> {
+            self.fetched.borrow_mut().push(format!("proxy {state_id}"));
+            self.proxy.clone()
+        }
+        fn repeaterbook(&self, token: &str, state_id: &str) -> Result<String, String> {
+            assert_eq!(token, self.token, "the stored token, as stored");
+            self.fetched.borrow_mut().push(format!("rb {state_id}"));
+            self.repeaterbook.clone()
+        }
+        fn rsgb(&self, square: &str) -> Result<String, String> {
+            self.fetched.borrow_mut().push(format!("rsgb {square}"));
+            self.rsgb.clone()
+        }
+        fn hearham(&self) -> Result<String, String> {
+            self.fetched.borrow_mut().push("hearham".into());
+            self.hearham.clone()
+        }
+    }
+
+    fn rows(r: &serde_json::Value) -> usize {
+        r["rows"].as_array().map_or(0, Vec::len)
+    }
+    fn lists(r: &serde_json::Value) -> Vec<(String, bool)> {
+        r["lists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|l| {
+                (
+                    l["source"].as_str().unwrap_or("?").to_string(),
+                    l["stale"].as_bool().unwrap_or(false),
+                )
+            })
+            .collect()
+    }
+
+    /// The search the operator ran: no token, their grid, today's list. Every machine hearham
+    /// lists inside the radius reaches the panel, and the list is kept for the week.
+    #[test]
+    fn todays_list_finds_the_machines_around_en52() {
+        let pc = Fixture::new(Ok(HEARHAM_EN52));
+        let r = pc.search(EN52).expect("a search");
+        assert_eq!(rows(&r), EN52_MACHINES);
+        assert_eq!(lists(&r), [("hearham".to_string(), false)]);
+        assert_ne!(r["hearhamUnavailable"], true);
+        assert_eq!(pc.stored("hearham.json").as_deref(), Some(HEARHAM_EN52));
+        // The planned states went to the proxy, which this build cannot use; hearham carried it.
+        assert!(pc.fetched.borrow().iter().any(|q| q.starts_with("proxy ")));
+    }
+
+    /// THE REPORT (2026-10-02): a list on this PC that is not hearham's list, an error page some
+    /// server answered as a success, was read as "no repeaters" for the rest of its week. It is
+    /// fetched again at once instead, and the good list replaces it.
+    #[test]
+    fn a_cached_payload_that_is_not_the_list_is_fetched_again_never_read_as_no_repeaters() {
+        let pc = Fixture::new(Ok(HEARHAM_EN52)).cache("hearham.json", DAY, ERROR_PAGE);
+        let r = pc.search(EN52).expect("a search");
+        assert_eq!(rows(&r), EN52_MACHINES, "the machines, not an empty list");
+        assert_eq!(
+            pc.fetched.borrow().last().map(String::as_str),
+            Some("hearham")
+        );
+        assert_eq!(pc.stored("hearham.json").as_deref(), Some(HEARHAM_EN52));
+    }
+
+    /// The same payload fetched is never stored, so it cannot become the week's list; with no other
+    /// list the search is an error the panel shows, never an empty list.
+    #[test]
+    fn a_fetched_payload_that_is_not_the_list_is_never_stored_and_says_so() {
+        let pc = Fixture::new(Ok(ERROR_PAGE));
+        let err = pc.search(EN52).expect_err("not an empty list");
+        assert!(err.starts_with("hearham: the list it sent"), "{err}");
+        assert_eq!(pc.stored("hearham.json"), None);
+    }
+
+    /// With a list on this PC, a fetch that sends something else keeps it (marked stale), and the
+    /// list it has is not written over.
+    #[test]
+    fn a_payload_that_is_not_the_list_never_replaces_the_list_this_pc_has() {
+        let pc = Fixture::new(Ok(ERROR_PAGE)).cache("hearham.json", 8 * DAY, HEARHAM_EN52);
+        let r = pc.search(EN52).expect("a search");
+        assert_eq!(rows(&r), EN52_MACHINES);
+        assert_eq!(lists(&r), [("hearham".to_string(), true)]);
+        assert_eq!(pc.stored("hearham.json").as_deref(), Some(HEARHAM_EN52));
+    }
+
+    /// hearham is the floor under the other directories, so when it cannot be read while one of
+    /// them answered, the panel is told: the machines are that directory's alone. Before, it was
+    /// dropped without a word, and a directory that answered with nothing gave an empty list.
+    #[test]
+    fn hearham_failing_behind_repeaterbook_is_said_never_dropped() {
+        for (rb, machines) in [(RB_EXPORT, 4), (r#"{"count":0,"results":[]}"#, 0)] {
+            let mut pc = Fixture::new(Err("hearham: server returned HTTP 502"));
+            pc.token = "rbuapp_test".into();
+            pc.repeaterbook = Ok(rb.into());
+            let r = pc.search(EN52).expect("a search");
+            assert_eq!(rows(&r), machines, "RepeaterBook's machines: {rb}");
+            assert_eq!(lists(&r), [("repeaterbook".to_string(), false)]);
+            assert_eq!(r["hearhamUnavailable"], true, "{rb}");
+        }
+    }
+
+    /// The RepeaterBook paths: no token (the proxy, which this build cannot use) and a stored
+    /// token RepeaterBook refuses both fall back to hearham's machines; a token that works merges
+    /// its rows with hearham's, one row per machine.
+    #[test]
+    fn every_repeaterbook_path_still_lists_hearhams_machines() {
+        let none = Fixture::new(Ok(HEARHAM_EN52));
+        let r = none.search(EN52).expect("no token");
+        assert_eq!(rows(&r), EN52_MACHINES);
+        assert_eq!(lists(&r), [("hearham".to_string(), false)]);
+
+        let mut refused = Fixture::new(Ok(HEARHAM_EN52));
+        refused.token = "rbuapp_refused".into();
+        refused.repeaterbook =
+            Err("RepeaterBook: token rejected — check the token in Settings ▸ Integrations".into());
+        let r = refused.search(EN52).expect("a refused token");
+        assert_eq!(rows(&r), EN52_MACHINES);
+        assert_eq!(lists(&r), [("hearham".to_string(), false)]);
+        assert!(refused
+            .fetched
+            .borrow()
+            .iter()
+            .any(|q| q.starts_with("rb ")));
+        assert!(!refused
+            .fetched
+            .borrow()
+            .iter()
+            .any(|q| q.starts_with("proxy ")));
+
+        let mut works = Fixture::new(Ok(HEARHAM_EN52));
+        works.token = "rbuapp_works".into();
+        works.repeaterbook = Ok(RB_EXPORT.into());
+        let r = works.search(EN52).expect("a working token");
+        assert_eq!(
+            rows(&r),
+            EN52_MACHINES + 4,
+            "hearham's 25 and RepeaterBook's own 4"
+        );
+        assert_eq!(
+            lists(&r),
+            [
+                ("repeaterbook".to_string(), false),
+                ("hearham".to_string(), false)
+            ]
+        );
+        assert_ne!(r["hearhamUnavailable"], true);
+    }
+
+    /// A UK search asks RSGB first; when its list cannot be read, hearham's machines are listed and
+    /// the panel says why, as before.
+    #[test]
+    fn a_uk_search_lists_hearhams_machines_when_rsgb_cannot_be_read() {
+        let pc = Fixture::new(Ok(HEARHAM_MANCHESTER));
+        let r = pc.search(IO83).expect("a search");
+        assert!(rows(&r) > 0);
+        assert_eq!(r["rsgbUnavailable"], true);
+        assert_ne!(r["hearhamUnavailable"], true);
+        assert!(pc.fetched.borrow().iter().any(|q| q.starts_with("rsgb ")));
     }
 }
 

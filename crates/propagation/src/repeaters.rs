@@ -391,9 +391,19 @@ fn hearham_link(v: &serde_json::Value) -> Option<Link> {
 /// of them is FM or NFM (or the mode is empty), and each digital flag comes from its
 /// own word, so "YSF/FM" is an FM machine that is also Fusion. A mode the record has
 /// no field for (P25, NXDN, M17, …) sets nothing and never makes a machine FM.
-pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
-    let rows: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
-    rows.iter()
+///
+/// **A payload that is not the list is an `Err`, never an empty list.** It is the whole
+/// worldwide directory (22,699 rows on 2026-10-02), so a body that is not a JSON array, or
+/// whose rows give no repeater at all (no frequency and position on any of them), is not
+/// hearham's list: a proxy's or a server's error page answered as a success, say. Read as no
+/// rows it made Program say "No FM repeaters within 50 mi." for a week, the cache's life, with
+/// nothing to show why (2026-10-02). The shell keeps the list it has instead, or says the list
+/// could not be read.
+pub fn parse_hearham_json(json: &str) -> Result<Vec<RepeaterRecord>, String> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(json)
+        .map_err(|e| format!("hearham: the list it sent could not be read ({e})"))?;
+    let records: Vec<RepeaterRecord> = rows
+        .iter()
         .filter_map(|v| {
             let freq_hz = jf64(v, "frequency")?;
             let lat = jf64(v, "latitude")?;
@@ -455,7 +465,14 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 bearing_deg: 0.0,
             })
         })
-        .collect()
+        .collect();
+    if records.is_empty() {
+        return Err(format!(
+            "hearham: the list it sent has no repeaters in it ({} rows)",
+            rows.len()
+        ));
+    }
+    Ok(records)
 }
 
 // ── RSGB ETCC (the UK coordinator) ──────────────────────────────────────────
@@ -1842,9 +1859,35 @@ mod tests {
         assert_eq!(state_code_for_id("99"), None);
     }
 
+    /// A payload that is not hearham's list is an error, never an empty list: read as "no rows",
+    /// it was a week of "No FM repeaters within 50 mi." with nothing to show why (2026-10-02). The
+    /// shapes are what a server or a proxy answers as a success: an error page, an error object,
+    /// an empty array, rows with no position. Each case is paired with the real list reading.
+    #[test]
+    fn a_payload_that_is_not_the_list_is_an_error_never_an_empty_list() {
+        for (what, body) in [
+            ("an HTML page", "<html><body>502 Bad Gateway</body></html>"),
+            ("an error object", r#"{"message":"Server Error"}"#),
+            ("nothing", ""),
+            ("an empty list", "[]"),
+            (
+                "rows that give no repeater",
+                r#"[{"id":1,"callsign":"W9TST","frequency":146940000},{"id":2}]"#,
+            ),
+        ] {
+            let err = parse_hearham_json(body).expect_err(what);
+            assert!(
+                err.starts_with("hearham: the list it sent"),
+                "{what}: {err}"
+            );
+        }
+        // CONTROL: the real list reads, so the errors above are about the payloads.
+        assert!(parse_hearham_json(HEARHAM_FIXTURE).is_ok_and(|r| !r.is_empty()));
+    }
+
     #[test]
     fn hearham_fixture_parses() {
-        let recs = parse_hearham_json(HEARHAM_FIXTURE);
+        let recs = parse_hearham_json(HEARHAM_FIXTURE).unwrap();
         assert!(recs.len() >= 15, "parsed {}", recs.len());
         // VE7RHS: 441.975 MHz +5 MHz, 100.0 enc/dec, FM, operational (Hz→MHz).
         let r = recs.iter().find(|r| r.callsign == "VE7RHS").unwrap();
@@ -1878,7 +1921,7 @@ mod tests {
         let json = format!(
             r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"{decode}","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
         );
-        let mut recs = parse_hearham_json(&json);
+        let mut recs = parse_hearham_json(&json).unwrap();
         assert_eq!(recs.len(), 1, "the {mode:?} row did not parse");
         recs.remove(0)
     }
@@ -2323,7 +2366,7 @@ mod tests {
     /// The measured cases from the hearham directory that motivated this check.
     #[test]
     fn missing_major_band_flags_a_gap_not_empty_country() {
-        let base = parse_hearham_json(HEARHAM_FIXTURE)[0].clone();
+        let base = parse_hearham_json(HEARHAM_FIXTURE).unwrap()[0].clone();
         let at = |mhz: f64| RepeaterRecord {
             output_mhz: mhz,
             ..base.clone()
@@ -2415,7 +2458,7 @@ mod tests {
 
     #[test]
     fn filter_sort_radius_and_order() {
-        let recs = parse_hearham_json(HEARHAM_FIXTURE);
+        let recs = parse_hearham_json(HEARHAM_FIXTURE).unwrap();
         let near = filter_sort(&recs, EN52, 80.0);
         assert!(!near.is_empty());
         assert!(near
@@ -2739,7 +2782,7 @@ mod tests {
     #[test]
     fn the_uk_merge_golden() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         let got: Vec<String> = merge_nearby(&[&coordinator, &[], &hearham], MANCHESTER, 100.0)
             .iter()
             .map(golden_line)
@@ -2936,7 +2979,7 @@ mod tests {
     #[test]
     fn a_mixed_machine_the_coordinator_lists_with_fm_programs_as_one_fm_row() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         // hearham alone: GB3XL is a DMR row, nothing to program.
         let alone = merge_nearby(&[&hearham], MANCHESTER, 100.0);
         let xl = alone.iter().find(|m| m.record.callsign == "GB3XL").unwrap();
@@ -2971,7 +3014,7 @@ mod tests {
         let json = format!(
             r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"{group}","internet_node":{node},"mode":"FM","encode":"","decode":"","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
         );
-        let mut recs = parse_hearham_json(&json);
+        let mut recs = parse_hearham_json(&json).unwrap();
         assert_eq!(recs.len(), 1, "the {group:?} {node} row did not parse");
         recs.remove(0)
     }
@@ -2988,7 +3031,7 @@ mod tests {
     /// a callsign where a number belongs.
     #[test]
     fn a_hearham_internet_node_is_a_link_on_the_network_its_group_names() {
-        let recs = parse_hearham_json(HEARHAM_FIXTURE);
+        let recs = parse_hearham_json(HEARHAM_FIXTURE).unwrap();
         let links = |id: &str| {
             recs.iter()
                 .find(|r| r.source_id == id)
@@ -3034,7 +3077,7 @@ mod tests {
     #[test]
     fn a_machine_keeps_every_link_its_rows_give_once() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         let both = merge_nearby(&[&coordinator, &[], &hearham], MANCHESTER, 100.0);
         let links = |call: &str| {
             both.iter()
@@ -3088,7 +3131,7 @@ mod tests {
     #[test]
     fn a_machines_links_and_colour_code_ride_into_both_exports() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         let both = merge_nearby(&[&coordinator, &[], &hearham], MANCHESTER, 100.0);
         let pp = both.iter().find(|m| m.record.callsign == "GB3PP").unwrap();
         let c = to_channel(&pp.record);
@@ -3325,7 +3368,7 @@ mod tests {
     #[test]
     fn a_route_to_where_it_starts_is_the_radius_search() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         let layers: [&[RepeaterRecord]; 3] = [&coordinator, &[], &hearham];
         let circle = Route {
             from: MANCHESTER,
@@ -3350,7 +3393,7 @@ mod tests {
     #[test]
     fn the_route_golden() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         let route = Route {
             from: LIVERPOOL,
             to: LEEDS,
@@ -3590,7 +3633,7 @@ mod tests {
     #[test]
     fn the_uk_merges_map_hearhams_listings_only() {
         let coordinator = parse_rsgb_json(RSGB_FIXTURE).unwrap();
-        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE);
+        let hearham = parse_hearham_json(HEARHAM_UK_FIXTURE).unwrap();
         let layers: [&[RepeaterRecord]; 3] = [&coordinator, &[], &hearham];
         let around = merge_nearby(&layers, MANCHESTER, 100.0);
         let along = merge_route(

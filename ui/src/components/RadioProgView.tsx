@@ -1259,6 +1259,18 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               />
             </div>
           )}
+          {/* hearham is the list under the others: when it could not be read, the machines shown
+              are the others' alone, and that is said rather than shown as fewer repeaters. With
+              nothing shown it is said in the list's place instead (below). */}
+          {result?.hearhamUnavailable && shown.length > 0 && (
+            <div className="rp-note" role="status">
+              <T
+                k="program.hearham.unavailable"
+                tags={{ b: <strong /> }}
+                vals={{ hearham: SOURCE_HEARHAM }}
+              />
+            </div>
+          )}
           {/* A route asks RepeaterBook about the nine states it reaches first, no more than a radius
               search can, so the states past them are named rather than left to read as empty. */}
           {result?.rbBeyond && result.rbBeyond.length > 0 && (
@@ -1450,8 +1462,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             {result && shown.length === 0 && (
               <p className="aw-empty">
                 {/* Two whole sentences, not one with an "FM " fragment spliced in: where the
-                    mode word sits in the sentence is the translator's to decide. */}
-                {searchMhz !== null
+                    mode word sits in the sentence is the translator's to decide. Never "No
+                    repeaters" while hearham's list is missing: the area is not known to be empty. */}
+                {result.hearhamUnavailable ? (
+                  <T
+                    k="program.hearham.unavailable"
+                    tags={{ b: <strong /> }}
+                    vals={{ hearham: SOURCE_HEARHAM }}
+                  />
+                ) : searchMhz !== null
                   ? result.route
                     ? t('program.results.none.freq.route', {
                         freq: mhzLabel(searchMhz),
