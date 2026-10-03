@@ -23771,6 +23771,11 @@ button.sat-chip:disabled {
 .rp-actions {
   justify-self: end;
   display: inline-flex;
+  /* Named actions are wider than ＋ and ☆ were: where they do not fit beside the figures (1366×768 at
+     85 %, and the longer labels of other languages), they wrap inside their cell, which the grid then
+     sizes to fit, instead of running out of the list (5 px out at 1366×768, Chrome, 2026-10-02). */
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--space-1);
 }
 .rp-add.added {
