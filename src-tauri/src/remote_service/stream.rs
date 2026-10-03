@@ -1001,7 +1001,8 @@ fn run(
     #[cfg(feature = "radio")]
     streaming.audio.stop(None);
     send(state(&session_id, false, Some(ended)));
-    tempo_core::applog::info("remote", "stream: ended");
+    // The contract's closed vocabulary, so the shack's own log says why, as the page does.
+    tempo_core::applog::info("remote", &format!("stream: ended ({ended:?})"));
 }
 
 #[cfg(test)]
