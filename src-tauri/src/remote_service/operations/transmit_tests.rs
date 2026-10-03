@@ -186,8 +186,13 @@ fn transmit_stop_does_not_wait_for_engine_or_a_pending_file_operation() {
     assert!(engine.take_slot_tx_abort());
 }
 
+/// Stop TX is never refused (operator ruling, 2026-10-03): the same Stop delivered again after a
+/// new remote CQ was armed stops that CQ too, although its token is from before the first Stop.
+/// Admission alone does it, before the engine is free: it retires the generation the CQ was armed
+/// under. This replaced `transmit_stop_rejects_a_replay_after_a_new_remote_arm`, which pinned the
+/// opposite (the replay refused `staleContext` and the new CQ left armed).
 #[test]
-fn transmit_stop_rejects_a_replay_after_a_new_remote_arm() {
+fn a_replayed_stop_after_a_new_remote_arm_still_stops_it() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
@@ -200,24 +205,18 @@ fn transmit_stop_rejects_a_replay_after_a_new_remote_arm() {
         e.take_immediate_retune();
         e.start_remote_ft_cq(f.authority.transmit.permit(now + LEASE).unwrap(), None)
             .unwrap();
+        // Positive control: the new CQ is armed and its permit is live.
+        assert!(!e.poll_remote_transmit(now));
+        assert!(e.tx_enabled());
     }
     assert_eq!(
         f.authority
             .stop_transmit(f.connection, SESSION, DEVICE, &request, now),
-        Err("staleContext")
+        Ok(())
     );
-    assert!(!f.engine.lock().unwrap().poll_remote_transmit(now));
-    assert!(f.engine.lock().unwrap().tx_enabled());
-    f.authority
-        .stop_transmit(
-            f.connection,
-            SESSION,
-            DEVICE,
-            &stop_request(&f, &state),
-            now,
-        )
-        .unwrap();
-    assert!(f.engine.lock().unwrap().poll_remote_transmit(now));
+    let mut e = f.engine.lock().unwrap();
+    assert!(e.poll_remote_transmit(now), "the new CQ's permit survived");
+    assert!(!e.tx_enabled(), "the new CQ is still armed");
 }
 
 // ── Stop anything (operator decision 2026-09-14) ────────────────────────────────────────────────
@@ -456,10 +455,9 @@ fn an_expired_lease_still_stops_and_starts_nothing() {
                 after["leaseId"].is_null(),
                 "and it is no longer the controller"
             );
-            // Re-issued to the browser that held control. Without a CURRENT token its Stop would be
-            // refused `staleContext` — the expiry's own revocation retired the old one — and the
-            // ruling would never reach the rig. Replay safety is untouched: see
-            // `a_replayed_stop_transmit_has_no_further_effect`.
+            // Re-issued to the browser that held control: the page sends a Stop only with a token
+            // the station issued it. The token's age no longer matters (operator ruling,
+            // 2026-10-03): see `a_delayed_stop_still_stops_what_is_on_the_air_now`.
             assert!(
                 after["transmitEpoch"].is_string(),
                 "the stop token stays with the browser that held control"
@@ -579,8 +577,19 @@ fn a_stop_token_ends_with_the_grant_and_with_any_lease_that_did_not_run_out() {
     }
 }
 
+// ── Stop TX is never refused (operator ruling, 2026-10-03) ─────────────────────────────────────
+// "Stop TX always stops whatever is transmitting, even if it was pressed before the last halt."
+// A Stop's token is the transmit generation its browser was last shown, and every halt at the
+// station moves that generation, so refusing an older token refused fresh Stops for something the
+// operator did not do. The token's age is no reason to refuse; WHO may stop is unchanged.
+
+/// A Stop delivered late (a duplicated frame, or one carrying the token from before the last halt)
+/// stops whatever is on the air when it lands. This replaced
+/// `a_replayed_stop_transmit_has_no_further_effect`, which pinned the 2026-09-15 rule: the late
+/// Stop refused `staleContext` and the new transmission left keyed. Authorization is not staleness:
+/// the same late Stop from a browser that is not the controller is still refused and stops nothing.
 #[test]
-fn a_replayed_stop_transmit_has_no_further_effect() {
+fn a_delayed_stop_still_stops_what_is_on_the_air_now() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = controlling(false);
     key_locally(&mut f.engine.lock().unwrap(), "ptt");
@@ -590,14 +599,27 @@ fn a_replayed_stop_transmit_has_no_further_effect() {
         Ok(json!({"stop":"accepted"}))
     );
     assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
-    // The shack keys up again; the same Stop delivered twice (a duplicated or delayed frame) is
-    // refused and leaves the new transmission alone. It retires only the token it displayed.
+    // The shack keys up again, and the same Stop arrives a second time. Its token was retired by
+    // its own first delivery, and the halt that ran then moved the generation again.
     key_locally(&mut f.engine.lock().unwrap(), "ptt");
-    assert_eq!(stop_v4(&f, DEVICE, &request, now), Err("staleContext"));
-    assert!(f.engine.lock().unwrap().manual_ptt());
-    // Positive control: a Stop against the current token does stop it.
+    let Request::StopTransmit { transmit_epoch, .. } = &request else {
+        unreachable!()
+    };
+    assert_ne!(
+        *transmit_epoch,
+        format!("{:016x}", f.authority.transmit.generation()),
+        "premise: the token is not the current one"
+    );
+    // NEGATIVE CONTROL: from a browser that is not the controller, the late Stop is refused for
+    // that, exactly as before, and the new transmission stays up.
+    assert_eq!(stop_v4(&f, OTHER, &request, now), Err("notController"));
+    assert!(
+        f.engine.lock().unwrap().manual_ptt(),
+        "a refused Stop stopped the new transmission"
+    );
+    // From the controller it stops the new transmission.
     assert_eq!(
-        stop_v4(&f, DEVICE, &stop_request(&f, &state), now),
+        stop_v4(&f, DEVICE, &request, now),
         Ok(json!({"stop":"accepted"}))
     );
     assert_stopped(&mut f.engine.lock().unwrap(), "ptt");

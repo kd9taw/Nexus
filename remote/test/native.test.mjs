@@ -1039,7 +1039,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      assert.match(owner.transmitEpoch,/^[0-9a-f]{16}$/)
      const stop = {type:'stopTransmit',stationBootId:owner.stationBootId,leaseId:owner.leaseId,transmitEpoch:owner.transmitEpoch}
      assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
-     assert.equal((await operation(stop)).response.error,'staleContext')
+     // Stop TX is never refused (operator ruling, 2026-10-03): the same Stop again, its token now
+     // retired, is still a Stop. It was refused `staleContext` under the 2026-09-15 rule.
+     assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
      const after = (await allowed(()=>operation({type:'state'}))).response.value
      assert.notEqual(after.transmitEpoch,owner.transmitEpoch)
      assert.equal(after.phase,'controlling')
