@@ -93,7 +93,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     finally { try { await browser?.stop() } finally { await app.mf.dispose() } }
   })
   try {
-    browser=await chrome()
+    browser=await chrome(stream?['--use-fake-device-for-media-stream']:[])
     if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'chrome-version.json'),JSON.stringify(await browser.call('Browser.getVersion'),null,2)+'\n')}
     // One approval (operator decision 2026-09-13): the browser that confirms a pairing is approved
     // with the station. So Chrome must be that browser: the account claims the code, Chrome confirms
@@ -815,7 +815,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await browser.call('Target.closeTarget',{targetId:encoderWindow})
       assert.ok(packets?.length>=40,'the station stand-in encoded its tone')
       await atShack(`__shack.largestBundle=0;__shack.feeds=0;__shack.feed=ch=>{__shack.feeds++;ch.send(JSON.stringify({type:'audioState',listening:true}));const packets=${JSON.stringify(packets)};let frame=0;const id=setInterval(()=>{if(ch.readyState!=='open'){if(ch.readyState==='closed')clearInterval(id);return}const bytes=[];for(let i=0;i<5;i++){const p=atob(packets[(frame+i)%packets.length]);bytes.push(p.length>>8,p.length&255,...[...p].map(c=>c.charCodeAt(0)))}const m=JSON.stringify({type:'audioRx',seq:frame,epoch:'00000000000000a1',firstFrameMs:frame*20,frameMs:20,count:5,payload:btoa(String.fromCharCode(...bytes))});__shack.largestBundle=Math.max(__shack.largestBundle,m.length);ch.send(m);frame+=5},100)};true`)
-      let streamSession=null
+      let streamSession=null,realAnswer=null
       const offers=[],closes=[]
       const signalling=(async()=>{while(producing&&shackLive){const source=station;let signal;try{signal=await source.take(value=>value.type==='streamSignal',500)}catch{continue}
         try{
@@ -823,6 +823,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.equal(signal.deviceId,device.id,'the relay stamps the approved device')
           if(signal.payload.kind==='offer'){
             offers.push(signal)
+            // The station's own answer, recorded: no station is behind it, so it is all this offer gets.
+            if(realAnswer){source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp:realAnswer}});continue}
             const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data));if(ch.label==='audio'){if(ch.readyState==='open')__shack.feed(ch);else ch.onopen=()=>__shack.feed(ch)}};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
             source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp}})
             source.send({type:'streamState',sessionId:signal.sessionId,streaming:true})
@@ -901,6 +903,22 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.deepEqual({events:await evaluate('window.__csp'),console:refused},{events:[],console:[]},'no CSP violation while listening')
         await click(audioButton('Stop listening'))
         await until(`!!${audioButton('Listen')}`,5000)
+        // THE MICROPHONE, under the Worker's real Permissions-Policy: the page's own origin may use it.
+        // The browser still asks (granted here as the operator would; this Chrome's microphone is its
+        // fake device), and the station's peer receives its audio. What the policy still refuses: the
+        // camera and geolocation everywhere, and the microphone to any other origin, the sign-in
+        // frame's included.
+        await browser.call('Browser.grantPermissions',{origin:app.origin,permissions:['audioCapture']})
+        await evaluate(`(()=>{const real=MediaDevices.prototype.getUserMedia;window.__media=[];MediaDevices.prototype.getUserMedia=function(c){const p=real.apply(this,arguments);p.then(()=>__media.push({audio:!!c?.audio,video:!!c?.video,ok:true}),e=>__media.push({audio:!!c?.audio,video:!!c?.video,ok:false,error:e.name}));return p};return true})()`)
+        await click(`document.querySelector('.remote-stream-mic')`)
+        await until(`document.querySelector('.remote-stream-mic')?.getAttribute('aria-pressed')==='true'||window.__media.length>0&&!window.__media[0].ok`,10000)
+        assert.deepEqual(await evaluate('window.__media'),[{audio:true,video:false,ok:true}],'the stream page obtained a microphone under the real policy')
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-mic')?.textContent`),'Mic on')
+        await untilShack(`(async()=>{for(const r of (await __pc.getStats()).values())if(r.type==='inbound-rtp'&&r.kind==='audio'&&r.packetsReceived>0)return true;return false})()`)
+        assert.deepEqual(await evaluate(`(p=>({microphone:p.allowsFeature('microphone'),elsewhere:p.allowsFeature('microphone','https://identity.remote-test.invalid'),camera:p.allowsFeature('camera'),geolocation:p.allowsFeature('geolocation')}))(document.featurePolicy)`),{microphone:true,elsewhere:false,camera:false,geolocation:false},'the microphone for this origin alone, and nothing else the policy names')
+        assert.equal(await evaluate(`navigator.mediaDevices.getUserMedia({video:true}).then(()=>'granted',e=>e.name)`),'NotAllowedError','control: the camera is still refused')
+        await click(`document.querySelector('.remote-stream-mic')`)
+        await until(`document.querySelector('.remote-stream-mic')?.getAttribute('aria-pressed')==='false'`,5000)
         // S11 / A2, the page's half: a click on the picture arrives as a pointer at the frame's own
         // coordinates; a key typed on the focused picture arrives; Tab stays here and leaves the picture.
         await press(await center('.remote-stream-video'))
@@ -1038,6 +1056,31 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(releases(),releasesBefore+1,'and control is released')
         assert.equal(loggingLease,null,'the station holds no lease for this browser')
         assert.equal(await evaluate(`document.querySelector('.remote-stream-placeholder')?.textContent.includes('Nobody answered “Still there?”, so the stream ended.')`),true,'the page says why it ended')
+        // A REAL STATION'S ANSWER. The stand-in above answers with Chrome's own SDP; the shack answers with
+        // str0m's. fixtures/stream/station-answer.json holds the page's offer and the answer the station's
+        // own code wrote for it, and the page takes that answer through the relay, its parser, secureAnswer
+        // and Chrome's setRemoteDescription, then waits for the connection as it would for the shack.
+        const recorded=JSON.parse(await readFile(new URL('./fixtures/stream/station-answer.json',import.meta.url),'utf8'))
+        await evaluate(`(()=>{const real=RTCPeerConnection.prototype.setRemoteDescription;window.__descriptions=[];RTCPeerConnection.prototype.setRemoteDescription=function(d){const p=real.apply(this,arguments);p.then(()=>__descriptions.push({type:d?.type,ok:true}),e=>__descriptions.push({type:d?.type,ok:false,error:String(e)}));return p};return true})()`)
+        const offersBefore=offers.length,closesBefore=closes.length
+        realAnswer=recorded.answer
+        await click(button('Start the stream'))
+        await until(`window.__descriptions.length>0||document.querySelector('.remote-stream-app')?.dataset.streamPhase==='ended'`,15000)
+        assert.equal(offers.length,offersBefore+1,'the page offered again')
+        // The recording still answers this page: every media line, codec and header extension the
+        // station's answer names is in the offer the page makes today.
+        const sections=sdp=>sdp.split(/\r\n(?=m=)/).map(section=>section.split('\r\n'))
+        const offered=sections(offers.at(-1).payload.sdp),answered=sections(recorded.answer)
+        assert.deepEqual(offered.map(lines=>lines[0].split(' ')[0]),answered.map(lines=>lines[0].split(' ')[0]),'the page offers the media the recorded answer answers')
+        for(const [i,lines] of answered.entries())for(const line of lines.filter(line=>/^a=(mid|rtpmap|extmap):/.test(line)))assert.ok(offered[i].includes(line),`the page's offer no longer carries "${line}", which the recorded station answer uses: record the pair again (fixtures/stream/README.md)`)
+        assert.deepEqual(await evaluate('window.__descriptions'),[{type:'answer',ok:true}],'Chrome took the station\'s own answer')
+        await sleep(1000)
+        assert.equal(closes.length,closesBefore,'the page refused nothing: no close went to the station')
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-app')?.dataset.streamPhase`),'connecting','the page waits for the connection')
+        // Nothing can connect to a recording, so the station ends the attempt as it ends one that never connects.
+        realAnswer=null
+        station.send({type:'streamState',sessionId:streamSession,streaming:false,reason:'connectionFailed'})
+        await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='ended'`,5000)
         // POSITIVE CONTROL for the CSP listener above: a request the policy forbids is reported, so the
         // empty list really meant "nothing violated", not "nothing was listening".
         await evaluate(`fetch('https://example.invalid/').catch(()=>{});true`)

@@ -517,7 +517,9 @@ export default {
       ].join('; '))
       response.headers.set('referrer-policy', 'no-referrer')
       response.headers.set('x-content-type-options', 'nosniff')
-      response.headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()')
+      // The stream's microphone over is this page's own: its origin may ask, and no frame or other
+      // site can. The browser still asks the operator. The camera and location stay off.
+      response.headers.set('permissions-policy', 'camera=(), microphone=(self), geolocation=()')
       response.headers.set('cache-control', 'no-store')
       return response
     } catch (error) {

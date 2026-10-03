@@ -35,6 +35,10 @@
 //!   [`crate::protocol::offer_fingerprint`]: the station checks the signature at admission, before
 //!   `accept`, and once DTLS is up holds [`Session::remote_fingerprint`], the certificate the page
 //!   actually presented, against the one it signed.
+//! - **Finding a path is not failing.** ICE meets refusals on the way: a check its destination
+//!   refuses, which Windows reports on the socket's next receive ([`receive_ends_session`]), and a
+//!   first trickled candidate the station cannot pair, which str0m reports as Disconnected. Neither
+//!   ends a session that has not connected yet; [`CONNECT_TIMEOUT`] does.
 //! - **Control must be reliable and ordered.** A `control` channel opened any other way is not used:
 //!   a Stop that the channel is allowed to drop is not a Stop.
 use std::net::SocketAddr;
@@ -53,6 +57,23 @@ use crate::protocol::{StreamReason, AUDIO_CHANNEL, CONTROL_CHANNEL, PTT_CHANNEL}
 
 /// How long ICE and DTLS may take before the session is given up on.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Does this error, from a receive on the session's socket, end the session? A receive that waited
+/// out its timeout does not, and neither does `ConnectionReset`. On an unconnected UDP socket that is
+/// Windows passing on an ICMP "port unreachable" for an EARLIER datagram (WSAECONNRESET): ICE sends
+/// checks to every candidate the page offered, and a destination that refuses one (a NAT with no
+/// mapping for the station yet, a router that will not loop a packet back to its own public
+/// address) answers that way. The socket is unharmed, and which candidates work is ICE's to decide.
+/// Measured against Chrome, the first such report came within 50 ms of the answer, before DTLS, and
+/// ending the session on it ended every stream.
+pub fn receive_ends_session(error: &std::io::Error) -> bool {
+    !matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::ConnectionReset
+    )
+}
 
 /// Why an offer was not answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -430,7 +451,12 @@ impl Session {
                 self.connected = true;
                 self.events.push(SessionEvent::Connected);
             }
-            Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
+            // Before the session first connects, str0m's Disconnected means only that no pair can
+            // work YET. The page trickles its candidates one at a time, and one the station cannot
+            // pair (an IPv6 address, beside its IPv4 socket) arriving first leaves none; ICE goes
+            // on as the rest arrive, and CONNECT_TIMEOUT is when the station gives up. Once
+            // connected, losing every pair is the end of the connection.
+            Event::IceConnectionStateChange(IceConnectionState::Disconnected) if self.connected => {
                 self.fail(StreamReason::ConnectionFailed)
             }
             Event::MediaAdded(media)
@@ -535,6 +561,54 @@ mod tests {
             Session::accept(&fixture_offer(), base, now).err(),
             Some(Refusal::Unavailable)
         );
+    }
+
+    /// ICE sends checks to every candidate the page offered, and a destination that refuses one
+    /// answers with ICMP "port unreachable", which Windows reports on the socket's next receive as
+    /// ConnectionReset. That is the destination's word about one datagram, not a failed socket, so
+    /// it does not end the session; nor does a receive that only waited. CONTROL: a socket whose
+    /// network is gone does.
+    #[test]
+    fn a_refused_check_is_not_the_end_of_the_session() {
+        use std::io::{Error, ErrorKind};
+        assert!(!receive_ends_session(&Error::from(
+            ErrorKind::ConnectionReset
+        )));
+        assert!(!receive_ends_session(&Error::from(ErrorKind::WouldBlock)));
+        assert!(!receive_ends_session(&Error::from(ErrorKind::TimedOut)));
+        assert!(receive_ends_session(&Error::from(ErrorKind::NetworkDown)));
+    }
+
+    /// The same on a real socket: a datagram sent where nobody listens is refused, and the socket
+    /// still receives what arrives next. On Windows the refusal is that ConnectionReset
+    /// (WSAECONNRESET, os error 10054). Measured against Chrome, it arrived tens of milliseconds
+    /// after the answer, before DTLS, and ending the session there ended every stream. Elsewhere an
+    /// unconnected socket is told nothing, and the receive only waits.
+    #[test]
+    fn a_datagram_refused_on_a_real_socket_leaves_it_receiving() {
+        use std::net::UdpSocket;
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        // Bound and dropped at once: nobody listens there.
+        let nobody = UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        socket.send_to(b"check", nobody).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        let mut buf = [0u8; 16];
+        let refused = socket
+            .recv_from(&mut buf)
+            .expect_err("nothing was sent to this socket");
+        if cfg!(windows) {
+            assert_eq!(refused.raw_os_error(), Some(10054), "{refused}");
+        }
+        assert!(!receive_ends_session(&refused), "{refused}");
+        let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        peer.send_to(b"next", socket.local_addr().unwrap()).unwrap();
+        let (n, _) = socket.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"next");
     }
 
     /// The offer check runs first, on every platform: a plain-RTP offer is refused as an invalid
@@ -699,6 +773,112 @@ mod tests {
                 eprintln!("page events: {:?}", page.events);
             }
             (page, station, answer, line, mid)
+        }
+
+        /// The real answer the compiled stream scenario hands the page
+        /// (`remote/test/fixtures/stream/station-answer.json`) is what the station writes today for
+        /// the page's offer beside it: the same lines in the same order, apart from what every
+        /// session makes new (its ICE credentials, certificate fingerprint, stream ids and SSRCs).
+        /// Red means the station's answer changed: record the pair again (the fixtures' README).
+        #[test]
+        fn the_recorded_answer_is_what_the_station_writes_for_the_page_offer() {
+            let file: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../remote/test/fixtures/stream/station-answer.json"
+            ))
+            .unwrap();
+            let offer = file["offer"].as_str().unwrap();
+            let (_, answer) =
+                Session::accept(offer, BASE.parse().unwrap(), Instant::now()).unwrap();
+            let fresh = |sdp: &str| -> Vec<String> {
+                const NEW_EACH_SESSION: [&str; 8] = [
+                    "o=str0m-0.24.0 ",
+                    "a=msid-semantic:",
+                    "a=ice-ufrag:",
+                    "a=ice-pwd:",
+                    "a=fingerprint:sha-256 ",
+                    "a=msid:",
+                    "a=ssrc:",
+                    "a=ssrc-group:FID ",
+                ];
+                sdp.split("\r\n")
+                    .map(
+                        |line| match NEW_EACH_SESSION.iter().find(|p| line.starts_with(**p)) {
+                            Some(prefix) => prefix.to_string(),
+                            None => line.to_string(),
+                        },
+                    )
+                    .collect()
+            };
+            assert_eq!(fresh(&answer), fresh(file["answer"].as_str().unwrap()));
+        }
+
+        /// The page trickles its candidates one at a time, and the first the station can read may
+        /// be one it cannot pair with its IPv4 socket: an IPv6 address, as a browser on a
+        /// dual-stack network reports. For that moment str0m has no pair and says Disconnected.
+        /// The session waits for the next candidate and connects. CONTROL: once connected, a page
+        /// that goes silent still ends the session.
+        #[test]
+        fn an_unpairable_first_candidate_does_not_end_the_session() {
+            let mut now = Instant::now();
+            let (mut page, offer, pending) = page(now);
+            // A browser's offer carries no candidates: it trickles every one afterwards. This
+            // page's str0m writes its own into the offer, which would pair from the start.
+            let offer: String = offer
+                .split_inclusive("\r\n")
+                .filter(|line| !line.starts_with("a=candidate:"))
+                .collect();
+            assert!(!offer.contains("a=candidate:"));
+            let (mut station, answer) =
+                Session::accept(&offer, BASE.parse().unwrap(), now).unwrap();
+            page.rtc
+                .sdp_api()
+                .accept_answer(pending, SdpAnswer::from_sdp_string(&answer).unwrap())
+                .unwrap();
+            page.drain();
+            let ipv6 = "candidate:1 1 udp 1686052607 2001:db8::7 61234 typ srflx raddr :: rport 0";
+            assert!(station.add_remote_candidate(ipv6, now));
+            for _ in 0..50 {
+                now += Duration::from_millis(10);
+                station.timeout(now);
+            }
+            assert!(!station.is_closed(), "{:?}", station.take_events());
+            // The candidates it can use arrive, and the session connects.
+            let line = station.add_reflexive(PUBLIC.parse().unwrap(), now).unwrap();
+            page.rtc
+                .add_remote_candidate(Candidate::from_sdp_string(&line).unwrap());
+            page.drain();
+            let page_line = Candidate::host(PAGE.parse().unwrap(), "udp")
+                .unwrap()
+                .to_sdp_string();
+            assert!(station.add_remote_candidate(&page_line, now));
+            for _ in 0..40 {
+                run(
+                    &mut page,
+                    &mut station,
+                    &mut now,
+                    Duration::from_millis(250),
+                );
+                if station.is_connected() {
+                    break;
+                }
+            }
+            assert!(station.is_connected(), "{:?}", station.take_events());
+            assert!(!station.is_closed());
+            // CONTROL: connected, and then nothing more arrives from the page.
+            for _ in 0..600 {
+                now += Duration::from_millis(100);
+                station.timeout(now);
+                let _ = station.take_transmits();
+                if station.is_closed() {
+                    break;
+                }
+            }
+            assert!(
+                station
+                    .take_events()
+                    .contains(&SessionEvent::Closed(StreamReason::ConnectionFailed)),
+                "a silent page ends the connected session"
+            );
         }
 
         /// A5, after DTLS: the station reads the certificate the page actually presented, which is

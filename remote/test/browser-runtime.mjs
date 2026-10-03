@@ -18,7 +18,8 @@ export function cleanupAfterTest(context, cleanup) {
   return stop
 }
 
-export async function chrome() {
+// `switches` are a scenario's own additions to the launch, such as the stream scenario's fake microphone.
+export async function chrome(switches = []) {
   const profile = await mkdtemp(join(tmpdir(), 'nexus-remote-browser-'))
   const child = spawn(process.env.CHROME_BIN || 'google-chrome', [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
@@ -26,7 +27,7 @@ export async function chrome() {
     '--no-proxy-server', '--disable-extensions', '--disable-default-apps',
     // Isolate synthetic browser cookies from a locked desktop credential store.
     '--password-store=basic', '--use-mock-keychain',
-    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`, ...switches, 'about:blank',
   ], { stdio: 'ignore', detached: true })
   let exited = false
   child.once('error', () => { exited = true })

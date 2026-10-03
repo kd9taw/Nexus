@@ -246,6 +246,20 @@ anything held and not re-asserted within 200 ms; `held` never presses anything; 
 
 Every `control` message from the page is at most 1,024 bytes.
 
+## The station's answer to the page's offer (`station-answer.json`)
+
+`offer` is the offer the page's own peer makes (`stream-link.ts`, `start()`: VP8 received, Opus
+sent, the three channels), taken from Chrome 140. `answer` is what the station's own code wrote for
+it (`Session::accept`, str0m 0.24, on Windows). The compiled stream scenario's stand-in station
+answers with Chrome's own SDP; this is the answer the shack sends instead. The scenario hands it to
+the page and requires the page to take it (its parser, `secureAnswer` and Chrome's
+`setRemoteDescription`), after checking that the page's live offer still carries every media line,
+codec and header extension the answer names. The Windows session test
+`the_recorded_answer_is_what_the_station_writes_for_the_page_offer` requires the station to write the
+same answer today, apart from what every session makes new. When either goes red, record the pair
+again: the offer from the page's peer in Chrome, the answer from `Session::accept` on Windows. The
+ICE credentials and fingerprints in both are from throwaway sessions and are used nowhere else.
+
 ## The station's own webview (`webview.json`)
 
 The station delivers admitted input to its own main window as the Tauri event

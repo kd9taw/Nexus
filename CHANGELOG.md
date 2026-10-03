@@ -962,6 +962,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hearham's are missing (in the list's place when nothing is shown), where before they went
   missing without a word.
 
+- **Remote as a stream: the browser's microphone works on the hosted page.** The hosted page told
+  the browser that none of its pages could use a microphone, so pressing **Mic off** in a stream
+  never turned the microphone on: every press ended with "The browser did not allow the
+  microphone", whatever the browser's own setting said. The page's own address may now use the
+  microphone, still only after you allow it in the browser. The camera and your location stay
+  refused, and no other site can use the microphone through the page.
+- **Remote as a stream: the stream no longer ends the moment it starts (Windows).** Every
+  **Start the stream** was answered by the shack and then ended in the same second, and the page
+  went back to **Start the stream** saying the connection to the station was lost. While the
+  station and the browser look for a way through each other's routers, some of their first tries
+  are refused, and Windows reports such a refusal as if the station's connection had failed. The
+  station took it at its word and ended the stream before anything could connect. A browser whose
+  network has IPv6 could end the same way. Now the station keeps looking for its usual 20 seconds,
+  and the stream connects when there is a way through.
 - **Remote: Listen plays the station's audio.** Since Listen arrived in 1.13.0 it never played on
   the hosted page: the page's own security policy refused the audio player the page builds, so
   every press ended with "The station has no audio to send right now." while the station was
