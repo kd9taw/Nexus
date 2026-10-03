@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comment writes them. A repeater already in Memories shows **✓ In Memories** instead, and nothing
   is saved twice: the same machine is the one the repeater lists are merged by (the same output
   within 2.5 kHz and the same callsign, or the same input and a site within 5 km where a side has
-  no callsign), so a machine saved from one directory is found again in another. The ★ goes by the
-  same rule, and a starred repeater now carries the town and links in its notes too.
+  no callsign), so a machine saved from one directory is found again in another. Repeaters' rows no
+  longer carry a ☆: the **In Memories** badge stands in its place, and a saved repeater is starred
+  for the cockpit strip in Memories.
 - **Remote as a stream, the station's half (Windows, off by default).** With **Stream this window
   to an approved browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
   station controls, while it holds control, can be shown this Nexus window and operate it, and
@@ -699,6 +700,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dot brings its row into view and opens a card with **Save to Memories** and **＋ Add**, so a click on
   a dot no longer adds the machine by itself. The map still shows hearham's listings only, never a
   RepeaterBook row, and says under it what it leaves off.
+- **Repeaters is simpler to work.** **Near** is the one place that says where to search: My station,
+  or one box that takes a grid square or a city (the Grid and City chips are gone), and Route to….
+  The list's own filter sits with the list, reads **Filter: call or MHz** and clears with one ✕; a place
+  typed into it is offered to Near ("Search near "woodstock, il" instead?") instead of quietly emptying
+  the list. The count line says what the filters hide and by which, with one tap to show it all:
+  "21 of 25 shown · nearest first — 4 hidden by On-air only · Show all". The bands are one segmented
+  control and FM / +Digital / On-air only one **Show** group, and Auto says its radius in words
+  ("50 mi: about how far 2m+70cm reach from a car or a handheld"). A row's actions say what they do,
+  each with its own icon: **Tune**, **Save to Memories** (a bookmark) and **Add to channel list** (a
+  list); the channel list says it is for programming a radio.
 - **Repeaters has the Conditions look.** The page is three cards on the app's ground, each with a
   section header as the Conditions boxes have: **Search** (where to look and Fetch repeaters),
   **Results** (the count, Save all shown and ＋ Add all shown in its header, then the filters, the map

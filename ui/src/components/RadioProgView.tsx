@@ -24,6 +24,7 @@ import { saveDownload } from '../remote-web/chunked-file'
 //   • `My channels`, the persisted project's name inside radioprog.json — a stored value, not a
 //     string on screen.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BookmarkCheck, BookmarkPlus, ListChecks, ListPlus, Radio } from 'lucide-react'
 import { confirmDialog } from '../confirm'
 import type {
   GeoCandidate,
@@ -50,8 +51,6 @@ import {
   addMemoryDeduped,
   isSendOnlyDcs,
   memoriesStore,
-  starMemory,
-  updateMemory,
   useMemories,
 } from '../features/memories'
 import {
@@ -84,7 +83,7 @@ import { fmtDistanceKm, useUnits } from '../units'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { pushToast } from '../toast'
-import { t } from '../i18n'
+import { getLocale, t } from '../i18n'
 import { T } from '../i18n/T'
 import { parseChirpCsv, type Memory } from '../features/memories'
 
@@ -123,6 +122,13 @@ const LINK_NETWORK: Record<Exclude<RepeaterLink['network'], 'node'>, string> = {
   irlp: 'IRLP',
   dmrId: 'DMR ID',
 }
+
+/** `Intl.ListFormat`, where the runtime has it (every webview Nexus ships in does). */
+const ListFormat = (
+  Intl as unknown as {
+    ListFormat?: new (locale: string, o: { style: string; type: string }) => { format(items: string[]): string }
+  }
+).ListFormat
 
 /** The frequency search's tolerance as the count line prints it, kHz ("2.5"). */
 const FREQ_TOL_KHZ = (FREQ_MATCH_MHZ * 1000).toFixed(1)
@@ -245,6 +251,38 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [toCands, setToCands] = useState<GeoCandidate[]>([])
   const [toBusy, setToBusy] = useState(false)
   const [corridorMi, setCorridorMi] = useState<number>(DEFAULT_CORRIDOR_MI)
+  // ONE box at each end takes a grid or a city (the operator, 2026-10-02: "If it was filtering only, what
+  // a clunky experience"): a valid locator is the place as typed, anything else is a town to look up.
+  // The kinds and the per-kind fields below stay what they were; the box is what sets them.
+  const [place, setPlace] = useState('')
+  const [toPlace, setToPlaceText] = useState('')
+  const setFromPlace = (v: string) => {
+    setPlace(v)
+    setCityPick(null)
+    setCityCands([])
+    const g = v.trim().toUpperCase()
+    if (!g) setOriginKind('station')
+    else if (isValidGrid(g)) {
+      setOriginKind('grid')
+      setGridInput(g)
+    } else {
+      setOriginKind('city')
+      setCityInput(v)
+    }
+  }
+  const setToPlace = (v: string) => {
+    setToPlaceText(v)
+    setToPick(null)
+    setToCands([])
+    const g = v.trim().toUpperCase()
+    if (g && isValidGrid(g)) {
+      setToKind('grid')
+      setToGrid(g)
+    } else {
+      setToKind('city')
+      setToCity(v)
+    }
+  }
 
   // ── results ──
   const [result, setResult] = useState<RepeaterSearchResult | null>(null)
@@ -398,8 +436,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       .finally(() => setFetching(false))
   }, [origin, fetching, routing, dest, corridorMi, effRadiusMi, originKind, originLabel, destLabel])
 
-  const searchCity = useCallback(() => {
-    const q = cityInput.trim()
+  const searchCity = useCallback((override?: string) => {
+    const q = (override ?? cityInput).trim()
     if (!q || geoBusy) return
     setGeoBusy(true)
     setCityCands([])
@@ -430,6 +468,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
   const useRecent = (r: Recent) => {
     // Recents carry resolved coordinates — re-fetch immediately from them.
+    setPlace(r.label)
     setOriginKind(r.kind === 'city' ? 'city' : 'grid')
     if (r.kind === 'grid') setGridInput(r.label)
     else {
@@ -461,6 +500,44 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     })
   }, [result, bands, showDigital, onAirOnly, search, searchMhz])
 
+  /** What the filters hide, and which of them hide something (none in a frequency search, which
+   *  applies none): the count line names them, with one tap to show everything. */
+  const hidden = useMemo(() => {
+    const none = { count: 0, why: [] as string[], words: '' }
+    if (!result || searchMhz !== null) return none
+    const q = search.trim().toUpperCase()
+    const rs = result.rows
+    const why: string[] = []
+    if (bands.length > 0 && rs.some((row) => !bands.includes(bandOfMhz(row.record.outputMhz))))
+      why.push(t('program.count.why.bands', { bands: bands.join(' + ') }))
+    if (!showDigital && rs.some((row) => !row.record.fm)) why.push(t('program.count.why.fm'))
+    if (onAirOnly && rs.some((row) => !row.record.operational)) why.push(t('program.filters.onAir.label'))
+    if (q && rs.some((row) => !row.record.callsign.toUpperCase().includes(q) && !row.record.city.toUpperCase().includes(q)))
+      why.push(t('program.count.why.text', { text: search.trim() }))
+    if (why.length === 0) return none
+    let words = why.join(', ')
+    try {
+      // The language's own "A, B and C" (ES2021, which this project's TypeScript lib predates).
+      if (ListFormat) words = new ListFormat(getLocale(), { style: 'long', type: 'conjunction' }).format(why)
+    } catch {
+      // An unknown locale keeps the commas.
+    }
+    return { count: rs.length - shown.length, why, words }
+  }, [result, searchMhz, search, bands, showDigital, onAirOnly, shown])
+  const showAll = () => {
+    setBands([])
+    setShowDigital(true)
+    setOnAirOnly(false)
+    setSearch('')
+  }
+  /** The filter's words read as a place ("woodstock, il", or a town that matches nothing here): offered to
+   *  Near rather than left as a filter that empties the list. A callsign or a frequency has a digit. */
+  const placeLike = useMemo(() => {
+    const text = search.trim()
+    if (!result || text.length < 3 || /\d/.test(text)) return false
+    return text.includes(',') || shown.length === 0
+  }, [result, search, shown])
+
   const inList = useMemo(() => new Set(rows.map((r) => r.channel.id)), [rows])
   const isAdded = (row: RepeaterSearchRow) => rowIds(row).some((id) => inList.has(id))
 
@@ -477,10 +554,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     }
     return out
   }, [shown, bank])
-  const starredIds = useMemo(
-    () => new Set([...savedById].filter(([, m]) => m.favorite).map(([id]) => id)),
-    [savedById],
-  )
 
   // The map (the operator's pick, 2026-09-30: "hearham-only map now"): the shown rows hearham
   // lists, each where its hearham row places it, and a count of the rest by why they are off it.
@@ -765,31 +838,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       .catch((e) => pushToast(remote ? controlFailureMessage(e) : String(e), 'error'))
   }
 
-  /** ★ one machine straight into the favorites list — the whole point of the
-   * feature: fetch, star, and it's on the cockpit MEM strip and in Memories
-   * without a trip through the channel-list builder. Starring a machine the bank
-   * already holds (the merge's rule, `savedMemoryOf`) stars THAT memory rather than
-   * adding a second, and the star toggles back off. */
-  const toggleStar = (row: RepeaterSearchRow) => {
-    let msg = ''
-    memoriesStore.update((bank) => {
-      const existing = savedMemoryOf(bank, row)
-      if (existing?.favorite) {
-        msg = t('program.star.unstarred', { name: existing.name })
-        return updateMemory(bank, existing.id, { favorite: false })
-      }
-      if (existing) {
-        msg = t('program.star.starred', { name: existing.name })
-        return starMemory(bank, existing.id)
-      }
-      const saved = saveRepeater(bank, row)
-      if (!saved.memory) return bank
-      msg = t('program.star.saved', { name: saved.memory.name })
-      return starMemory(saved.bank, saved.memory.id)
-    })
-    if (msg) pushToast(msg, 'success', 4000)
-  }
-
   /** Save to Memories (the operator's pick, 2026-10-02: "Save buttons + all fields"): the machine
    * into the bank as a memory, not starred, with every field `repeaterMemory` maps — frequency,
    * offset, tone or DCS, narrow, the callsign, and the town, links and colour code in its notes. A
@@ -982,6 +1030,46 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   /** The reach the shown list was searched with, as the empty list words it. */
   const reachMi = result?.route ? corridorMi : effRadiusMi
 
+  /** The one box that says where, at either end of a search: a valid locator is the place as typed, and
+   *  anything else is a town, looked up when the operator presses Search or Enter. A place picked from the
+   *  matches shows as the box's words. */
+  const placeBox = (end: 'from' | 'to') => {
+    const from = end === 'from'
+    const text = from ? place : toPlace
+    const busy = from ? geoBusy : toBusy
+    const lookup = text.trim() !== '' && !isValidGrid(text.trim())
+    const go = () => (from ? searchCity() : searchToCity())
+    return (
+      <span className="rp-city rp-place">
+        <input disabled={remote}
+          type="text"
+          className="settings-input rp-city-input rp-place-input"
+          value={text}
+          placeholder={t('program.origin.place.placeholder', { grid: EXAMPLE_GRID })}
+          aria-label={from ? t('program.origin.place.aria') : t('program.route.to.place.aria')}
+          onChange={(e) => (from ? setFromPlace(e.target.value) : setToPlace(e.target.value))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && lookup) go()
+          }}
+        />
+        {lookup && (
+          <button type="button" className="filter-chip" onClick={go} disabled={remote || busy}>
+            {busy ? t('program.city.searching') : t('program.city.search')}
+          </button>
+        )}
+      </span>
+    )
+  }
+
+  /** "Search near <place>?" from the list's filter: the words go to Near, which looks them up, and the
+   *  filter is cleared. Nothing is fetched until the operator presses Fetch, as everywhere here. */
+  const searchNear = (text: string) => {
+    setSearch('')
+    setArea('around')
+    setFromPlace(text)
+    searchCity(text)
+  }
+
   const toneLabel = (c: ProgChannel): string => {
     if (c.toneMode === 'none') return '—'
     if (c.toneMode === 'dtcs') return `D${String(c.dtcsCode).padStart(3, '0')}`
@@ -1018,6 +1106,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <span className="rp-card-title">{t('program.card.search')}</span>
           </header>
           <div className="rp-card-body">
+          {/* ONE place to say where (2026-10-02): My station, or one box that takes a grid or a city, and
+              Route to…. The list's own filter, above the list, narrows the list and never asks for a place. */}
           <div className="rp-origin" role="group" aria-label={t('program.origin.aria')}>
             <span className="rp-lbl">{routing ? t('program.route.from') : t('program.origin.label')}</span>
             <button disabled={remote}
@@ -1030,57 +1120,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 grid: myGrid ? `· ${myGrid.toUpperCase()}` : '',
               })}
             </button>
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${originKind === 'grid' ? ' active' : ''}`}
-              onClick={() => setOriginKind('grid')}
-            >
-              {t('program.origin.grid.label')}
-            </button>
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${originKind === 'city' ? ' active' : ''}`}
-              onClick={() => setOriginKind('city')}
-            >
-              {t('program.origin.city.label')}
-            </button>
-            {originKind === 'grid' && (
-              <input disabled={remote}
-                type="text"
-                className={`settings-input mono rp-grid${gridInput && !isValidGrid(gridInput.trim()) ? ' invalid' : ''}`}
-                value={gridInput}
-                maxLength={6}
-                placeholder={EXAMPLE_GRID}
-                aria-label={t('program.origin.grid.aria')}
-                onChange={(e) => setGridInput(e.target.value.toUpperCase())}
-              />
-            )}
-            {originKind === 'city' && (
-              <span className="rp-city">
-                <input disabled={remote}
-                  type="text"
-                  className="settings-input rp-city-input"
-                  value={cityInput}
-                  placeholder={t('program.origin.city.placeholder')}
-                  aria-label={t('program.origin.city.aria')}
-                  onChange={(e) => {
-                    setCityInput(e.target.value)
-                    setCityPick(null)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') searchCity()
-                  }}
-                />
-                <button
-                  type="button"
-                  className="filter-chip"
-                  onClick={searchCity}
-                  disabled={remote || (geoBusy || !cityInput.trim())}
-                >
-                  {geoBusy ? t('program.city.searching') : t('program.city.search')}
-                </button>
-              </span>
-            )}
+            {placeBox('from')}
             {!routing && <span className="rp-filter-gap" />}
             {!routing && (
               <button disabled={remote}
@@ -1120,57 +1160,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   grid: myGrid ? `· ${myGrid.toUpperCase()}` : '',
                 })}
               </button>
-              <button disabled={remote}
-                type="button"
-                className={`filter-chip${toKind === 'grid' ? ' active' : ''}`}
-                onClick={() => setToKind('grid')}
-              >
-                {t('program.origin.grid.label')}
-              </button>
-              <button disabled={remote}
-                type="button"
-                className={`filter-chip${toKind === 'city' ? ' active' : ''}`}
-                onClick={() => setToKind('city')}
-              >
-                {t('program.origin.city.label')}
-              </button>
-              {toKind === 'grid' && (
-                <input disabled={remote}
-                  type="text"
-                  className={`settings-input mono rp-grid${toGrid && !isValidGrid(toGrid.trim()) ? ' invalid' : ''}`}
-                  value={toGrid}
-                  maxLength={6}
-                  placeholder={EXAMPLE_GRID}
-                  aria-label={t('program.origin.grid.aria')}
-                  onChange={(e) => setToGrid(e.target.value.toUpperCase())}
-                />
-              )}
-              {toKind === 'city' && (
-                <span className="rp-city">
-                  <input disabled={remote}
-                    type="text"
-                    className="settings-input rp-city-input"
-                    value={toCity}
-                    placeholder={t('program.origin.city.placeholder')}
-                    aria-label={t('program.origin.city.aria')}
-                    onChange={(e) => {
-                      setToCity(e.target.value)
-                      setToPick(null)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') searchToCity()
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="filter-chip"
-                    onClick={searchToCity}
-                    disabled={remote || (toBusy || !toCity.trim())}
-                  >
-                    {toBusy ? t('program.city.searching') : t('program.city.search')}
-                  </button>
-                </span>
-              )}
+              {placeBox('to')}
               <button disabled={remote}
                 type="button"
                 className="filter-chip rp-route-remove"
@@ -1408,8 +1398,18 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 : result.route
                   ? t('program.count.route', { shown: shown.length, total: result.rows.length })
                   : t('program.count', { shown: shown.length, total: result.rows.length })}
+              {/* What is hidden, and by what, with one tap to show it all (2026-10-02). */}
+              {hidden.why.length > 0 && (
+                <span className="rp-hidden">
+                  {t('program.count.hidden', { count: hidden.count, why: hidden.words })}
+                  <button disabled={remote} type="button" className="rp-show-all" onClick={showAll}>
+                    {t('program.count.showAll')}
+                  </button>
+                </span>
+              )}
               {shown.some((r) => isProgrammable(r.record) && !isAdded(r)) && (
-                <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
+                <button disabled={remote} type="button" className="filter-chip rp-add-all" onClick={addAllShown}>
+                  <ListPlus size={13} aria-hidden="true" />
                   {t('program.addAll.label')}
                 </button>
               )}
@@ -1421,6 +1421,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   onClick={() => void saveAllShown()}
                   title={t('program.saveAll.title')}
                 >
+                  <BookmarkPlus size={13} aria-hidden="true" />
                   {t('program.saveAll.label')}
                 </button>
               )}
@@ -1428,60 +1429,64 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           )}
           </header>
           <div className="rp-card-body rp-found-body">
+          {/* Fewer, grouped controls (2026-10-02): the bands as one segmented control, and what to show
+              (FM only or with digital, on the air only) as one group. The text filter lives with the list. */}
           <div className="rp-filters" role="group" aria-label={t('program.filters.aria')}>
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${bands.length === 0 ? ' active' : ''}`}
-              onClick={() => setBands([])}
-            >
-              {t('program.filters.allBands')}
-            </button>
-            {BAND_CHIPS.map((b) => (
+            <span className="rp-lbl">{t('program.filters.bands.label')}</span>
+            <span className="rp-seg" role="group" aria-label={t('program.filters.bands.label')}>
               <button disabled={remote}
-                key={b}
                 type="button"
-                className={`filter-chip${bands.includes(b) ? ' active' : ''}`}
-                onClick={() =>
-                  setBands((bs) => (bs.includes(b) ? bs.filter((x) => x !== b) : [...bs, b]))
-                }
+                className={`filter-chip${bands.length === 0 ? ' active' : ''}`}
+                aria-pressed={bands.length === 0}
+                onClick={() => setBands([])}
               >
-                {b}
+                {t('program.filters.allBands')}
               </button>
-            ))}
+              {BAND_CHIPS.map((b) => (
+                <button disabled={remote}
+                  key={b}
+                  type="button"
+                  className={`filter-chip${bands.includes(b) ? ' active' : ''}`}
+                  aria-pressed={bands.includes(b)}
+                  onClick={() =>
+                    setBands((bs) => (bs.includes(b) ? bs.filter((x) => x !== b) : [...bs, b]))
+                  }
+                >
+                  {b}
+                </button>
+              ))}
+            </span>
             <span className="rp-filter-gap" />
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${!showDigital ? ' active' : ''}`}
-              onClick={() => setShowDigital(false)}
-              title={t('program.filters.fm.title')}
-            >
-              {MODE_FM}
-            </button>
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${showDigital ? ' active' : ''}`}
-              onClick={() => setShowDigital(true)}
-              title={t('program.filters.digital.title')}
-            >
-              {t('program.filters.digital.label')}
-            </button>
-            <button disabled={remote}
-              type="button"
-              className={`filter-chip${onAirOnly ? ' active' : ''}`}
-              onClick={() => setOnAirOnly((v) => !v)}
-              title={t('program.filters.onAir.title')}
-            >
-              {t('program.filters.onAir.label')}
-            </button>
-            <input disabled={remote}
-              type="search"
-              className="settings-input rp-search"
-              value={search}
-              placeholder={t('program.filters.search.placeholder')}
-              title={t('program.filters.search.title')}
-              aria-label={t('program.filters.search.aria')}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <span className="rp-lbl">{t('program.filters.show.label')}</span>
+            <span className="rp-seg" role="group" aria-label={t('program.filters.show.label')}>
+              <button disabled={remote}
+                type="button"
+                className={`filter-chip${!showDigital ? ' active' : ''}`}
+                aria-pressed={!showDigital}
+                onClick={() => setShowDigital(false)}
+                title={t('program.filters.fm.title')}
+              >
+                {MODE_FM}
+              </button>
+              <button disabled={remote}
+                type="button"
+                className={`filter-chip${showDigital ? ' active' : ''}`}
+                aria-pressed={showDigital}
+                onClick={() => setShowDigital(true)}
+                title={t('program.filters.digital.title')}
+              >
+                {t('program.filters.digital.label')}
+              </button>
+              <button disabled={remote}
+                type="button"
+                className={`filter-chip${onAirOnly ? ' active' : ''}`}
+                aria-pressed={onAirOnly}
+                onClick={() => setOnAirOnly((v) => !v)}
+                title={t('program.filters.onAir.title')}
+              >
+                {t('program.filters.onAir.label')}
+              </button>
+            </span>
           </div>
 
           {/* Map first, the list under it (the operator's pick, 2026-10-02): after a fetch with something
@@ -1531,6 +1536,41 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 )}
                 <span>{t('program.map.hint')}</span>
               </div>
+            </div>
+          )}
+          {/* The list's own filter, WITH the list (the operator's finding, 2026-10-02: "woodstock, il" typed
+              here, meaning to search near it, read as a broken fetch). It narrows this list, says so in the
+              count above, clears with one ✕, and a place typed into it anyway is offered to Near. */}
+          {result && (
+            <div className="rp-list-tools">
+              <span className="rp-filter-box">
+                <input disabled={remote}
+                  type="search"
+                  className="settings-input rp-search"
+                  value={search}
+                  placeholder={t('program.filters.search.placeholder')}
+                  title={t('program.filters.search.title')}
+                  aria-label={t('program.filters.search.aria')}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {search !== '' && (
+                  <button
+                    type="button"
+                    className="rp-filter-clear"
+                    disabled={remote}
+                    onClick={() => setSearch('')}
+                    aria-label={t('program.filters.search.clear')}
+                    title={t('program.filters.search.clear')}
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+              {placeLike && (
+                <button disabled={remote} type="button" className="filter-chip rp-place-offer" onClick={() => searchNear(search.trim())}>
+                  {t('program.filters.place.offer', { place: search.trim() })}
+                </button>
+              )}
             </div>
           )}
           <div className="rp-results" role="table" aria-label={t('program.results.aria')}>
@@ -1641,19 +1681,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     )}
                   </span>
                   <span className="rp-actions" role="cell">
-                    {programmable && (
-                      <button disabled={remote}
+                    {catOk && programmable && (
+                      <button disabled={remote && !repeaterControl}
                         type="button"
-                        className={`rp-star${starredIds.has(c.id) ? ' on' : ''}`}
-                        onClick={() => toggleStar(row)}
-                        aria-pressed={starredIds.has(c.id)}
-                        title={
-                          starredIds.has(c.id)
-                            ? t('program.row.unstar.title')
-                            : t('program.row.star.title')
-                        }
+                        className="pota-hunt-btn rp-tune"
+                        onClick={() => tuneTo(c)}
+                        title={t('program.row.tune.title')}
                       >
-                        {starredIds.has(c.id) ? '★' : '☆'}
+                        <Radio size={12} aria-hidden="true" />
+                        {t('program.row.tune.label')}
                       </button>
                     )}
                     {/* Saved: the badge stands where the button was, so the row keeps its shape. It
@@ -1665,6 +1701,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                           className="pota-badge rp-saved-badge"
                           title={t('program.row.saved.title', { name: saved.name })}
                         >
+                          <BookmarkCheck size={12} aria-hidden="true" />
                           {t('program.row.saved.label')}
                         </span>
                       ) : (
@@ -1674,19 +1711,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                           onClick={() => saveRow(row)}
                           title={t('program.row.save.title')}
                         >
+                          <BookmarkPlus size={12} aria-hidden="true" />
                           {t('program.row.save.label')}
                         </button>
                       ))}
-                    {catOk && programmable && (
-                      <button disabled={remote && !repeaterControl}
-                        type="button"
-                        className="pota-hunt-btn rp-tune"
-                        onClick={() => tuneTo(c)}
-                        title={t('program.row.tune.title')}
-                      >
-                        {t('program.row.tune.label')}
-                      </button>
-                    )}
                     <button
                       type="button"
                       className={`pota-hunt-btn rp-add${added ? ' added' : ''}`}
@@ -1700,6 +1728,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                           : t('program.row.add.digital.title')
                       }
                     >
+                      {added ? <ListChecks size={12} aria-hidden="true" /> : <ListPlus size={12} aria-hidden="true" />}
                       {added ? t('program.row.added.label') : t('program.row.add.label')}
                     </button>
                   </span>
@@ -1749,8 +1778,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         <aside className="rp-builder rp-card">
           <div className="rp-builder-head rp-card-head">
             <span className="rp-builder-title rp-card-title">
+              <ListChecks size={13} aria-hidden="true" />
               {t('program.builder.title')} <span className="np-count">{rows.length}</span>
             </span>
+            <span className="rp-builder-sub">{t('program.builder.sub')}</span>
             <label className="rp-cap">
               {t('program.builder.nameCap.label')}
               {/* The option labels name RIG MODELS (`features/radioprog.ts`) — tokens. */}

@@ -4603,12 +4603,12 @@ export const EN = {
   // `{{grid}}` is the station locator with its separator, or nothing at all.
   'program.origin.station.label': 'My station {{grid}}',
   'program.origin.station.title': 'Your station grid from Settings',
-  'program.origin.grid.label': 'Grid',
-  'program.origin.grid.aria': 'Grid square',
-  'program.origin.city.label': 'City',
-  'program.origin.city.aria': 'City',
+  // ONE box takes a grid or a city (a locator is the place as typed; anything else is a town to look
+  // up). {{grid}} is an example locator, a token.
+  'program.origin.place.placeholder': 'Grid or city: {{grid}}, Gatlinburg TN',
+  'program.origin.place.aria': 'Where to search: a grid square or a city',
+  'program.route.to.place.aria': 'Where the route ends: a grid square or a city',
   // A HUMAN example, not a technical one: a locale should offer a place its operators know.
-  'program.origin.city.placeholder': 'Gatlinburg, TN',
   'program.city.search': 'Search',
   'program.city.searching': 'Searching…',
   'program.city.noMatch': 'No places matched — try "City, State"',
@@ -4622,7 +4622,7 @@ export const EN = {
   'program.radius.label': 'Radius',
   'program.radius.auto.label': 'Auto',
   'program.radius.auto.title': "Radius from the selected bands' realistic repeater reach",
-  'program.radius.auto.hint': '= {{radius}} ({{bands}})',
+  'program.radius.auto.hint': '{{radius}}: about how far {{bands}} reach from a car or a handheld',
   'program.radius.auto.allBands': 'all bands',
 
   // Or a route: from one place to another, the machines within a corridor either side of the
@@ -4693,12 +4693,30 @@ export const EN = {
     'Also list DMR / D-STAR / Fusion machines (badged; programming them comes later)',
   'program.filters.onAir.label': 'On-air only',
   'program.filters.onAir.title': 'Hide machines the directory marks off-air',
-  'program.filters.search.placeholder': 'Call, city or MHz…',
+  // The list's OWN filter, beside the list: it narrows this list and never asks for a place (an operator
+  // typed "woodstock, il" here, meaning to search near it, 2026-10-02). A place typed anyway is offered
+  // to Near: {{place}} is the operator's own words.
+  'program.filters.search.placeholder': 'Filter: call or MHz',
+  'program.filters.search.clear': 'Clear the filter',
+  'program.filters.place.offer': 'Search near “{{place}}” instead?',
+  'program.filters.bands.label': 'Bands',
+  'program.filters.show.label': 'Show',
   'program.filters.search.aria': 'Filter results',
-  'program.filters.search.title': 'A callsign or town filters the list. A frequency in MHz (147.18, 438.5125) shows every repeater on it, whatever the filters.',
+  'program.filters.search.title':
+    'Filters this list by callsign or town. A frequency in MHz (147.18, 438.5125) shows every repeater on it, whatever the filters. To search near another place, use Near.',
   'program.count': '{{shown}} of {{total}} shown · nearest first',
   'program.count.freq': '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · nearest first',
   'program.count.route': '{{shown}} of {{total}} shown · in order along the route',
+  // What the filters hide, after the count: {{why}} is a list of the filters that hide something (the
+  // three below and the On-air only chip's own words), joined the language's own way.
+  'program.count.hidden': {
+    one: '— {{count}} hidden by {{why}}',
+    other: '— {{count}} hidden by {{why}}',
+  },
+  'program.count.why.bands': '{{bands}} only',
+  'program.count.why.fm': 'FM only',
+  'program.count.why.text': 'the filter “{{text}}”',
+  'program.count.showAll': 'Show all',
   'program.count.freq.route':
     '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · in order along the route',
   // THE MAP (the operator's pick, 2026-09-30: "hearham-only map now"). Every dot is a hearham
@@ -4728,11 +4746,11 @@ export const EN = {
     'A filled dot is in your channel list. Point at a dot to find its row; click one to save the machine to Memories or add it.',
   // The selected dot's card: its ✕.
   'program.map.card.close': 'Close',
-  'program.addAll.label': '＋ Add all shown',
+  'program.addAll.label': 'Add all to channel list',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',
   // Save all shown: every FM repeater the list shows into Memories, each once.
-  'program.saveAll.label': 'Save all shown',
+  'program.saveAll.label': 'Save all to Memories',
   'program.saveAll.title':
     'Save every FM repeater shown to Memories, once each: the ones already there are left as they are',
   'program.saveAll.confirm.title': 'Save {{count}} repeaters to Memories?',
@@ -4775,29 +4793,26 @@ export const EN = {
   'program.row.differ.input': 'Input {{used}} is programmed (also listed: {{others}})',
   'program.row.differ.mode': 'Mode {{used}} is programmed (also listed: {{others}})',
   'program.row.differ.colorCode': 'Color code {{used}} is programmed (also listed: {{others}})',
-  'program.row.star.title':
-    'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
-  'program.row.unstar.title':
-    'Unstar — keeps the channel in Memories, drops it off the cockpit strip',
   // Save to Memories: the machine as a memory, not starred. Once saved the row shows the badge
   // instead; {{name}} is the memory's name ("W9ABC 94", a callsign and a frequency: a token).
   'program.row.save.label': 'Save to Memories',
   'program.row.save.title':
     'Save this repeater to Memories: frequency, offset, tone or DCS, callsign, town and links. Not starred, so it stays off the cockpit strip',
-  'program.row.saved.label': '✓ In Memories',
-  'program.row.saved.title': 'In Memories as {{name}}',
+  'program.row.saved.label': 'In Memories',
+  'program.row.saved.title': 'In Memories as {{name}}. Star it there to put it on the cockpit strip',
   // Tune is a RETUNE of the CAT rig — frequency, shift, offset and tone. It never transmits.
   'program.row.tune.label': 'Tune',
   'program.row.tune.title': 'Tune your CAT rig to this repeater now (FM + shift + offset + tone)',
-  'program.row.add.label': '＋ Add',
-  'program.row.added.label': '✓ Added',
-  'program.row.add.title': 'Add to the channel list',
+  'program.row.add.label': 'Add to channel list',
+  'program.row.added.label': 'In channel list',
+  'program.row.add.title': 'Add to the channel list, to program a radio (CHIRP or CSV)',
   'program.row.remove.title': 'Remove from the channel list',
   'program.row.add.digital.title':
     'Digital repeater — programming DMR/D-STAR/Fusion comes in a later version',
 
   // The channel list being built — the artifact this section exists to produce.
   'program.builder.title': 'Channel list',
+  'program.builder.sub': 'for programming a radio: CHIRP or CSV',
   'program.builder.nameCap.label': 'Max name',
   'program.builder.nameCap.title':
     "Your radio's channel-name length — auto names re-derive to fit (hand-edited names are kept)",
@@ -4862,9 +4877,6 @@ export const EN = {
   'program.tune.done': 'Tuned {{freq}} {{mode}} — {{shift}}{{tone}}',
   'program.tune.simplex': 'simplex',
   'program.tune.tone': ' · tone {{hz}}',
-  'program.star.unstarred': '{{name}} unstarred — still in Memories',
-  'program.star.starred': '{{name}} starred — already in Memories',
-  'program.star.saved': '{{name}} ★ — on the cockpit MEM strip and in Memories',
   'program.save.done': '{{name}} saved to Memories',
   // The already-there clause is INTERPOLATED into the sentence, not glued after it: it
   // carries the second count, which one message cannot pluralise beside the first.

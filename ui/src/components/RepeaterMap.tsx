@@ -22,6 +22,7 @@
 // `placeHoverCard`, the dark marker halo), not MapView itself: that component is Connect's, with
 // its own layers, picker and stored setup, none of which a channel list needs.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { BookmarkCheck, BookmarkPlus, ListChecks, ListPlus } from 'lucide-react'
 import { geoInterpolate, geoPath, type GeoProjection } from 'd3-geo'
 import { basemap, destinationPoint, greatCircle, makeProjection, project, rangeRing, usStateBorders } from '../mapGeo'
 import type { LatLon } from '../grid'
@@ -498,6 +499,7 @@ export function RepeaterMap({
                   className="pota-badge rp-saved-badge"
                   title={selected.m.savedAs ? t('program.row.saved.title', { name: selected.m.savedAs }) : undefined}
                 >
+                  <BookmarkCheck size={12} aria-hidden="true" />
                   {t('program.row.saved.label')}
                 </span>
               ) : (
@@ -507,6 +509,7 @@ export function RepeaterMap({
                   onClick={() => onSave(selected.m.id)}
                   title={t('program.row.save.title')}
                 >
+                  <BookmarkPlus size={12} aria-hidden="true" />
                   {t('program.row.save.label')}
                 </button>
               ))}
@@ -517,6 +520,7 @@ export function RepeaterMap({
               onClick={() => onPick(selected.m.id)}
               title={selected.m.added ? t('program.row.remove.title') : t('program.row.add.title')}
             >
+              {selected.m.added ? <ListChecks size={12} aria-hidden="true" /> : <ListPlus size={12} aria-hidden="true" />}
               {selected.m.added ? t('program.row.added.label') : t('program.row.add.label')}
             </button>
           </div>

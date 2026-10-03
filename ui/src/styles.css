@@ -23402,10 +23402,6 @@ button.sat-chip:disabled {
   color: var(--text-faint);
   margin-right: 2px;
 }
-.rp-grid {
-  width: 84px;
-  text-transform: uppercase;
-}
 .rp-city {
   display: inline-flex;
   gap: var(--space-1);
@@ -23415,9 +23411,100 @@ button.sat-chip:disabled {
 .rp-city-input {
   width: 200px;
 }
+/* The one box that says where: room for "Gatlinburg TN" or a locator, and no more than the row has. */
+.rp-place-input {
+  width: 15em;
+  max-width: 100%;
+}
+/* THE LIST'S OWN FILTER (2026-10-02): with the list, under the map, and plainly a filter of it: its
+   words say so, a ✕ clears it, and the count above says what it hides. The browser's own clear is
+   hidden, so there is one ✕. */
+.rp-list-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+.rp-filter-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 18em;
+  min-width: 0;
+}
 .rp-search {
-  width: 160px;
-  margin-left: auto;
+  width: 100%;
+  padding-right: 28px;
+}
+.rp-search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.rp-filter-clear {
+  position: absolute;
+  right: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.rp-filter-clear:hover {
+  color: var(--text);
+}
+/* What the filters hide, after the count, and the one tap that shows it all. */
+.rp-hidden {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  color: var(--text);
+}
+.rp-show-all {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+/* A segmented control: its buttons joined into one pill, so the bands read as one control and what
+   to show as another. */
+.rp-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+}
+.rp-seg > .filter-chip {
+  min-height: 28px;
+  border-color: transparent;
+}
+.rp-seg > .filter-chip.active {
+  border-color: var(--accent);
+}
+/* A row's actions and the count line's: an icon beside each name, so Memories (the bookmark) and the
+   channel list (the list) read apart at a glance. */
+.rp-actions .pota-hunt-btn,
+.rp-actions .pota-badge,
+.rp-map-card-acts .pota-hunt-btn,
+.rp-map-card-acts .pota-badge,
+.rp-count > .filter-chip,
+.rp-builder-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.rp-builder-sub {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
 }
 .rp-filter-gap {
   width: var(--space-3);
@@ -23714,32 +23801,6 @@ button.sat-chip:disabled {
 }
 .rp-save {
   white-space: nowrap;
-}
-/* ★ a machine straight into Memories favorites — same affordance as the
-   Memories row star (.mv-star), so one star means one thing app-wide. */
-.rp-star {
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 0.95rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 3px 5px;
-}
-/* The app's ONE chase gold (.wn-chase.active / .sat-star.on / .sat-fav-mark), light theme
-   overriding to the chase ink like every other gold star. Was `var(--warn, #e6b800)` — an
-   undefined token whose fallback is a second, slightly-off gold that fired in both themes,
-   so a favourite here read as a different idiom from every other ★ in the app and kept a
-   dark-tuned gold on the light theme's white panel. */
-.rp-star:hover {
-  color: #f5a524;
-}
-.rp-star.on {
-  color: #f5a524;
-}
-[data-theme='light'] .rp-star:hover,
-[data-theme='light'] .rp-star.on {
-  color: #9d6500;
 }
 .rp-attribution {
   padding-top: 2px;

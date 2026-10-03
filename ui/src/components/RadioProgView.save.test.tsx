@@ -158,29 +158,4 @@ describe('Save to Memories', () => {
     await waitFor(() => expect(saveAll()).toBeNull())
     expect(badgeIn('K9DCS')).not.toBeNull()
   })
-
-  it('the ★ and the save are one identity: starring a saved machine stars that memory, and adds none', async () => {
-    await fetched([LINKED, DCS])
-    fireEvent.click(saveIn('W9ABC')!)
-    const star = () => within(rowOf('W9ABC')).getByRole('button', { name: '☆' })
-    await waitFor(() => expect(star().getAttribute('aria-pressed')).toBe('false'))
-    fireEvent.click(star())
-    expect(memories()).toHaveLength(1)
-    expect(memories()[0]).toMatchObject({ callsign: 'W9ABC', favorite: true })
-    // CONTROL: starring a machine not yet saved saves it, with the same fields, as a favourite.
-    fireEvent.click(within(rowOf('K9DCS')).getByRole('button', { name: '☆' }))
-    expect(memories()).toHaveLength(2)
-    expect(memories().find((m) => m.callsign === 'K9DCS')).toMatchObject({ favorite: true, notes: 'Beloit', toneMode: 'dtcs' })
-    await waitFor(() => expect(badgeIn('K9DCS')).not.toBeNull())
-  })
-
-  it("the ★ never stars another machine's memory that only shares the output and tone", async () => {
-    // K9TWN's memory: W9ABC's output and tone, the bank's own frequency+tone key, another machine.
-    memoriesStore.set({ ...emptyBank(), memories: [
-      { id: 'twin', name: 'K9TWN', kind: 'repeater', rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5, groups: [], favorite: false, source: 'user', callsign: 'K9TWN' },
-    ] })
-    await fetched([machine('W9ABC', 146.94)])
-    fireEvent.click(within(rowOf('W9ABC')).getByRole('button', { name: '☆' }))
-    expect(Object.fromEntries(memories().map((m) => [m.callsign, m.favorite]))).toEqual({ W9ABC: true, K9TWN: false })
-  })
 })
