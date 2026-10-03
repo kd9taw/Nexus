@@ -138,9 +138,15 @@ point on the curve, and their `signature` is not a signature. No key material is
 - The station refuses an offer that is not DTLS-SRTP (no `a=fingerprint:sha-256`, or any media
   line on a profile other than `UDP/TLS/RTP/SAVPF` or `UDP/DTLS/SCTP`), that has no VP8 video
   line the page can receive, or that has no data channel. It answers `invalidOffer`.
-- Candidates trickle one per message. The station advertises server-reflexive (and, once TURN
-  exists, relay) candidates only. It never sends a host candidate, and its `raddr`/`rport` are
-  `0.0.0.0 0`, so no LAN address leaves the shack. Both ends use the same STUN server,
+- Candidates trickle one per message. The station advertises its own LAN address as a host
+  candidate, straight after its answer, when its stream socket's address is a private IPv4 one
+  (10/8, 172.16/12, 192.168/16): a browser on the shack's own network connects to it directly.
+  Then its server-reflexive candidate (and, once TURN exists, relay ones), whose `raddr`/`rport`
+  are `0.0.0.0 0`. No other LAN address leaves the shack: never a link-local or 100.64/10 one,
+  never another host's, and never the station's own anywhere but its host candidate. (Until the
+  operator's ruling of 2026-10-03 the station sent no host candidate at all, and a browser on the
+  shack's own network found no path.) The relay and the page hand every station candidate to the
+  browser as it is, filtering none by type or address. Both ends use the same STUN server,
   `stun:stun.cloudflare.com:3478`, with no credentials; the page gives it to its peer connection
   so it has a reflexive candidate of its own.
 

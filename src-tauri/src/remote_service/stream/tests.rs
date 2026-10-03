@@ -1,6 +1,6 @@
 //! The stream's station side, with a real operations authority and a real engine. What needs a
-//! WebRTC session (the offer answered, DTLS, no LAN address) is tested in `tempo_stream::session`
-//! on Windows; everything here runs on every platform.
+//! WebRTC session (the offer answered, DTLS, the one LAN address it offers) is tested in
+//! `tempo_stream::session` on Windows; everything here runs on every platform.
 use super::*;
 use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use std::sync::{Mutex, OnceLock};

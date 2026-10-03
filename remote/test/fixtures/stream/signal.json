@@ -142,7 +142,19 @@
       }
     },
     {
-      "name": "candidate (reflexive; never host)",
+      "name": "candidate (host: the shack's own LAN address, for a browser on its network)",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:fffeff7eba9f32d1e7c95ebe 1 udp 2130706175 10.0.0.5 61000 typ host ufrag cgyb7Q0Lvq0tP3Ko",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "candidate (reflexive)",
       "message": {
         "type": "streamSignal",
         "sessionId": "10000000-0000-4000-8000-000000000001",
@@ -264,7 +276,18 @@
       }
     },
     {
-      "name": "candidate (reflexive; never host)",
+      "name": "candidate (host: the shack's own LAN address, for a browser on its network)",
+      "message": {
+        "type": "streamSignal",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:fffeff7eba9f32d1e7c95ebe 1 udp 2130706175 10.0.0.5 61000 typ host ufrag cgyb7Q0Lvq0tP3Ko",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "candidate (reflexive)",
       "message": {
         "type": "streamSignal",
         "payload": {
