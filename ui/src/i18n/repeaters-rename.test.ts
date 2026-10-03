@@ -157,7 +157,13 @@ describe('the pt-BR kit carries the rename', () => {
   it('names the view by its old name nowhere in its English column, and its notes call the view Repeaters', () => {
     const left = [...english].filter(([k, v]) => !(k in OTHER_SENSE.en) && LOCALES.en.old.test(v)).map(([k]) => k)
     expect(left).toEqual([])
-    const stale = [...notes].filter(([, v]) => /Program's|Program \(radio|in Program\b|Program section/.test(v)).map(([k]) => k)
+    // The translators' notes name the view too ("Under Repeaters' map", "the one Repeaters reads on every search").
+    const NOTE_OLD = /(?<![A-Za-z])Program(?![A-Za-z])/
+    const stale = [...notes].filter(([, v]) => NOTE_OLD.test(v)).map(([k]) => k)
     expect(stale).toEqual([])
+    // CONTROL: the notes as they read before the rename are caught.
+    for (const s of ["Under Program's map: what it shows.", 'hearham is a repeater directory, the one Program reads on every search'])
+      expect(NOTE_OLD.test(s), s).toBe(true)
+    expect(NOTE_OLD.test('The radio-programming program; CHIRP programs the radio.')).toBe(false)
   })
 })
