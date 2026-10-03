@@ -29,9 +29,12 @@ async function freePortOutsideEphemeralRange() {
   throw new Error(`no free port found in ${floor}-${ceiling - 1}`)
 }
 
-export async function runtime({ bindings = {}, port: requestedPort } = {}) {
+// `origin` stands the service up on another public origin - an https:// one is the hosted service.
+// Every helper but `open()` still works there, because dispatchFetch delivers any URL to workerd;
+// `open()` is a real TCP socket and needs the local http:// origin.
+export async function runtime({ bindings = {}, port: requestedPort, origin: publicOrigin } = {}) {
   const port = requestedPort ?? await freePortOutsideEphemeralRange()
-  const origin = `http://127.0.0.1:${port}`, issuer = 'https://identity.remote-test.invalid/'
+  const origin = publicOrigin ?? `http://127.0.0.1:${port}`, issuer = 'https://identity.remote-test.invalid/'
   const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true })
   const publicJwk = { ...await exportJWK(publicKey), kid: crypto.randomUUID(), alg: 'RS256', use: 'sig' }
   let jwksReads = 0

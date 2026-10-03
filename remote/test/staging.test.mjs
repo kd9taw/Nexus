@@ -698,12 +698,17 @@ test('live verification exercises the real compiled Worker, asset bytes and auth
   assert.ok(result.assetsChecked >= 3)
 })
 
-test('a wrong Worker revision, stale asset, missing security header or open admission fails the same live check', async () => {
-  for (const fault of ['revision', 'asset', 'headers', 'admission']) {
+test('a wrong Worker revision, stale asset, missing security header, page over plain HTTP or open admission fails the same live check', async () => {
+  for (const fault of ['revision', 'asset', 'headers', 'hsts', 'plain', 'admission']) {
     const corrupted = async (input, options) => {
-      const path = new URL(input).pathname
+      const { pathname: path, protocol } = new URL(input)
       if (fault === 'admission' && path.endsWith('/session')) return Response.json({})
+      if (fault === 'plain' && protocol === 'http:') return new Response('<!doctype html>', { status: 200 })
       const actual = await served(input, options)
+      if (fault === 'hsts' && path === '/' && protocol === 'https:') {
+        const headers = new Headers(actual.headers); headers.delete('strict-transport-security')
+        return new Response(actual.body, { status: actual.status, headers })
+      }
       if (fault === 'revision' && path.endsWith('/config')) return Response.json({ ...await actual.json(), revision: 'stale' })
       if (fault === 'asset' && path.endsWith('.js')) return new Response('stale bytes', { status: 200 })
       if (fault === 'headers' && path === '/') {
@@ -712,7 +717,7 @@ test('a wrong Worker revision, stale asset, missing security header or open admi
       }
       return actual
     }
-    await assert.rejects(verifyLive(artifact, corrupted))
+    await assert.rejects(verifyLive(artifact, corrupted), { hsts: /missing its security headers/, plain: /answers plain HTTP/ }[fault])
   }
 })
 

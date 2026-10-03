@@ -962,6 +962,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macro editors and the satellite Doppler switch. What each setting does, and when it takes
   effect, is unchanged.
 
+### Security
+
+- **Remote: the hosted page opens only over https://.** An `http://` address for the Remote page,
+  typed without the `https://` or followed from an old link, loaded the whole page, sign-in
+  included, unencrypted, where anyone on the same network (public Wi-Fi, a hostile router) could
+  read or replace it. Now an `http://` address goes straight to the same `https://` address before
+  the service does anything else, and the page tells your browser to use only `https://` for it
+  from then on. Stations and browsers already on `https://`, which is every one Nexus sets up, see
+  no change.
+
 ### Fixed
 
 - **Program never shows a repeater list it could not read as "no repeaters".** A search could
