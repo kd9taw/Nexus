@@ -724,8 +724,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Repeaters is simpler to work.** **Near** is the one place that says where to search: My station,
   or one box that takes a grid square or a city (the Grid and City chips are gone), and Route to….
   The list's own filter sits with the list, reads **Filter: call or MHz** and clears with one ✕; a place
-  typed into it is offered to Near ("Search near "woodstock, il" instead?") instead of quietly emptying
-  the list. The count line says what the filters hide and by which, with one tap to show it all:
+  typed into it is offered instead of quietly emptying the list ("Search near "woodstock, il" instead?"),
+  and that tap is the search: Near looks the place up and the list is fetched around it with the radius
+  and bands you have set, the filter cleared. Words that are no place say so where the offer was, and a
+  name that is several places waits for your pick. The count line says what the filters hide and by
+  which, with one tap to show it all:
   "21 of 25 shown · nearest first — 4 hidden by On-air only · Show all". The bands are one segmented
   control and FM / +Digital / On-air only one **Show** group, and Auto says its radius in words
   ("50 mi: about how far 2m+70cm reach from a car or a handheld"). A row's actions say what they do,

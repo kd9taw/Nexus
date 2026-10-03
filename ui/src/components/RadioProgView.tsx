@@ -238,6 +238,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [showDigital, setShowDigital] = useState(false)
   const [onAirOnly, setOnAirOnly] = useState(true)
   const [search, setSearch] = useState('')
+  /** A "Search near <place>?" the operator tapped: waiting for its words to become a place, or missed (they match none). */
+  const [nearAsk, setNearAsk] = useState<{ text: string; missed: boolean } | null>(null)
   const [recents, setRecents] = useState<Recent[]>(loadRecents)
   // Or a route (the operator's pick, 2026-09-30: a route list for a trip): from the origin above to
   // a second place given the same three ways, the machines within a corridor either side of the
@@ -436,7 +438,9 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       .finally(() => setFetching(false))
   }, [origin, fetching, routing, dest, corridorMi, effRadiusMi, originKind, originLabel, destLabel])
 
-  const searchCity = useCallback((override?: string) => {
+  /** Look up the town in Near. `onLookup` hears what was found (null: the lookup failed, and its toast says why), and a
+   *  caller that passes it says "no places matched" itself. */
+  const searchCity = useCallback((override?: string, onLookup?: (cands: GeoCandidate[] | null) => void) => {
     const q = (override ?? cityInput).trim()
     if (!q || geoBusy) return
     setGeoBusy(true)
@@ -444,12 +448,27 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     geocodeCity(q)
       .then((cands) => {
         setCityCands(cands)
-        if (cands.length === 0) pushToast(t('program.city.noMatch'), 'info', 3000)
+        if (cands.length === 0 && !onLookup) pushToast(t('program.city.noMatch'), 'info', 3000)
         if (cands.length === 1) setCityPick(cands[0])
+        onLookup?.(cands)
       })
-      .catch((e) => pushToast(String(e), 'error'))
+      .catch((e) => {
+        pushToast(String(e), 'error')
+        onLookup?.(null)
+      })
       .finally(() => setGeoBusy(false))
   }, [cityInput, geoBusy])
+
+  // A tapped "Search near …?" is the search: once its words are a place in Near (the one found, or the one picked from
+  // several), the list is fetched around it exactly as Fetch does, and the filter that held the words is cleared. Near
+  // changed to anything else meanwhile is the operator's own, and waits for Fetch.
+  useEffect(() => {
+    if (!nearAsk || nearAsk.missed || !origin || fetching) return
+    if (originKind !== 'city' || cityInput !== nearAsk.text) return
+    setNearAsk(null)
+    setSearch('')
+    doFetch()
+  }, [nearAsk, origin, fetching, originKind, cityInput, doFetch])
 
   const searchToCity = useCallback(() => {
     const q = toCity.trim()
@@ -1061,13 +1080,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     )
   }
 
-  /** "Search near <place>?" from the list's filter: the words go to Near, which looks them up, and the
-   *  filter is cleared. Nothing is fetched until the operator presses Fetch, as everywhere here. */
+  /** "Search near <place>?" from the list's filter: the words go to Near, which looks them up, and the search follows
+   *  (the effect above). Words that match no place say so where the offer was, and nothing is fetched; a failed lookup
+   *  drops the request, and the offer stands to tap again. */
   const searchNear = (text: string) => {
-    setSearch('')
     setArea('around')
     setFromPlace(text)
-    searchCity(text)
+    setNearAsk({ text, missed: false })
+    searchCity(text, (cands) => {
+      if (!cands) setNearAsk(null)
+      else if (cands.length === 0) setNearAsk({ text, missed: true })
+    })
   }
 
   const toneLabel = (c: ProgChannel): string => {
@@ -1566,10 +1589,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   </button>
                 )}
               </span>
-              {placeLike && (
-                <button disabled={remote} type="button" className="filter-chip rp-place-offer" onClick={() => searchNear(search.trim())}>
-                  {t('program.filters.place.offer', { place: search.trim() })}
-                </button>
+              {nearAsk?.missed && nearAsk.text === search.trim() ? (
+                <span role="status">{t('program.city.noMatch')}</span>
+              ) : (
+                placeLike && (
+                  <button disabled={remote || geoBusy} type="button" className="filter-chip rp-place-offer" onClick={() => searchNear(search.trim())}>
+                    {t('program.filters.place.offer', { place: search.trim() })}
+                  </button>
+                )
               )}
             </div>
           )}

@@ -3,7 +3,8 @@
 Repeaters is the radio-programming workbench: it turns the repeaters around a
 location into a channel list, and gets that list out to a radio. The channel
 list is the artifact — the repeater results are a source feed that fills it, and
-nothing is fetched until you press **Fetch repeaters**. Nexus never drives a
+nothing is fetched until you ask: **Fetch repeaters**, or the list filter's
+**Search near …** offer. Nexus never drives a
 programming cable; **CHIRP** does that, free, for about a thousand models, and
 this section builds the CSV CHIRP imports. It is deliberately not a repeater
 directory: no polling and no browsing for its own sake, and its one map shows
@@ -131,7 +132,11 @@ only under All. The list's own text filter sits with the list, under the map:
 **Filter: call or MHz**, with a ✕ that clears it. It narrows the list you
 have, by callsign or town; it never searches somewhere else, and if what you
 type there looks like a place ("woodstock, il"), it offers **Search near
-"woodstock, il" instead?**, which moves the words to Near and looks them up.
+"woodstock, il" instead?**, and that tap is the search: the words move to Near,
+Near looks them up, and the list is fetched around the place with the radius and
+bands you have set, the filter cleared. Words that are no place say so where the
+offer was and fetch nothing; a name that is several places waits for you to pick
+one under Near.
 The count line, in the Results header, says what the filters hide and by which,
 with one tap to undo them all: "21 of 25 shown · nearest first — 4 hidden by
 On-air only · **Show all**". Beside it, **Add all to channel list** and **Save
