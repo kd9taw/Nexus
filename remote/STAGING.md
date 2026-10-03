@@ -156,6 +156,31 @@ All three paths write `source='manual'` and UPDATE rather than DELETE. The trial
 proof an account consumed its trial; removing it re-opens the reinstall and re-pair abuse the
 one-trial rule exists to refuse.
 
+## The stream's relay key
+
+A stream whose direct connection fails can fall back to a relay: the `turn` route mints Cloudflare
+Realtime TURN credentials for that one stream, with a TURN key the service holds as two Worker
+secrets, `TURN_KEY_ID` and `TURN_KEY_TOKEN` (the key's id and its API token). Create the key in the
+Cloudflare dashboard's Realtime section, then add both to the GitHub `production` environment as
+`REMOTE_TURN_KEY_ID` and `REMOTE_TURN_KEY_TOKEN`. Every deploy applies them as encrypted secrets, the
+way it applies `ADMIN_SUBJECT`, and neither ever reaches the browser.
+
+**Until both are set, the deploy refuses** before it migrates or uploads anything: `wrangler.jsonc`
+declares them under `secrets.required`, and the preflight names each one that is missing. A Worker
+running without them (locally, in the tests) refuses the route as `relayNotConfigured`, and the page
+then streams direct, as it did before the relay.
+
+**Proving the relay.** A stream prefers a direct path, so on a network where one works it never uses
+the relay. To make it, open the Remote page, run `localStorage.setItem('nexus.remote.relay', 'force')`
+in the browser's console and start a stream: the browser then offers relay candidates alone, so a
+live picture can only have come through the relay, and without a relay the stream cannot connect at
+all. If it does not connect, the `turn` request in the browser's Network panel says which half
+failed: a 200 carrying `iceServers` means the key works and the path through the relay does not (a
+shack network that blocks outbound UDP, say); a 503 `relayNotConfigured` means the Worker holds no
+key; a 503 `relayUnavailable` means Cloudflare refused, answered something unusable, or did not
+answer within three seconds. `localStorage.removeItem('nexus.remote.relay')` puts streams back to
+direct first.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` uses the **production** environment's

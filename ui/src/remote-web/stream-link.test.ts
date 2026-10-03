@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { StreamLink } from './stream-link'
+import { STREAM_ICE_SERVERS, STREAM_RELAY_WAIT_MS, StreamLink, browserStream } from './stream-link'
 import type { AudioEnvironment } from './audio-listen'
 import {
   MIC_CONSTRAINTS, MIC_ENDED, STREAM_UPLINK_BUDGET_BYTES, parseHeld, parseMicState, parseReceivedMessage, parseStreamInput,
   secureAnswer,
 } from './stream-protocol'
-import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, OFFER_SIGNATURE, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
 const TARGET = { stationBootId: stopCase.stationBootId as string, leaseId: LEASE, transmitEpoch: stopCase.transmitEpoch as string }
@@ -682,4 +682,129 @@ it('shows the station\'s microphone over as the contract carries it, and refuses
     control.deliver(bad)
     expect(h.link.getSnapshot().station?.ended, JSON.stringify(bad)).toBe('routeChanged')
   }
+})
+
+// THE RELAY. The service mints Cloudflare TURN credentials for this stream, and the page hands
+// them to its peer beside the STUN server it always has. ICE tries every direct path before a relayed
+// one, so the relay carries the stream only where nothing direct works; and whatever stops the page
+// getting one leaves the stream exactly as it was before the relay existed: direct.
+it('the relay the service mints rides beside STUN; a page with no relay to ask builds the peer it always did', async () => {
+  let asked = 0
+  const h = harness({ relay: async () => { asked++; return { iceServers: [RELAY] } } })
+  await h.link.start(LEASE)
+  expect(asked).toBe(1)
+  expect(h.peer.iceServers).toEqual([...STREAM_ICE_SERVERS, RELAY])
+  expect(h.signals.map(s => s.payload.kind)).toEqual(['offer'])
+  const direct = harness()
+  await direct.link.start(LEASE)
+  expect(direct.peer.iceServers).toEqual(STREAM_ICE_SERVERS)
+})
+
+it('a relay the service will not or cannot give leaves the stream direct', async () => {
+  for (const [what, relay] of [
+    ['refused: signed out, not entitled, no relay key, the provider down', () => Promise.reject(Error('relayUnavailable'))],
+    ['an answer with no TURN in it', async () => ({ iceServers: [{ urls: ['stun:stun.example.invalid:3478'] }] })],
+    ['a TURN entry without its credential', async () => ({ iceServers: [{ urls: RELAY.urls, username: RELAY.username }] })],
+    ['a TURN URL that is not one', async () => ({ iceServers: [{ ...RELAY, urls: ['turn:has a space:3478'] }] })],
+    ['not an answer at all', async () => 'relay'],
+  ] as const) {
+    const h = harness({ relay })
+    await h.link.start(LEASE)
+    expect(h.peer.iceServers, what).toEqual(STREAM_ICE_SERVERS)
+    expect(h.signals.map(s => s.payload.kind), what).toEqual(['offer'])
+    expect(h.link.getSnapshot().phase, what).toBe('connecting')
+  }
+})
+
+it('a relay slow to answer costs the relay, never the stream', async () => {
+  let answer: (value: unknown) => void = () => {}
+  const h = harness({ relay: () => new Promise(resolve => { answer = resolve }) })
+  const starting = h.link.start(LEASE)
+  await vi.advanceTimersByTimeAsync(STREAM_RELAY_WAIT_MS - 1)
+  expect(h.peers, 'still waiting for the relay').toHaveLength(0)
+  await vi.advanceTimersByTimeAsync(1)
+  await starting
+  expect(h.peer.iceServers).toEqual(STREAM_ICE_SERVERS)
+  expect(h.signals.map(s => s.payload.kind)).toEqual(['offer'])
+  // Its answer arriving after all changes nothing about the stream already offered.
+  answer({ iceServers: [RELAY] })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(h.peers).toHaveLength(1)
+})
+
+it('a browser that will not build a peer with the relay still streams direct', async () => {
+  const h = harness({ relay: async () => ({ iceServers: [RELAY] }), refuseRelay: true })
+  await h.link.start(LEASE)
+  expect(h.peers).toHaveLength(1)
+  expect(h.peer.iceServers).toEqual(STREAM_ICE_SERVERS)
+  expect(h.signals.map(s => s.payload.kind)).toEqual(['offer'])
+  expect(h.link.getSnapshot().phase).toBe('connecting')
+})
+
+it('a stream ended while its relay was being asked for creates nothing and sends nothing', async () => {
+  for (const end of ['close', 'disconnected', 'dispose'] as const) {
+    let answer: (value: unknown) => void = () => {}
+    const h = harness({ relay: () => new Promise(resolve => { answer = resolve }) })
+    const starting = h.link.start(LEASE)
+    await Promise.resolve()
+    h.link[end]()
+    answer({ iceServers: [RELAY] })
+    await starting
+    expect(h.peers, end).toHaveLength(0)
+    expect(h.signals, end).toEqual([])
+  }
+  // And one started again meanwhile is the only one that goes on.
+  const answers: ((value: unknown) => void)[] = []
+  const h = harness({ relay: () => new Promise(resolve => { answers.push(resolve) }) })
+  const first = h.link.start(LEASE)
+  await Promise.resolve()
+  h.link.close()
+  const second = h.link.start(LEASE)
+  await Promise.resolve()
+  answers[0]({ iceServers: [RELAY] })
+  await first
+  expect(h.peers, 'the stream that was closed').toHaveLength(0)
+  answers[1]({ iceServers: [] })
+  await second
+  expect(h.peers).toHaveLength(1)
+  expect(h.signals.map(s => s.payload.kind)).toEqual(['offer'])
+})
+
+it('the browser builds its peer with exactly the servers it is given, and no relay-only policy', () => {
+  const built: unknown[] = []
+  vi.stubGlobal('RTCPeerConnection', class { constructor(config: unknown) { built.push(config) } })
+  try {
+    browserStream().peer([...STREAM_ICE_SERVERS, RELAY])
+    expect(built).toEqual([{ iceServers: [...STREAM_ICE_SERVERS, RELAY], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' }])
+  } finally { vi.unstubAllGlobals() }
+})
+
+// The relay's test switch, set in the browser's console. Forced, the browser offers relay candidates
+// alone, so a live picture can only have come through the relay, even on a network where a direct path
+// works; with no relay from the service such a stream cannot connect at all, which is what a test of the
+// relay needs to see. Anything but the exact word leaves the default, and it is read as each peer is built.
+it('the relay test switch: only nexus.remote.relay = force builds a peer that uses the relay alone', () => {
+  const built: unknown[] = []
+  vi.stubGlobal('RTCPeerConnection', class { constructor(config: unknown) { built.push(config) } })
+  const relayed = [...STREAM_ICE_SERVERS, RELAY], env = browserStream()
+  const plain = (iceServers: unknown) => ({ iceServers, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' })
+  try {
+    for (const value of ['on', 'Force', 'relay', 'force ', '1']) { localStorage.setItem('nexus.remote.relay', value); env.peer(relayed) }
+    localStorage.setItem('nexus.remote.relay', 'force')
+    env.peer(relayed)
+    env.peer([...STREAM_ICE_SERVERS])
+    localStorage.removeItem('nexus.remote.relay')
+    env.peer(relayed)
+    expect(built).toEqual([...Array(5).fill(plain(relayed)),
+      { ...plain(relayed), iceTransportPolicy: 'relay' },
+      // The service gave no relay: still the relay alone, never a direct path.
+      { ...plain([...STREAM_ICE_SERVERS]), iceTransportPolicy: 'relay' },
+      // Taken away, the next peer is the default again, with no reload.
+      plain(relayed)])
+    // Storage the browser refuses to read is no switch.
+    built.length = 0
+    vi.stubGlobal('localStorage', { getItem: () => { throw new DOMException('denied', 'SecurityError') } })
+    env.peer(relayed)
+    expect(built).toEqual([plain(relayed)])
+  } finally { vi.unstubAllGlobals(); localStorage.removeItem('nexus.remote.relay') }
 })

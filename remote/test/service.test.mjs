@@ -2601,3 +2601,90 @@ test('a revoked entitlement refuses a stream offer at the relay, and a live one 
   assert.equal(await offerReachesStation(), true, 'and a reinstated account can stream again')
   live.browser.close(); live.station.close()
 })
+
+// THE STREAM'S RELAY. `turn` mints Cloudflare Realtime TURN credentials for one stream, for a
+// browser a ticket would be given to, and nobody else. The provider is a fake in every test
+// (runtime.mjs `relay`), and the key id and token below are generated here, never real.
+const hex = bytes => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), b => b.toString(16).padStart(2, '0')).join('')
+const relayAnswer = () => ({ iceServers: [
+  { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.cloudflare.com:53'] },
+  { urls: ['turn:turn.cloudflare.com:3478?transport=udp', 'turn:turn.cloudflare.com:53?transport=udp',
+    'turn:turn.cloudflare.com:3478?transport=tcp', 'turn:turn.cloudflare.com:80?transport=tcp',
+    'turns:turn.cloudflare.com:5349?transport=tcp', 'turns:turn.cloudflare.com:443?transport=tcp'],
+  username: hex(48), credential: hex(48) },
+] })
+
+test('the relay route refuses whoever a ticket would refuse, and a service without the relay key refuses by name', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}/turn`
+  const refused = async (client, status, extra) => (await client.post(path, {}, status, extra)).value.error
+  assert.equal(await refused(app.client(), 401, { origin: app.origin }), 'signInRequired')
+  assert.equal(await refused(app.client(pair.browser.jwt), 403, { origin: 'https://other.invalid' }), 'originDenied')
+  assert.equal(await refused(pair.browser, 403), 'deviceNotApproved', 'a browser not yet approved at the radio')
+  await app.approved(pair)
+  assert.equal(await refused(await app.owner(), 404), 'stationUnavailable', 'another account\'s station')
+  // THE CONTROL: everything a ticket needs is in place, and the same browser is given one.
+  await pair.browser.post(`stations/${pair.stationId}/ticket`)
+  assert.equal(await refused(pair.browser, 503), 'relayNotConfigured', 'a service holding no relay key says so')
+  await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, pair.browser.accountId).run()
+  assert.equal(await refused(pair.browser, 403), 'trialRequired')
+})
+
+test('the relay route mints TURN credentials for an approved, entitled browser, and hands back the relay alone', async () => {
+  const keyId = hex(16), token = hex(32), asked = []
+  let provider = async () => Response.json(relayAnswer()), release = () => {}
+  const relayed = await runtime({ bindings: { TURN_KEY_ID: keyId, TURN_KEY_TOKEN: token }, relay: async request => {
+    asked.push({ url: request.url, method: request.method, authorization: request.headers.get('authorization'),
+      type: request.headers.get('content-type'), body: await request.json() })
+    return provider()
+  } })
+  try {
+    const pair = await relayed.paired(), path = `stations/${pair.stationId}/turn`
+    // Refused before the provider is asked: a refusal never mints a credential.
+    await relayed.client().post(path, {}, 401, { origin: relayed.origin })
+    await pair.browser.post(path, {}, 403)
+    assert.equal(asked.length, 0)
+    await relayed.approved(pair)
+    const entitled = until => relayed.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(until, pair.browser.accountId).run()
+    // A month of entitlement left: the credential lasts the longest session, a day (a stream is a lane
+    // of one station connection, admitted for a day).
+    await entitled(Date.now() + 30 * 86400000)
+    const answer = relayAnswer(), [, turn] = answer.iceServers
+    provider = async () => Response.json(answer)
+    const { value, response } = await pair.browser.post(path)
+    assert.deepEqual(asked, [{ url: `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
+      method: 'POST', authorization: `Bearer ${token}`, type: 'application/json', body: { ttl: 86400 } }])
+    assert.deepEqual(value, { iceServers: [{ urls: turn.urls.filter(url => !url.includes(':53?')), username: turn.username, credential: turn.credential }] },
+      'the TURN entry alone: STUN is the page\'s own, and the DNS port is left out')
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    assert.ok(!JSON.stringify(value).includes(token) && !JSON.stringify(value).includes(keyId), 'the key and its token never reach the page')
+    // An hour left: the credential ends with the entitlement, not a day later.
+    await entitled(Date.now() + 3600000)
+    await pair.browser.post(path)
+    assert.ok(asked[1].body.ttl > 3500 && asked[1].body.ttl <= 3600, `ttl ${asked[1].body.ttl}`)
+    // The provider down, or answering something else: refused by name, and nothing of its answer passes through.
+    for (const [what, answerWith] of [
+      ['an error status, whatever its body says', async () => Response.json(answer, { status: 500 })],
+      ['a failed connection', async () => { throw new Error('unreachable') }],
+      ['not JSON', async () => new Response('<html>', { status: 200 })],
+      ['no TURN entry', async () => Response.json({ iceServers: [answer.iceServers[0]] })],
+      ['TURN on the DNS port alone', async () => Response.json({ iceServers: [{ ...turn, urls: ['turn:turn.cloudflare.com:53?transport=udp'] }] })],
+      ['TURN without its credential', async () => Response.json({ iceServers: [{ urls: turn.urls, username: turn.username }] })],
+    ]) {
+      provider = answerWith
+      assert.deepEqual((await pair.browser.post(path, {}, 503)).value, { error: 'relayUnavailable' }, what)
+    }
+    // A provider that never answers costs the request a bounded wait, never a page left hanging.
+    provider = () => new Promise(resolve => { release = () => resolve(Response.json(answer)) })
+    const answered = pair.browser.post(path, {}, 503)
+    const unanswered = delay(8000).then(() => { throw new Error('the route was still waiting on the provider after 8 s') })
+    assert.deepEqual((await Promise.race([answered, unanswered])).value, { error: 'relayUnavailable' })
+    // A page asking in a loop is bounded per browser: twelve a minute, like tickets. Started at the
+    // top of a minute's window, so the window cannot roll over part way through the count.
+    provider = async () => Response.json(answer)
+    const looping = await relayed.paired()
+    await relayed.approved(looping)
+    if (60000 - Date.now() % 60000 < 15000) await delay(60000 - Date.now() % 60000)
+    for (let ask = 0; ask < 12; ask++) await looping.browser.post(`stations/${looping.stationId}/turn`)
+    assert.equal((await looping.browser.post(`stations/${looping.stationId}/turn`, {}, 429)).value.error, 'tryLater')
+  } finally { release(); await relayed.mf.dispose() }
+})

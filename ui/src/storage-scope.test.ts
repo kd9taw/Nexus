@@ -221,6 +221,10 @@ const SHARED = [
   // same reason (remote-web/useRareDxAlerts, remote-web/usePotaAlerts).
   'nexus.remote.potaAlerts',
   'nexus.remote.rareDxAlerts',
+  // The Remote page's relay test switch: 'force' makes every stream use the relay alone
+  // (remote-web/stream-link, 2026-10-03). Set by hand in the console, for the whole browser: SHARED,
+  // like the workspace flag below.
+  'nexus.remote.relay',
   // The Remote page's flag that shows the old watch/control workspace again, hidden while streaming
   // is proven (remote-web/RemoteApp, 2026-10-02). Set by hand or by the compiled sweep, for the whole
   // browser: SHARED, like the alert opt-ins.

@@ -354,44 +354,56 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
 // the Worker live. Every deploy now applies the secret from its GitHub environment, and the preflight
 // refuses a run whose environment does not supply it, before any request and before any write.
 const subject = 'google-oauth2|104857600000000000042'
+// The stream's relay key, synthetic: two required secrets a deploy must supply beside ADMIN_SUBJECT.
+const relaySecrets = { REMOTE_TURN_KEY_ID: randomBytes(16).toString('hex'), REMOTE_TURN_KEY_TOKEN: randomBytes(32).toString('hex') }
+const relayPresent = { REMOTE_TURN_KEY_ID_PRESENT: 'true', REMOTE_TURN_KEY_TOKEN_PRESENT: 'true' }
 test('the deploy preflight requires every Worker secret from the environment, and refuses a foreign database or unowned Worker, before any write', async () => {
   const required = template.secrets?.required
-  assert.deepEqual(required, ['ADMIN_SUBJECT'], 'positive control: the template declares the secret this guards')
+  assert.deepEqual(required, ['ADMIN_SUBJECT', 'TURN_KEY_ID', 'TURN_KEY_TOKEN'], 'positive control: the template declares the secrets this guards')
 
   // Not firing: the environment supplies it, as the value or, for steps that must not hold it, as
   // presence only. The live Worker's current binding is reported, never required: the upload replaces it.
   for (const [secrets, fault, live] of [
-    [{ REMOTE_ADMIN_SUBJECT: subject }, undefined, 'secret_text'],
-    [{ REMOTE_ADMIN_SUBJECT_PRESENT: 'true' }, undefined, 'secret_text'],
-    [{ REMOTE_ADMIN_SUBJECT: subject }, 'secret-missing', 'absent'],
-    [{ REMOTE_ADMIN_SUBJECT: subject }, 'secret-as-var', 'plain_text'],
+    [{ REMOTE_ADMIN_SUBJECT: subject, ...relaySecrets }, undefined, 'secret_text'],
+    [{ REMOTE_ADMIN_SUBJECT_PRESENT: 'true', ...relayPresent }, undefined, 'secret_text'],
+    [{ REMOTE_ADMIN_SUBJECT: subject, ...relaySecrets }, 'secret-missing', 'absent'],
+    [{ REMOTE_ADMIN_SUBJECT: subject, ...relaySecrets }, 'secret-as-var', 'plain_text'],
   ]) {
     const p = uploadedProvider({ tagged: true, fault, secrets })
     const result = await p.api.preflight(required, ids.databaseId)
-    assert.deepEqual(result.liveSecretTypes, { ADMIN_SUBJECT: live })
-    assert.deepEqual(result.secretsSupplied, ['ADMIN_SUBJECT'])
+    assert.deepEqual(result.liveSecretTypes, { ADMIN_SUBJECT: live, TURN_KEY_ID: 'secret_text', TURN_KEY_TOKEN: 'secret_text' })
+    assert.deepEqual(result.secretsSupplied, required)
     const reported = JSON.stringify(result)
     assert.ok(!reported.includes(subject) && !reported.includes('synthetic|someone'), 'no secret value is ever reported')
+    assert.ok(Object.values(relaySecrets).every(value => !reported.includes(value)), 'nor the relay key')
     assert.equal(p.writes.length, 0)
   }
   // A first deploy has no Worker to hold anything, and may proceed: the upload brings the secret.
-  const fresh = provider({ database: ids.databaseId, extraEnv: { REMOTE_ADMIN_SUBJECT_PRESENT: 'true' } })
-  assert.deepEqual((await fresh.api.preflight(required, ids.databaseId)).liveSecretTypes, { ADMIN_SUBJECT: 'no Worker yet' })
+  const fresh = provider({ database: ids.databaseId, extraEnv: { REMOTE_ADMIN_SUBJECT_PRESENT: 'true', ...relayPresent } })
+  assert.deepEqual((await fresh.api.preflight(required, ids.databaseId)).liveSecretTypes,
+    { ADMIN_SUBJECT: 'no Worker yet', TURN_KEY_ID: 'no Worker yet', TURN_KEY_TOKEN: 'no Worker yet' })
   assert.ok(fresh.calls.every(call => call.method === 'GET'))
 
   // Firing: not supplied, in each shape an unset or mangled GitHub secret takes. Refused before any request.
-  for (const secrets of [{}, { REMOTE_ADMIN_SUBJECT: '' }, { REMOTE_ADMIN_SUBJECT: `${subject} ` }, { REMOTE_ADMIN_SUBJECT: 'short' },
-    { REMOTE_ADMIN_SUBJECT_PRESENT: 'false' }, { REMOTE_ADMIN_SUBJECT_PRESENT: 'TRUE' }]) {
+  for (const [secrets, missing] of [
+    [{}, 'REMOTE_ADMIN_SUBJECT, REMOTE_TURN_KEY_ID, REMOTE_TURN_KEY_TOKEN'],
+    ...[{ REMOTE_ADMIN_SUBJECT: '' }, { REMOTE_ADMIN_SUBJECT: `${subject} ` }, { REMOTE_ADMIN_SUBJECT: 'short' },
+      { REMOTE_ADMIN_SUBJECT_PRESENT: 'false' }, { REMOTE_ADMIN_SUBJECT_PRESENT: 'TRUE' }].map(admin => [{ ...admin, ...relaySecrets }, 'REMOTE_ADMIN_SUBJECT']),
+    // The relay key is as required as the administrator: a deploy without it stops here too.
+    [{ REMOTE_ADMIN_SUBJECT: subject }, 'REMOTE_TURN_KEY_ID, REMOTE_TURN_KEY_TOKEN'],
+    [{ REMOTE_ADMIN_SUBJECT: subject, REMOTE_TURN_KEY_ID: relaySecrets.REMOTE_TURN_KEY_ID }, 'REMOTE_TURN_KEY_TOKEN'],
+    [{ REMOTE_ADMIN_SUBJECT_PRESENT: 'true', REMOTE_TURN_KEY_TOKEN_PRESENT: 'true', REMOTE_TURN_KEY_ID_PRESENT: 'false' }, 'REMOTE_TURN_KEY_ID'],
+  ]) {
     const p = provider({ database: ids.databaseId, extraEnv: secrets })
     await assert.rejects(p.api.preflight(required, ids.databaseId), error => {
-      assert.match(error.message, /^REMOTE_ADMIN_SUBJECT not set in this GitHub environment; .*nothing was migrated or uploaded$/)
-      assert.ok(!error.message.includes(subject))
+      assert.equal(error.message, `${missing} not set in this GitHub environment; every deploy applies required Worker secrets from it, so nothing was migrated or uploaded`)
+      assert.ok(!error.message.includes(subject) && Object.values(relaySecrets).every(value => !error.message.includes(value)))
       return true
     })
     assert.equal(p.calls.length, 0, JSON.stringify(Object.keys(secrets)))
   }
-  // Firing: the other preconditions, with the secret supplied.
-  const supplied = { REMOTE_ADMIN_SUBJECT: subject }
+  // Firing: the other preconditions, with the secrets supplied.
+  const supplied = { REMOTE_ADMIN_SUBJECT: subject, ...relaySecrets }
   for (const [options, database, expected] of [
     [{ tagged: true, secrets: supplied }, randomUUID(), /artifact database does not match/],
     [{ tagged: false, secrets: supplied }, ids.databaseId, /unrecognized deployment/],
@@ -408,7 +420,7 @@ test('migrate and deploy each run the preflight themselves, so neither writes wi
     const p = uploadedProvider({ tagged: true })
     // Refused before Wrangler starts: past the preflight this would spawn Wrangler, which fails differently.
     await assert.rejects(uploadArtifact(scratch, mode, { ...p.env, PATH: process.env.PATH, GITHUB_SHA: ids.revision }, p.fetcher),
-      /REMOTE_ADMIN_SUBJECT not set in this GitHub environment/)
+      /REMOTE_ADMIN_SUBJECT, REMOTE_TURN_KEY_ID, REMOTE_TURN_KEY_TOKEN not set in this GitHub environment/)
     assert.equal(p.writes.length, 0, mode)
   }
 })
@@ -698,12 +710,14 @@ test('live verification exercises the real compiled Worker, asset bytes and auth
   assert.ok(result.assetsChecked >= 3)
 })
 
-test('a wrong Worker revision, stale asset, missing security header, page over plain HTTP or open admission fails the same live check', async () => {
-  for (const fault of ['revision', 'asset', 'headers', 'hsts', 'plain', 'admission']) {
+test('a wrong Worker revision, stale asset, missing security header, page over plain HTTP, open admission or an open relay route fails the same live check', async () => {
+  for (const fault of ['revision', 'asset', 'headers', 'hsts', 'plain', 'admission', 'relay-admission']) {
     const corrupted = async (input, options) => {
       const { pathname: path, protocol } = new URL(input)
       if (fault === 'admission' && path.endsWith('/session')) return Response.json({})
       if (fault === 'plain' && protocol === 'http:') return new Response('<!doctype html>', { status: 200 })
+      // The stream's relay route hands out a credential, so it is checked for the same refusals.
+      if (fault === 'relay-admission' && path.endsWith('/turn')) return Response.json({})
       const actual = await served(input, options)
       if (fault === 'hsts' && path === '/' && protocol === 'https:') {
         const headers = new Headers(actual.headers); headers.delete('strict-transport-security')

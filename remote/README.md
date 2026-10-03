@@ -52,7 +52,7 @@ second station never restarts the first.
 because `enabled` plus an expiry cannot tell them apart and they are different
 sentences to an operator. Two gates consume them: `requireEligible()` admits
 pairing while a trial runs **or** has never started, and `requireTrial()` guards
-`device`, `ticket` and `renew` — that is its only call site. Observation is gated
+`device`, `ticket`, `renew` and `turn` — that is its only call site. Observation is gated
 separately by `observerDeadline` in the relay, which also expires a session already
 in flight, so neither function is the whole entitlement story on its own.
 
@@ -67,6 +67,9 @@ invented one cannot afterwards be told from a real one.
 - Pairing codes and pending browser approvals expire after ten minutes. Approved
   browser cookies last thirty days. One-use WebSocket tickets expire after fifteen
   seconds. Credentials and tickets are stored as SHA-256 digests.
+- The stream's relay credentials (`turn`, Cloudflare TURN) last a day at most, the longest a
+  stream can run, and never past the account's entitlement. A browser may ask for twelve a
+  minute. Without the relay key the route refuses `relayNotConfigured` and streams stay direct.
 - Browser sessions revalidate account, device and trial authority every thirty
   seconds with a sixty-second maximum lease. ACKs and pings cannot renew authority,
   and expiry does not depend on a client sending anything.

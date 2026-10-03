@@ -266,7 +266,11 @@ export class HostedConnection {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN
         || this.socket.bufferedAmount + new TextEncoder().encode(text).length > STREAM_SIGNAL_BYTES) throw new RemoteError(503)
       this.socket.send(text)
-    }, { ...streamEnvironment, signOffer: streamEnvironment.signOffer ?? (device && (async sdp => {
+    }, { ...streamEnvironment,
+      // The stream's relay, asked for as each stream starts. The request is this connection's,
+      // so stopping or reconnecting cancels one still on its way.
+      relayServers: streamEnvironment.relayServers ?? (() => this.client.post(`stations/${stationId}/turn`, {}, this.abort.signal)),
+      signOffer: streamEnvironment.signOffer ?? (device && (async sdp => {
       // The session this offer is made in: the relay stamps its id on the offer, and the station
       // checks the signature against it.
       const key = await device.key(), sessionId = this.sessionId

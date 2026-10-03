@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote service: never a VPN's 100.x address, and nothing else about your network. It needs the
   new Nexus at the shack; the Remote site is unchanged.
 
+### Added
+
+- **Remote stream: a relay for networks where a direct connection fails.** Where the browser
+  cannot reach the shack directly, as on some mobile and office networks, the stream can now pass
+  through Cloudflare's relay instead. A direct connection is always tried, and preferred: the
+  relay carries the stream only when nothing direct works, and it carries it still encrypted,
+  unable to read it. Whenever the relay cannot be reached, the stream works direct exactly as
+  before.
+
 ## [1.16.0] — 2026-10-03
 
 ### Added

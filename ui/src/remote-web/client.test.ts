@@ -8,7 +8,8 @@ import fixtures from '../remote-monitor/fixtures.v2.json'
 import { POLL_MS } from '../remote-monitor/protocol'
 import { startMonitor } from '../remote-monitor/session'
 import { deviceKey } from './device-key'
-import { harness, LEASE } from './stream-link.testkit'
+import { harness, LEASE, RELAY } from './stream-link.testkit'
+import { STREAM_ICE_SERVERS } from './stream-link'
 import { offerBinding, offerFingerprint } from './stream-protocol'
 
 class Socket {
@@ -561,6 +562,27 @@ it('routes both of the stream\'s message kinds to the stream and keeps the socke
   expect(socket.readyState, 'the socket stays open').toBe(1)
   expect(seen.map(m => (m as { type: string }).type)).toEqual(['streamState', 'streamSignal'])
   remote.stop()
+})
+
+// The stream's relay is this station's, asked for when a stream starts, and the request belongs
+// to the connection: stopping it cancels a request still in flight.
+it('a stream asks the service for this station\'s relay, and hands it to the peer beside STUN', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  vi.stubGlobal('WebSocket', Socket)
+  const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, ''), stationId = crypto.randomUUID()
+  const asked: { path: string; body: unknown; signal?: AbortSignal }[] = []
+  const post = vi.fn(async (path: string, body: unknown, signal?: AbortSignal) => { asked.push({ path, body, signal }); return { iceServers: [RELAY] } })
+  const observationTicket = async () => ({ body: { ticket, serverNow: 1000 }, startedAt: performance.now() })
+  const h = harness()
+  const remote = new HostedConnection({ post, observationTicket, operationVersion: 4 } as unknown as BrowserClient, stationId, true, h.env)
+  remote.start(); await vi.advanceTimersByTimeAsync(0)
+  expect(asked, 'nothing is asked for before a stream starts').toEqual([])
+  await remote.stream.start(LEASE)
+  expect(asked.map(({ path, body }) => [path, body])).toEqual([[`stations/${stationId}/turn`, {}]])
+  expect(h.peer.iceServers).toEqual([...STREAM_ICE_SERVERS, RELAY])
+  expect(asked[0].signal?.aborted).toBe(false)
+  remote.stop()
+  expect(asked[0].signal?.aborted, 'stopping the connection cancels it').toBe(true)
 })
 
 // A5: the offer on the socket carries this browser's key and its signature over the offer's own
