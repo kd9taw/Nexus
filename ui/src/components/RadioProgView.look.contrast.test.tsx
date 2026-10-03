@@ -142,7 +142,7 @@ const ALL: Mode[] = [...new Set<Mode>([...MODES, ...SKINS.flatMap((s) => skinBas
  *  board's own suite (PotaSotaView.contrast.test.tsx) holds and pins: every light theme and the light theme under each
  *  accent preset, every dark theme, and in dark the HUNT look itself ("dark is untouched", 2026-09-30). These buttons are
  *  held to exactly those themes. Under two accent presets at night the look itself reads 3.93 and 4.44:1, on the POTA
- *  board as here: the look's fix belongs to every host at once, not to one view (see the N83 report). */
+ *  board as here: the look's fix belongs to every host at once, not to one view. */
 const skinsOf = (theme: 'light' | 'dark') => ['', ...SKINS.filter((s) => s.base === theme).map((s) => s.id)]
 const accent = PALETTE_ROLES.find((r) => r.id === 'accent')!
 const HUNT_MODES: Mode[] = [
