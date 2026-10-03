@@ -302,7 +302,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [linkedId, setLinkedId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const rowEls = useRef(new Map<string, HTMLDivElement>())
-  /** A dot clicked on the map brings its row into view in the list under it (and only then: a row the
+  /** A dot clicked on the map brings its row into view in the list beside or under it (and only then: a row the
    *  operator clicked is already where they are looking). */
   const scrollToRow = useRef<string | null>(null)
   useEffect(() => {
@@ -1128,7 +1128,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           <header className="rp-card-head">
             <span className="rp-card-title">{t('program.card.search')}</span>
           </header>
-          <div className="rp-card-body">
+          <div className="rp-card-body rp-query-body">
           {/* ONE place to say where (2026-10-02): My station, or one box that takes a grid or a city, and
               Route to…. The list's own filter, above the list, narrows the list and never asks for a place. */}
           <div className="rp-origin" role="group" aria-label={t('program.origin.aria')}>
@@ -1514,7 +1514,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
 
           {/* Map first, the list under it (the operator's pick, 2026-10-02): after a fetch with something
               shown, the map of hearham's listings above the list of every machine. With nothing
-              shown, the list's own empty words (and its Try wider) stand alone. */}
+              shown, the list's own empty words (and its Try wider) stand alone. On a wide window the
+              two sit side by side, each the whole height (the operator's pick, 2026-10-03: "Map left,
+              list right"); the list's filter and the list are one column of the split. */}
+          <div className="rp-split">
           {result && searched && shown.length > 0 && (
             <div className="rp-map">
               <RepeaterMap
@@ -1561,6 +1564,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               </div>
             </div>
           )}
+          <div className="rp-list">
           {/* The list's own filter, WITH the list (the operator's finding, 2026-10-02: "woodstock, il" typed
               here, meaning to search near it, read as a broken fetch). It narrows this list, says so in the
               count above, clears with one ✕, and a place typed into it anyway is offered to Near. */}
@@ -1782,6 +1786,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 </div>
               )
             })}
+          </div>
+          </div>
           </div>
           </div>
           </section>

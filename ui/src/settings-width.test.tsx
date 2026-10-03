@@ -312,8 +312,9 @@ describe('the Settings panel uses the window it has', () => {
       const expected: Record<string, string> = {
         'panel pota-view pota-hunter': '1100px', // prose-shaped, and still is
         'panel log-view logbook': t === 'xl' ? '1600px' : '1100px',
-        // Repeaters takes the room from lg too (2026-10-02, the operator's "Conditions' look" for it).
-        'radioprog panel': t === 'xl' || t === 'lg' ? '1600px' : '1100px',
+        // Repeaters uses the whole width of its pane from md, as Settings does (the operator, 2026-10-03: "the
+        // screen is narrow and in the middle"); at xs/sm the shipped cap is inert by arithmetic and stays.
+        'radioprog panel': t === 'xs' || t === 'sm' ? '1100px' : 'none',
       }
       for (const [classes, want] of Object.entries(expected)) {
         const got = maxWidth(siblingPanel(classes))

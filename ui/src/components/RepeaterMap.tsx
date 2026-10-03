@@ -391,8 +391,14 @@ export function RepeaterMap({
   const hit = (e: { clientX: number; clientY: number }) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return null
-    const px = e.clientX - rect.left
-    const py = e.clientY - rect.top
+    // Visual px to layout px. Under `.app { zoom: var(--ui-zoom) }` the pointer and the rect are VISUAL px and the
+    // dots are LAYOUT px (`size` is the box's clientWidth), so the unscaled offset hit a dot (1/zoom − 1) × its
+    // distance away: at the default 85 % the station's own dot named another machine (Chrome, 2026-10-03). The
+    // rect's ratio undoes any zoom, as MapView's canvasXY does.
+    const sx = rect.width > 0 ? size.w / rect.width : 1
+    const sy = rect.height > 0 ? size.h / rect.height : 1
+    const px = (e.clientX - rect.left) * sx
+    const py = (e.clientY - rect.top) * sy
     const reach = Math.max(8, 7 * ms)
     let best: { m: MapMarker; x: number; y: number; d: number } | null = null
     for (const p of placed) {

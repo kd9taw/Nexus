@@ -5879,19 +5879,24 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
-/* xl (effective width ≥ 2400): let the DATA surfaces — Logbook's 11-column table
-   and the Program workbench — use the room. POTA is prose-shaped and keeps the
-   1100px measure above; Settings USED to, and the rule below is why it no longer does. */
-[data-viewport='xl'] .layout.single > .panel.log-view,
-[data-viewport='xl'] .layout.single > .panel.radioprog {
+/* xl (effective width ≥ 2400): let the DATA surface — Logbook's 11-column table — use
+   the room. POTA is prose-shaped and keeps the 1100px measure above; Settings and
+   Repeaters USED to, and the rules below are why they no longer do. */
+[data-viewport='xl'] .layout.single > .panel.log-view {
   max-width: 1600px;
 }
-/* Repeaters takes the room from lg (effective width ≥ 1600, which is 1920×1080 and 1366×768 at
-   the default 85 %): its map is as wide as its column, and at 1100 px 1920 left two 400 px bands
-   of nothing beside it (the operator, 2026-10-02: "This page looks bland compared to the rest of
-   nexus"). At md the window is barely wider than 1100, so nothing changes there. */
-[data-viewport='lg'] .layout.single > .panel.radioprog {
-  max-width: 1600px;
+/* Repeaters uses the whole width of its pane from md, as Settings does (the operator,
+   2026-10-03: "the screen is narrow and in the middle and you have a lot of room on the screen
+   to resize everything"). It was a centred column, 1100 px and then 1600 px from lg (2026-10-02:
+   "This page looks bland compared to the rest of nexus"), with the rest of the window as gutter.
+   On a wide window its map and its list now sit side by side, so the width is theirs, and the
+   reading widths live inside it: the list's rows (.rp-list), the channel list's column (.rp-body)
+   and the notes (.rp-note) each have a measure of their own. At xs/sm the cap is inert by
+   arithmetic, as Settings' rule below explains. */
+[data-viewport='md'] .layout.single > .panel.radioprog,
+[data-viewport='lg'] .layout.single > .panel.radioprog,
+[data-viewport='xl'] .layout.single > .panel.radioprog {
+  max-width: none;
 }
 /* THE FIELD DAY DASHBOARD is a board, not prose — and it arrives here from somewhere else.
    Until 2026-08-30 it was drawn in the three-pane operating workspace (App.tsx), which put a
@@ -23360,6 +23365,15 @@ button.sat-chip:disabled {
   gap: var(--space-3);
   padding: var(--space-3);
 }
+/* Wide (lg and up, 2026-10-03): the source column holds the map and the list side by side
+   (.rp-split), so it takes the room, and the channel list keeps a column of its own: a quarter of
+   the page, floored at 520 px, where its rows still fit with the Remote page's Tune among their
+   buttons (their columns, gaps, buttons and scrollbar come to about 495), and no wider than 600 px,
+   where its name boxes stop being worth the width (3440×1440). */
+[data-viewport='lg'] .rp-body,
+[data-viewport='xl'] .rp-body {
+  grid-template-columns: minmax(0, 1fr) clamp(520px, 26%, 600px);
+}
 /* Narrow (EFFECTIVE width) stack: the source above the channel list. Each row floors at what
    its half holds and shares any surplus, and past that the panel scrolls (the deficit's owner,
    `.layout.single > .panel`). The rows were minmax(0, 1fr), two equal halves of whatever the
@@ -23391,6 +23405,16 @@ button.sat-chip:disabled {
 [data-viewport='xl'] .rp-source {
   min-height: 0;
   overflow-y: auto;
+}
+/* Compact on a wide window (2026-10-03): the Search card's groups (Near, Recent, Radius, Fetch…)
+   flow along its width, each one whole, instead of stacking one under another, so the map and the
+   list under it get the height. A group wider than what is left of a line takes the next one. */
+[data-viewport='lg'] .rp-query-body,
+[data-viewport='xl'] .rp-query-body {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-5);
 }
 .rp-origin,
 .rp-recents,
@@ -23554,6 +23578,8 @@ button.sat-chip:disabled {
   color: var(--text-dim);
   border-left: 2px solid var(--state-ok);
   padding: var(--space-1) var(--space-2);
+  /* A measure, now the page is as wide as the window (2026-10-03). */
+  max-width: 90ch;
 }
 .rp-count {
   font-size: var(--fs-label);
@@ -23592,18 +23618,56 @@ button.sat-chip:disabled {
 .rp-chan-rows > .aw-empty {
   margin: auto;
 }
+/* THE MAP AND THE LIST share this box (the operator's pick, 2026-10-03, "Map left, list right":
+   "On a wide window the map and the list sit side by side, each the full height, so the list shows
+   many more rows. On a narrow window: the map above, the list below filling the rest."). Before,
+   the map took two parts of the column to the list's one and the list sat at or near its 120 px
+   floor: two whole rows at 1366×768 and at 1920×1080 (Chrome). The box is the results card's
+   grower; it and the list's column take a zero LENGTH basis (as .rp-results explains), and neither
+   may shrink under what it holds (no `min-height: 0`, as .rp-found explains). */
+.rp-split {
+  flex: 1 1 0px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* The list's column: its filter over the list, and the list taking all the height left. */
+.rp-list {
+  flex: 1 1 0px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Wide (lg and up): side by side, each the whole height of the box and half its width. Beside the
+   map the list stops at 1000 px, where a row's figures and its three actions read as one line with
+   room to spare, and the map takes the surplus (3440×1440). With no map (before a fetch, or nothing
+   shown) the list's words have the whole width. */
+[data-viewport='lg'] .rp-split,
+[data-viewport='xl'] .rp-split {
+  flex-direction: row;
+}
+[data-viewport='lg'] .rp-map + .rp-list,
+[data-viewport='xl'] .rp-map + .rp-list {
+  max-width: 1000px;
+}
 /* The map (RepeaterMap.tsx; the operator's picks: a hearham-only map, 2026-09-30; "A large map on
-   top, the list underneath", 2026-10-02) sits over the list and takes two parts of the column to
-   the list's one, each from a zero LENGTH basis (as .rp-results explains) over a floor of its own.
-   The canvas fills the stage out of flow, and the words under it say what the map shows and what
-   it leaves off. */
+   top, the list underneath", 2026-10-02; "Map left, list right", 2026-10-03). Above the list (md
+   and down) it is its drawing's floor and its words, and the list takes the rest; beside the list
+   (lg and up) it is a grower and its drawing fills its whole height. The canvas fills the stage out
+   of flow, and the words under it say what the map shows and what it leaves off. */
 .rp-map {
-  flex: 2 1 0px;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
+}
+[data-viewport='lg'] .rp-map,
+[data-viewport='xl'] .rp-map {
+  flex: 1 1 0px;
+  min-width: 0;
 }
 /* In the stacked layout the list sits at its 120 px floor and the panel scrolls, but a map that
    short is no map: at 1024×768 its canvas was 53 px tall under its words (Chrome, 2026-10-02). So
@@ -23678,15 +23742,19 @@ button.sat-chip:disabled {
 .rp-row:hover {
   background: var(--bg-elev-2);
 }
-/* Where the list is narrowest — md, where the panel stops at 1100 px and the column is ~590 px, and
-   xs — a row's buttons (★, Save to Memories, Tune, ＋ Add: ~330 px) do not fit beside its figures,
-   and they ran 97 to 146 px out of the list at 1024×768 (Chrome, 2026-10-02). There they take the
-   row's last line, at its right; their place in the reading order is unchanged. */
+/* Where the list is narrowest — md, where the column is ~590 to ~850 px, lg, where the list is half
+   the source column beside the map (~500 to ~850 px), and xs — a row's buttons (★, Save to
+   Memories, Tune, ＋ Add: ~330 px) do not fit beside its figures, and they ran 97 to 146 px out of
+   the list at 1024×768 (Chrome, 2026-10-02); wrapped in their cell instead, they stood one above
+   another and a row took 89 px at 1366×768 (Chrome, 2026-10-03). There they take the row's last
+   line, at its right; their place in the reading order is unchanged. */
 [data-viewport='md'] .rp-row,
+[data-viewport='lg'] .rp-row,
 [data-viewport='xs'] .rp-row {
   grid-template-columns: minmax(72px, 1fr) 76px 56px 52px minmax(64px, 0.9fr) auto;
 }
 [data-viewport='md'] .rp-actions,
+[data-viewport='lg'] .rp-actions,
 [data-viewport='xs'] .rp-actions {
   grid-column: 1 / -1;
   order: 1;

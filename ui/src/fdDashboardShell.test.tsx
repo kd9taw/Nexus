@@ -161,7 +161,7 @@ describe('the shell gives the scoreboard more room than the centre column did, n
       px,
       `[data-viewport='lg'] → max-width: ${v}. 1920 is lg, and it is the size the report ` +
         'came from — a widening scoped to xl (≥2400 effective px) would leave the reported ' +
-        'window untouched, which is the trap the log-view/radioprog rule above sets.',
+        'window untouched, which is the trap the log-view rule above sets.',
     ).toBeGreaterThan(1100)
   })
 
