@@ -30,7 +30,7 @@ EmComm, Reference, Other — an offset direction (simplex / + up / − down / od
 split) with either an offset in MHz or an absolute TX frequency, a tone mode
 (None / Tone / TSQL / DTCS) with its CTCSS frequency or DTCS code, a callsign,
 free-text notes, group membership, the ★ favorite flag, and for an HF net the
-days and UTC start time. A repeater sent over from the **Program** section also
+days and UTC start time. A repeater sent over from the **Repeaters** section also
 carries the site's latitude and longitude, so its distance and bearing are
 recomputed from wherever you are now rather than baked in at save time. Nexus
 stamps the last recall time. It does **not** store power, filter width or tuning
@@ -131,7 +131,7 @@ only while the Memories section is enabled.
    looking at **★ Favorites**, in which case it stars, or at a group, in which
    case it joins that group.
 3. Either way you get frequency and mode **only**. A repeater needs its shift and
-   tone typed in afterwards (below) or brought over from Program.
+   tone typed in afterwards (below) or brought over from Repeaters.
 
 ### Tune a saved channel
 
@@ -195,9 +195,9 @@ sits at the right-hand end of that header row, off this crop.*
    for a digital code.
 5. Name it, and star it if you want it on the cockpit strips.
 
-### Send repeaters over from Program
+### Send repeaters over from Repeaters
 
-The **Program** section searches repeaters near your grid and builds channel
+The **Repeaters** section searches repeaters near your grid and builds channel
 lists. Two paths land here:
 
 1. **★ a machine in the results list** — it goes straight into Memories as a
@@ -253,7 +253,7 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
 - **＋ Save captures frequency and mode, nothing else.** Save an FM repeater off
   the dial and you get a plain simplex channel — the shift and tone you have set
   in [Settings ▸ Phone](settings-reference.md#phone-ssb--fm) do not come
-  with it. Type them into the editor, or bring the machine over from Program,
+  with it. Type them into the editor, or bring the machine over from Repeaters,
   which does carry them.
 - **Nexus never writes to the radio's own memory channels.** There is no CAT path
   that fills a rig memory slot; the CHIRP CSV is the whole delivery story. The
@@ -285,7 +285,7 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
   not.
 - **Duplicate detection is frequency (to 100 Hz) + mode + CTCSS encode tone.**
   Two channels that differ only by offset, name, group or DTCS code count as the
-  same channel, so the second one is skipped on import or on a Program save.
+  same channel, so the second one is skipped on import or on a channel-list save from Repeaters.
 - **＋ New saves before you type.** The channel exists in the bank from the press, and the
   count moves with it. **Escape keeps it; Discard is the only way out that removes it.** See
   [Enter a repeater by hand](#enter-a-repeater-by-hand).
@@ -322,7 +322,7 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
 
 ## Related guides
 
-- [Program](program.md) — building a repeater list for a location, and **Save to
+- [Repeaters](program.md) — building a repeater list for a location, and **Save to
   Memory Bank**, which drops it straight into this bank
 - [Phone (SSB)](phone.md)
 - [CW](cw.md)

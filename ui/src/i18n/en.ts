@@ -4408,7 +4408,7 @@ export const EN = {
   // has to keep the three consistent, which is why they read as the same words here.
   'memories.empty.none': 'No memories yet.',
   'memories.empty.hint':
-    'Start with a <b>starter pack</b> — nets, calling frequencies, POTA, and digital watering holes, ready to go. Or save the current frequency with <b>＋ Save</b>, import a CHIRP CSV, or send repeaters here from the Program section. Star a memory (★) and it shows on the MEM strip in every cockpit.',
+    'Start with a <b>starter pack</b> — nets, calling frequencies, POTA, and digital watering holes, ready to go. Or save the current frequency with <b>＋ Save</b>, import a CHIRP CSV, or send repeaters here from the Repeaters section. Star a memory (★) and it shows on the MEM strip in every cockpit.',
   'memories.empty.browsePacks': 'Browse starter packs',
   'memories.empty.noMatch': 'Nothing matches this view.',
 
@@ -4589,7 +4589,7 @@ export const EN = {
   // the exported CSV, so it cannot vary by locale), the example grid and frequency, and the
   // persisted project name. The rig models in the "Max name" list are tokens in
   // `features/radioprog.ts`.
-  'program.title': 'Program',
+  'program.title': 'Repeaters',
   'program.sub':
     'Build channel lists for your radios — repeaters near a location, exported for CHIRP or tuned on your rig',
 
@@ -4669,11 +4669,11 @@ export const EN = {
     "{{rb}} is asked about the states at the start of this route, not every one it crosses, so the machines in <b>{{states}}</b> are {{hearham}}'s alone. Search the rest of the trip as a route of its own.",
 
   // The saved-projects file Program could not read. `{{path}}` is a file path on the operator's
-  // computer — a token, never translated. "Program" in the second is this section's own name.
+  // computer — a token, never translated. "Repeaters" in the second is this section's own name.
   'program.projectsFile.setAside':
     'Nexus could not read your saved channel lists, so it kept that file, untouched, at <code>{{path}}</code> and started a new list. Nothing was deleted.',
   'program.projectsFile.keptInPlace':
-    'Nexus could not read your saved channel lists at <code>{{path}}</code> and could not move that file aside, so Program will not save until it is moved or repaired. Nothing was deleted.',
+    'Nexus could not read your saved channel lists at <code>{{path}}</code> and could not move that file aside, so Repeaters will not save until it is moved or repaired. Nothing was deleted.',
 
   // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
   'program.filters.aria': 'Result filters',
@@ -5266,11 +5266,11 @@ export const EN = {
     'HRDLog.net code cleared — auto-upload to HRDLog.net is off',
   'settings.connections.repeaterbook.token.saveFailed': 'Could not save the RepeaterBook token',
   'settings.connections.repeaterbook.token.saved':
-    'RepeaterBook token saved — the Program section now uses RepeaterBook',
+    'RepeaterBook token saved — the Repeaters section now uses RepeaterBook',
   'settings.connections.repeaterbook.token.clearFailed':
     'Could not clear the RepeaterBook token',
   'settings.connections.repeaterbook.token.cleared':
-    'RepeaterBook token cleared — the Program section falls back to hearham.com',
+    'RepeaterBook token cleared — the Repeaters section falls back to hearham.com',
   'settings.connections.cloudlog.key.saveFailed': 'Could not save the Cloudlog API key',
   'settings.connections.cloudlog.key.saved': 'Cloudlog API key saved to the keychain',
   'settings.connections.cloudlog.key.clearFailed': 'Could not clear the Cloudlog API key',
@@ -7161,7 +7161,7 @@ export const EN = {
   'settings.confirmations.repeaterbook.token.forget.title':
     'Remove the stored RepeaterBook token from the system keychain',
   'settings.confirmations.repeaterbook.token.hint':
-    "Optional. Without a token the <b>Program</b> section uses the open hearham.com directory. Add a personal token (from your RepeaterBook account's <b>API Apps</b> page) to pull from RepeaterBook.com under your own account instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to hearham.com.",
+    "Optional. Without a token the <b>Repeaters</b> section uses the open hearham.com directory. Add a personal token (from your RepeaterBook account's <b>API Apps</b> page) to pull from RepeaterBook.com under your own account instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is pending RepeaterBook's approval; if RepeaterBook is unreachable, Repeaters falls back to hearham.com.",
 
   'settings.confirmations.cloudlog.note':
     'Auto-forward each logged QSO to your self-hosted <b>Cloudlog</b> or <b>Wavelog</b> logbook (HTTP). The API key is a per-instance token for your own server — enter it, your station-profile id, and turn on the toggle.',
@@ -9904,9 +9904,9 @@ export const EN = {
   'nav.memories.label': 'Memories',
   'nav.memories.title':
     'Memories — saved channels: repeaters, nets, calling freqs; groups + ★ favorites; one click to tune',
-  'nav.program.label': 'Program',
+  'nav.program.label': 'Repeaters',
   'nav.program.title':
-    'Program — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+    'Repeaters — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',
@@ -10645,7 +10645,7 @@ export const EN = {
   'features.memories.label': 'Memories',
   'features.memories.oneLine':
     'Saved channels — repeaters, HF nets, calling freqs: groups, ★ favorites, one-click tune, CHIRP CSV, starter packs + opt-in net reminders.',
-  'features.program.label': 'Program',
+  'features.program.label': 'Repeaters',
   'features.program.oneLine':
     'Program your radios — local repeaters to a channel list: CHIRP CSV, rig memories, or tune-now.',
   'features.awards.label': 'Awards',

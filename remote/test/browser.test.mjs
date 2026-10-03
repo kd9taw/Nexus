@@ -3459,7 +3459,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.delete(collection)
       await until(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
     }
-    for(const label of ['Settings','Program']){
+    for(const label of ['Settings','Repeaters']){
       await click(button(label))
       if(applicationVersion<14){await until(`!!document.querySelector('.remote-view-unavailable')`);continue}
       const settings=label==='Settings'

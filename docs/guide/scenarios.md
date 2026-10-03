@@ -271,7 +271,7 @@ Nexus is built so the station still works. What changes:
 | [Awards & Journey](awards-journey.md) — counted from the local log, no network at all | [DXpeditions](dxpeditions.md) — the expedition list |
 | [Stats](stats.md) | Confirmation upload and download |
 | [Satellites](satellites.md) pass prediction, from the orbital elements already downloaded | Fresh orbital elements — refresh them before you leave |
-| [Memories](memories.md) and [Program](program.md) channel lists you already have | Repeater lookups for a new location |
+| [Memories](memories.md) and [Repeaters](program.md) channel lists you already have | Repeater lookups for a new location |
 
 **Before you go:** refresh the orbital elements
 ([Settings ▸ Radio ▸ Orbital elements](settings-reference.md#orbital-elements)),

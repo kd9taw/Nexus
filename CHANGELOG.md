@@ -684,6 +684,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lights while its carrier is up, as on FT. FT's transmit buttons are now the same size as
   everyone else's. On the Remote, the row follows the contact in the Quick layout, and for a
   browser watching without station control it scrolls with the screen, as the transmit bar does.
+- **Program is now Repeaters.** The view the navigation bar called **Program** is called **Repeaters**
+  everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
+  window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel
+  list, your settings and the RepeaterBook token are unchanged.
 - **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
   **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
   the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After

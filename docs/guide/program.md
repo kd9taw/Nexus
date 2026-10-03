@@ -1,6 +1,6 @@
-# Program
+# Repeaters
 
-Program is the radio-programming workbench: it turns the repeaters around a
+Repeaters is the radio-programming workbench: it turns the repeaters around a
 location into a channel list, and gets that list out to a radio. The channel
 list is the artifact — the repeater results are a source feed that fills it, and
 nothing is fetched until you press **Fetch repeaters**. Nexus never drives a
@@ -9,16 +9,16 @@ this section builds the CSV CHIRP imports. It is deliberately not a repeater
 directory: no polling and no browsing for its own sake, and its one map shows
 hearham's listings only.
 
-Program ships on: it is enabled under the **Just getting started**,
+Repeaters ships on: it is enabled under the **Just getting started**,
 **POTA / SOTA** and **6m / VHF** goal profiles and wherever no goal profile was
 chosen, and off only under DX chasing and contesting; it toggles either way in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
-<!-- TODO: capture screenshot — the Program section on a wide window: fetched results on the left showing FM rows plus one badged DMR row and one OFF-AIR row, a six-channel list built on the right, the whole delivery row visible under it -->
+<!-- TODO: capture screenshot — the Repeaters section on a wide window: fetched results on the left showing FM rows plus one badged DMR row and one OFF-AIR row, a six-channel list built on the right, the whole delivery row visible under it -->
 
 ## The tour
 
-![The Program source column: NEAR with My station · EN52 selected beside Grid and City, a RECENT chip reading EN52, RADIUS chips 10/25/50/100/200 mi and Auto with "= 50 mi (2m+70cm)" beside it, a Fetch repeaters button, then band chips (All, 2m, 70cm, 1.25m, 6m, 10m) with 2m and 70cm lit, FM / +Digital, On-air only, and a "Filter call / city…" box.](../img/manual/program-search.webp)
+![The Repeaters source column: NEAR with My station · EN52 selected beside Grid and City, a RECENT chip reading EN52, RADIUS chips 10/25/50/100/200 mi and Auto with "= 50 mi (2m+70cm)" beside it, a Fetch repeaters button, then band chips (All, 2m, 70cm, 1.25m, 6m, 10m) with 2m and 70cm lit, FM / +Digital, On-air only, and a "Filter call / city…" box.](../img/manual/program-search.webp)
 
 *The source column in Nexus 1.10.3, before a fetch.*
 
@@ -82,7 +82,7 @@ RepeaterBook access for every Nexus user is pending RepeaterBook's approval:
 until it is granted that path answers 503 and the search falls through to
 hearham, which is why an install with no token is a hearham install.
 
-For a location in the UK, Program also reads the national coordinator's list:
+For a location in the UK, Repeaters also reads the national coordinator's list:
 the RSGB's repeater list (ETCC, ukrepeater.net), asked about the 4-character
 locator squares your radius reaches, the nine nearest at most, one request per
 square, each cached for a week. When a wider radius reaches further, a note
@@ -111,7 +111,7 @@ RepeaterBook.com", "Repeater data from hearham.com" — and the exported file
 carries a comment line for each directory this search read and each one a
 channel in your list came from.
 
-hearham has real holes in rural country, so Program checks for one. When the
+hearham has real holes in rural country, so Repeaters checks for one. When the
 results inside your radius carry nothing at all on 2 m, or nothing on 70 cm, a
 note says so: "hearham lists no **2 m** repeaters here, which is unusual for an
 area that has any — its rural coverage is patchy, so this list is probably
@@ -133,7 +133,7 @@ or off-air machine on that frequency is not hidden: "3 on 147.18 MHz (±2.5 kHz)
 filters not applied · nearest first". 2.5 kHz is under half the narrowest channel
 spacing in use (6.25 kHz), so a frequency names one channel: 147.18 never finds
 147.195 or 147.1875. The search covers the machines inside your radius; with none
-on the frequency, Program says so and offers a wider one.
+on the frequency, Repeaters says so and offers a wider one.
 
 **A result row** is callsign, output frequency, offset (`-0.6`, `+5.0`, `→` and
 the absolute input for a true split, `—` for simplex), tone (`103.5`, `D023`,
@@ -376,7 +376,7 @@ handheld; ☆ on a result row is the one-machine version.
   cannot tell you about the individual machines a directory never listed. A
   RepeaterBook token is the fix, and shared access is not available until
   RepeaterBook approves it.
-- **Program has no ⧉ pop-out** — it renders in the main window only. (Memories
+- **Repeaters has no ⧉ pop-out** — it renders in the main window only. (Memories
   does detach, if you want a channel list on a second monitor.)
 - **Nexus does not talk to your radio's programming port.** No cable, no CPS, no
   cloning. The one thing it moves directly is a CAT rig's VFO, from the per-row
