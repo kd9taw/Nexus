@@ -3,6 +3,11 @@ import { afterEach, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteStation } from './RemoteStation'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
+import { EN } from '../i18n/en'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
 
 afterEach(() => { cleanup(); delete window.__TAURI_INTERNALS__ })
 it('renders local pairing and device approval through only the isolated Remote commands', async () => {
@@ -92,16 +97,16 @@ it('keeps transmit revocation available during a pending refresh and discards it
  }
  window.__TAURI_INTERNALS__={invoke:invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
  render(<RemoteStation />)
- const revoke=await screen.findByRole('button',{name:'Revoke transmission permission'})
+ const revoke=await screen.findByRole('button',{name:'Revoke FT8/FT4 transmission from the Remote page'})
  fireEvent.click(screen.getByRole('button',{name:'Refresh browser requests'}))
  expect((revoke as HTMLButtonElement).disabled).toBe(false)
  fireEvent.click(revoke)
- await screen.findByRole('button',{name:'Allow FT8/FT4 transmission'})
+ await screen.findByRole('button',{name:'Allow FT8/FT4 transmission from the Remote page'})
  release()
  await waitFor(()=>expect(actions).toContainEqual({type:'transmitPermission',deviceId,allow:false}))
  await new Promise(resolve=>setTimeout(resolve,0))
- expect(screen.queryByRole('button',{name:'Revoke transmission permission'})).toBeNull()
- expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission'})).toBeTruthy()
+ expect(screen.queryByRole('button',{name:'Revoke FT8/FT4 transmission from the Remote page'})).toBeNull()
+ expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission from the Remote page'})).toBeTruthy()
 })
 
 // One approval (operator decisions 2026-09-13 and 2026-09-14): approving the pairing turns Remote on
@@ -126,14 +131,14 @@ it('approves the pairing and each browser in one step, with the transmit tick on
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  fireEvent.click(await screen.findByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' }))
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
   fireEvent.click(screen.getByRole('button', { name: 'Approve this account pairing' }))
   await screen.findByText(second.slice(-6))
   expect(actions).toEqual([{ type: 'approve', accountId, enrollmentId: pairingId, transmit: true }])
   // The approval turned Remote on, which is when start at sign-in is offered.
   await screen.findByRole('button', { name: 'Start Nexus when I sign in' })
   // One Approve per browser, each with its own transmit tick, off unless ticked.
-  const ticks = screen.getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' })
+  const ticks = screen.getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' })
   expect(ticks).toHaveLength(2)
   fireEvent.click(ticks[1])
   fireEvent.click(screen.getAllByRole('button', { name: 'Approve browser' })[1])
@@ -149,7 +154,7 @@ it('approves the pairing and each browser in one step, with the transmit tick on
 
 // Remote remembers being on, and approved browsers keep what the operator allowed, transmit included.
 // A restart still never arms the transmitter, and the shack has to say both.
-it('tells the operator approved browsers keep their access across a restart and transmit stays off until TX On', async () => {
+it('tells the operator approved browsers keep their access across a restart and transmit stays off until the browser turns it on', async () => {
   const deviceId = crypto.randomUUID()
   const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
     stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
@@ -163,12 +168,66 @@ it('tells the operator approved browsers keep their access across a restart and 
   render(<RemoteStation />)
   await screen.findByRole('button', { name: 'Turn off Remote' })
   expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/FT8\/FT4 transmit included/)
-  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/always off after a restart until the browser presses TX On/)
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/always off after a restart until the browser turns it on again/)
   expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/Turn off Remote only disconnects/)
   // Beside the transmit permission itself, not only in the general hint.
-  expect(screen.getByText(/FT8\/FT4 transmit also needs station controls/).textContent).toMatch(/stays allowed across restarts until you revoke it/)
+  expect(screen.getByText(/FT8\/FT4 transmit from the Remote page also needs station controls/).textContent).toMatch(/stays allowed across restarts until you revoke it/)
   expect(screen.getByText(/Approving a browser gives it station controls/).textContent).toMatch(/To limit a browser, revoke them here/)
   expect(screen.queryByText(/turns off whenever Nexus restarts|not kept|grant it again after every restart|resets whenever/)).toBeNull()
+})
+
+// The operator, 2026-10-03: "an approved, streaming browser is you at the shack and may change everything. I fix only the
+// wording in Settings that says otherwise." A stream needs station controls alone, so the card says what that browser can
+// do, transmit included, and names the FT8/FT4 permission for what it covers: the Remote page's own controls.
+it('says a streaming browser uses Nexus as you would here, transmit included, and names the FT8/FT4 permission for the Remote page', async () => {
+  const deviceId = crypto.randomUUID()
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
+    devices: [{ id: deviceId, name: 'Streaming browser', approved: 1, expiresAt: Date.now() + 30 * 86400000 },
+      { id: crypto.randomUUID(), name: 'Waiting browser', approved: 0, expiresAt: Date.now() + 600000 }], error: null,
+    loggingPermissions: [], stationPermissions: [deviceId], transmitPermissions: [] }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  await screen.findByRole('button', { name: 'Turn off Remote' })
+  const control = screen.getByText(/Approving a browser gives it station controls/).textContent
+  expect(control).toMatch(/With streaming on, they also let it stream this window and use Nexus as you would here, transmit included/)
+  expect(control).toMatch(/revoke them here, which also ends its stream/)
+  const transmit = screen.getByText(/FT8\/FT4 transmit from the Remote page also needs station controls/).textContent
+  expect(transmit).toMatch(/A streaming browser doesn’t need it: through the stream it transmits as you would here/)
+  expect(transmit).toMatch(/Nothing transmits from the page until the browser presses TX On/)
+  // The old words read as a limit that a stream does not have; no line of the card says them now.
+  const card = document.querySelector('.remote-native')!.textContent
+  expect(card).not.toMatch(/Starting a transmission needs its own permission/)
+  expect(card).not.toMatch(/Nothing transmits until the browser presses TX On/)
+  expect(screen.getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Allow FT8/FT4 transmission from the Remote page' })).toBeTruthy()
+})
+
+// The same words in every language. A translation that kept the old limit would tell its operator the opposite of the
+// English, and an English-only maintainer would never see it.
+it('in every language the FT8/FT4 permission names the Remote page, and the switch, the card and the question say transmit included', () => {
+  type Locale = 'en' | 'de' | 'es' | 'fr' | 'ja'
+  const PAGE: Record<Locale, string> = { en: 'Remote page', de: 'Remote-Seite', es: 'página de Remote', fr: 'page Remote', ja: 'Remote のページ' }
+  const INCLUDED: Record<Locale, string> = { en: 'transmit included', de: 'Senden eingeschlossen', es: 'incluida la transmisión', fr: 'émission comprise', ja: '送信を含む' }
+  const STREAMED: Record<Locale, string> = { en: 'streamed to this browser', de: 'als Stream in diesem Browser', es: 'en directo en este navegador',
+    fr: 'en direct dans ce navigateur', ja: 'このブラウザーへのライブ' }
+  const OLD_LIMIT: Record<Locale, string> = { en: 'Starting a transmission needs its own permission', de: 'Eine Aussendung zu starten erfordert eine eigene Berechtigung',
+    es: 'Iniciar una transmisión requiere un permiso independiente', fr: 'Lancer une émission nécessite une autorisation distincte', ja: '送信を始めるには別の許可が必要です' }
+  const catalogs = { en: EN, de: DE, es: ES, fr: FR, ja: JA } as Record<Locale, Record<string, unknown>>
+  for (const loc of Object.keys(catalogs) as Locale[]) {
+    const say = (key: string) => String(catalogs[loc][key])
+    for (const key of ['remote.approveTransmit', 'remote.transmitAllow', 'remote.transmitRevoke', 'remote.transmitLocalHint'])
+      expect(say(key), `${loc} ${key}`).toContain(PAGE[loc])
+    for (const key of ['settings.remoteStream.hint', 'remote.controlLocalHint', 'remote.approval.body', 'remote.approval.bodyAgain'])
+      expect(say(key), `${loc} ${key}`).toContain(INCLUDED[loc])
+    for (const key of ['remote.configurationLocal', 'remote.settingsEditable'])
+      expect(say(key), `${loc} ${key}`).toContain(STREAMED[loc])
+    expect(say('remote.controlLocalHint'), `${loc} still says a transmission needs its own permission`).not.toContain(OLD_LIMIT[loc])
+  }
 })
 
 // Browser approval lifetime (operator decision 2026-09-14): each approved browser shows when its
@@ -209,7 +268,7 @@ it('shows each browser approval expiry, and warns and offers approval again in i
     expect(within(await card(id)).getByRole('button', { name: 'Approve again' })).toBeTruthy()
   }
   const phone = await card(capped)
-  fireEvent.click(within(phone).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' }))
+  fireEvent.click(within(phone).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
   fireEvent.click(within(phone).getByRole('button', { name: 'Approve again' }))
   await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, transmit: true }))
   // Ending it is still one click away, beside the warning.

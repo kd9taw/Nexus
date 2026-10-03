@@ -59,6 +59,8 @@ it('a browser asking to stream: the shack asks with its name and the key the sit
   expect(screen.getByRole('dialog', { name: TITLE })).toBe(box)
   expect(box.getAttribute('aria-describedby') && document.getElementById(box.getAttribute('aria-describedby')!)?.textContent).toContain(SHORT)
   expect(box.querySelector('.remote-approval-key')?.textContent).toBe(SHORT)
+  // What Approve lets it do, said plainly (the operator, 2026-10-03: a streaming browser is the operator at the shack).
+  expect(box.textContent).toMatch(/asks to stream this station and operate it as you would here, transmit included/)
   await wait(APPROVAL_ARM_MS)
   fireEvent.click(approve())
   await flush()
@@ -117,6 +119,7 @@ it('Deny refuses a waiting request at the service; for a browser approved before
   render(<RemoteApprovalPrompt />)
   await flush()
   expect(dialog()?.textContent).toMatch(/was approved before, but it can’t stream until you approve it again here/)
+  expect(dialog()?.textContent).toMatch(/When it streams, it can operate this station as you would here, transmit included/)
   fireEvent.click(deny())
   await flush()
   expect(actions, 'its approval is not touched').toEqual([])

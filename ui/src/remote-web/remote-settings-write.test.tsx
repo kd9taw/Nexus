@@ -74,7 +74,7 @@ const saveButton = () => screen.getAllByRole<HTMLButtonElement>('button', { name
 it('enables only the preferences the station lets this browser change, and saves just the one that changed', async () => {
   const h = fixture(['settingsLogging', 'settingsControl'])
   await tick()
-  expect(screen.getByText(t('remote.settingsEditable'))).toBeTruthy()
+  expect(screen.getByText(t('remote.settingsEditable')).textContent).toMatch(/stay read-only here\. Change them in Nexus at the station, in person or streamed to this browser/)
   tab('Digital')
   expect(autoLog().disabled).toBe(false)
   // Positive control on the lock: a sequencing preference beside it stays read-only.

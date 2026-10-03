@@ -29,8 +29,10 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *  ... No hunting through Settings."). The browser's name and the key it shows on the Remote page.
  *
  *  Approve is exactly Settings ▸ Remote access's approve with its transmit tick off: station controls
- *  and logging, no FT8/FT4 transmit, and the key shown here pinned (the station pins it only if the
- *  service still lists this same key). It never approves by default: Deny holds the keyboard when it
+ *  and logging, and the key shown here pinned (the station pins it only if the service still lists this
+ *  same key). Station controls are all a stream needs, and a streaming browser is the operator at the
+ *  shack, transmit included (the operator, 2026-10-03), so the question says so: the tick is only the
+ *  Remote page's own FT8/FT4 transmit. It never approves by default: Deny holds the keyboard when it
  *  opens, so Enter alone denies; Escape or a click outside closes it and answers nothing; and Approve
  *  takes no click for its first second. Deny refuses a waiting request; for a browser approved before,
  *  it leaves its approval exactly as it is (it still cannot stream). Either way it is not asked again

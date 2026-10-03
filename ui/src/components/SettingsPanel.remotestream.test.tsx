@@ -145,7 +145,7 @@ describe('on a Windows station', () => {
     })
     expect(sw.getAttribute('aria-checked')).toBe('false')
     expect(document.getElementById('settings-remote-access')!.contains(sw)).toBe(true)
-    expect(screen.getByText(EN['settings.remoteStream.hint'])).toBeTruthy()
+    expect(screen.getByText(EN['settings.remoteStream.hint']).textContent).toMatch(/can operate it as you would here, transmit included/)
   })
 
   it('says beside the switch that the stream is this window as Windows draws it, so Nexus stays open and not minimized', async () => {
@@ -210,6 +210,7 @@ describe('the beta line', () => {
     renderPanel(true)
     await openStationTab()
     await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
+    expect(screen.getByText(EN['remote.configurationLocal']).textContent).toMatch(/in Nexus at the station, in person or streamed to this browser/)
     expect(line()).toBeNull()
   })
 })
