@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so when that is missing. Only the Nexus window is sent,
   never the rest of the PC's screen, and what you click and type reaches Nexus and no other
   program. Nothing streams until you press **Start the stream**, and only with station control
-  allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
+  allowed for that browser at the radio. If the station does not take the start, the page says
+  why (station control off for this browser, another browser in control, or try again) instead of
+  going back to the button without a word. **Stop TX** stays at the top of the page the whole time
   and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
   or let the picture freeze, and it lets go. In Phone the space bar over the picture is push-to-talk
   for your own microphone, and a space typed into a Nexus field still types. Anything you hold down
@@ -903,6 +905,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hearham's list could not be read, the machines shown are RepeaterBook's and Program says that
   hearham's are missing (in the list's place when nothing is shown), where before they went
   missing without a word.
+
+- **Remote: Listen plays the station's audio.** Since Listen arrived in 1.13.0 it never played on
+  the hosted page: the page's own security policy refused the audio player the page builds, so
+  every press ended with "The station has no audio to send right now." while the station was
+  sending audio. Behind that, the player also failed on the first packet it was given, and in a
+  stream the Listen button turned itself on, showing "Listening to the station" over silence
+  before anyone pressed it. Now Listen starts only when you press it, on the Remote page and in a
+  stream, and you hear the station.
 
 - **Connect: the Space Wx gauges sit two to a row.** They were meant to, but stood one per row,
   so the box ran six gauges deep and its 30-day lines were out of sight below them. Now the

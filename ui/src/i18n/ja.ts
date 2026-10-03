@@ -178,6 +178,7 @@ export const JA: PartialCatalog = {
   "remote.stream.ready": "準備完了。ライブを開始すると、シャックのNexusを見て操作できます。",
   "remote.stream.display": "ライブは、シャックでWindowsが描いているNexusのウィンドウです。シャックのNexusは開いたままにし、最小化しないでください。",
   "remote.stream.starting": "ライブを開始しています…",
+  "remote.stream.refused": "局でライブを開始できませんでした。もう一度ライブを開始してください。",
   "remote.stream.waitingForPicture": "局の画面を待っています…",
   "remote.stream.live": "シャックのNexusをライブ表示中",
   "remote.stream.stalled": "画面の更新が止まりました。画面が再び動くまで、局はこのブラウザーのための送信をしません。",

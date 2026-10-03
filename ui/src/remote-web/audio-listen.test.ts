@@ -248,6 +248,22 @@ it('ends on a decoder failure rather than playing nothing and looking live', asy
   expect(h.link.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'audioUnavailable' })
 })
 
+it('stays ended when the station agrees after the player gave up: an agreement is not a sound', async () => {
+  const h = harness()
+  h.link.listen(LEASE)
+  await settle()
+  h.link.receive(bundle(0))
+  await settle()
+  h.fail()
+  // The station's word can land after the page's own player has failed. Taken as a start, it read
+  // "Connecting audio" and then "Listening to the station" with no player open: silence that says
+  // it is listening.
+  h.link.receive({ type: 'audioState', listening: true })
+  expect(h.link.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'audioUnavailable' })
+  h.link.receive(bundle(3))
+  expect(h.link.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'audioUnavailable' })
+})
+
 it('adapts to an output device that is not at 48 kHz instead of assuming one', async () => {
   const h = harness({ contextRate: 44100 })
   h.link.listen(LEASE)

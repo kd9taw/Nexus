@@ -60,7 +60,7 @@ export type OperationView = {
   error: string | null
   controlPending: PendingControl | null
   controlSending: boolean
-  /** An automatic read (heartbeat/state) is the request in flight — Release waits it out. */
+  /** An automatic read (heartbeat/state) is the request in flight — Release and acquire wait it out. */
   reading: boolean
   controlResult: ControlOutcome | null
   controlError: ControlFailure | null
@@ -660,9 +660,17 @@ export class OperationClient {
     }).catch(() => {})
   }
   async acquire() {
+    // Waits out an automatic read first, as `release()` does and for the same reason: `request()`
+    // refuses anything while another request is in flight, so an acquire made mid-read was refused
+    // `remoteBusy` and never left. Only when a read IS in flight; with none this stays synchronous
+    // up to `request()`.
+    if (this.automaticReadInFlight()) await this.settleAutomaticRead()
     const s = this.view.state
+    // Refused here, unsent, in the words the station uses for the same two refusals, so a page can
+    // say why: another browser holds control, or this one may not take it. Anything else is a
+    // state not current enough to act on, which the next read answers.
     if (!s || !this.view.fresh || !s.allowed || s.phase !== 'available')
-      throw new Error('localPermissionRequired')
+      throw new Error(s?.phase === 'occupied' ? 'controllerBusy' : s && !s.allowed ? 'localPermissionRequired' : 'stationUnavailable')
     await this.request({
       type: 'acquire',
       requestId: crypto.randomUUID(),

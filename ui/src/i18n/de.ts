@@ -173,6 +173,7 @@ export const DE: PartialCatalog = {
   "remote.stream.ready": "Bereit. Starte den Stream, um Nexus an der Station zu sehen und zu bedienen.",
   "remote.stream.display": "Der Stream ist das Nexus-Fenster so, wie Windows es an der Station zeichnet. Nexus muss dort deshalb geöffnet bleiben und darf nicht minimiert sein.",
   "remote.stream.starting": "Stream wird gestartet…",
+  "remote.stream.refused": "Die Station konnte den Stream gerade nicht starten. Starte den Stream erneut.",
   "remote.stream.waitingForPicture": "Warte auf das Bild der Station…",
   "remote.stream.live": "Nexus an der Station wird gestreamt",
   "remote.stream.stalled": "Das Bild wird nicht mehr aktualisiert. Die Station sendet für diesen Browser erst wieder, wenn es sich bewegt.",

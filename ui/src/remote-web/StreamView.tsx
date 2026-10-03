@@ -39,6 +39,8 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   const [wanted, setWanted] = useState(false)
   // The last stream ended because nobody answered "Still there?".
   const [idled, setIdled] = useState(false)
+  // Why the last Start came to nothing, until the next one: the refusal's code.
+  const [refused, setRefused] = useState<string | null>(null)
   const video = useRef<HTMLVideoElement>(null)
 
   const state = ops.state
@@ -69,8 +71,13 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   const start = () => {
     setWanted(true)
     setIdled(false)
-    // A refused acquire (someone else took control first) ends the request, so the button is live again.
-    if (state?.phase === 'available') void operations.acquire().catch(() => setWanted(false))
+    setRefused(null)
+    // A refused acquire ends the request, so the button is live again, and the page says why. The
+    // refusal clears the held state, so without its reason the page only went back to Ready.
+    if (state?.phase === 'available') void operations.acquire().catch((error: unknown) => {
+      setWanted(false)
+      setRefused(error instanceof Error ? error.message : 'stationUnavailable')
+    })
   }
   const end = () => { setWanted(false); link.close(); void operations.release() }
   // Unanswered, "Still there?" ends the stream as End the stream does, and says why afterwards.
@@ -79,7 +86,7 @@ export function StreamView({ connection, station, disconnect, signOut }: {
     link.stopTransmit(target)
     if (ops.stopAvailable) void operations.stopTransmit().catch(() => {})
   }
-  const status = statusLine(ops.connected, state?.phase ?? null, stream.phase, stream.reason, wanted)
+  const status = statusLine(ops.connected, state?.phase ?? null, stream.phase, stream.reason, wanted, refused)
   // M9: receive audio is MUTED, not ducked, while the operator's own over may be on the air. Derived
   // on every change - this page holding PTT, the station saying its over is keyed, or the observed
   // rig keyed - so it lets go on every way an over ends and can never stick.
@@ -139,7 +146,8 @@ export function StreamView({ connection, station, disconnect, signOut }: {
         <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
         {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
         {!running && (state?.phase === 'available' || state?.phase === 'controlling') && <>
-          <button type="button" className="remote-button remote-button--primary" disabled={wanted || ops.busy} onClick={start}>{t('remote.stream.start')}</button>
+          {/* Lit through the once-a-second read, as Release is: a press then waits it out (acquire). */}
+          <button type="button" className="remote-button remote-button--primary" disabled={wanted || (ops.busy && !ops.reading)} onClick={start}>{t('remote.stream.start')}</button>
           {/* What the stream needs at the shack, as far as the capture code shows it. */}
           <p className="remote-stream-entry-note" role="note">{t('remote.stream.display')}</p>
         </>}
@@ -266,10 +274,17 @@ function useIdReminder(running: boolean, keyed: boolean): 'due' | 'end' | null {
 
 /** One sentence for where things stand. Written out rather than looked up in a map: the catalog's
  *  orphan check reads literal t() calls, so a lookup table reads as keys nobody uses. */
-function statusLine(connected: boolean, phase: string | null, stream: string, reason: string | null, wanted: boolean): string {
+function statusLine(connected: boolean, phase: string | null, stream: string, reason: string | null, wanted: boolean, refused: string | null): string {
   if (stream === 'live') return t('remote.stream.live')
   if (stream === 'stalled') return t('remote.stream.stalled')
   if (stream === 'connecting') return t('remote.stream.starting')
+  // A refused start is what the operator just did, so it goes ahead of how the last stream ended.
+  // The station's standing word (control off, another browser in control) still says it once it lands.
+  if (refused && connected && phase !== 'localPermissionRequired' && phase !== 'occupied') {
+    return refused === 'localPermissionRequired' ? t('remote.stream.permission')
+      : refused === 'controllerBusy' ? t('remote.stream.occupied')
+      : t('remote.stream.refused')
+  }
   if (stream === 'ended') return ended(reason)
   if (!connected) return t('remote.stream.connecting')
   if (phase === null) return t('remote.stream.waiting')

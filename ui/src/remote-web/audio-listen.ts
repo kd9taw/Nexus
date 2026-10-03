@@ -1,5 +1,5 @@
 // Listening, from the browser's side: feature detection, the decoder, the sequence
-// rules, and the state an operator reads. The buffer itself is in `audio-worklet.ts`,
+// rules, and the state an operator reads. The buffer itself is in `audio-worklet-processor.js`,
 // where the audio clock is.
 //
 // WHY WEBCODECS AND NOT WEBRTC. A WebRTC receive leg would give Opus everywhere with
@@ -21,7 +21,7 @@ import {
   audioPackets, parseAudioBundle, parseAudioState,
 } from './audio-protocol'
 import {
-  AUDIO_CEILING_MS, AUDIO_PREFILL_MS, AUDIO_WORKLET_NAME, AUDIO_WORKLET_SOURCE,
+  AUDIO_BED_LEVEL, AUDIO_CEILING_MS, AUDIO_PREFILL_MS, AUDIO_WORKLET_NAME,
 } from './audio-worklet'
 
 /** What the operator is shown. Each one is a different thing to do about it. */
@@ -172,11 +172,11 @@ export class AudioLink {
     if (raw.type === 'audioState') {
       let state
       try { state = parseAudioState(raw) } catch { this.fail('audioUnavailable'); return true }
-      if (state.listening) {
-        // The station agreed. The phase stays `connecting` until audio actually plays -
-        // an agreement is not a sound.
-        if (this.phase === 'ended' || this.phase === 'off') this.set('connecting', null)
-      } else if (this.phase !== 'off') {
+      // The station agreeing starts nothing: only the operator's press opens the player, and
+      // `connecting` lasts until audio actually plays - an agreement is not a sound. A stream's
+      // station says it the moment the audio channel opens, and it can land after the page's
+      // own player gave up; taken as a start, either read "Listening" over silence.
+      if (!state.listening && this.phase !== 'off') {
         this.teardown()
         this.set('ended', state.reason ?? 'audioStopped')
       }
@@ -336,16 +336,33 @@ export function browserAudio(): AudioEnvironment {
     // `window.AudioDecoder`, NOT a WebCodecs check: Safari shipped WebCodecs video-only
     // for two years, and a WebCodecs check would have said yes to every one of them.
     decoderAvailable: () => typeof AudioDecoder !== 'undefined',
-    decoder: handlers => new AudioDecoder({
-      output: frame => handlers.output(frame as unknown as DecodedFrame),
-      error: handlers.error,
-    }) as unknown as AudioDecoderLike,
+    // The browser's own types, here and nowhere else: decode() takes an EncodedAudioChunk, never
+    // a plain object, and a decoded AudioData counts its samples in `numberOfFrames`. Both were
+    // cast past here, and in a real browser the first packet threw, so Listen ended saying the
+    // station had no audio.
+    decoder: handlers => {
+      const decoder = new AudioDecoder({
+        output: data => handlers.output({
+          sampleRate: data.sampleRate,
+          frames: data.numberOfFrames,
+          copyTo: (target, options) => data.copyTo(target, options as AudioDataCopyToOptions),
+          close: () => data.close(),
+        }),
+        error: handlers.error,
+      })
+      return {
+        configure: config => decoder.configure(config),
+        decode: chunk => decoder.decode(new EncodedAudioChunk(chunk)),
+        close: () => decoder.close(),
+      }
+    },
     context: async () => {
       const context = new AudioContext({ sampleRate: DECODE_RATE, latencyHint: 'interactive' })
-      // A blob URL, because an AudioWorklet module can only be fetched and a separate
-      // file would be a build asset to keep in step with the source it came from.
-      const url = URL.createObjectURL(new Blob([AUDIO_WORKLET_SOURCE], { type: 'text/javascript' }))
-      try { await context.audioWorklet.addModule(url) } finally { URL.revokeObjectURL(url) }
+      // A file of the page's own origin. An AudioWorklet module can only be fetched, and the
+      // hosted page's `script-src 'self'` refuses one made from a blob: URL, so Listen said the
+      // station had no audio while it was sending some. The build emits the file beside the
+      // page's scripts and never inlines it (vite.remote.config.ts).
+      await context.audioWorklet.addModule(new URL('./audio-worklet-processor.js', import.meta.url).href)
       const rate = context.sampleRate
       const node = new AudioWorkletNode(context, AUDIO_WORKLET_NAME, {
         numberOfInputs: 0,
@@ -354,6 +371,7 @@ export function browserAudio(): AudioEnvironment {
           capacity: Math.ceil((rate * (AUDIO_CEILING_MS + AUDIO_PREFILL_MS * 2)) / 1000),
           prefill: Math.ceil((rate * AUDIO_PREFILL_MS) / 1000),
           ceiling: Math.ceil((rate * AUDIO_CEILING_MS) / 1000),
+          level: AUDIO_BED_LEVEL,
         },
       })
       // Through a gain the page can close to silence while the operator's own over is on the air.
