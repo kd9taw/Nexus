@@ -3003,6 +3003,7 @@ export const JA: PartialCatalog = {
   "program.age.days": "{{days}}日前",
   "program.missingStates": "RepeaterBookが<b>{{states}}</b>について応答しなかったため、その地域のレピータはこの一覧に含まれていません。地域が空なのではなく取得に失敗しています — 数分後にもう一度取得してください。",
   "program.rsgb.unavailable": "{{rsgb}}のレピータ一覧をいま読み込めなかったため、<b>{{hearham}}の局だけ</b>を表示しています。コーディネーターのデータは後でもう一度取得してください。",
+  "program.hearham.unavailable": "{{hearham}}のレピータ一覧をいま読み込めなかったため、<b>その局はこの一覧に含まれていません</b>。数分後にもう一度取得してください。",
   "program.rsgb.beyond": "{{rsgb}}には近いロケーター・スクエアだけを問い合わせ、この半径が届くすべてのスクエアには問い合わせないため、<b>{{squares}}</b>の局は{{hearham}}のものだけです。",
   "program.rsgb.beyond.route": "{{rsgb}}にはこのルートの始めの方のロケーター・スクエアだけを問い合わせ、通過するすべてのスクエアには問い合わせないため、<b>{{squares}}</b>の局は{{hearham}}のものだけです。",
   "program.route.rbBeyond": "{{rb}}にはこのルートの始めの方の州だけを問い合わせ、通過するすべての州には問い合わせないため、<b>{{states}}</b>の局は{{hearham}}のものだけです。残りの区間は別のルートとして検索してください。",

@@ -2748,6 +2748,7 @@ export const DE: PartialCatalog = {
   "program.age.days": "vor {{days}} d",
   "program.missingStates": "RepeaterBook hat für <b>{{states}}</b> nicht geantwortet, daher fehlen die dortigen Relais in dieser Liste. Das ist ein fehlgeschlagener Abruf, kein leeres Gebiet — in ein paar Minuten erneut abrufen.",
   "program.rsgb.unavailable": "Die Relaisliste von {{rsgb}} ließ sich gerade nicht lesen, daher sind dies <b>nur die Relais von {{hearham}}</b>. Später erneut abrufen, um die Daten des Koordinators hinzuzufügen.",
+  "program.hearham.unavailable": "Die Relaisliste von {{hearham}} ließ sich gerade nicht lesen, daher <b>fehlen ihre Relais in dieser Liste</b>. In ein paar Minuten erneut abrufen.",
   "program.rsgb.beyond": "{{rsgb}} wird nur nach den nächstgelegenen Locator-Feldern gefragt, nicht nach jedem Feld in diesem Umkreis, daher stammen die Relais in <b>{{squares}}</b> nur von {{hearham}}.",
   "program.rsgb.beyond.route": "{{rsgb}} wird nur nach den Locator-Feldern am Anfang dieser Route gefragt, nicht nach jedem, das sie durchquert, daher stammen die Relais in <b>{{squares}}</b> nur von {{hearham}}.",
   "program.route.rbBeyond": "{{rb}} wird nur nach den Bundesstaaten am Anfang dieser Route gefragt, nicht nach jedem, den sie durchquert, daher stammen die Relais in <b>{{states}}</b> nur von {{hearham}}. Den Rest der Reise als eigene Route suchen.",

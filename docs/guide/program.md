@@ -73,14 +73,18 @@ pretend to.
 **Where the data comes from.** With no token, hearham.com — an open, no-account
 directory pulled whole (~22,000 rows worldwide) and cached. Add your own
 RepeaterBook token (`rbuapp_…`, from your RepeaterBook account's **API Apps**
-page) under **RepeaterBook** in Settings and US searches pull RepeaterBook state
-exports under your own account instead. RepeaterBook's API has no radius query,
+page) under **RepeaterBook** in Settings and US searches also pull RepeaterBook
+state exports under your own account. RepeaterBook's API has no radius query,
 so Nexus pulls the origin's state plus whatever states sit under eight compass
 points at your radius and filters by distance locally — a search on a state line
 gets the neighbouring state too, rather than half a circle of results. Shared
 RepeaterBook access for every Nexus user is pending RepeaterBook's approval:
 until it is granted that path answers 503 and the search falls through to
-hearham, which is why an install with no token is a hearham install.
+hearham, which is why an install with no token is a hearham install. hearham is
+read on every search, under the other lists, and only a list that reads as
+hearham's is kept on your PC. When it cannot be read the search says so: an
+error with Retry when there is no other list, or a note when RepeaterBook's or
+the RSGB's machines are shown alone. It never reports an empty area instead.
 
 For a location in the UK, Program also reads the national coordinator's list:
 the RSGB's repeater list (ETCC, ukrepeater.net), asked about the 4-character

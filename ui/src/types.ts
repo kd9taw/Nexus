@@ -4623,6 +4623,10 @@ export interface RepeaterSearchResult {
   /** A UK origin whose RSGB list could not be read (the endpoint is a beta): the rows are
    * hearham's alone, and the panel says so. */
   rsgbUnavailable: boolean
+  /** The hearham list could not be read while another directory answered: the rows are that
+   * directory's alone, and the panel says so, in the list's place when nothing is shown, since
+   * the area is then not known to be empty. Absent from a station that predates it. */
+  hearhamUnavailable?: boolean
   /** Locator squares the radius reaches that RSGB was not asked about (nine per search are). */
   rsgbBeyond: string[]
   /** States a route's corridor crosses that RepeaterBook was not asked about (2-letter codes): a

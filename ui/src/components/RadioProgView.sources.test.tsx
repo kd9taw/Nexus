@@ -182,6 +182,42 @@ describe('Program, merged from several directories', () => {
     expect(screen.queryByText(/repeater list could not be read/)).toBeNull()
   })
 
+  // 2026-10-02: hearham is the list under the others. When it could not be read while another
+  // directory answered, the panel says so; with nothing to show it says so in the list's place,
+  // never "No FM repeaters within 50 mi.", since the area is then not known to be empty.
+  const rbAlone = (over: Partial<RepeaterSearchResult> = {}) =>
+    result({ lists: [{ source: 'repeaterbook', fetchedUtc: NOW - 86400, stale: false }], rows: [zgd()], ...over })
+  const HEARHAM_UNREAD = /hearham repeater list could not be read/
+
+  it("says when hearham's list could not be read behind another directory's, and only then", async () => {
+    await fetchWith(rbAlone({ hearhamUnavailable: true }), 'W3ZGD')
+    expect((await screen.findByText(HEARHAM_UNREAD)).closest('.rp-note')).toBeTruthy()
+    cleanup()
+    await fetchWith(rbAlone(), 'W3ZGD')
+    expect(screen.queryByText(HEARHAM_UNREAD)).toBeNull()
+  })
+
+  it("with nothing to show and hearham's list missing, never says there are no repeaters", async () => {
+    const emptyWords = async (res: RepeaterSearchResult) => {
+      cleanup()
+      repeaterSearch.mockResolvedValue(res)
+      render(<RadioProgView myGrid="EN52" />)
+      fireEvent.click(screen.getByRole('button', { name: /fetch/i }))
+      return waitFor(() => {
+        const empty = document.querySelector('.rp-results .aw-empty')
+        expect(empty).toBeTruthy()
+        return empty!.textContent ?? ''
+      })
+    }
+    const unread = await emptyWords(rbAlone({ rows: [], hearhamUnavailable: true }))
+    expect(unread).toMatch(HEARHAM_UNREAD)
+    expect(unread).not.toMatch(/No (FM )?repeaters? (with)?in/)
+    // CONTROL: the same empty list with hearham's read is the area's own answer, and says that.
+    const read = await emptyWords(rbAlone({ rows: [] }))
+    expect(read).toMatch(/No FM repeaters within/)
+    expect(read).not.toMatch(HEARHAM_UNREAD)
+  })
+
   it('names the locator squares RSGB was not asked about, and only when there are some', async () => {
     await fetchWith(result({ rsgbBeyond: ['IO70', 'IO80'] }), 'GB3BW')
     const note = await screen.findByText(/is asked about the locator squares nearest you/)
