@@ -154,6 +154,7 @@ export const FR: PartialCatalog = {
   "remote.b3.potaAlertsStale": "La station n’a pas de spots POTA récents pour le moment. Les alertes reprennent dès que son tableau POTA ou sa carte les actualise.",
   "remote.audio.start": "Écouter",
   "remote.audio.stop": "Arrêter l\u2019écoute",
+  "remote.audio.volume": "Volume",
   "remote.audio.connecting": "Connexion de l\u2019audio",
   "remote.audio.live": "Écoute de la station",
   "remote.audio.gap": "Trou audio : la liaison perd des paquets",

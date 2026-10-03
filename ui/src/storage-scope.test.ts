@@ -214,6 +214,9 @@ const SHARED = [
   'nexus.memory.bank.v1',
   'nexus.memory.bank.v2',
   'nexus.needed.autopop',
+  // The Remote listener's volume (remote-web/audio-listen, 2026-10-03). SHARED: how loud this
+  // browser plays the station is the listener's choice, not one window's, like the alert opt-ins.
+  'nexus.remote.listenVolume',
   // Remote need alerts, opted in per browser. SHARED like autopop: whether this operator wants
   // to be told about new needs is not a fact about one window (remote-web/useNeedAlerts).
   'nexus.remote.needAlerts',

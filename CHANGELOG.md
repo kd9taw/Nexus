@@ -44,6 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel carries a Tune button the desktop does not, and in a medium-width window, or on a phone,
   the rows ran past the list under a sideways scrollbar. A row whose buttons do not fit beside its
   name and figures now carries them on a line of their own, at the right.
+- **Remote: Listen no longer breaks into a burst of static every few seconds.** Nexus at the shack
+  dropped a 20 ms piece of the receive audio about every second and a half, so the browser's player
+  kept running dry and filled each gap with its faint hiss for a moment. Nexus at the shack now
+  sends all of it. The page also keeps a little more audio in hand (180 ms instead of 120 ms), and
+  it plays a piece the network lost as a gap of the same length in the same place, so a packet
+  lost on Wi-Fi no longer comes back seconds later as static. The first half needs the new Nexus at
+  the shack.
+- **Remote: Listen plays loud enough to hear, and has a volume control.** The shack's receive audio
+  is set low for the decoders (about 30 on Nexus's level meter), and the page played it just as
+  low, far under anything else on the computer. Listen now raises it by 24 dB to start with, and a
+  **Volume** slider beside Listen sets anything from the station's own level to 42 dB above it;
+  the browser remembers your setting. A strong signal is held just under full scale instead of
+  clipping. The faint hiss that marks a gap in the audio follows the volume, so it stays under the
+  band.
 
 ### Changed
 

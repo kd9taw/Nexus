@@ -28,6 +28,10 @@
 .remote-audio-state--gap, .remote-audio-state--stalled { color: var(--alert-warning); }
 .remote-audio-state--ended { color: var(--alert-critical); }
 .remote-audio--off { font-size: .85em; color: var(--text-dim); }
+/* The listener's volume, shown only while listening. A short slider, so it wraps with the state
+   line inside the control rather than widening the row. */
+.remote-audio-volume { display: inline-flex; align-items: center; gap: .35em; font-size: .85em; color: var(--text-dim); }
+.remote-audio-volume input { width: 6em; }
 .remote-session-toggle { display: flex; align-items: center; justify-content: center; gap: .5em; flex: 0 0 auto; }
 .remote-session-toggle svg { flex: 0 0 auto; }
 .remote-session-info { padding-top: .5em; min-width: 0; }

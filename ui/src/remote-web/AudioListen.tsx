@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { Headphones, VolumeX } from 'lucide-react'
 import { t } from '../i18n'
 import type { AudioLink, AudioPhase } from './audio-listen'
+import { AUDIO_VOLUME_DB } from './audio-worklet'
 import type { OperationClient } from './operation-client'
 
 /** Muted by default, always. A page that starts making noise when it opens is hostile:
@@ -9,6 +10,7 @@ import type { OperationClient } from './operation-client'
  *  safe assumption is that nobody asked for sound yet. */
 export function AudioListen({ audio, client }: { audio: AudioLink; client?: OperationClient | null }) {
   const view = useSyncExternalStore(audio.subscribe, audio.getSnapshot)
+  const volume = useSyncExternalStore(audio.subscribe, () => audio.volume)
   const state = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleView)
   const station = state?.state
   // The station said whether it can do this at all. An older station never advertises the
@@ -48,8 +50,20 @@ export function AudioListen({ audio, client }: { audio: AudioLink; client?: Oper
         "live", "gap" and "stalled" are four different things to do about it, and a
         control that only said on/off would make a dead link look like a dead band. */}
     {on && <span className={`remote-audio-state remote-audio-state--${view.phase}`} role="status">{audioCaption(view.phase)}</span>}
+    {/* The shack's RX level is set for its decoders, far under a normal listen: the page lifts it
+        by this much, remembered by this browser. A measurement, so its reading is not translated. */}
+    {on && <label className="remote-audio-volume">
+      <span>{t('remote.audio.volume')}</span>
+      <input type="range" min={AUDIO_VOLUME_DB.min} max={AUDIO_VOLUME_DB.max} step={1} value={volume}
+        aria-valuetext={volumeReading(volume)} onChange={event => audio.setVolume(Number(event.currentTarget.value))} />
+    </label>}
     {view.phase === 'ended' && <span className="remote-audio-state remote-audio-state--ended" role="alert">{audioEnded(view.reason)}</span>}
   </span>
+}
+
+/** The volume as gain over the station's own level, built invariantly: dB is not translated. */
+function volumeReading(db: number): string {
+  return `+${db} dB`
 }
 
 export function audioCaption(phase: AudioPhase): string {
