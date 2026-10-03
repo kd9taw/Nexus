@@ -872,6 +872,8 @@ fn run(
                     }
                 }
             }
+            // A report about one datagram. One too long for `buf` is dropped here: the part of it
+            // Windows hands back with the error never reaches the session.
             Err(e) if !receive_ends_session(&e) => {}
             Err(_) => session.close(StreamReason::ConnectionFailed, Instant::now()),
         }

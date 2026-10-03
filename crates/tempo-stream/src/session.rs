@@ -36,9 +36,10 @@
 //!   `accept`, and once DTLS is up holds [`Session::remote_fingerprint`], the certificate the page
 //!   actually presented, against the one it signed.
 //! - **Finding a path is not failing.** ICE meets refusals on the way: a check its destination
-//!   refuses, which Windows reports on the socket's next receive ([`receive_ends_session`]), and a
-//!   first trickled candidate the station cannot pair, which str0m reports as Disconnected. Neither
-//!   ends a session that has not connected yet; [`CONNECT_TIMEOUT`] does.
+//!   refuses, or whose time to live runs out, which Windows reports on the socket's next receive
+//!   ([`receive_ends_session`]), and a first trickled candidate the station cannot pair, which
+//!   str0m reports as Disconnected. Neither ends a session that has not connected yet;
+//!   [`CONNECT_TIMEOUT`] does.
 //! - **Control must be reliable and ordered.** A `control` channel opened any other way is not used:
 //!   a Stop that the channel is allowed to drop is not a Stop.
 use std::net::SocketAddr;
@@ -58,21 +59,33 @@ use crate::protocol::{StreamReason, AUDIO_CHANNEL, CONTROL_CHANNEL, PTT_CHANNEL}
 /// How long ICE and DTLS may take before the session is given up on.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Windows' WSAEMSGSIZE on a receive: the datagram was longer than the buffer it was read into.
+const WSAEMSGSIZE: i32 = 10040;
+/// Windows' WSAENETRESET on a datagram socket's receive: "the time to live has expired"
+/// (Microsoft's `recvfrom` reference), an ICMP time-exceeded for an earlier datagram.
+const WSAENETRESET: i32 = 10052;
+
 /// Does this error, from a receive on the session's socket, end the session? A receive that waited
-/// out its timeout does not, and neither does `ConnectionReset`. On an unconnected UDP socket that is
-/// Windows passing on an ICMP "port unreachable" for an EARLIER datagram (WSAECONNRESET): ICE sends
-/// checks to every candidate the page offered, and a destination that refuses one (a NAT with no
-/// mapping for the station yet, a router that will not loop a packet back to its own public
-/// address) answers that way. The socket is unharmed, and which candidates work is ICE's to decide.
-/// Measured against Chrome, the first such report came within 50 ms of the answer, before DTLS, and
-/// ending the session on it ended every stream.
+/// out its timeout does not, and neither does a report about one datagram, which leaves the socket
+/// unharmed. On an unconnected UDP socket Windows makes three such reports:
+/// - `ConnectionReset` (WSAECONNRESET) passes on an ICMP "port unreachable" for an EARLIER
+///   datagram: ICE sends checks to every candidate the page offered, and a destination that refuses
+///   one (a NAT with no mapping for the station yet, a router that will not loop a packet back to
+///   its own public address) answers that way. Which candidates work is ICE's to decide. Measured
+///   against Chrome, the first such report came within 50 ms of the answer, before DTLS, and ending
+///   the session on it ended every stream.
+/// - WSAENETRESET is the same for an ICMP "time exceeded": a check that met a routing loop or too
+///   short a path.
+/// - WSAEMSGSIZE is a datagram longer than the caller's buffer, which anyone who can reach the
+///   socket can send. Windows hands back the part that fit with the error, and that part is not a
+///   datagram: the caller drops it, and the next datagram is received whole.
+///
+/// Any other error is the socket's own, and ends the session.
 pub fn receive_ends_session(error: &std::io::Error) -> bool {
-    !matches!(
-        error.kind(),
-        std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::ConnectionReset
-    )
+    use std::io::ErrorKind::{ConnectionReset, TimedOut, WouldBlock};
+    let one_datagram = error.kind() == ConnectionReset
+        || (cfg!(windows) && matches!(error.raw_os_error(), Some(WSAEMSGSIZE | WSAENETRESET)));
+    !matches!(error.kind(), WouldBlock | TimedOut) && !one_datagram
 }
 
 /// Why an offer was not answered.
