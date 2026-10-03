@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmission started in that second, such as Tune pressed right after a band change, stayed on
   the air through the first press. Now a Stop from a browser with station control stops whatever
   is transmitting when it arrives, even one pressed before the last stop, and Stop TX is ready
-  again the moment a Stop is accepted instead of a moment later. If the station does refuse a Stop
+  again the moment a Stop is accepted instead of a moment later. Pressed again faster than the
+  Remote service passes Stops on (twice a second), it shows the accepted Stop still under way, not a
+  failure. If the station does refuse a Stop
   (station control taken back at the radio, for example), the stream page says **Could not stop
   transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
 

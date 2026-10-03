@@ -210,6 +210,53 @@ it.each(['noControl', 'loggingOnly'] as const)('a browser %s gets the existing r
   }
 })
 
+// The relay holds a session to two Stops a second, and Stop TX stays ready after an accepted Stop, so a
+// fast operator meets that limit: a third press in a second is refused `remoteBusy` with the first two
+// accepted. The station is already stopping, so the page must not say "Could not stop transmit"
+// (2026-10-03). Phone's TX strip, with the page's real toast.
+it('a Stop the relay refuses within a second of an accepted one raises no failure, and the stop line keeps it', async () => {
+  const real = await vi.importActual<typeof import('../toast')>('../toast')
+  const toast = vi.mocked(withErrorToast), stubbed = toast.getMockImplementation()!
+  toast.mockImplementation(real.withErrorToast)
+  const raised = new Map<number, string>()
+  const off = subscribeToasts(all => { for (const t of all) raised.set(t.id, t.message) })
+  const failures = () => [...raised.values()].filter(m => m.startsWith(EN['shell.halt.failed']))
+  try {
+    const pressed = async (h: ReturnType<typeof session>, reply: object) => {
+      fireEvent.click(stopTx()[0])
+      await settle()
+      const stop = h.stops()[h.stops().length - 1]
+      act(() => h.client.receive({ type: 'operationResponse', requestId: stop.requestId, ...reply }))
+      await settle()
+    }
+    // POSITIVE CONTROL: refused `remoteBusy` with nothing accepted before it, the press says so.
+    const alone = session('control')
+    remote(alone.client, CASES[0].element(panelsWith([])))
+    await settle()
+    await pressed(alone, { error: 'remoteBusy' })
+    expect(failures(), 'control: a refused Stop toasts').toEqual([`${EN['shell.halt.failed']}: remoteBusy`])
+    cleanup(); uninstall?.(); uninstall = undefined
+    act(() => { for (const id of raised.keys()) dismissToast(id) })
+    raised.clear()
+
+    const h = session('control')
+    remote(h.client, CASES[0].element(panelsWith([])))
+    await settle()
+    await pressed(h, { value: { stop: 'accepted' } })
+    await pressed(h, { value: { stop: 'accepted' } })
+    await pressed(h, { error: 'remoteBusy' })
+    expect(h.stops(), 'premise: three presses, three stops sent').toHaveLength(3)
+    expect(failures(), 'a third press inside the relay’s second said the Stop failed').toEqual([])
+    expect([EN['remote.stop.sent'], EN['remote.stop.stopped']], 'the stop line lost the acceptance')
+      .toContain(document.querySelector('.cockpit-stopstate')?.textContent)
+    expect(stopTx()[0].disabled).toBe(false)
+  } finally {
+    off()
+    act(() => { for (const id of raised.keys()) dismissToast(id) })
+    toast.mockImplementation(stubbed)
+  }
+})
+
 // ── Esc on the hosted page ──────────────────────────────────────────────────────────────────────
 // The hosted page is App. While Tempo, Phone, SSTV, APRS or Satellites is on show, App binds Esc to
 // the shell's halt: the api haltTx that the cockpits' Stop TX uses above. So a browser holding

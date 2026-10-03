@@ -150,6 +150,48 @@ it('keeps Stop available after an accepted Stop, and the next press goes at once
   h.c.disconnected()
 })
 
+// The relay holds each session to two Stops a second (its own limit, unchanged), and Stop TX stays
+// ready after an accepted Stop, so a fast operator meets that limit: the third press in a second is
+// refused `remoteBusy` with the first two already accepted. The station is already stopping, so that
+// refusal is no failure: the acceptance stands and the press resolves on it (2026-10-03). Any other
+// refusal, and `remoteBusy` for a press with no acceptance in the second before it, still fails.
+it('a remoteBusy within a second of an accepted Stop leaves that acceptance standing; any other refusal still fails', async () => {
+  const h = client()
+  const press = () => ({ done: h.c.stopTransmit(), id: h.sent[h.sent.length - 1].request.requestId as string })
+  const answer = (requestId: string, reply: object) => h.c.receive({ type: 'operationResponse', requestId, ...reply })
+  // CONTROL: refused `remoteBusy` with nothing accepted before it, a press fails as it always did.
+  const lone = press(), loneFails = expect(lone.done).rejects.toThrow('remoteBusy')
+  answer(lone.id, { error: 'remoteBusy' })
+  await loneFails
+  expect(h.c.getSnapshot()).toMatchObject({ stopError: 'remoteBusy', stopAccepted: false })
+  // Two accepted inside one second, then a third that the relay's limit refuses.
+  for (let n = 0; n < 2; n++) {
+    const accepted = press()
+    answer(accepted.id, { value: { stop: 'accepted' } })
+    await expect(accepted.done).resolves.toEqual({ stop: 'accepted' })
+    await vi.advanceTimersByTimeAsync(300)
+  }
+  const third = press()
+  expect(h.c.getSnapshot()).toMatchObject({ stopSending: true, stopAccepted: false })
+  answer(third.id, { error: 'remoteBusy' })
+  await expect(third.done).resolves.toEqual({ stop: 'accepted' })
+  expect(h.c.getSnapshot()).toMatchObject({ stopSending: false, stopError: null, stopAccepted: true })
+  // CONTROL: any other refusal straight after an acceptance still fails...
+  const refused = press(), refusedFails = expect(refused.done).rejects.toThrow('notController')
+  answer(refused.id, { error: 'notController' })
+  await refusedFails
+  // ...and so does `remoteBusy` for a press a full second after the last acceptance.
+  const last = press()
+  answer(last.id, { value: { stop: 'accepted' } })
+  await last.done
+  await vi.advanceTimersByTimeAsync(1000)
+  const late = press(), lateFails = expect(late.done).rejects.toThrow('remoteBusy')
+  answer(late.id, { error: 'remoteBusy' })
+  await lateFails
+  expect(h.c.getSnapshot()).toMatchObject({ stopError: 'remoteBusy', stopAccepted: false })
+  h.c.disconnected()
+})
+
 it.each(['timeout', 'disconnect', 'refused'])('does not retry or claim RF stopped after %s', async cause => {
   const h = client(), stopped = h.c.stopTransmit(), requestId = h.sent[h.sent.length - 1].request.requestId
   const rejected = expect(stopped).rejects.toThrow(cause === 'refused' ? 'notController' : 'operationUnknown')

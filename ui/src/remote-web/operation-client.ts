@@ -73,7 +73,8 @@ export type OperationView = {
    * afterwards on its own thread, so between this and the transmitter actually going free the rig
    * is still on the air. The browser says "stop sent" here and "stopped" only once the station's
    * own reading shows the transmitter free (`useStationStopProgress`). Cleared when a new Stop is
-   * sent, when one fails, and on disconnect. */
+   * sent, when one fails, and on disconnect; the relay's limit inside the second after an acceptance
+   * is not a failure, and puts it back (`stopAcceptedAt`). */
   stopAccepted?: boolean
   requestReady?: boolean
   /** DISPLAY ONLY. The last state the station sent, kept while a command outcome's re-read is
@@ -132,6 +133,10 @@ export class OperationClient {
    * honours a Stop whatever its token's age (operator ruling, 2026-10-03), so the Stop keeps its
    * token, while a gesture captured before the Stop must still never leave after it. */
   private armEpoch: string | null = null
+  /** When this browser's last Stop was accepted. The relay holds a session to two Stops a second, its
+   * own limit, so a `remoteBusy` for a press sent within that second of an acceptance is the limit, not
+   * a refusal to stop: the station is already stopping, and that acceptance stands (2026-10-03). */
+  private stopAcceptedAt = -Infinity
   // A successful mutation invalidates command context, not the controller's
   // lease. Refresh with a heartbeat so continuous use cannot starve renewal.
   // This token permits only renewal/release; actions still require fresh state.
@@ -220,6 +225,7 @@ export class OperationClient {
     this.stopTarget = null
     this.stopLeaseId = null
     this.armEpoch = null
+    this.stopAcceptedAt = -Infinity
     this.heartbeatLeaseId = null
     const stop = this.pendingStop
     this.pendingStop = null
@@ -404,6 +410,14 @@ export class OperationClient {
       this.probe?.replied(r.requestId)
       if ('error' in r) {
         this.probe?.confirmed(r.requestId, r.error)
+        // The relay's two-a-second limit met inside the second after an accepted Stop: no failure to
+        // show, because a Stop is already under way. The acceptance stands, and the press resolves on
+        // it. Every other refusal, and this one without that acceptance, is still a failure.
+        if (r.error === 'remoteBusy' && stop.started - this.stopAcceptedAt < OPERATION_RATE_WINDOW_MS) {
+          this.update({ stopError: null, stopAccepted: true })
+          stop.resolve({ stop: 'accepted' })
+          return
+        }
         this.update({ stopError: r.error, stopAccepted: false })
         stop.reject(new Error(r.error))
       } else {
@@ -411,6 +425,7 @@ export class OperationClient {
         // token it used (`armEpoch`), never the Stop's own: see `stopTransmit`.
         this.probe?.confirmed(r.requestId, 'accepted')
         this.armEpoch = null
+        this.stopAcceptedAt = this.now()
         this.polledAt = -Infinity
         this.update({ stopError: null, stopAccepted: true })
         stop.resolve(r.value)
