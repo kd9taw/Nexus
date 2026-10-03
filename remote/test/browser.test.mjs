@@ -885,6 +885,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // The station has been sending since the channel opened. Nobody has asked to listen, so the
         // control still offers Listen, with no state line: its "audio started" turns nothing on.
         assert.equal(await atShack('__shack.feeds'),1,'the station started its audio when the channel opened')
+        // The word crosses the link after the stand-in counts its feed: wait for it to reach the page before
+        // asserting what it did (CI 2026-10-03 read the page first: heard null, Listen still offered).
+        await until(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return !!c.stream.audioState;f=f.return}return false})()`,10000)
         assert.deepEqual(await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const a=document.querySelector('.remote-stream-app .remote-audio');return {heard:c.stream.audioState,button:a?.querySelector('button')?.textContent,state:a?.querySelector('.remote-audio-state')?.textContent??null}}f=f.return}return null})()`),{heard:{type:'audioState',listening:true},button:'Listen',state:null},'nobody asked to listen: the station\'s word arrived and turned nothing on')
         await click(audioButton('Listen'))
         await until(`window.__worklets.length>0&&window.__worklets.every(w=>'ok' in w)`,10000)
