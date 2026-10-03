@@ -896,6 +896,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote as a stream: the browser's microphone works on the hosted page.** The hosted page told
+  the browser that none of its pages could use a microphone, so pressing **Mic off** in a stream
+  never turned the microphone on: every press ended with "The browser did not allow the
+  microphone", whatever the browser's own setting said. The page's own address may now use the
+  microphone, still only after you allow it in the browser. The camera and your location stay
+  refused, and no other site can use the microphone through the page.
 - **Remote as a stream: the stream no longer ends the moment it starts (Windows).** Every
   **Start the stream** was answered by the shack and then ended in the same second, and the page
   went back to **Start the stream** saying the connection to the station was lost. While the

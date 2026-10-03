@@ -964,7 +964,7 @@ test('compiled hosted shell has pinned security headers and distributes its lice
   assert.doesNotMatch(policy, /script-src[^;]*blob:/)
   assert.ok(policy.includes("frame-ancestors 'none'") && policy.includes('https://identity.remote-test.invalid'))
   assert.equal(policy.includes('unsafe-eval'), false)
-  assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(), geolocation=()')
+  assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(self), geolocation=()')
   const licenses = await app.mf.dispatchFetch(`${app.origin}/remote-licenses.txt`)
   assert.equal(licenses.status, 200)
   const text = await licenses.text()
@@ -992,8 +992,10 @@ test('the hosted page\'s policy is exactly what it was before the stream: no med
   // Stated separately so the reason reads in the failure, not only in a diff.
   const raw = response.headers.get('content-security-policy')
   for (const loosening of ['media-src', 'webrtc', 'stun:', 'turn:', 'turns:', "'unsafe-eval'"]) assert.equal(raw.includes(loosening), false, loosening)
-  // The microphone stays off until the mic uplink (a later wave) turns it on deliberately.
-  assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(), geolocation=()')
+  // The microphone is the page's own: the stream's mic over asks for it, and only this origin may
+  // (no frame, no other site). The browser still asks the operator, and the station's own rules
+  // decide what reaches a transmitter. The camera and geolocation stay refused.
+  assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(self), geolocation=()')
 })
 
 test('an in-flight publication survives the last browser disconnect and hibernation', async () => {
