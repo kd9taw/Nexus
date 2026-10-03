@@ -49,6 +49,7 @@ import {
   SENTINEL_MODES,
   baseTheme,
   chainOf,
+  compoundMatches,
   contrast,
   expandWith,
   parseRules,
@@ -266,8 +267,41 @@ function once<T>(key: string, make: () => T): T {
   return memo.get(key) as T
 }
 const keyOf = (rules: Rule[], mode: Mode, at: El[]) => `${rules === SHIPPED ? 's' : rules === BEFORE ? 'b' : 'r'}|${mode}|${JSON.stringify(at)}`
-const tokens = (rules: Rule[], mode: Mode, at: El[]) => once(`t|${keyOf(rules, mode, at)}`, () => tokensAt(rules, mode, at))
-const win = (rules: Rule[], mode: Mode, at: El[], ...props: string[]) => once(`w|${keyOf(rules, mode, at)}|${props.join()}`, () => winnerAt(rules, mode, at, ...props))
+/** The compound a rule puts on the element itself, split off its selector the way reachesChain splits it. */
+const SUBJECT = new WeakMap<Rule, string | undefined>()
+function subjectOf(rule: Rule): string | undefined {
+  if (!SUBJECT.has(rule)) SUBJECT.set(rule, rule.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop())
+  return SUBJECT.get(rule)
+}
+/** The rules of a set that can win `props` on `el`: those that declare one and whose subject matches `el` (reachesChain gives up
+ *  on any other before it reads an ancestor or the theme), cut once per element and set instead of once per theme, as
+ *  NativeControls.contrast does; winnerAt over the cut names the same winner as over the whole set. Holding the look in every
+ *  theme and accent took this file from 48 to 150 s in the full suite, its light sweep 88 s of a 120 s budget (2026-10-03). */
+const CUTS = new WeakMap<Rule[], Map<string, Rule[]>>()
+function cutFor(rules: Rule[], el: El, props: string[]): Rule[] {
+  let byKey = CUTS.get(rules)
+  if (!byKey) CUTS.set(rules, (byKey = new Map()))
+  const key = `${JSON.stringify(el)}|${props.join()}`
+  let cut = byKey.get(key)
+  if (!cut) {
+    cut = rules.filter((r) => {
+      const subject = subjectOf(r)
+      return r.decls.some((d) => props.includes(d.prop)) && !!subject && compoundMatches(subject, el)
+    })
+    byKey.set(key, cut)
+  }
+  return cut
+}
+/** Only a rule that declares a custom property can set one: tokensAt over those alone gives the same tokens. */
+const TOKEN_RULES = new WeakMap<Rule[], Rule[]>()
+function tokenRules(rules: Rule[]): Rule[] {
+  let declaring = TOKEN_RULES.get(rules)
+  if (!declaring) TOKEN_RULES.set(rules, (declaring = rules.filter((r) => r.decls.some((d) => d.prop.startsWith('--')))))
+  return declaring
+}
+const tokens = (rules: Rule[], mode: Mode, at: El[]) => once(`t|${keyOf(rules, mode, at)}`, () => tokensAt(tokenRules(rules), mode, at))
+const win = (rules: Rule[], mode: Mode, at: El[], ...props: string[]) =>
+  once(`w|${keyOf(rules, mode, at)}|${props.join()}`, () => winnerAt(cutFor(rules, at[at.length - 1], props), mode, at, ...props))
 const BLANK = /^(inherit|transparent|none|initial|unset)$/i
 const colourOf = (rules: Rule[], mode: Mode, at: El[], value: string, under: Rgb): Rgb => {
   const c = toRgb(expandWith(tokens(rules, mode, at), value), under)
