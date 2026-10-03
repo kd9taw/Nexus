@@ -30,7 +30,7 @@ EmComm, Reference, Other — an offset direction (simplex / + up / − down / od
 split) with either an offset in MHz or an absolute TX frequency, a tone mode
 (None / Tone / TSQL / DTCS) with its CTCSS frequency or DTCS code, a callsign,
 free-text notes, group membership, the ★ favorite flag, and for an HF net the
-days and UTC start time. A repeater sent over from the **Program** section also
+days and UTC start time. A repeater sent over from the **Repeaters** section also
 carries the site's latitude and longitude, so its distance and bearing are
 recomputed from wherever you are now rather than baked in at save time. Nexus
 stamps the last recall time. It does **not** store power, filter width or tuning
@@ -131,7 +131,7 @@ only while the Memories section is enabled.
    looking at **★ Favorites**, in which case it stars, or at a group, in which
    case it joins that group.
 3. Either way you get frequency and mode **only**. A repeater needs its shift and
-   tone typed in afterwards (below) or brought over from Program.
+   tone typed in afterwards (below) or brought over from Repeaters.
 
 ### Tune a saved channel
 
@@ -195,16 +195,19 @@ sits at the right-hand end of that header row, off this crop.*
    for a digital code.
 5. Name it, and star it if you want it on the cockpit strips.
 
-### Send repeaters over from Program
+### Send repeaters over from Repeaters
 
-The **Program** section searches repeaters near your grid and builds channel
+The **Repeaters** section searches repeaters near your grid and builds channel
 lists. Two paths land here:
 
-1. **★ a machine in the results list** — it goes straight into Memories as a
-   favorite, with its shift, tone and site coordinates, and appears on the
-   cockpit MEM strip without a trip through the list builder. The star toggles
-   back off, and starring a machine the bank already holds stars *that* row
-   rather than duplicating it.
+1. **Save to Memories** on a repeater's row (or **Save all to Memories** for every FM
+   repeater the list shows, or the button on the card of its dot on the map) — the machine
+   comes in as a channel, not starred: its frequency, offset, tone or DCS code,
+   narrow FM when the directory says so, its callsign and site, and in its
+   notes the town, the links (AllStar, IRLP, DMR ID) and the DMR colour code,
+   the way the CHIRP export's comment writes them (`Seattle; IRLP 3570; CC1`).
+   A machine already here shows **✓ In Memories** on its row instead, and is
+   never saved twice.
 2. **Save to Memory Bank** in the channel-list builder writes the whole list in
    one go — analog rows only (digital-only machines are skipped), deduped,
    unstarred, and each one lands as FM. Star the ones you want on the strips.
@@ -253,7 +256,7 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
 - **＋ Save captures frequency and mode, nothing else.** Save an FM repeater off
   the dial and you get a plain simplex channel — the shift and tone you have set
   in [Settings ▸ Phone](settings-reference.md#phone-ssb--fm) do not come
-  with it. Type them into the editor, or bring the machine over from Program,
+  with it. Type them into the editor, or bring the machine over from Repeaters,
   which does carry them.
 - **Nexus never writes to the radio's own memory channels.** There is no CAT path
   that fills a rig memory slot; the CHIRP CSV is the whole delivery story. The
@@ -285,7 +288,13 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
   not.
 - **Duplicate detection is frequency (to 100 Hz) + mode + CTCSS encode tone.**
   Two channels that differ only by offset, name, group or DTCS code count as the
-  same channel, so the second one is skipped on import or on a Program save.
+  same channel, so the second one is skipped on import or on a channel-list save from Repeaters.
+  **Save to Memories and Save all to Memories in Repeaters go by the machine instead**, with
+  the rule the repeater lists are merged by: the same output (within 2.5 kHz) and the same
+  callsign (`W9ABC/R` is `W9ABC`), or, for a memory with no callsign, the same input too and a
+  site within 5 km. So a machine saved from one directory is found again from another, and a
+  second machine on the same output and tone in the next county is saved as a channel of its
+  own. A memory with neither a callsign nor a site is never taken for a directory's machine.
 - **＋ New saves before you type.** The channel exists in the bank from the press, and the
   count moves with it. **Escape keeps it; Discard is the only way out that removes it.** See
   [Enter a repeater by hand](#enter-a-repeater-by-hand).
@@ -322,7 +331,7 @@ is ticked with a ten-minute lead. The net is invented for this picture.*
 
 ## Related guides
 
-- [Program](program.md) — building a repeater list for a location, and **Save to
+- [Repeaters](program.md) — building a repeater list for a location, and **Save to
   Memory Bank**, which drops it straight into this bank
 - [Phone (SSB)](phone.md)
 - [CW](cw.md)

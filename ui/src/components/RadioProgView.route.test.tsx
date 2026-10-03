@@ -92,8 +92,8 @@ function routeToEN53() {
   const add = screen.queryByRole('button', { name: t('program.route.add') })
   if (add) fireEvent.click(add)
   const to = screen.getByRole('group', { name: t('program.route.to.aria') })
-  fireEvent.click(within(to).getByRole('button', { name: t('program.origin.grid.label') }))
-  fireEvent.change(within(to).getByRole('textbox', { name: t('program.origin.grid.aria') }), {
+  // The route's end is one box that takes a grid or a city (2026-10-02): a locator is the place as typed.
+  fireEvent.change(within(to).getByRole('textbox', { name: t('program.route.to.place.aria') }), {
     target: { value: 'EN53' },
   })
 }

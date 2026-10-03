@@ -173,10 +173,11 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
   install. Nothing installs behind your back and nothing happens on a schedule: the button waits for
   you, and stands down while you are transmitting, tuning, in a contact or running CQ, and tells you
   which. Every update is signed and verified before it is applied.
-- **📻 Program and Memories.** Search the repeaters around any location and **star one straight from
-  the results**: it saves into Memories as a proper FM channel with the machine's shift, offset and
-  access tone, and lands on the quick-recall strip in the Phone, Operate and CW cockpits, where one
-  click or **Ctrl+1** through **Ctrl+9** tunes it. Starred repeaters remember where the machine
+- **📻 Repeaters and Memories.** Search the repeaters around any location, see them on a map, and **save
+  one straight from the results**: it goes into Memories as a proper FM channel with the machine's
+  shift, offset, access tone, town and links; star it there and it lands on the quick-recall strip in
+  the Phone, Operate and CW cockpits, where one click or **Ctrl+1** through **Ctrl+9** tunes it. Saved
+  repeaters remember where the machine
   physically is, so Memories shows distance and bearing measured from your current grid each time,
   which means the numbers follow you when you operate portable. A per-repeater **Tune** names FM
   explicitly, so the frequency, shift, offset and tone all land together on the radio you mapped for
@@ -332,7 +333,7 @@ still says what a thing does *not* do, and so does every entry in the changelog.
   DXpedition end), **transmit-side iGating** (deliberately never, since it means a radio keying up
   unattended), and programming DMR / D-STAR / Fusion repeaters (they are listed with badges so you
   know they're there). Shared RepeaterBook access for every user, with no token to set up, is
-  pending RepeaterBook's approval; until then Program uses the open hearham.com directory by default
+  pending RepeaterBook's approval; until then Repeaters uses the open hearham.com directory by default
   and your own RepeaterBook token if you add one.
 
 ## Architecture

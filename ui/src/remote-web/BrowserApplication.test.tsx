@@ -650,7 +650,7 @@ it.each(['settings','program'] as const)('connects the actual %s section with sa
     <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],configuration:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>
   const {container,rerender,unmount}=render(view(true))
-  fireEvent.click(screen.getByRole('button',{name:section==='settings'?/^Settings$/:/^Program —/}))
+  fireEvent.click(screen.getByRole('button',{name:section==='settings'?/^Settings$/:/^Repeaters —/}))
   if(section==='settings'){
     await waitFor(()=>expect(container.querySelector('.settings-panel')?.textContent).toContain('Station settings'))
     expect(container.querySelectorAll('.settings-panel')).toHaveLength(1)

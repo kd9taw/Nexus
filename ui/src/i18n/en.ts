@@ -4437,7 +4437,7 @@ export const EN = {
   // has to keep the three consistent, which is why they read as the same words here.
   'memories.empty.none': 'No memories yet.',
   'memories.empty.hint':
-    'Start with a <b>starter pack</b> — nets, calling frequencies, POTA, and digital watering holes, ready to go. Or save the current frequency with <b>＋ Save</b>, import a CHIRP CSV, or send repeaters here from the Program section. Star a memory (★) and it shows on the MEM strip in every cockpit.',
+    'Start with a <b>starter pack</b> — nets, calling frequencies, POTA, and digital watering holes, ready to go. Or save the current frequency with <b>＋ Save</b>, import a CHIRP CSV, or send repeaters here from the Repeaters section. Star a memory (★) and it shows on the MEM strip in every cockpit.',
   'memories.empty.browsePacks': 'Browse starter packs',
   'memories.empty.noMatch': 'Nothing matches this view.',
 
@@ -4618,7 +4618,11 @@ export const EN = {
   // the exported CSV, so it cannot vary by locale), the example grid and frequency, and the
   // persisted project name. The rig models in the "Max name" list are tokens in
   // `features/radioprog.ts`.
-  'program.title': 'Program',
+  'program.title': 'Repeaters',
+  // The view's three cards, headed the way the Conditions boxes are: where to look, what was found, and the
+  // channel list (program.builder.title).
+  'program.card.search': 'Search',
+  'program.card.results': 'Results',
   'program.sub':
     'Build channel lists for your radios — repeaters near a location, exported for CHIRP or tuned on your rig',
 
@@ -4628,12 +4632,12 @@ export const EN = {
   // `{{grid}}` is the station locator with its separator, or nothing at all.
   'program.origin.station.label': 'My station {{grid}}',
   'program.origin.station.title': 'Your station grid from Settings',
-  'program.origin.grid.label': 'Grid',
-  'program.origin.grid.aria': 'Grid square',
-  'program.origin.city.label': 'City',
-  'program.origin.city.aria': 'City',
+  // ONE box takes a grid or a city (a locator is the place as typed; anything else is a town to look
+  // up). {{grid}} is an example locator, a token.
+  'program.origin.place.placeholder': 'Grid or city: {{grid}}, Gatlinburg TN',
+  'program.origin.place.aria': 'Where to search: a grid square or a city',
+  'program.route.to.place.aria': 'Where the route ends: a grid square or a city',
   // A HUMAN example, not a technical one: a locale should offer a place its operators know.
-  'program.origin.city.placeholder': 'Gatlinburg, TN',
   'program.city.search': 'Search',
   'program.city.searching': 'Searching…',
   'program.city.noMatch': 'No places matched — try "City, State"',
@@ -4647,7 +4651,7 @@ export const EN = {
   'program.radius.label': 'Radius',
   'program.radius.auto.label': 'Auto',
   'program.radius.auto.title': "Radius from the selected bands' realistic repeater reach",
-  'program.radius.auto.hint': '= {{radius}} ({{bands}})',
+  'program.radius.auto.hint': '{{radius}}: about how far {{bands}} reach from a car or a handheld',
   'program.radius.auto.allBands': 'all bands',
 
   // Or a route: from one place to another, the machines within a corridor either side of the
@@ -4703,11 +4707,11 @@ export const EN = {
     "{{rb}} is asked about the states at the start of this route, not every one it crosses, so the machines in <b>{{states}}</b> are {{hearham}}'s alone. Search the rest of the trip as a route of its own.",
 
   // The saved-projects file Program could not read. `{{path}}` is a file path on the operator's
-  // computer — a token, never translated. "Program" in the second is this section's own name.
+  // computer — a token, never translated. "Repeaters" in the second is this section's own name.
   'program.projectsFile.setAside':
     'Nexus could not read your saved channel lists, so it kept that file, untouched, at <code>{{path}}</code> and started a new list. Nothing was deleted.',
   'program.projectsFile.keptInPlace':
-    'Nexus could not read your saved channel lists at <code>{{path}}</code> and could not move that file aside, so Program will not save until it is moved or repaired. Nothing was deleted.',
+    'Nexus could not read your saved channel lists at <code>{{path}}</code> and could not move that file aside, so Repeaters will not save until it is moved or repaired. Nothing was deleted.',
 
   // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
   'program.filters.aria': 'Result filters',
@@ -4718,21 +4722,35 @@ export const EN = {
     'Also list DMR / D-STAR / Fusion machines (badged; programming them comes later)',
   'program.filters.onAir.label': 'On-air only',
   'program.filters.onAir.title': 'Hide machines the directory marks off-air',
-  'program.filters.search.placeholder': 'Call, city or MHz…',
+  // The list's OWN filter, beside the list: it narrows this list and never asks for a place (an operator
+  // typed "woodstock, il" here, meaning to search near it, 2026-10-02). A place typed anyway is offered
+  // to Near: {{place}} is the operator's own words.
+  'program.filters.search.placeholder': 'Filter: call or MHz',
+  'program.filters.search.clear': 'Clear the filter',
+  'program.filters.place.offer': 'Search near “{{place}}” instead?',
+  'program.filters.bands.label': 'Bands',
+  'program.filters.show.label': 'Show',
   'program.filters.search.aria': 'Filter results',
-  'program.filters.search.title': 'A callsign or town filters the list. A frequency in MHz (147.18, 438.5125) shows every repeater on it, whatever the filters.',
+  'program.filters.search.title':
+    'Filters this list by callsign or town. A frequency in MHz (147.18, 438.5125) shows every repeater on it, whatever the filters. To search near another place, use Near.',
   'program.count': '{{shown}} of {{total}} shown · nearest first',
   'program.count.freq': '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · nearest first',
   'program.count.route': '{{shown}} of {{total}} shown · in order along the route',
+  // What the filters hide, after the count: {{why}} is a list of the filters that hide something (the
+  // three below and the On-air only chip's own words), joined the language's own way.
+  'program.count.hidden': {
+    one: '— {{count}} hidden by {{why}}',
+    other: '— {{count}} hidden by {{why}}',
+  },
+  'program.count.why.bands': '{{bands}} only',
+  'program.count.why.fm': 'FM only',
+  'program.count.why.text': 'the filter “{{text}}”',
+  'program.count.showAll': 'Show all',
   'program.count.freq.route':
     '{{shown}} on {{freq}} MHz (±{{tol}} kHz), filters not applied · in order along the route',
   // THE MAP (the operator's pick, 2026-09-30: "hearham-only map now"). Every dot is a hearham
   // listing, so the words say so, and say what is left off when RepeaterBook or the RSGB list
   // filled the list too: RepeaterBook's terms forbid a map, and the RSGB list is not mapped yet.
-  'program.view.aria': 'Show the repeaters as a list or on a map',
-  'program.view.list': 'List',
-  'program.view.map': 'Map',
-  'program.view.map.title': "The machines shown, on a map: {{hearham}}'s listings only",
   'program.map.aria': {
     one: 'Map of {{count}} repeater',
     other: 'Map of {{count}} repeaters',
@@ -4753,10 +4771,19 @@ export const EN = {
   },
   'program.map.rsgb.none':
     'The {{rsgb}} list is not mapped for now. Every machine shown is one {{hearham}} lists too.',
-  'program.map.hint': 'A filled dot is in your channel list. Click a dot to add the machine or take it off.',
-  'program.addAll.label': '＋ Add all shown',
+  'program.map.hint':
+    'A filled dot is in your channel list. Point at a dot to find its row; click one to save the machine to Memories or add it.',
+  // The selected dot's card: its ✕.
+  'program.map.card.close': 'Close',
+  'program.addAll.label': 'Add all to channel list',
   'program.addAll.confirm.title': 'Add {{count}} channels?',
   'program.addAll.confirm.ok': 'Add channels',
+  // Save all shown: every FM repeater the list shows into Memories, each once.
+  'program.saveAll.label': 'Save all to Memories',
+  'program.saveAll.title':
+    'Save every FM repeater shown to Memories, once each: the ones already there are left as they are',
+  'program.saveAll.confirm.title': 'Save {{count}} repeaters to Memories?',
+  'program.saveAll.confirm.ok': 'Save them',
 
   // The results list, and what it says when it has nothing. Two whole sentences for the
   // empty case: where the mode word sits belongs to the translator.
@@ -4795,22 +4822,26 @@ export const EN = {
   'program.row.differ.input': 'Input {{used}} is programmed (also listed: {{others}})',
   'program.row.differ.mode': 'Mode {{used}} is programmed (also listed: {{others}})',
   'program.row.differ.colorCode': 'Color code {{used}} is programmed (also listed: {{others}})',
-  'program.row.star.title':
-    'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
-  'program.row.unstar.title':
-    'Unstar — keeps the channel in Memories, drops it off the cockpit strip',
+  // Save to Memories: the machine as a memory, not starred. Once saved the row shows the badge
+  // instead; {{name}} is the memory's name ("W9ABC 94", a callsign and a frequency: a token).
+  'program.row.save.label': 'Save to Memories',
+  'program.row.save.title':
+    'Save this repeater to Memories: frequency, offset, tone or DCS, callsign, town and links. Not starred, so it stays off the cockpit strip',
+  'program.row.saved.label': 'In Memories',
+  'program.row.saved.title': 'In Memories as {{name}}. Star it there to put it on the cockpit strip',
   // Tune is a RETUNE of the CAT rig — frequency, shift, offset and tone. It never transmits.
   'program.row.tune.label': 'Tune',
   'program.row.tune.title': 'Tune your CAT rig to this repeater now (FM + shift + offset + tone)',
-  'program.row.add.label': '＋ Add',
-  'program.row.added.label': '✓ Added',
-  'program.row.add.title': 'Add to the channel list',
+  'program.row.add.label': 'Add to channel list',
+  'program.row.added.label': 'In channel list',
+  'program.row.add.title': 'Add to the channel list, to program a radio (CHIRP or CSV)',
   'program.row.remove.title': 'Remove from the channel list',
   'program.row.add.digital.title':
     'Digital repeater — programming DMR/D-STAR/Fusion comes in a later version',
 
   // The channel list being built — the artifact this section exists to produce.
   'program.builder.title': 'Channel list',
+  'program.builder.sub': 'for programming a radio: CHIRP or CSV',
   'program.builder.nameCap.label': 'Max name',
   'program.builder.nameCap.title':
     "Your radio's channel-name length — auto names re-derive to fit (hand-edited names are kept)",
@@ -4875,9 +4906,7 @@ export const EN = {
   'program.tune.done': 'Tuned {{freq}} {{mode}} — {{shift}}{{tone}}',
   'program.tune.simplex': 'simplex',
   'program.tune.tone': ' · tone {{hz}}',
-  'program.star.unstarred': '{{name}} unstarred — still in Memories',
-  'program.star.starred': '{{name}} starred — already in Memories',
-  'program.star.saved': '{{name}} ★ — on the cockpit MEM strip and in Memories',
+  'program.save.done': '{{name}} saved to Memories',
   // The already-there clause is INTERPOLATED into the sentence, not glued after it: it
   // carries the second count, which one message cannot pluralise beside the first.
   'program.saveBank.done': {
@@ -5300,11 +5329,11 @@ export const EN = {
     'HRDLog.net code cleared — auto-upload to HRDLog.net is off',
   'settings.connections.repeaterbook.token.saveFailed': 'Could not save the RepeaterBook token',
   'settings.connections.repeaterbook.token.saved':
-    'RepeaterBook token saved — the Program section now uses RepeaterBook',
+    'RepeaterBook token saved — the Repeaters section now uses RepeaterBook',
   'settings.connections.repeaterbook.token.clearFailed':
     'Could not clear the RepeaterBook token',
   'settings.connections.repeaterbook.token.cleared':
-    'RepeaterBook token cleared — the Program section falls back to hearham.com',
+    'RepeaterBook token cleared — the Repeaters section falls back to hearham.com',
   'settings.connections.cloudlog.key.saveFailed': 'Could not save the Cloudlog API key',
   'settings.connections.cloudlog.key.saved': 'Cloudlog API key saved to the keychain',
   'settings.connections.cloudlog.key.clearFailed': 'Could not clear the Cloudlog API key',
@@ -7195,7 +7224,7 @@ export const EN = {
   'settings.confirmations.repeaterbook.token.forget.title':
     'Remove the stored RepeaterBook token from the system keychain',
   'settings.confirmations.repeaterbook.token.hint':
-    "Optional. Without a token the <b>Program</b> section uses the open hearham.com directory. Add a personal token (from your RepeaterBook account's <b>API Apps</b> page) to pull from RepeaterBook.com under your own account instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to hearham.com.",
+    "Optional. Without a token the <b>Repeaters</b> section uses the open hearham.com directory. Add a personal token (from your RepeaterBook account's <b>API Apps</b> page) to pull from RepeaterBook.com under your own account instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is pending RepeaterBook's approval; if RepeaterBook is unreachable, Repeaters falls back to hearham.com.",
 
   'settings.confirmations.cloudlog.note':
     'Auto-forward each logged QSO to your self-hosted <b>Cloudlog</b> or <b>Wavelog</b> logbook (HTTP). The API key is a per-instance token for your own server — enter it, your station-profile id, and turn on the toggle.',
@@ -9938,9 +9967,9 @@ export const EN = {
   'nav.memories.label': 'Memories',
   'nav.memories.title':
     'Memories — saved channels: repeaters, nets, calling freqs; groups + ★ favorites; one click to tune',
-  'nav.program.label': 'Program',
+  'nav.program.label': 'Repeaters',
   'nav.program.title':
-    'Program — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+    'Repeaters — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',
@@ -10679,7 +10708,7 @@ export const EN = {
   'features.memories.label': 'Memories',
   'features.memories.oneLine':
     'Saved channels — repeaters, HF nets, calling freqs: groups, ★ favorites, one-click tune, CHIRP CSV, starter packs + opt-in net reminders.',
-  'features.program.label': 'Program',
+  'features.program.label': 'Repeaters',
   'features.program.oneLine':
     'Program your radios — local repeaters to a channel list: CHIRP CSV, rig memories, or tune-now.',
   'features.awards.label': 'Awards',

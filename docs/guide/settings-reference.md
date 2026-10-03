@@ -1780,11 +1780,11 @@ placeholder — a stored key is never displayed back.*
 
 **RepeaterBook**
 
-- **RepeaterBook API token** — optional. "Without a token the **Program** section
+- **RepeaterBook API token** — optional. "Without a token the **Repeaters** section
   uses the open hearham.com directory. Add a personal token (from your
   RepeaterBook account's **API Apps** page) to pull from RepeaterBook.com under
   your own account instead." Shared RepeaterBook access for every Nexus user is
-  pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls
+  pending RepeaterBook's approval; if RepeaterBook is unreachable, Repeaters falls
   back to hearham.com.
 
 **Cloudlog / Wavelog**

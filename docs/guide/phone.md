@@ -225,7 +225,7 @@ License-class enforcement hard-blocks PTT outside your privileges — see
 - [SSTV](sstv.md) — pictures in the phone segment, through this same transmitter
 - [APRS](aprs.md) — the packet side of the same 2 m radio
 - [Memories](memories.md) — the bank behind this cockpit's MEM strip
-- [Program](program.md) — building the repeater channels you work here
+- [Repeaters](program.md) — building the repeater channels you work here
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Field Day & POTA/SOTA](contesting-pota.md)
 - [Settings reference](settings-reference.md)

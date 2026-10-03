@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   access could be revoked at any time. The old watch-and-control workspace is hidden on the site
   while streaming is proven; its code stays. Leases, permits, heartbeats, the stop rules and what
   an approval grants are unchanged.
+- **Repeaters: Save to Memories.** Every FM repeater's row has a **Save to Memories** button, and
+  **Save all shown** beside **＋ Add all shown** saves every FM repeater the list shows. The memory
+  carries the frequency, offset, tone or DCS code, narrow FM, the callsign and the site, and in its
+  notes the town, the links (AllStar, IRLP, DMR ID) and the DMR colour code, as the CHIRP export's
+  comment writes them. A repeater already in Memories shows **✓ In Memories** instead, and nothing
+  is saved twice: the same machine is the one the repeater lists are merged by (the same output
+  within 2.5 kHz and the same callsign, or the same input and a site within 5 km where a side has
+  no callsign), so a machine saved from one directory is found again in another. Repeaters' rows no
+  longer carry a ☆: the **In Memories** badge stands in its place, and a saved repeater is starred
+  for the cockpit strip in Memories.
 - **Remote as a stream, the station's half (Windows, off by default).** With **Stream this
   station from my browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
   station controls, while it holds control, can be shown this Nexus window and operate it, and
@@ -705,6 +715,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lights while its carrier is up, as on FT. FT's transmit buttons are now the same size as
   everyone else's. On the Remote, the row follows the contact in the Quick layout, and for a
   browser watching without station control it scrolls with the screen, as the transmit bar does.
+- **Repeaters: the map comes first, the list under it, and a dot and its row are linked.** After a
+  fetch the map of the machines hearham lists sits above the list of every machine; the List and Map
+  chips are gone. Point at a dot and its row lights up; point at a row and its dot is ringed. A click on
+  a dot brings its row into view and opens a card with **Save to Memories** and **＋ Add**, so a click on
+  a dot no longer adds the machine by itself. The map still shows hearham's listings only, never a
+  RepeaterBook row, and says under it what it leaves off.
+- **Repeaters is simpler to work.** **Near** is the one place that says where to search: My station,
+  or one box that takes a grid square or a city (the Grid and City chips are gone), and Route to….
+  The list's own filter sits with the list, reads **Filter: call or MHz** and clears with one ✕; a place
+  typed into it is offered to Near ("Search near "woodstock, il" instead?") instead of quietly emptying
+  the list. The count line says what the filters hide and by which, with one tap to show it all:
+  "21 of 25 shown · nearest first — 4 hidden by On-air only · Show all". The bands are one segmented
+  control and FM / +Digital / On-air only one **Show** group, and Auto says its radius in words
+  ("50 mi: about how far 2m+70cm reach from a car or a handheld"). A row's actions say what they do,
+  each with its own icon: **Tune**, **Save to Memories** (a bookmark) and **Add to channel list** (a
+  list); the channel list says it is for programming a radio.
+- **Repeaters has the Conditions look.** The page is three cards on the app's ground, each with a
+  section header as the Conditions boxes have: **Search** (where to look and Fetch repeaters),
+  **Results** (the count, Save all shown and ＋ Add all shown in its header, then the filters, the map
+  and the list) and **Channel list**. The lists a search read show as chips with their age, a
+  repeater's callsign leads its row in heavier type, and the row you point at or select carries an
+  accent bar. From a 1920×1080 window (and 1366×768 at the default scale) the page uses up to 1600 px
+  of width instead of 1100, so the map is wider. Every word reads at 4.5:1 or better in every theme.
+- **Program is now Repeaters.** The view the navigation bar called **Program** is called **Repeaters**
+  everywhere: the navigation button, its tooltip, the view's title, Settings ▸ Appearance ▸ Features, the
+  window title, the RepeaterBook token's notes and the guide, in all five languages. Your saved channel
+  list, your settings and the RepeaterBook token are unchanged.
 - **Connect is now Conditions, and it opens in Frame + bar.** The view the navigation bar called
   **Connect** is **Conditions (formerly Connect)**: the button reads Conditions, and its tooltip and
   the window's title say "(formerly Connect)". Your saved layouts and settings are unchanged. After

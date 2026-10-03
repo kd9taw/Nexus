@@ -163,7 +163,7 @@ Thirteen panels tear off into their own OS window — see
   with Cabrillo and club interop, plus the POTA/SOTA hunter.
 
 ### System
-- **[Program](program.md)** — the radio-programming workbench: the repeaters
+- **[Repeaters](program.md)** — the radio-programming workbench: the repeaters
   around a location become a channel list, and the list becomes a CHIRP CSV.
 - **[Settings reference](settings-reference.md)** — a walk through every Settings
   tab, field by field.
@@ -262,7 +262,7 @@ control sits on the panel's own header — **⧉ Pop out** in most places, **↗
 out** on Memories, **⧉ Pop out board** on the club band board, and a bare **⧉**
 on Operate and Satellites. Where a panel has no such control, it does not
 detach, and **most sections do not**: there is no pop-out for the logbook,
-awards, stats, Spots, Program, Settings, chat, or the Phone, CW, RTTY, PSK,
+awards, stats, Spots, Repeaters, Settings, chat, or the Phone, CW, RTTY, PSK,
 SSTV, APRS and JS8 cockpits.
 
 | Panel | Control | Notes |

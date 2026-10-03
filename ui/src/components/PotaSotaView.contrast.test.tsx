@@ -381,8 +381,8 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
     expect(has(/ \.pota-badge\.pota-badge-worked "WORKED TODAY": #57647a on #cbd2db = 3\.9[34]:1$/), 'WORKED TODAY').toBe(true)
     // Program's buttons, the HUNT look on their tint, and ADDED's green on it (Chrome: 4.01:1 each, the same pairs).
     expect(has(/^the Program view rp-row \.pota-hunt-btn\.rp-tune "Tune": #0174ab on #d3e6f1 = 4\.0[01]:1$/), 'Tune').toBe(true)
-    expect(has(/^the Program view rp-row \.pota-hunt-btn\.rp-add "＋ Add": #0174ab on #d3e6f1 = 4\.0[01]:1$/), 'Add').toBe(true)
-    expect(has(/^the Program view rp-row \.pota-hunt-btn\.rp-add\.added "✓ Added": #007f35 on #d3e6f1 = 4\.0[01]:1$/), 'ADDED').toBe(true)
+    expect(has(/^the Program view rp-row \.pota-hunt-btn\.rp-add "Add to channel l": #0174ab on #d3e6f1 = 4\.0[01]:1$/), 'Add').toBe(true)
+    expect(has(/^the Program view rp-row \.pota-hunt-btn\.rp-add\.added "In channel list": #007f35 on #d3e6f1 = 4\.0[01]:1$/), 'ADDED').toBe(true)
   }, 60_000)
 
   // The dark batch's three, and the paper theme's frequency line, as they shipped (Chrome, the same pairs; a ratio a unit
