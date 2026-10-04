@@ -30,7 +30,7 @@ use super::admission::Refusal;
 use super::encode::{Command, Station, TxStart, TxStop};
 use super::model::{ObjectRef, Owner};
 use super::reconnect::{End, Ladder, Step};
-use super::session::{Config, ConnError, Connection, Event, SendError, StopOutcome};
+use super::session::{Announcement, Config, ConnError, Connection, Event, SendError, StopOutcome};
 use super::vita::{
     decode_fft, decode_tile, row_level, FftAssembler, FftFrame, TileAssembler, TileRow, FFT_CLASS,
     WATERFALL_CLASS,
@@ -632,6 +632,63 @@ fn a_stuck_transmitter_escalates_and_the_next_session_will_not_key() {
         assert!(!commands(&sim, 1).contains(&"xmit 1".to_string()));
         assert_keys(&sim, 1);
     }
+}
+
+#[test]
+fn a_reader_woken_by_the_answer_to_a_start_reads_it_keyed() {
+    // The driver publishes the state a request leaves before it answers. Held right after the
+    // answer it has done nothing more, so this is the earliest moment a caller woken by the answer
+    // can read the state.
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let mut c = Client::ready(&sim, config(vec![]));
+    c.create_slice();
+    c.wait_transmit_ready();
+    let release = c.conn.hold_after(Announcement::Answer);
+    c.conn.start(TxStart::Key).expect("keyed");
+    let answered = c.conn.snapshot();
+    drop(release);
+    assert!(
+        answered.keyed,
+        "the start was answered before keyed was set"
+    );
+    assert!(!answered.transmit_ready);
+    c.wait_interlock("TRANSMITTING");
+    assert!(matches!(
+        c.conn.stop(TxStop::Unkey),
+        StopOutcome::Sent { .. }
+    ));
+    c.wait("UnkeyConfirmed", |e| *e == Event::UnkeyConfirmed);
+    assert_keys(&sim, 1);
+}
+
+#[test]
+fn a_reader_woken_by_unkey_confirmed_reads_it_unkeyed() {
+    // The driver publishes the state a step leaves before it sends the step's events. Held right
+    // after `UnkeyConfirmed` goes out it has done nothing more, so this is the earliest moment a
+    // reader woken by the event can read the state. Unheld, the window is a few instructions
+    // wide, and a reader gets into it only by preempting the driver (a loaded or single-core
+    // machine).
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let mut c = Client::ready(&sim, config(vec![]));
+    c.create_slice();
+    c.wait_transmit_ready();
+    c.conn.start(TxStart::Key).expect("keyed");
+    c.wait_interlock("TRANSMITTING");
+    let release = c
+        .conn
+        .hold_after(Announcement::Event(Event::UnkeyConfirmed));
+    assert!(matches!(
+        c.conn.stop(TxStop::Unkey),
+        StopOutcome::Sent { .. }
+    ));
+    c.wait("UnkeyConfirmed", |e| *e == Event::UnkeyConfirmed);
+    let announced = c.conn.snapshot();
+    drop(release);
+    assert!(
+        !announced.keyed,
+        "UnkeyConfirmed went out before keyed cleared"
+    );
+    assert_keys(&sim, 1);
 }
 
 #[test]
