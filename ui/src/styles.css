@@ -7567,7 +7567,8 @@ select optgroup {
   --need-color: var(--need-watch);
 }
 /* The dim POTA colour (`--pota-dim`, above) on a Band activity tick and on its band map's tick and
-   label edge. It feeds the `--need-color` those marks paint, but it is NOT a need class: BandStrip
+   label edge, and on the spot key's "POTA activator" swatch, beside "New park" (SpotLegend.tsx).
+   It feeds the `--need-color` those marks paint, but it is NOT a need class: BandStrip
    and BandMap give it only to a POTA activator no need colours, so a need's own colour (the full
    POTA one, for a park still to be worked) always comes first. */
 .pota-dim {

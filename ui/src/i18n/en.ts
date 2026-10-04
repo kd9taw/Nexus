@@ -2897,6 +2897,14 @@ export const EN = {
   // component — the two surfaces must explain their dots identically, so they share these
   // keys. The need COLOURS are named by `need.chip.*`; these are the type badges beside them.
   'spots.legend.aria': 'Spot colour + type key',
+  // The two POTA colours a tick can wear, side by side among the need colours (operator,
+  // 2026-10-03, "Dim POTA color for all"), and the only keys there in plain words.
+  'spots.legend.newPark.label': 'New park',
+  'spots.legend.newPark.title':
+    'A park or summit you have not worked in this activation. A new country or another award need still takes its own colour first.',
+  'spots.legend.potaDim.label': 'POTA activator',
+  'spots.legend.potaDim.title':
+    'A POTA activator you need nothing from right now, such as one at a park you have already worked in this activation.',
   'spots.legend.pota.title': 'Live POTA activator — the call is on a park now',
   'spots.legend.sota.title': 'Live SOTA activator — the call is on a summit now',
   'spots.legend.dxped.label': 'DXped',

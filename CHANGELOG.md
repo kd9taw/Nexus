@@ -144,6 +144,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the Call Roster, the Needed board and Connect put the park first too. A new country or any
   other award need still comes first. The board's order, alerts, sounds and logging are
   unchanged.
+- **The spot key names both POTA greens.** The colour key in Band activity and in the band map
+  now shows **New park**, the full green of a park you still need, and beside it **POTA
+  activator**, the dim green of any other activator, between MODE and LoTW. In a narrow pane the
+  key can wrap onto one or two more lines.
 
 ### Added
 
