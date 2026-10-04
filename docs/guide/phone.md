@@ -134,6 +134,15 @@ of this window on, you talk on your own microphone instead of the rig's.
    release to stop**. Whichever you hold, the header's **▲ TX** sign stays dark
    until your voice keys the rig, and the page's **Hold PTT**, held, shows the
    accent colour until then and the transmit colour from then on.
+4. If you sound quiet, raise **Mic level**, beside **Mic on**. Talk as you would
+   on the air and raise it until your loudest words reach the end of its bar.
+   The page holds every peak 3 dB under full scale, so your voice never clips on
+   the way, and your browser remembers the setting. It starts at your
+   microphone's own level: the page keeps the browser's automatic gain off, so a
+   laptop's built-in microphone can be much quieter than a headset. The rig's own
+   level for USB audio still applies: **USB MOD Level** on Icom radios, **RPORT
+   GAIN** in the FTDX10's SSB menu (its DATA menu has its own, for FT8), the USB
+   audio input level on Kenwood radios.
 
 The over ends when you let go, when your audio stops arriving for 200 ms, when
 the picture or the connection freezes, and at 10 minutes. **Lock** does not work

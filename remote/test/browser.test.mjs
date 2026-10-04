@@ -915,6 +915,16 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.deepEqual(await evaluate('window.__media'),[{audio:true,video:false,ok:true}],'the stream page obtained a microphone under the real policy')
         assert.equal(await evaluate(`document.querySelector('.remote-stream-mic')?.textContent`),'Mic on')
         await untilShack(`(async()=>{for(const r of (await __pc.getStats()).values())if(r.type==='inbound-rtp'&&r.kind==='audio'&&r.packetsReceived>0)return true;return false})()`)
+        // THE MIC LEVEL, under the same policy: its worklet is a file of the page's own origin, the line carries the
+        // microphone through it (the meter reads Chrome's fake microphone), and the control is on screen beside Mic at
+        // today's level, 0 dB.
+        await until(`window.__worklets.some(w=>w.url.includes('mic-level')&&'ok' in w)`,10000)
+        assert.deepEqual(await evaluate(`window.__worklets.filter(w=>w.url.includes('mic-level')).map(w=>{const u=new URL(w.url,location.href);return {ok:w.ok,error:w.error??null,sameOrigin:u.origin===location.origin,asset:u.pathname.startsWith('/assets/')&&u.pathname.endsWith('.js')}})`),
+          [{ok:true,error:null,sameOrigin:true,asset:true}],'the Mic level worklet loads as a file of the page\'s own origin, under the Worker\'s policy')
+        await until(`Number(document.querySelector('.remote-stream-micmeter')?.getAttribute('aria-valuenow'))>-48`,10000)
+        assert.deepEqual(await evaluate(`(()=>{const s=document.querySelector('.remote-stream-miclevel input[type=range]'),r=s.getBoundingClientRect(),next=document.querySelector('.remote-stream-mic').nextElementSibling;return {value:s.value,label:s.closest('label')?.textContent,onScreen:r.width>0&&r.height>0&&r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,besideMic:!!next?.contains(s)}})()`),
+          {value:'0',label:'Mic level',onScreen:true,besideMic:true},'the Mic level is on screen beside Mic, at today\'s level')
+        assert.deepEqual({events:await evaluate('window.__csp'),console:refused},{events:[],console:[]},'no CSP violation with the Mic level running')
         assert.deepEqual(await evaluate(`(p=>({microphone:p.allowsFeature('microphone'),elsewhere:p.allowsFeature('microphone','https://identity.remote-test.invalid'),camera:p.allowsFeature('camera'),geolocation:p.allowsFeature('geolocation')}))(document.featurePolicy)`),{microphone:true,elsewhere:false,camera:false,geolocation:false},'the microphone for this origin alone, and nothing else the policy names')
         assert.equal(await evaluate(`navigator.mediaDevices.getUserMedia({video:true}).then(()=>'granted',e=>e.name)`),'NotAllowedError','control: the camera is still refused')
         await click(`document.querySelector('.remote-stream-mic')`)

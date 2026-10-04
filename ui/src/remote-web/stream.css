@@ -30,6 +30,17 @@
 /* The microphone, on: the accent, never the transmit colour - a microphone that is on is not on the
    air (PTT arms, the voice keys). */
 .remote-button.remote-stream-mic[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
+/* The Mic level, beside Mic while it is on: the slider and a meter of what is sent. The bar is the loudest
+   of the voice lately, and takes the warning colour while the limiter holds a word down. */
+.remote-stream-miclevel { display: inline-flex; align-items: center; gap: .35em; color: var(--text-dim); font-size: var(--fs-label); }
+.remote-stream-miclevel label { display: inline-flex; align-items: center; gap: .35em; }
+.remote-stream-miclevel input { width: 6em; }
+.remote-stream-micmeter {
+  display: inline-block; width: 4em; height: .5em; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+}
+.remote-stream-micmeter > span { display: block; height: 100%; background: var(--snr-strong); }
+.remote-stream-micmeter[data-limited] > span { background: var(--alert-warning); }
 
 /* The picture fills the region and keeps its shape; the bars around it are the stage's own colour.
    `position: relative` so the placeholder and the stalled notice sit over it, never beside it. */

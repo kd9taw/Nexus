@@ -7,6 +7,7 @@ import { BetaNote } from './BetaNote'
 import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
+import { MIC_LEVEL_DB, MIC_METER_FLOOR_DB, MIC_METER_TOP_DB, meterDb } from './mic-level'
 import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
 import { exactSize, observeDeviceSize, type StopTarget, type StreamLink, type StreamView as LinkView } from './stream-link'
 import type { AudioView } from './audio-listen'
@@ -186,6 +187,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
           disabled={stream.mic === 'asking'} title={t('remote.stream.mic.title')}
           onClick={() => void link.setMic(stream.mic !== 'on')}>
           {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
+        {stream.control && stream.mic === 'on' && <MicLevel link={link} />}
         {running && <button type="button" className="remote-button" onClick={end}>{t('remote.stream.end')}</button>}
         {listen && audioOn && <button type="button" className="remote-button" onClick={() => relayAudio.release()}>{t('remote.audio.stop')}</button>}
         <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
@@ -282,6 +284,37 @@ function useStillThere(running: boolean, link: StreamLink, idle: () => void): bo
     }
   }, [running, link])
   return asking
+}
+
+/** The operator's Mic level, beside Mic while it is on: how loud the voice goes to the station, kept by this
+ *  browser, and a meter of what is going. Shown only where the page could build the level. Its readings are
+ *  measurements, so they are not translated. */
+function MicLevel({ link }: { link: StreamLink }) {
+  const level = useSyncExternalStore(link.subscribe, () => link.micLevel)
+  const meter = useSyncExternalStore(link.micMeter.subscribe, link.micMeter.getSnapshot)
+  if (!meter.live) return null
+  const db = Math.round(meterDb(meter.peak))
+  return <span className="remote-stream-miclevel">
+    <label title={t('remote.stream.mic.level.title')}>
+      <span>{t('remote.stream.mic.level')}</span>
+      <input type="range" min={MIC_LEVEL_DB.min} max={MIC_LEVEL_DB.max} step={1} value={level}
+        aria-valuetext={levelReading(level)} onChange={event => link.setMicLevel(Number(event.currentTarget.value))} />
+    </label>
+    <span className="remote-stream-micmeter" role="meter" aria-label={t('remote.stream.mic.meter')}
+      aria-valuemin={MIC_METER_FLOOR_DB} aria-valuemax={Math.round(MIC_METER_TOP_DB)} aria-valuenow={db} aria-valuetext={meterReading(db)}
+      data-limited={meter.limited || undefined}>
+      <span style={{ width: `${Math.min(100, (100 * (db - MIC_METER_FLOOR_DB)) / (MIC_METER_TOP_DB - MIC_METER_FLOOR_DB))}%` }} />
+    </span>
+  </span>
+}
+
+/** The level as gain over the microphone's own, built invariantly: dB is not translated. */
+function levelReading(db: number): string {
+  return db > 0 ? `+${db} dB` : `${db} dB`
+}
+/** The meter in dB under full scale, built invariantly for the same reason. */
+function meterReading(db: number): string {
+  return `${db} dBFS`
 }
 
 /** What the microphone is doing, in a stack of notes at the foot of the picture that never takes a
