@@ -554,7 +554,6 @@ export const JA: PartialCatalog = {
   "lanWindow.reason.badAddress": "局のアドレスではありません。このネットワーク上で局に表示されているとおりに入力してください。",
   "lanWindow.reason.badCode": "コードは 0〜9 と a〜f の16文字です。局の画面と見比べてください。",
   "lanWindow.reason.badName": "このコンピューターに1〜32文字の名前を付けてください。",
-  "lanWindow.reason.unreachable": "応答がありません。局の電源が入っていること、局で「このネットワーク上の Remote」がオンになっていること、このコンピューターが同じネットワークにあることを確認してください。",
   "lanWindow.reason.pairingClosed": "局は今ペアリングを受け付けていません。局で「コンピューターをペアリング」を押し、10分以内に新しいコードを入力してください。",
   "lanWindow.reason.wrongCode": "局がコードを拒否しました。局の画面と見比べてください。3回間違えると、局で新しいコードが必要になります。",
   "lanWindow.reason.stationProofFailed": "コードが局のものと一致しません。コードとアドレスを確認してください。どちらも正しい場合は、このネットワーク上の別の何かが局の代わりに応答しているおそれがあります。",

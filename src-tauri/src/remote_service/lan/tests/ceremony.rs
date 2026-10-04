@@ -6,11 +6,11 @@ use super::super::book::{Checked, MAX_PAIRED, PAIRING_FOR, WRONG_PROOFS};
 use super::super::pairing::{self as proofs, Side};
 use super::*;
 
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn nonce() -> [u8; 32] {
+pub(super) fn nonce() -> [u8; 32] {
     let mut bytes = [0; 32];
     ring::rand::SecureRandom::fill(&SystemRandom::new(), &mut bytes).unwrap();
     bytes
@@ -31,14 +31,17 @@ fn shown_code(book: &Book) -> [u8; 8] {
 
 /// A computer's side of a pairing connection: what the shack presented, and this session's
 /// exporter.
-struct Pairing {
-    socket: Client,
-    shack: Vec<u8>,
-    exporter: [u8; 32],
+pub(super) struct Pairing {
+    pub(super) socket: Client,
+    pub(super) shack: Vec<u8>,
+    pub(super) exporter: [u8; 32],
 }
 
 /// TLS with `key` and no shack key pinned, then the upgrade.
-async fn open_pairing(stream: tokio::net::TcpStream, key: &str) -> Result<Pairing, String> {
+pub(super) async fn open_pairing(
+    stream: tokio::net::TcpStream,
+    key: &str,
+) -> Result<Pairing, String> {
     let connector = tokio_rustls::TlsConnector::from(tls::client::pairing(key).unwrap());
     let name = rustls::pki_types::ServerName::try_from("nexus-station").unwrap();
     let tls = connector
@@ -111,7 +114,7 @@ async fn prove_code(p: &mut Pairing, computer: &Computer, typed: &[u8; 8], name:
 }
 
 /// A hostile computer: it sends a proof made with `guess` whether or not the shack's proof held.
-async fn guess_code(p: &mut Pairing, computer: &Computer, guess: &[u8; 8]) -> Value {
+pub(super) async fn guess_code(p: &mut Pairing, computer: &Computer, guess: &[u8; 8]) -> Value {
     let ours = nonce();
     send(
         &mut p.socket,

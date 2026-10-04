@@ -564,7 +564,6 @@ export const FR: PartialCatalog = {
   "lanWindow.reason.badAddress": "Ce n’est pas l’adresse d’une station. Saisissez-la telle que la station l’affiche, sur ce réseau.",
   "lanWindow.reason.badCode": "Le code compte seize caractères, de 0 à 9 et de a à f. Comparez-le à l’écran de la station.",
   "lanWindow.reason.badName": "Donnez à cet ordinateur un nom de 1 à 32 caractères.",
-  "lanWindow.reason.unreachable": "Rien n’a répondu. Vérifiez que la station est allumée, que Remote sur ce réseau y est activé et que cet ordinateur est sur le même réseau.",
   "lanWindow.reason.pairingClosed": "La station n’associe pas en ce moment. Appuyez sur Associer un ordinateur à la station, puis saisissez le nouveau code dans les dix minutes.",
   "lanWindow.reason.wrongCode": "La station a refusé le code. Comparez-le à l’écran de la station. Après trois codes erronés, la station en demande un nouveau.",
   "lanWindow.reason.stationProofFailed": "Le code ne correspond pas à celui de la station. Vérifiez le code et l’adresse. S’ils sont justes tous les deux, autre chose sur ce réseau répond peut-être à la place de la station.",

@@ -564,7 +564,6 @@ export const ES: PartialCatalog = {
   "lanWindow.reason.badAddress": "Esa no es la dirección de una estación. Escríbela tal como la muestra la estación, en esta red.",
   "lanWindow.reason.badCode": "El código tiene dieciséis caracteres, del 0 al 9 y de la a a la f. Compruébalo con la pantalla de la estación.",
   "lanWindow.reason.badName": "Ponle a este ordenador un nombre de 1 a 32 caracteres.",
-  "lanWindow.reason.unreachable": "No respondió nada. Comprueba que la estación esté encendida, que Remote en esta red esté activado allí y que este ordenador esté en la misma red.",
   "lanWindow.reason.pairingClosed": "La estación no está vinculando ahora. Pulsa Vincular un ordenador en la estación y escribe el código nuevo antes de diez minutos.",
   "lanWindow.reason.wrongCode": "La estación rechazó el código. Compruébalo con la pantalla de la estación. Tras tres códigos erróneos, la estación necesita uno nuevo.",
   "lanWindow.reason.stationProofFailed": "El código no coincide con el de la estación. Comprueba el código y la dirección. Si los dos son correctos, puede que otra cosa de esta red esté respondiendo en lugar de la estación.",

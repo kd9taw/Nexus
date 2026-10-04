@@ -73,8 +73,9 @@ pub(super) struct Opened {
 /// Why a connection did not open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Failed {
-    /// Nothing answered, or it went away before the handshake was done.
-    Unreachable,
+    /// Nothing answered, or it went away before the handshake was done: why, as the window says
+    /// it (`tempo_stream::lan::unreached`).
+    Unreachable(&'static str),
     /// The address presented a key this computer did not pin.
     KeyChanged,
     /// The station refused this computer's key in the handshake.
@@ -86,16 +87,26 @@ fn tls_error(error: &std::io::Error) -> Option<&rustls::Error> {
     error.get_ref()?.downcast_ref::<rustls::Error>()
 }
 
-/// What a failed read or write says about the handshake: refused by the station, or anything else.
-fn refused_or_gone(error: &std::io::Error) -> Failed {
+/// What a failed read or write at `at` says about the handshake: refused by the station, or
+/// anything else.
+fn refused_or_gone(at: SocketAddrV4, error: &std::io::Error) -> Failed {
     match tls_error(error) {
         // What a station's verifier answers a key it does not take (`tls::PinnedClients`).
         Some(rustls::Error::AlertReceived(rustls::AlertDescription::AccessDenied)) => {
             Failed::Refused
         }
         Some(rustls::Error::InvalidCertificate(_)) => Failed::KeyChanged,
-        _ => Failed::Unreachable,
+        _ => gone(at, error),
     }
+}
+
+/// Nothing answered at `at`, or it went away: `at` is on none of this computer's networks, its
+/// computer refused the connection, or no answer.
+fn gone(at: SocketAddrV4, error: &std::io::Error) -> Failed {
+    Failed::Unreachable(tempo_stream::lan::unreached(
+        error,
+        tempo_stream::lan::here(*at.ip()),
+    ))
 }
 
 fn socket_config() -> WebSocketConfig {
@@ -106,30 +117,30 @@ fn socket_config() -> WebSocketConfig {
 
 /// TCP, TLS with `config`, and the upgrade, at `at`.
 pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<Opened, Failed> {
-    let tcp = tokio::time::timeout(CONNECT, TcpStream::connect(at))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .ok_or(Failed::Unreachable)?;
+    let tcp = match tokio::time::timeout(CONNECT, TcpStream::connect(at)).await {
+        Ok(Ok(tcp)) => tcp,
+        Ok(Err(error)) => return Err(gone(at, &error)),
+        Err(_) => return Err(gone(at, &std::io::ErrorKind::TimedOut.into())),
+    };
     let name = rustls::pki_types::ServerName::try_from("nexus-station")
-        .map_err(|_| Failed::Unreachable)?;
+        .map_err(|_| Failed::Unreachable("noAnswer"))?;
     let tls = tokio_rustls::TlsConnector::from(config)
         .connect(name, tcp)
         .await
-        .map_err(|e| refused_or_gone(&e))?;
+        .map_err(|e| refused_or_gone(at, &e))?;
     let station = tls
         .get_ref()
         .1
         .peer_certificates()
         .and_then(|keys| keys.first())
-        .ok_or(Failed::Unreachable)?
+        .ok_or(Failed::Unreachable("noAnswer"))?
         .as_ref()
         .to_vec();
     let exporter = tls
         .get_ref()
         .1
         .export_keying_material([0; 32], crate::remote_service::lan::pairing::EXPORTER, None)
-        .map_err(|_| Failed::Unreachable)?;
+        .map_err(|_| Failed::Unreachable("noAnswer"))?;
     // In TLS 1.3 the station judges this computer's key after this computer's side of the
     // handshake is done, so its refusal is the first thing read here.
     let (socket, _) = tokio_tungstenite::client_async_with_config(
@@ -139,8 +150,8 @@ pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<
     )
     .await
     .map_err(|e| match e {
-        tokio_tungstenite::tungstenite::Error::Io(io) => refused_or_gone(&io),
-        _ => Failed::Unreachable,
+        tokio_tungstenite::tungstenite::Error::Io(io) => refused_or_gone(at, &io),
+        _ => Failed::Unreachable("noAnswer"),
     })?;
     Ok(Opened {
         socket,
@@ -174,6 +185,10 @@ enum First {
     },
 }
 
+/// The reasons that say nothing answered (`tempo_stream::lan::unreached`), as against a station
+/// that answered and said no.
+pub(crate) const UNREACHED: [&str; 3] = ["otherNetwork", "refused", "noAnswer"];
+
 /// How much a reason says, for the one to tell when no address welcomed this computer.
 fn weight(reason: &str) -> u8 {
     match reason {
@@ -201,7 +216,7 @@ async fn hello(
     record: &PairedStation,
 ) -> Result<(Socket, String), &'static str> {
     let Opened { mut socket, .. } = open(at, config).await.map_err(|failed| match failed {
-        Failed::Unreachable => "unreachable",
+        Failed::Unreachable(why) => why,
         Failed::KeyChanged => "keyChanged",
         Failed::Refused => "notPaired",
     })?;
@@ -209,7 +224,7 @@ async fn hello(
     let hello = json!({"type":"hello","protocol":protocol,"stream":stream,"operation":operation});
     say(&mut socket, hello.to_string())
         .await
-        .map_err(|_| "unreachable")?;
+        .map_err(|_| "noAnswer")?;
     let first = loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => break text,
@@ -259,8 +274,8 @@ pub(crate) async fn connect(
 }
 
 /// Open the road to the station `record` names at each of `order` in turn: the road and the
-/// address that welcomed this computer, or the most telling reason none did (`unreachable`, with
-/// nowhere to try).
+/// address that welcomed this computer, or the most telling reason none did, the first address's
+/// among equals (`noAnswer`, with nowhere to try).
 pub(crate) async fn connect_at(
     record: &PairedStation,
     order: &[SocketAddrV4],
@@ -268,11 +283,11 @@ pub(crate) async fn connect_at(
     let key = ComputerKey::restore(&record.pkcs8).ok_or("storeUnavailable")?;
     let config =
         tls::client::config(&record.pkcs8, &record.station_key).ok_or("storeUnavailable")?;
-    let mut told = "unreachable";
+    let mut told = None;
     for &at in order {
         let reached = tokio::time::timeout(HANDSHAKE, hello(at, config.clone(), record))
             .await
-            .unwrap_or(Err("unreachable"));
+            .unwrap_or(Err("noAnswer"));
         match reached {
             Ok((socket, session)) => {
                 let ids = Ids {
@@ -282,11 +297,13 @@ pub(crate) async fn connect_at(
                 };
                 return Ok((Road::new(socket, key, record.station_key.clone(), ids), at));
             }
-            Err(reason) if weight(reason) > weight(told) => told = reason,
+            Err(reason) if told.is_none_or(|told| weight(reason) > weight(told)) => {
+                told = Some(reason)
+            }
             Err(_) => {}
         }
     }
-    Err(told)
+    Err(told.unwrap_or("noAnswer"))
 }
 
 /// Is `answer` the station's own (S3-M1): signed with `station_key` (SPKI, lowercase hex, the key

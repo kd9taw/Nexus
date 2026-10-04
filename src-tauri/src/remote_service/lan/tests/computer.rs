@@ -35,7 +35,7 @@ async fn behind_a_port(s: &Shack, stop: watch::Receiver<bool>) -> SocketAddrV4 {
 
 /// This computer's record for `s`'s station, as pairing kept it: the paired computer's key, the
 /// station's key pinned, the two ids, and `at`.
-fn paired_record(s: &Shack, at: SocketAddrV4) -> PairedStation {
+pub(super) fn paired_record(s: &Shack, at: SocketAddrV4) -> PairedStation {
     PairedStation {
         station_id: STATION.into(),
         device_id: s.device.clone(),
@@ -111,7 +111,7 @@ async fn acquire(road: &mut road::Road) -> Value {
 }
 
 /// The contract's recorded offer and the answer str0m wrote for it.
-fn recorded() -> (String, String) {
+pub(super) fn recorded() -> (String, String) {
     let file: Value = serde_json::from_str(include_str!(
         "../../../../../remote/test/fixtures/stream/station-answer.json"
     ))
@@ -216,7 +216,8 @@ async fn behind_a_port_on(s: &Shack, ip: Ipv4Addr, stop: watch::Receiver<bool>) 
 /// ★ Remembered addresses, on this box's own private address (a station's are private, and only a
 /// private one is remembered): the one the operator typed is tried first, then the remembered ones
 /// in their order, the last that worked first, and the first to welcome this computer is the
-/// road. CONTROL: with only addresses where nothing listens, the answer is `unreachable`; and an
+/// road. CONTROL: with only addresses where nothing listens, the answer is that nothing listens
+/// there (`refused`); and an
 /// address that told more (another key) is what the page is told over one that told nothing.
 /// Skipped, saying so, on a box with no private address of its own.
 #[tokio::test]
@@ -259,7 +260,7 @@ async fn the_remembered_addresses_are_tried_in_order() {
     kept.addresses = vec![dead.to_string()];
     assert_eq!(
         road::connect(&kept, None).await.err(),
-        Some("unreachable"),
+        Some("refused"),
         "the control"
     );
     let mut pinned_elsewhere = paired_record(&s, live);
@@ -269,6 +270,81 @@ async fn the_remembered_addresses_are_tried_in_order() {
         road::connect(&pinned_elsewhere, None).await.err(),
         Some("keyChanged")
     );
+}
+
+/// ★ Nothing answering is said as the window says it (`tempo_stream::lan::unreached`), on the road
+/// and on a pairing alike, in place of one sentence for all of it: a port where nothing listens is
+/// `refused`; a machine that takes the connection and drops it before the handshake is done, as the
+/// shack's gate drops a source it will not hear, is `noAnswer`, and so is nowhere to try; and the
+/// first address's own word stands over an equal one after it. CONTROL: past the port where nothing
+/// listens, the station's own welcomes this computer. (`otherNetwork` reads this computer's own
+/// networks, which only Windows gives: `unreached`'s own test pins it.) Skipped, saying so, on a box
+/// with no private address of its own.
+#[tokio::test]
+async fn nothing_answering_is_said_as_the_window_says_it() {
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let live = behind_a_port_on(&s, private, stop).await;
+    let dead = {
+        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
+        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
+            unreachable!()
+        };
+        at
+    };
+    let dropping = {
+        let listener = tokio::net::TcpListener::bind((private, 0)).await.unwrap();
+        let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
+            unreachable!()
+        };
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        at
+    };
+    let kept = paired_record(&s, live);
+    assert_eq!(
+        road::connect_at(&kept, &[dead]).await.err(),
+        Some("refused")
+    );
+    assert_eq!(
+        road::connect_at(&kept, &[dropping]).await.err(),
+        Some("noAnswer")
+    );
+    assert_eq!(
+        road::connect_at(&kept, &[]).await.err(),
+        Some("noAnswer"),
+        "nowhere to try"
+    );
+    for (order, first) in [
+        ([dead, dropping], "refused"),
+        ([dropping, dead], "noAnswer"),
+    ] {
+        assert_eq!(
+            road::connect_at(&kept, &order).await.err(),
+            Some(first),
+            "the first address's own word: {order:?}"
+        );
+    }
+    let typed = [0x5e; 8];
+    assert_eq!(
+        pairing::pair(dead, typed, "Den PC").await.err(),
+        Some("refused")
+    );
+    assert_eq!(
+        pairing::pair(dropping, typed, "Den PC").await.err(),
+        Some("noAnswer")
+    );
+    let (_, reached) = road::connect_at(&kept, &[dead, live])
+        .await
+        .expect("the control");
+    assert_eq!(reached, live);
 }
 
 // ----- Pairing, the computer's half -----
@@ -456,7 +532,7 @@ async fn a_station_of_another_version_says_which_side_to_update() {
             .public_key()
             .to_string();
         let refused = vec![vec![json!({"type":"refused","reason":side})]];
-        let (at, mut heard) = scripted_station(&key, refused.clone()).await;
+        let (at, mut heard) = scripted_station(Ipv4Addr::LOCALHOST, &key, refused.clone()).await;
         let mut kept = record(STATION, &["192.168.1.20"]);
         kept.station_key = pinned;
         assert_eq!(road::connect(&kept, Some(at)).await.err(), Some(side));
@@ -465,7 +541,7 @@ async fn a_station_of_another_version_says_which_side_to_update() {
             hello,
             json!({"type":"hello","protocol":VERSIONS.0,"stream":VERSIONS.1,"operation":VERSIONS.2})
         );
-        let (at, mut heard) = scripted_station(&key, refused).await;
+        let (at, mut heard) = scripted_station(Ipv4Addr::LOCALHOST, &key, refused).await;
         assert_eq!(pairing::pair(at, [1; 8], "Den PC").await.err(), Some(side));
         let asked = heard.recv().await.unwrap();
         assert_eq!(asked["type"], "pair");
@@ -585,7 +661,7 @@ async fn control_ended_by_the_hosted_road_is_acquired_again() {
 // ----- The offer and the answer -----
 
 /// The station's one stream slot, free again once a refused offer's session has finished ending.
-async fn slot_free(s: &Shack) {
+pub(super) async fn slot_free(s: &Shack) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while s.shared.authority.claim_stream().is_none() {
         assert!(
@@ -749,15 +825,17 @@ fn the_answer_is_checked_against_the_pinned_key() {
     );
 }
 
-/// A machine holding `key` that answers each message it hears with the next group of `replies`
-/// (TLS with any P-256 key taken, and the upgrade). What it heard comes back on the channel.
-async fn scripted_station(
+/// A machine on `on` holding `key` that answers each message it hears with the next group of
+/// `replies` (TLS with any P-256 key taken, and the upgrade). What it heard comes back on the
+/// channel.
+pub(super) async fn scripted_station(
+    on: Ipv4Addr,
     key: &str,
     replies: Vec<Vec<Value>>,
 ) -> (SocketAddrV4, tokio::sync::mpsc::UnboundedReceiver<Value>) {
     let identity = tls::Identity::new(key, STATION.into()).unwrap();
     let config = tls::server(&identity, Arc::new(|_: &[u8; 32]| None), Arc::new(|| true)).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind((on, 0)).await.unwrap();
     let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
         unreachable!()
     };
@@ -821,8 +899,12 @@ async fn an_answer_that_does_not_hold_never_reaches_the_page() {
         let candidate = json!({"type":"streamSignal","payload":{"kind":"candidate",
             "candidate":"candidate:1 1 udp 2130706431 192.168.1.20 42075 typ host","sdpMid":"0"}});
         let answered = json!({"type":"streamSignal","payload":{"kind":"answer","sdp":signed}});
-        let (at, mut there) =
-            scripted_station(&key, vec![vec![welcome], vec![candidate, answered]]).await;
+        let (at, mut there) = scripted_station(
+            Ipv4Addr::LOCALHOST,
+            &key,
+            vec![vec![welcome], vec![candidate, answered]],
+        )
+        .await;
         let (mut opened, _) = road::connect(&kept, Some(at)).await.unwrap();
         let lease = "30000000-0000-4000-8000-000000000003".to_string();
         opened
@@ -861,7 +943,7 @@ async fn an_answer_that_does_not_hold_never_reaches_the_page() {
 // ----- End to end -----
 
 /// The window's own page socket on `origin`: the secret in its path and the window's own origin.
-async fn page_socket(origin: &Origin) -> Client2 {
+pub(super) async fn page_socket(origin: &Origin) -> Client2 {
     let page = origin.page();
     let secret = page.split('/').nth(3).unwrap();
     let url = format!("ws://127.0.0.1:{}/{secret}/socket", origin.port());
@@ -879,11 +961,11 @@ async fn page_socket(origin: &Origin) -> Client2 {
     tokio_tungstenite::connect_async(request).await.unwrap().0
 }
 
-type Client2 =
+pub(super) type Client2 =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// What the page is told next, other than the station's status line.
-async fn told(page: &mut Client2) -> Value {
+pub(super) async fn told(page: &mut Client2) -> Value {
     loop {
         match tokio::time::timeout(Duration::from_secs(20), page.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
@@ -900,7 +982,7 @@ async fn told(page: &mut Client2) -> Value {
 
 /// An operation request as the page's own client sends it, and its answer, asked again while
 /// the station is merely busy.
-async fn page_ask(page: &mut Client2, request: Value) -> Value {
+pub(super) async fn page_ask(page: &mut Client2, request: Value) -> Value {
     for _ in 0..50 {
         let mut request = request.clone();
         if request["type"] != "stopTransmit" {
@@ -1046,7 +1128,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
 
 /// The page's connect to the station, at `typed` if the operator typed an address, and what the
 /// page is told of it.
-async fn page_connect(page: &mut Client2, typed: Option<SocketAddrV4>) -> Value {
+pub(super) async fn page_connect(page: &mut Client2, typed: Option<SocketAddrV4>) -> Value {
     let mut asked = json!({"type":"connect","stationId":STATION});
     if let Some(typed) = typed {
         asked["address"] = json!(typed.to_string());
@@ -1064,7 +1146,8 @@ async fn page_connect(page: &mut Client2, typed: Option<SocketAddrV4>) -> Value 
 /// pinned for it). The address that welcomed it is remembered first. CONTROL: a remembered address
 /// that works is the road and no look is made; a typed one is tried first; an advert with another
 /// station's key tag is never tried, though it names a port of this one, so with only that found
-/// the answer stays `unreachable`. Skipped, saying so, on a box with no private address of its own.
+/// the answer stays the remembered address's own (`refused`). Skipped, saying so, on a box with no
+/// private address of its own.
 #[tokio::test]
 async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
     use ring::digest::{digest, SHA256};
@@ -1157,7 +1240,7 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
     remembered(&[dead]);
     assert_eq!(
         page_connect(&mut page, None).await,
-        json!({"type":"connectRefused","reason":"unreachable"}),
+        json!({"type":"connectRefused","reason":"refused"}),
         "the control"
     );
     assert_eq!(looks.load(Ordering::SeqCst), 2);

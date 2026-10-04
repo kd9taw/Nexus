@@ -8,8 +8,14 @@
 // blames one. Typing the address always works, found by name or not.
 import { t } from '../i18n'
 
-/** Why the station could not be reached (`tempo_stream::lan::unreached`). */
-export type LanUnreached = 'otherNetwork' | 'refused' | 'noAnswer'
+/** Why the station could not be reached (`tempo_stream::lan::unreached`): what this computer's
+ *  Nexus says when nothing answered, as against a station that answered and said no. */
+export const LAN_UNREACHED = ['otherNetwork', 'refused', 'noAnswer'] as const
+export type LanUnreached = (typeof LAN_UNREACHED)[number]
+
+export function lanUnreached(reason: string): reason is LanUnreached {
+  return (LAN_UNREACHED as readonly string[]).includes(reason)
+}
 
 export function lanReachLine(code: LanUnreached): string {
   switch (code) {

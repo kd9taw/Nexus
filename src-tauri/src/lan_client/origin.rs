@@ -687,9 +687,17 @@ async fn connect(
         .await?
         .ok_or("unknownStation")?;
     let (opened, at) = match road::connect(&record, typed).await {
-        Err("unreachable") => {
+        Err(why) if road::UNREACHED.contains(&why) => {
             let tried = road::order(&record, typed);
-            road::connect_at(&record, &found_at(reach, &record, &tried).await).await?
+            let found = found_at(reach, &record, &tried).await;
+            // Nothing found by name: the page hears why the addresses tried did not answer.
+            road::connect_at(&record, &found).await.map_err(|later| {
+                if found.is_empty() {
+                    why
+                } else {
+                    later
+                }
+            })?
         }
         reached => reached?,
     };

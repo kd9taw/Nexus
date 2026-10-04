@@ -14,6 +14,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 mod ceremony;
 mod computer;
+mod drops;
+mod hostile;
 
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
@@ -366,6 +368,29 @@ fn keyed_under_presence(s: &Shack, session: &str, state: &Value) {
     e.set_operating_mode("phone", false);
     e.set_ptt(true);
     assert!(e.manual_ptt(), "premise: keyed");
+}
+
+/// A live stream's heartbeat with a fresh picture, as the station takes it: the lease renewed on the
+/// computer's own connection, then presence minted again from it. When presence was minted.
+async fn renewed(s: &Shack, socket: &mut Client, session: &str, state: &Value) -> Instant {
+    let answered = ask(
+        socket,
+        json!({"type":"heartbeat","requestId":id(),"leaseId":state["leaseId"]}),
+    )
+    .await;
+    assert_eq!(answered["value"]["phase"], "controlling", "{answered}");
+    let now = Instant::now();
+    let permit = s
+        .shared
+        .authority
+        .stream_presence(session, &s.device, state["leaseId"].as_str().unwrap(), now)
+        .unwrap();
+    s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .hold_remote_presence(permit, now);
+    now
 }
 
 fn halted(s: &Shack) -> bool {
@@ -1115,9 +1140,9 @@ async fn eventually(lan: &Lan, what: &str, done: impl Fn(&LanStatus) -> bool) ->
     }
 }
 
-/// Listening on this box's own private address, with a computer welcomed, in control and keyed.
-/// `None`, said on stderr, on a box with no private address of its own.
-async fn listening_and_keyed() -> Option<(Running, Client)> {
+/// Listening on this box's own private address, LAN on, with nobody connected yet. `None`, said on
+/// stderr, on a box with no private address of its own.
+async fn listening() -> Option<Running> {
     let Some(address) = own_private_address() else {
         eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
         return None;
@@ -1142,20 +1167,31 @@ async fn listening_and_keyed() -> Option<(Running, Client)> {
         st.listening.as_deref() == Some(at.to_string().as_str())
     })
     .await;
+    Some(Running {
+        lan,
+        s,
+        at,
+        scratch,
+    })
+}
+
+/// A computer that dialled `at` (the listener, or something in front of it), welcomed, in control
+/// and keyed under its session's presence: its socket, its session and the acquire's state.
+async fn keyed_at(s: &Shack, at: SocketAddr) -> (Client, String, Value) {
     let stream = tokio::net::TcpStream::connect(at).await.unwrap();
     let mut socket = open(stream, &s.computer.key, &s.public_key).await.unwrap();
-    let (session, state) = in_control(&s, &mut socket).await;
-    keyed_under_presence(&s, &session, &state);
-    assert!(!halted(&s), "premise: on the air");
-    Some((
-        Running {
-            lan,
-            s,
-            at,
-            scratch,
-        },
-        socket,
-    ))
+    let (session, state) = in_control(s, &mut socket).await;
+    keyed_under_presence(s, &session, &state);
+    assert!(!halted(s), "premise: on the air");
+    (socket, session, state)
+}
+
+/// Listening on this box's own private address, with a computer welcomed, in control and keyed.
+/// `None`, said on stderr, on a box with no private address of its own.
+async fn listening_and_keyed() -> Option<(Running, Client)> {
+    let r = listening().await?;
+    let (socket, _, _) = keyed_at(&r.s, r.at).await;
+    Some((r, socket))
 }
 
 /// ★ LAN off mid-over: turning it off at the shack ends the session, its lease and the over,
