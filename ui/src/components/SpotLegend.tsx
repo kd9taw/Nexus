@@ -3,6 +3,7 @@
 // theirs through GETTERS: they are module constants that BandStrip and BandMap read during
 // render, so resolving at import time would freeze whichever locale loaded first. The record
 // shape is unchanged, so neither consumer had to move.
+import { Fragment } from 'react'
 import { NEED_CHIP } from '../features/needVisuals'
 import { t } from '../i18n'
 import type { BeaconKind, NeedTag } from '../types'
@@ -51,6 +52,10 @@ export const BEACON_BADGE: Record<BeaconKind, { ch: string; cls: string; word: s
 // here, since they ride as badges independent of the colour.
 // Key order mirrors the backend NeedTag::tier() descending (same as NEED_PRECEDENCE), so all
 // three surfaces — decode feed, Needed board, and this legend — read as one system.
+// The park sits at its rank, before Confirm, and is the one key in plain words, with the dim POTA
+// colour beside it (operator, 2026-10-03, "Dim POTA color for all"): "New park" is the full POTA
+// colour a park still to be worked keeps, "POTA activator" the dim one any other activator's tick
+// wears on the strip and the map.
 const LEGEND_NEEDS: NeedTag[] = [
   'Wanted',
   'NewEntity',
@@ -59,6 +64,7 @@ const LEGEND_NEEDS: NeedTag[] = [
   'NewGrid',
   'NewBand',
   'NewMode',
+  'NewPark',
   'Confirm',
 ]
 
@@ -72,16 +78,32 @@ const LEGEND_NEEDS: NeedTag[] = [
 export function SpotLegend() {
   return (
     <div className="spot-legend" role="group" aria-label={t('spots.legend.aria')}>
-      {LEGEND_NEEDS.map((tag) => (
-        <span
-          key={tag}
-          className={`spot-legend-item need-${NEED_CHIP[tag].cls}`}
-          title={NEED_CHIP[tag].title}
-        >
-          <span className="spot-legend-dot" aria-hidden />
-          {NEED_CHIP[tag].short}
-        </span>
-      ))}
+      {LEGEND_NEEDS.map((tag) =>
+        tag === 'NewPark' ? (
+          <Fragment key={tag}>
+            <span
+              className={`spot-legend-item need-${NEED_CHIP[tag].cls}`}
+              title={t('spots.legend.newPark.title')}
+            >
+              <span className="spot-legend-dot" aria-hidden />
+              {t('spots.legend.newPark.label')}
+            </span>
+            <span className="spot-legend-item pota-dim" title={t('spots.legend.potaDim.title')}>
+              <span className="spot-legend-dot" aria-hidden />
+              {t('spots.legend.potaDim.label')}
+            </span>
+          </Fragment>
+        ) : (
+          <span
+            key={tag}
+            className={`spot-legend-item need-${NEED_CHIP[tag].cls}`}
+            title={NEED_CHIP[tag].title}
+          >
+            <span className="spot-legend-dot" aria-hidden />
+            {NEED_CHIP[tag].short}
+          </span>
+        ),
+      )}
       <span className="spot-legend-div" aria-hidden />
       <span className="spot-legend-item" title={t('spots.legend.pota.title')}>
         <span className="spot-type-badge type-pota" aria-hidden>

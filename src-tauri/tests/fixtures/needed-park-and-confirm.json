@@ -1,0 +1,46 @@
+[
+  {
+    "admittedAt": null,
+    "band": "20m",
+    "call": "K1ABC",
+    "entity": "United States",
+    "evidence": "spotted by W3LPL via cluster/RBN",
+    "freqMhz": 14.025,
+    "gridRarity": null,
+    "headline": "Confirm — United States · POTA US-0001",
+    "mode": "CW",
+    "park": {
+      "program": "POTA",
+      "reference": "US-0001"
+    },
+    "priority": 20,
+    "tags": [
+      "NewPark",
+      "Confirm",
+      "Pota"
+    ],
+    "zone": 5
+  },
+  {
+    "admittedAt": null,
+    "band": "20m",
+    "call": "K1ABC",
+    "entity": "United States",
+    "evidence": "POTA US-0001 — K1ABC on the air",
+    "freqMhz": 14.074,
+    "gridRarity": null,
+    "headline": "Confirm — United States · POTA US-0001",
+    "mode": "Digital",
+    "park": {
+      "program": "POTA",
+      "reference": "US-0001"
+    },
+    "priority": 20,
+    "tags": [
+      "NewPark",
+      "Confirm",
+      "Pota"
+    ],
+    "zone": 5
+  }
+]

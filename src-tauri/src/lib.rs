@@ -20428,7 +20428,7 @@ fn read_need_alerts(
                 if live.iter().any(|(_, r)| hunted.needed(r, &base, now))
                     && !a.tags.contains(&propagation::NeedTag::NewPark)
                 {
-                    a.tags.push(propagation::NeedTag::NewPark);
+                    propagation::add_park_need(&mut a.tags);
                     a.priority = a.priority.max(propagation::NeedTag::NewPark.tier());
                 }
                 // A chip per programme the activator is live on — both, when they are on a
@@ -41091,6 +41091,74 @@ mod tests {
                 .tags
                 .contains(&propagation::NeedTag::NewPark),
             "both hunted today — nothing left to need"
+        );
+    }
+
+    /// The board for an activator who is both a park still to be worked and a confirmation
+    /// opportunity, on each of the board's two paths. The operator has worked the USA on 20 m in CW
+    /// and, on 40 m, in FT8, and confirmed neither; K1ABC, never worked, is at US-0001, spotted on the
+    /// cluster in CW (the row the tag loop decorates) and on the hunter feed in FT8 (the feed's own
+    /// row, from `activation_alert`).
+    fn park_and_confirm_board() -> Vec<propagation::NeedAlert> {
+        let now = crate::now_unix();
+        let mut cw = pass_qso("W1AW", "FN31", "20m", 14.025);
+        cw.mode = "CW".into();
+        cw.when_unix = (now - 7_200) as u64;
+        let mut ft8 = pass_qso("W1AW", "FN31", "40m", 7.074);
+        ft8.mode = "FT8".into();
+        ft8.when_unix = (now - 3_600) as u64;
+        let mut engine = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        engine.log_qso(cw);
+        engine.log_qso(ft8);
+        let mut ft8_spot = live_spot("POTA", "K1ABC", "US-0001", 60);
+        ft8_spot.freq_khz = 14_074.0;
+        ft8_spot.mode = "FT8".into();
+        needed_board_for(
+            engine,
+            &["K1ABC"],
+            &[("POTA", std::slice::from_ref(&ft8_spot))],
+        )
+    }
+
+    /// ⭐ A PARK STILL TO BE WORKED LEADS A CONFIRMATION ON BOTH OF THE BOARD'S PATHS (operator,
+    /// 2026-10-04, "New park wins": "The needed-park color shows on the strip, the band map and the
+    /// decode list alike."). The desktop colours a strip's and a map's tick from a row's first need,
+    /// and its decode list ranks the same tags itself, park over confirmation, so a park appended
+    /// after the Confirm showed the confirmation grey on two of the three views.
+    #[test]
+    fn a_park_still_to_be_worked_leads_a_confirmation_on_both_paths() {
+        let alerts = park_and_confirm_board();
+        let tags = |mode: &str| board_row(&alerts, "K1ABC", mode).tags.clone();
+        let park_first = vec![
+            propagation::NeedTag::NewPark,
+            propagation::NeedTag::Confirm,
+            propagation::NeedTag::Pota,
+        ];
+        assert_eq!(
+            [tags("CW"), tags("Digital")],
+            [park_first.clone(), park_first],
+            "the cluster's CW row, then the feed's FT8 row"
+        );
+    }
+
+    /// THE DESKTOP'S VIEWS ARE TESTED AGAINST THIS BOARD, NOT A COPY OF IT. The fixture is these rows
+    /// with their clock field cleared, and `ui/src/parkAndConfirm.agreement.test.tsx` renders the band
+    /// strip, the band map and the decode list from it. When the board changes, this fails and prints
+    /// the rows: put them in the file, and the desktop's test then says what the views make of them.
+    #[test]
+    fn the_park_and_confirm_board_is_the_one_the_desktop_views_are_tested_against() {
+        let mut got = serde_json::to_value(park_and_confirm_board()).unwrap();
+        for row in got.as_array_mut().unwrap() {
+            row["admittedAt"] = serde_json::Value::Null; // the wall clock
+        }
+        let want: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/needed-park-and-confirm.json"
+        ))
+        .unwrap();
+        assert!(
+            got == want,
+            "the board now reads:\n{}",
+            serde_json::to_string_pretty(&got).unwrap()
         );
     }
 
