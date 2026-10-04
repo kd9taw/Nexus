@@ -979,6 +979,11 @@ principal third-party components, not a substitute for that gate:
   seed its own scale on a high-DPI panel instead of rendering half-size until the operator
   finds the zoom control) — MIT. Not a new crate: already in the tree at the same version as a
   dependency of gtk, gdkx11 and webkit2gtk, which the Linux webview pulls in regardless.
+- **webview2-com** and **windows-core** (Windows only: the Remote stations window turns off
+  WebView2's own browser keys, such as reload, print and find, so they cannot act on the Remote
+  page) — MIT, and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both
+  are already in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the
+  webview Tauri uses.
 - **io-kit-sys**, **core-foundation-sys**, **coreaudio-sys** (macOS only: reading USB
   topology from the IO registry, so the pickers can say WHICH RADIO a serial port or a sound
   card belongs to — two rigs with the same bridge and codec chips are otherwise identical

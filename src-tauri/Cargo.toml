@@ -168,8 +168,8 @@ gdk = "0.18"
 # Licence: webview2-com MIT (its Cargo.toml; the crate ships no licence text), windows-core
 # MIT OR Apache-2.0 (its own license-mit / license-apache-2.0) — compatible with our GPL-3.0-only.
 #
-# ⚠️ NOTICE ENTRY IS OUTSTANDING — the two belong in NOTICE's Rust dependencies list (as gdk's
-# "not a new crate" line does), and adding it is approval-gated.
+# NOTICE lists both under Rust dependencies, beside gdk's "not a new crate" line (approved
+# 2026-10-04).
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
