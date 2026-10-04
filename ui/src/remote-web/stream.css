@@ -43,13 +43,18 @@
 .remote-stream-micmeter[data-limited] > span { background: var(--alert-warning); }
 
 /* The picture fills the region and keeps its shape; the bars around it are the stage's own colour.
-   `position: relative` so the placeholder and the stalled notice sit over it, never beside it. */
-.remote-stream-stage { position: relative; display: grid; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
+   `position: relative` so the placeholder and the stalled notice sit over it, never beside it. Every
+   touch on the stage is the page's own: the browser neither pans nor zooms the page under the picture,
+   and two fingers zoom and pan the picture instead (StreamView's useInput). The header stays the
+   browser's, so a pinch there still zooms the page. */
+.remote-stream-stage { position: relative; display: grid; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); touch-action: none; }
 .remote-stream-video { width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; background: transparent; outline: none; }
 .remote-stream-video:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* A picture the station sized to the stage is drawn at its own size, one pixel to a device pixel
    (StreamView's useExactPicture sets the size), in the middle of the stage. */
 .remote-stream-video[data-exact] { place-self: center; object-fit: fill; }
+/* Fit, while the picture is zoomed: over its top-right corner, where it takes its own taps. */
+.remote-stream-fit { position: absolute; top: 8px; right: 8px; }
 .remote-stream-placeholder {
   position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 16px;
   padding: 16px; text-align: center; color: var(--text); background: var(--bg); font-size: calc(16px * var(--text-scale));

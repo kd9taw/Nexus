@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { ClickCount, HeldInput, framePoint, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
+import { ClickCount, HeldInput, PictureZoom, ZOOM_MAX, framePoint, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox, type Stage } from './stream-capture'
 import { parseStreamInput } from './stream-protocol'
 
 // A 16:9 picture laid out in a 1600x1000 box: `object-fit: contain` shows it 1600x900, with a 50 px
@@ -95,4 +95,91 @@ it('remembers what is held and releases exactly that: keys, and the press with i
   // Released once: nothing is left to release.
   expect(held.releaseAll()).toEqual([])
   expect(held.dragging).toBe(false)
+})
+
+// ── Two fingers zoom and pan the picture on this page (never sent) ────────────────────────────────
+// A phone's stage in portrait (412 x 594 CSS pixels under a 321 px header) showing the shack's 3440 x 1440
+// window: fitted, the picture is 412 x 172.5 in the middle of it, centred on (206, 618).
+const STAGE: Stage = { left: 0, top: 321, width: 412, height: 594, videoWidth: 3440, videoHeight: 1440 }
+const fingers = (...points: [number, number][]) => points.map(([x, y]) => ({ x, y }))
+/** Where the browser lays the zoomed picture's box out (its CSS transform about the stage's centre),
+ *  as getBoundingClientRect reports it to the input bridge. */
+const zoomedBox = (zoom: PictureZoom): PictureBox => ({
+  left: STAGE.left + STAGE.width / 2 + zoom.x - zoom.zoom * STAGE.width / 2,
+  top: STAGE.top + STAGE.height / 2 + zoom.y - zoom.zoom * STAGE.height / 2,
+  width: STAGE.width * zoom.zoom, height: STAGE.height * zoom.zoom, videoWidth: STAGE.videoWidth, videoHeight: STAGE.videoHeight,
+})
+
+it('zooms by how far two fingers spread, about the point of the picture between them', () => {
+  const zoom = new PictureZoom()
+  expect(zoom.transform, 'the whole picture: no transform at all').toBe('')
+  // About the picture's centre: 20 px apart to 100 px apart is five times.
+  zoom.hold(fingers([196, 618], [216, 618]))
+  zoom.move(fingers([156, 618], [256, 618]), STAGE)
+  expect({ zoom: zoom.zoom, x: zoom.x, y: zoom.y }).toEqual({ zoom: 5, x: 0, y: 0 })
+  expect(zoom.transform).toBe('translate(0px, 0px) scale(5)')
+  // About a point 100 px right of the centre: that point stays under the fingers.
+  zoom.fit()
+  zoom.hold(fingers([296, 618], [316, 618]))
+  zoom.move(fingers([286, 618], [326, 618]), STAGE)
+  expect({ zoom: zoom.zoom, x: zoom.x, y: zoom.y }).toEqual({ zoom: 2, x: -100, y: 0 })
+  // ...and the input bridge, reading the box as the browser lays it out, maps the fingers' point to
+  // the same point of the frame as before the zoom: framePoint maps through it.
+  expect(framePoint(zoomedBox(zoom), 306, 618)!.x).toBeCloseTo(framePoint(zoomedBox(new PictureZoom()), 306, 618)!.x, 9)
+  expect(framePoint(zoomedBox(zoom), 306, 618)!.x).toBeCloseTo(0.5 + 100 / 412, 9)
+  // A point that was off the frame's edge at the whole picture is on it now.
+  expect(framePoint(zoomedBox(new PictureZoom()), 206, 820)).toBeNull()
+  zoom.hold(fingers([206, 618], [226, 618]))
+  zoom.move(fingers([166, 618], [266, 618]), STAGE)
+  expect(framePoint(zoomedBox(zoom), 206, 820)).not.toBeNull()
+})
+
+it('never zooms out past the whole picture, nor in past ZOOM_MAX', () => {
+  const zoom = new PictureZoom()
+  zoom.hold(fingers([186, 618], [226, 618]))
+  zoom.move(fingers([201, 618], [211, 618]), STAGE)
+  expect({ zoom: zoom.zoom, x: zoom.x, y: zoom.y, transform: zoom.transform }).toEqual({ zoom: 1, x: 0, y: 0, transform: '' })
+  zoom.hold(fingers([201, 618], [211, 618]))
+  zoom.move(fingers([0, 618], [412, 618]), STAGE)
+  expect(zoom.zoom).toBe(ZOOM_MAX)
+})
+
+it('pans with the fingers, but never so far that the stage shows past the picture\'s edge; a side smaller than the stage stays centred', () => {
+  const zoom = new PictureZoom()
+  zoom.hold(fingers([196, 618], [216, 618]))
+  zoom.move(fingers([156, 618], [256, 618]), STAGE)
+  // Both fingers dragged far right and down: the picture's left edge stops at the stage's, and its top
+  // edge at the stage's top (at five times it is 862 px tall in a 594 px stage).
+  zoom.hold(fingers([156, 618], [256, 618]))
+  zoom.move(fingers([2156, 1118], [2256, 1118]), STAGE)
+  expect(zoom.x).toBe((412 * 5 - 412) / 2)
+  expect(zoom.y).toBeCloseTo((1440 * (412 / 3440) * 5 - 594) / 2, 9)
+  const corner = framePoint(zoomedBox(zoom), 0.5, 321.5)!
+  expect(corner.x < 0.001 && corner.y < 0.001, 'the stage\'s top-left corner shows the frame\'s: ' + JSON.stringify(corner)).toBe(true)
+  // At twice, the picture is 345 px tall in the 594 px stage: it stays in the middle, however the fingers go.
+  zoom.fit()
+  zoom.hold(fingers([196, 618], [216, 618]))
+  zoom.move(fingers([186, 618], [226, 618]), STAGE)
+  zoom.hold(fingers([186, 618], [226, 618]))
+  zoom.move(fingers([186, 900], [226, 900]), STAGE)
+  expect({ zoom: zoom.zoom, y: zoom.y }).toEqual({ zoom: 2, y: 0 })
+})
+
+it('carries on without a jump when a finger lifts: the one left pans, and Fit is the whole picture again', () => {
+  const zoom = new PictureZoom()
+  zoom.hold(fingers([196, 618], [216, 618]))
+  zoom.move(fingers([156, 618], [256, 618]), STAGE)
+  zoom.hold(fingers([256, 618]))
+  zoom.move(fingers([256, 618]), STAGE)
+  expect({ zoom: zoom.zoom, x: zoom.x, y: zoom.y }, 'nothing moved').toEqual({ zoom: 5, x: 0, y: 0 })
+  zoom.move(fingers([206, 598]), STAGE)
+  expect({ zoom: zoom.zoom, x: zoom.x, y: zoom.y }).toEqual({ zoom: 5, x: -50, y: -20 })
+  // The stage turned to landscape under a zoomed picture: kept over the new stage.
+  zoom.keep({ ...STAGE, top: 174, width: 915, height: 238 })
+  expect(zoom.x).toBe(-50)
+  zoom.fit()
+  expect({ zoom: zoom.zoom, x: zoom.x, y: zoom.y, transform: zoom.transform }).toEqual({ zoom: 1, x: 0, y: 0, transform: '' })
+  // No fingers held, nothing moves.
+  zoom.move(fingers([0, 0], [400, 400]), STAGE)
+  expect(zoom.zoom).toBe(1)
 })

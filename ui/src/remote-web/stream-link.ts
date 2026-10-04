@@ -260,6 +260,10 @@ export class StreamLink {
   private sizeSent: string | null = null
   private sizeTimer: ReturnType<typeof setTimeout> | undefined
   private unwatchSize: (() => void) | undefined
+  /** The area as last measured, and how far the operator has zoomed into the picture on the page:
+   *  the station is asked for the area times the zoom (`viewMessage`). */
+  private area: { width: number; height: number } | null = null
+  private zoom = 1
   private media: unknown = null
   private receiver: ReceiverLike | null = null
   private frameHandle: number | null = null
@@ -455,6 +459,15 @@ export class StreamLink {
     this.video = video
     if (video && this.env.watchSize) this.unwatchSize = this.env.watchSize(video, (width, height) => this.resized(width, height))
     this.bindVideo()
+  }
+
+  /** How far the operator has zoomed into the picture on the page (1, or anything below it, is the
+   *  whole picture). The station hears it as a new size, once it has settled. */
+  setZoom(zoom: number): void {
+    const next = zoom > 1 ? zoom : 1
+    if (next === this.zoom) return
+    this.zoom = next
+    if (this.area) this.resized(this.area.width, this.area.height)
   }
 
   /** Stop, on the control channel whenever it is open, past every budget. The caller sends it over
@@ -797,9 +810,11 @@ export class StreamLink {
     if (ptt?.readyState !== 'open') return false
     try { ptt.send(JSON.stringify(message)); return true } catch { return false }
   }
-  /** The picture area changed size: the station hears of it once the new size has settled. */
+  /** The picture area changed size, or the zoom into it did: the station hears of it once the new
+   *  size has settled. */
   private resized(width: number, height: number): void {
-    this.size = viewMessage(width, height)
+    this.area = { width, height }
+    this.size = viewMessage(width, height, this.zoom)
     clearTimeout(this.sizeTimer)
     this.sizeTimer = setTimeout(() => { this.sizeTimer = undefined; this.sendView() }, STREAM_VIEW_SETTLE_MS)
   }

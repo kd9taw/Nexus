@@ -247,17 +247,22 @@ export const STREAM_INPUT_FLUSH_MS = 16
 
 /** `view`: the page's picture area, in its own device pixels. The station encodes the picture no
  *  larger than that, scaled once from its window and never enlarged, so the page can show it pixel
- *  for pixel. Sent when `control` opens, and again once a new size has held for
- *  STREAM_VIEW_SETTLE_MS, so a window being dragged is told once, where it stops. Not input: it
- *  needs no presence, and a station from before it drops it unread. */
+ *  for pixel; while the operator has zoomed into the picture on the page, the area times the zoom,
+ *  which is the size the page then draws it at. Sent when `control` opens, and again once a new
+ *  size has held for STREAM_VIEW_SETTLE_MS, so a window being dragged is told once, where it stops.
+ *  Not input: it needs no presence, and a station from before it drops it unread. */
 export type StreamViewSize = { type: 'view'; width: number; height: number }
 export const STREAM_VIEW_MAX = 16384
 export const STREAM_VIEW_SETTLE_MS = 250
 /** The `view` message for a picture area of `width`×`height` device pixels, or null for one the
- *  contract cannot carry: whole numbers from 1 to STREAM_VIEW_MAX. */
-export function viewMessage(width: number, height: number): StreamViewSize | null {
+ *  contract cannot carry: whole numbers from 1 to STREAM_VIEW_MAX. `zoom` is how far the operator
+ *  has zoomed into the picture on the page: a good area is asked for that many times over, at most
+ *  STREAM_VIEW_MAX a side, so the station sends more of its pixels instead of the page enlarging few. */
+export function viewMessage(width: number, height: number, zoom = 1): StreamViewSize | null {
   const side = (n: number) => Number.isInteger(n) && n >= 1 && n <= STREAM_VIEW_MAX
-  return side(width) && side(height) ? { type: 'view', width, height } : null
+  if (!side(width) || !side(height)) return null
+  const zoomed = (n: number) => zoom > 1 ? Math.min(STREAM_VIEW_MAX, Math.round(n * zoom)) : n
+  return { type: 'view', width: zoomed(width), height: zoomed(height) }
 }
 
 export const PTT_STATE_REASONS = ['refused', 'lapsed', 'released', 'stopped'] as const

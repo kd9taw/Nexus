@@ -246,6 +246,37 @@ it('view: a new stream\'s station is told the size again, and a detached picture
   expect(h.watching).toBe(false)
 })
 
+it('view: zoomed into on this page, the station is asked for the area times the zoom, at most the contract\'s largest side, and for the area again at Fit', async () => {
+  const h = harness()
+  // A phone's stage in device pixels (412 x 594 CSS pixels at a ratio of 3).
+  h.resize(1236, 1782)
+  await h.live()
+  const views = () => h.peer.channel('control').sent.filter(m => m.type === 'view')
+  expect(views()).toEqual([{ type: 'view', width: 1236, height: 1782 }])
+  // A pinch is told once, where it stops, as a drag is.
+  for (const zoom of [1.5, 2, 2.5]) { h.link.setZoom(zoom); h.advance(100) }
+  expect(views()).toHaveLength(1)
+  h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(last(views())).toEqual({ type: 'view', width: 3090, height: 4455 })
+  // The phone turned while zoomed: the new area, times the zoom.
+  h.resize(2745, 714); h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(last(views())).toEqual({ type: 'view', width: 6863, height: 1785 })
+  // Never past the contract's largest side.
+  h.link.setZoom(8); h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(last(views())).toEqual({ type: 'view', width: STREAM_VIEW_MAX, height: 5712 })
+  // Fit, and anything that is not a zoom in, is the area itself again.
+  h.link.setZoom(1); h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(last(views())).toEqual({ type: 'view', width: 2745, height: 714 })
+  const told = views().length
+  for (const zoom of [0.5, Number.NaN, -3]) { h.link.setZoom(zoom); h.advance(STREAM_VIEW_SETTLE_MS) }
+  expect(views(), 'not news').toHaveLength(told)
+  // CONTROL: an area the contract cannot carry is still never sent, zoomed or not.
+  h.link.setZoom(2); h.advance(STREAM_VIEW_SETTLE_MS)
+  expect(last(views())).toEqual({ type: 'view', width: 5490, height: 1428 })
+  for (const [width, height] of [[0, 0], [1600.5, 896], [STREAM_VIEW_MAX + 1, 896]]) { h.resize(width, height); h.advance(1000) }
+  expect(views()).toHaveLength(told + 1)
+})
+
 it('view: a picture sized to its area is drawn one pixel to a device pixel, and nothing else is', () => {
   // The station cut 1919 to 1918; the area's edge rounded the other way. Both drawn at their own size.
   expect(exactSize({ width: 1918, height: 802 }, { width: 1919, height: 896 }, 1)).toEqual({ width: 1918, height: 802 })

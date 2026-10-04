@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   microphone was found but could not start because another program may be using it. Anything else
   is said with the browser's own name for the error. Pressing PTT still never asks for the
   microphone: only the Mic button does. It needs the Remote page's update.
+- **Remote streaming: a pinch on a phone no longer presses anything at the shack.** Two fingers on
+  the stream's picture reached Nexus at the shack as two presses and a drag between them, on
+  whatever lay under them: a slider, the waterfall, a button. The page also followed the phone's own
+  zoom and shrank into a corner of the zoomed view. Now two fingers zoom and pan the picture on the
+  phone, and nothing of them is sent. One finger works Nexus as before, its press held back a tenth
+  of a second so that a second finger can make it a pinch; a quick tap still clicks. While zoomed,
+  the page asks Nexus at the shack for that many more pixels, so the picture stays sharp as it grows,
+  within the same limits as before. **Fit** shows the whole picture again. A pinch on the buttons
+  above the picture still zooms the browser, and the page now keeps its size when it does. It needs
+  the Remote page's update; the sharper zoom also needs the new Nexus at the shack.
 
 ### Changed
 
@@ -120,6 +130,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relay carries the stream only when nothing direct works, and it carries it still encrypted,
   unable to read it. Whenever the relay cannot be reached, the stream works direct exactly as
   before.
+- **Remote streaming: Esc stops transmitting anywhere on the stream page, and Full screen.** Esc is
+  Stop TX on the stream page wherever the keyboard is, as it is on every screen of Nexus, and it
+  still goes on to Nexus at the shack when the picture has it. A **Full screen** button fills the
+  screen with the whole stream page, Stop TX included. In Chrome and Edge Esc stays a Stop in full
+  screen: hold Esc for two seconds, or press **Exit full screen**, to leave. In Firefox and Safari,
+  where Esc leaves full screen before the page can see it, leaving full screen any way but **Exit
+  full screen** sends Stop TX. On a phone or tablet full screen turns to landscape where the browser
+  allows it, and the back gesture leaves it without a Stop. An iPhone has no full screen for a web
+  page, so the button is not shown there. It needs the Remote page's update.
 
 ## [1.16.0] — 2026-10-03
 
