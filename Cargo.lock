@@ -2803,6 +2803,7 @@ dependencies = [
  "serde",
  "serde_json",
  "socket2",
+ "tempo-flexsim",
 ]
 
 [[package]]

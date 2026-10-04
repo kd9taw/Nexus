@@ -19,6 +19,9 @@
 //! - [`fdsync`] — Nexus↔Nexus Field Day club sync (NDJSON over TCP + a UDP
 //!   discovery beacon). The one protocol here where Nexus owns BOTH ends, so
 //!   its codec is serde-derived instead of matching an external wire format.
+//! - [`flex`] — the native FlexRadio client's protocol core (SmartSDR session, status
+//!   decoding, typed command encoding, ownership, the unkey readback), ported from AetherSDR.
+//!   Nothing in the app uses it yet; the shipped Flex path is [`flexcat`] / [`flexvita`].
 //! - [`wl2k`] — the Winlink CMS telnet transport (`server.winlink.org:8772`). One
 //!   session per operator action, never a reconnect loop and never a poll; the B2F
 //!   protocol it carries lives in `tempo_core::winlink` and is joined to it through
@@ -37,6 +40,7 @@ pub mod aprsis;
 pub mod cluster;
 pub mod dxkeeper;
 pub mod fdsync;
+pub mod flex;
 pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;
