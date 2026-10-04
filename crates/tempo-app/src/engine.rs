@@ -72,10 +72,14 @@ use tempo_core::{channel, spectrum, tempo_fast, tx};
 /// and every bit of that arithmetic happens on PUBLISH — the reader clones a mean that is
 /// already computed. So a reader waits at most for one publisher's row, never for a fold over
 /// the frames it is about to receive.
+///
+/// THE SLOTS HOLD FRAMES, AND THE ROWS ARE THEIR VIEW. Every publish is stamped into a
+/// [`SpectrumFrame`] here (see [`FeedRows::stamp`]), and the row readers hand out
+/// `Spectrum::from(frame)` — the same values, span and source a row always carried.
 #[derive(Default)]
 struct FeedRows {
     audio: Option<RowAverage>,
-    rf: Option<(Spectrum, Instant)>,
+    rf: Option<(SpectrumFrame, Instant)>,
     /// The span the on-screen rig scope is actually showing, and the row computed over it.
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
     scope_req: Option<ScopeReq>,
@@ -92,6 +96,36 @@ struct FeedRows {
     /// `RowAverage::push` would usually cover it, but that is a coincidence of two timeouts, not
     /// a guarantee — and coincidences are what this file keeps getting bitten by.)
     scope_win: spectrum::WindowN,
+    /// The last frame number stamped, 0 before the first. One counter for all three slots.
+    seq: u64,
+}
+
+impl FeedRows {
+    /// Make a published row the feed's next frame: the next `seq`, and the time of the publish.
+    ///
+    /// ONE COUNTER FOR EVERY SLOT, AND IT LIVES HERE rather than in each producer. The rig scope
+    /// is served from whichever slot wins the precedence — the radio's panadapter, the narrow
+    /// scope row, the full audio row — and a producer restarts whenever its radio is re-selected
+    /// or its link re-dials. Counters of their own would restart at 1 and run at their own rates,
+    /// and a reader asking for "newer than the last frame I drew" would sit on a frozen picture
+    /// until a fresh count caught up with a stale one. Stamped under this lock, the numbers also
+    /// run in publish order.
+    ///
+    /// Called only for a frame the slot KEEPS: a row dropped by the transmit hold never gets a
+    /// number, so the hold shows up to a reader as no new frame, which is what it is.
+    fn stamp(&mut self, row: Spectrum, scale: SpectrumScale, slice: Option<u8>) -> SpectrumFrame {
+        self.seq += 1;
+        SpectrumFrame {
+            seq: self.seq,
+            t_ms: now_unix_millis(),
+            source: row.source,
+            lo_hz: row.lo_hz,
+            hi_hz: row.hi_hz,
+            scale,
+            slice,
+            bins: row.row,
+        }
+    }
 }
 
 /// A standing request from the rig scope for a row over ITS window rather than the full
@@ -136,8 +170,9 @@ struct RowAverage {
     n: u32,
     /// The mean of those frames, back on the display axis — recomputed on every publish so a
     /// read is a clone, and retained across a read so a reader that outruns the producer repeats
-    /// a row instead of blanking (exactly what the latest-value slot did in that case).
-    mean: Spectrum,
+    /// a row instead of blanking (exactly what the latest-value slot did in that case). It carries
+    /// the NEWEST folded frame's `seq` and `t_ms`: a mean is new exactly when a frame went in.
+    mean: SpectrumFrame,
     /// When the most recent frame was published. This is the freshness clock the precedence
     /// rule in [`SpectrumFeed::row`] reads, unchanged — a read does not touch it.
     at: Instant,
@@ -152,10 +187,10 @@ impl RowAverage {
     /// Open a window on `row` — its own values verbatim as the mean, so a one-frame window is
     /// bit-identical to the frame (the dB↔power round trip is not exact in f32, and the
     /// byte-stable row digest in `tempo_audio::rxdsp` reads a one-frame window).
-    fn start(row: Spectrum) -> Self {
+    fn start(row: SpectrumFrame) -> Self {
         Self {
             sum: row
-                .row
+                .bins
                 .iter()
                 .map(|v| spectrum::display_to_power(*v))
                 .collect(),
@@ -166,7 +201,7 @@ impl RowAverage {
     }
 
     /// Fold one published frame in.
-    fn push(&mut self, row: Spectrum) {
+    fn push(&mut self, row: SpectrumFrame) {
         // Restart rather than blend when the frames stop describing the same picture: a span or
         // bin-count change (zoom, device swap, a capture closing to an empty row) would smear
         // frequencies that were never together, and a source change is a different instrument
@@ -183,7 +218,7 @@ impl RowAverage {
         if self.n == 0
             || self.n >= SpectrumFeed::MAX_AVG_FRAMES
             || self.at.elapsed() >= Self::GAP_RESTART
-            || row.row.len() != self.sum.len()
+            || row.bins.len() != self.sum.len()
             || row.lo_hz != self.mean.lo_hz
             || row.hi_hz != self.mean.hi_hz
             || row.source != self.mean.source
@@ -191,23 +226,27 @@ impl RowAverage {
             *self = Self::start(row);
             return;
         }
-        for (s, v) in self.sum.iter_mut().zip(&row.row) {
+        for (s, v) in self.sum.iter_mut().zip(&row.bins) {
             *s += spectrum::display_to_power(*v);
         }
         self.n += 1;
         let n = self.n as f32;
-        // In place: `mean.row` and `sum` are the same length on this path, so the steady state
+        // In place: `mean.bins` and `sum` are the same length on this path, so the steady state
         // allocates nothing.
-        for (m, p) in self.mean.row.iter_mut().zip(&self.sum) {
+        for (m, p) in self.mean.bins.iter_mut().zip(&self.sum) {
             *m = spectrum::power_to_display(p / n);
         }
+        // The scale and slice need no update: one slot's frames all come from the one producer,
+        // and a change of source has already restarted the window above.
+        self.mean.seq = row.seq;
+        self.mean.t_ms = row.t_ms;
         self.at = Instant::now();
     }
 
     /// Hand the mean to a reader and open the next window. `n = 0` is the whole reset: `sum` is
     /// overwritten by the next `push`, and `mean` deliberately survives so an unfed read repeats
     /// it. Nothing here divides.
-    fn take(&mut self) -> Spectrum {
+    fn take(&mut self) -> SpectrumFrame {
         self.n = 0;
         self.mean.clone()
     }
@@ -314,9 +353,11 @@ impl SpectrumFeed {
                 }
                 return;
             }
+            // Only the audio FFT publishes here, so its axis is the frame's scale.
+            let frame = g.stamp(row, SpectrumScale::AUDIO, None);
             match g.audio.as_mut() {
-                Some(avg) => avg.push(row),
-                None => g.audio = Some(RowAverage::start(row)),
+                Some(avg) => avg.push(frame),
+                None => g.audio = Some(RowAverage::start(frame)),
             }
         }
     }
@@ -328,9 +369,18 @@ impl SpectrumFeed {
     /// `byte / 160` of the rig's scope display HEIGHT (`civ::scope`), both already dB-mapped by
     /// the radio. Squaring a log axis and rooting it back is the same mistake as averaging dB,
     /// and the rig owns that picture's scaling anyway.
+    ///
+    /// A row with nothing said about it: [`SpectrumScale::Relative`] and no slice. Every
+    /// producer in the tree publishes through [`Self::publish_rf_frame`] instead.
     pub fn publish_rf(&self, row: Spectrum) {
+        self.publish_rf_frame(row, SpectrumScale::Relative, None);
+    }
+    /// [`Self::publish_rf`] with what the producer knows about the row: what its values mean,
+    /// and which receiver's span it is. One call is one frame — the feed stamps the next `seq`.
+    pub fn publish_rf_frame(&self, row: Spectrum, scale: SpectrumScale, slice: Option<u8>) {
         if let Ok(mut g) = self.rows.lock() {
-            g.rf = Some((row, Instant::now()));
+            let frame = g.stamp(row, scale, slice);
+            g.rf = Some((frame, Instant::now()));
         }
     }
     /// Drop the native row so the audio FFT takes over immediately (DATA mode / scope off).
@@ -348,15 +398,20 @@ impl SpectrumFeed {
     /// and opens the next window; freshness is still judged on the most recent PUBLISH, so a
     /// dead capture goes quiet on exactly the schedule it always did.
     pub fn row(&self) -> Option<Spectrum> {
+        self.frame().map(Spectrum::from)
+    }
+
+    /// [`Self::row`], as the frame the winning slot holds.
+    fn frame(&self) -> Option<SpectrumFrame> {
         {
             let g = self.rows.lock().ok()?;
-            if let Some((spec, at)) = &g.rf {
-                if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
-                    return Some(spec.clone());
+            if let Some((frame, at)) = &g.rf {
+                if at.elapsed() < std::time::Duration::from_secs(1) && !frame.bins.is_empty() {
+                    return Some(frame.clone());
                 }
             }
         }
-        self.audio_row()
+        self.audio_frame()
     }
 
     /// The AUDIO row, never the RF one — for the displays that are about the DECODER's passband
@@ -377,6 +432,12 @@ impl SpectrumFeed {
     /// The freshness rule and the empty-row-when-stale behaviour are exactly `row()`'s: this is
     /// that branch, not a second opinion about it.
     pub fn audio_row(&self) -> Option<Spectrum> {
+        self.audio_frame().map(Spectrum::from)
+    }
+
+    /// [`Self::audio_row`], as the frame the audio slot holds — and it closes the averaging
+    /// window exactly as the row read does.
+    pub fn audio_frame(&self) -> Option<SpectrumFrame> {
         let mut g = self.rows.lock().ok()?;
         let audio = g.audio.as_mut()?;
         if audio.at.elapsed() < std::time::Duration::from_secs(2) {
@@ -387,11 +448,10 @@ impl SpectrumFeed {
         // from the last decoded buffer — a non-empty row redrawn at 8-20 Hz, i.e. the
         // frozen-ghost streak this whole change exists to remove. An empty row stops the
         // waterfall cleanly, which is the honest failure.
-        Some(Spectrum {
-            row: Vec::new(),
-            lo_hz: audio.mean.lo_hz,
-            hi_hz: audio.mean.hi_hz,
+        Some(SpectrumFrame {
+            bins: Vec::new(),
             source: audio.mean.source.clone(),
+            ..audio.mean
         })
     }
 
@@ -403,9 +463,9 @@ impl SpectrumFeed {
         let audio = g.audio.as_ref()?;
         let mut row = audio.mean.clone();
         if audio.at.elapsed() >= Duration::from_secs(2) {
-            row.row.clear();
+            row.bins.clear();
         }
-        Some(row)
+        Some(row.into())
     }
 
     /// Observe the station's current scope without requesting a DSP span/window
@@ -414,8 +474,8 @@ impl SpectrumFeed {
     pub fn peek_scope_row(&self) -> Option<Spectrum> {
         let g = self.rows.lock().ok()?;
         if let Some((row, at)) = &g.rf {
-            if at.elapsed() < Duration::from_secs(1) && !row.row.is_empty() {
-                return Some(row.clone());
+            if at.elapsed() < Duration::from_secs(1) && !row.bins.is_empty() {
+                return Some(row.clone().into());
             }
         }
         if let (Some(req), Some(avg)) = (&g.scope_req, &g.scope) {
@@ -423,17 +483,17 @@ impl SpectrumFeed {
                 && avg.at.elapsed() < Duration::from_secs(2)
                 && f64::from(req.lo) == avg.mean.lo_hz
                 && f64::from(req.hi) == avg.mean.hi_hz
-                && !avg.mean.row.is_empty()
+                && !avg.mean.bins.is_empty()
             {
-                return Some(avg.mean.clone());
+                return Some(avg.mean.clone().into());
             }
         }
         let audio = g.audio.as_ref()?;
         let mut row = audio.mean.clone();
         if audio.at.elapsed() >= Duration::from_secs(2) {
-            row.row.clear();
+            row.bins.clear();
         }
-        Some(row)
+        Some(row.into())
     }
 
     /// How long a scope-span request stands after the last poll that renewed it.
@@ -483,9 +543,11 @@ impl SpectrumFeed {
                 }
                 return;
             }
+            // The audio FFT over the scope's span: the same axis as the audio slot.
+            let frame = g.stamp(row, SpectrumScale::AUDIO, None);
             match g.scope.as_mut() {
-                Some(avg) => avg.push(row),
-                None => g.scope = Some(RowAverage::start(row)),
+                Some(avg) => avg.push(frame),
+                None => g.scope = Some(RowAverage::start(frame)),
             }
         }
     }
@@ -508,6 +570,50 @@ impl SpectrumFeed {
     ///   drawing the old window's frequencies under the new window's labels;
     /// - else the full audio row, exactly as before.
     pub fn scope_row(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<Spectrum> {
+        self.scope_frame(lo_hz, hi_hz, win).map(Spectrum::from)
+    }
+
+    /// [`Self::scope_row`] for a caller that names the LAST FRAME IT DREW — `None` when the
+    /// frame the scope would be shown is not newer than that one, so a reader that polls faster
+    /// than its source draws each sweep once instead of scrolling copies of it.
+    ///
+    /// `last_seq` is 0 for a caller that has drawn nothing yet. Two answers are given on every
+    /// poll, whatever it names, because they are not "nothing new":
+    /// - a source that went quiet hands out its EMPTY frame, exactly as the row read does, and a
+    ///   scope reads that as "unavailable" rather than "keep the last picture";
+    /// - with nothing ever published (the Companion/UDP path), `fallback` computes a row on
+    ///   demand, as for the row command. Nobody published it, so it carries `seq` 0.
+    ///
+    /// The averaging windows close exactly as they do for a row read, an answer of `None`
+    /// included: the window it closed held nothing newer than the frame this caller last drew,
+    /// because a mean carries the number of the newest frame folded into it.
+    pub fn scope_frame_after(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: spectrum::WindowN,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win) else {
+            let row = fallback();
+            return Some(SpectrumFrame {
+                seq: 0,
+                t_ms: now_unix_millis(),
+                source: row.source,
+                lo_hz: row.lo_hz,
+                hi_hz: row.hi_hz,
+                // The fallback is the audio FFT of the last decoded buffer, on the same axis.
+                scale: SpectrumScale::AUDIO,
+                slice: None,
+                bins: row.row,
+            });
+        };
+        (frame.bins.is_empty() || frame.seq > last_seq).then_some(frame)
+    }
+
+    /// [`Self::scope_row`], as the frame the winning slot holds.
+    fn scope_frame(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<SpectrumFrame> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
             && hi_hz <= Self::SCOPE_MAX_HZ
@@ -519,7 +625,7 @@ impl SpectrumFeed {
             let rf_live = g
                 .rf
                 .as_ref()
-                .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.row.is_empty());
+                .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty());
             // A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE. `RowAverage::push`
             // restarts on span, bin count and source; two window lengths share all three, so
             // without this a Fast->Sharp switch would fold an 85 ms picture and a 341 ms one
@@ -539,14 +645,14 @@ impl SpectrumFeed {
                 if let Some(avg) = g.scope.as_mut() {
                     let matches = f64::from(lo_hz) == avg.mean.lo_hz
                         && f64::from(hi_hz) == avg.mean.hi_hz
-                        && !avg.mean.row.is_empty();
+                        && !avg.mean.bins.is_empty();
                     if matches && avg.at.elapsed() < Duration::from_secs(2) {
                         return Some(avg.take());
                     }
                 }
             }
         }
-        self.row()
+        self.frame()
     }
 
     /// Test-only: age the standing scope request to simulate a scope that stopped polling.
@@ -783,7 +889,8 @@ impl MeterFeed {
 }
 
 use crate::dto::{
-    AppSnapshot, DecodeRow, OpMode, QsoStatus, QsyStatus, RadioSummary, SourceKind, Spectrum, Tier,
+    AppSnapshot, DecodeRow, OpMode, QsoStatus, QsyStatus, RadioSummary, SourceKind, Spectrum,
+    SpectrumFrame, SpectrumScale, Tier,
 };
 use crate::settings::Settings;
 use crate::station::StationCore;
@@ -44337,6 +44444,177 @@ mod tests {
             (feed.row().expect("published").row[0] - 0.5).abs() < 1e-6,
             "and the capped mean is still correct for a steady input"
         );
+    }
+
+    /// The rig scope's frame poll, with a fallback that must never be asked: something has
+    /// been published in every test that uses it.
+    fn scope_poll(feed: &SpectrumFeed, last_seq: u64) -> Option<SpectrumFrame> {
+        feed.scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, last_seq, || {
+            unreachable!("something was published, so the fallback is never asked")
+        })
+    }
+
+    /// EVERY PUBLISH IS ONE FRAME, NUMBERED FROM ONE COUNTER FOR ALL THREE SLOTS.
+    ///
+    /// The scope's reader is moved between the radio's panadapter, the narrow scope row and the
+    /// full audio row by the precedence, so the numbers have to be comparable across slots — and
+    /// a mean is as new as the newest frame folded into it.
+    #[test]
+    fn every_publish_is_one_frame_numbered_from_one_counter() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let audio = feed.audio_frame().expect("published");
+        assert_eq!(audio.seq, 1, "0 is kept for a row nobody published");
+        assert_eq!((audio.scale, audio.slice), (SpectrumScale::AUDIO, None));
+
+        feed.scope_row(300.0, 1100.0, spectrum::WindowN::Balanced);
+        feed.publish_scope(spec(300.0, 1100.0, "audio"));
+        let narrow = scope_poll(&feed, 0).expect("the narrow row");
+        assert_eq!((narrow.seq, narrow.lo_hz), (2, 300.0));
+        assert_eq!(narrow.scale, SpectrumScale::AUDIO);
+
+        feed.publish_rf_frame(
+            spec(14_000_000.0, 14_200_000.0, "flex"),
+            SpectrumScale::Relative,
+            Some(1),
+        );
+        let rf = scope_poll(&feed, 0).expect("the panadapter wins");
+        assert_eq!(
+            (rf.seq, rf.source.as_str(), rf.scale, rf.slice),
+            (3, "flex", SpectrumScale::Relative, Some(1)),
+            "the producer's scale and slice ride the frame"
+        );
+        feed.publish_rf(spec(14_000_000.0, 14_200_000.0, "flex"));
+        let bare = scope_poll(&feed, 0).expect("a row with nothing said about it");
+        assert_eq!(
+            (bare.seq, bare.scale, bare.slice),
+            (4, SpectrumScale::Relative, None)
+        );
+
+        feed.clear_rf();
+        for _ in 0..3 {
+            feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        }
+        assert_eq!(
+            feed.audio_frame().expect("published").seq,
+            7,
+            "three frames folded into one mean: it carries the newest frame's number"
+        );
+    }
+
+    /// THE POLL ANSWERS EACH FRAME ONCE — the repeated-row defect's cure, at the source.
+    ///
+    /// The scope polls every 50 ms and a CI-V scope may sweep a few times a second. The row read
+    /// hands the same sweep back on every poll, and that is kept exactly as it was; the frame
+    /// poll answers a sweep once and then nothing until the next one.
+    #[test]
+    fn the_frame_poll_answers_each_frame_once() {
+        let feed = SpectrumFeed::default();
+        let sweep = |v: f32| {
+            let mut s = spec(144_975_000.0, 145_025_000.0, "civ");
+            s.row = vec![v; 475];
+            s
+        };
+        feed.publish_rf_frame(sweep(0.25), SpectrumScale::Relative, Some(0));
+        let first = scope_poll(&feed, 0).expect("a new sweep is answered");
+        for _ in 0..6 {
+            assert_eq!(
+                scope_poll(&feed, first.seq),
+                None,
+                "a re-read of the same sweep is not a new frame"
+            );
+            assert_eq!(
+                feed.scope_row(300.0, 1100.0, spectrum::WindowN::Balanced)
+                    .expect("the row read")
+                    .row,
+                vec![0.25; 475],
+                "while the row read repeats it, as it always has"
+            );
+        }
+        feed.publish_rf_frame(sweep(0.75), SpectrumScale::Relative, Some(0));
+        let second = scope_poll(&feed, first.seq).expect("the next sweep");
+        assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
+        assert_eq!(second.bins, vec![0.75; 475]);
+
+        // The averaged audio slot: a poll after three frames gets their mean once.
+        feed.clear_rf();
+        let amps = [0.2f32, 0.8, 0.5];
+        for a in amps {
+            let mut s = spec(0.0, 4000.0, "audio");
+            s.row = vec![a];
+            feed.publish_audio(s);
+        }
+        let mean = scope_poll(&feed, second.seq).expect("three new frames");
+        assert!((mean.bins[0] - power_mean(&amps)).abs() < 1e-6);
+        assert_eq!(
+            scope_poll(&feed, mean.seq),
+            None,
+            "and not again until another frame is folded in"
+        );
+        let mut s = spec(0.0, 4000.0, "audio");
+        s.row = vec![0.4];
+        feed.publish_audio(s);
+        let next = scope_poll(&feed, mean.seq).expect("one more frame");
+        assert_eq!((next.seq, next.bins.clone()), (mean.seq + 1, vec![0.4]));
+    }
+
+    /// The transmit hold drops the muted receiver's rows before they are numbered, so to the
+    /// frame poll an over is "no new frame" — while the row read keeps repeating the pre-TX
+    /// picture, unchanged.
+    #[test]
+    fn the_transmit_hold_reads_as_no_new_frame() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let before = scope_poll(&feed, 0).expect("published");
+        feed.set_tx_hold(true);
+        for _ in 0..8 {
+            let mut z = spec(0.0, 4000.0, "audio");
+            z.row = vec![0.001; 512];
+            feed.publish_audio(z);
+        }
+        assert_eq!(
+            scope_poll(&feed, before.seq),
+            None,
+            "the mute is not a frame"
+        );
+        assert_eq!(
+            feed.row().expect("held").row,
+            before.bins,
+            "the row read still repeats the pre-TX picture"
+        );
+        feed.set_tx_hold(false);
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        assert_eq!(
+            scope_poll(&feed, before.seq).expect("key-up").seq,
+            before.seq + 1,
+            "the dropped rows never took a number"
+        );
+    }
+
+    /// Two answers are not "nothing new", and come back on every poll whatever it names.
+    #[test]
+    fn a_quiet_source_and_the_companion_path_answer_every_poll() {
+        // Nothing ever published: the Companion/UDP row, computed on demand and unnumbered.
+        let feed = SpectrumFeed::default();
+        let companion = feed
+            .scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 99, || {
+                spec(0.0, 4000.0, "audio")
+            })
+            .expect("answered whatever the caller names");
+        assert_eq!(
+            (companion.seq, companion.scale, companion.bins.len()),
+            (0, SpectrumScale::AUDIO, 512)
+        );
+
+        // A capture that went quiet: its EMPTY frame, even to the caller that drew it last.
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let live = scope_poll(&feed, 0).expect("published");
+        feed.backdate_audio_for_test(Duration::from_secs(3));
+        for _ in 0..3 {
+            let quiet = scope_poll(&feed, live.seq).expect("a quiet source says so every time");
+            assert!(quiet.bins.is_empty());
+            assert_eq!((quiet.seq, quiet.hi_hz), (live.seq, 4000.0));
+        }
     }
 
     #[test]

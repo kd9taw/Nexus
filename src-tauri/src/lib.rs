@@ -14,6 +14,7 @@
 //! - `set_tier { tier }` -> `AppSnapshot`  (tier is "TempoFast" | "FT8" | "FT4" | "TempoDeep")
 //! - `get_spectrum_row` -> `Spectrum`      (one waterfall row)
 //! - `get_scope_row`     -> `Spectrum`      (one rig-scope row, over the scope's own span)
+//! - `get_scope_frame`   -> `SpectrumFrame | null` (the same, newer than the last frame drawn)
 //!
 //! ## Live radio (`--features radio`, built on the station PC)
 //! With the `radio` feature, `run()` spawns [`tempo_audio::service::run_radio`]
@@ -12787,6 +12788,28 @@ fn get_scope_row(
     }
     // Nothing published yet — the Companion/UDP path, exactly as in `get_spectrum_row`.
     Ok(spectrum_fallback(&state))
+}
+
+/// `get_scope_row` as a FRAME, for a scope that names the last frame it drew (`last_seq`, 0 for
+/// none): `null` when the source has not advanced past it, so a scope polling faster than its
+/// radio sweeps commits each sweep once instead of scrolling copies of the last one. The span
+/// request, the precedence and the fallbacks are `get_scope_row`'s; see
+/// `SpectrumFeed::scope_frame_after` for the two answers that come back on every poll.
+#[tauri::command(async)]
+fn get_scope_frame(
+    lo_hz: f32,
+    hi_hz: f32,
+    window: Option<String>,
+    last_seq: u64,
+    feed: State<'_, tempo_app::engine::SpectrumFeed>,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
+    // The same default as `get_scope_row`, for the reason given there.
+    let win = window
+        .as_deref()
+        .and_then(tempo_core::spectrum::WindowN::from_tag)
+        .unwrap_or_default();
+    Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
 }
 
 /// Fast Graph power trace (MSK144): raw 20 ms RMS samples since `since_seq`. Same meter bus,
@@ -32051,6 +32074,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_source,
             get_spectrum_row,
             get_scope_row,
+            get_scope_frame,
             get_meters,
             get_fast_power,
             set_mode,
@@ -33944,6 +33968,37 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "set_sub_level,"),
             "set_sub_level is not registered — the Sub strip would fail at runtime"
+        );
+    }
+
+    /// The scope's frame poll works only if `get_scope_frame` is REGISTERED. Left out of
+    /// `generate_handler!`, the command is dead code — a warning in a build, an error only under
+    /// the clippy gate — and the poll fails at runtime; this fails in the test gate as well. It
+    /// must also answer from the feed's own frame poll, not from a precedence of its own.
+    #[test]
+    fn the_scope_frame_command_is_registered_and_answers_from_the_feed() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nfn get_scope_frame(")
+            .expect("the command the scope polls must exist")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("feed.scope_frame_after("),
+            "get_scope_frame must answer from SpectrumFeed::scope_frame_after"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "get_scope_frame,"),
+            "get_scope_frame is not registered — the scope's frame poll would fail at runtime"
         );
     }
 

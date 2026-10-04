@@ -6526,13 +6526,9 @@ impl RadioLoop {
                 // mutex, so the Icom panadapter was starved by the very hold that starved the
                 // audio row (the boundary CAT block downstream of this loop's engine.lock()).
                 if !data_mode {
+                    // TAKEN, so a sweep is published once: one sweep, one frame.
                     if let Some(sweep) = d.take_scope_row() {
-                        self.spectrum_feed.publish_rf(tempo_app::dto::Spectrum {
-                            row: sweep.row,
-                            lo_hz: sweep.lo_hz,
-                            hi_hz: sweep.hi_hz,
-                            source: "civ".into(),
-                        });
+                        crate::civ::scope::publish_sweep(&self.spectrum_feed, sweep);
                     }
                 } else {
                     // DATA mode (FT8/FT4): drop any stale native row so the audio FFT takes over

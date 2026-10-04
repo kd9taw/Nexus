@@ -651,6 +651,58 @@ mod tests {
         );
     }
 
+    /// ONE TICK, ONE FRAME IN EACH SLOT IT FEEDS. A tick that publishes a row takes exactly one
+    /// frame number for it, and one more for the scope's own row while a scope asks for one; a
+    /// tick with no new audio publishes nothing and takes no number.
+    #[test]
+    fn one_tick_is_one_numbered_frame_per_row_it_publishes() {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 12_000);
+        let feed = SpectrumFeed::default();
+        let meters = MeterFeed::default();
+        let mut dsp = RxDsp::new();
+
+        ring.push_slice(&tone(12_000, 700.0, 256));
+        assert!(dsp.tick(&tap, &feed, &meters));
+        let first = feed.audio_frame().expect("the tick published a row");
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.scale, tempo_app::dto::SpectrumScale::AUDIO);
+        assert_eq!(
+            first.slice, None,
+            "the audio passband is no receiver's RF span"
+        );
+
+        assert!(
+            !dsp.tick(&tap, &feed, &meters),
+            "nothing new from the device"
+        );
+        assert_eq!(
+            feed.audio_frame().expect("still published").seq,
+            first.seq,
+            "no new audio, no new frame"
+        );
+
+        // A scope on screen asks for its own window: from the next tick on, each tick feeds
+        // both slots, one number each.
+        feed.scope_row(300.0, 1100.0, WindowN::Balanced);
+        let mut last = first.seq;
+        for _ in 0..3 {
+            ring.push_slice(&tone(12_000, 700.0, 256));
+            assert!(dsp.tick(&tap, &feed, &meters));
+            let audio = feed.audio_frame().expect("the wide row");
+            let scope = feed
+                .scope_frame_after(300.0, 1100.0, WindowN::Balanced, last, || {
+                    unreachable!("rows were published, so the fallback is never asked")
+                })
+                .expect("the narrow row is new");
+            assert_eq!((scope.lo_hz, scope.hi_hz), (300.0, 1100.0));
+            assert_eq!(audio.seq, last + 1, "one number for the wide row");
+            assert_eq!(scope.seq, last + 2, "and one for the scope's");
+            last = scope.seq;
+        }
+    }
+
     /// METER BALLISTICS PIN — fast attack.
     ///
     /// A real S-meter (IC-9700 class) snaps UP nearly instantly and falls smoothly; symmetric

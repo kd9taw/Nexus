@@ -4,7 +4,8 @@
 //! `27 00` frames: the first frame of a burst carries a header (center/fixed mode, the RF
 //! position, an out-of-range flag), the rest carry the waveform points (one byte each,
 //! `0x00..=0xA0` display height). [`ScopeAssembler`] reassembles bursts into complete
-//! sweeps normalized to the waterfall's 0..1 row contract, tagged with the absolute RF span.
+//! sweeps normalized to the waterfall's 0..1 row contract, tagged with the absolute RF span,
+//! and [`publish_sweep`] hands each one to the spectrum feed as one frame.
 //!
 //! Scope bytes never collide with CI-V framing (`FE`/`FD`/`FB`/`FA`): sequence counters are
 //! BCD, frequencies/spans are BCD, and waveform points top out at `0xA0` — so the ordinary
@@ -216,6 +217,27 @@ impl ScopeAssembler {
     }
 }
 
+/// Publish one completed sweep to the spectrum feed: ONE call per sweep, and the feed stamps it
+/// with the next frame number, which is how a reader polling faster than the radio sweeps tells a
+/// new sweep from the last one again.
+///
+/// - The scale is RELATIVE: a point is the rig's display height (0–160) against its own REF
+///   level, which Nexus sets but never reads back, so no dB axis can be claimed for it.
+/// - The slice is 0, the Main receiver: the stream is pinned to the Main scope
+///   ([`scope_stream_frames`]) and `parse_waveform` drops the Sub's sweeps.
+pub fn publish_sweep(feed: &tempo_app::engine::SpectrumFeed, sweep: ScopeSweep) {
+    feed.publish_rf_frame(
+        tempo_app::dto::Spectrum {
+            row: sweep.row,
+            lo_hz: sweep.lo_hz,
+            hi_hz: sweep.hi_hz,
+            source: "civ".into(),
+        },
+        tempo_app::dto::SpectrumScale::Relative,
+        Some(0),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::frame::{freq_to_bcd, Frame};
@@ -411,5 +433,52 @@ mod tests {
             data: vec![0x00],
         };
         assert!(asm.push(&short).is_none());
+    }
+
+    /// ONE COMPLETED SWEEP, ONE FRAME. The scope draws a new row only when the frame number
+    /// advances, so a sweep published without one would never be drawn and a sweep numbered twice
+    /// would scroll a copy. A burst the radio flags out of range never becomes a sweep, so it
+    /// takes no number either.
+    #[test]
+    fn each_completed_sweep_is_one_numbered_frame() {
+        let feed = tempo_app::engine::SpectrumFeed::default();
+        let newest = |last| {
+            feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
+                unreachable!("a sweep was published, so the fallback is never asked")
+            })
+        };
+        let mut asm = ScopeAssembler::new();
+        assert!(asm.push(&wf_frame(1, 2, &center_header())).is_none());
+        publish_sweep(
+            &feed,
+            asm.push(&wf_frame(2, 2, &[0, 80, 160])).expect("complete"),
+        );
+        let first = newest(0).expect("the sweep reached the feed");
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.source, "civ");
+        assert_eq!(first.scale, tempo_app::dto::SpectrumScale::Relative);
+        assert_eq!(first.slice, Some(0), "the Main scope");
+        assert_eq!(first.bins, vec![0.0, 0.5, 1.0]);
+        assert_eq!((first.lo_hz, first.hi_hz), (144_975_000.0, 145_025_000.0));
+        assert_eq!(
+            newest(first.seq),
+            None,
+            "a re-read of the same sweep is not a new frame"
+        );
+
+        // Mid-retune: the radio flags the burst out of range, and nothing reaches the feed.
+        let mut oor = center_header();
+        *oor.last_mut().unwrap() = 0x01;
+        assert!(asm.push(&wf_frame(1, 2, &oor)).is_none());
+        assert!(asm.push(&wf_frame(2, 2, &[1, 2, 3])).is_none());
+        assert_eq!(newest(first.seq), None, "no sweep, no frame");
+
+        assert!(asm.push(&wf_frame(1, 2, &center_header())).is_none());
+        publish_sweep(
+            &feed,
+            asm.push(&wf_frame(2, 2, &[40, 40, 40])).expect("complete"),
+        );
+        let second = newest(first.seq).expect("the next sweep is a new frame");
+        assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
     }
 }

@@ -607,12 +607,19 @@ pub fn pump(
     let Some(row) = parse_wf1(&raw) else {
         return Pumped::Dropped;
     };
-    feed.publish_rf(tempo_app::dto::Spectrum {
-        row,
-        lo_hz,
-        hi_hz,
-        source: SOURCE.to_string(),
-    });
+    // One frame read, one frame published: the feed stamps the next frame number. RELATIVE: the
+    // bytes are the radio's own inverted display line, and nothing calibrates them to dB. Slice 0:
+    // this is receiver 1's line (`parse_wf1`).
+    feed.publish_rf_frame(
+        tempo_app::dto::Spectrum {
+            row,
+            lo_hz,
+            hi_hz,
+            source: SOURCE.to_string(),
+        },
+        tempo_app::dto::SpectrumScale::Relative,
+        Some(0),
+    );
     Pumped::Published
 }
 
@@ -1154,6 +1161,46 @@ mod tests {
             ..meta
         };
         assert_eq!(pump(&mut src, &feed, cursor), Pumped::Unavailable);
+    }
+
+    /// ONE FRAME READ, ONE FRAME. A published read takes the next frame number; a dropped read
+    /// and an unplaceable one publish nothing, so they take none.
+    #[test]
+    fn each_published_read_is_one_numbered_frame() {
+        let feed = tempo_app::engine::SpectrumFeed::default();
+        let newest = |last| {
+            feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
+                unreachable!("a frame was published, so the fallback is never asked")
+            })
+        };
+        let meta = SweepMeta {
+            dial_hz: 14_100_000.0,
+            center_hz: None,
+            fix_start_hz: None,
+            span_code: b'7',
+            mode_code: b'4',
+        };
+        let mut src = MockWaterfall::ramp();
+        assert_eq!(pump(&mut src, &feed, meta), Pumped::Published);
+        let first = newest(0).expect("the frame reached the feed");
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.source, SOURCE);
+        assert_eq!(first.scale, tempo_app::dto::SpectrumScale::Relative);
+        assert_eq!(first.slice, Some(0), "receiver 1's line");
+        assert_eq!(first.bins.len(), WF1_BINS);
+
+        let mut short = MockWaterfall::new(vec![vec![0u8; 10]]);
+        assert_eq!(pump(&mut short, &feed, meta), Pumped::Dropped);
+        let cursor = SweepMeta {
+            mode_code: b'7',
+            ..meta
+        };
+        assert_eq!(pump(&mut src, &feed, cursor), Pumped::Unavailable);
+        assert_eq!(newest(first.seq), None, "nothing published, no new frame");
+
+        assert_eq!(pump(&mut src, &feed, meta), Pumped::Published);
+        let second = newest(first.seq).expect("the next read is a new frame");
+        assert_eq!(second.seq, first.seq + 1, "one read, one step");
     }
 
     /// The replies the radio actually sent, and the crossed-reply case the P2 check exists for.
