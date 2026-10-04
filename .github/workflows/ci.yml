@@ -676,6 +676,52 @@ jobs:
       - name: The manual's images and cross-references resolve
         run: node scripts/release-docs.mjs --push-gate
 
+  # The scope and waterfall in a real browser (ui/spectrum-harness/, see its README).
+  #
+  # jsdom never lays out and has no graphics context, so every gate in `ui` above stays green
+  # through a broken waterfall paint path, and the compiled-browser sweep drives the hosted Remote
+  # page, not the desktop scope. This mounts the SHIPPED PhoneScope and Waterfall in headless Chrome
+  # with the desktop IPC bridge stood in by synthetic frames and the real clock, and checks their
+  # pictures against stored PNGs under a tolerance and their row cadence against the sweeps a source
+  # published; frame pacing, main-thread time and the IPC parse cost are measured and printed, never
+  # asserted, because this runner is nobody's shack PC.
+  #
+  # Two controls run every time — a wrong palette must fail the picture comparison, a planted extra
+  # row must be found — so a green run is one whose instruments could have gone red. A check marked
+  # as a KNOWN FAILURE (the scope's repeated rows today) keeps this job green while it fails and turns
+  # it red the day it passes, so the marker leaves in the same change as the defect.
+  #
+  # No GPU. The harness pins Chrome to software rasterisation and SwiftShader WebGL and asserts it,
+  # and the stored pictures are keyed on that backend; they came out byte-identical under Chrome 140,
+  # 147 and 151. Measured at 187 s through `scripts/gates --job spectrum-harness`, the UI install
+  # included; most of it is real time the probes wait out, so a slower runner adds little.
+  spectrum-harness:
+    name: Scope and waterfall in a real browser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install UI dependencies
+        run: npm --prefix ui ci
+      - name: Pictures, row cadence, frame pacing and IPC cost of the shipped scope and waterfall
+        run: |
+          google-chrome --version
+          node ui/spectrum-harness/run.mjs --out "$RUNNER_TEMP/spectrum-harness"
+      # Only on failure, as the browser sweep's: the rendered pictures, their diffs and the numbers.
+      - name: The harness's pictures, diffs and results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrum-harness-failure
+          path: |
+            ${{ runner.temp }}/spectrum-harness/results.json
+            ${{ runner.temp }}/spectrum-harness/pixels/
+          if-no-files-found: ignore
+
   # The downloadable manual's EPUB must stay valid — a doc change that breaks it should go
   # red here, on the push, not be discovered on a Kindle after release. Builds the EPUB only
   # (no Chrome/PDF) and runs the official W3C epubcheck, which exits non-zero on any error.
