@@ -25,17 +25,19 @@
 //   loss     a forced WebGL2 context loss: canvas-2D must stand in, and WebGL2 must come back with
 //            the same picture, without a reload.
 //   rperf    the renderer at 2048 bins x 2048 rows filling a 1024x768 window, beside its budget.
+//   axis     the scale's axis (ui/src/spectrum/scale.ts) against the picture: a −20 dBFS level drawn
+//            by each backend must sit on the axis's −20 dBFS tick.
 //
 // Controls run every time, because an instrument that cannot fail proves nothing: a WRONG PALETTE
 // must fail the pixel comparison (the components' and the renderer's, on each backend), a PLANTED
 // extra row must be found by the cadence probe, a BROKEN context must fail the renderer's self-test,
-// and a DROPPED restore handler must fail the loss check. A run where any control comes back clean
-// is red.
+// a DROPPED restore handler must fail the loss check, and an axis pinned to a WRONG REFERENCE must
+// miss the drawn line. A run where any control comes back clean is red.
 //
 // A check can carry a KNOWN-FAILURE marker: it is expected red and keeps the run green while it is,
 // and the run goes red the day it passes, so the marker cannot outlive the defect it names.
 //
-// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,capability,loss,rperf]
+// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis]
 //          [--out DIR] [--record] [--palette NAME] [--plant N] [--chrome PATH] [--cpu-throttle N]
 // exit:  0 everything as expected · 1 something is not (a picture moved, a control stayed clean, a
 //        known failure passed, the backend is not the pinned one) · 2 could not run (usage, no
@@ -54,7 +56,7 @@ const UI = resolve(HERE, '..')
 const BASELINES = join(HERE, 'baselines')
 
 const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
-  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf (default: all;
+  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis (default: all;
                       the backend always runs)
   --out DIR           results.json, rendered pictures and diffs (default: $TMPDIR/nexus-spectrum-harness)
   --record            re-record the stored pictures of the probes selected (pixel, render): each
@@ -65,7 +67,7 @@ const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
   --chrome PATH       Chrome binary (default: $CHROME_BIN or google-chrome)
   --cpu-throttle N    DevTools CPU throttling for the perf probe (default 1)`
 
-const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf']
+const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf', 'axis']
 const opt = {
   only: new Set(PROBES),
   out: join(tmpdir(), 'nexus-spectrum-harness'),
@@ -772,6 +774,30 @@ async function rperfChecks(cdp, base) {
 
 // ---------------------------------------------------------------------------------------------
 
+/** The axis against the picture, on each backend: the −20 dBFS tick must be on the line the renderer drew
+ *  for a −20 dBFS level (its centre half a line width under its top edge, within a pixel), and the same
+ *  tick on an axis pinned to a −100 dBFS floor, the control, must miss it. */
+async function axisChecks(cdp, base) {
+  for (const backend of ['webgl2', 'canvas2d']) {
+    const page = await openPage(cdp, `${base}/index.html?mode=axis&backend=${backend}&palette=${opt.palette}`)
+    let r
+    try {
+      r = await waitFor(page, 'done', 30_000)
+    } finally {
+      await page.close()
+    }
+    const drawnY = r.topRow + 1
+    const ok = r.backend === backend && r.topRow >= 0 && r.tickY !== null && Math.abs(drawnY - r.tickY) <= 1
+    const detail = `${r.backend}: line at y ${drawnY}, −20 dBFS tick at ${r.tickY?.toFixed(2) ?? 'none'}, reads ${r.reading.toFixed(2)} dBFS`
+    record({ kind: 'axis', id: `axis, ${backend}`, outcome: ok ? 'pass' : 'fail', detail })
+    line('AXIS', `−20 dBFS on ${backend}`, detail, ok ? 'ok' : 'FAIL (the tick is off the drawn line)')
+    const fired = r.topRow >= 0 && (r.wrongY === null || Math.abs(drawnY - r.wrongY) > 1)
+    const wrong = `a −100 dBFS floor puts the tick at ${r.wrongY?.toFixed(2) ?? 'none'}`
+    record({ kind: 'control', id: `axis, ${backend}, wrong reference`, outcome: fired ? 'control-fired' : 'fail', detail: wrong })
+    line('CONTROL', `wrong reference on ${backend}`, wrong, fired ? 'misses the line, as it must' : 'FAIL (a wrong axis passed)')
+  }
+}
+
 async function main() {
   if (spawnSync(opt.chrome, ['--version'], { encoding: 'utf8' }).status !== 0) bail(2, `no Chrome at "${opt.chrome}" (set --chrome or CHROME_BIN)`)
   mkdirSync(opt.out, { recursive: true })
@@ -810,6 +836,7 @@ async function main() {
       if (opt.only.has('capability')) await capabilityChecks(cdp, server.base)
       if (opt.only.has('loss')) await lossChecks(cdp, server.base)
       if (opt.only.has('rperf')) await rperfChecks(cdp, server.base)
+      if (opt.only.has('axis')) await axisChecks(cdp, server.base)
     }
   } catch (e) {
     record({ kind: 'harness', id: 'run', outcome: 'fail', detail: e.message })

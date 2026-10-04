@@ -1990,6 +1990,29 @@ export interface Spectrum {
   source?: string
 }
 
+/** What a frame's 0..1 values mean (`SpectrumScale` in dto.rs; `kind` is the serde tag). `dbfs`: linear
+ *  in dB from `loDb` (0) to `hiDb` (1), relative to digital full scale. `relative`: the radio's own
+ *  display scale, with no calibrated axis known. There is no dBm kind: no source is calibrated yet. */
+export type SpectrumScale = { kind: 'dbfs'; loDb: number; hiDb: number } | { kind: 'relative' }
+
+/** One numbered spectrum frame (`SpectrumFrame` in dto.rs), as the backend's frame command answers it.
+ *  `spectrum/scale.ts`'s `rendererFrame` turns it into the renderer's own frame. */
+export interface SpectrumFrameWire {
+  /** The feed's frame counter; 0 = unsequenced (nobody published it). */
+  seq: number
+  /** Unix ms when the producer handed it over. Wall clock: order frames by `seq`, not this. */
+  tMs: number
+  /** "audio" | "civ" | "flex" | "yaesu", as `Spectrum.source`. */
+  source: string
+  loHz: number
+  hiHz: number
+  scale: SpectrumScale
+  /** 0 = Main / slice A; absent = not one receiver's RF span. */
+  slice?: number
+  /** 0..1 at the producer's own resolution. */
+  bins: number[]
+}
+
 /** Live meter readout (`get_meters`) — polled fast (~100 ms); lock-free backend-side, so a
  * CAT stall can never freeze it (unlike the snapshot, whose engine lock the radio loop holds
  * across blocking CAT). */

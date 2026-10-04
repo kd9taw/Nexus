@@ -29,6 +29,7 @@ check, and `results.json` plus every rendered picture (and a diff for a failed o
 | capability | which backend the renderer picks: WebGL2 on a healthy context, canvas-2D (with the reason) when there is no context or when the context takes float uploads and keeps nothing | yes |
 | loss | a forced WebGL2 context loss (`WEBGL_lose_context`): canvas-2D must stand in at once from the same history, and WebGL2 must come back without a reload and draw exactly what a renderer that never lost its context draws | yes |
 | rperf | the renderer at 2048 bins × 2048 rows filling a 1024×768 window, one new row and one redraw per frame, on each backend, flat and 3-D: the renderer's own main-thread time, the main-thread task time, and draw-to-pixels (plus the GPU timer query where the context has one), beside the renderer's budget (under 2 ms of GPU and 1 ms of main thread a frame) | measured only |
+| axis | the scale's axis (`ui/src/spectrum/scale.ts`) against the picture: a −20 dBFS level, encoded as the producer encodes it and drawn by each backend in the range `scaleRange.ts` gives it, must sit on the axis's −20 dBFS tick (the line's centre within a pixel) | yes |
 
 Timings come from `performance.now()` on a cross-origin-isolated page (5 µs, not 100 µs).
 
@@ -40,7 +41,8 @@ comparison (the components' fixture, and the renderer's on each backend); a **pl
 (one ask answered with the previous sweep again) must be found by the cadence probe, exactly once;
 a **broken context** (none at all, or one that drops float uploads) must fail the renderer's
 self-test and leave it on canvas-2D; the loss check run with the renderer's **restore handler
-dropped** (the page swallows every `webglcontextrestored` listener) must fail; and the burst the 3-D
+dropped** (the page swallows every `webglcontextrestored` listener) must fail; the axis's −20 dBFS
+tick on an axis pinned to a **wrong reference** (a −100 dBFS floor) must miss the drawn line; and the burst the 3-D
 stack rejects must show on the 2-D waterfall, or that check proves nothing. The long-frame observer gets its own: an 80 ms frame
 is planted during warm-up and must be seen, or long frames are reported as unmeasured rather than
 as zero. `--palette NAME` and `--plant N` apply the same controls to every check by hand.

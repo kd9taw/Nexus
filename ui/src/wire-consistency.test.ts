@@ -62,6 +62,19 @@ describe('Rust <-> TypeScript wire consistency', () => {
     expect(tsUnion('Tier')).not.toContain('FT1')
   })
 
+  it('SpectrumScale: every scale kind Rust serializes is a kind the axis reads', () => {
+    // `#[serde(tag = "kind", rename_all = "camelCase")]`: the tag is the variant's name, camelCased.
+    // A kind the UI does not list reads as relative (spectrum/scale.ts), which is safe but would
+    // leave a newly calibrated source unlabelled, so the pair is held equal here.
+    const body = dto.match(/pub enum SpectrumScale\s*\{([\s\S]*?)\n\}/)
+    if (!body) throw new Error('enum SpectrumScale not found in dto.rs')
+    const kinds = (src: string) => [...src.matchAll(/^\s*([A-Z]\w*)\b/gm)].map((x) => x[1][0].toLowerCase() + x[1].slice(1))
+    expect(kinds(body[1]).sort()).toEqual([...tsUnion('SpectrumScale')].sort())
+    // Control: a variant added on the Rust side is seen, so the equality above can fail.
+    expect(kinds(`${body[1]}\n    CalibratedDbm { lo_dbm: f32 },`)).toContain('calibratedDbm')
+    expect(kinds(body[1]).length).toBeGreaterThanOrEqual(2)
+  })
+
   it('no UI source compares a tier against a retired protocol name', () => {
     // Belt and braces: the type check above only guards types.ts. A stray literal in a
     // comparison elsewhere is exactly what broke Work routing.

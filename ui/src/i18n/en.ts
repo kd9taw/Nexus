@@ -10308,6 +10308,27 @@ export const EN = {
     'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.',
   'scope.canvas.title': 'Click a signal to tune it · press and drag to slide the passband',
   'scope.paused.badge': '⏸ paused · wheel to rewind',
+  // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
+  // averaging times (50 ms … 2 s) are measurements and stay in the component.
+  'scope.strip.aria': 'Scope display settings',
+  'scope.strip.window.aria': 'Resolution',
+  'scope.strip.window.fast.title':
+    'Fast — 1024-point window, 85 ms. Keying and speech onsets resolve; carriers read twice as wide.',
+  'scope.strip.window.balanced.title':
+    'Balanced — 2048-point window, 171 ms. The default. A 25 WPM dit is shorter than this window.',
+  'scope.strip.window.sharp.title':
+    'Sharp — 4096-point window, 341 ms. Half the carrier width, at double the time smear.',
+  'scope.strip.average.label': 'Smooth',
+  'scope.strip.average.title':
+    'Averaging — how long each frequency is smoothed. Longer steadies the noise floor; shorter keeps keying and syllables. Off draws every sweep as it arrives.',
+  'scope.strip.average.off': 'Off',
+  'scope.strip.detector.aria': 'Detector',
+  'scope.strip.detector.peak': 'Peak',
+  'scope.strip.detector.peak.title':
+    'Peak — where one pixel covers several frequency bins, draw the strongest. A narrow carrier keeps its level.',
+  'scope.strip.detector.average': 'Avg',
+  'scope.strip.detector.average.title':
+    'Average — where one pixel covers several frequency bins, draw their mean power. A smoother noise floor; a narrow carrier in a wide view reads lower.',
 
   // ── The MSK144 Fast Graph ───────────────────────────────────────────────────────────
   // The callsigns and the second ticks drawn on it are data and a scale.

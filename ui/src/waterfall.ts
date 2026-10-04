@@ -276,17 +276,21 @@ export const WF_ZERO_TRIM_DB = 5
  * The window WIDTH rides with the shifted floor (`c = f + span`), so Zero slides the window
  * rather than squeezing it — unchanged, and the reason `parkFloor`'s minimum-window guarantee
  * survives the operator's knobs.
+ *
+ * `dbPerUnit` is the dB one unit of value spans on the row's own axis (`spectrum/scale.ts`
+ * `axisOf`), so Zero's trim is the same dB on every source; the default is the audio axis.
  */
 export function applyGainZero(
   floor: number,
   ceil: number,
   gain: number,
   zero: number,
+  dbPerUnit = WF_DB_SPAN,
 ): { floor: number; ceil: number } {
   const span = Math.max(ceil - floor, MIN_SPAN)
   // ADDITIVE on the dB axis (see WF_DB_SPAN), and a fixed dB — never a fraction of `span`,
   // which is what let this stack on the park. See WF_ZERO_TRIM_DB.
-  const f = floor + dbToSpan(zero * WF_ZERO_TRIM_DB)
+  const f = floor + (zero * WF_ZERO_TRIM_DB) / dbPerUnit
   // gain>0 → 0.4×span (punchy); gain<0 → 2×span (flat). gain=0 → unchanged.
   const widthFactor = gain >= 0 ? 1 - 0.6 * gain : 1 - gain
   let c = f + span * widthFactor

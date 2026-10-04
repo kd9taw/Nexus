@@ -19,6 +19,7 @@ import { join, relative } from 'node:path'
 import { scopedKey, surfaceKey } from './features/windowScope'
 import { panelStorageKey } from './features/panelState'
 import { PALETTE_ROLES } from './features/paletteRoles'
+import { SCALE_KEYS } from './spectrum/scaleSettings'
 
 /** Every base key routed through the per-surface scope. Adding one here without routing
  *  it (or routing one without adding it here) fails `routes exactly the per-surface keys`
@@ -257,6 +258,17 @@ const SHARED = [
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',
   'nexus.waterfall.zero',
+  // Each cockpit's scope scale record (spectrum/scaleSettings.ts: averaging, detector, G/Z, window).
+  // Per cockpit, not per window, for the reason the waterfall's G/Z above are shared: a contrast
+  // calibration against the station's noise floor that re-calibrating per window would surprise.
+  'nexus.scope.phone',
+  'nexus.scope.cw',
+  'nexus.scope.operate',
+  'nexus.scope.js8',
+  'nexus.scope.rtty',
+  'nexus.scope.psk',
+  'nexus.scope.sstv',
+  'nexus.scope.tempo',
   'nexus.watchlist',
   'nexus.workspace',
   'tempo-onboarded',
@@ -645,6 +657,19 @@ describe('call sites agree with the classification', () => {
     const classified = [...PER_SURFACE, ...SHARED, ...DEDUPE, ...SESSION_SCOPED]
     expect(tableKeys.filter((k) => !classified.includes(k)), 'unclassified colour-role keys').toEqual([])
     expect(SHARED.filter((k) => k.startsWith('nexus-palette-')).sort()).toEqual(tableKeys)
+  })
+
+  /**
+   * The scope scale records reach `localStorage` through `SCALE_KEYS[cockpit]`, a table lookup the
+   * literal scan above cannot resolve, so the table itself is checked, as the colour roles' is: every
+   * key in it is classified SHARED, and SHARED lists no `nexus.scope.` key the table does not have.
+   */
+  it('classifies every scope scale key, from the key table itself', () => {
+    const tableKeys = Object.values(SCALE_KEYS).sort()
+    expect(tableKeys.length).toBeGreaterThan(0)
+    expect(tableKeys.filter((k) => !SHARED.includes(k)), 'scale keys not classified SHARED').toEqual([])
+    expect(SHARED.filter((k) => k.startsWith('nexus.scope.')).sort()).toEqual(tableKeys)
+    expect(tableKeys.filter((k) => routed.has(k)), 'a scale key routed per window').toEqual([])
   })
 
   it('classifies every key exactly once', () => {
