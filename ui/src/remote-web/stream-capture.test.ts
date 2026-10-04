@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
-import { ClickCount, HeldInput, PictureZoom, ZOOM_MAX, framePoint, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox, type Stage } from './stream-capture'
-import { parseStreamInput } from './stream-protocol'
+import { ClickCount, HeldInput, PictureZoom, ZOOM_MAX, framePoint, keyMessage, keyPress, pointerMessage, textMessage, typedChange, typedText, wheelMessage, type PictureBox, type Stage } from './stream-capture'
+import { STREAM_CONTROL_BYTES, parseStreamInput } from './stream-protocol'
 
 // A 16:9 picture laid out in a 1600x1000 box: `object-fit: contain` shows it 1600x900, with a 50 px
 // bar above and below it that is part of the element and none of the frame.
@@ -182,4 +182,57 @@ it('carries on without a jump when a finger lifts: the one left pans, and Fit is
   // No fingers held, nothing moves.
   zoom.move(fingers([0, 0], [400, 400]), STAGE)
   expect(zoom.zoom).toBe(1)
+})
+
+// The typing box (the operator's pick, 2026-10-03): what a phone's keyboard commits, as the contract's `text`, with
+// Enter and Backspace as `key`. Unlike a paste, nothing is trimmed: a word goes as it is finished, the space after it
+// with the next, and dropping that space would run the words together at the shack.
+it('typed text keeps every character, spaces too, drops control characters as the station does, and goes in pieces the contract takes', () => {
+  expect(typedText(' ')).toEqual([{ type: 'text', text: ' ' }])
+  expect(typedText('CQ DX ')).toEqual([{ type: 'text', text: 'CQ DX ' }])
+  expect(typedText('a\u0007b\u007fc\u0085d\ne')).toEqual([{ type: 'text', text: 'abcde' }])
+  expect(typedText('\u0000\n')).toEqual([])
+  // 256 characters to a message, in order.
+  const long = 'x'.repeat(300)
+  expect(typedText(long).map(m => m.text.length)).toEqual([256, 44])
+  // And never more bytes than the control channel carries: 256 four-byte characters would be 1047 with the message
+  // around them, which the link refuses to send. Cut by bytes, in order, and every piece is one the station takes.
+  const wide = '📡'.repeat(256)
+  const pieces = typedText(wide)
+  expect(pieces.map(m => m.text).join('')).toBe(wide)
+  expect(pieces.length).toBe(2)
+  for (const piece of pieces) {
+    expect(new TextEncoder().encode(JSON.stringify(piece)).length).toBeLessThanOrEqual(STREAM_CONTROL_BYTES)
+    expect(() => parseStreamInput(piece)).not.toThrow()
+  }
+  // CONTROL: a paste is trimmed and has its line breaks made spaces, as before.
+  expect(textMessage(' CQ\n')).toEqual({ type: 'text', text: 'CQ' })
+})
+
+it('Enter and Backspace go as a key pressed and let go, as the contract has them', () => {
+  for (const key of ['Enter', 'Backspace'] as const) {
+    const [down, up] = keyPress(key)
+    expect([down, up]).toEqual([
+      { type: 'key', action: 'down', key, code: key, modifiers: 0, repeat: false },
+      { type: 'key', action: 'up', key, code: key, modifiers: 0, repeat: false },
+    ])
+    expect(() => { parseStreamInput(down); parseStreamInput(up) }).not.toThrow()
+  }
+})
+
+it('a change in the typing box goes as Backspaces past the part both share, then the rest as text', () => {
+  const sent = (from: string, to: string) => typedChange(from, to).map(m => m.type === 'text' ? m.text : m.action === 'down' ? '⌫' : '')
+    .filter(Boolean)
+  expect(sent('', 'W1AW')).toEqual(['W1AW'])
+  expect(sent('W1AW', 'W1AW ')).toEqual([' '])
+  expect(sent('W1AW', 'W1A')).toEqual(['⌫'])
+  // A word the keyboard corrected: back to where they part, then the correction.
+  expect(sent('teh ', 'the ')).toEqual(['⌫', '⌫', '⌫', 'he '])
+  // A character changed in the middle: back to it, and the rest again.
+  expect(sent('K1ABC', 'K2ABC')).toEqual(['⌫', '⌫', '⌫', '⌫', '2ABC'])
+  // Characters outside the first plane count as one, as the station counts them.
+  expect(sent('a📡b', 'a📡')).toEqual(['⌫'])
+  expect(sent('same', 'same')).toEqual([])
+  // Each Backspace is a press and its release.
+  expect(typedChange('ab', 'a').map(m => m.type === 'key' ? m.action : m.type)).toEqual(['down', 'up'])
 })

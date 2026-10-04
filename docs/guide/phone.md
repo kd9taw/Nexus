@@ -131,7 +131,7 @@ of this window on, you talk on your own microphone instead of the rig's.
    rig keys when your audio arrives. With the microphone off, nothing keys, and
    the page says so. Pressed through the picture, this cockpit's PTT reads
    **Armed — talk to transmit** until your voice keys the rig, then **ON AIR —
-   release to stop**. Whichever you hold, the header's **▲ TX** sign stays dark
+   release to stop**. Whichever you hold, the **▲ TX** sign by **Stop TX** stays dark
    until your voice keys the rig, and the page's **Hold PTT**, held, shows the
    accent colour until then and the transmit colour from then on.
 4. If you sound quiet, raise **Mic level**, beside **Mic on**. Talk as you would
