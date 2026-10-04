@@ -20,7 +20,7 @@ pub enum Fault {
     /// *Guard:* receive-side continuity on the packet count. A lost DAX audio packet is replaced
     /// by its own duration of silence and a late one is dropped, never spliced in
     /// (`tempo_net::flexvita::VitaSequence` today). FFT frame assembly never emits a frame that is
-    /// missing a fragment (`FftReassembler` today; the port's coverage check, port plan §2.1).
+    /// missing a fragment (the coverage check of `tempo_net::flex::vita::FftAssembler`).
     /// Spec §6.7 names reordered VITA as one of these controls.
     Vita {
         stream_id: u32,

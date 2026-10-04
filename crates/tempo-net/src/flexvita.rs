@@ -1,18 +1,16 @@
-//! FlexRadio VITA-49 UDP stream decoder — the panadapter FFT frames the radio streams once a
-//! `display pan` object is created (see [`crate::flexcat`]).
+//! FlexRadio VITA-49 UDP stream decoder — the packet envelope every stream shares, DAX audio,
+//! meters, and the DAX TX packet builder. The panadapter's FFT frames and waterfall tiles are
+//! decoded from the payload [`parse_vita`] returns, in [`crate::flex::vita`].
 //!
 //! Each datagram is a VITA-49 packet: a 32-bit header word, an optional stream id, an optional
 //! class id (Flex OUI `0x1C2D`, packet class `0x8003` = FFT), optional timestamps, then the payload.
-//! For an FFT packet the payload is FlexLib's `VitaFFTPacket`: `start_bin`, `num_bins`, `bin_size`,
-//! `total_bins`, `frame_index`, then `num_bins` big-endian u16 magnitudes. A full sweep spans
-//! several datagrams (MTU), reassembled by [`FftReassembler`] keyed on `frame_index`.
 //!
 //! All parsing is PURE + unit-tested against synthetic packets.
 //!
-//! HONESTY NOTE: written to the published VITA-49 layout + the open-source FlexLib
-//! (`VitaFFTPacket`), unit-tested synthetically. The exact payload field order and the bin
-//! magnitude SENSE (is a larger value a stronger or weaker signal?) are pinned from FlexLib but NOT
-//! yet confirmed on live hardware — the orchestration flags this until an operator verifies it.
+//! HONESTY NOTE: written to the published VITA-49 layout + the open-source FlexLib, unit-tested
+//! synthetically, NOT yet confirmed on live hardware — the orchestration flags this until an
+//! operator verifies it. (The FFT bin SENSE this note once left open is settled where the FFT is
+//! now decoded: a bin is a pixel row counted from the top, not a magnitude.)
 
 /// Flex's registered OUI in the VITA class id (24-bit).
 pub const FLEX_OUI: u32 = 0x00_1C_2D;
@@ -49,10 +47,6 @@ pub struct VitaPacket<'a> {
 fn be_u32(b: &[u8], off: usize) -> Option<u32> {
     b.get(off..off + 4)
         .map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
-}
-fn be_u16(b: &[u8], off: usize) -> Option<u16> {
-    b.get(off..off + 2)
-        .map(|s| u16::from_be_bytes([s[0], s[1]]))
 }
 
 /// Parse the VITA-49 header and return the envelope + payload slice. `None` on a short/malformed
@@ -272,125 +266,6 @@ pub fn build_dax_tx_packet(stream_id: u32, packet_count: u8, samples: &[i16]) ->
     out
 }
 
-/// One FFT payload fragment (a contiguous slice `start_bin..start_bin+num_bins` of the sweep).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FftFrame {
-    pub start_bin: u16,
-    pub num_bins: u16,
-    pub total_bins: u16,
-    pub frame_index: u32,
-    pub bins: Vec<u16>,
-}
-
-/// Parse an FFT packet payload (`VitaFFTPacket`) into a fragment. Pure. `None` if truncated.
-pub fn parse_fft(payload: &[u8]) -> Option<FftFrame> {
-    let start_bin = be_u16(payload, 0)?;
-    let num_bins = be_u16(payload, 2)?;
-    let _bin_size = be_u16(payload, 4)?;
-    let total_bins = be_u16(payload, 6)?;
-    let frame_index = be_u32(payload, 8)?;
-    let mut bins = Vec::with_capacity(num_bins as usize);
-    let mut o = 12usize;
-    for _ in 0..num_bins {
-        bins.push(be_u16(payload, o)?);
-        o += 2;
-    }
-    Some(FftFrame {
-        start_bin,
-        num_bins,
-        total_bins,
-        frame_index,
-        bins,
-    })
-}
-
-/// How many sweeps may be part-assembled at once. UDP reordering is a packet or two deep, not a
-/// dozen; three sweeps of 2048 bins is a few KB, and the oldest is evicted rather than grown.
-const IN_FLIGHT_SWEEPS: usize = 3;
-
-/// One sweep being reassembled: its bins plus WHICH of them have actually been written.
-#[derive(Debug)]
-struct Sweep {
-    frame_index: u32,
-    total: u16,
-    bins: Vec<u16>,
-    /// Per-bin coverage. A running count of bins *pushed* is not the same thing — see
-    /// [`FftReassembler`].
-    covered: Vec<bool>,
-    filled: usize,
-}
-
-/// Reassembles the multi-datagram fragments of one FFT sweep into a full row of `total_bins` values.
-///
-/// ⚠️ TWO DEFECTS THIS SHAPE EXISTS TO FIX (audit #1009, both reproduced against the old code).
-///
-/// 1. **A single current-sweep slot meant UDP reordering across sweeps produced NO row at all.**
-///    The old `push` reset everything whenever `frame_index` changed, so the delivery order
-///    `A1 B1 A2 B2 …` — one sweep's tail arriving after the next sweep's head, which is ordinary
-///    UDP — completed zero of six sweeps in a lifted-out reproduction: a permanently blank
-///    panadapter, not a degraded one. A small in-flight map absorbs that.
-/// 2. **A duplicate fragment could COMPLETE a sweep.** Completion counted bins *pushed*
-///    (`self.filled += f.bins.len()`), so the same fragment twice satisfied a four-bin sweep and
-///    published a row whose other half was still the `vec![0u16]` fill — and `fft_to_row` maps 0
-///    to 0.0, so the hole paints as the waterfall floor: a false dead-spectrum band, indis-
-///    tinguishable from a quiet part of the band. Coverage is per-bin now, so re-writing a bin
-///    never advances completion.
-#[derive(Debug, Default)]
-pub struct FftReassembler {
-    /// Part-assembled sweeps in arrival order (oldest first, evicted from the front).
-    inflight: Vec<Sweep>,
-}
-
-impl FftReassembler {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Push a fragment. Returns `Some(row)` (length `total_bins`) once the sweep it belongs to is
-    /// covered end to end. Sweeps still missing a fragment age out as newer ones arrive, so a lost
-    /// fragment costs its own frame and nothing else.
-    pub fn push(&mut self, f: &FftFrame) -> Option<Vec<u16>> {
-        let pos = match self
-            .inflight
-            .iter()
-            .position(|s| s.frame_index == f.frame_index)
-        {
-            Some(i) => i,
-            None => {
-                if self.inflight.len() >= IN_FLIGHT_SWEEPS {
-                    self.inflight.remove(0); // oldest incomplete sweep gives up its place
-                }
-                self.inflight.push(Sweep {
-                    frame_index: f.frame_index,
-                    total: f.total_bins,
-                    bins: vec![0u16; f.total_bins as usize],
-                    covered: vec![false; f.total_bins as usize],
-                    filled: 0,
-                });
-                self.inflight.len() - 1
-            }
-        };
-        let sweep = &mut self.inflight[pos];
-        let start = f.start_bin as usize;
-        for (i, &b) in f.bins.iter().enumerate() {
-            let Some(slot) = sweep.bins.get_mut(start + i) else {
-                continue; // a fragment past the declared width — ignore, never grow
-            };
-            *slot = b;
-            if let Some(seen) = sweep.covered.get_mut(start + i) {
-                if !*seen {
-                    *seen = true;
-                    sweep.filled += 1;
-                }
-            }
-        }
-        if sweep.total > 0 && sweep.filled >= sweep.total as usize {
-            return Some(self.inflight.remove(pos).bins);
-        }
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,94 +304,13 @@ mod tests {
         assert_eq!(v.stream_id, Some(0x4200_0000));
         assert_eq!(v.class_oui, Some(FLEX_OUI));
         assert_eq!(v.packet_class, Some(FFT_PACKET_CLASS));
-        let f = parse_fft(v.payload).unwrap();
-        assert_eq!(f.total_bins, 2);
-        assert_eq!(f.bins, vec![10, 20]);
+        // With no timestamps the header is 16 bytes: the payload starts right after the class id.
+        assert_eq!(v.payload, &fft_payload(0, 2, 2, 1, &[10, 20])[..]);
     }
 
     #[test]
     fn short_datagram_is_none() {
         assert!(parse_vita(&[0u8; 2]).is_none());
-        assert!(parse_fft(&[0u8; 6]).is_none());
-    }
-
-    #[test]
-    fn reassembles_a_multi_fragment_sweep() {
-        let mut r = FftReassembler::new();
-        // Sweep frame 7, total 4 bins, delivered in two fragments.
-        let a = parse_fft(&fft_payload(0, 2, 4, 7, &[1, 2])).unwrap();
-        let b = parse_fft(&fft_payload(2, 2, 4, 7, &[3, 4])).unwrap();
-        assert_eq!(r.push(&a), None); // incomplete
-        assert_eq!(r.push(&b), Some(vec![1, 2, 3, 4])); // complete row
-    }
-
-    #[test]
-    fn an_incomplete_sweep_never_blocks_a_later_one() {
-        let mut r = FftReassembler::new();
-        let stale = parse_fft(&fft_payload(0, 2, 4, 7, &[1, 2])).unwrap(); // frame 7, incomplete
-        let next = parse_fft(&fft_payload(0, 4, 4, 8, &[5, 6, 7, 8])).unwrap(); // frame 8, complete
-        assert_eq!(r.push(&stale), None);
-        assert_eq!(r.push(&next), Some(vec![5, 6, 7, 8])); // frame 8 stands on its own
-    }
-
-    /// UDP REORDERING ACROSS SWEEPS MUST STILL PAINT A WATERFALL (audit #1009).
-    ///
-    /// The old single-slot reassembler reset on any `frame_index` change, so this delivery order —
-    /// each sweep's tail arriving after the next sweep's head, which is ordinary UDP — completed
-    /// ZERO of six sweeps: a permanently blank panadapter.
-    #[test]
-    fn a_sweep_still_completes_when_its_fragments_arrive_out_of_order() {
-        let mut r = FftReassembler::new();
-        let head = |frame: u32| parse_fft(&fft_payload(0, 2, 4, frame, &[1, 2])).unwrap();
-        let tail = |frame: u32| parse_fft(&fft_payload(2, 2, 4, frame, &[3, 4])).unwrap();
-
-        let mut rows = 0;
-        // Interleaved: head(n), head(n+1), tail(n), tail(n+1), …
-        for n in 0..6u32 {
-            r.push(&head(n));
-            if n > 0 && r.push(&tail(n - 1)).is_some() {
-                rows += 1;
-            }
-        }
-        assert!(
-            rows >= 5,
-            "{rows} rows from six interleaved sweeps — reordering must cost at most the frame it \
-             touches, not the whole waterfall"
-        );
-    }
-
-    /// A DUPLICATE FRAGMENT MUST NOT COMPLETE A SWEEP (audit #1009).
-    ///
-    /// Completion counted bins PUSHED, so the same fragment twice satisfied a four-bin sweep and
-    /// published a row whose uncovered half was still the zero fill — and zero paints as the
-    /// waterfall floor, i.e. a false dead-spectrum band rather than an obvious artifact.
-    #[test]
-    fn a_duplicated_fragment_cannot_complete_a_half_covered_sweep() {
-        let mut r = FftReassembler::new();
-        let half = parse_fft(&fft_payload(0, 2, 4, 3, &[9, 9])).unwrap();
-        assert_eq!(r.push(&half), None);
-        assert_eq!(
-            r.push(&half),
-            None,
-            "the same two bins twice is still half a sweep"
-        );
-        // The real second half completes it, with no zero hole.
-        let rest = parse_fft(&fft_payload(2, 2, 4, 3, &[7, 8])).unwrap();
-        assert_eq!(r.push(&rest), Some(vec![9, 9, 7, 8]));
-    }
-
-    /// The in-flight map is BOUNDED: a radio streaming sweeps whose fragments never arrive cannot
-    /// grow it (the reason the old single-slot design was safe, kept).
-    #[test]
-    fn part_assembled_sweeps_are_bounded() {
-        let mut r = FftReassembler::new();
-        for frame in 0..50u32 {
-            assert_eq!(
-                r.push(&parse_fft(&fft_payload(0, 1, 4, frame, &[1])).unwrap()),
-                None
-            );
-        }
-        assert_eq!(r.inflight.len(), IN_FLIGHT_SWEEPS);
     }
 
     /// THE PACKET COUNT IS THE ONLY LOSS SIGNAL ON THIS WIRE, and the RX side never read it

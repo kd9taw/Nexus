@@ -11,7 +11,8 @@ description = "Test support for Nexus's native FlexRadio client: a SmartSDR-prot
 workspace = true
 
 [dev-dependencies]
-# The shipped VITA-49 decoders (`flexvita`). The tests use them as an independent reader of the
-# simulator's packets, and to show that its loss and reorder faults trip the continuity guards
-# that exist in the tree today. A dev-dependency only: nothing in the library depends on them.
+# The shipped VITA-49 decoders (`flexvita`, and `flex::vita` for the FFT frames). The tests use
+# them as an independent reader of the simulator's packets, and to show that its loss and reorder
+# faults trip the continuity guards that exist in the tree today. A dev-dependency only: nothing
+# in the library depends on them.
 tempo-net = { path = "../tempo-net" }

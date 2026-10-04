@@ -9,7 +9,8 @@ use crate::line::{parse_reply, LineBuf};
 use crate::vita::{Content, Start, Stream};
 use std::collections::VecDeque;
 use std::io::ErrorKind;
-use tempo_net::flexvita::{self, FftReassembler, VitaGap, VitaSequence};
+use tempo_net::flex::vita::{decode_fft, FftAssembler};
+use tempo_net::flexvita::{self, VitaGap, VitaSequence};
 
 /// The longest any single wait may take before a test fails.
 const WAIT: Duration = Duration::from_secs(10);
@@ -699,14 +700,15 @@ fn a_lost_fft_fragment_costs_its_own_frame_and_no_other() {
         .unwrap();
         let (_c, _) = Client::greeted(&sim);
         let udp = register(&sim);
-        let mut assembler = FftReassembler::new();
+        let mut assembler = FftAssembler::new();
         receive(&udp, arriving)
             .iter()
             .filter_map(|p| {
-                let fragment = flexvita::parse_fft(flexvita::parse_vita(p).unwrap().payload)?;
+                let packet = flexvita::parse_vita(p).unwrap();
+                let fragment = decode_fft(packet.payload, packet.has_trailer)?;
                 assembler
                     .push(&fragment)
-                    .map(|row| (fragment.frame_index, row))
+                    .map(|frame| (frame.frame_index, frame.rows))
             })
             .collect()
     };

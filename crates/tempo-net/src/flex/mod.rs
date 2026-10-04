@@ -2,10 +2,12 @@
 //! command encoding, ownership, the readback that proves an unkey, and the VITA-49 display
 //! streams.
 //!
-//! **Nothing in the app uses this module yet.** The shipped Flex paths (`crate::flexcat`,
-//! `crate::flexvita`, `crate::flexdisc` and their callers) are untouched. A later change builds the
-//! daemon that runs [`session::Connection`] for a radio and puts the engine's transmit gates in
-//! front of it.
+//! **The app uses only its display side yet.** The shipped native panadapter
+//! (`tempo_audio::flexspectrum`, still on the `crate::flexcat` session) assembles its FFT frames
+//! with [`vita`] and reads its create reply and its pan's status with [`ownership`] and
+//! [`status`]. A later change builds the daemon that runs [`session::Connection`] for a radio and
+//! puts the engine's transmit gates in front of it; until then `crate::flexcat`,
+//! `crate::flexvita` (the packet envelope, DAX audio, meters) and `crate::flexdisc` carry the rest.
 //!
 //! # Layers
 //!
