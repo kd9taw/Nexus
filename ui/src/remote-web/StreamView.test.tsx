@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StreamView } from './StreamView'
 import type { HostedConnection } from './client'
@@ -982,5 +982,281 @@ it('the armed look reads in both themes: the accent label on the button is at le
     const backdrop = toRgb(tokens.get('--bg')!, [0, 0, 0])!
     const fill = toRgb(got.background!, backdrop)!
     expect(contrast(toRgb(got.color!, fill)!, fill), `the label (${mode})`).toBeGreaterThanOrEqual(4.5)
+  }
+})
+
+// ── Esc is a Stop anywhere on this page (the desktop's own rule) ───────────────────────────────────
+
+it('Esc stops TX from wherever the keyboard is, as Stop TX does, and the picture still sends it on to Nexus at the shack', async () => {
+  const v = await streaming({ ...controlling, stopAvailable: true })
+  const control = v.peer.channel('control')
+  const stops = () => ({ stream: control.sent.filter(m => m.type === 'stopTransmit').length, socket: v.operations.stopTransmit.mock.calls.length })
+  const escape = (init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true, ...init })
+    act(() => { (document.activeElement ?? document.body).dispatchEvent(event) })
+    return event
+  }
+  const places: [string, HTMLElement][] = [['nothing focused', document.body], ['Stop TX', screen.getByRole('button', { name: 'Stop TX' })],
+    ['Hold PTT', screen.getByRole('button', { name: 'Hold PTT' })], ['the microphone', screen.getByRole('button', { name: 'Mic off' })],
+    ['End the stream', screen.getByRole('button', { name: 'End the stream' })]]
+  for (const [i, [where, place]] of places.entries()) {
+    place.focus()
+    const event = escape()
+    expect(stops(), where).toEqual({ stream: i + 1, socket: i + 1 })
+    expect(event.defaultPrevented, `${where}: Esc keeps every other meaning it has`).toBe(false)
+  }
+  // On the picture: a Stop here, and the key goes on to Nexus, which stops there as well.
+  v.video.focus()
+  escape()
+  expect(stops(), 'the picture').toEqual({ stream: places.length + 1, socket: places.length + 1 })
+  expect(control.sent.filter(m => m.type === 'key' && m.key === 'Escape')).toEqual([{ type: 'key', action: 'down', key: 'Escape', code: 'Escape', modifiers: 0, repeat: false }])
+  // A held Esc is one press; CONTROL: any other key is no Stop.
+  document.body.focus()
+  escape({ repeat: true })
+  fireEvent.keyDown(document.body, { key: 'q', code: 'KeyQ' })
+  expect(stops()).toEqual({ stream: places.length + 1, socket: places.length + 1 })
+})
+
+it('CONTROL: where Stop TX could not be pressed (nothing could carry it), Esc sends nothing either', () => {
+  const v = view({ state: state('available'), fresh: true })
+  expect((screen.getByRole('button', { name: 'Stop TX' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
+  expect(v.operations.stopTransmit).not.toHaveBeenCalled()
+  expect(v.peers).toHaveLength(0)
+})
+
+// ── Full screen: the whole page, Stop TX with it, and Esc still a Stop ─────────────────────────────
+// jsdom has no Fullscreen API, Keyboard Lock or orientation lock, so each test is given the browser it is
+// about: a desktop with Keyboard Lock (Chrome, Edge), one without (Firefox, Safari), a phone or tablet (a
+// coarse pointer), and an iPhone (no full screen for a page at all).
+
+describe('Full screen', () => {
+  function browser(kind: { coarse?: boolean; keyboardLock?: 'locks' | 'refuses' | 'absent'; enabled?: boolean } = {}) {
+    let element: Element | null = null
+    const changed = () => document.dispatchEvent(new Event('fullscreenchange'))
+    const request = vi.fn(function (this: Element) { element = this; changed(); return Promise.resolve() })
+    const exit = vi.fn(() => { element = null; changed(); return Promise.resolve() })
+    const keyboard = kind.keyboardLock === 'absent' ? undefined : {
+      lock: vi.fn(() => kind.keyboardLock === 'refuses' ? Promise.reject(new DOMException('refused', 'NotAllowedError')) : Promise.resolve()),
+      unlock: vi.fn(),
+    }
+    const orientation = { lock: vi.fn(() => kind.coarse ? Promise.resolve() : Promise.reject(new DOMException('not here', 'NotSupportedError'))), unlock: vi.fn() }
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: kind.enabled ?? true })
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => element })
+    Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exit })
+    Object.defineProperty(Element.prototype, 'requestFullscreen', { configurable: true, value: request })
+    Object.defineProperty(navigator, 'keyboard', { configurable: true, value: keyboard })
+    Object.defineProperty(window.screen, 'orientation', { configurable: true, value: orientation })
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(pointer: coarse)' && !!kind.coarse }))
+    return {
+      request, exit, keyboard, orientation, get element() { return element },
+      /** The browser leaving full screen on its own: Esc where the page cannot keep it, a back gesture, a swipe. */
+      leave: () => act(() => { element = null; changed() }),
+    }
+  }
+  afterEach(() => {
+    for (const name of ['fullscreenEnabled', 'fullscreenElement', 'exitFullscreen']) delete (document as unknown as Record<string, unknown>)[name]
+    delete (Element.prototype as unknown as Record<string, unknown>).requestFullscreen
+    delete (navigator as unknown as Record<string, unknown>).keyboard
+    delete (window.screen as unknown as Record<string, unknown>).orientation
+    vi.unstubAllGlobals()
+  })
+  const press = (name: string) => act(async () => { fireEvent.click(screen.getByRole('button', { name })); for (let i = 0; i < 4; i++) await Promise.resolve() })
+  const stops = (v: ReturnType<typeof view>) => ({
+    stream: v.peer.channel('control').sent.filter(m => m.type === 'stopTransmit').length, socket: v.operations.stopTransmit.mock.calls.length,
+  })
+
+  it('Chrome and Edge: the whole page goes full screen with Esc locked to it, so Esc is still a Stop; leaving by its own Exit, or by holding Esc, adds none', async () => {
+    const fs = browser({ keyboardLock: 'locks' })
+    const v = await streaming({ ...controlling, stopAvailable: true })
+    await press('Full screen')
+    expect(fs.request.mock.contexts[0], 'the whole page, Stop TX with it: never the picture alone').toBe(document.documentElement)
+    expect(fs.keyboard!.lock).toHaveBeenCalledWith(['Escape'])
+    expect(fs.orientation.lock).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Stop TX' })).toBeTruthy()
+    // Esc, locked to the page, reaches it and stops; the browser stays full screen.
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
+    expect(stops(v)).toEqual({ stream: 1, socket: 1 })
+    // Held for two seconds, Esc leaves: its press already stopped, and the exit adds nothing.
+    fs.leave()
+    expect(stops(v)).toEqual({ stream: 1, socket: 1 })
+    expect(fs.keyboard!.unlock).toHaveBeenCalled()
+    await press('Full screen')
+    await press('Exit full screen')
+    expect(fs.exit).toHaveBeenCalledTimes(1)
+    expect(fs.element).toBeNull()
+    expect(stops(v), 'its own Exit').toEqual({ stream: 1, socket: 1 })
+    expect(screen.getByRole('button', { name: 'Full screen' })).toBeTruthy()
+  })
+
+  it('Firefox and Safari (no Keyboard Lock), or a lock the browser refuses: any exit the page did not ask for sends Stop TX; CONTROL: its own Exit sends none', async () => {
+    for (const keyboardLock of ['absent', 'refuses'] as const) {
+      const fs = browser({ keyboardLock })
+      const v = await streaming({ ...controlling, stopAvailable: true })
+      await press('Full screen')
+      expect(fs.element, keyboardLock).toBe(document.documentElement)
+      fs.leave()
+      expect(stops(v), keyboardLock).toEqual({ stream: 1, socket: 1 })
+      await press('Full screen')
+      await press('Exit full screen')
+      expect(stops(v), `${keyboardLock}: its own Exit`).toEqual({ stream: 1, socket: 1 })
+      cleanup()
+    }
+  })
+
+  it('a phone or tablet: full screen turned to landscape, with no Esc to keep, and the back gesture leaves it with no Stop', async () => {
+    const fs = browser({ coarse: true, keyboardLock: 'locks' })
+    const v = await streaming({ ...controlling, stopAvailable: true })
+    await press('Full screen')
+    expect(fs.element).toBe(document.documentElement)
+    expect(fs.orientation.lock).toHaveBeenCalledWith('landscape')
+    expect(fs.keyboard!.lock, 'Chrome on Android has the call, and no Esc key to lock').not.toHaveBeenCalled()
+    fs.leave()
+    expect(stops(v)).toEqual({ stream: 0, socket: 0 })
+    expect(fs.orientation.unlock).toHaveBeenCalled()
+  })
+
+  it('an iPhone has no full screen for a page, so there is no button; CONTROL: a browser with one has it', () => {
+    browser({ enabled: false })
+    view(controlling)
+    expect(screen.queryByRole('button', { name: 'Full screen' })).toBeNull()
+    cleanup()
+    browser()
+    view(controlling)
+    expect(screen.getByRole('button', { name: 'Full screen' })).toBeTruthy()
+  })
+
+  it('leaving the stream page leaves the full screen it entered, as asked: no Stop', async () => {
+    const fs = browser({ keyboardLock: 'absent' })
+    const v = await streaming({ ...controlling, stopAvailable: true })
+    await press('Full screen')
+    cleanup()
+    expect(fs.exit).toHaveBeenCalledTimes(1)
+    expect(fs.element).toBeNull()
+    expect(stops(v)).toEqual({ stream: 0, socket: 0 })
+  })
+})
+
+// ── Touch: two fingers zoom and pan the picture HERE and are never sent; one finger is Nexus's mouse ──
+
+const finger = (type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel', id: number, x: number, target?: Element) => act(() => {
+  ;(target ?? document.querySelector('video')!).dispatchEvent(new PointerEvent(type, {
+    bubbles: true, cancelable: true, pointerId: id, pointerType: 'touch', isPrimary: id === 1, clientX: x, clientY: 550,
+    button: type === 'pointermove' ? -1 : 0, buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+  }))
+})
+async function touchStream() {
+  idleTimers()
+  const v = await streaming()
+  // The stage laid out where the picture is (1600 x 900 at the top of the page's 100 px header), so a
+  // zoom has room to work in. Its centre is (800, 550).
+  v.video.parentElement!.getBoundingClientRect = () => ({ left: 0, top: 100, width: 1600, height: 900, right: 1600, bottom: 1000, x: 0, y: 100, toJSON: () => ({}) })
+  // What the page asked the station for as it zoomed, recorded on the way through (and not a spy, so that
+  // on a page with no zoom at all the test still reaches what was sent).
+  const zooms: number[] = []
+  const link = v.link as unknown as { setZoom?: (zoom: number) => void }
+  const setZoom = link.setZoom?.bind(v.link)
+  link.setZoom = zoom => { zooms.push(zoom); setZoom?.(zoom) }
+  return {
+    v, zooms,
+    pointers: () => v.peer.channel('control').sent.filter(m => m.type === 'pointer'),
+    held: () => v.peer.channel('ptt').sent.filter(m => m.type === 'held' && m.buttons !== 0),
+  }
+}
+/** Two fingers 20 px apart about the picture's centre, spread to 116 px apart: 5.8 times. */
+function pinch(v: ReturnType<typeof view>) {
+  finger('pointerdown', 1, 790)
+  v.advance(30)
+  finger('pointerdown', 2, 810)
+  for (let step = 1; step <= 8; step++) { finger('pointermove', 1, 790 - step * 6); finger('pointermove', 2, 810 + step * 6); v.advance(16) }
+  finger('pointerup', 1, 742)
+  finger('pointerup', 2, 858)
+}
+
+it('a pinch on the picture sends the shack nothing - no press, no drag - and zooms the picture here instead (it used to send two presses and a drag)', async () => {
+  const { v, zooms, pointers, held } = await touchStream()
+  try {
+    pinch(v)
+    v.advance(500)
+    expect({ pointers: pointers(), held: held() }).toEqual({ pointers: [], held: [] })
+    expect(v.video.style.transform).toBe('translate(0px, 0px) scale(5.8)')
+    expect(last(zooms)).toBe(5.8)
+    expect(screen.getByRole('button', { name: 'Fit' })).toBeTruthy()
+    // CONTROL: one finger on the same picture is Nexus's mouse, and reaches the shack.
+    finger('pointerdown', 3, 800)
+    finger('pointerup', 3, 800)
+    expect(pointers().map(m => `${m.action} ${m.pointerType}`)).toEqual(['down touch', 'up touch'])
+  } finally { vi.useRealTimers() }
+})
+
+it('one finger is Nexus\'s mouse, its press held back 100 ms for a second finger: a tap sends press and release together, a longer press goes at 100 ms with its drag after it', async () => {
+  const { v, pointers } = await touchStream()
+  try {
+    const sent = () => pointers().map(m => `${m.action} ${m.x} ${m.y} ${m.buttons} ${m.clicks} ${m.pointerType}`)
+    finger('pointerdown', 1, 800)
+    v.advance(60)
+    expect(sent(), 'held back').toEqual([])
+    finger('pointerup', 1, 800)
+    expect(sent(), 'a tap: its press and release together').toEqual(['down 0.5 0.5 1 1 touch', 'up 0.5 0.5 0 1 touch'])
+    // Held: the press goes at 100 ms where it was made, and the finger's travel meanwhile after it.
+    v.advance(1000)
+    finger('pointerdown', 1, 400)
+    finger('pointermove', 1, 440)
+    v.advance(99)
+    expect(sent()).toHaveLength(2)
+    v.advance(1)
+    expect(sent().slice(2)).toEqual(['down 0.25 0.5 1 1 touch'])
+    v.advance(16)
+    expect(sent().slice(3)).toEqual(['move 0.275 0.5 1 0 touch'])
+    finger('pointermove', 1, 480)
+    finger('pointerup', 1, 480)
+    expect(sent().slice(4)).toEqual(['move 0.3 0.5 1 0 touch', 'up 0.3 0.5 0 1 touch'])
+    // CONTROL: a mouse is never held back.
+    v.advance(1000)
+    act(() => { v.video.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 9, pointerType: 'mouse', clientX: 800, clientY: 550, button: 0, buttons: 1 })) })
+    expect(sent().slice(6)).toEqual(['down 0.5 0.5 1 1 mouse'])
+  } finally { vi.useRealTimers() }
+})
+
+it('a second finger after the press went ends it at the shack with a cancel, never a click, and nothing of the pinch after it is sent', async () => {
+  const { v, pointers, held } = await touchStream()
+  try {
+    finger('pointerdown', 1, 800)
+    v.advance(150)
+    expect(pointers().map(m => m.action)).toEqual(['down'])
+    finger('pointerdown', 2, 820)
+    expect(pointers().map(m => m.action)).toEqual(['down', 'cancel'])
+    const heldThen = held().length
+    for (let step = 1; step <= 4; step++) { finger('pointermove', 1, 800 - step * 10); finger('pointermove', 2, 820 + step * 10); v.advance(16) }
+    finger('pointerup', 2, 860)
+    finger('pointermove', 1, 700)
+    finger('pointerup', 1, 700)
+    v.advance(500)
+    expect(pointers().map(m => m.action)).toEqual(['down', 'cancel'])
+    expect(held(), 'and nothing is held there after it').toHaveLength(heldThen)
+  } finally { vi.useRealTimers() }
+})
+
+it('Fit shows the whole picture again and asks the station for the stage\'s own size; a stream that ends forgets its zoom', async () => {
+  const { v, zooms } = await touchStream()
+  try {
+    pinch(v)
+    act(() => { fireEvent.click(screen.getByRole('button', { name: 'Fit' })) })
+    expect(v.video.style.transform).toBe('')
+    expect(last(zooms)).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Fit' })).toBeNull()
+    pinch(v)
+    expect(v.video.style.transform).not.toBe('')
+    act(() => { fireEvent.click(screen.getByRole('button', { name: 'End the stream' })) })
+    expect(v.video.style.transform).toBe('')
+    expect(last(zooms)).toBe(1)
+  } finally { vi.useRealTimers() }
+})
+
+it('the stage takes every touch for itself, so the browser neither pans nor zooms the page under the picture; CONTROL: the header is the browser\'s as before', () => {
+  view(controlling)
+  for (const mode of THEMES) {
+    expect(winnerAt(PAGE_RULES, mode, chainOf(document.querySelector('.remote-stream-stage')!), 'touch-action')?.value, mode).toBe('none')
+    expect(winnerAt(PAGE_RULES, mode, chainOf(document.querySelector('header')!), 'touch-action'), mode).toBeNull()
   }
 })

@@ -62,7 +62,7 @@ const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
 // shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
 // was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
-const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true}]
+const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true,phone:true}]
 
 // Shard selection. Unset means shard 0 of 1 — i.e. EVERYTHING — so a local run,
 // `npm --prefix remote run test:browser` and `scripts/gates` all keep full coverage. CI
@@ -81,8 +81,8 @@ const SHARD_SCENARIOS = SCENARIOS.filter((_, index) => index % SHARDS === SHARD)
 if (SHARDS === 1 && SHARD_SCENARIOS.length !== SCENARIOS.length) throw new Error('unsharded run must select every scenario')
 console.log(`# browser shard ${SHARD} of ${SHARDS}: running ${SHARD_SCENARIOS.length} of ${SCENARIOS.length} scenarios`)
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream} of SHARD_SCENARIOS) test(`compiled hosted browser ${stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream,phone} of SHARD_SCENARIOS) test(`compiled hosted browser ${phone?'phone':stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, phone?'phone':stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -855,6 +855,105 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(offers.length,1,'one offer, under the lease the station issued')
         const heldLease=await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return c.operations.getSnapshot().state?.leaseId;f=f.return}return null})()`)
         assert.equal(offers[0].leaseId,heldLease,'A3: the offer carries the lease this browser holds')
+        if(phone){
+          // A PHONE, in Chrome's own mobile emulation with touch, upright (412 x 915) and turned (915 x 412): the
+          // operator's report of 2026-10-03, "the streaming window is very small and cannot really be zoomed into".
+          // Every finger is judged by what reached the shack. A tap is a press and a release there. A PINCH IS NOTHING
+          // THERE: two fingers zoom and pan the picture on this page, where a pinch used to send the shack two presses
+          // and a drag, which could press a control at the shack. Zoomed, the station is asked for the stage times the
+          // zoom, so the picture is drawn from more of the shack's pixels. The page keeps its size under the browser's
+          // own zoom, and Fit is the whole picture again.
+          const touch=async(type,touchPoints)=>{await browser.call('Input.dispatchTouchEvent',{type,touchPoints},session);await sleep(25)}
+          const tap=async point=>{await touch('touchStart',[{...point,id:1}]);await touch('touchEnd',[])}
+          const record=()=>atShack(`({pointers:__shack.received.control.filter(m=>m.type==='pointer'),held:__shack.received.ptt.filter(m=>m.type==='held'&&m.buttons!==0),views:__shack.received.control.filter(m=>m.type==='view')})`)
+          const zoomOf=()=>evaluate(`(()=>{const t=getComputedStyle(document.querySelector('.remote-stream-video')).transform;if(t==='none')return {zoom:1,x:0,y:0};const m=t.slice(t.indexOf('(')+1,-1).split(',').map(Number);return {zoom:m[0],x:m[4],y:m[5]}})()`)
+          const page=()=>evaluate(`(()=>{const s=document.querySelector('.remote-stream-stage'),r=s.getBoundingClientRect(),v=document.querySelector('.remote-stream-video'),css=getComputedStyle(document.documentElement);return {stage:{x:r.x,y:r.y,w:r.width,h:r.height},video:[v.videoWidth,v.videoHeight],eff:[parseFloat(css.getPropertyValue('--vw-eff')),parseFloat(css.getPropertyValue('--vh-eff'))],scale:visualViewport.scale,touchAction:getComputedStyle(s).touchAction}})()`)
+          const centreOf=expression=>evaluate(`(()=>{const e=${expression};e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+          const settledView=async()=>{await sleep(700);return (await record()).views.at(-1)}
+          const phoneRecord=[]
+          for(const [w,h] of [[412,915],[915,412]]){
+            await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:3,mobile:true},session)
+            await browser.call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5},session)
+            await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+            await settledLayout()
+            const at=await page(),fitted=await settledView()
+            const stop=await evaluate(`(()=>{const e=${button('Stop TX')},r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y))}})()`)
+            assert.ok(stop.inside&&stop.hit,`Stop TX reachable on a ${w}x${h} phone: ${JSON.stringify(stop)}`)
+            const centre={x:at.stage.x+at.stage.w/2,y:at.stage.y+at.stage.h/2}
+            // A TAP: a press and a release at the shack, where the finger was.
+            let mark=(await record()).pointers.length
+            await tap(centre)
+            await untilShack(`__shack.received.control.filter(m=>m.type==='pointer').length>=${mark+2}`)
+            await sleep(300)
+            const tapped=(await record()).pointers.slice(mark)
+            assert.deepEqual(tapped.map(m=>`${m.action} ${m.pointerType} ${m.clicks}`),['down touch 1','up touch 1'],`a tap on a ${w}x${h} phone: ${JSON.stringify(tapped)}`)
+            assert.ok(tapped.every(m=>Math.abs(m.x-0.5)<0.01&&Math.abs(m.y-0.5)<0.01),'where the finger was: '+JSON.stringify(tapped))
+            // A PINCH on the picture: two fingers 40 px apart about its centre, the second landing 25 ms after the first,
+            // spread to 232 px apart. Nothing at all reaches the shack: no press, no drag, nothing held.
+            const before=await record()
+            await touch('touchStart',[{x:centre.x-20,y:centre.y,id:1}])
+            await touch('touchStart',[{x:centre.x-20,y:centre.y,id:1},{x:centre.x+20,y:centre.y,id:2}])
+            for(let i=1;i<=8;i++)await touch('touchMove',[{x:centre.x-20-i*12,y:centre.y,id:1},{x:centre.x+20+i*12,y:centre.y,id:2}])
+            await touch('touchEnd',[])
+            await sleep(500)
+            const after=await record(),pinched={pointers:after.pointers.slice(before.pointers.length),held:after.held.slice(before.held.length)}
+            const entry={phone:`${w}x${h}`,tap:tapped.map(m=>({action:m.action,x:+m.x.toFixed(3),y:+m.y.toFixed(3),pointerType:m.pointerType,clicks:m.clicks})),pinch:{pointers:pinched.pointers.map(m=>`${m.action} ${m.buttons}`),held:pinched.held.length}}
+            phoneRecord.push(entry)
+            console.log(`Phone input record ${w}x${h}: `+JSON.stringify(entry))
+            assert.deepEqual(pinched,{pointers:[],held:[]},`a pinch on a ${w}x${h} phone sends the shack nothing: no press, no drag`)
+            assert.equal(at.touchAction,'none','the stage takes every touch for itself, so the browser neither pans nor zooms under the picture')
+            // ...and zooms the picture HERE, about the point between the fingers (5.8 times), with the page as it was.
+            const zoomed=await zoomOf(),still=await page()
+            assert.ok(Math.abs(zoomed.zoom-5.8)<0.01&&Math.abs(zoomed.x)<0.5&&Math.abs(zoomed.y)<0.5,'the picture zoomed here: '+JSON.stringify(zoomed))
+            assert.deepEqual({eff:still.eff,scale:still.scale,stage:still.stage},{eff:at.eff,scale:1,stage:at.stage},'the browser did not zoom the page, and the page kept its size')
+            assert.equal(await evaluate(`!!${button('Fit')}`),true,'Fit is offered while zoomed')
+            // SHARPER: once the zoom settles the station is asked for the stage times the zoom.
+            const sharp=await settledView()
+            assert.ok([sharp.width-Math.min(16384,Math.round(fitted.width*zoomed.zoom)),sharp.height-Math.min(16384,Math.round(fitted.height*zoomed.zoom))].every(d=>Math.abs(d)<=1),'zoomed, the station is asked for the stage times the zoom: '+JSON.stringify({fitted,sharp,zoom:zoomed.zoom}))
+            Object.assign(entry,{zoom:zoomed.zoom,view:{fitted:[fitted.width,fitted.height],zoomed:[sharp.width,sharp.height]}})
+            // THE ZOOM MAPS: a tap 30 px right of the centre lands where the zoomed picture shows it, not the whole one.
+            mark=(await record()).pointers.length
+            await tap({x:centre.x+30,y:centre.y})
+            await untilShack(`__shack.received.control.filter(m=>m.type==='pointer').length>=${mark+2}`)
+            const shown=Math.min(at.stage.w/at.video[0],at.stage.h/at.video[1])*at.video[0],[through]=(await record()).pointers.slice(mark)
+            assert.ok(Math.abs(through.x-(0.5+30/(zoomed.zoom*shown)))<0.002&&Math.abs(through.y-0.5)<0.002,'the tap maps through the zoom: '+JSON.stringify({x:through.x,y:through.y,zoomed:0.5+30/(zoomed.zoom*shown),whole:0.5+30/shown}))
+            entry.zoomedTap={x:+through.x.toFixed(4),zoomed:+(0.5+30/(zoomed.zoom*shown)).toFixed(4),whole:+(0.5+30/shown).toFixed(4)}
+            // FIT: the whole picture again, and the stage's own size asked for again.
+            await tap(await centreOf(button('Fit')))
+            await until(`getComputedStyle(document.querySelector('.remote-stream-video')).transform==='none'&&!${button('Fit')}`,5000)
+            assert.deepEqual(await settledView(),fitted,'Fit asks for the stage\'s own size again')
+            // THE BROWSER'S OWN ZOOM, as a pinch on the header makes it: the page keeps its size, where it once shrank into
+            // a corner of the zoomed view and would have asked the station for a smaller picture.
+            const viewsBefore=(await record()).views.length
+            await browser.call('Emulation.setPageScaleFactor',{pageScaleFactor:2.5},session)
+            // Long enough for the page to tell the station a new size, had it one to tell.
+            await sleep(700);await settledLayout()
+            const browserZoomed=await page(),duringZoom=(await record()).views.slice(viewsBefore)
+            await browser.call('Emulation.setPageScaleFactor',{pageScaleFactor:1},session)
+            assert.ok(browserZoomed.scale>2.4,'control: the browser did zoom: '+JSON.stringify(browserZoomed))
+            assert.ok([browserZoomed.eff[0]-at.eff[0],browserZoomed.eff[1]-at.eff[1],browserZoomed.stage.w-at.stage.w,browserZoomed.stage.h-at.stage.h].every(d=>Math.abs(d)<0.5),`the page kept its size under the browser's zoom: ${JSON.stringify({at,browserZoomed})}`)
+            assert.ok(duringZoom.every(v=>v.width>=fitted.width&&v.height>=fitted.height),'and asked the station for no smaller picture: '+JSON.stringify({fitted,duringZoom}))
+            entry.browserZoom={scale:browserZoomed.scale,eff:browserZoomed.eff,views:duringZoom.map(v=>[v.width,v.height])}
+            await settledView()
+            if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`phone-${w}x${h}.png`),Buffer.from(shot.data,'base64'))}
+          }
+          // FULL SCREEN, a phone's rule: the whole page, turned to landscape where the browser can (this emulation cannot,
+          // and says NotSupportedError), no Esc to keep, and the back gesture leaving it sends no Stop.
+          await evaluate(`window.__locks=[];const o=screen.orientation.lock.bind(screen.orientation);screen.orientation.lock=k=>{__locks.push('orientation '+k);return o(k)};const l=navigator.keyboard.lock.bind(navigator.keyboard);navigator.keyboard.lock=k=>{__locks.push('keyboard '+k);return l(k)};true`)
+          await tap(await centreOf(button('Full screen')))
+          await until(`document.fullscreenElement===document.documentElement`,5000)
+          assert.deepEqual(await evaluate('window.__locks'),['orientation landscape'],'a phone turns to landscape, and has no Esc to lock')
+          const stopsBefore=[await atShack(`__shack.received.control.filter(m=>m.type==='stopTransmit').length`),stopRequests.length]
+          await evaluate('document.exitFullscreen().then(()=>true)')
+          await until('!document.fullscreenElement',5000)
+          await sleep(600)
+          assert.deepEqual([await atShack(`__shack.received.control.filter(m=>m.type==='stopTransmit').length`),stopRequests.length],stopsBefore,'on a phone, leaving full screen by the back gesture sends no Stop')
+          assert.equal(await evaluate(`!!${button('Full screen')}`),true,'and Full screen is offered again')
+          console.log('Phone input record: '+JSON.stringify(phoneRecord))
+          assert.equal(exceptions,0,'the stream view raised no runtime exception')
+          assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
+          return
+        }
         // A5 in real Chrome: the offer carries the key this browser made and registered with its device,
         // and a signature over the offer's own DTLS fingerprint and the ids the relay stamps. The station's
         // check is Rust's (ring); this proves the page's half end to end, against the signed bytes built
@@ -1000,6 +1099,42 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal((await atShack(`__shack.received.control.find(m=>m.type==='stopTransmit')`)).leaseId,heldLease)
         await sleep(300)
         assert.equal(stopRequests.length,socketStops+1,'and the same Stop over the socket, at the same moment')
+        // ESC IS A STOP ANYWHERE ON THE PAGE, in real Chrome: from wherever the keyboard is the Stop goes both ways at once,
+        // and from the picture the key still goes on to Nexus at the shack. CONTROL: another key is no Stop. Each Esc waits
+        // for the page to hold the station's next transmit epoch, as an operator's second press would find it, and past the
+        // relay's own limit of two Stops a second for a session (a press inside it is answered remoteBusy, by design).
+        let stoppedAt=Date.now()
+        const pageEpoch=()=>evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const o=c.operations.getSnapshot();return o.stopSending?null:o.state?.transmitEpoch??null}f=f.return}return null})()`)
+        const ready=async()=>{await sleep(Math.max(0,stoppedAt+1100-Date.now()));for(let i=0;i<80&&await pageEpoch()!==transmitEpoch;i++)await sleep(100);assert.equal(await pageEpoch(),transmitEpoch,'the page holds the station\'s current transmit epoch')}
+        const stopsNow=async()=>({stream:await atShack(`__shack.received.control.filter(m=>m.type==='stopTransmit').length`),socket:stopRequests.length})
+        const oneStop=async(before,what)=>{stoppedAt=Date.now();for(let i=0;i<50;i++){const now=await stopsNow();if(now.stream>before.stream&&now.socket>before.socket)break;await sleep(100)}await sleep(300);assert.deepEqual(await stopsNow(),{stream:before.stream+1,socket:before.socket+1},what)}
+        const esc=async()=>{for(const type of ['rawKeyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27},session)}
+        for(const [where,focus] of [['nothing focused','document.activeElement?.blur()'],['Stop TX',`${button('Stop TX')}.focus()`],['Hold PTT',`document.querySelector('.remote-stream-ptt').focus()`],['the microphone',`document.querySelector('.remote-stream-mic').focus()`],['the picture',`document.querySelector('.remote-stream-video').focus()`]]){
+          await ready()
+          await evaluate(`${focus};true`)
+          const before=await stopsNow()
+          await esc()
+          await oneStop(before,`Esc with ${where} sends one Stop, both ways`)
+        }
+        await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.key==='Escape'&&m.action==='down')`)
+        {await ready();const before=await stopsNow();await evaluate('document.activeElement?.blur();true');await typeKey('q','KeyQ','q');await sleep(600);assert.deepEqual(await stopsNow(),before,'control: another key is no Stop')}
+        // FULL SCREEN, with Esc still a Stop. Chrome and Edge: the whole page, Stop TX with it, and Esc locked to the page
+        // (Keyboard Lock), so Esc stops and full screen stays; the page's own Exit leaves it with no Stop.
+        await evaluate(`window.__locks=[];const l=navigator.keyboard.lock.bind(navigator.keyboard);navigator.keyboard.lock=k=>{__locks.push(String(k));return l(k).then(()=>{__locks.push('locked')},e=>{__locks.push('refused '+e.name);throw e})};true`)
+        await ready()
+        await click(button('Full screen'))
+        await until(`document.fullscreenElement===document.documentElement&&window.__locks.includes('locked')`,5000)
+        assert.deepEqual(await evaluate('window.__locks'),['Escape','locked'],'Keyboard Lock holds Esc for the page')
+        {const stop=await evaluate(`(()=>{const e=${button('Stop TX')},r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y))}})()`);assert.ok(stop.inside&&stop.hit,'Stop TX on screen in full screen: '+JSON.stringify(stop))}
+        {const before=await stopsNow();await esc();await oneStop(before,'Esc in full screen is a Stop');assert.equal(await evaluate('document.fullscreenElement===document.documentElement'),true,'and full screen stays')}
+        {await ready();const before=await stopsNow();await click(button('Exit full screen'));await until('!document.fullscreenElement',5000);await sleep(600);assert.deepEqual(await stopsNow(),before,'the page\'s own Exit sends no Stop')}
+        // Firefox and Safari have no Keyboard Lock, and without it Chrome hands the page no Esc at all in full screen: Esc
+        // leaves full screen first (measured, Chrome 140). There any exit the page did not ask for is a Stop. CONTROL: its
+        // own Exit is not.
+        await evaluate(`Object.defineProperty(navigator,'keyboard',{configurable:true,value:undefined});true`)
+        {await ready();await click(button('Full screen'));await until('document.fullscreenElement===document.documentElement',5000);const before=await stopsNow();await esc();await until('!document.fullscreenElement',5000);await oneStop(before,'without Keyboard Lock, Esc leaving full screen is a Stop')}
+        {await ready();await click(button('Full screen'));await until('document.fullscreenElement===document.documentElement',5000);const before=await stopsNow();await click(button('Exit full screen'));await until('!document.fullscreenElement',5000);await sleep(600);assert.deepEqual(await stopsNow(),before,'control: without Keyboard Lock, the page\'s own Exit sends no Stop')}
+        await evaluate(`delete navigator.keyboard;true`)
         // Ending it is the operator's to ask; the station is told, and the picture goes.
         await click(button('End the stream'))
         await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`)

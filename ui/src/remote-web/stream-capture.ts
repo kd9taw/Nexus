@@ -6,8 +6,10 @@
 // WHAT NEVER LEAVES THIS PAGE. A position outside the picture (the letterbox bars around it), a key
 // pressed anywhere but on the focused picture, Tab (it moves focus out of the picture, so the
 // keyboard can never be trapped in it), and composition input (an IME's work in progress, which
-// has no single key to send) are all dropped. The station forwards what does arrive into Nexus's
-// window as DOM events; there is no path from here to anything else on the shack PC.
+// has no single key to send) are all dropped. So is every touch of a gesture with two fingers in
+// it: they zoom and pan the picture on this page (PictureZoom), and a pinch once reached the shack
+// as two presses and a drag on whatever lay under them. The station forwards what does arrive into
+// Nexus's window as DOM events; there is no path from here to anything else on the shack PC.
 import { MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, type StreamKey, type StreamPointer, type StreamText, type StreamWheel } from './stream-protocol'
 
 /** The picture's box as laid out, and the frame's own size. */
@@ -131,4 +133,64 @@ export class HeldInput {
     this.keys.clear(); this.pointer = null
     return releases
   }
+}
+
+/** The stage as laid out, and the frame's own size: what a zoom is kept inside. */
+export type Stage = { left: number; top: number; width: number; height: number; videoWidth: number; videoHeight: number }
+type Point = { x: number; y: number }
+/** As far as two fingers zoom the picture: eight times is about the shack's own pixels for a
+ *  3440-wide window on a phone's 412-wide stage, and well past them for anything smaller. */
+export const ZOOM_MAX = 8
+
+/** The operator's own zoom into the picture on this page, never sent: how far (1 is the whole
+ *  picture) and how far its centre sits from the stage's, in CSS pixels. It is drawn as the
+ *  picture's CSS transform about its own centre, which is the stage's, and the input bridge reads
+ *  the picture's box as the browser lays it out, so a press on a zoomed picture lands where the
+ *  picture shows it. Fingers zoom it by how far they spread and pan it by where they go, keeping the
+ *  point of the picture under them under them; it never zooms out past the whole picture, and never
+ *  pans so far that the stage shows past the picture's edge. */
+export class PictureZoom {
+  zoom = 1
+  x = 0
+  y = 0
+  private from: { zoom: number; x: number; y: number; at: Point; spread: number } | null = null
+  /** The fingers down now, after one landed or lifted: the gesture goes on from here, about them. */
+  hold(points: Point[]): void {
+    this.from = points.length ? { zoom: this.zoom, x: this.x, y: this.y, at: centre(points), spread: spread(points) } : null
+  }
+  /** The fingers moved. */
+  move(points: Point[], stage: Stage): void {
+    const from = this.from
+    if (!from || !points.length) return
+    const at = centre(points), apart = spread(points)
+    const zoom = from.spread > 0 && apart > 0 ? Math.min(ZOOM_MAX, Math.max(1, from.zoom * apart / from.spread)) : from.zoom
+    // The point under the fingers when they landed, as an offset from the picture's centre at the whole picture.
+    const cx = stage.left + stage.width / 2, cy = stage.top + stage.height / 2
+    const qx = (from.at.x - cx - from.x) / from.zoom, qy = (from.at.y - cy - from.y) / from.zoom
+    this.zoom = zoom
+    this.x = at.x - cx - zoom * qx
+    this.y = at.y - cy - zoom * qy
+    this.keep(stage)
+  }
+  /** Keep the picture over the stage: a side larger than the stage never shows the stage past its
+   *  edge, and a side smaller than it stays in the middle. */
+  keep(stage: Stage): void {
+    const fit = stage.videoWidth > 0 && stage.videoHeight > 0 ? Math.min(stage.width / stage.videoWidth, stage.height / stage.videoHeight) : 0
+    const room = (side: number, area: number) => Math.max(0, (side * fit * this.zoom - area) / 2)
+    const rx = room(stage.videoWidth, stage.width), ry = room(stage.videoHeight, stage.height)
+    this.x = Math.min(rx, Math.max(-rx, this.x))
+    this.y = Math.min(ry, Math.max(-ry, this.y))
+  }
+  /** The whole picture again. */
+  fit(): void { this.zoom = 1; this.x = 0; this.y = 0; this.from = null }
+  /** The picture's CSS transform, or none for the whole picture. */
+  get transform(): string { return this.zoom === 1 && this.x === 0 && this.y === 0 ? '' : `translate(${this.x}px, ${this.y}px) scale(${this.zoom})` }
+}
+function centre(points: Point[]): Point {
+  return { x: points.reduce((sum, p) => sum + p.x, 0) / points.length, y: points.reduce((sum, p) => sum + p.y, 0) / points.length }
+}
+/** How far the fingers are from their centre, on average: half the distance between two. */
+function spread(points: Point[]): number {
+  const c = centre(points)
+  return points.reduce((sum, p) => sum + Math.hypot(p.x - c.x, p.y - c.y), 0) / points.length
 }

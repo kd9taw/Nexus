@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { initialState, startMonitor } from '../remote-monitor/session'
@@ -7,7 +7,7 @@ import { BetaNote } from './BetaNote'
 import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
-import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
+import { ClickCount, HeldInput, PictureZoom, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox, type Stage } from './stream-capture'
 import { exactSize, observeDeviceSize, type StopTarget, type StreamLink, type StreamView as LinkView } from './stream-link'
 import type { AudioView } from './audio-listen'
 import { shortFingerprint, type StreamKey, type StreamPointer } from './stream-protocol'
@@ -26,6 +26,9 @@ const BRAND = 'Nexus'
 // cannot read why a socket was refused, so a session that has not started by now is reported as the
 // station being away; the connection keeps retrying underneath and the sentence goes when it lands.
 const OFFLINE_MS = 8000
+// How long a finger's press on the picture waits before it goes, so that a second finger landing
+// meanwhile makes the touch a pinch, which is never sent.
+const TOUCH_HOLD_MS = 100
 
 /** The stream: Nexus at the shack as a picture, operated with this browser's mouse and keyboard.
  *
@@ -104,8 +107,9 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   // Control gone - released, taken over, or the socket lost - ends the stream here at once, rather
   // than on the station's word a moment later.
   useEffect(() => { if (running && controlling === false) link.close('notController') }, [running, controlling, link])
+  const zoom = usePictureZoom(video, link, running)
   // Blind means no authority, for a click as much as for PTT: a frozen picture takes no input.
-  useInput(video, connection, stream.phase === 'live')
+  useInput(video, connection, stream.phase === 'live', zoom.zoom, zoom.draw)
   useExactPicture(video)
 
   const start = () => {
@@ -140,6 +144,8 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
     link.stopTransmit(target)
     if (ops.stopAvailable) void operations.stopTransmit().catch(() => {})
   }
+  useEscapeStops(canStop, stopTx)
+  const fullScreen = useFullScreen(stopTx)
   const status = statusLine(ops.connected, state?.phase ?? null, stream.phase, stream.reason, wanted, refused, offline, listen)
   // The station offers its receive audio only from a build that has it (AudioListen's own rule).
   const audioOffered = !!state?.controls?.capabilities.includes('audioListen')
@@ -188,6 +194,8 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
           {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
         {running && <button type="button" className="remote-button" onClick={end}>{t('remote.stream.end')}</button>}
         {listen && audioOn && <button type="button" className="remote-button" onClick={() => relayAudio.release()}>{t('remote.audio.stop')}</button>}
+        {!listen && fullScreen.offered && <button type="button" className="remote-button" onClick={fullScreen.toggle}
+          title={fullScreen.on ? undefined : t('remote.stream.fullscreen.title')}>{fullScreen.on ? t('remote.stream.fullscreen.exit') : t('remote.stream.fullscreen')}</button>}
         <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
         <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>
       </div>
@@ -195,6 +203,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
     </header>
     <main className="remote-stream-stage" aria-label={t('remote.stream.stage')}>
       {!listen && <video ref={video} className="remote-stream-video" tabIndex={0} muted autoPlay playsInline aria-label={t('remote.stream.picture')} />}
+      {zoom.zoomed && <button type="button" className="remote-button remote-stream-fit" title={t('remote.stream.fit.title')} onClick={zoom.fit}>{t('remote.stream.fit')}</button>}
       {stream.phase === 'stalled' && <p className="remote-stream-stalled" role="alert">{t('remote.stream.stalled')}</p>}
       {/* The station's own word, on its last heartbeat reply: it is not holding transmit presence for
           this browser, whatever the picture here looks like (its clock says the picture is late). */}
@@ -442,11 +451,53 @@ function useExactPicture(video: RefObject<HTMLVideoElement | null>): void {
   }, [video])
 }
 
+/** The operator's own zoom into the picture (PictureZoom): drawn as its transform, kept over the
+ *  stage as the stage and the frame change, told to the link so the station sends the stage times the
+ *  zoom (`view`, the operator's pick "Ask for more pixels", 2026-10-03), and the whole picture again
+ *  when the stream ends. `zoomed` is whether Fit is offered. */
+function usePictureZoom(video: RefObject<HTMLVideoElement | null>, link: StreamLink, running: boolean) {
+  const [zoom] = useState(() => new PictureZoom())
+  const [zoomed, setZoomed] = useState(false)
+  const draw = useCallback(() => {
+    const element = video.current, stage = stageOf(element)
+    if (stage) zoom.keep(stage)
+    if (element) element.style.transform = zoom.transform
+    link.setZoom(zoom.zoom)
+    setZoomed(zoom.zoom > 1)
+  }, [video, link, zoom])
+  const fit = useCallback(() => { zoom.fit(); draw() }, [zoom, draw])
+  useEffect(() => {
+    const element = video.current, stage = element?.parentElement
+    if (!element || !stage) return
+    const unobserve = observeDeviceSize(stage, draw)
+    element.addEventListener('resize', draw)
+    return () => { unobserve(); element.removeEventListener('resize', draw) }
+  }, [video, draw])
+  useEffect(() => { if (!running) fit() }, [running, fit])
+  return { zoom, zoomed, draw, fit }
+}
+/** The stage the picture sits in, as laid out, and the frame's own size. */
+function stageOf(element: HTMLVideoElement | null): Stage | null {
+  const stage = element?.parentElement
+  if (!element || !stage) return null
+  const r = stage.getBoundingClientRect()
+  return { left: r.left, top: r.top, width: r.width, height: r.height, videoWidth: element.videoWidth, videoHeight: element.videoHeight }
+}
+
 /** The input bridge's page half (S11, A2). Listeners go on the PICTURE and nowhere else: a pointer
  *  on the header, a key typed while any other control has focus, never reaches the station. What
  *  was pressed through the picture is released through it when it loses focus or stops being live,
- *  so nothing is left held at the shack by a key-up this page never saw. */
-function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedConnection, active: boolean): void {
+ *  so nothing is left held at the shack by a key-up this page never saw.
+ *
+ *  A FINGER is Nexus's mouse, as it was, but its press waits TOUCH_HOLD_MS before it goes: a second
+ *  finger landing meanwhile makes the touch a pinch, and NOTHING of a touch with two fingers in it is
+ *  ever sent, until every finger is up. Those fingers zoom and pan the picture here (`zoom`). A pinch
+ *  used to reach the shack as two presses and a drag between them, on whatever control lay under
+ *  them. A tap shorter than the wait sends its press and its release together; a second finger after
+ *  the press went ends it at the shack with a cancel, which clicks nothing there. A finger has no
+ *  hover, so it moves nothing at the shack unless its press went. */
+function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedConnection, active: boolean,
+  zoom: PictureZoom, drawZoom: () => void): void {
   useEffect(() => {
     const element = video.current
     if (!element || !active) return
@@ -465,7 +516,66 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
     // The press's click count, which its release carries too: a click at the shack is a click.
     const count = new ClickCount()
     let clicks = 0
+    // Touch: the fingers down on the picture; a press waiting to go, with where its finger has got to
+    // since; the finger whose press went, for a cancel; and whether this touch is a pinch.
+    const fingers = new Map<number, { x: number; y: number }>()
+    let waiting: { down: StreamPointer; last: PointerEvent | null; timer: ReturnType<typeof setTimeout> } | null = null
+    let pressing: PointerEvent | null = null
+    let pinching = false
+    const drop = () => { if (waiting) clearTimeout(waiting.timer); waiting = null }
+    const go = () => {
+      const press = waiting
+      drop()
+      if (!press) return
+      send(press.down)
+      if (press.last) send(pointerMessage('move', box(), press.last, true))
+    }
+    const touchDown = (event: PointerEvent) => {
+      fingers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      event.preventDefault()
+      if (pinching || fingers.size > 1) {
+        if (waiting) drop()
+        else if (held.dragging && pressing) send(pointerMessage('cancel', box(), pressing, true))
+        pressing = null
+        pinching = true
+        zoom.hold([...fingers.values()])
+        return
+      }
+      clicks = count.press(event)
+      const down = pointerMessage('down', box(), event, false, clicks)
+      if (!down) return
+      element.focus({ preventScroll: true })
+      try { element.setPointerCapture(event.pointerId) } catch { /* moves still arrive while over the picture */ }
+      pressing = event
+      waiting = { down, last: null, timer: setTimeout(go, TOUCH_HOLD_MS) }
+    }
+    const touchMove = (event: PointerEvent) => {
+      if (!fingers.has(event.pointerId)) return
+      fingers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      if (pinching) {
+        const stage = stageOf(element)
+        if (stage) { zoom.move([...fingers.values()], stage); drawZoom() }
+        return
+      }
+      pressing = event
+      if (waiting) waiting.last = event
+      else if (held.dragging) send(pointerMessage('move', box(), event, true))
+    }
+    const touchEnd = (event: PointerEvent, action: 'up' | 'cancel') => {
+      if (!fingers.delete(event.pointerId)) return
+      if (pinching) {
+        if (fingers.size) zoom.hold([...fingers.values()])
+        else pinching = false
+        return
+      }
+      pressing = null
+      // A tap: its press goes now, its release right after. A press the browser cancelled before it
+      // went is nothing to end.
+      if (action === 'up') go(); else drop()
+      if (held.dragging) send(action === 'up' ? pointerMessage('up', box(), event, true, clicks) : pointerMessage('cancel', box(), event, true))
+    }
     const down = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') { touchDown(event); return }
       clicks = count.press(event)
       const message = pointerMessage('down', box(), event, false, clicks)
       if (!message) return
@@ -475,9 +585,18 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       send(message)
     }
     // A drag may run past the picture's edge, and is pinned to it; a plain hover outside is not sent.
-    const move = (event: PointerEvent) => send(pointerMessage('move', box(), event, held.dragging))
-    const up = (event: PointerEvent) => { if (held.dragging) send(pointerMessage('up', box(), event, true, clicks)) }
-    const cancel = (event: PointerEvent) => { if (held.dragging) send(pointerMessage('cancel', box(), event, true)) }
+    const move = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') touchMove(event)
+      else send(pointerMessage('move', box(), event, held.dragging))
+    }
+    const up = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') touchEnd(event, 'up')
+      else if (held.dragging) send(pointerMessage('up', box(), event, true, clicks))
+    }
+    const cancel = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') touchEnd(event, 'cancel')
+      else if (held.dragging) send(pointerMessage('cancel', box(), event, true))
+    }
     // A paste on the picture is committed text for the field focused at the shack.
     const paste = (event: ClipboardEvent) => {
       const message = textMessage(event.clipboardData?.getData('text/plain') ?? '')
@@ -498,7 +617,9 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       send(message)
     }
     const keydown = key('down'), keyup = key('up')
+    // A press still waiting never goes once the picture has lost focus or stopped being live.
     const release = () => {
+      drop()
       for (const message of held.releaseAll()) link.input(message)
       link.holdInput([], 0)
     }
@@ -529,5 +650,90 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       element.removeEventListener('contextmenu', menu)
       element.removeEventListener('paste', paste)
     }
-  }, [video, connection, active])
+  }, [video, connection, active, zoom, drawZoom])
+}
+
+/** Esc is a Stop anywhere on this page, as on every screen of Nexus (the desktop's useEscStop; the
+ *  operator's pick "Esc stops anywhere", 2026-10-03). It is heard in the capture phase on `window`,
+ *  so no control on the page can keep it from the Stop, and never prevented, so it keeps every other
+ *  meaning it has: on the picture it still goes on to Nexus at the shack, which stops there too, and
+ *  a second Stop is harmless. It is Stop TX's own press, made exactly when Stop TX could be pressed;
+ *  a held Esc is one press. */
+function useEscapeStops(can: boolean, stop: () => void): void {
+  const latest = useRef({ can, stop })
+  latest.current = { can, stop }
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.repeat && latest.current.can) latest.current.stop() }
+    window.addEventListener('keydown', key, true)
+    return () => window.removeEventListener('keydown', key, true)
+  }, [])
+}
+
+type KeyboardLock = { lock?: (keys: string[]) => Promise<void>; unlock?: () => void }
+type OrientationLock = { lock?: (orientation: string) => Promise<void>; unlock?: () => void }
+const keyboardLock = () => (navigator as Navigator & { keyboard?: KeyboardLock }).keyboard
+const orientationLock = () => screen.orientation as (ScreenOrientation & OrientationLock) | undefined
+
+/** Full screen for the whole page, Stop TX with it, never the picture alone; and Esc still a Stop
+ *  wherever there is an Esc key (the operator's pick, 2026-10-03). Chrome and Edge lock Esc to the
+ *  page (Keyboard Lock), so it reaches useEscapeStops and only a two-second hold leaves. A desktop
+ *  browser without it (Firefox, Safari) leaves on Esc before the page can hear it, so there every
+ *  exit the page did not ask for sends Stop TX: it cannot tell an Esc from any other way out. A
+ *  phone or tablet (a coarse pointer) has no Esc: it turns to landscape where it can, and its back
+ *  gesture leaves with no Stop, so a swipe never ends an over. An iPhone has no full screen for a
+ *  page at all, so it is not offered there. */
+function useFullScreen(stop: () => void): { offered: boolean; on: boolean; toggle: () => void } {
+  const [on, setOn] = useState(() => !!document.fullscreenElement)
+  const latest = useRef(stop)
+  latest.current = stop
+  // This page's own full screen while it lasts: whether leaving it was asked for here, whether leaving
+  // it any other way is a Stop, and what it locked, to let go of when it ends.
+  const mine = useRef<{ asked: boolean; stops: boolean; locked: 'keyboard' | 'orientation' | null } | null>(null)
+  useEffect(() => {
+    const letGo = (left: { locked: 'keyboard' | 'orientation' | null }) => {
+      try {
+        if (left.locked === 'keyboard') keyboardLock()?.unlock?.()
+        if (left.locked === 'orientation') orientationLock()?.unlock?.()
+      } catch { /* nothing left to let go of */ }
+    }
+    const changed = () => {
+      setOn(!!document.fullscreenElement)
+      const left = mine.current
+      if (document.fullscreenElement || !left) return
+      mine.current = null
+      // The Stop first, before anything else that could go wrong.
+      if (left.stops && !left.asked) latest.current()
+      letGo(left)
+    }
+    document.addEventListener('fullscreenchange', changed)
+    return () => {
+      document.removeEventListener('fullscreenchange', changed)
+      // Leaving the stream page leaves its full screen, as asked.
+      const left = mine.current
+      mine.current = null
+      if (left && document.fullscreenElement) { letGo(left); void document.exitFullscreen().catch(() => {}) }
+    }
+  }, [])
+  const toggle = () => {
+    if (document.fullscreenElement) {
+      if (mine.current) mine.current.asked = true
+      void document.exitFullscreen().catch(() => {})
+      return
+    }
+    const touch = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    const entry: { asked: boolean; stops: boolean; locked: 'keyboard' | 'orientation' | null } = { asked: false, stops: !touch, locked: null }
+    mine.current = entry
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).then(async () => {
+      if (mine.current !== entry) return
+      if (touch) {
+        try { await orientationLock()?.lock?.('landscape'); entry.locked = 'orientation' } catch { /* it stays as the operator holds it */ }
+        return
+      }
+      // Esc held for the page: leaving is then a two-second hold of a key whose press already stopped.
+      const keys = keyboardLock()
+      if (!keys?.lock) return
+      try { await keys.lock(['Escape']); entry.locked = 'keyboard'; entry.stops = false } catch { /* not held: every exit not asked for stops */ }
+    }, () => { if (mine.current === entry) mine.current = null })
+  }
+  return { offered: document.fullscreenEnabled === true, on, toggle }
 }
