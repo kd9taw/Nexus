@@ -1105,7 +1105,7 @@ describe('Full screen', () => {
     stream: v.peer.channel('control').sent.filter(m => m.type === 'stopTransmit').length, socket: v.operations.stopTransmit.mock.calls.length,
   })
 
-  it('Chrome and Edge: the whole page goes full screen with Esc locked to it, so Esc is still a Stop; leaving by its own Exit, or by holding Esc, adds none', async () => {
+  it('Chrome and Edge: the whole page goes full screen with Esc locked to it, so Esc is still a Stop; holding Esc to leave stops again, and its own Exit adds none', async () => {
     const fs = browser({ keyboardLock: 'locks' })
     const v = await streaming({ ...controlling, stopAvailable: true })
     await press('Full screen')
@@ -1116,16 +1116,33 @@ describe('Full screen', () => {
     // Esc, locked to the page, reaches it and stops; the browser stays full screen.
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
     expect(stops(v)).toEqual({ stream: 1, socket: 1 })
-    // Held for two seconds, Esc leaves: its press already stopped, and the exit adds nothing.
+    // Held for two seconds, Esc leaves. Its repeats are the same press, and the exit is one Stop more: the page
+    // cannot tell it from the exit of a lock that never held Esc (below).
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', repeat: true })
     fs.leave()
-    expect(stops(v)).toEqual({ stream: 1, socket: 1 })
+    expect(stops(v)).toEqual({ stream: 2, socket: 2 })
     expect(fs.keyboard!.unlock).toHaveBeenCalled()
     await press('Full screen')
     await press('Exit full screen')
     expect(fs.exit).toHaveBeenCalledTimes(1)
     expect(fs.element).toBeNull()
-    expect(stops(v), 'its own Exit').toEqual({ stream: 1, socket: 1 })
+    expect(stops(v), 'its own Exit').toEqual({ stream: 2, socket: 2 })
     expect(screen.getByRole('button', { name: 'Full screen' })).toBeTruthy()
+  })
+
+  it('a Keyboard Lock that resolves without holding Esc (WebView2 may): Esc leaves full screen unheard, and that exit still sends Stop TX; CONTROL: its own Exit sends none', async () => {
+    const fs = browser({ keyboardLock: 'locks' })
+    const v = await streaming({ ...controlling, stopAvailable: true })
+    await press('Full screen')
+    expect(fs.keyboard!.lock).toHaveBeenCalledWith(['Escape'])
+    // Esc leaves at once and no key reaches the page. The unlock shows the page took the lock as held.
+    fs.leave()
+    expect(fs.keyboard!.unlock).toHaveBeenCalled()
+    expect(stops(v)).toEqual({ stream: 1, socket: 1 })
+    await press('Full screen')
+    await press('Exit full screen')
+    expect(fs.exit).toHaveBeenCalledTimes(1)
+    expect(stops(v), 'its own Exit').toEqual({ stream: 1, socket: 1 })
   })
 
   it('Firefox and Safari (no Keyboard Lock), or a lock the browser refuses: any exit the page did not ask for sends Stop TX; CONTROL: its own Exit sends none', async () => {
