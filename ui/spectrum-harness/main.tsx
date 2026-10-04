@@ -16,6 +16,7 @@ import { PhoneScope } from '../src/components/PhoneScope'
 import { Waterfall } from '../src/components/Waterfall'
 import { bakeLut, resolveColormap } from '../src/waterfall'
 import { WF_PALETTE_KEY } from '../src/waterfallPalette'
+import { capability, loss, render, rperf } from './renderer'
 import {
   CODE_SLOTS,
   INDEXED_SETS,
@@ -39,6 +40,7 @@ interface HarnessState {
   result?: unknown
   start?: () => void
   stop?: () => unknown
+  gpu?: () => Promise<unknown>
 }
 declare global {
   interface Window {
@@ -535,10 +537,21 @@ async function ipc() {
   }
 }
 
-const MODES: Record<string, () => Promise<unknown>> = { backend, pixel, cadence, perf, ipc }
+const MODES: Record<string, () => Promise<unknown>> = {
+  backend,
+  pixel,
+  cadence,
+  perf,
+  ipc,
+  // The renderer core (ui/src/spectrum), which no component mounts yet: renderer.ts.
+  render: () => render(q, palette),
+  capability: () => capability(q),
+  loss: () => loss(q, palette),
+  rperf: () => rperf(q, palette, H),
+}
 // Every timing below rests on performance.now(), which Chrome coarsens to 100 µs unless the page is
 // cross-origin isolated (run.mjs serves it so: 5 µs). A sub-millisecond cost read at 100 µs is noise.
-if ((mode === 'perf' || mode === 'ipc') && !self.crossOriginIsolated) fail('the page is not cross-origin isolated: timers are 100 µs')
+if ((mode === 'perf' || mode === 'ipc' || mode === 'rperf') && !self.crossOriginIsolated) fail('the page is not cross-origin isolated: timers are 100 µs')
 const run = MODES[mode]
 if (!run) fail(`unknown mode ${mode}`)
 else

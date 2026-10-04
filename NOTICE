@@ -201,8 +201,17 @@ FlexRadio workstation) and reimplemented for Nexus's normalized history rows:
 - **`ui/src/waterfallHistory.ts`** — the retained-history ring buffer behind the
   pause/scrollback and instant-palette-recolor waterfall, a reimplementation of
   AetherSDR's `WaterfallHistoryBuffer`.
+- **`ui/src/spectrum/dss.ts`** — the same 3DSS surface for the spectrum renderer's two
+  backends: the canvas-2D drawing moved from `ui/src/dss.ts`; AetherSDR's noise-floor
+  anchoring and temporal median-of-3 impulse rejection (`DssRenderer.cpp`,
+  `smoothDssRow` / `median3`); and a WebGL2 mesh displaced from the history texture,
+  after the geometry of AetherSDR's `resources/shaders/dss_mesh.vert`. The changes are
+  documented in the file header.
+- **`ui/src/spectrum/ring.ts`** — the spectrum renderer's retained history (frame values
+  at native resolution, each row with its own frequency frame), the same
+  `WaterfallHistoryBuffer` concept reimplemented again.
 
-Both files carry header-level attribution to their AetherSDR origin. AetherSDR is
+These files carry header-level attribution to their AetherSDR origin. AetherSDR is
 GPLv3 and Nexus is GPLv3-only, so the ported code combines cleanly into the GPLv3
 whole. Additionally, Nexus's native FlexRadio DAX / VITA-49 code
 (`crates/tempo-net/src/flexvita.rs`, `crates/tempo-audio/src/flexdax.rs`) used

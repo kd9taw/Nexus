@@ -150,6 +150,82 @@ export const INDEXED_SETS: Record<string, IndexedSet> = {
   },
 }
 
+/**
+ * Sets only the renderer fixtures use (the renderer is fed rows directly, so they need no padding).
+ * They ask what the components' fixtures cannot: history drawn through each row's own span across
+ * a retune, a native 2048-bin source decimated by each detector, and a one-row burst the 3-D stack
+ * must reject.
+ */
+export const RENDERER_SETS: Record<string, IndexedSet> = {
+  /** A QSY halfway: the span moves up 500 Hz while two carriers stay at 1500 and 3000 Hz absolute.
+   *  Drawn through each row's own span, they stay straight lines across the step. */
+  retune: {
+    id: 'retune',
+    count: 120,
+    frame(i) {
+      const lo = i < 60 ? 0 : 500
+      const row = noiseDb(AUDIO_BINS, -95, 5000 + i)
+      addTone(row, lo, lo + 4000, 1500, -50)
+      addTone(row, lo, lo + 4000, 3000, -60)
+      return { row: Array.from(row, dbfs), loHz: lo, hiHz: lo + 4000, source: 'audio' }
+    },
+  },
+  /** A Flex-width row: 2048 bins over 200 kHz, three carriers and one 8-bin-wide signal, so a
+   *  pixel covers about five bins and the detectors disagree. */
+  wide: {
+    id: 'wide',
+    count: 80,
+    frame(i) {
+      const lo = 14_000_000
+      const hi = 14_200_000
+      const row = noiseDb(2048, -100, 6000 + i)
+      for (const [hz, db] of [
+        [14_030_000, -45],
+        [14_074_000, -60],
+        [14_150_000, -75],
+      ]) addTone(row, lo, hi, hz, db)
+      for (let k = 0; k < 8; k++) addTone(row, lo, hi, 14_110_000 + k * 100, -70)
+      return { row: Array.from(row, dbfs), loHz: lo, hiHz: hi, source: 'flex' }
+    },
+  },
+  /** The audio passband, then a 23 cm rig scope (5 kHz across 1296.1 MHz, 475 points): far enough
+   *  from where the history began that float32 hertz would put a carrier pixels off, unless the
+   *  renderer re-bases its frequencies on the newest rows. */
+  uhf: {
+    id: 'uhf',
+    count: 120,
+    frame(i) {
+      if (i < 40) return INDEXED_SETS.carrier.frame(i)
+      const lo = 1_296_097_500
+      const hi = 1_296_102_500
+      const row = noiseDb(475, -95, 8000 + i)
+      addTone(row, lo, hi, 1_296_100_000, -50)
+      addTone(row, lo, hi, 1_296_099_000, -60)
+      return { row: Array.from(row, dbfs), loHz: lo, hiHz: hi, source: 'civ' }
+    },
+  },
+  /** Identical rows (one noise draw) with a two-tone: the stack's median of three leaves them be. */
+  steady: {
+    id: 'steady',
+    count: 60,
+    frame() {
+      const row = noiseDb(AUDIO_BINS, -95, 7000)
+      addTone(row, AUDIO_LO, AUDIO_HI, 900, -50)
+      addTone(row, AUDIO_LO, AUDIO_HI, 2600, -55)
+      return audioFrame(row)
+    },
+  },
+  /** `steady` with row 40 a broadband burst 55 dB over the floor: one row of interference. */
+  'steady-burst': {
+    id: 'steady-burst',
+    count: 60,
+    frame(i) {
+      if (i !== 40) return RENDERER_SETS.steady.frame(i)
+      return audioFrame(new Float64Array(AUDIO_BINS).fill(-40))
+    },
+  },
+}
+
 /** Row `i` of an indexed set, padded with the set's last row (see `PAD_ROWS`). */
 export function indexedFrame(set: IndexedSet, i: number): Frame {
   return set.frame(Math.min(i, set.count - 1))
