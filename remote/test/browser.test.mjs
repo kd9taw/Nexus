@@ -14,6 +14,31 @@ import { stationModesFixture } from './station-modes-fixture.mjs'
 import { navigationFixture } from './navigation-fixture.mjs'
 import { tempoConversations } from './tempo-fixture.mjs'
 
+/** A browser's proof on a lane message (security review S1-M1) in its exact shape: the device key's
+ *  SPKI, a number from 1, a 64-byte signature. Whether it holds is the station's to say. */
+const laneProofShape = proof => !!proof && typeof proof === 'object' && Object.keys(proof).sort().join() === 'publicKey,seq,signature'
+  && /^3059301306072a8648ce3d020106082a8648ce3d03010703420004[0-9a-f]{128}$/.test(proof.publicKey)
+  && Number.isSafeInteger(proof.seq) && proof.seq > 0 && /^[0-9a-f]{128}$/.test(proof.signature)
+/** The stand-in station's own key (security review S3-M1), and its signature on an answer, made as
+ *  remote/test/fixtures/stream/README.md says ("Binding the answer to the station"): the page takes
+ *  only an answer the key the service lists for the station signed, for its own offer and session. */
+async function stationSigner() {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+  const fingerprint = sdp => Uint8Array.from(/a=fingerprint:sha-256 ([0-9A-Fa-f:]+)/.exec(sdp)[1].split(':'), pair => parseInt(pair, 16))
+  const sha256 = async bytes => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  const text = new TextEncoder()
+  return {
+    publicKey: Buffer.from(await crypto.subtle.exportKey('spki', pair.publicKey)).toString('hex'),
+    async sign(answer, offer, stationId, deviceId, sessionId) {
+      const signed = new Uint8Array([...text.encode('nexus-stream-answer/1'), ...await sha256(fingerprint(answer)), ...await sha256(fingerprint(offer)),
+        ...text.encode(stationId), ...text.encode(deviceId), ...text.encode(sessionId)])
+      const signature = Buffer.from(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, signed)).toString('hex')
+      const media = answer.indexOf('\r\nm=') + 2
+      return `${answer.slice(0, media)}a=nexus-station-signature:${signature}\r\n${answer.slice(media)}`
+    },
+  }
+}
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 // Scroll a node into view only once it has MOUNTED, and read it while it is still there, in one
@@ -150,7 +175,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && APPLICATION_VERSIONS.includes(message.version)))) {}
-        else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3,4,5].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl','stopTransmit'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId,action:message.request.action?.action,on:message.request.action?.on})}
+        // S1-M1: beside its request, the browser's own proof, in its exact shape, on all but Stop and state.
+        else if(message.type==='operationRequest'&&(({proof,...rest})=>(proof===undefined||laneProofShape(proof))&&((Object.keys(rest).length===2)||Object.keys(rest).length===3&&[2,3,4,5].includes(rest.operationVersion)))(message)&&['state','acquire','heartbeat','release','result','logManual','stationControl','stopTransmit'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId,action:message.request.action?.action,on:message.request.action?.on,signed:'proof' in message})}
         else if (stream && message.type === 'streamSignal' && Object.keys(message).length === 3 && ['offer', 'candidate', 'close'].includes(message.payload?.kind)) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
@@ -338,6 +364,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await until(`document.body.textContent.includes('waiting for approval in Nexus at the shack')`)
     assert.equal((await app.db.prepare('SELECT COUNT(*) AS count FROM devices WHERE station_id=?').bind(pair.stationId).first()).count,0,'nothing is approved before the shack approves')
     await shack.post('enroll/approve',{id:enrollment.id,proof:enrollment.proof,credential:stationCredential})
+    // S3-M1: the station records its own key before it connects, as Nexus at the shack does.
+    const signer=await stationSigner()
+    await pair.native.post(`stations/${pair.stationId}/native/key`,{publicKey:signer.publicKey})
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     // One approval: the confirming browser is approved with no request and no approve-device call.
     await until(`!!${button('Remove this browser’s approval')}`)
@@ -831,9 +860,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           if(signal.payload.kind==='offer'){
             offers.push(signal)
             // The station's own answer, recorded: no station is behind it, so it is all this offer gets.
-            if(realAnswer){source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp:realAnswer}});continue}
+            // Each signed for this offer and session with the station's key (S3-M1), as the shack signs it.
+            const signed=answer=>signer.sign(answer,signal.payload.sdp,pair.stationId,signal.deviceId,signal.sessionId)
+            if(realAnswer){source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp:await signed(realAnswer)}});continue}
             const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data));if(ch.label==='audio'){if(ch.readyState==='open')__shack.feed(ch);else ch.onopen=()=>__shack.feed(ch)}};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
-            source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp}})
+            source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp:await signed(sdp)}})
             source.send({type:'streamState',sessionId:signal.sessionId,streaming:true})
           }else if(signal.payload.kind==='candidate')await atShack(`__pc?.addIceCandidate(${JSON.stringify({candidate:signal.payload.candidate,sdpMid:signal.payload.sdpMid})}).then(()=>true,()=>false)`)
           else if(signal.payload.kind==='close'){closes.push(signal);await atShack('(window.__pc?.close(),true)')}
@@ -1301,6 +1332,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(closes.length,2,'unanswered, the station is told the stream ended')
         for(let i=0;i<30&&releases()===releasesBefore;i++)await sleep(100)
         assert.equal(releases(),releasesBefore+1,'and control is released')
+        // S1-M1, in the built page: everything it sent the older lane carried its proof, but Stop and state.
+        const sentOperations=operationWire.filter(v=>v.direction==='out')
+        assert.ok(sentOperations.some(v=>v.type==='acquire')&&sentOperations.some(v=>v.type==='release'),'premise: the page took and released control')
+        assert.deepEqual(sentOperations.filter(v=>v.signed!==!['state','stopTransmit'].includes(v.type)).map(v=>v.type),[],'a proof on every request but state and Stop, and none on those')
         assert.equal(loggingLease,null,'the station holds no lease for this browser')
         assert.equal(await evaluate(`document.querySelector('.remote-stream-placeholder')?.textContent.includes('Nobody answered “Still there?”, so the stream ended.')`),true,'the page says why it ended')
         // A REAL STATION'S ANSWER. The stand-in above answers with Chrome's own SDP; the shack answers with

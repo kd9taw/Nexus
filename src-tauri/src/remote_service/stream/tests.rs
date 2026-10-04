@@ -168,6 +168,7 @@ fn fixture(now: Instant) -> Fixture {
             station_id: STATION.into(),
             // The operator approved this browser at the radio, and pinned its key (A5).
             pinned: Arc::new(|device: &str| (device == DEVICE).then(|| key().pin())),
+            signer: None,
         },
         lease: acquired["leaseId"].as_str().unwrap().to_string(),
         delivered,

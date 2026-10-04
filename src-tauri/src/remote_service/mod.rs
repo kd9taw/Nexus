@@ -6,9 +6,13 @@ mod aprs;
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
 mod audio;
+/// The relay's older lanes, held to the browser's own key (security review S1-M1).
+mod lanes;
 pub(crate) mod operations;
 pub(crate) mod query;
 pub(crate) mod sstv;
+/// The station's own signing key, which signs its stream answers (security review S3-M1).
+mod station_key;
 #[cfg(test)]
 pub(crate) mod stored_log_tests;
 /// Remote as a stream: the `streamSignal` lane and the session thread (see its header).
@@ -46,6 +50,9 @@ pub struct Status {
     /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
     /// stream. An approved browser listed with a key and missing here is approved again to stream.
     pinned_devices: Vec<String>,
+    /// S3-M1: the service holds another signing key for this station, so browsers refuse its stream
+    /// until it is paired again. Its own field, because it lasts past any one request's error.
+    key_refused: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -401,6 +408,13 @@ struct Control {
     generation: u64,
     vault_writer: Option<mpsc::UnboundedSender<Write>>,
     remembered: Remembered,
+    /// This pairing's signing key (S3-M1), read from the vault or made there once. `None` while there
+    /// is no pairing, or when the credential store would not give one up: the station's answers then
+    /// go unsigned, and pages refuse them.
+    station_key: Option<Arc<station_key::Signer>>,
+    /// The service holds another key for this station (`stationKeyPinned`): pages will refuse its
+    /// answers until it is paired again. Said at the shack.
+    key_refused: bool,
 }
 impl Control {
     fn stop(&mut self) {
@@ -637,6 +651,7 @@ impl Service {
             .map(|d| d.id.clone())
             .collect();
         status.observation_generation = enabled.then(|| control.generation.to_string());
+        status.key_refused = control.key_refused;
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
             status.phase = "disabled".into();
@@ -878,6 +893,8 @@ impl Controller {
                     .iter()
                     .all(|(id, key)| identifier(id) && pin_shape(key))
         });
+        // S3-M1: this pairing's signing key, made here once for a pairing from before it existed.
+        let key = self.station_key(&binding);
         // Decide under the lock BEFORE the pairing becomes visible, so a Turn off that arrives
         // afterwards is ordered after this decision and wins.
         let resumed = {
@@ -885,6 +902,8 @@ impl Controller {
                 return;
             };
             let enabled = remembered.as_ref().is_some_and(|s| s.enabled);
+            control.station_key = key;
+            control.key_refused = false;
             control.remember(Persist::Bound(binding, remembered, pins.map(Box::new)));
             if enabled {
                 control.stop();
@@ -1015,6 +1034,33 @@ impl Controller {
             device.key = device.public_key.as_deref().and_then(fingerprint);
         }
         Ok(value.devices)
+    }
+    /// This pairing's signing key (S3-M1), made once: the one the vault holds for it, or a new one
+    /// saved there first. A store that will not answer (locked) makes nothing, because the key may
+    /// be in it: the station's answers go unsigned until it does.
+    fn station_key(&self, binding: &Binding) -> Option<Arc<station_key::Signer>> {
+        match self.vault.station_key() {
+            Ok(Some(kept)) if kept.binding == *binding => {
+                if let Some(signer) = station_key::Signer::restore(&kept.pkcs8) {
+                    return Some(Arc::new(signer));
+                }
+            }
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+        self.new_station_key(binding)
+    }
+    /// A new signing key for `binding`, saved before it is used: a key the vault did not keep would
+    /// be gone at the next start, and the service would refuse the one made then.
+    fn new_station_key(&self, binding: &Binding) -> Option<Arc<station_key::Signer>> {
+        let (signer, pkcs8) = station_key::Signer::generate()?;
+        self.vault
+            .save_station_key(&vault::StationKey {
+                binding: binding.clone(),
+                pkcs8,
+            })
+            .ok()?;
+        Some(Arc::new(signer))
     }
     fn reflect(&self, value: &str) {
         if let Ok(mut status) = self.status.lock() {
@@ -1301,6 +1347,8 @@ impl Controller {
                     return Err("invalidResponse");
                 }
                 self.vault.save(&binding, &token)?;
+                // S3-M1: a new pairing is a new station, with a signing key of its own.
+                let key = self.new_station_key(&binding);
                 // One approval: the service approved the browser that confirmed this pairing along
                 // with the station. It gets what any approved browser gets, waiting in the record
                 // for Turn on. A service that reports no browser pairs exactly as it used to.
@@ -1321,6 +1369,8 @@ impl Controller {
                     })
                     .filter(|(id, approval, _)| identifier(id) && approval.expires_at > now_ms());
                 if let Ok(mut control) = self.control.lock() {
+                    control.station_key = key;
+                    control.key_refused = false;
                     // A new pairing starts with nothing remembered: off, no grants, no pins.
                     control.remember(Persist::Bound(binding.clone(), None, None));
                     if let Some((device_id, approval, key)) = paired {
@@ -1369,7 +1419,11 @@ impl Controller {
                     .post(&station_path(&binding, "revoke"), Some(&token), empty())
                     .await?;
                 self.vault.remove(&binding)?;
+                // The pairing's key goes with it: a new pairing makes its own.
+                let _ = self.vault.remove_station_key();
                 if let Ok(mut control) = self.control.lock() {
+                    control.station_key = None;
+                    control.key_refused = false;
                     control.remember(Persist::Removed);
                 }
                 self.binding = None;

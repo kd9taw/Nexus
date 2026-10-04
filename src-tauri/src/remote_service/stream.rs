@@ -24,6 +24,11 @@
 //!   an unsigned offer included, `deviceKeyMismatch`. Once DTLS is up, the certificate the page
 //!   actually presented must be the one it signed, or the session ends there: before presence, and
 //!   before any input or PTT is taken.
+//! - **The station's own key (security review S3-M1): the answer, in [`run`].** The answer is signed
+//!   with the key its pairing record at the service holds (`station_key`), over both DTLS
+//!   fingerprints and the station's, device's and session's ids, so the page can tell the station
+//!   from a relay that answers in its place. Without a key the answer goes unsigned, and the page
+//!   refuses it.
 //! - **Transmit presence (S8) and a fresh picture (S9): [`Presence`].** Minted by the operations
 //!   authority when the session connects and on every heartbeat whose picture is fresh, held by
 //!   the engine, which stops every transmission at the station when it lapses. A heartbeat with a
@@ -128,6 +133,9 @@ pub(super) struct Station {
     /// The station's own id, as its pairing holds it: one of the ids a browser signs (A5).
     pub station_id: String,
     pub pinned: PinnedKeys,
+    /// The station's own key, which signs its answer (S3-M1). `None` without one: the answer then
+    /// goes unsigned, and the page refuses it, saying to update Nexus at the shack.
+    pub signer: Option<Arc<super::station_key::Signer>>,
 }
 
 /// An offer, and the identity the relay stamped on it.
@@ -867,6 +875,21 @@ fn run(
             return;
         }
     };
+    // S3-M1: signed with the station's own key, for this offer, this browser and this session, so
+    // the page can tell the station from a relay that answers in its place.
+    let signed = station.signer.as_ref().and_then(|signer| {
+        signer.sign_answer(
+            &offer.sdp,
+            &answer,
+            &station.station_id,
+            &offer.device,
+            &session_id,
+        )
+    });
+    if signed.is_none() {
+        tempo_core::applog::info("remote", "stream: answer unsigned, no station key");
+    }
+    let answer = signed.unwrap_or(answer);
     send(
         StationToRoom::StreamSignal {
             session_id: session_id.clone(),
