@@ -213,9 +213,13 @@ afterEach(() => {
 })
 
 describe('a CQ WW RTTY session, through App', () => {
+  // ⚠️ THE FIRST WAIT AND THE BUDGET ARE FOR WORK, NOT A CLOCK (2026-10-04). The whole App mounts
+  // and boots before the stream shows the first RTTY poll: 0.25 s of the test's 0.4 s alone, and
+  // 2.7–2.9 s of 4.4–4.7 s at a tenth of a CPU. RTL's default 1 s `waitFor` failed a loaded box
+  // with the stream still on its "Arm RX" placeholder, and the default 5 s budget was next in line.
   it('grabs the call and the exchange the session asks for, and keys the session’s own exchange', async () => {
     render(<App />)
-    await waitFor(() => expect(stream()?.textContent).toBe(TEXT))
+    await waitFor(() => expect(stream()?.textContent).toBe(TEXT), { timeout: 20_000 })
 
     // The call: both fields, as ever.
     await grab('W1AW')
@@ -237,5 +241,5 @@ describe('a CQ WW RTTY session, through App', () => {
       fireEvent.keyDown(window, { key: 'F2' })
     })
     await waitFor(() => expect(rttySend).toHaveBeenCalledWith(frameForAir('W1AW 599 4 WI 4 WI')))
-  })
+  }, 30_000)
 })
