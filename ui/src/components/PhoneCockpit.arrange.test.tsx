@@ -5,13 +5,17 @@
 // tier flips the log form and the voice keyer are never remounted (a remount of the keyer stops its
 // over and discards its recording; of the log form, loses a half-typed contact). jsdom lays nothing
 // out: widths are stubbed as in PhoneCockpit.structure.test.tsx, whose mocks this file shares.
+//
+// THE LEFT SIDE (2026-10-03): the record's `leftSide` renders beside the scope on a window about 1280 px
+// wide or wider, falls back into the columns below that with the record untouched, and comes back; the
+// sweep then runs the side's moves and the window crossing that width as well.
 import { useRef } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANELS, panelStorageKey, usePanelLayout, type PanelLayoutApi, type PhonePanelId } from '../features/panelState'
-import { arrangeIds, regionGroups, type PaneMove } from '../features/panelPlace'
+import { arrangeIds, placedColumns, regionGroups, type PaneMove } from '../features/panelPlace'
 
 vi.mock('../api', () => ({
   // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
@@ -240,5 +244,168 @@ describe('THE FIBER-IDENTITY SWEEP: no arrangement remounts the log form or the 
     // The sweep must have MOVED things, or it proved nothing.
     expect([...seen].sort(), 'the flips never reached every tier').toEqual([1, 2, 3])
     expect(applied, 'too few of the random moves changed the placement').toBeGreaterThan(15)
+  })
+})
+
+// ── THE LEFT SIDE (2026-10-03) ─────────────────────────────────────────────────────────────────────
+
+/** The effective window width useViewport publishes on <html>; the side shows from 1280. A change
+ *  reaches the cockpit through a MutationObserver, so it is flushed like a frame. */
+async function windowWidth(px: number | null) {
+  await act(async () => {
+    if (px == null) document.documentElement.style.removeProperty('--vw-eff')
+    else document.documentElement.style.setProperty('--vw-eff', `${px}px`)
+    await Promise.resolve()
+  })
+}
+afterEach(() => document.documentElement.style.removeProperty('--vw-eff'))
+
+/** Phone with the two boards wired, so Spots and Needed can be shown (they ship hidden). */
+function LiveFeeds() {
+  const panels = usePanelLayout(PHONE_PANELS)
+  api = panels
+  return (
+    <PhoneCockpit
+      snap={makeSnap()}
+      theme="dark"
+      onWorkSpot={() => {}}
+      spots={[]}
+      panels={panels}
+      spotsBoard={{ bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }}
+      neededBoard={{ alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }}
+    />
+  )
+}
+const side = () => document.querySelector('.cockpit-left')
+const sideFrames = () => (side() ? framesIn(side()!.querySelector('.cockpit-left-col')!) : null)
+
+describe('Phone renders the left side', () => {
+  const RECORD = { v: 2, state: { spots: 'docked', needed: 'docked' }, share: {}, leftSide: ['spots', 'bandActivity'] }
+
+  it('opens where the operator left it on a wide window: full height beside the scope, out of the region', async () => {
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify(RECORD))
+    await windowWidth(1600)
+    render(<LiveFeeds />)
+    await tier(1200)
+    expect(sideFrames()).toEqual(['spots', 'bandActivity'])
+    expect(rendered().flat(), 'a pane on the side is not in the region as well').not.toContain('bandActivity')
+    expect(rendered().flat()).not.toContain('spots')
+    // The shell: header, the row (side | stage), the dock — the dock after the row, full width.
+    const shell = document.querySelector('main.phone-cockpit')!
+    const row = shell.querySelector(':scope > .cockpit-leftrow')!
+    expect(row, 'the side shows but the row is not a box').not.toBeNull()
+    expect([...row.children].map((c) => c.className)).toEqual(['cockpit-left', 'cockpit-stage'])
+    expect(row.nextElementSibling?.className).toMatch(/^cockpit-txdock/)
+    // Nothing that stops a transmission is on the side; the strip is in the stage, under the scope.
+    expect(side()!.querySelector('.cockpit-txstrip, .cockpit-txdock, .ph-ptt')).toBeNull()
+    const strip = row.querySelector(':scope > .cockpit-stage > .cockpit-txstrip')!
+    expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the strip left its place under the scope').toBe(true)
+  })
+
+  it('below about 1280 px its panes stand in their usual columns, the record untouched — and come back when the window widens', async () => {
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify(RECORD))
+    await windowWidth(1600)
+    render(<LiveFeeds />)
+    await tier(1200)
+    const stored = localStorage.getItem(panelStorageKey('phone'))
+    expect(sideFrames()).toEqual(['spots', 'bandActivity'])
+    await windowWidth(1279)
+    expect(side(), 'the side still shows on a narrow window').toBeNull()
+    expect(document.querySelectorAll('main.phone-cockpit > .cockpit-flat > .cockpit-flat').length, 'the wrappers kept a box').toBe(1)
+    // Their usual columns: the record's placement (stock here), exactly as with no side at all.
+    await tier(1200)
+    expect(rendered()).toEqual([['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'spots', 'needed'], ['log']])
+    expect(localStorage.getItem(panelStorageKey('phone')), 'a narrow window rewrote the stored arrangement').toBe(stored)
+    expect(api!.layout.leftSide).toEqual(['spots', 'bandActivity'])
+    await windowWidth(1280)
+    expect(sideFrames(), 'the side did not come back at 1280').toEqual(['spots', 'bandActivity'])
+    expect(localStorage.getItem(panelStorageKey('phone'))).toBe(stored)
+  })
+
+  it('an old record (no left side) opens exactly as before on a wide window', async () => {
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify({ v: 2, state: { spots: 'docked' }, share: {}, cols: { log: 480 } }))
+    await windowWidth(2560)
+    render(<LiveFeeds />)
+    await tier(1800)
+    expect(side()).toBeNull()
+    expect(document.querySelector('.cockpit-leftrow, .cockpit-stage'), 'a wrapper took a box with no side to show').toBeNull()
+    expect(rendered()).toEqual([['bandActivity', 'voiceKeyer', 'spots'], ['receiver', 'transmitter'], ['log']])
+    expect(api!.layout).toEqual({ v: 2, state: { spots: 'docked' }, share: {}, cols: { log: 480 } })
+  })
+
+  it('a side whose panes are all hidden is not drawn, and the region takes them back on the tick', async () => {
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify({ v: 2, state: {}, share: {}, leftSide: ['spots'] }))
+    await windowWidth(1600)
+    render(<LiveFeeds />)
+    await tier(1200)
+    // Spots ships hidden: nothing on the side is on screen, so there is no side.
+    expect(side()).toBeNull()
+    act(() => api!.setPanelState('spots', 'docked'))
+    expect(sideFrames()).toEqual(['spots'])
+  })
+
+  it('the Spots / Needed divider is between them on the side, at any tier', async () => {
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify({ v: 2, state: { spots: 'docked', needed: 'docked' }, share: {}, leftSide: ['spots', 'needed'] }))
+    await windowWidth(1600)
+    render(<LiveFeeds />)
+    await tier(900)
+    const col = side()!.querySelector('.cockpit-left-col')!
+    expect([...col.children].map((c) => (c.getAttribute('role') === 'separator' ? 'seam' : c.getAttribute('data-pane')))).toEqual(['spots', 'seam', 'needed'])
+    // A feed on the side is in a bounded column, never the stacking flow's content-height wrapper.
+    expect(col.querySelector('.np-pane--stacked')).toBeNull()
+  })
+})
+
+describe('THE FIBER-IDENTITY SWEEP, with the left side and the window crossing about 1280 px', () => {
+  it('60 random moves, the side included, with window and tier flips between them: the log form, the keyer and the scope never remount', async () => {
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify({ v: 2, state: { spots: 'docked', needed: 'docked' }, share: {}, leftSide: ['bandActivity'] }))
+    await windowWidth(1600)
+    render(<LiveFeeds />)
+    await tier(1800)
+    const log0 = document.querySelector('[data-testid="log-stub"]')!
+    const vk0 = document.querySelector('[data-testid="vk-stub"]')!
+    const scope0 = document.querySelector('[data-testid="scope-stub"]')!
+    const shownAll = (id: PhonePanelId) => (SHOWN.has(id) || id === 'spots' || id === 'needed')
+    const ids = arrangeIds(PHONE_PANELS.arrange!)
+    const moves: PaneMove[] = ['up', 'down', 'left', 'right']
+    const next = rng(20261003)
+    let wide = true
+    let sideSeen = 0
+    let crossings = 0
+    const records = new Set<string>()
+    for (let step = 0; step < 60; step++) {
+      const id = ids[Math.floor(next() * ids.length)]
+      const move = moves[Math.floor(next() * moves.length)]
+      act(() => api!.movePane!(id, move, shownAll, wide))
+      records.add(JSON.stringify({ p: api!.layout.place ?? null, s: api!.layout.leftSide ?? null }))
+      if (step % 5 === 2) {
+        const w = [1100, 1279, 1280, 1600, 2560][Math.floor(next() * 5)]
+        if (w >= 1280 !== wide) crossings++
+        wide = w >= 1280
+        await windowWidth(w)
+      }
+      if (step % 7 === 3) await tier([900, 1200, 1800][Math.floor(next() * 3)])
+      // Where every pane stands: the side's panes on it (wide), every other in its column.
+      const onSide = wide ? (api!.layout.leftSide ?? []).filter(shownAll) : []
+      if (onSide.length > 0) sideSeen++
+      expect(sideFrames() ?? [], `step ${step}: ${id} ${move}`).toEqual(onSide)
+      const tracks = Number(region().getAttribute('data-cols')) as 1 | 2 | 3
+      const want = regionGroups(PHONE_PANELS.arrange!, api!.layout.place, tracks, (x) => shownAll(x) && !onSide.includes(x))
+        .filter((g) => g.col === 'log' || tracks === 3 || g.ids.length > 0)
+        .map((g) => (g.col === 'log' ? [...g.ids, 'log'] : g.ids))
+      expect(rendered(), `step ${step}: ${id} ${move} — the region is not the arrangement`).toEqual(want)
+      expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), `step ${step}: remounted the log form`).toBe(true)
+      expect(document.querySelector('[data-testid="vk-stub"]')!.isSameNode(vk0), `step ${step}: remounted the voice keyer`).toBe(true)
+      expect(document.querySelector('[data-testid="scope-stub"]')!.isSameNode(scope0), `step ${step}: remounted the scope`).toBe(true)
+      // Never on the side: the keyer, the log form, a rig strip.
+      expect(side()?.querySelector('[data-testid="vk-stub"], [data-testid="log-stub"], [data-pane="receiver"], [data-pane="transmitter"], [data-pane="rigscope"]') ?? null).toBeNull()
+    }
+    // The sweep must have used the side and crossed the width, or it proved nothing.
+    expect(sideSeen, 'the side never showed').toBeGreaterThan(10)
+    expect(crossings, 'the window never crossed about 1280 px').toBeGreaterThan(3)
+    expect(records.size, 'too few of the random moves changed the arrangement').toBeGreaterThan(15)
+    // And the stored side is still a list of the panes it may hold.
+    for (const id of api!.layout.leftSide ?? []) expect(PHONE_PANELS.arrange!.leftSide).toContain(id)
+    expect(placedColumns(PHONE_PANELS.arrange!, api!.layout.place).a).toContain('voiceKeyer')
   })
 })

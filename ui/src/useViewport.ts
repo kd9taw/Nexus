@@ -69,6 +69,31 @@ export function useViewportSize(): { width: number; height: number } | null {
   }, [raw])
 }
 
+/** `--vw-eff` as published on <html> (useViewport below, and the index.html preseed before first
+ *  paint), in effective CSS px; null where nothing is published. */
+function readEffWidth(): number | null {
+  const v = parseFloat(document.documentElement.style.getPropertyValue('--vw-eff'))
+  return Number.isFinite(v) && v > 0 ? v : null
+}
+
+function subscribeEffWidth(onChange: () => void): () => void {
+  if (typeof MutationObserver === 'undefined') return () => {}
+  const mo = new MutationObserver(onChange)
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+  return () => mo.disconnect()
+}
+
+/**
+ * Whether the EFFECTIVE window is at least `minEffW` CSS px wide — for a decision the stylesheet
+ * cannot make, because it moves a pane between parents (Phone's left side, which shows from about
+ * 1280 px). Like `useViewportClass` it READS what useViewport publishes (`--vw-eff`, zoom-corrected)
+ * and never measures the window itself, so it cannot disagree with `[data-viewport]`; false while
+ * nothing is published. Re-renders only when the answer changes.
+ */
+export function useEffectiveWidthAtLeast(minEffW: number): boolean {
+  return useSyncExternalStore(subscribeEffWidth, () => (readEffWidth() ?? 0) >= minEffW, () => false)
+}
+
 /** Read the live `--ui-zoom` (defaults to 1 if unset/invalid). */
 function currentZoom(): number {
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')

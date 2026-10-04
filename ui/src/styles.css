@@ -23212,6 +23212,17 @@ button.sat-chip:disabled {
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
+/* BESIDE THE LEFT SIDE (2026-10-03) the scope stands in the stage (cockpit-panes.css), and the row
+   that holds the stage takes the stage's INTRINSIC height as its automatic minimum — where a column
+   counts each child at its preferred size, the scope at its content height rather than the 8em floor it
+   shrinks to under deficit. On a 1280×720 effective window that scrolled the shell 22 px further and
+   set the TX strip 22 px lower than without the side (measured in Chrome). Size containment makes the
+   scope's intrinsic size its floor, which is all the flex layout gives it under deficit anyway; laid
+   out, its size is still its basis clamped by the rule above. Only beside the side: with no side its
+   basis resolves against the shell, and nothing here changes. cockpit-shells.test.ts computes both. */
+.phone-cockpit .ph-scope-panel--beside {
+  contain: size;
+}
 /* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. It never
    shrinks: as a default flex item it gave its own 8 px to an overfull column (thinning to
    ~5 px under a scope dragged to its ceiling), and PaneSeam's measured ceiling, taken with
@@ -23242,12 +23253,13 @@ button.sat-chip:disabled {
    column. Each rule names the gap it gives back: the cockpit shells' and the pane grid's columns'
    (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
    a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px).
+   Phone's scope divider carries `in-column` too since its left side (2026-10-03): it stands in the
+   stage (cockpit-panes.css), whose gap is the shell's, so a shell-child selector cannot reach it.
    Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
    sm/xs viewports, which hide every divider. cockpit-shells.test.ts computes each net. */
 .layout.single.rtty-cockpit > .pane-splitter.horizontal,
 .layout.single.psk-cockpit > .pane-splitter.horizontal,
 .layout.single.sstv-view > .pane-splitter.horizontal,
-.layout.single.phone-cockpit > .pane-splitter.horizontal,
 .layout.single.cw-cockpit > .pane-splitter.horizontal,
 .layout.single.js8-cockpit > .pane-splitter.horizontal,
 .pane-splitter.horizontal.in-column {

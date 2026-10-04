@@ -36,10 +36,12 @@ import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
+import { LeftSide } from './panes/LeftSide'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
-import { regionColsStyle } from '../features/paneColumns'
+import { LEFT_SIDE_MIN_VW, regionColsStyle } from '../features/paneColumns'
+import { useEffectiveWidthAtLeast } from '../useViewport'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
@@ -904,9 +906,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const lastPoW = useRef<number | null>(null)
   const scopeRef = useRef<HTMLDivElement>(null)
   // The scope strip its height divider sizes: the divider sets its CSS var on the strip's
-  // container (this cockpit's root) and measures the range the layout honours (on a short window
-  // the pane region's floor stops the strip below its own max-height).
+  // parent (the stage, which has no box until the left side shows — then the shell is the
+  // container) and measures the range the layout honours (on a short window the pane region's
+  // floor stops the strip below its own max-height). The stored height is a share of the shell.
   const scopePanelRef = useRef<HTMLElement>(null)
+  const scopeShareOf = () => scopePanelRef.current?.closest<HTMLElement>('main.phone-cockpit') ?? null
   useWheelTune(scopeRef, {
     remoteFrequency: true,
     radioId: snap.activeRadioId,
@@ -1401,7 +1405,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // was rebuilt to kill. So the column is not rendered when it is empty, and maxCols
   // collapses with it — a bounded tier (2/3, `overflow:hidden`) never gets a track with
   // nothing in it. Below the 3-col tier both feeds live in this column, so they count.
-  const leadPresent = hasBandPane || hasKeyerPane || auxPresent || hasSpotsPane || hasNeededPane
+  // (Computed below from the panes IN THE REGION: one on the left side is not in it.)
   // Three columns are band | keyer+rig/dsp | log, so the tier is only offered when the
   // leading column (Band Activity) AND at least one aux pane exist — otherwise a track
   // would sit empty, the operator's "band of empty black" rebuilt. This is the same
@@ -1423,7 +1427,24 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       receiver: hasReceiverPane,
       transmitter: hasTransmitterPane,
     })[id as string] ?? false
-  const placed3 = regionGroups(PHONE_PANELS.arrange!, place, 3, paneShown)
+  // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
+  // A full-height column beside the scope, the TX strip and the region, between the header and the
+  // dock, for the panes the operator put there (the record's `leftSide`: Band Activity, Spots, Needed —
+  // PHONE_PANELS.arrange.leftSide, so never the keyer or the log form). It has ROOM on a window at least
+  // about 1280 effective px wide, read from the published `--vw-eff` (never a size @media), and never in
+  // the hosted Quick presentation, which has its own one-column order. Without room its panes stand in
+  // their usual columns, and the stored choice is kept exactly as it was: nothing here writes it.
+  const sideWide = useEffectiveWidthAtLeast(LEFT_SIDE_MIN_VW)
+  const sideRoom = sideWide && !quick && panels != null
+  const sideIds = sideRoom ? (panels?.layout.leftSide ?? []) : []
+  // What the side renders, top to bottom. With nothing on it shown it is not drawn at all — an empty
+  // column beside the scope is the "band of empty black" by another name.
+  const sideGroup = sideIds.filter(paneShown)
+  const sideShows = sideGroup.length > 0
+  // The panes IN THE REGION: shown, and not on the left side.
+  const inRegion = (id: PhonePanelId) => paneShown(id) && !sideIds.includes(id)
+  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed')
+  const placed3 = regionGroups(PHONE_PANELS.arrange!, place, 3, inRegion)
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
@@ -1433,9 +1454,9 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         : placed3[0].ids.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || hasNeededPane) && (hasBandPane || hasSpotsPane) ? 3 : leadPresent ? 2 : 1,
+      : (auxPresent || inRegion('needed')) && (inRegion('bandActivity') || inRegion('spots')) ? 3 : leadPresent ? 2 : 1,
   )
-  const groups = regionGroups(PHONE_PANELS.arrange!, place, cols, paneShown)
+  const groups = regionGroups(PHONE_PANELS.arrange!, place, cols, inRegion)
   // The divider between the two feeds measures and repaints their frames (PaneSeam).
   const spotsFrameRef = useRef<HTMLElement>(null)
   const neededFrameRef = useRef<HTMLElement>(null)
@@ -1752,18 +1773,22 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // flow the body is content height, so it takes a readable floor there instead. With a feed
   // shown the leading column is never empty, so `cols === 1` IS the stacking flow — and a floor
   // at the bounded tiers would overflow a pane squeezed to its fill floor into a second scroller.
-  const feedWrap = `np-pane${cols === 1 ? ' np-pane--stacked' : ''}`
+  // On the left side a feed is in a bounded column that scrolls (cockpit-panes.css `.cockpit-left-col`),
+  // never in the stacking flow.
+  const feedWrap = (id: PhonePanelId) => `np-pane${cols === 1 && !sideGroup.includes(id) ? ' np-pane--stacked' : ''}`
   // The two feeds are a PAIR only while the divider between them is on screen (tier 2, both
   // shown — see feedPanes below): then each carries the operator's share, and its floor follows
   // that share (CockpitPaneFrame `split`), so the divider moves them even in a column too short
   // for both floors. Anywhere else each is the only feed in its column and keeps the stock floor.
   // Stock, that is tier 2; arranged, wherever Needed sits directly under Spots in a column the region
   // bounds (tier 2 or 3).
-  const feedsAdjacent = groups.some((g) => {
-    const i = g.ids.indexOf('spots')
-    return i >= 0 && g.ids[i + 1] === 'needed'
-  })
-  const feedsSplit = hasSpotsPane && hasNeededPane && feedsAdjacent && cols >= 2 && panels != null
+  // On the LEFT SIDE too (2026-10-03): its column is always bounded, so the pair splits there at any tier.
+  const spotsOverNeeded = (ids: readonly PhonePanelId[]) => {
+    const i = ids.indexOf('spots')
+    return i >= 0 && ids[i + 1] === 'needed'
+  }
+  const feedsAdjacent = cols >= 2 && groups.some((g) => spotsOverNeeded(g.ids))
+  const feedsSplit = hasSpotsPane && hasNeededPane && (feedsAdjacent || spotsOverNeeded(sideGroup)) && panels != null
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
@@ -1774,7 +1799,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
-        <div className={feedWrap}>
+        <div className={feedWrap('spots')}>
           {control || spotsRead?.phase === 'ready' ? (
             <SpotsPanel
               {...spotsBoard}
@@ -1798,7 +1823,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
-        <div className={feedWrap}>
+        <div className={feedWrap('needed')}>
           {(control || needsRead?.phase === 'ready') && (
             <NeededPanel {...neededBoard} pane={{ filterKey: PHONE_NEEDED_FILTERS, modes: PHONE_NEEDED_MODES }} />
           )}
@@ -2420,7 +2445,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                     layout={panels.layout}
                     shown={paneShown}
                     labels={phonePanelLabels()}
-                    onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                    sideRoom={sideRoom}
+                    onMove={(id, move) => panels.movePane!(id, move, paneShown, sideRoom)}
                   />
                 ) : undefined
               }
@@ -2559,9 +2585,30 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           Nothing on this strip stops a transmission (THE STOP LINE, features/panelState.ts):
           it is a display plus click-to-tune, and Stop TX / Tune are in the TX strip below it, PTT in
           the dock below, none of them reachable from the ⊞ menu. */}
+      {/* THE LEFT SIDE'S ROW AND THE STAGE (2026-10-03, cockpit-panes.css "THE LEFT SIDE"). The scope,
+          its divider, the TX strip and the pane region ALWAYS render inside these two wrappers, so the
+          side showing or going (a window crossing about 1280 px, a pane moved in ⊞ Arrange) never
+          moves the voice keyer or the log form to a new parent — React would remount both, stopping
+          an over and losing a half-typed contact. Until the side shows both are `cockpit-flat`, with
+          no box at all: the scope, the strip and the region are then the shell's flex items exactly as
+          before, which is what keeps the strip's sticky edges measured against the shell. With the
+          side shown the row lays it beside the stage. The header above and the TX dock below never
+          enter either, so PTT and the dock never move; Stop TX and Tune ride the strip under the scope. */}
+      <div className={sideShows ? 'cockpit-leftrow' : 'cockpit-flat'}>
+      {sideShows && panels && (
+        <LeftSide
+          stored={panels.layout.cols?.leftSide}
+          setCols={panels.setCols}
+          label={t('pane.left.label')}
+          widthLabel={t('pane.seam.leftWidth.label')}
+        >
+          {sideGroup.map(placedPane)}
+        </LeftSide>
+      )}
+      <div className={sideShows ? 'cockpit-stage' : 'cockpit-flat'}>
       {shown('scope') && (
         <>
-      <section hidden={!details} className={`ph-scope-panel${!details ? ' ph-scope-panel--quiet' : ''}`} ref={scopePanelRef}>
+      <section hidden={!details} className={`ph-scope-panel${!details ? ' ph-scope-panel--quiet' : ''}${sideShows ? ' ph-scope-panel--beside' : ''}`} ref={scopePanelRef}>
         <div className="ph-scope-head">
           {(() => {
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native
@@ -2687,6 +2734,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         axis="y"
         varName="--ph-scope-h"
         strip={scopePanelRef}
+        // In the stage, not a direct shell child: it gives back its column's gap as every divider
+        // whose parent styles.css may not name does (styles.css `.pane-splitter.horizontal.in-column`).
+        className="in-column"
+        // The stored height is a share of the SHELL in both states, so the left side showing narrows
+        // the scope without shortening it, and the TX strip under it stays at the same height.
+        shareOf={scopeShareOf}
         storageKey="nexus.split.phone.scope"
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}
@@ -2768,6 +2821,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           />
         )}
       </div>
+      {/* the stage */}</div>
+      {/* the left side's row */}</div>
 
       {/* THE HOSTED QUICK PRESENTATION puts the contact first (`.cockpit-col--contact`), so there
           the strip follows the contact column instead of preceding it, right above the dock: a

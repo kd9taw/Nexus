@@ -13,7 +13,11 @@
 
    THE MODEL. A cockpit shell has five child kinds — header chrome, the scope, the TX strip
    right under it (FT's cluster: TX On/Off · Tune · ATU · Stop TX, sticky; `.cockpit-txstrip`
-   below), ONE pane region, and the TX dock. The region is a grid of columns; each column is itself a flex
+   below), ONE pane region, and the TX dock — and, since 2026-10-03, PHONE'S may show ONE MORE:
+   THE LEFT SIDE (its section below), a full-height column of feeds beside the scope, the strip
+   and the region, between the header and the dock. Without it Phone's box tree is exactly the
+   five kinds; with it the scope, the strip and the region stand in a STAGE beside the side, and
+   the header and the dock are where they always were. The region is a grid of columns; each column is itself a flex
    stack of pane frames. Vertical deficit has exactly three legal fates, in order: a
    scrollbar inside the pane that overflowed; a scrollbar inside the COLUMN that overflowed
    (the only fate available to a stack of fit="content" frames, which are `flex: 0 0 auto`
@@ -466,6 +470,101 @@
    class; native transmit controls keep the pinned stop surface above. */
 .remote-observer-dock {
   position: static;
+}
+
+/* THE LEFT SIDE (operator's pick, 2026-10-03: "Arrange gets a third place, 'Left side': a
+   full-height column beside the scope … Stop TX, Tune and PTT don't move"). Phone only. ⊞ Panels ▸
+   Arrange puts Band Activity, Spots or Needed there (features/panelPlace); the side shows on a window
+   at least about 1280 effective px wide (features/paneColumns `LEFT_SIDE_MIN_VW`, read from the
+   published `--vw-eff`), and below that its panes stand in their usual columns — the stored choice is
+   kept, never rewritten. The voice keyer and the log form can never stand there: the side comes and
+   goes with the window's width, and a pane that changes parent is remounted.
+
+   WHAT CHANGED IN THE CONTRACT, exactly:
+     1. Phone's scope, its divider, the TX strip and the pane region are no longer SHELL children
+        in the DOM. They render inside two wrappers that are ALWAYS there — the row and, in it, the
+        stage — so the side showing or going never moves the voice keyer or the log form to a new
+        parent (a remount stops the keyer's over and loses a half-typed contact). The header and the
+        dock are still shell children, before and after the row.
+     2. Until the side shows, both wrappers are `.cockpit-flat`: `display: contents`, NO BOX. The
+        scope, the strip and the region are then flex items of the shell exactly as before, so the
+        strip's sticky edges are still measured against the shell — the reason it had to be a
+        direct shell child (the 150–175 % pins below) still holds, box for box.
+     3. With the side shown, the row is `.cockpit-leftrow` (side | stage), the stage `.cockpit-stage`
+        (scope, divider, strip, region, with the shell's own gap), and the dock stays below the row,
+        full width: PTT and the whole dock do not move. The strip stays directly under the scope, and
+        the scope keeps its HEIGHT (its stored share is of the shell, PaneSeam `shareOf`, and beside the
+        side it is size-contained, styles.css `.ph-scope-panel--beside`), so Stop TX and Tune move right
+        with the scope's left edge and nowhere else. Its sticky edges are then held inside the stage,
+        which runs from under the header to the dock; the side only shows at 1280 effective px and up.
+        Measured in Chrome, with and without a side, from 1280×800 to 3440×1440 and at 1920×1080 150 %
+        (1280 effective), 1280×720, 2560×1080 175 % and 3440×1440 175 %: PTT, the dock, the scope's
+        height and Stop TX's and Tune's height on the screen identical, both hit-testable at rest.
+     4. The side's frames stand in its own column, which is out of flow (it can never raise the
+        row's height, so a long Spots list never scrolls the shell) and scrolls itself — the pane
+        contract's second legal fate. No transmit control is in it, and no move can put one there:
+        the panes it may hold are listed by id (ArrangeSpec.leftSide), and no stop control has one.
+   Neither wrapper scrolls or clips: a box that did would become the sticky strip's scroll container.
+   Enforced in cockpit-panes.test.ts (these rules, computed), cockpit-shells.test.ts (Phone's chains
+   through both wrappers, both states) and PhoneCockpit.structure.test.tsx (the rendered tree). */
+.cockpit-flat {
+  display: contents;
+}
+/* The row, with the side shown: the shell's grower, as the region is the stage's (basis 0, so the
+   scope keeps the height it was dragged to). Its automatic minimum is the stage's floors — the side
+   adds nothing (its column is out of flow) — so past them the shell's deficit valve scrolls, as
+   before. */
+.cockpit-leftrow {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-3);
+}
+/* The stage: what the shell's column was for the scope, its divider, the strip and the region, with
+   the shell's own gap (the scope divider's margins give that gap back in both states). */
+.cockpit-stage {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* The side. Its width is the operator's (`--cockpit-left-w`, written on it from the record's
+   `cols.leftSide`), CLAMPED BY THE SHEET between a 16em floor and 40 % of the row — on load, on every
+   resize and on every zoom change, before any script runs, without rewriting the stored width (a
+   bigger window gets it back). 28em until the operator drags it: at 24em the Spots table cut its
+   frequency column off (measured at 1366×768 and 1920×1080); its last columns and Needed's still
+   scroll sideways at 28em, which is what the divider is for. Neither a grower nor a shrink victim: the
+   stage, `min-width: 0`, is what gives way. Its divider's range is the same pair of numbers
+   (features/paneColumns). */
+.cockpit-left {
+  flex: 0 0 clamp(16em, var(--cockpit-left-w, 28em), 40%);
+  position: relative;
+  min-width: 0;
+}
+/* The side's column: OUT OF FLOW and filling the side, so its content can never stretch the row —
+   and the interposed scroller its frames need (fit="content" strips cannot shrink; fill panes floor
+   at the bounded flow's yielding floor, which is legal only because this scrolls behind it). */
+.cockpit-left-col {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  overflow-x: hidden;
+  --cockpit-fill-min: min(10em, 100%);
+}
+/* The side's width divider: absolutely placed on its right edge, straddling the row's gap, the full
+   height, over no pane — the column dividers' geometry (`.cockpit-colseam`). */
+.cockpit-left-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: calc(var(--space-3) / -2 - 6px);
+  width: 12px;
+  margin: 0;
 }
 
 /* Action cluster in a pane head (pop-out / remove / pane-supplied buttons). The head is

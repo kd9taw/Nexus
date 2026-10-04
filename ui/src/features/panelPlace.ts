@@ -25,6 +25,15 @@
 // A column's ORDER on screen (`colOrder`, "swap columns") is read and kept by the record, but no
 // cockpit renders it yet: its tracks are positional (cockpit-panes.css) and the column dividers
 // size them by position, so a swap has to move the widths and the dividers with it first.
+//
+// THE LEFT SIDE (operator's pick, 2026-10-03: "Arrange gets a third place, 'Left side'"; Phone only):
+// a full-height column beside the scope, outside the pane region, for the panes an ArrangeSpec lists in
+// `leftSide` (Phone: Band Activity, Spots and Needed). The record keeps it APART from the placement
+// (PanelLayout.leftSide, the panes there top to bottom): a pane on the left side keeps its place in
+// the three columns, which is where it stands whenever the side does not show — a window under about
+// 1280 px, where the stored choice is kept and never rewritten — and where ▶ takes it back. ◀ from the
+// first column puts a listed pane there. Never the voice keyer, never the log form: a pane that
+// changes parent is remounted, and the side comes and goes with the window's width.
 
 /** The columns of a grid cockpit's pane region, in their stock order on screen. */
 export type PaneColumn = 'a' | 'b' | 'log'
@@ -49,6 +58,10 @@ export interface ArrangeSpec<P extends string> {
   /** Below three tracks, the stock order of the one column `a` and `b` share, where it is not simply
    *  `a` then `b`. Used only while nothing has been arranged. */
   readonly stockMerged?: readonly P[]
+  /** The panes that may stand on the LEFT SIDE (see the header). Absent: the cockpit has none. Each
+   *  must be a pane whose remount loses nothing in flight, because the side shows and goes with the
+   *  window's width — so never a pinned pane. */
+  readonly leftSide?: readonly P[]
 }
 
 /** Every pane an ArrangeSpec lists, in stock order (a, then b, then log). */
@@ -219,4 +232,78 @@ export function isStockPlacement<P extends string>(spec: ArrangeSpec<P>, place: 
   if (place == null) return true
   const now = placedColumns(spec, place)
   return PANE_COLUMNS.every((c) => now[c].join('\u0000') === spec.columns[c].join('\u0000'))
+}
+
+// ── THE LEFT SIDE ────────────────────────────────────────────────────────────────────────────────
+
+/** The panes on the left side from any input, or undefined for "nothing there": only the panes the
+ *  spec lists in `leftSide`, each once, in the order stored. An id outside that list — the voice keyer,
+ *  a rig strip, a hand-edited stop control — is dropped, so a stored or hand-edited record cannot put
+ *  one there. */
+export function coerceLeftSide<P extends string>(spec: ArrangeSpec<P>, raw: unknown): P[] | undefined {
+  if (!spec.leftSide || !Array.isArray(raw)) return undefined
+  const allowed = spec.leftSide as readonly string[]
+  const out: P[] = []
+  for (const v of raw) if (typeof v === 'string' && allowed.includes(v) && !out.includes(v as P)) out.push(v as P)
+  return out.length > 0 ? out : undefined
+}
+
+/** What ⊞ Arrange moves: the three-column placement and the panes on the left side. */
+export interface Arrangement<P extends string> {
+  place?: PanePlacement<P>
+  leftSide?: P[]
+}
+
+/**
+ * The arrangement after one move of `id`, or null when it does nothing. `sideShows` is whether the
+ * left side is on screen on this window (wide enough, and the cockpit has one).
+ *
+ * While it shows, a pane on it moves ▲ ▼ among the panes there (past the hidden ones), ▶ takes it
+ * back to its place in the columns, and ◀ does nothing; ◀ on a listed pane in the first column puts
+ * it at the foot of the side; and every other move is `movePane` among the panes in the columns.
+ * While it does not show, its panes stand in their columns and move there like any other, and the
+ * side itself is kept exactly as stored — no move reaches it.
+ */
+export function moveArranged<P extends string>(
+  spec: ArrangeSpec<P>,
+  arr: Arrangement<P>,
+  id: P,
+  move: PaneMove,
+  shown: (id: P) => boolean,
+  sideShows: boolean,
+): Arrangement<P> | null {
+  const side = arr.leftSide ?? []
+  const keep = (place: PanePlacement<P> | null): Arrangement<P> | null => (place ? { ...arr, place } : null)
+  if (!sideShows || !spec.leftSide) return keep(movePane(spec, arr.place, undefined, id, move, shown))
+  if (side.includes(id)) {
+    if (move === 'left') return null
+    if (move === 'right') {
+      const rest = side.filter((x) => x !== id)
+      return { place: arr.place, ...(rest.length > 0 ? { leftSide: rest } : {}) }
+    }
+    const at = side.indexOf(id)
+    const step = move === 'up' ? -1 : 1
+    let to = at + step
+    while (to >= 0 && to < side.length && !shown(side[to])) to += step
+    if (to < 0 || to >= side.length) return null
+    const next = side.filter((x) => x !== id)
+    next.splice(to, 0, id)
+    return { ...arr, leftSide: next }
+  }
+  if (move === 'left' && spec.leftSide.includes(id) && placedColumns(spec, arr.place)[PANE_COLUMNS[0]].includes(id)) {
+    return { ...arr, leftSide: [...side, id] }
+  }
+  return keep(movePane(spec, arr.place, undefined, id, move, (x) => shown(x) && !side.includes(x)))
+}
+
+/** Whether a move would do anything — what the ⊞ Arrange buttons' `disabled` reads. */
+export function canMoveArranged<P extends string>(
+  spec: ArrangeSpec<P>,
+  arr: Arrangement<P>,
+  id: P,
+  move: PaneMove,
+  shown: (id: P) => boolean,
+  sideShows: boolean,
+): boolean {
+  return moveArranged(spec, arr, id, move, shown, sideShows) != null
 }
