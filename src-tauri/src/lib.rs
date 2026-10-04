@@ -52,6 +52,9 @@ mod log_queries;
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
 mod pouncer;
+/// The licence-class band edges the scopes draw, read from the transmit gate's own table. Display
+/// only: the gate stays `privileges::tx_allowed`.
+mod privilege_spans;
 mod profile_sync;
 /// The quit when the logbook still has changes on their way to disk: the window is held while
 /// they are saved, with the radio stopped FIRST — see the module header for the order.
@@ -32234,6 +32237,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,
+            privilege_spans::get_privilege_spans,
             dxcc_entity_names,
             dxcc_entity_continents,
             cloudlog_station_info,
