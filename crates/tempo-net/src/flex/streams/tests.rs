@@ -82,7 +82,7 @@ fn a_release_while_the_create_is_in_flight_makes_one_removal_and_no_churn() {
     b.acquire(3, RX);
     b.release(3, RX, 100);
     // The entry stays for the stream that is coming.
-    assert_eq!(b.snapshot()[0].create_pending, true);
+    assert!(b.snapshot()[0].create_pending);
     b.registered(0x0400_0003, 3, 200);
     assert!(b.poll(200 + REMOVAL_GRACE_MS - 1).is_empty());
     assert_eq!(
