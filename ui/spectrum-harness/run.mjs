@@ -534,6 +534,8 @@ const RENDER_FIXTURES = [
   'scope-wide-average',
   'dss-two-tone',
 ]
+/** Fixtures checked only backend against backend, with no stored picture (see the loop). */
+const CROSS_ONLY = ['wf-uhf']
 const RENDER_BACKENDS = ['webgl2', 'canvas2d']
 const RENDER_BASELINES = join(BASELINES, 'renderer')
 const EXACT = { channel: 0, maxFraction: 0 }
@@ -625,6 +627,18 @@ async function renderChecks(cdp, base, backend) {
     const band = comparePixels(rowsFrom(a, a.traceH), rowsFrom(b, b.traceH))
     record({ kind: 'render-cross', id: fx, outcome: band.match ? 'pass' : 'fail', detail: band.reason || `band ${pct(band)}; whole ${pct(whole)}`, band: { differing: band.differing, maxDelta: band.maxDelta }, whole: { fraction: whole.fraction, maxDelta: whole.maxDelta } })
     line('BOTH', `webgl2 vs canvas2d: ${fx}`, `band ${pct(band)}; whole ${(whole.fraction * 100).toFixed(3)}%`, band.match ? 'agree' : `FAIL (${band.reason})`)
+  }
+  // Absolute RF far from where the history began. WebGL2 carries hertz as float32 offsets from an
+  // origin it moves to the newest rows; canvas-2D works in float64 and is exact, so the two must
+  // agree. Without the re-basing a zoomed 23 cm span lands carriers pixels apart.
+  for (const fx of CROSS_ONLY) {
+    const a = await renderFixture2(cdp, base, fx, 'webgl2', opt.palette)
+    const b = await renderFixture2(cdp, base, fx, 'canvas2d', opt.palette)
+    writeFileSync(join(dir, `webgl2-${fx}.png`), encodePng(a.width, a.height, a.rgba))
+    writeFileSync(join(dir, `canvas2d-${fx}.png`), encodePng(b.width, b.height, b.rgba))
+    const cmp = comparePixels(a, b)
+    record({ kind: 'render-cross', id: fx, outcome: cmp.match ? 'pass' : 'fail', detail: cmp.reason || pct(cmp), differing: cmp.differing, maxDelta: cmp.maxDelta })
+    line('BOTH', `webgl2 vs canvas2d: ${fx}`, pct(cmp), cmp.match ? 'agree' : `FAIL (${cmp.reason})`)
   }
   // Drawing again changes nothing. A host draws at display rate and commits rows far slower, so a
   // draw that leaves anything behind (canvas-2D blits its band only when a row arrives) builds up

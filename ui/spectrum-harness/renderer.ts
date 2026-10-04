@@ -43,6 +43,10 @@ export const FIXTURES: Record<string, Fixture> = {
   'scope-wide-peak': { set: 'wide', w: 320, h: 192, traceH: 86, stripH: 0, mode: '2d', detector: 'peak' },
   'scope-wide-average': { set: 'wide', w: 320, h: 192, traceH: 86, stripH: 0, mode: '2d', detector: 'average' },
   'dss-two-tone': { set: 'two-tone', w: 320, h: 192, traceH: 0, stripH: 0, mode: 'dss', detector: 'peak' },
+  // Zoomed inside a 23 cm scope's span after the history began on audio: WebGL2's float32 hertz
+  // stay exact only because it re-bases on the newest rows. No stored picture: canvas-2D, which
+  // works in float64 throughout, is the reference.
+  'wf-uhf': { set: 'uhf', w: 320, h: 160, traceH: 0, stripH: 18, mode: '2d', detector: 'peak', view: [1_296_098_500, 1_296_101_500] },
 }
 
 function setOf(id: string) {

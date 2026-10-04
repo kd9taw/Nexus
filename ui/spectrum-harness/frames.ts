@@ -188,6 +188,22 @@ export const RENDERER_SETS: Record<string, IndexedSet> = {
       return { row: Array.from(row, dbfs), loHz: lo, hiHz: hi, source: 'flex' }
     },
   },
+  /** The audio passband, then a 23 cm rig scope (5 kHz across 1296.1 MHz, 475 points): far enough
+   *  from where the history began that float32 hertz would put a carrier pixels off, unless the
+   *  renderer re-bases its frequencies on the newest rows. */
+  uhf: {
+    id: 'uhf',
+    count: 120,
+    frame(i) {
+      if (i < 40) return INDEXED_SETS.carrier.frame(i)
+      const lo = 1_296_097_500
+      const hi = 1_296_102_500
+      const row = noiseDb(475, -95, 8000 + i)
+      addTone(row, lo, hi, 1_296_100_000, -50)
+      addTone(row, lo, hi, 1_296_099_000, -60)
+      return { row: Array.from(row, dbfs), loHz: lo, hiHz: hi, source: 'civ' }
+    },
+  },
   /** Identical rows (one noise draw) with a two-tone: the stack's median of three leaves them be. */
   steady: {
     id: 'steady',
