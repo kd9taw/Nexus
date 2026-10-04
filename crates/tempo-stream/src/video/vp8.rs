@@ -2,7 +2,7 @@
 //!
 //! libvpx is linked statically from the pinned source build (scripts/build-windows-cross.sh). The
 //! shim is compiled against that build's own headers, so the only thing Rust knows about libvpx is
-//! the shim's five functions, declared below.
+//! the shim's six functions, declared below.
 use std::ffi::{c_char, c_int, c_longlong, c_uint, c_ulong, CStr};
 use std::ptr::NonNull;
 use std::time::Duration;
@@ -19,6 +19,7 @@ struct Raw {
 extern "C" {
     fn nexus_vp8_version() -> *const c_char;
     fn nexus_vp8_open(width: c_uint, height: c_uint, kbps: c_uint) -> *mut Raw;
+    fn nexus_vp8_set_kbps(enc: *mut Raw, kbps: c_uint) -> c_int;
     #[allow(clippy::too_many_arguments)]
     fn nexus_vp8_encode(
         enc: *mut Raw,
@@ -140,6 +141,11 @@ impl Encode for Vp8 {
         }
         Some(packets)
     }
+
+    fn set_kbps(&mut self, kbps: u32) -> bool {
+        // SAFETY: `raw` is a live encoder; the rate is a plain value.
+        unsafe { nexus_vp8_set_kbps(self.raw.as_ptr(), kbps) == 0 }
+    }
 }
 
 impl Drop for Vp8 {
@@ -235,6 +241,49 @@ mod tests {
         assert!(
             settled.iter().all(|&s| s < half_second / 4),
             "settled resends {settled:?} against a half-second budget of {half_second} bytes"
+        );
+    }
+
+    /// ★ A new bit rate takes effect on the running encoder (2026-10-03): from 2 Mbit/s to 200
+    /// kbit/s the frames come out several times smaller, and none of them is a keyframe, so a link
+    /// that narrows is followed without the keyframe a new encoder would cost. CONTROL: the same
+    /// frames at the old rate stay large.
+    #[test]
+    fn a_new_bit_rate_shrinks_the_frames_without_a_keyframe() {
+        let (w, h) = (1280u32, 720u32);
+        let sizes = |retarget: bool| {
+            let mut enc = Vp8::open(w, h, 2000).unwrap();
+            let mut out = Vec::new();
+            for n in 0..60u64 {
+                if retarget && n == 30 {
+                    assert!(enc.set_kbps(200), "libvpx refused the new rate");
+                }
+                let packets = enc
+                    .encode(
+                        &picture(w, h, (n * 5) as u8),
+                        Duration::from_millis(66 * n),
+                        n == 0,
+                    )
+                    .unwrap();
+                out.push((
+                    packets.iter().map(|p| p.data.len()).sum::<usize>(),
+                    packets.iter().any(|p| p.keyframe),
+                ));
+            }
+            out
+        };
+        let mean =
+            |frames: &[(usize, bool)]| frames.iter().map(|f| f.0).sum::<usize>() / frames.len();
+        let (kept, moved) = (sizes(false), sizes(true));
+        assert!(
+            moved[30..].iter().all(|f| !f.1),
+            "a keyframe after the new rate"
+        );
+        assert!(
+            mean(&moved[45..]) * 3 < mean(&kept[45..]),
+            "{} bytes a frame at 200 kbit/s against {} at 2 Mbit/s",
+            mean(&moved[45..]),
+            mean(&kept[45..])
         );
     }
 

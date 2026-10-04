@@ -3,6 +3,9 @@
 //!
 //! - [`picture`] — the captured BGRA, the I420 the encoder takes, and the size and bit rate it is
 //!   sent at: no larger than the page shows, within what the path carries (every platform).
+//! - [`rate`] — what each frame is sent at when the session estimates the link: the bit rate
+//!   follows the estimate, and a weak link steps the frame rate and then the size down (every
+//!   platform).
 //! - [`pipeline`] — the encoder thread: drop-not-queue, 30 frames a second at most, a still window
 //!   twice a second, keyframes when the page asks (every platform, tested with a stand-in encoder).
 //! - `capture` — Windows Graphics Capture of the one window (Windows).
@@ -12,6 +15,7 @@
 //! long before it is asked.
 pub mod picture;
 pub mod pipeline;
+pub mod rate;
 
 #[cfg(windows)]
 mod capture;
@@ -83,11 +87,24 @@ impl Video {
         self.pipeline.take()
     }
 
-    /// Where the page is and how large it shows the picture, in its own device pixels: from the
-    /// next frame on, the picture is encoded no larger than that, within the path's budget
-    /// ([`picture::Bound`]). `None` for what is not known yet.
-    pub fn fit(&self, path: Option<picture::Path>, view: Option<(u32, u32)>) {
-        self.pipeline.set_bound(picture::Bound::new(path, view));
+    /// Where the page is, how large it shows the picture, in its own device pixels, and what the
+    /// link to it carries, in kbit/s (the session's estimate): from the next frame on, the picture
+    /// is encoded no larger than the view, within the path's budget ([`picture::Bound`]), at what
+    /// the link carries ([`rate`]). `None` for what is not known (or, for the link, not estimated).
+    pub fn fit(
+        &self,
+        path: Option<picture::Path>,
+        view: Option<(u32, u32)>,
+        estimate: Option<u32>,
+    ) {
+        self.pipeline
+            .set_bound(picture::Bound::new(path, view).within(estimate));
+    }
+
+    /// The link the whole picture would need to be sent at its own budget, in kbit/s: what the
+    /// session asks its estimation to look for. `None` before the first frame.
+    pub fn wanted(&self) -> Option<u32> {
+        self.pipeline.wanted()
     }
 
     /// The page asked for a keyframe.

@@ -16,7 +16,9 @@
 //!   read soft in every browser.
 //! - **The bit rate follows the pixels** ([`Bound::kbps`]), within the path's ceiling. Encoding
 //!   cost follows the pixel count too, and the station's CPU belongs to the radio first, which is
-//!   one more reason never to encode more than the page shows.
+//!   one more reason never to encode more than the page shows. That is the picture's own budget;
+//!   where the session estimates the link ([`Bound::within`]), what the link carries decides
+//!   within it (`video::rate`).
 //! - **BT.601, limited range.** VP8 carries no colour description, and a browser's decoder assumes
 //!   exactly that, so any other matrix would shift every colour on the page.
 use std::time::Instant;
@@ -110,6 +112,9 @@ pub struct Bound {
     pub pixels: u64,
     /// The path's bit rate ceiling, in kbit/s.
     pub max_kbps: u32,
+    /// What the link to the page carries, in kbit/s, as the session estimates it; `None` where it
+    /// has no estimate, and then the picture's own budget is its bit rate.
+    pub link: Option<u32>,
 }
 
 impl Bound {
@@ -129,6 +134,15 @@ impl Bound {
             height,
             pixels,
             max_kbps,
+            link: None,
+        }
+    }
+
+    /// The same bound, on a link the session estimates carries `estimate` kbit/s.
+    pub fn within(self, estimate: Option<u32>) -> Self {
+        Self {
+            link: estimate,
+            ..self
         }
     }
 
