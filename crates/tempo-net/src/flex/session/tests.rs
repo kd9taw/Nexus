@@ -1093,3 +1093,11 @@ fn no_input_makes_the_session_originate_a_key() {
         }
     }
 }
+
+/// One connection serves several callers at once (the rigctld shim's client threads and the
+/// radio loop), so it must be shareable across threads. A compile-time check.
+#[test]
+fn a_connection_can_be_shared_across_threads() {
+    fn shared<T: Send + Sync>() {}
+    shared::<Connection>();
+}

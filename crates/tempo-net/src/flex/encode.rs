@@ -19,7 +19,7 @@
 //! ours. Nothing anywhere classifies a command by matching its text.
 //!
 //! Not representable here, so nothing in Nexus can send them: `slice set <n> tx=1` (moving the
-//! transmit slice), power and other `transmit set` writes, DAX streams and `transmit set dax`,
+//! transmit slice), every `transmit set` write but RF power, DAX streams and `transmit set dax`,
 //! `cw key`/`cw ptt`, `dvk`, slice `play`, amplifier and tuner relays, waveform commands,
 //! `interlock` writes, TNF commands, and any raw text. Later changes add what they need as typed
 //! variants.
@@ -36,6 +36,11 @@
 //! before rendering (a frequency must be positive and finite, a filter's low edge below its high,
 //! levels in range); free text is restricted to a safe token, so no command can carry a line
 //! break or a `|`. Recorded in the repo-root NOTICE (AetherSDR entry).
+//!
+//! Added for Nexus, with no upstream code taken: the slice's audio level, mute, noise blanker,
+//! noise reduction and automatic notch, and the transmitter's RF power. Their wire text is
+//! FlexRadio's public API documentation (`TCPIP-slice`, `TCPIP-transmit`), with the key names and
+//! the `0`/`1` flags the slice and transmit decoders read back.
 
 use std::fmt;
 
@@ -149,6 +154,27 @@ impl AgcMode {
     }
 }
 
+/// A slice's on/off noise function (D `TCPIP-slice`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceFunction {
+    /// `nb`: the noise blanker.
+    Nb,
+    /// `nr`: noise reduction.
+    Nr,
+    /// `anf`: the automatic notch filter.
+    Anf,
+}
+
+impl SliceFunction {
+    fn word(self) -> &'static str {
+        match self {
+            SliceFunction::Nb => "nb",
+            SliceFunction::Nr => "nr",
+            SliceFunction::Anf => "anf",
+        }
+    }
+}
+
 /// Text for the radio's CW keyer. Whitespace runs collapse to one space (a macro's line breaks
 /// key as a word gap); printable ASCII only, and no `"` or `|`, which would break the quoting or
 /// the frame. Spaces go on the wire as byte `0x7f` (A, `CwxModel.cpp`).
@@ -241,6 +267,22 @@ pub enum Command {
         slice: u8,
         level: i32,
     },
+    /// `slice set <n> audio_level=<0–100>`: the slice's audio gain.
+    SliceAudioLevel {
+        slice: u8,
+        level: i32,
+    },
+    /// `slice set <n> audio_mute=<0|1>`.
+    SliceAudioMute {
+        slice: u8,
+        mute: bool,
+    },
+    /// `slice set <n> nb=<0|1>`, `nr=` or `anf=`.
+    SliceDsp {
+        slice: u8,
+        function: SliceFunction,
+        on: bool,
+    },
     // ── Display ──
     /// `display panafall create x=<w> y=<h>`.
     PanafallCreate {
@@ -268,6 +310,12 @@ pub enum Command {
     // ── Transmit chain, not keying ──
     /// `atu bypass`.
     AtuBypass,
+    /// `transmit set rfpower=<0–100>`: the transmitter's RF power, percent. Not a keying command:
+    /// it sets how much power the next transmission makes, and Nexus's per-mode ceilings decide
+    /// the value before it gets here.
+    TransmitRfPower {
+        level: i32,
+    },
 }
 
 /// A command that can key the transmitter. Rendered only through [`render_start`].
@@ -423,7 +471,10 @@ impl Command {
             | Command::SliceFilter { slice, .. }
             | Command::SliceAgcMode { slice, .. }
             | Command::SliceAgcThreshold { slice, .. }
-            | Command::SliceAgcOffLevel { slice, .. } => Some(Target::Slice(*slice)),
+            | Command::SliceAgcOffLevel { slice, .. }
+            | Command::SliceAudioLevel { slice, .. }
+            | Command::SliceAudioMute { slice, .. }
+            | Command::SliceDsp { slice, .. } => Some(Target::Slice(*slice)),
             Command::SliceCreate { pan: Some(pan), .. }
             | Command::PanCenter { pan, .. }
             | Command::PanRemove { pan } => Some(Target::Pan(*pan)),
@@ -446,7 +497,8 @@ impl Command {
             | Command::MeterList
             | Command::SliceCreate { pan: None, .. }
             | Command::PanafallCreate { .. }
-            | Command::AtuBypass => None,
+            | Command::AtuBypass
+            | Command::TransmitRfPower { .. } => None,
         }
     }
 }
@@ -529,6 +581,17 @@ pub fn render(command: &Command) -> Result<Rendered, EncodeError> {
         Command::SliceAgcOffLevel { slice, level: l } => {
             format!("slice set {slice} agc_off_level={}", level(*l)?)
         }
+        Command::SliceAudioLevel { slice, level: l } => {
+            format!("slice set {slice} audio_level={}", level(*l)?)
+        }
+        Command::SliceAudioMute { slice, mute } => {
+            format!("slice set {slice} audio_mute={}", u8::from(*mute))
+        }
+        Command::SliceDsp {
+            slice,
+            function,
+            on,
+        } => format!("slice set {slice} {}={}", function.word(), u8::from(*on)),
         Command::PanafallCreate { x, y } => {
             if *x == 0 || *y == 0 {
                 return Err(EncodeError::Pixels);
@@ -544,6 +607,7 @@ pub fn render(command: &Command) -> Result<Rendered, EncodeError> {
         }
         Command::StreamRemove { stream } => format!("stream remove {}", id(*stream)),
         Command::AtuBypass => "atu bypass".to_string(),
+        Command::TransmitRfPower { level: l } => format!("transmit set rfpower={}", level(*l)?),
     };
     Ok(Rendered::ordinary(text, command.target()))
 }
@@ -652,6 +716,29 @@ pub(super) mod tests {
                 slice: 0,
                 level: 10,
             },
+            Command::SliceAudioLevel {
+                slice: 1,
+                level: 50,
+            },
+            Command::SliceAudioMute {
+                slice: 1,
+                mute: true,
+            },
+            Command::SliceDsp {
+                slice: 1,
+                function: SliceFunction::Nb,
+                on: true,
+            },
+            Command::SliceDsp {
+                slice: 1,
+                function: SliceFunction::Nr,
+                on: false,
+            },
+            Command::SliceDsp {
+                slice: 1,
+                function: SliceFunction::Anf,
+                on: true,
+            },
             Command::PanafallCreate { x: 1024, y: 480 },
             Command::PanCenter {
                 pan: 0x4000_0000,
@@ -665,6 +752,7 @@ pub(super) mod tests {
                 stream: 0x0400_000A,
             },
             Command::AtuBypass,
+            Command::TransmitRfPower { level: 40 },
         ];
         for c in &all {
             // Exhaustiveness: adding a variant breaks this match until the list covers it.
@@ -692,12 +780,16 @@ pub(super) mod tests {
                 | Command::SliceAgcMode { .. }
                 | Command::SliceAgcThreshold { .. }
                 | Command::SliceAgcOffLevel { .. }
+                | Command::SliceAudioLevel { .. }
+                | Command::SliceAudioMute { .. }
+                | Command::SliceDsp { .. }
                 | Command::PanafallCreate { .. }
                 | Command::PanCenter { .. }
                 | Command::PanRemove { .. }
                 | Command::WaterfallRemove { .. }
                 | Command::StreamRemove { .. }
-                | Command::AtuBypass => {}
+                | Command::AtuBypass
+                | Command::TransmitRfPower { .. } => {}
             }
         }
         all
@@ -814,6 +906,71 @@ pub(super) mod tests {
         );
     }
 
+    /// The slice's audio and noise setters and the transmitter's RF power: the keys the slice and
+    /// transmit decoders read (`audio_level`, `audio_mute`, `nb`, `nr`, `anf`, `rfpower`), flags
+    /// as `0`/`1` the way the radio reports them, each aimed at its slice or at no object.
+    #[test]
+    fn the_wire_text_of_the_slice_audio_noise_and_power_setters() {
+        let text = |c: Command| render(&c).unwrap().text().to_string();
+        assert_eq!(
+            text(Command::SliceAudioLevel {
+                slice: 2,
+                level: 75
+            }),
+            "slice set 2 audio_level=75"
+        );
+        assert_eq!(
+            text(Command::SliceAudioMute {
+                slice: 2,
+                mute: true
+            }),
+            "slice set 2 audio_mute=1"
+        );
+        assert_eq!(
+            text(Command::SliceAudioMute {
+                slice: 2,
+                mute: false
+            }),
+            "slice set 2 audio_mute=0"
+        );
+        let dsp = |function, on| {
+            text(Command::SliceDsp {
+                slice: 1,
+                function,
+                on,
+            })
+        };
+        assert_eq!(dsp(SliceFunction::Nb, true), "slice set 1 nb=1");
+        assert_eq!(dsp(SliceFunction::Nr, false), "slice set 1 nr=0");
+        assert_eq!(dsp(SliceFunction::Anf, true), "slice set 1 anf=1");
+        assert_eq!(
+            text(Command::TransmitRfPower { level: 0 }),
+            "transmit set rfpower=0"
+        );
+        assert_eq!(
+            text(Command::TransmitRfPower { level: 100 }),
+            "transmit set rfpower=100"
+        );
+        assert_eq!(
+            Command::SliceAudioLevel {
+                slice: 3,
+                level: 10
+            }
+            .target(),
+            Some(Target::Slice(3))
+        );
+        assert_eq!(
+            Command::SliceDsp {
+                slice: 4,
+                function: SliceFunction::Nr,
+                on: true
+            }
+            .target(),
+            Some(Target::Slice(4))
+        );
+        assert_eq!(Command::TransmitRfPower { level: 5 }.target(), None);
+    }
+
     #[test]
     fn values_are_validated_before_rendering() {
         for f in [0.0, -1.0, f64::NAN, f64::INFINITY, 2e11] {
@@ -841,6 +998,16 @@ pub(super) mod tests {
         assert!(render(&Command::ClientSetNetworkMtu(100)).is_err());
         assert!(render(&Command::ClientUdpPort(0)).is_err());
         assert!(render(&Command::PanafallCreate { x: 0, y: 10 }).is_err());
+        for level in [-1, 101] {
+            assert_eq!(
+                render(&Command::SliceAudioLevel { slice: 0, level }),
+                Err(EncodeError::Level(level))
+            );
+            assert_eq!(
+                render(&Command::TransmitRfPower { level }),
+                Err(EncodeError::Level(level))
+            );
+        }
     }
 
     #[test]

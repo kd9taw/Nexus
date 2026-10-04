@@ -1146,10 +1146,13 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// A [`Session`] running on its own thread over one connection.
+/// A [`Session`] running on its own thread over one connection. `Sync`, so one connection can
+/// serve several callers at once: each request waits on its own answer, and a stop never queues
+/// behind another caller's request.
 pub struct Connection {
     requests: Sender<Request>,
-    events: Receiver<Event>,
+    /// Behind a lock only so the connection is `Sync`; one reader drains it.
+    events: Mutex<Receiver<Event>>,
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
 }
@@ -1188,7 +1191,7 @@ impl Connection {
         };
         Ok(Connection {
             requests,
-            events,
+            events: Mutex::new(events),
             shared,
             thread: Some(thread),
         })
@@ -1227,7 +1230,7 @@ impl Connection {
 
     /// The next event, waiting up to `timeout`.
     pub fn next_event(&self, timeout: Duration) -> Option<Event> {
-        self.events.recv_timeout(timeout).ok()
+        lock(&self.events).recv_timeout(timeout).ok()
     }
 
     /// The session's state as of its last step. Each step's state is published before its answers
