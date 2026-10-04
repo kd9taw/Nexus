@@ -90,6 +90,9 @@ const MIGRATED = [
   // Remote over this network's card (2026-10-04) — born migrated: the switch, the status line, the
   // pairing window, the paired computers and the reset.
   'remote-native/LanStation.tsx',
+  // Its other end's sentences (2026-10-04) — born migrated: a station not reached, or not found by
+  // name, and a typed address that is not one.
+  'remote-native/lanReach.ts',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',

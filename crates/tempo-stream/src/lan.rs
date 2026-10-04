@@ -46,10 +46,24 @@
 //! hear? [`listenable`] says exactly which addresses, private IPv4 only (the operator's ruling of
 //! 2026-10-04, "any private network"); [`Network`] is the one it listens on, with its subnet, and
 //! nothing from outside that subnet is heard or tried, on the listener or on a stream's socket;
-//! [`network`] finds it on this computer.
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+//! [`look`] finds it on this computer.
+//!
+//! Not on every adapter, though: [`left_out`] drops tunnels and virtual adapters before anything
+//! is chosen. A VPN that hands out a private address is another network, not the shack's, and is
+//! where the route to the internet leaves while a full-tunnel VPN is up, so without this the
+//! listener would follow it there; nobody on the shack's network can reach a virtual switch's
+//! address (WSL's, Hyper-V's, VirtualBox's). [`dnssd`] lets the other computer find the shack by
+//! name, and [`firewall`] reads what Windows' firewall will let in on the network it listens on.
+pub mod dnssd;
+pub mod firewall;
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use crate::video::picture::Path;
+
+/// The TCP port the shack listens on, and the UDP port of its stream, unless the operator sets
+/// another: beside Field Day sync's 42073 and 42074.
+pub const PORT: u16 = 42075;
 
 /// Is this an address that belongs to the shack's own network rather than the internet?
 pub fn private(ip: IpAddr) -> bool {
@@ -259,8 +273,9 @@ pub enum NoNetwork {
 /// Where Remote over this network listens: `chosen`, the operator's pick, when it is a private
 /// address this computer has; with none, the address the route to the internet leaves by
 /// (`route`), when that is a private address this computer has; else this computer's one private
-/// address. `addresses` are this computer's IPv4 addresses on adapters that are up, each with the
-/// length of its subnet's prefix.
+/// address. `addresses` are this computer's IPv4 addresses on adapters that are up and not left out
+/// ([`choices`]), each with the length of its subnet's prefix, so a pick or a route on a VPN or a
+/// virtual adapter is not one of them.
 pub fn choose(
     chosen: Option<Ipv4Addr>,
     route: Option<Ipv4Addr>,
@@ -287,16 +302,176 @@ pub fn choose(
     }
 }
 
-/// [`choose`], from this computer's own adapters and route.
-pub fn network(chosen: Option<Ipv4Addr>) -> Result<Network, NoNetwork> {
+/// One of this computer's adapters that is up, as the listener's choice reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Adapter {
+    /// The name Windows shows for it: "Wi-Fi", "Ethernet", "vEthernet (WSL)".
+    pub name: String,
+    /// Its interface type, as IANA numbers them (`ifType`): 6 Ethernet, 71 Wi-Fi, 23 PPP, 53 a
+    /// proprietary virtual interface, 131 a tunnel.
+    pub kind: u32,
+    /// Windows calls it hardware (`HardwareInterface`): a card, a chip or a dongle, not an adapter a
+    /// driver or a virtual switch made.
+    pub hardware: bool,
+    /// It has a default gateway.
+    pub gateway: bool,
+    /// Its interface index.
+    pub index: u32,
+    /// Its GUID as Windows writes it, `{…}`.
+    pub id: String,
+    /// Its IPv4 addresses, each with the length of its subnet's prefix.
+    pub addresses: Vec<(Ipv4Addr, u8)>,
+}
+
+/// Why an adapter is not one to listen on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeftOut {
+    /// A VPN or another tunnel, by its interface type: PPP (Windows' own VPN connections), a
+    /// tunnel, or a proprietary virtual interface (the Wintun adapter of WireGuard, Tailscale and
+    /// many VPN apps).
+    Tunnel,
+    /// Not hardware: a Hyper-V virtual switch's adapter (WSL's, the Default Switch's, an internal
+    /// switch's), VirtualBox's or VMware's host adapter, Docker's, a TAP adapter (OpenVPN's and many
+    /// VPN clients'), a mobile hotspot's, Bluetooth's.
+    Virtual,
+}
+
+const IF_PPP: u32 = 23;
+const IF_PROP_VIRTUAL: u32 = 53;
+const IF_TUNNEL: u32 = 131;
+
+/// Is `adapter` left out of the listener's choice, and why? Tunnels by their interface type, then
+/// everything Windows does not call hardware. The one virtual adapter kept is Hyper-V's for an
+/// external switch: the computer's own way onto the physical network when its card is shared with
+/// virtual machines. Hyper-V names it "vEthernet (…)", and it alone has the network's gateway;
+/// WSL's, the Default Switch's and an internal switch's have none.
+pub fn left_out(adapter: &Adapter) -> Option<LeftOut> {
+    if matches!(adapter.kind, IF_PPP | IF_PROP_VIRTUAL | IF_TUNNEL) {
+        return Some(LeftOut::Tunnel);
+    }
+    if adapter.hardware || (adapter.gateway && adapter.name.starts_with("vEthernet (")) {
+        return None;
+    }
+    Some(LeftOut::Virtual)
+}
+
+/// A private IPv4 address the listener may use, on an adapter that is not left out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub network: Network,
+    /// Its adapter's name, which the shack shows beside the address.
+    pub name: String,
+    /// Its adapter's interface index, the one Windows' name service advertises on.
+    pub index: u32,
+    /// Its adapter's GUID, by which Windows' network list names the network on it.
+    pub id: String,
+}
+
+/// Every address the listener may use: each private IPv4 address ([`listenable`]) of each adapter
+/// that is not left out ([`left_out`]), in the order the adapters come.
+pub fn choices(adapters: &[Adapter]) -> Vec<Choice> {
+    adapters
+        .iter()
+        .filter(|adapter| left_out(adapter).is_none())
+        .flat_map(|adapter| {
+            adapter.addresses.iter().filter_map(|&(address, prefix)| {
+                Some(Choice {
+                    network: Network::new(address, prefix)?,
+                    name: adapter.name.clone(),
+                    index: adapter.index,
+                    id: adapter.id.clone(),
+                })
+            })
+        })
+        .collect()
+}
+
+/// This computer's networks, as the listener finds them each time it looks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    /// Every address it may use ([`choices`]), for the operator to pick from.
+    pub choices: Vec<Choice>,
+    /// Where it listens, chosen among those ([`choose`]), or why nowhere.
+    pub network: Result<Network, NoNetwork>,
+}
+
+impl Look {
+    /// The choice it listens on, when it listens.
+    pub fn chosen(&self) -> Option<&Choice> {
+        let network = self.network.as_ref().ok()?;
+        self.choices
+            .iter()
+            .find(|choice| choice.network == *network)
+    }
+}
+
+/// [`choose`] among this computer's own [`choices`], with its route.
+pub fn look(chosen: Option<Ipv4Addr>) -> Look {
     #[cfg(windows)]
     {
-        choose(chosen, adapters::route(), &adapters::up())
+        let choices = choices(&adapters::up());
+        let addresses: Vec<(Ipv4Addr, u8)> = choices
+            .iter()
+            .map(|choice| (choice.network.address(), choice.network.prefix()))
+            .collect();
+        let network = choose(chosen, adapters::route(), &addresses);
+        Look { choices, network }
     }
     #[cfg(not(windows))]
     {
         let _ = chosen;
-        Err(NoNetwork::Unavailable)
+        Look {
+            choices: Vec::new(),
+            network: Err(NoNetwork::Unavailable),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The other computer's side: the address it was given, and why it could not reach it.
+// ---------------------------------------------------------------------------------------------
+
+/// The address an operator typed for a shack, the one the shack shows: a private IPv4 address
+/// ([`listenable`]), with a port or with [`PORT`]. `None` for anything else: a name, IPv6, a
+/// public address, a system port. Typing it always works, with or without finding by name.
+pub fn typed(text: &str) -> Option<SocketAddrV4> {
+    let text = text.trim();
+    let address = match text.parse::<SocketAddrV4>() {
+        Ok(address) => address,
+        Err(_) => SocketAddrV4::new(text.parse().ok()?, PORT),
+    };
+    (listenable(*address.ip()) && address.port() >= 1024).then_some(address)
+}
+
+/// Is `ip` on one of this computer's own networks ([`choices`])? Taken to be where that cannot be
+/// read (off Windows), so nothing is blamed on the network that the network did not do.
+pub fn here(ip: Ipv4Addr) -> bool {
+    #[cfg(windows)]
+    {
+        choices(&adapters::up())
+            .iter()
+            .any(|choice| choice.network.contains(ip.into()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ip;
+        true
+    }
+}
+
+/// Why this computer could not reach a shack, as a code the window puts in words: `otherNetwork`
+/// when the address is on none of this computer's networks (`here` false); `refused` when the
+/// shack's computer answered that nothing listens on the port, which Windows does only with its
+/// firewall off; `noAnswer` for the rest. A firewall that drops what it does not allow, a port
+/// nothing listens on behind that firewall, a network that keeps its devices apart and a shack
+/// that is asleep all look the same from here, and the words say so.
+pub fn unreached(error: &std::io::Error, here: bool) -> &'static str {
+    if !here {
+        return "otherNetwork";
+    }
+    match error.kind() {
+        std::io::ErrorKind::ConnectionRefused => "refused",
+        _ => "noAnswer",
     }
 }
 
@@ -304,13 +479,15 @@ pub fn network(chosen: Option<Ipv4Addr>) -> Result<Network, NoNetwork> {
 mod adapters {
     use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 
-    use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
+    use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS, NO_ERROR};
     use windows::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
-        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+        GetAdaptersAddresses, GetIfEntry2, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
+        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH, MIB_IF_ROW2,
     };
-    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows::Win32::NetworkManagement::Ndis::{IfOperStatusUp, NET_LUID_LH};
     use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+
+    use super::Adapter;
 
     /// The address the route to the internet leaves by: a UDP socket "connected" to a documentation
     /// address (RFC 5737) learns the interface it would leave by. Nothing is sent, and no name is
@@ -324,14 +501,17 @@ mod adapters {
         }
     }
 
-    /// This computer's IPv4 addresses on adapters that are up, each with its prefix length.
-    pub fn up() -> Vec<(Ipv4Addr, u8)> {
+    /// This computer's adapters that are up, each with its IPv4 addresses and their prefix lengths.
+    pub fn up() -> Vec<Adapter> {
         let mut size: u32 = 16 * 1024;
         for _ in 0..4 {
             // In u64s: the records the call writes there need 8-byte alignment.
             let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
             let first = buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
-            let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+            let flags = GAA_FLAG_SKIP_ANYCAST
+                | GAA_FLAG_SKIP_MULTICAST
+                | GAA_FLAG_SKIP_DNS_SERVER
+                | GAA_FLAG_INCLUDE_GATEWAYS;
             // SAFETY: `first` points at `size` writable bytes, aligned for the records; the call
             // writes no more than `size` and says so when it needs more.
             let result = unsafe {
@@ -349,6 +529,7 @@ mod adapters {
             // null or pointing at another record there, and `buffer` outlives this walk.
             while let Some(record) = unsafe { adapter.as_ref() } {
                 if record.OperStatus == IfOperStatusUp {
+                    let mut addresses = Vec::new();
                     let mut unicast = record.FirstUnicastAddress.cast_const();
                     // SAFETY: as above, the unicast list lives inside `buffer`.
                     while let Some(entry) = unsafe { unicast.as_ref() } {
@@ -359,7 +540,7 @@ mod adapters {
                             if address.sa_family == AF_INET {
                                 let ip =
                                     unsafe { (*socket.cast::<SOCKADDR_IN>()).sin_addr.S_un.S_addr };
-                                found.push((
+                                addresses.push((
                                     Ipv4Addr::from(u32::from_be(ip)),
                                     entry.OnLinkPrefixLength,
                                 ));
@@ -367,6 +548,23 @@ mod adapters {
                         }
                         unicast = entry.Next.cast_const();
                     }
+                    found.push(Adapter {
+                        // SAFETY: the call wrote both names as null-terminated strings inside
+                        // `buffer` (or left them null, which reads as empty).
+                        name: unsafe { wide(record.FriendlyName) },
+                        kind: record.IfType,
+                        hardware: hardware(record.Luid),
+                        gateway: !record.FirstGatewayAddress.is_null(),
+                        // SAFETY: the union's two views are the same bytes; the index is a u32.
+                        index: unsafe { record.Anonymous1.Anonymous.IfIndex },
+                        id: if record.AdapterName.is_null() {
+                            String::new()
+                        } else {
+                            // SAFETY: as for the names above, an ANSI string.
+                            unsafe { record.AdapterName.to_string() }.unwrap_or_default()
+                        },
+                        addresses,
+                    });
                 }
                 adapter = record.Next.cast_const();
             }
@@ -375,22 +573,69 @@ mod adapters {
         Vec::new()
     }
 
+    /// Windows' own word on whether the adapter is hardware (`HardwareInterface`, the first of
+    /// `InterfaceAndOperStatusFlags`' bits). An adapter whose row cannot be read is not.
+    fn hardware(luid: NET_LUID_LH) -> bool {
+        let mut row = MIB_IF_ROW2 {
+            InterfaceLuid: luid,
+            ..Default::default()
+        };
+        // SAFETY: `row` is a whole MIB_IF_ROW2 with the LUID the call reads set; it fills the rest.
+        let read = unsafe { GetIfEntry2(&mut row) };
+        read == NO_ERROR && row.InterfaceAndOperStatusFlags._bitfield & 1 != 0
+    }
+
+    /// A UTF-16 string the call wrote, or empty for none.
+    ///
+    /// # Safety
+    /// `text` is null or points at a null-terminated UTF-16 string.
+    unsafe fn wide(text: windows::core::PWSTR) -> String {
+        if text.is_null() {
+            return String::new();
+        }
+        // SAFETY: as the caller promises.
+        unsafe { text.to_string() }.unwrap_or_default()
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
 
-        /// On a real Windows network stack: this computer's own route and addresses read back, each
-        /// a plausible prefix, and the route's address among them.
+        /// On a real Windows network stack: this computer's own route and adapters read back, each
+        /// address with a plausible prefix and the route's address among them; loopback is not
+        /// hardware, and no choice is on a tunnel or a virtual adapter. Each adapter and what
+        /// became of it is printed (`--nocapture`), to hold beside `Get-NetAdapter`'s
+        /// `HardwareInterface` column.
         #[test]
-        fn this_computers_addresses_and_route_are_read() {
+        fn this_computers_adapters_and_route_are_read() {
             let up = up();
-            assert!(!up.is_empty(), "no IPv4 address on an adapter that is up");
-            assert!(up.iter().all(|&(_, prefix)| prefix <= 32), "{up:?}");
+            let all: Vec<(Ipv4Addr, u8)> = up.iter().flat_map(|a| a.addresses.clone()).collect();
+            assert!(!all.is_empty(), "no IPv4 address on an adapter that is up");
+            assert!(all.iter().all(|&(_, prefix)| prefix <= 32), "{up:?}");
             if let Some(route) = route() {
                 assert!(
-                    up.iter().any(|&(ip, _)| ip == route),
+                    all.iter().any(|&(ip, _)| ip == route),
                     "route {route} not among {up:?}"
                 );
+            }
+            for adapter in &up {
+                println!(
+                    "{:?} type {} hardware {} gateway {} index {} {:?}: {:?}",
+                    adapter.name,
+                    adapter.kind,
+                    adapter.hardware,
+                    adapter.gateway,
+                    adapter.index,
+                    adapter.addresses,
+                    super::super::left_out(adapter)
+                );
+                if adapter.addresses.iter().any(|(ip, _)| ip.is_loopback()) {
+                    assert!(!adapter.hardware, "loopback read as hardware: {adapter:?}");
+                }
+            }
+            for choice in super::super::choices(&up) {
+                let on = up.iter().find(|a| a.index == choice.index).unwrap();
+                assert_eq!(super::super::left_out(on), None, "{choice:?}");
             }
         }
     }
@@ -763,5 +1008,229 @@ mod tests {
         // A LAN with no internet at all: no route.
         assert_eq!(choose(None, None, &[wifi]), at(wifi));
         assert_eq!(choose(None, None, &[]), Err(NoNetwork::Choose));
+    }
+
+    // ----- The adapter list -----
+
+    /// An adapter as Windows reports it, for the tables below.
+    fn adapter(name: &str, kind: u32, hardware: bool, gateway: bool, at: &str) -> Adapter {
+        let (address, prefix) = at.split_once('/').unwrap();
+        Adapter {
+            name: name.into(),
+            kind,
+            hardware,
+            gateway,
+            index: 7,
+            id: format!("{{{name}}}"),
+            addresses: vec![(v4(address), prefix.parse().unwrap())],
+        }
+    }
+
+    const ETHERNET: u32 = 6;
+    const WIFI: u32 = 71;
+
+    /// ★ Tunnels and virtual adapters are left out, each for its reason, and the networks a card
+    /// is on are kept: as this box's own adapters read on Windows (Wi-Fi, the WSL switch, Tailscale)
+    /// and the kinds it does not have. CONTROL: the same virtual adapters with Windows calling them
+    /// hardware would be kept, so it is the hardware bit and the type that leave them out, not the
+    /// name.
+    #[test]
+    fn tunnels_and_virtual_adapters_are_left_out() {
+        let kept = [
+            adapter("Wi-Fi", WIFI, true, true, "192.168.1.20/24"),
+            adapter("Ethernet", ETHERNET, true, true, "10.0.0.5/24"),
+            // A USB Ethernet dongle on a LAN with no router: hardware, no gateway.
+            adapter("Ethernet 2", ETHERNET, true, false, "192.168.50.2/24"),
+            // Hyper-V's adapter for an external switch: the computer's own way onto the network.
+            adapter(
+                "vEthernet (External)",
+                ETHERNET,
+                false,
+                true,
+                "192.168.1.21/24",
+            ),
+        ];
+        for adapter in &kept {
+            assert_eq!(left_out(adapter), None, "{adapter:?}");
+        }
+        let tunnels = [
+            // Wintun (WireGuard, Tailscale, Cloudflare WARP, NordLynx), and OpenVPN's offload.
+            adapter("WireGuard", IF_PROP_VIRTUAL, false, true, "10.66.0.2/32"),
+            adapter("Tailscale", IF_PROP_VIRTUAL, false, false, "100.85.1.2/32"),
+            // Windows' own VPN connections (IKEv2, SSTP, L2TP, PPTP) are PPP adapters.
+            adapter("Office VPN", IF_PPP, false, true, "172.20.0.9/32"),
+            adapter("A tunnel", IF_TUNNEL, false, false, "10.9.9.9/32"),
+            // A tunnel that called itself hardware is still a tunnel.
+            adapter("Odd tunnel", IF_PROP_VIRTUAL, true, true, "10.1.1.1/24"),
+        ];
+        for adapter in &tunnels {
+            assert_eq!(left_out(adapter), Some(LeftOut::Tunnel), "{adapter:?}");
+        }
+        let virtuals = [
+            adapter(
+                "vEthernet (WSL (Hyper-V firewall))",
+                ETHERNET,
+                false,
+                false,
+                "172.25.48.1/20",
+            ),
+            adapter(
+                "vEthernet (Default Switch)",
+                ETHERNET,
+                false,
+                false,
+                "172.31.96.1/20",
+            ),
+            adapter(
+                "VirtualBox Host-Only Network",
+                ETHERNET,
+                false,
+                false,
+                "192.168.56.1/24",
+            ),
+            adapter(
+                "VMware Network Adapter VMnet8",
+                ETHERNET,
+                false,
+                false,
+                "192.168.13.1/24",
+            ),
+            // OpenVPN's TAP adapter carrying a full tunnel: Ethernet by type, with a gateway, and
+            // still not hardware.
+            adapter("OpenVPN TAP-Windows6", ETHERNET, false, true, "10.8.0.6/24"),
+            adapter(
+                "Local Area Connection* 10",
+                WIFI,
+                false,
+                false,
+                "192.168.137.1/24",
+            ),
+        ];
+        for adapter in &virtuals {
+            assert_eq!(left_out(adapter), Some(LeftOut::Virtual), "{adapter:?}");
+            let hardware = Adapter {
+                hardware: true,
+                ..adapter.clone()
+            };
+            assert_eq!(left_out(&hardware), None, "control: {hardware:?}");
+        }
+    }
+
+    /// ★ The choices are the private addresses of the adapters kept, with the adapter's name, index
+    /// and GUID; the route's address on a full-tunnel VPN is not among them, so the listener goes
+    /// to the shack's own network, and with Wi-Fi and Ethernet both up and no route through either,
+    /// the operator picks. CONTROL: the same adapters unfiltered would have put it on the VPN.
+    #[test]
+    fn the_choice_leaves_the_vpn_and_the_virtual_switch_out() {
+        let wifi = adapter("Wi-Fi", WIFI, true, true, "192.168.1.20/24");
+        let wsl = adapter("vEthernet (WSL)", ETHERNET, false, false, "172.25.48.1/20");
+        let vpn = adapter("NordLynx", IF_PROP_VIRTUAL, false, true, "10.5.0.2/16");
+        let found = choices(&[wifi.clone(), wsl.clone(), vpn.clone()]);
+        assert_eq!(
+            found,
+            vec![Choice {
+                network: Network::new(v4("192.168.1.20"), 24).unwrap(),
+                name: "Wi-Fi".into(),
+                index: 7,
+                id: "{Wi-Fi}".into(),
+            }]
+        );
+        let pairs = |list: &[Choice]| -> Vec<(Ipv4Addr, u8)> {
+            list.iter()
+                .map(|c| (c.network.address(), c.network.prefix()))
+                .collect()
+        };
+        // The full-tunnel VPN carries the route: the listener stays on Wi-Fi.
+        assert_eq!(
+            choose(None, Some(v4("10.5.0.2")), &pairs(&found)),
+            Ok(Network::new(v4("192.168.1.20"), 24).unwrap())
+        );
+        // CONTROL: unfiltered, the same route would have put it on the VPN.
+        let unfiltered: Vec<(Ipv4Addr, u8)> = [&wifi, &wsl, &vpn]
+            .iter()
+            .flat_map(|a| a.addresses.clone())
+            .collect();
+        assert_eq!(
+            choose(None, Some(v4("10.5.0.2")), &unfiltered),
+            Ok(Network::new(v4("10.5.0.2"), 16).unwrap())
+        );
+        // A pick on the VPN is not this computer's to listen on.
+        assert_eq!(
+            choose(Some(v4("10.5.0.2")), None, &pairs(&found)),
+            Err(NoNetwork::Gone)
+        );
+        // Wi-Fi and Ethernet both up, the route through neither: the operator picks.
+        let ethernet = adapter("Ethernet", ETHERNET, true, false, "10.0.0.5/24");
+        let both = choices(&[wifi, ethernet, vpn]);
+        assert_eq!(both.len(), 2);
+        assert_eq!(
+            choose(None, Some(v4("10.5.0.2")), &pairs(&both)),
+            Err(NoNetwork::Choose)
+        );
+        let look = Look {
+            network: choose(Some(v4("10.0.0.5")), None, &pairs(&both)),
+            choices: both,
+        };
+        assert_eq!(look.chosen().map(|c| c.name.as_str()), Some("Ethernet"));
+        // A public address on a kept adapter is no choice either.
+        let public = adapter("Ethernet 3", ETHERNET, true, true, "203.0.113.5/24");
+        assert!(choices(&[public]).is_empty());
+    }
+
+    // ----- The other computer's side -----
+
+    /// The typed address: the one the shack shows, with or without its port, spaces trimmed; with
+    /// none, the default port. Refused: a name, IPv6, a public or loopback address, a system port,
+    /// garbage. CONTROL: each refusal's private-address twin is taken.
+    #[test]
+    fn a_typed_address_is_a_private_ipv4_address_and_a_port() {
+        for (text, want) in [
+            ("192.168.1.20", "192.168.1.20:42075"),
+            ("  192.168.1.20:42075 ", "192.168.1.20:42075"),
+            ("10.0.0.5:50000", "10.0.0.5:50000"),
+            ("172.16.0.1:1024", "172.16.0.1:1024"),
+        ] {
+            assert_eq!(typed(text), Some(want.parse().unwrap()), "{text}");
+        }
+        for text in [
+            "",
+            "nexus.local",
+            "nexus-3f2a9b1c.local:42075",
+            "fe80::1",
+            "[fd00::1]:42075",
+            "203.0.113.5",
+            "127.0.0.1:42075",
+            "100.85.1.2",
+            "192.168.1.20:80",
+            "192.168.1.20:",
+            "192.168.1.20:99999",
+            "192.168.1",
+        ] {
+            assert_eq!(typed(text), None, "{text}");
+        }
+    }
+
+    /// Why a computer could not reach the shack, from the error its connection got: another
+    /// network first, whatever the error; then a refusal; everything else is no answer, which the
+    /// words do not pretend to explain.
+    #[test]
+    fn an_unreached_shack_is_another_network_a_refusal_or_no_answer() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            unreached(&Error::from(ErrorKind::ConnectionRefused), false),
+            "otherNetwork"
+        );
+        assert_eq!(
+            unreached(&Error::from(ErrorKind::ConnectionRefused), true),
+            "refused"
+        );
+        for kind in [
+            ErrorKind::TimedOut,
+            ErrorKind::HostUnreachable,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::ConnectionReset,
+        ] {
+            assert_eq!(unreached(&Error::from(kind), true), "noAnswer", "{kind:?}");
+        }
     }
 }
