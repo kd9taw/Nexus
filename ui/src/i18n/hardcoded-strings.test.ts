@@ -84,6 +84,9 @@ const MIGRATED = [
   'remote-web/BetaNote.tsx',
   'remote-web/browser-label.ts',
   'remote-native/RemoteApprovalPrompt.tsx',
+  // The Remote stations window's entry in Settings (2026-10-04) — born migrated: its label, button,
+  // hint and failure line.
+  'remote-native/RemoteStationsWindow.tsx',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',

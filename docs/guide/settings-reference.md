@@ -165,6 +165,17 @@ Each browser has a key too, which you compare when you approve it. Taking contro
 only from the key you approved; **Stop TX** never needs it. A browser approved before browser
 keys existed is asked for again, here, before it can take control.
 
+**Remote stations…** is the other end of the stream. On a Windows computer you operate from,
+it opens the Remote page in a Nexus window of its own, for a station you have paired. You sign
+in there, and approve the window at the station once, as you would a new browser. **F11** puts
+the window in full screen and takes it out again. It is the window's own full screen, not the
+page's, so **Esc** over the picture still stops transmitting. The browser's own shortcuts are off
+in this window: F5, Ctrl+R, Ctrl+P, Ctrl+F and the like reach the page, and over the picture
+they go on to the station like any other key. Links to other sites open in your browser. The
+window reopens where you left it, fitted to the screens attached at the time, and a window
+closed in full screen reopens at its last size. The page in this window can reach nothing in
+Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
+
 ---
 
 ## Radio

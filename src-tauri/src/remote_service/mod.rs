@@ -27,7 +27,10 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch};
-use transport::{credential, empty, identifier, station_path, Client, REMOTE_ORIGIN};
+/// The one Remote origin: the service this station talks to, and the page the Remote stations
+/// window shows (`remote_window`).
+pub(crate) use transport::REMOTE_ORIGIN;
+use transport::{credential, empty, identifier, station_path, Client};
 use vault::{Binding, SystemVault, Vault};
 
 #[derive(Clone, Serialize, Default)]

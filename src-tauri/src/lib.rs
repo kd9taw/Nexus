@@ -57,6 +57,9 @@ mod profile_sync;
 mod quit;
 mod remote_monitor;
 mod remote_service;
+/// The Remote stations window: the hosted Remote page in a Nexus window of its own, on the PC an
+/// operator works from (Windows only). The page in it reaches no command — see the module header.
+mod remote_window;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
@@ -29453,6 +29456,7 @@ fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
             // itself — safe to sweep the whole map.
             capture_bandmap_window(&w);
             window_state::capture_panel(&w);
+            window_state::capture_remote(&w);
         }
     }
 }
@@ -32339,6 +32343,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             dock_bandmap_window,
             window_state::get_window_behind,
             window_state::set_window_behind,
+            remote_window::open_remote_stations_window,
             set_area,
             qso_resend,
             qso_freetext,

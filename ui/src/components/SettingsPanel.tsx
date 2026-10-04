@@ -6,6 +6,7 @@ import { useReceiverGain } from '../remote-web/useReceiverGain'
 import { useRemotePreferences } from '../remote-web/useRemotePreferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
+import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
@@ -4485,6 +4486,18 @@ export function SettingsPanel({
               </div>
             )}
             {remote ? <p className="settings-note">{t('remote.configurationLocal')}</p> : <RemoteStation />}
+            {/* The other end of the stream (the operator, 2026-10-04, "Stream client window"): this PC
+                opens the Remote page in a Nexus window of its own. Last in the card, after this
+                station's own Remote, which the operator ordered first. Windows only, where the
+                webview is the Chromium the page is tested on; elsewhere the note says to use a
+                browser. Never on the Remote page. */}
+            {!remote && IS_WINDOWS && <RemoteStationsWindow />}
+            {!remote && !IS_WINDOWS && (
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.remoteStations.label')}</span>
+                <span className="settings-hint">{t('settings.remoteStations.unavailable')}</span>
+              </div>
+            )}
           </fieldset>
           )}
 

@@ -227,6 +227,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Home Screen on an iPhone or iPad, or install it from Chrome or Edge. Opened from there it has no
   browser bars, which on an iPhone is the only way to a full-screen stream. It needs the Remote
   page's update.
+- **Remote stations window (Windows).** On the computer you operate from, Settings ▸ Station ▸
+  Remote access ▸ **Remote stations…** opens the Remote page in a Nexus window of its own instead
+  of a browser tab. **F11** puts the window in full screen and back; it is the window's own full
+  screen, so **Esc** over the picture still stops transmitting. The browser's own shortcuts (reload,
+  print, find and the like) are off in this window, so those keys reach the page and the shack.
+  Links to other sites open in your browser, and the window reopens where you left it, fitted to
+  the screens attached. You sign in there and approve the window at the station once, like a new
+  browser. The page in it can reach nothing in Nexus, exactly as in a browser. Linux and macOS
+  keep using Remote in a browser for now.
 
 ## [1.16.0] — 2026-10-03
 
