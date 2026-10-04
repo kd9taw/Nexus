@@ -146,6 +146,16 @@ describe('clamped on load', () => {
     expect(loadScaleSettings('psk').gain).toBe(0)
   })
 
+  it('starts the RF scope pane from the defaults: the audio waterfall’s old G and Z are another axis', () => {
+    window.localStorage.setItem('nexus.phonescope.win', 'sharp')
+    window.localStorage.setItem('nexus.waterfall.gain', '0.4')
+    window.localStorage.setItem('nexus.waterfall.zero', '0.3')
+    expect(loadScaleSettings('rfpan')).toEqual(scaleDefaults('rfpan'))
+    // Control: the same stored keys DO reach a digital waterfall's record and Phone's.
+    expect(loadScaleSettings('operate').gain).toBe(0.4)
+    expect(loadScaleSettings('phone').window).toBe('sharp')
+  })
+
   it('stops reading the old keys once the record has the field, and never writes them', () => {
     window.localStorage.setItem('nexus.phonescope.win', 'sharp')
     window.localStorage.setItem('nexus.waterfall.zero', '0.5')

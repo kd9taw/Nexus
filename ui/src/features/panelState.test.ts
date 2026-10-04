@@ -24,6 +24,7 @@ import {
   CW_PANELS,
   RTTY_PANELS,
   type PanelLayout,
+  type PanelVocabulary,
   type OperatePanelId,
 } from './panelState'
 import { scopedKey, windowInstance } from './windowScope'
@@ -486,12 +487,12 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   })
 
   it('lists the expected content panels per cockpit', () => {
-    expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'txcompose', 'gallery'])
+    expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
       'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
       'spots', 'needed',
     ])
-    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'stream'])
+    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
       'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
       'spots', 'needed',
@@ -611,16 +612,20 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.needed).toBeUndefined()
   })
 
-  it('only Phone and CW ship panes hidden — their Spots and Needed — and each hidden id is its own', () => {
+  it('Phone and CW ship their Spots and Needed hidden, the five digital cockpits their RF scope pane — and each hidden id is its own', () => {
     // ⚠️ `features/connectPresets.ts` reads Connect's record RAW (`state[s] === 'removed'`) and
     // writes it the same way, i.e. it takes absent to mean docked. That stays true only while
     // Connect lists nothing here: before a vocabulary gains a hidden pane, route every raw
     // reader of its record through `panelStateIn`. (CW's record has no raw reader: CwCockpit and
-    // panelHost read it through `stateOf`.)
+    // panelHost read it through `stateOf`; nor do the five digital cockpits' — App and
+    // DetachedPanel build theirs with usePanelLayout, checked 2026-10-04.)
     const shipsHidden = ALL_PANEL_VOCABULARIES.filter((v) => (v.defaultRemoved ?? []).length > 0)
-    expect(shipsHidden.map((v) => v.view)).toEqual(['phone', 'cw'])
+    expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
+    for (const v of [OPERATE_PANELS, SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS, panelState.JS8_PANELS]) {
+      expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope'])
+    }
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
@@ -636,6 +641,50 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     // A stored value always wins over the default, in both directions.
     expect(panelStateIn(PHONE_PANELS, { ...empty, state: { spots: 'docked' } }, 'spots')).toBe('docked')
     expect(panelStateIn(PHONE_PANELS, { ...empty, state: { receiver: 'removed' } }, 'receiver')).toBe('removed')
+  })
+})
+
+describe('the RF scope pane ships hidden in the five digital cockpits (operator, 2026-10-03)', () => {
+  // The pick, verbatim: "Yes, opt-in pane (Recommended)" — an RF pan pane, off by default, in
+  // FT/JS8/RTTY/PSK/SSTV, with the audio waterfall staying the default. Nobody's screen changes on
+  // the update that adds it: a fresh record and one stored by an older build both read it hidden,
+  // every other pane keeps its default, a tick docks it, and Reset hides it again.
+  const DIGITAL: readonly PanelVocabulary<string>[] = [OPERATE_PANELS, panelState.JS8_PANELS, RTTY_PANELS, panelState.PSK_PANELS, SSTV_PANELS]
+
+  it('a FRESH record shows it hidden, and every other pane docked, in all five', () => {
+    for (const v of DIGITAL) {
+      const { result, unmount } = renderHook(() => usePanelLayout(v))
+      expect(result.current.stateOf('rfScope'), `${v.view}: it ships visible`).toBe('removed')
+      for (const id of v.panelIds) {
+        if (id === 'rfScope') continue
+        expect(result.current.stateOf(id), `${v.view}: "${id}" changed its default`).toBe('docked')
+      }
+      unmount()
+    }
+  })
+
+  it('a record stored before it existed reads it hidden, and keeps every choice in it', () => {
+    savePanelLayout(panelStorageKey('rtty'), { v: 1, state: { stream: 'removed' }, share: { stream: 1.2 } } as PanelLayout<string>)
+    const { result } = renderHook(() => usePanelLayout(RTTY_PANELS))
+    expect(result.current.stateOf('rfScope')).toBe('removed')
+    expect(result.current.stateOf('stream')).toBe('removed')
+    expect(result.current.stateOf('scope')).toBe('docked')
+    expect(result.current.shareOf('stream')).toBe(1.2)
+  })
+
+  it('a tick docks it and is stored; Reset hides it again', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setPanelState('rfScope', 'docked'))
+    expect(result.current.stateOf('rfScope')).toBe('docked')
+    expect(JSON.parse(localStorage.getItem(panelStorageKey('operate'))!).state.rfScope).toBe('docked')
+    act(() => result.current.reset())
+    expect(result.current.stateOf('rfScope')).toBe('removed')
+    expect(result.current.stateOf('waterfall'), 'control: Reset leaves the waterfall docked').toBe('docked')
+  })
+
+  it('it is no stop control by name, and JS8 can place it (it heads the leading column)', () => {
+    expect((STOP_CONTROL_WORDS as readonly string[]).includes('rfscope')).toBe(false)
+    expect(panelState.JS8_PANELS.arrange?.columns.a[0]).toBe('rfScope')
   })
 })
 

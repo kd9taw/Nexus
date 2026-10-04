@@ -4460,6 +4460,8 @@ export const ES: PartialCatalog = {
   "scope.pause.resume.title": "Reanudar el espectro en vivo (el historial siguió llenándose durante la pausa)",
   "scope.pause.title": "Pausar la cascada — luego recórrela hacia atrás con la rueda del ratón",
   "scope.paused.badge": "⏸ en pausa · rueda para rebobinar",
+  "rfScope.title": "Scope RF",
+  "scope.rf.none": "Sin datos de scope del equipo",
   "scope.smeter.aria": "S-meter",
   "scope.smeter.title": "S-meter {{reading}} ({{db}} dB rel S9, por CAT)",
   "scope.smeter.title.none": "Este equipo no da S-meter por CAT",

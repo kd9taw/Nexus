@@ -10342,6 +10342,10 @@ export const EN = {
   'scope.canvas.keys.aria':
     'Scope: ← and → tune, with Shift in bigger steps; Enter tunes onto the signal in the passband; [ and ] narrow and widen the filter; ↑ and ↓ scroll back while paused',
   'scope.paused.badge': '⏸ paused · wheel to rewind',
+  // The RF scope pane (components/RfScopePane): its title in all five digital cockpits and ⊞ menus, and
+  // the chip it shows while the radio sends it no panadapter.
+  'rfScope.title': 'RF scope',
+  'scope.rf.none': 'No scope data from the radio',
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',

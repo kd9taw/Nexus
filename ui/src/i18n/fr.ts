@@ -4460,6 +4460,8 @@ export const FR: PartialCatalog = {
   "scope.pause.resume.title": "Reprendre le scope en direct (l'historique a continué de se remplir pendant la pause)",
   "scope.pause.title": "Mettre la cascade en pause — puis remonter l'historique à la molette",
   "scope.paused.badge": "⏸ en pause · molette pour remonter",
+  "rfScope.title": "Scope RF",
+  "scope.rf.none": "Aucune donnée de scope de la radio",
   "scope.smeter.aria": "S-meter",
   "scope.smeter.title": "S-meter {{reading}} ({{db}} dB par rapport à S9, via CAT)",
   "scope.smeter.title.none": "Cette radio ne renvoie pas de S-meter par CAT",

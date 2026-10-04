@@ -6354,6 +6354,8 @@ export const JA: PartialCatalog = {
   "scope.canvas.edges.title": "信号をクリックで同調・押したままドラッグで帯域をスライド・フィルターの端をドラッグで幅を変更",
   "scope.canvas.keys.aria": "スコープ：←→で同調（Shiftで大きなステップ）、Enterで帯域内の信号に同調、[ ]でフィルターを狭く・広く、一時停止中は↑↓で巻き戻し",
   "scope.paused.badge": "⏸ 一時停止・ホイールで巻き戻し",
+  "rfScope.title": "RFスコープ",
+  "scope.rf.none": "無線機からのスコープデータがありません",
   "scope.strip.aria": "スコープの表示設定",
   "scope.strip.window.aria": "分解能",
   "scope.strip.window.fast.title": "高速 — 1024ポイント窓、85 ms。キーイングや音声の立ち上がりが分解できます。キャリアは倍の幅に見えます。",

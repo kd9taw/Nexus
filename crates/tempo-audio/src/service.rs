@@ -6422,17 +6422,21 @@ impl RadioLoop {
                     || self.tx_until_ms.is_some()
                     || self.tuning_keyed
                     || self.manual_ptt_applied;
-                // In FT8/FT4 (a DATA mode) the Operate waterfall shows the AUDIO FFT (0–4000 Hz),
-                // not the RF panadapter — so keep the native scope OFF here and never feed its
-                // absolute-RF row into the shared spectrum. Otherwise spectrum_row() prefers the
-                // fresh "civ" MHz-span row and the source-unaware FT8 waterfall maps it onto a
-                // 0–4000 Hz view → every bin clamps to the floor → a flat "purple" field (while FT8
-                // still decodes, since the decoder reads raw audio). Phone/CW keep the scope — their
-                // PhoneScope is source-aware and renders the civ row correctly, and CW keeps it
-                // even on the soundcard keyer, whose mode word is now a DATA submode too (see
-                // `RadioLoop::scope_yields_to_audio_waterfall`).
-                let data_mode = self.scope_yields_to_audio_waterfall();
-                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !data_mode);
+                // In a DATA mode (FT8/FT4 and the keyboard modes) the cockpit's waterfall is the
+                // AUDIO FFT (0–4000 Hz), not the RF panadapter, so the native scope stays OFF and
+                // its absolute-RF row stays out of the shared spectrum — UNLESS an RF scope pane is
+                // on screen (operator's pick, 2026-10-03: an opt-in pane in the FT, JS8, RTTY, PSK
+                // and SSTV cockpits). The pane reads the RF slot and the waterfall the audio slot
+                // (`SpectrumFeed::rf_frame_after` / `audio_row`), so the row no longer has to be
+                // kept off the waterfall by clearing it here; what stays is that the stream shares
+                // the CAT link with the PTT of every over, so it runs only while somebody looks at
+                // it. The pane's request rides its read and lapses two seconds after the last one.
+                // Phone/CW keep the scope — their PhoneScope is source-aware and renders the civ
+                // row correctly, and CW keeps it even on the soundcard keyer, whose mode word is
+                // now a DATA submode too (see `RadioLoop::scope_yields_to_audio_waterfall`).
+                let stand_down =
+                    self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted();
+                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !stand_down);
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
@@ -6525,14 +6529,15 @@ impl RadioLoop {
                 // Publish straight to the spectrum feed. This used to go through the engine
                 // mutex, so the Icom panadapter was starved by the very hold that starved the
                 // audio row (the boundary CAT block downstream of this loop's engine.lock()).
-                if !data_mode {
+                if !stand_down {
                     // TAKEN, so a sweep is published once: one sweep, one frame.
                     if let Some(sweep) = d.take_scope_row() {
                         crate::civ::scope::publish_sweep(&self.spectrum_feed, sweep);
                     }
                 } else {
-                    // DATA mode (FT8/FT4): drop any stale native row so the audio FFT takes over
-                    // immediately (no ~1 s window where the last civ row still wins).
+                    // DATA mode (FT8/FT4) with no RF scope pane: drop any stale native row so the
+                    // audio FFT takes over immediately (no ~1 s window where the last civ row still
+                    // wins).
                     self.spectrum_feed.clear_rf();
                 }
             }
@@ -13880,6 +13885,7 @@ mod tests {
     mod filter_width;
     mod receive_source;
     mod remote_radio;
+    mod rf_pane;
     use super::should_command_rf_power;
 
     #[test]

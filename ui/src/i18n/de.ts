@@ -6479,6 +6479,8 @@ export const DE: PartialCatalog = {
   "scope.canvas.edges.title": "Auf ein Signal klicken, um es abzustimmen · gedrückt ziehen verschiebt den Durchlassbereich · eine Filterkante ziehen ändert die Breite",
   "scope.canvas.keys.aria": "Scope: ← und → stimmen ab, mit Umschalt in größeren Schritten; Eingabe stimmt auf das Signal im Durchlassbereich ab; [ und ] machen den Filter schmaler und breiter; ↑ und ↓ blättern im angehaltenen Bild zurück",
   "scope.paused.badge": "⏸ angehalten · Rad zum Zurückspulen",
+  "rfScope.title": "HF-Scope",
+  "scope.rf.none": "Keine Scope-Daten vom Funkgerät",
   "scope.strip.aria": "Anzeigeeinstellungen des Scopes",
   "scope.strip.window.aria": "Auflösung",
   "scope.strip.window.fast.title": "Schnell — 1024-Punkte-Fenster, 85 ms. Tastung und Sprachansätze lösen sich auf; Träger erscheinen doppelt so breit.",
