@@ -2790,6 +2790,13 @@ name = "tempo-fast-sys"
 version = "0.2.0"
 
 [[package]]
+name = "tempo-flexsim"
+version = "0.1.0"
+dependencies = [
+ "tempo-net",
+]
+
+[[package]]
 name = "tempo-net"
 version = "0.2.0"
 dependencies = [
