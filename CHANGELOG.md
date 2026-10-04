@@ -114,6 +114,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
+  a new place, **Left side**: a column from under the header down to the dock, beside the scope,
+  so the band map and the two boards get the whole height of the window instead of what is left
+  under the scope. **◀** in Column 1 puts Band Activity, Spots or Needed there and **▶** takes it
+  back. Drag the left side's right edge to set its width; Phone remembers it, and fits it to a
+  smaller window without forgetting it. The left side shows on windows about 1280 px wide or wider;
+  on a narrower one those panes stand in their usual columns and come back when the window is wide
+  enough again. PTT and the dock do not move, Tune and Stop TX stay right under the scope at the
+  same height, and the voice keyer and the log form cannot go there. The arrangement is saved with
+  the rest of the Phone layout, so it comes back with your profile and with a settings backup.
 - **Remote stream: a relay for networks where a direct connection fails.** Where the browser
   cannot reach the shack directly, as on some mobile and office networks, the stream can now pass
   through Cloudflare's relay instead. A direct connection is always tried, and preferred: the

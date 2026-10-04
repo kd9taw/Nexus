@@ -91,8 +91,22 @@ that column scrolls, so the NR slider, the AGC chips, the DSP toggles and the
 keyer's F-keys are always reachable rather than rendered past the edge. Spots and
 Needed, when ticked, come after the strips and take whatever height they leave,
 which is where a tall window used to have empty space. **PTT**, **Stop TX**
-and **Tune** are not in the pane region at all, so nothing you do in ⊞ Panels and
-no window size moves them.
+and **Tune** are not in the pane region at all, so nothing you do in ⊞ Panels can
+hide them or put them in a pane.
+
+**The left side.** ⊞ Panels ▸ **Arrange** starts with a **Left side**: a column
+from under the header down to the dock, beside the scope, for **Band Activity**,
+**Spots** and **Needed**. **◀** on one of them in Column 1 puts it there, the full
+height of the window, and **▶** takes it back to its column. Drag the divider on
+the left side's right edge to make it wider or narrower; Nexus remembers the width,
+and a double-click on the divider (or **Backspace**) puts the default back. The
+left side shows on a window about 1280 px wide or wider, counted after the UI
+scale. On a narrower window those panes stand in their usual columns, your choice
+is kept, and they go back to the left side when the window is wide enough again.
+The voice keyer, the log form and the radio's strips cannot go there. **PTT** and
+the dock below it never move, and **Tune** and **Stop TX** stay in the strip
+right under the scope, at the same height: with the left side showing, the scope
+gets narrower and keeps its height. **Reset layout** empties the left side.
 
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 
