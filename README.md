@@ -438,10 +438,10 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
-  stacked-spectrum view (`ui/src/dss.ts`) and retained-history model
-  (`ui/src/waterfallHistory.ts`) are ported from AetherSDR's `DssRenderer` /
-  `WaterfallHistoryBuffer`; its `PanadapterStream` was a wire-format reference for the
-  native Flex DAX/VITA path (see **[NOTICE](NOTICE)**).
+  stacked-spectrum view (`ui/src/dss.ts`, `ui/src/spectrum/dss.ts`) and retained-history
+  model (`ui/src/waterfallHistory.ts`, `ui/src/spectrum/ring.ts`) are ported from
+  AetherSDR's `DssRenderer` / `WaterfallHistoryBuffer`; its `PanadapterStream` was a
+  wire-format reference for the native Flex DAX/VITA path (see **[NOTICE](NOTICE)**).
 - **[fldigi](http://www.w1hkj.com/)** (GPL-3.0-or-later) — **Dave Freese W1HKJ** and **Stefan Fendt
   DL1SMF** (descended from **Tomi Manninen OH2BNS**'s gmfsk). Nexus's RTTY demodulator
   (`crates/tempo-core/src/rtty/demod.rs`) is **ported from fldigi's receive path** (`rtty.cxx` +
