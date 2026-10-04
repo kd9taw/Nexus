@@ -47,7 +47,9 @@ export async function createArtifact(root, values, row = target()) {
   for (const name of assets) {
     const nexusMapAsset = /^assets\/(earth-night|earth-relief)-[A-Za-z0-9_-]+\.webp$/.test(name)
       || /^assets\/cqzones-[A-Za-z0-9_-]+\.geojson$/.test(name)
-    requireValue(name === 'index.html' || name === 'remote-licenses.txt' || /^assets\/[A-Za-z0-9_.-]+\.(js|css)$/.test(name) || nexusMapAsset,
+    // The web app manifest and the icons it and an iPhone's home screen name (ui/remote/public), by exact name.
+    const webAppAsset = ['manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'].includes(name)
+    requireValue(name === 'index.html' || name === 'remote-licenses.txt' || /^assets\/[A-Za-z0-9_.-]+\.(js|css)$/.test(name) || nexusMapAsset || webAppAsset,
       'Unexpected browser asset; review it before adding it to the upload')
     const target = join(destination, 'assets', name)
     await mkdir(resolve(target, '..'), { recursive: true })

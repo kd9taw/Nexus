@@ -153,6 +153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus at the shack as you type it, a word the keyboard corrects or one you delete included. Enter
   in the box is Enter in Nexus, and Backspace in the empty box deletes there. Nothing is sent while
   the picture is frozen. It needs the Remote page's update.
+- **Remote: put the page on your phone's home screen.** The Remote page can be installed: Add to
+  Home Screen on an iPhone or iPad, or install it from Chrome or Edge. Opened from there it has no
+  browser bars, which on an iPhone is the only way to a full-screen stream. It needs the Remote
+  page's update.
 
 ## [1.16.0] — 2026-10-03
 

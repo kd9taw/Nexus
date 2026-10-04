@@ -584,6 +584,9 @@ export default {
         // This permission is image-only; scripts and objects retain their policy.
         "img-src 'self' data: blob:", `connect-src 'self' ${socketOrigin} ${issuer}`,
         `frame-src ${issuer}`, "worker-src 'self'", "form-action 'self'",
+        // The web app manifest (the page's own, so a phone can put it on its home screen): `default-src 'none'`
+        // refuses a manifest.
+        "manifest-src 'self'",
         "frame-ancestors 'none'", "base-uri 'none'", "object-src 'none'",
       ].join('; '))
       response.headers.set('referrer-policy', 'no-referrer')

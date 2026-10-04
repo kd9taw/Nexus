@@ -1014,6 +1014,22 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             if(artifacts){await browser.call('Input.insertText',{text:'CQ'},session);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-412x915-typing.png'),Buffer.from(shot.data,'base64'))}
             phoneRecord.push({typing:sent})
           }
+          // THE INSTALLABLE APP, under the Worker's real policy: Chrome reads the page's own manifest (`manifest-src 'self'`) with no
+          // error and no policy refusal. CONTROL: the same page pointed at another origin's manifest is refused by the policy, and
+          // that refusal is seen, so the empty list above means none was refused.
+          {
+            const manifest=await browser.call('Page.getAppManifest',{},session)
+            const installable=await browser.call('Page.getInstallabilityErrors',{},session).catch(error=>({error:String(error.message)}))
+            console.log('Phone manifest: '+JSON.stringify({url:manifest.url,errors:manifest.errors,installable}))
+            assert.ok(manifest.url.endsWith('/manifest.webmanifest')&&manifest.errors.length===0&&JSON.parse(manifest.data).name==='Nexus Remote',`Chrome read the page's manifest: ${JSON.stringify({url:manifest.url,errors:manifest.errors})}`)
+            assert.deepEqual({events:(await evaluate('window.__csp')).filter(v=>v.startsWith('manifest-src')),console:refused.filter(text=>/manifest/i.test(text))},{events:[],console:[]},'no policy refusal of the manifest')
+            await evaluate(`document.querySelector('link[rel=manifest]').href='https://example.invalid/app.webmanifest';true`)
+            await browser.call('Page.getAppManifest',{},session).catch(()=>null)
+            for(let i=0;i<30&&!(await evaluate(`window.__csp.some(v=>v.startsWith('manifest-src'))`));i++)await sleep(100)
+            assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('manifest-src https://example.invalid')),'control: another origin\'s manifest is refused by the policy: '+JSON.stringify(await evaluate('window.__csp')))
+            await evaluate(`document.querySelector('link[rel=manifest]').href='/manifest.webmanifest';true`)
+            phoneRecord.push({manifest:{url:manifest.url,errors:manifest.errors,installable}})
+          }
           console.log('Phone input record: '+JSON.stringify(phoneRecord))
           assert.equal(exceptions,0,'the stream view raised no runtime exception')
           assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')

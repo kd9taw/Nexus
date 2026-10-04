@@ -977,8 +977,9 @@ test('compiled hosted shell has pinned security headers and distributes its lice
 // so media-src (left to default-src 'none') does not apply either. The policy is pinned WHOLE, so a
 // directive added "for the stream" - a stun:/turn: source, a media-src, a webrtc allowance - turns
 // this red and has to be argued for. The real-browser half (a stream under this very header) is the
-// `stream` scenario in browser.test.mjs.
-test('the hosted page\'s policy is exactly what it was before the stream: no media, WebRTC or ICE allowance', async () => {
+// `stream` scenario in browser.test.mjs. One directive has been added since, and argued for below:
+// `manifest-src 'self'` (2026-10-03), the page's own web app manifest, which loads nothing else.
+test('the hosted page\'s policy is pinned whole: no media, WebRTC or ICE allowance, and only its own manifest added', async () => {
   const response = await app.mf.dispatchFetch(app.origin)
   const policy = Object.fromEntries(response.headers.get('content-security-policy').split(';')
     .map(directive => directive.trim().split(/\s+/)).map(([name, ...sources]) => [name, sources]))
@@ -987,6 +988,7 @@ test('the hosted page\'s policy is exactly what it was before the stream: no med
     'img-src': ["'self'", 'data:', 'blob:'],
     'connect-src': ["'self'", app.origin.replace(/^http/, 'ws'), 'https://identity.remote-test.invalid'],
     'frame-src': ['https://identity.remote-test.invalid'], 'worker-src': ["'self'"], 'form-action': ["'self'"],
+    'manifest-src': ["'self'"],
     'frame-ancestors': ["'none'"], 'base-uri': ["'none'"], 'object-src': ["'none'"],
   })
   // Stated separately so the reason reads in the failure, not only in a diff.
@@ -996,6 +998,44 @@ test('the hosted page\'s policy is exactly what it was before the stream: no med
   // (no frame, no other site). The browser still asks the operator, and the station's own rules
   // decide what reaches a transmitter. The camera and geolocation stay refused.
   assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(self), geolocation=()')
+})
+
+// THE INSTALLABLE WEB APP (the operator's pick, 2026-10-03): on an iPhone, Add to Home Screen is the only way to the
+// whole screen, and Chrome and Edge give an installed page a window of its own. That needs a manifest, and the page's
+// `default-src 'none'` refuses one; `manifest-src 'self'` lets the browser read this origin's own and nothing else.
+// The manifest and its icons are files of the compiled page (ui/remote/public), served as the page's other assets are.
+// The real-browser half (Chrome reads the manifest under this very header) is the `phone` scenario in browser.test.mjs.
+test('the installable web app: the page names its own manifest, the policy lets the browser read it, and the manifest and every icon it names are served', async () => {
+  const page = await app.mf.dispatchFetch(app.origin)
+  const html = await page.text()
+  assert.match(html, /<link rel="manifest" href="\/manifest\.webmanifest"/)
+  assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/)
+  const directives = page.headers.get('content-security-policy').split(';').map(directive => directive.trim())
+  assert.deepEqual(directives.filter(directive => directive.startsWith('manifest-src')), ["manifest-src 'self'"])
+  const response = await app.mf.dispatchFetch(`${app.origin}/manifest.webmanifest`)
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-type'), /^application\/manifest\+json/)
+  const manifest = await response.json()
+  assert.deepEqual({ id: manifest.id, name: manifest.name, start_url: manifest.start_url, scope: manifest.scope, display: manifest.display },
+    { id: '/', name: 'Nexus Remote', start_url: '/', scope: '/', display: 'standalone' })
+  // A PNG says its own size in its header: each icon is the size the manifest gives it, and the 192 and 512 a browser
+  // asks for to install a page are both there.
+  const png = async path => {
+    const image = await app.mf.dispatchFetch(new URL(path, app.origin))
+    assert.equal(image.status, 200, path)
+    assert.equal(image.headers.get('content-type'), 'image/png', path)
+    const bytes = Buffer.from(await image.arrayBuffer())
+    assert.equal(bytes.subarray(1, 4).toString('latin1'), 'PNG', path)
+    return `${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`
+  }
+  for (const icon of manifest.icons) {
+    assert.equal(icon.type, 'image/png')
+    assert.equal(await png(icon.src), icon.sizes, icon.src)
+  }
+  assert.deepEqual(manifest.icons.map(icon => icon.sizes).sort(), ['192x192', '512x512'])
+  assert.equal(await png('/apple-touch-icon.png'), '180x180')
+  // CONTROL: a file the page does not have is not served in the manifest's place.
+  assert.equal((await app.mf.dispatchFetch(`${app.origin}/manifest.json`)).status, 404)
 })
 
 // THE HOSTED SERVICE STAYS ON https:// (security review, 2026-10-03). The live page answered plain
