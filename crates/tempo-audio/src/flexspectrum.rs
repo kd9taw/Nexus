@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashMap;
 
-use tempo_app::dto::Spectrum;
-use tempo_app::engine::{engine_lock, engine_lock_result, Engine, MeterFeed};
+use tempo_app::dto::{Spectrum, SpectrumScale};
+use tempo_app::engine::{engine_lock, engine_lock_result, Engine, MeterFeed, SpectrumFeed};
 use tempo_net::flexcat::{
     parse_create_stream_id, parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, FlexRecv,
     MeterDef, PanStatus,
@@ -253,6 +253,27 @@ pub fn fft_to_row(bins: &[u16]) -> Vec<f32> {
         .collect()
 }
 
+/// Publish one reassembled sweep to the spectrum feed: ONE call per sweep, and the feed stamps it
+/// with the next frame number.
+///
+/// - The scale is RELATIVE until the bin encoding is confirmed. Nexus maps `bin / 65535` and has
+///   never seen a real radio; how SmartSDR places a bin against the pan's `min_dbm`/`max_dbm`
+///   (which [`set_pan_ref_command`] sets) decides any dBm axis, and that is not established.
+/// - The slice is the one the CAT link drives, when its address names one: our pan is centred on
+///   that slice's dial and follows it.
+fn publish_sweep(feed: &SpectrumFeed, bins: &[u16], (lo_hz, hi_hz): (f64, f64), slice: Option<u8>) {
+    feed.publish_rf_frame(
+        Spectrum {
+            row: fft_to_row(bins),
+            lo_hz,
+            hi_hz,
+            source: "flex".into(),
+        },
+        SpectrumScale::Relative,
+        slice,
+    );
+}
+
 /// The active radio's current dial in Hz, from the engine (0 if the lock is unavailable).
 fn engine_dial_hz(engine: &Arc<Mutex<Engine>>) -> u64 {
     engine_lock_result(engine)
@@ -379,6 +400,8 @@ impl FlexSpectrum {
             .map(|e| e.settings().rig_addr.clone())
             .and_then(|addr| crate::rigmodels::flex_slice_for_cat_addr(&addr))
             .map(|n| n as u16);
+        // The same slice labels the pan's frames — see `publish_sweep`.
+        let slice = our_slice.and_then(|n| u8::try_from(n).ok());
         // Bind the UDP FFT socket FIRST so we can tell SmartSDR which port to stream to.
         let udp = UdpSocket::bind("0.0.0.0:0")?;
         udp.set_read_timeout(Some(Duration::from_millis(400)))?;
@@ -570,19 +593,13 @@ impl FlexSpectrum {
                                 continue;
                             };
                             if let Some(bins) = asm.push(&frame) {
-                                let (lo, hi) =
+                                let span =
                                     rf_span_hz(*center.lock().unwrap(), *span_hz.lock().unwrap());
-                                let spec = Spectrum {
-                                    row: fft_to_row(&bins),
-                                    lo_hz: lo,
-                                    hi_hz: hi,
-                                    source: "flex".into(),
-                                };
                                 // Straight to the feed. This used to take the ENGINE mutex —
                                 // which the radio loop holds across its blocking boundary CAT —
                                 // so the Flex panadapter was starved by the same hold that
                                 // starved the audio row, despite already having its own thread.
-                                feed.publish_rf(spec);
+                                publish_sweep(&feed, &bins, span, slice);
                             }
                         }
                         Some(METER_PACKET_CLASS) => {
@@ -933,5 +950,50 @@ mod tests {
             None,
             "engine mirror cleared on teardown"
         );
+    }
+
+    /// ONE REASSEMBLED SWEEP, ONE FRAME. A fragment that completes nothing publishes nothing; the
+    /// fragment that completes a sweep publishes it once, and the feed numbers it.
+    #[test]
+    fn each_reassembled_sweep_is_one_numbered_frame() {
+        use tempo_net::flexvita::FftFrame;
+        let feed = SpectrumFeed::default();
+        let newest = |last| {
+            feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
+                unreachable!("a sweep was published, so the fallback is never asked")
+            })
+        };
+        let fragment = |frame_index: u32, start_bin: u16, bins: &[u16]| FftFrame {
+            start_bin,
+            num_bins: bins.len() as u16,
+            total_bins: 4,
+            frame_index,
+            bins: bins.to_vec(),
+        };
+        let span = rf_span_hz(14.1, SPAN_HZ);
+        let mut asm = FftReassembler::new();
+        assert!(asm.push(&fragment(7, 0, &[0, 65535])).is_none());
+        let bins = asm
+            .push(&fragment(7, 2, &[65535, 0]))
+            .expect("covered end to end");
+        publish_sweep(&feed, &bins, span, Some(1));
+        let first = newest(0).expect("the sweep reached the feed");
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.source, "flex");
+        assert_eq!(first.scale, SpectrumScale::Relative);
+        assert_eq!(first.slice, Some(1), "the slice the CAT link drives");
+        assert_eq!(first.bins, vec![0.0, 1.0, 1.0, 0.0]);
+        assert_eq!((first.lo_hz, first.hi_hz), span);
+
+        assert!(asm.push(&fragment(8, 0, &[1, 1])).is_none());
+        assert_eq!(
+            newest(first.seq),
+            None,
+            "half of the next sweep is not a new frame"
+        );
+        let bins = asm.push(&fragment(8, 2, &[1, 1])).expect("the next sweep");
+        publish_sweep(&feed, &bins, span, Some(1));
+        let second = newest(first.seq).expect("the next sweep is a new frame");
+        assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
     }
 }

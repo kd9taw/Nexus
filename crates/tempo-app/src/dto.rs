@@ -1510,6 +1510,9 @@ fn default_offset() -> f32 {
 }
 
 /// One waterfall row: ~120 magnitudes in 0..1.
+///
+/// The spectrum feed stores [`SpectrumFrame`]s and hands this out as their row view, so the row
+/// commands, the Companion path and the older Remote page are served exactly what they were.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Spectrum {
@@ -1526,6 +1529,84 @@ pub struct Spectrum {
     /// or `"civ"` (Icom CI-V scope) — lets the UI label a native panadapter. Empty = audio.
     #[serde(default)]
     pub source: String,
+}
+
+/// One spectrum frame: a row, plus what its producer knows about it.
+///
+/// A ROW CANNOT SAY WHETHER IT IS NEW. The rig scope polls every 50 ms and the native panadapter
+/// slot is latest-value, so a radio that sends three sweeps a second is read as the same sweep
+/// about six times over, and every read scrolled the waterfall another row: 82% of the rows from a
+/// 3 sweep/s source were repeats when the real-browser harness measured it (2026-10-03). `seq` is
+/// what lets a reader tell a new sweep from a re-read of an old one.
+///
+/// THE VALUES KEEP THE ROW'S 0..1 DOMAIN, deliberately. What a value means was already fixed per
+/// source (the audio FFT's axis is exact dBFS); it was only unwritten. `scale` writes it down,
+/// which costs no producer or consumer a change of value domain.
+///
+/// Serialised field order puts `seq` and `tMs` first and the bins last.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectrumFrame {
+    /// The frame's number, stamped by the spectrum feed when the frame is published: one counter
+    /// for every slot of the feed, starting at 1, so a frame published later always carries the
+    /// larger number — across a change of source, a producer restarting, or the rig scope moving
+    /// between the radio's panadapter and the audio FFT. A reader that keeps the last `seq` it
+    /// drew asks for anything newer with a plain comparison. 0 is never stamped: it marks a row
+    /// nobody published (the Companion/UDP fallback, computed on demand).
+    pub seq: u64,
+    /// When the producer handed the frame to the feed, in Unix milliseconds. Wall clock, so it
+    /// can step backwards under a clock correction: order frames by `seq`, never by this.
+    pub t_ms: u64,
+    /// As [`Spectrum::source`].
+    pub source: String,
+    /// As [`Spectrum::lo_hz`].
+    pub lo_hz: f64,
+    /// As [`Spectrum::hi_hz`].
+    pub hi_hz: f64,
+    /// What a value in `bins` means.
+    pub scale: SpectrumScale,
+    /// Which receiver's span this is, counting from 0 (Main, or slice A). `None` when the frame
+    /// is not one receiver's RF span — the audio FFT — or nothing says which it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice: Option<u8>,
+    /// The values, 0..1, at the producer's own resolution: the row, unchanged.
+    pub bins: Vec<f32>,
+}
+
+/// What a [`SpectrumFrame`] value means, said per source rather than left implied.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SpectrumScale {
+    /// Linear in dB from `lo_db` (0.0) to `hi_db` (1.0), relative to digital full scale.
+    Dbfs { lo_db: f32, hi_db: f32 },
+    /// The radio's own display scale with no calibrated axis known: higher is stronger, and that
+    /// is all a value says.
+    Relative,
+}
+
+impl SpectrumScale {
+    /// The audio FFT's axis, which is exact: [`tempo_core::spectrum::DB_SPAN`] dB below full
+    /// scale up to full scale (`tempo_core::spectrum::power_to_display`).
+    pub const AUDIO: Self = Self::Dbfs {
+        lo_db: -tempo_core::spectrum::DB_SPAN,
+        hi_db: 0.0,
+    };
+}
+
+/// A frame's row view.
+impl From<SpectrumFrame> for Spectrum {
+    fn from(f: SpectrumFrame) -> Self {
+        Self {
+            row: f.bins,
+            lo_hz: f.lo_hz,
+            hi_hz: f.hi_hz,
+            source: f.source,
+        }
+    }
 }
 
 /// The live meters (`get_meters`), read lock-free off `engine::MeterFeed` — the meter widgets
@@ -4390,5 +4471,56 @@ mod receivers_dto_tests {
         obj.remove("subCommandable");
         let back: ReceiversDto = serde_json::from_value(v).unwrap();
         assert!(back.sub.is_none() && back.pairing.is_none() && back.sub_commandable.is_none());
+    }
+}
+
+#[cfg(test)]
+mod spectrum_frame_dto_tests {
+    use super::*;
+
+    /// The frame's wire shape, byte for byte. The real-browser harness answers the frame command
+    /// with these same bytes (`ui/spectrum-harness/frames.ts`), so a change here is one there.
+    #[test]
+    fn a_frame_serialises_seq_first_and_leaves_an_absent_slice_out() {
+        let civ = SpectrumFrame {
+            seq: 7,
+            t_ms: 1_700_000_000_123,
+            source: "civ".into(),
+            lo_hz: 144_975_000.0,
+            hi_hz: 145_025_000.0,
+            scale: SpectrumScale::Relative,
+            slice: Some(0),
+            bins: vec![0.0, 0.5, 1.0],
+        };
+        assert_eq!(
+            serde_json::to_string(&civ).unwrap(),
+            r#"{"seq":7,"tMs":1700000000123,"source":"civ","loHz":144975000.0,"hiHz":145025000.0,"scale":{"kind":"relative"},"slice":0,"bins":[0.0,0.5,1.0]}"#
+        );
+        let audio = SpectrumFrame {
+            seq: 8,
+            t_ms: 1_700_000_000_143,
+            source: "audio".into(),
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            scale: SpectrumScale::AUDIO,
+            slice: None,
+            bins: vec![0.25],
+        };
+        let json = serde_json::to_string(&audio).unwrap();
+        assert_eq!(
+            json,
+            r#"{"seq":8,"tMs":1700000000143,"source":"audio","loHz":0.0,"hiHz":4000.0,"scale":{"kind":"dbfs","loDb":-120.0,"hiDb":0.0},"bins":[0.25]}"#
+        );
+        assert_eq!(serde_json::from_str::<SpectrumFrame>(&json).unwrap(), audio);
+        assert_eq!(
+            Spectrum::from(civ),
+            Spectrum {
+                row: vec![0.0, 0.5, 1.0],
+                lo_hz: 144_975_000.0,
+                hi_hz: 145_025_000.0,
+                source: "civ".into(),
+            },
+            "the row view keeps the values, the span and the source"
+        );
     }
 }

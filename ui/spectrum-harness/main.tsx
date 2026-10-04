@@ -5,7 +5,8 @@
 // The stand-in sits where Tauri does — `window.__TAURI_INTERNALS__.invoke` — so everything above it
 // is production code: api.ts's `getScopeRow`/`getSpectrumRow`, the fetch latch, the draw loop.
 // Each answer is parsed from the JSON the backend would send, in a later task, as a real IPC reply
-// arrives.
+// arrives. It also answers the frame command (`get_scope_frame`) as the backend does: a sweep's
+// number is its index + 1, and an ask naming a sweep the source has not advanced past gets null.
 //
 // The page reads its job from the URL and reports through `window.__harness`, which run.mjs polls
 // over the DevTools protocol. Modes: `backend`, `pixel`, `cadence`, `perf`, `ipc` (see run.mjs).
@@ -23,6 +24,8 @@ import {
   decodeBits,
   f32Json,
   frameJson,
+  frameReply,
+  frameTail,
   indexedFrame,
   prng,
   slotCentre,
@@ -89,34 +92,55 @@ function dist(xs: number[]) {
 // ---------------------------------------------------------------------------------------------
 // The IPC stand-in.
 
-/** What the source hands back for one ask: a serialised `Spectrum`, or null = refuse it. */
-type Answer = { json: string } | null
+/**
+ * What the source hands back for one ask: a sweep, or null = refuse it. A sweep is its serialised
+ * `Spectrum` for the row commands, and its number, time and `frameTail` for the frame command.
+ * `'unchanged'` answers a frame ask that names a sweep the source has not advanced past: the
+ * backend's null, which is not a row.
+ */
+type Answer = { json: string; seq: number; tMs: number; tail: string } | 'unchanged' | null
+/** The sweep the caller last drew, on a frame ask; `undefined` on a row ask. */
+type Drawn = number | undefined
 const unexpected: string[] = []
 /** Per answered row: the JSON parse, and the component's own work up to the next task. */
 const rowCost: { parseMs: number; rowMs: number }[] = []
 let collectRowCost = false
+/** Wall-clock milliseconds for a page time, as the backend stamps `tMs`. */
+const wallMs = (pageMs: number) => Math.round(performance.timeOrigin + pageMs)
 
-function installIpc(answer: () => Answer): void {
+function installIpc(answer: (drawn: Drawn) => Answer): void {
   const deliver = new MessageChannel()
   const after = new MessageChannel()
   const pending: (() => void)[] = []
   const afterQ: (() => void)[] = []
   deliver.port1.onmessage = () => pending.shift()?.()
   after.port1.onmessage = () => afterQ.shift()?.()
-  const invoke = <T,>(cmd: string): Promise<T> => {
-    if (cmd !== 'get_scope_row' && cmd !== 'get_spectrum_row') {
+  const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+    const asksFrame = cmd === 'get_scope_frame'
+    if (!asksFrame && cmd !== 'get_scope_row' && cmd !== 'get_spectrum_row') {
       unexpected.push(cmd)
       return Promise.reject(new Error(`harness: no stand-in for ${cmd}`))
     }
-    const out = answer()
+    // The backend refuses a frame ask without its required `lastSeq` (0 = nothing drawn yet).
+    const drawn = args?.lastSeq
+    if (asksFrame && typeof drawn !== 'number') {
+      unexpected.push(`${cmd} without lastSeq`)
+      return Promise.reject(new Error(`harness: ${cmd} needs lastSeq`))
+    }
+    const out = answer(asksFrame ? (drawn as number) : undefined)
     return new Promise<T>((resolve, reject) => {
       pending.push(() => {
         if (!out) {
           reject(new Error('harness: the source has stopped'))
           return
         }
+        if (out === 'unchanged') {
+          resolve(null as T)
+          return
+        }
+        const json = asksFrame ? frameReply(out.seq, out.tMs, out.tail) : out.json
         const t0 = performance.now()
-        const value = JSON.parse(out.json) as T
+        const value = JSON.parse(json) as T
         const parseMs = performance.now() - t0
         resolve(value)
         // A task posted now runs after this task's microtasks, i.e. after the component has
@@ -198,11 +222,17 @@ async function pixel() {
   const set = INDEXED_SETS[q.get('set') ?? '']
   if (!set) throw new Error(`unknown pixel set ${q.get('set')}`)
   const total = set.count + PAD_ROWS
-  const payloads = Array.from({ length: total }, (_, i) => frameJson(indexedFrame(set, i)))
+  const frames = Array.from({ length: total }, (_, i) => indexedFrame(set, i))
+  const payloads = frames.map(frameJson)
+  const tails = frames.map(frameTail)
   let served = 0
   let refused = false
+  // Served by call, so every ask is a sweep the caller has not drawn.
   installIpc(() => {
-    if (served < total) return { json: payloads[served++] }
+    if (served < total) {
+      const i = served++
+      return { json: payloads[i], seq: i + 1, tMs: wallMs(performance.now()), tail: tails[i] }
+    }
     refused = true
     return null
   })
@@ -283,28 +313,36 @@ async function cadence() {
   const plant = Number(q.get('plant') ?? 0)
   // Sweeps whose time starts inside the window.
   const published = Math.ceil((windowMs * set.rate) / 1000)
-  const payloads = Array.from({ length: published }, (_, s) => frameJson(timedFrame(set, s, true)))
-  const terminator = frameJson(timedFrame(set, null, true))
+  const frames = Array.from({ length: published }, (_, s) => timedFrame(set, s, true))
+  const payloads = frames.map(frameJson)
+  const tails = frames.map(frameTail)
+  const end = timedFrame(set, null, true)
+  const terminator = frameJson(end)
+  const terminatorTail = frameTail(end)
+  // The log holds the asks that were answered with a sweep: a frame ask answered null is no row.
   const log: { tMs: number; seq: number }[] = []
   let t0 = -1
   let lastSeq = -1
   let endServed = false
   let stopped = false
-  installIpc(() => {
+  installIpc((drawn) => {
     const now = performance.now()
     if (t0 < 0) t0 = now
     if (now - t0 < windowMs) {
-      let seq = Math.min(published - 1, Math.floor(((now - t0) * set.rate) / 1000))
+      const due = Math.min(published - 1, Math.floor(((now - t0) * set.rate) / 1000))
+      if (drawn !== undefined && due + 1 <= drawn) return 'unchanged'
       // The positive control: the ask numbered `plant` gets the sweep before it AGAIN — one extra
-      // row with no new data, which the probe must find.
+      // row with no new data, which the probe must find. A frame ask gets it under the new sweep's
+      // number, the one way such a row could reach a scope that commits only new frames.
+      let seq = due
       if (plant > 0 && log.length + 1 === plant && lastSeq >= 0) seq = lastSeq
       lastSeq = seq
       log.push({ tMs: r3(now - t0), seq })
-      return { json: payloads[seq] }
+      return { json: payloads[seq], seq: due + 1, tMs: wallMs(t0 + (due * 1000) / set.rate), tail: tails[seq] }
     }
     if (!endServed) {
       endServed = true
-      return { json: terminator }
+      return { json: terminator, seq: published + 1, tMs: wallMs(now), tail: terminatorTail }
     }
     stopped = true
     return null
@@ -358,14 +396,19 @@ async function perf() {
   const set = TIMED_SETS[q.get('set') ?? '']
   if (!set) throw new Error(`unknown timed set ${q.get('set')}`)
   // A pool built BEFORE the clock starts: formatting floats is the backend's work, not the page's.
-  const pool = Array.from({ length: 64 }, (_, s) => frameJson(timedFrame(set, s, false)))
+  const frames = Array.from({ length: 64 }, (_, s) => timedFrame(set, s, false))
+  const pool = frames.map(frameJson)
+  const tails = frames.map(frameTail)
   let t0 = -1
   let answered = 0
-  installIpc(() => {
+  installIpc((drawn) => {
     const now = performance.now()
     if (t0 < 0) t0 = now
+    const due = Math.floor(((now - t0) * set.rate) / 1000)
+    if (drawn !== undefined && due + 1 <= drawn) return 'unchanged'
     answered++
-    return { json: pool[Math.floor(((now - t0) * set.rate) / 1000) % pool.length] }
+    const k = due % pool.length
+    return { json: pool[k], seq: due + 1, tMs: wallMs(t0 + (due * 1000) / set.rate), tail: tails[k] }
   })
   mount('viewport')
   const loaf: PerformanceEntry[] = []
