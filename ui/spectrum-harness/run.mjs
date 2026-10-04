@@ -345,13 +345,19 @@ function record(check) {
 }
 
 const FIXTURE_SETS = ['carrier', 'two-tone', 'noise-step', 'ft8-slot']
-const COMPONENTS = ['phonescope', 'waterfall']
+const COMPONENTS = ['phonescope', 'waterfall', 'minispectrum']
+/** MiniSpectrum draws only the newest row, so two fixtures say all there is to say about it. */
+const setsOf = (comp) => (comp === 'minispectrum' ? ['carrier', 'two-tone'] : FIXTURE_SETS)
 const WRONG_PALETTE = 'viridis'
 
-/** The Waterfall draws through the spectrum renderer, so its pictures are taken on BOTH backends and
- *  each must match the one stored picture (recorded on canvas-2D, the reference path): the band runs
- *  one per-pixel mapping on both. */
+/** The Waterfall and MiniSpectrum draw through the spectrum renderer, so their pictures are taken on
+ *  BOTH backends and each must match the one stored picture (recorded on canvas-2D, the reference). */
 const backendsOf = (comp) => (comp === 'phonescope' ? ['webgl2'] : ['webgl2', 'canvas2d'])
+/** A picture that is all trace is stored PER BACKEND: the two rasterise a line differently (a stroked
+ *  path on canvas-2D, a shader ribbon on WebGL2; renderer.ts keeps per-backend pictures for the same
+ *  reason). The waterfall band runs one per-pixel mapping on both, so it has one picture. */
+const perBackend = (comp) => comp === 'minispectrum'
+const pictureOf = (comp, set, backend) => `${comp}-${set}${perBackend(comp) ? `.${backend}` : ''}.png`
 
 async function renderFixture(cdp, base, comp, set, palette, backend = 'webgl2') {
   const page = await openPage(cdp, `${base}/index.html?mode=pixel&comp=${comp}&set=${set}&palette=${palette}&backend=${backend}`)
@@ -368,21 +374,23 @@ async function pixelChecks(cdp, base, backend) {
   mkdirSync(join(opt.out, 'pixels'), { recursive: true })
   if (opt.record) {
     for (const comp of COMPONENTS) {
-      for (const set of FIXTURE_SETS) {
-        const id = `${comp}-${set}`
-        const ref = comp === 'phonescope' ? 'webgl2' : 'canvas2d'
-        const a = await renderFixture(cdp, base, comp, set, opt.palette, ref)
-        const b = await renderFixture(cdp, base, comp, set, opt.palette, ref)
-        const same = comparePixels(a, b, { channel: 0, maxFraction: 0 })
-        if (!same.match) {
-          record({ kind: 'pixel', id, outcome: 'fail', detail: `two renders differ (${same.reason}); not recorded` })
-          line('PIXEL', id, same.reason, 'NOT DETERMINISTIC — not recorded')
-          continue
+      for (const set of setsOf(comp)) {
+        const refs = comp === 'phonescope' ? ['webgl2'] : perBackend(comp) ? ['webgl2', 'canvas2d'] : ['canvas2d']
+        for (const ref of refs) {
+          const id = pictureOf(comp, set, ref).slice(0, -4)
+          const a = await renderFixture(cdp, base, comp, set, opt.palette, ref)
+          const b = await renderFixture(cdp, base, comp, set, opt.palette, ref)
+          const same = comparePixels(a, b, { channel: 0, maxFraction: 0 })
+          if (!same.match) {
+            record({ kind: 'pixel', id, outcome: 'fail', detail: `two renders differ (${same.reason}); not recorded` })
+            line('PIXEL', id, same.reason, 'NOT DETERMINISTIC — not recorded')
+            continue
+          }
+          mkdirSync(BASELINES, { recursive: true })
+          writeFileSync(join(BASELINES, `${id}.png`), encodePng(a.width, a.height, a.rgba))
+          record({ kind: 'pixel', id, outcome: 'recorded', detail: `${a.width}x${a.height}, two renders identical` })
+          line('PIXEL', id, `${a.width}x${a.height}, two renders identical`, 'recorded')
         }
-        mkdirSync(BASELINES, { recursive: true })
-        writeFileSync(join(BASELINES, `${id}.png`), encodePng(a.width, a.height, a.rgba))
-        record({ kind: 'pixel', id, outcome: 'recorded', detail: `${a.width}x${a.height}, two renders identical` })
-        line('PIXEL', id, `${a.width}x${a.height}, two renders identical`, 'recorded')
       }
     }
     writeFileSync(
@@ -403,7 +411,7 @@ async function pixelChecks(cdp, base, backend) {
     const actual = await renderFixture(cdp, base, comp, set, palette, backend)
     const suffix = `${palette === stored.palette ? '' : `.${palette}`}${comp === 'phonescope' ? '' : `.${backend}`}`
     writeFileSync(join(opt.out, 'pixels', `${id}${suffix}.png`), encodePng(actual.width, actual.height, actual.rgba))
-    const expected = decodePng(readFileSync(join(BASELINES, `${id}.png`)))
+    const expected = decodePng(readFileSync(join(BASELINES, pictureOf(comp, set, backend))))
     const cmp = comparePixels(actual, expected)
     if (!cmp.match && cmp.diff) {
       writeFileSync(join(opt.out, 'pixels', `${id}${suffix}.diff.png`), encodePng(actual.width, actual.height, cmp.diff))
@@ -411,7 +419,7 @@ async function pixelChecks(cdp, base, backend) {
     return { id, actual, cmp }
   }
   for (const comp of COMPONENTS) {
-    for (const set of FIXTURE_SETS) {
+    for (const set of setsOf(comp)) {
       for (const backend of backendsOf(comp)) {
         const { id, actual, cmp } = await compareOne(comp, set, opt.palette, backend)
         // The renderer's backend is asserted, as the Chrome backend is: a picture from the other one

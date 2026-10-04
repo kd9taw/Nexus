@@ -23289,13 +23289,27 @@ button.sat-chip:disabled {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
-/* A display well (DISPLAY WELLS): `.well` paints the dark face, and the trace and gridline the
-   component reads off this canvas resolve to the dark theme's inks. */
+/* A display well (DISPLAY WELLS): `.well` paints the dark face, and the face and accent the
+   component reads off this box resolve to the dark theme's inks. The spectrum renderer puts its
+   canvas in it (absolutely, filling it), so it is positioned, and clips to its rounded border. */
 .mini-spectrum-canvas {
+  position: relative;
+  overflow: hidden;
   width: 100%;
   display: block;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+/* Its faint mid gridline, for scale, over the renderer's canvas. */
+.mini-spectrum-canvas::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--text-dim);
+  opacity: 0.2;
+  pointer-events: none;
 }
 .mini-spectrum-idle {
   color: var(--text-dim);

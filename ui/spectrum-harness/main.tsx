@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { PhoneScope } from '../src/components/PhoneScope'
 import { Waterfall } from '../src/components/Waterfall'
+import { MiniSpectrum } from '../src/components/MiniSpectrum'
 import { WSPR_WATERFALL_WINDOW, bakeLut, resolveColormap } from '../src/waterfall'
 import { WF_PALETTE_KEY } from '../src/waterfallPalette'
 import { axis, capability, loss, render, rperf } from './renderer'
@@ -62,7 +63,7 @@ window.addEventListener('unhandledrejection', (e) => fail(`unhandled rejection: 
 
 const q = new URLSearchParams(location.search)
 const mode = q.get('mode') ?? 'backend'
-const comp = q.get('comp') === 'waterfall' ? 'waterfall' : 'phonescope'
+const comp = q.get('comp') === 'waterfall' ? 'waterfall' : q.get('comp') === 'minispectrum' ? 'minispectrum' : 'phonescope'
 const palette = q.get('palette') ?? 'turbo'
 const THEME = 'dark'
 
@@ -178,6 +179,9 @@ function mount(shape: Shape, opts: { fixedWindow?: boolean; rowMs?: number } = {
       // on an audio row they are the plain 0–4 kHz window. No dial, marker or carrier line, so
       // nothing is drawn as text over the picture.
       <PhoneScope transmitting={false} theme={THEME} viewLoHz={-1e9} viewHiHz={1e9} />
+    ) : comp === 'minispectrum' ? (
+      // A trace of the newest row only, so it is polled as fast as the rows are served.
+      <MiniSpectrum pollMs={20} height={96} />
     ) : (
       <Waterfall
         transmitting={false}
@@ -200,8 +204,10 @@ function rowCanvas(): HTMLCanvasElement {
     if (!cv) throw new Error('no .ph-scope-canvas mounted')
     return cv
   }
-  const shown = [...document.querySelectorAll<HTMLCanvasElement>('.waterfall-render canvas')].filter((c) => c.style.visibility !== 'hidden')
-  if (shown.length !== 1) throw new Error(`${shown.length} renderer canvases showing in the waterfall`)
+  // MiniSpectrum's trace is the renderer's too, in the strip's own box.
+  const layer = comp === 'minispectrum' ? '.mini-spectrum-canvas' : '.waterfall-render'
+  const shown = [...document.querySelectorAll<HTMLCanvasElement>(`${layer} canvas`)].filter((c) => c.style.visibility !== 'hidden')
+  if (shown.length !== 1) throw new Error(`${shown.length} renderer canvases showing in the ${comp}`)
   return shown[0]
 }
 

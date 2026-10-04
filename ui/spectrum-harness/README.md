@@ -2,7 +2,7 @@
 
 jsdom never lays out and never has a graphics context, so every unit gate in `ui/` stays green
 through a broken waterfall paint path. This harness mounts the **shipped** `PhoneScope` (Phone and
-CW) and `Waterfall` (FT, JS8, RTTY, PSK, SSTV) in headless Chrome, unmodified, with the desktop IPC
+CW), `Waterfall` (FT, JS8, RTTY, PSK, SSTV) and `MiniSpectrum` in headless Chrome, unmodified, with the desktop IPC
 bridge (`window.__TAURI_INTERNALS__.invoke`) stood in by synthetic frames and the real clock left
 alone — a virtual-time budget starves a `requestAnimationFrame` loop, which both components are.
 
@@ -21,7 +21,7 @@ check, and `results.json` plus every rendered picture (and a diff for a failed o
 | Probe | What | Asserted? |
 |---|---|---|
 | backend | Chrome is pinned to software rasterisation and SwiftShader WebGL (`PINNED_FLAGS` in `run.mjs`) and the run checks it got exactly that. No GPU is needed. | yes |
-| pixel | four fixtures (`frames.ts`: a carrier, a two-tone, a noise-floor step, an FT8 period) through each component, against `baselines/*.png` within `compare.mjs`'s tolerance. Rows are served by call, so the picture does not depend on timing. The Waterfall draws through the spectrum renderer, so its run on **both** backends (the renderer's backend asserted each time), against its one stored picture, which canvas-2D reproduces exactly. | yes |
+| pixel | four fixtures (`frames.ts`: a carrier, a two-tone, a noise-floor step, an FT8 period) through each component, against `baselines/*.png` within `compare.mjs`'s tolerance. Rows are served by call, so the picture does not depend on timing. The Waterfall and MiniSpectrum draw through the spectrum renderer, so theirs run on **both** backends (the renderer's backend asserted each time): the Waterfall's band against its one stored picture, which canvas-2D reproduces exactly; MiniSpectrum, all trace, against a picture per backend (the two rasterise a line differently), on two fixtures. | yes |
 | cadence | sources on the real clock at their producers' rates — audio 50/s, CI-V 3/s and 10/s, Flex 15/s, FT-710 84/s — each sweep carrying a barcode of its own number. The canvas is read back: rows committed, distinct sweeps shown, and **repeats** (a committed row showing the same sweep as the row before it). The Waterfall's on both backends. | repeats = 0 |
 | perf | each component filling a 1024×768 and a 3440×1440 window: frame pacing, long animation frames, main-thread time per frame, the cost of one committed row (the Waterfall's, which draws on the next frame, is its fetch-to-commit work only); the Waterfall on both backends | measured only |
 | ipc | a `Spectrum` row parsed from its JSON on every frame at 60 Hz, 512 and 2048 bins, beside the same values taken from a binary buffer | measured only |

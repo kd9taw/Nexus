@@ -3,9 +3,15 @@
 // audio section (device confirmation while picking inputs) and the Connect pane grid.
 // Polls the same engine spectrum row every scope shares (native RF preferred, audio
 // FFT fallback) and draws a filled trace; honest idle state when the row is flat.
+//
+// The trace is drawn by the spectrum renderer (ui/src/spectrum), as every scope's is: one value per
+// pixel from all the bins under it (their maximum), through WebGL2 or canvas-2D. It keeps this
+// strip's own look, the accent on the well (DISPLAY WELLS), by handing the renderer a table that
+// runs from the well's face to the accent instead of a waterfall palette.
 import { useEffect, useRef, useState } from 'react'
 import { getSpectrumRow } from '../api'
-import { agcRange, dbToSpan, normalize } from '../waterfall'
+import { agcRange, dbToSpan, WF_DB_SPAN } from '../waterfall'
+import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../spectrum'
 import type { Spectrum } from '../types'
 import { remoteApplicationTransport, applicationSessionGeneration, onApplicationSessionChange } from '../applicationTransport'
 import { t } from '../i18n'
@@ -19,6 +25,34 @@ interface Props {
   idleHint?: string
 }
 
+/** One small canvas to paint a colour on and read it back, made the first time it is needed. */
+let swatch: CanvasRenderingContext2D | null | undefined
+/** A CSS colour as the browser paints it, any syntax a canvas takes; null with no 2-D context. */
+function rgbOf(colour: string): [number, number, number] | null {
+  swatch ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+  const ctx = swatch
+  if (!ctx) return null
+  ctx.fillStyle = colour
+  ctx.fillRect(0, 0, 1, 1)
+  const d = ctx.getImageData(0, 0, 1, 1).data
+  return [d[0], d[1], d[2]]
+}
+
+/** The table the renderer draws the trace with: the well's face at 0, rising evenly to the accent at
+ *  255. The renderer fills the band with entry 0, shades under the trace from 0.3, 0.7 and 1.0 of
+ *  the way up, and strokes the line in entry 255: the accent trace on the well. */
+function inkLut(face: [number, number, number], ink: [number, number, number]): Uint8ClampedArray {
+  const lut = new Uint8ClampedArray(256 * 4)
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255
+    lut[i * 4] = Math.round(face[0] + (ink[0] - face[0]) * t)
+    lut[i * 4 + 1] = Math.round(face[1] + (ink[1] - face[1]) * t)
+    lut[i * 4 + 2] = Math.round(face[2] + (ink[2] - face[2]) * t)
+    lut[i * 4 + 3] = 255
+  }
+  return lut
+}
+
 /** Format a Hz edge for the axis label (kHz below 1 MHz, MHz above). */
 function fmtHz(hz: number): string {
   if (!Number.isFinite(hz)) return ''
@@ -27,7 +61,11 @@ function fmtHz(hz: number): string {
 
 export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
   const remote=!!remoteApplicationTransport()
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  // The renderer's box: it puts its own canvas in here and fills it.
+  const hostRef = useRef<HTMLDivElement>(null)
+  const rendererRef = useRef<SpectrumRenderer | null>(null)
+  /** The ink table, and the two colours it was built from (rebuilt when either moves). */
+  const inksRef = useRef<{ key: string; lut: Uint8ClampedArray | null } | null>(null)
   const [spec, setSpec] = useState<Spectrum | null>(null)
   const [alive, setAlive] = useState(false)
 
@@ -65,43 +103,56 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
     }
   }, [pollMs,remote])
 
+  // The renderer lives as long as the strip: a trace only, so it keeps two rows, not a history.
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    if(!spec?.row?.length){if(remote)canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);return}
-    const dpr = window.devicePixelRatio || 1
-    const w = canvas.clientWidth
-    const h = canvas.clientHeight
-    if (w <= 0 || h <= 0) return
-    // Resize only on a real size change (Waterfall.tsx:335 is the reference): this
-    // effect re-runs on every 120 ms spectrum poll, and an unguarded assignment
-    // discarded the backing store ~8x a second for nothing.
-    const devW = Math.round(w * dpr)
-    const devH = Math.round(h * dpr)
-    if (canvas.width !== devW || canvas.height !== devH) {
-      canvas.width = devW
-      canvas.height = devH
+    const host = hostRef.current
+    if (!host) return
+    const renderer = createSpectrumRenderer(host, { depth: 2 })
+    rendererRef.current = renderer
+    return () => {
+      renderer.destroy()
+      rendererRef.current = null
     }
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    // setTransform, NOT scale(): scale() is CUMULATIVE, and the resize above used to
-    // reset the matrix on every draw. With the resize guarded, a cumulative scale
-    // would compound dpr every frame and the trace would march off-canvas.
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    const styles = getComputedStyle(canvas)
+  }, [])
+
+  useEffect(() => {
+    const host = hostRef.current
+    const renderer = rendererRef.current
+    // No canvas context at all (jsdom): nothing to draw on.
+    if (!host || !renderer || renderer.backend === 'none') return
+    // The inks, read off the well itself (the DISPLAY WELLS pattern): its face and its accent.
+    const styles = getComputedStyle(host)
+    const face = styles.getPropertyValue('--well-bg').trim() || '#0b0f17'
     const accent = styles.getPropertyValue('--accent').trim() || '#4ea1ff'
-    const dim = styles.getPropertyValue('--text-dim').trim() || '#888'
-    ctx.clearRect(0, 0, w, h)
-    // Faint mid gridline for scale reference.
-    ctx.strokeStyle = dim
-    ctx.globalAlpha = 0.2
-    ctx.beginPath()
-    ctx.moveTo(0, h / 2)
-    ctx.lineTo(w, h / 2)
-    ctx.stroke()
-    ctx.globalAlpha = 1
-    // The trace: filled area under a polyline.
-    //
+    const key = `${face} ${accent}`
+    if (inksRef.current?.key !== key) {
+      const f = rgbOf(face)
+      const a = rgbOf(accent)
+      inksRef.current = { key, lut: f && a ? inkLut(f, a) : null }
+    }
+    const lut = inksRef.current.lut
+    if (!lut) return
+    const dpr = window.devicePixelRatio || 1
+    const base: Omit<SpectrumScene, 'view' | 'trace'> = {
+      lut,
+      layout: { traceH: Math.round(host.clientHeight * dpr), stripH: 0, lineWidth: 1.25 * dpr },
+      detector: 'peak',
+      mode: '2d',
+      offsetRows: 0,
+      newestAtTop: true,
+    }
+    if (!spec?.row?.length) {
+      // A remote reading that failed clears the trace (the band is left the bare face); a local
+      // one keeps the last picture until the next row.
+      if (remote) renderer.draw({ ...base, view: { loHz: 0, hiHz: 1 }, trace: null })
+      return
+    }
+    const w = host.clientWidth
+    const h = host.clientHeight
+    if (w <= 0 || h <= 0) return
+    // Resize only on a real size change (Waterfall.tsx is the reference): this effect re-runs on
+    // every spectrum poll, and the renderer clears its canvas when it is sized.
+    renderer.resize(Math.round(w * dpr), Math.round(h * dpr))
     // Row values are the UI's 0..1 contract, but that axis is LINEAR IN dB against an
     // ABSOLUTE full-scale reference (2026-08-04) — it is no longer self-scaling. The old
     // draw plotted them raw, which only ever filled the box because the producer divided
@@ -116,29 +167,14 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
     const row = spec.row
     const { floor, ceil } = agcRange(row)
     const top = Math.max(ceil, floor + dbToSpan(10))
-    const yFor = (v: number) => h - normalize(v, floor, top) * (h - 4)
-    ctx.beginPath()
-    ctx.moveTo(0, h)
-    for (let i = 0; i < row.length; i++) {
-      const x = (i / (row.length - 1)) * w
-      ctx.lineTo(x, yFor(row[i]))
-    }
-    ctx.lineTo(w, h)
-    ctx.closePath()
-    ctx.globalAlpha = 0.25
-    ctx.fillStyle = accent
-    ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.strokeStyle = accent
-    ctx.lineWidth = 1.25
-    ctx.beginPath()
-    for (let i = 0; i < row.length; i++) {
-      const x = (i / (row.length - 1)) * w
-      const y = yFor(row[i])
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
+    // The whole row across the strip, in the row's own span.
+    const loHz = spec.loHz ?? 0
+    const hiHz = spec.hiHz != null && spec.hiHz > loHz ? spec.hiHz : loHz + 1
+    renderer.draw({
+      ...base,
+      view: { loHz, hiHz },
+      trace: { frame: { seq: 0, tMs: 0, loHz, hiHz, bins: row, dbPerUnit: WF_DB_SPAN }, range: { floor, ceil: top } },
+    })
   }, [spec,remote])
 
   const srcBadge =
@@ -154,9 +190,10 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
             : ''}
         </span>
       </div>
-      {/* A display well (styles.css DISPLAY WELLS): the `--accent`/`--text-dim` read above come off
-          this canvas, so the trace is drawn in the dark theme's inks on a face dark in both. */}
-      <canvas ref={canvasRef} className="mini-spectrum-canvas well" style={{ height }} />
+      {/* A display well (styles.css DISPLAY WELLS): the `--well-bg`/`--accent` read above come off
+          this box, so the trace is drawn in the dark theme's inks on a face dark in both. The
+          renderer's canvas fills it. */}
+      <div ref={hostRef} className="mini-spectrum-canvas well" style={{ height }} />
       {!alive && idleHint && <div className="mini-spectrum-idle">{remote&&!spec?t('remote.collectionUnavailable'):idleHint}</div>}
     </div>
   )
