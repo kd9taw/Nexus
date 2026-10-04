@@ -18,10 +18,11 @@ export type LanFound = { name: string; address: string; protocol: number; key: s
 /** The road, open: the ids the station stamped and the key this computer pinned for it. */
 export type LanRoad = { stationId: string; deviceId: string; sessionId: string; stationKey: string; address: string }
 
-/** Why a pairing did not happen, as this computer's Nexus names it. */
+/** Why a pairing did not happen, as this computer's Nexus names it. Nothing answering at the address
+ *  is told as `tempo_stream::lan::unreached` names it (`otherNetwork`, `refused`, `noAnswer`). */
 export const PAIR_REASONS = ['badAddress', 'badCode', 'badName', 'unreachable', 'pairingClosed', 'wrongCode',
   'stationProofFailed', 'pairingFull', 'stationUnavailable', 'updateStation', 'updateComputer', 'stationsFull',
-  'storeUnavailable', 'notStation', 'unavailable'] as const
+  'storeUnavailable', 'notStation', 'unavailable', 'otherNetwork', 'refused', 'noAnswer'] as const
 export type PairReason = (typeof PAIR_REASONS)[number]
 
 /** Why the road did not open. */

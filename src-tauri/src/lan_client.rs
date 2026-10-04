@@ -82,7 +82,7 @@ pub(crate) mod tests;
 pub(crate) use origin::PREFERRED_PORT;
 pub(crate) use origin::{Origin, Reach};
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::sync::{Arc, Mutex};
 
 use ring::digest::{digest, SHA256};
@@ -91,7 +91,7 @@ use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use serde::Serialize;
 use tempo_stream::protocol;
 
-use crate::remote_service::lan::{valid_name, DEFAULT_PORT, NAME_CHARS};
+use crate::remote_service::lan::{valid_name, NAME_CHARS};
 use crate::remote_service::vault::{PairedStation, PairedStations, StationVault};
 
 /// The most stations this computer keeps a pairing with.
@@ -178,17 +178,6 @@ pub(crate) fn code(typed: &str) -> Option<[u8; 8]> {
     protocol::hex_bytes(&hex)?.try_into().ok()
 }
 
-/// A station's address as typed or remembered: a private IPv4 address (RFC 1918, the only kind a
-/// station listens on), with its port or without it (then the station's own default).
-pub(crate) fn address(typed: &str) -> Option<SocketAddrV4> {
-    let typed = typed.trim();
-    let at = match typed.parse::<SocketAddrV4>() {
-        Ok(at) => at,
-        Err(_) => SocketAddrV4::new(typed.parse::<Ipv4Addr>().ok()?, DEFAULT_PORT),
-    };
-    (tempo_stream::lan::listenable(*at.ip()) && at.port() >= 1024).then_some(at)
-}
-
 /// This computer's name as the operating system gives it, for the station to show beside its key:
 /// at most [`NAME_CHARS`] characters, or empty when there is none to give, and the operator types
 /// one.
@@ -244,7 +233,10 @@ fn sound(record: &PairedStation) -> bool {
         && protocol::device_key(&record.station_key)
         && !record.addresses.is_empty()
         && record.addresses.len() <= MAX_ADDRESSES
-        && record.addresses.iter().all(|a| address(a).is_some())
+        && record
+            .addresses
+            .iter()
+            .all(|a| tempo_stream::lan::typed(a).is_some())
         && ComputerKey::restore(&record.pkcs8).is_some()
 }
 

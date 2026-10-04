@@ -116,6 +116,10 @@ async fn ceremony(
         .await
         .map_err(|failed| match failed {
             Failed::Unreachable => "unreachable",
+            // Nothing answered at the address: why, in the words the card uses for it.
+            Failed::NotConnected(how) => {
+                tempo_stream::lan::unreached(&how.into(), tempo_stream::lan::here(*at.ip()))
+            }
             // A station takes a key it does not know only while its pairing window is open.
             Failed::Refused => "pairingClosed",
             // On a pairing connection any P-256 key is taken: one that is not is no station's.

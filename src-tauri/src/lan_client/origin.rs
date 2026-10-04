@@ -52,7 +52,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use super::road::{self, Road, ToPage};
-use super::{address, code, hex, pairing, StationView, Stations, MAX_STATIONS};
+use super::{code, hex, pairing, StationView, Stations, MAX_STATIONS};
 use crate::remote_service::lan::valid_name;
 use crate::remote_service::vault::PairedStation;
 
@@ -548,7 +548,7 @@ async fn pair(
     typed_code: &str,
     name: &str,
 ) -> Result<StationView, &'static str> {
-    let at = address(typed_address).ok_or("badAddress")?;
+    let at = tempo_stream::lan::typed(typed_address).ok_or("badAddress")?;
     let code = code(typed_code).ok_or("badCode")?;
     if !valid_name(name) {
         return Err("badName");
@@ -678,7 +678,7 @@ async fn connect(
     typed: Option<&str>,
 ) -> Result<(Road, String), &'static str> {
     let typed = match typed {
-        Some(text) => Some(address(text).ok_or("badAddress")?),
+        Some(text) => Some(tempo_stream::lan::typed(text).ok_or("badAddress")?),
         None => None,
     };
     let kept = reach.stations.clone();

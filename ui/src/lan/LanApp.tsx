@@ -11,7 +11,7 @@ import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
 import { LanConnection, lanStream } from './connection'
 import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanFound, type LanStation, type PairReason } from './protocol'
-import { lanFindLine } from '../remote-native/lanReach'
+import { lanFindLine, lanReachLine } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
 import '../remote-web/remote-site.css'
@@ -62,6 +62,10 @@ function sentence(reason: PairReason | ConnectReason | ClosedReason): string {
     case 'stationLeft': return t('lanWindow.reason.stationLeft')
     case 'connectionLost': return t('lanWindow.reason.connectionLost')
     case 'disconnected': return t('lanWindow.disconnected')
+    // Nothing answered at the address: the card's own words for why (`tempo_stream::lan::unreached`).
+    case 'otherNetwork':
+    case 'refused':
+    case 'noAnswer': return lanReachLine(reason)
   }
 }
 

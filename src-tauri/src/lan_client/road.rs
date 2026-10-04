@@ -38,7 +38,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use super::{address, ComputerKey};
+use super::ComputerKey;
 use crate::remote_service::lan::{tls, VERSIONS};
 use crate::remote_service::vault::PairedStation;
 
@@ -75,6 +75,9 @@ pub(super) struct Opened {
 pub(super) enum Failed {
     /// Nothing answered, or it went away before the handshake was done.
     Unreachable,
+    /// No TCP connection was made: how it ended (`TimedOut` when nothing answered in time), for
+    /// `tempo_stream::lan::unreached` to name.
+    NotConnected(std::io::ErrorKind),
     /// The address presented a key this computer did not pin.
     KeyChanged,
     /// The station refused this computer's key in the handshake.
@@ -106,11 +109,11 @@ fn socket_config() -> WebSocketConfig {
 
 /// TCP, TLS with `config`, and the upgrade, at `at`.
 pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<Opened, Failed> {
-    let tcp = tokio::time::timeout(CONNECT, TcpStream::connect(at))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .ok_or(Failed::Unreachable)?;
+    let tcp = match tokio::time::timeout(CONNECT, TcpStream::connect(at)).await {
+        Ok(Ok(tcp)) => tcp,
+        Ok(Err(error)) => return Err(Failed::NotConnected(error.kind())),
+        Err(_) => return Err(Failed::NotConnected(std::io::ErrorKind::TimedOut)),
+    };
     let name = rustls::pki_types::ServerName::try_from("nexus-station")
         .map_err(|_| Failed::Unreachable)?;
     let tls = tokio_rustls::TlsConnector::from(config)
@@ -201,7 +204,7 @@ async fn hello(
     record: &PairedStation,
 ) -> Result<(Socket, String), &'static str> {
     let Opened { mut socket, .. } = open(at, config).await.map_err(|failed| match failed {
-        Failed::Unreachable => "unreachable",
+        Failed::Unreachable | Failed::NotConnected(_) => "unreachable",
         Failed::KeyChanged => "keyChanged",
         Failed::Refused => "notPaired",
     })?;
@@ -240,7 +243,11 @@ async fn hello(
 /// the operator gave an address, then each remembered one, the last that worked first.
 pub(crate) fn order(record: &PairedStation, typed: Option<SocketAddrV4>) -> Vec<SocketAddrV4> {
     let mut order: Vec<SocketAddrV4> = typed.into_iter().collect();
-    for remembered in record.addresses.iter().filter_map(|a| address(a)) {
+    for remembered in record
+        .addresses
+        .iter()
+        .filter_map(|a| tempo_stream::lan::typed(a))
+    {
         if !order.contains(&remembered) {
             order.push(remembered);
         }

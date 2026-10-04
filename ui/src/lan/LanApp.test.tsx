@@ -69,8 +69,10 @@ it('opens its socket beside the page, with the launch secret in its path, and as
 })
 
 describe('every reason, in a sentence', () => {
+  const REACH = ['otherNetwork', 'refused', 'noAnswer']
   const sentences = (prefix: string, reasons: readonly string[]) => reasons.map(reason =>
-    [reason, EN[(reason === 'disconnected' ? 'lanWindow.disconnected' : `${prefix}${reason}`) as keyof typeof EN]] as const)
+    [reason, EN[(reason === 'disconnected' ? 'lanWindow.disconnected'
+      : REACH.includes(reason) ? `remote.lan.reach.${reason}` : `${prefix}${reason}`) as keyof typeof EN]] as const)
   it.each(sentences('lanWindow.reason.', PAIR_REASONS))('a pairing refused %s', (reason, said) => {
     page()
     socket.tell({ type: 'pairRefused', reason })
@@ -146,6 +148,15 @@ describe('the pairing dialog', () => {
     expect(shack.getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pairSubmit'] }))
     expect(last(socket.sent)).toEqual({ type: 'pair', address: '192.168.1.44', code: '0a1b2c3d4e5f6071', name: 'DEN-PC' })
+  })
+
+  it('says why a pairing reached nobody, in the words the card uses', () => {
+    for (const reach of ['otherNetwork', 'refused', 'noAnswer'] as const) {
+      cleanup()
+      page()
+      socket.tell({ type: 'pairRefused', reason: reach })
+      expect(screen.queryByRole('alert')?.textContent, reach).toBe(EN[`remote.lan.reach.${reach}`])
+    }
   })
 
   it('says why no station was found by name, and looks again only where it can', () => {
