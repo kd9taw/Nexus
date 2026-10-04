@@ -21,11 +21,11 @@ check, and `results.json` plus every rendered picture (and a diff for a failed o
 | Probe | What | Asserted? |
 |---|---|---|
 | backend | Chrome is pinned to software rasterisation and SwiftShader WebGL (`PINNED_FLAGS` in `run.mjs`) and the run checks it got exactly that. No GPU is needed. | yes |
-| pixel | four fixtures (`frames.ts`: a carrier, a two-tone, a noise-floor step, an FT8 period) through each component, against `baselines/*.png` within `compare.mjs`'s tolerance. Rows are served by call, so the picture does not depend on timing. | yes |
-| cadence | sources on the real clock at their producers' rates — audio 50/s, CI-V 3/s and 10/s, Flex 15/s, FT-710 84/s — each sweep carrying a barcode of its own number. The canvas is read back: rows committed, distinct sweeps shown, and **repeats** (a committed row showing the same sweep as the row before it). | repeats = 0 |
+| pixel | four fixtures (`frames.ts`: a carrier, a two-tone, a noise-floor step, an FT8 period) through each component, against `baselines/*.png` within `compare.mjs`'s tolerance. Rows are served by call, so the picture does not depend on timing; PhoneScope's trace hold and averaging, which run on the real clock, are set to none for this probe, so its trace is the last row's own shape. PhoneScope's picture is read from the spectrum renderer's canvas (WebGL2 here, asked to keep its drawing buffer so it can be read after the frame), not its overlay. | yes |
+| cadence | sources on the real clock at their producers' rates — audio 50/s, CI-V 3/s and 10/s, Flex 15/s, FT-710 84/s — each sweep carrying a barcode of its own number. The canvas is read back: rows committed, distinct sweeps shown, and **repeats** (a committed row showing the same sweep as the row before it). Every row entering the renderer's ring is logged with the frame number it carries, so each repeat is also read as **marked** (the number of the row before it: a repeat that says so) or **unmarked** (a new number on an old sweep: the defect). PhoneScope runs in both of its slow-scope looks: a **row per sweep** and **smooth scroll** (below). | per look, below |
 | perf | each component filling a 1024×768 and a 3440×1440 window: frame pacing, long animation frames, main-thread time per frame, the cost of one committed row | measured only |
 | ipc | a `Spectrum` row parsed from its JSON on every frame at 60 Hz, 512 and 2048 bins, beside the same values taken from a binary buffer | measured only |
-| render | the renderer core (`ui/src/spectrum`, mounted bare: no component uses it yet) on **both** backends, WebGL2 and canvas-2D: nine fixtures (`renderer.ts`) against `baselines/renderer/<backend>-<fixture>.png`; the two backends against each other on the waterfall band, where both run the same per-pixel mapping (and on a zoomed 23 cm scope span reached from audio, where canvas-2D's float64 is the reference for WebGL2's float32 hertz); and the 3-D stack against a one-row burst | yes. The whole-picture difference between backends (the trace line and the 3-D stack are rasterised differently) is printed |
+| render | the renderer core (`ui/src/spectrum`, mounted bare, without the component around it) on **both** backends, WebGL2 and canvas-2D: nine fixtures (`renderer.ts`) against `baselines/renderer/<backend>-<fixture>.png`; the two backends against each other on the waterfall band, where both run the same per-pixel mapping (and on a zoomed 23 cm scope span reached from audio, where canvas-2D's float64 is the reference for WebGL2's float32 hertz); and the 3-D stack against a one-row burst | yes. The whole-picture difference between backends (the trace line and the 3-D stack are rasterised differently) is printed |
 | capability | which backend the renderer picks: WebGL2 on a healthy context, canvas-2D (with the reason) when there is no context or when the context takes float uploads and keeps nothing | yes |
 | loss | a forced WebGL2 context loss (`WEBGL_lose_context`): canvas-2D must stand in at once from the same history, and WebGL2 must come back without a reload and draw exactly what a renderer that never lost its context draws | yes |
 | rperf | the renderer at 2048 bins × 2048 rows filling a 1024×768 window, one new row and one redraw per frame, on each backend, flat and 3-D: the renderer's own main-thread time, the main-thread task time, and draw-to-pixels (plus the GPU timer query where the context has one), beside the renderer's budget (under 2 ms of GPU and 1 ms of main thread a frame) | measured only |
@@ -47,16 +47,29 @@ stack rejects must show on the 2-D waterfall, or that check proves nothing. The 
 is planted during warm-up and must be seen, or long frames are reported as unmeasured rather than
 as zero. `--palette NAME` and `--plant N` apply the same controls to every check by hand.
 
+## The slow-scope looks, and how each is gated
+
+PhoneScope commits a waterfall row only when the source's frame number advances, and the operator
+picks what a poll with nothing new does (`nexus.phonescope.rows`; the page takes `rows=` from the URL):
+
+- **`sweep`, one row per sweep.** Nothing: the waterfall moves when the source does. Gated on zero
+  repeated rows, one row per answered ask, and every ring row carrying the number of the sweep its
+  pixels show — for audio, FT-710, CI-V at 3 and 10 and Flex at 15 a second.
+- **`smooth`, smooth scroll (the default).** The newest sweep is committed again, as a repeat that
+  carries its own number. Repeats are expected on every source slower than the poll; gated on every one
+  being marked, none unmarked or misaligned, and one row per ask, new or not.
+
+Both looks have a control: a planted row (an old sweep under a NEW number, the one way a copy could
+reach a scope that commits only new frames) must be found as exactly one repeated row under `sweep`,
+and as exactly one unmarked repeat among the marked ones under `smooth`.
+
 ## Known failures
 
-A check can be marked as an expected red. It keeps the run green while it fails, and turns the run
-red the day it passes, so the marker cannot outlive the defect. Today's:
-
-- **Repeated rows** (`civ-3`, `civ-10`, `flex-15` on `PhoneScope`). The scope commits a waterfall row
-  on every 50 ms poll, new sweep or not, so any source slower than ~20 sweeps a second scrolls copies
-  of its last sweep: at 3 sweeps a second about five of every six rows are repeats. It flips green
-  when the scope commits a row only when the source's frame counter advances; delete the marker in
-  `CADENCE` (`run.mjs`) in that same change.
+A check can be marked as an expected red (`expect: 'known-failure'` in `CADENCE`). It keeps the run
+green while it fails, and turns the run red the day it passes, so the marker cannot outlive the
+defect. None today: the repeated-row defect (`civ-3`, `civ-10`, `flex-15` on PhoneScope, a row on
+every 50 ms poll whether or not the source had swept, so at 3 sweeps a second five rows in six were
+copies) was fixed by committing on the frame number, and its markers were removed in that change.
 
 ## Re-recording the pictures
 

@@ -412,52 +412,78 @@ async function pixelChecks(cdp, base, backend) {
   line('CONTROL', `wrong palette: phonescope-carrier`, `${(cmp.fraction * 100).toFixed(1)}% of pixels differ`, fired ? 'rejected, as it must be' : 'ACCEPTED — the comparator is blind')
 }
 
-const KNOWN_REPEATED_ROWS =
-  'the repeated-row defect: PhoneScope commits a waterfall row on every 50 ms poll whether or not a new ' +
-  'sweep arrived, so a source slower than 20 sweeps a second scrolls copies of its last sweep. Expected ' +
-  'red until the scope commits a row only when the source frame counter advances; that change turns ' +
-  'this into "known failure now passes" — delete the marker in the same change.'
+// PhoneScope runs in both of its slow-scope looks (PhoneScope.tsx PHSCOPE_ROWS_KEY), each gated on
+// its own terms:
+//   sweep   ONE ROW PER SWEEP. Zero repeated rows, one row per answered ask, and every ring row
+//           carrying the number of the sweep its pixels show. CI-V at 3 and 10 and Flex at 15 used to
+//           be marked known failures here (the repeated-row defect: a row every 50 ms poll whether or
+//           not the source had swept); in this look they pass.
+//   smooth  SMOOTH SCROLL, the default. Repeats are expected — the newest sweep committed again on a
+//           poll the source had nothing new for — and every one must be MARKED (the number of the row
+//           before it); none unmarked, none misaligned, and one row per ask, new or not.
+// The marker mechanism stays for the next defect: a check can carry `expect: 'known-failure'`, and
+// goes red the day it passes.
 const CADENCE = [
-  { comp: 'phonescope', set: 'audio-50', expect: 'pass' },
+  { comp: 'phonescope', rows: 'sweep', set: 'audio-50', expect: 'pass' },
+  { comp: 'phonescope', rows: 'sweep', set: 'ft710-84', expect: 'pass' },
+  { comp: 'phonescope', rows: 'sweep', set: 'civ-3', expect: 'pass' },
+  { comp: 'phonescope', rows: 'sweep', set: 'civ-10', expect: 'pass' },
+  { comp: 'phonescope', rows: 'sweep', set: 'flex-15', expect: 'pass' },
+  { comp: 'phonescope', rows: 'smooth', set: 'audio-50', expect: 'marked' },
+  { comp: 'phonescope', rows: 'smooth', set: 'ft710-84', expect: 'marked' },
+  { comp: 'phonescope', rows: 'smooth', set: 'civ-3', expect: 'marked' },
+  { comp: 'phonescope', rows: 'smooth', set: 'civ-10', expect: 'marked' },
+  { comp: 'phonescope', rows: 'smooth', set: 'flex-15', expect: 'marked' },
   { comp: 'waterfall', set: 'audio-50', expect: 'pass' },
-  { comp: 'phonescope', set: 'ft710-84', expect: 'pass' },
-  { comp: 'phonescope', set: 'civ-3', expect: 'known-failure', why: KNOWN_REPEATED_ROWS },
-  { comp: 'phonescope', set: 'civ-10', expect: 'known-failure', why: KNOWN_REPEATED_ROWS },
-  { comp: 'phonescope', set: 'flex-15', expect: 'known-failure', why: KNOWN_REPEATED_ROWS },
-  // CONTROL: one planted extra row in a source that is otherwise clean must be found, exactly once.
-  { comp: 'phonescope', set: 'audio-50', plant: 40, expect: 'control' },
+  // CONTROLS: one planted row — an old sweep under a NEW number, the one way a copy could reach a
+  // scope that commits only new frames — in a source that is otherwise clean. A row per sweep must
+  // find exactly one repeated row, and smooth scroll exactly one UNMARKED repeat among its marked ones.
+  { comp: 'phonescope', rows: 'sweep', set: 'audio-50', plant: 40, expect: 'control' },
+  { comp: 'phonescope', rows: 'smooth', set: 'civ-3', plant: 8, expect: 'control' },
 ]
 const CADENCE_WINDOW_MS = 6000
 
 async function cadenceChecks(cdp, base) {
   for (const c of CADENCE) {
     const plant = c.plant ?? opt.plant
-    const name = `${c.comp}/${c.set}${plant ? ` +row@${plant}` : ''}`
-    const page = await openPage(cdp, `${base}/index.html?mode=cadence&comp=${c.comp}&set=${c.set}&window=${CADENCE_WINDOW_MS}&plant=${plant}&palette=${opt.palette}`, { width: 1100, height: 800 })
+    const name = `${c.comp}${c.rows ? `[${c.rows}]` : ''}/${c.set}${plant ? ` +row@${plant}` : ''}`
+    const page = await openPage(cdp, `${base}/index.html?mode=cadence&comp=${c.comp}&set=${c.set}&window=${CADENCE_WINDOW_MS}&plant=${plant}&palette=${opt.palette}${c.rows ? `&rows=${c.rows}` : ''}`, { width: 1100, height: 800 })
     let r
     try {
       r = await waitFor(page, 'done', CADENCE_WINDOW_MS + 30_000)
     } finally {
       await page.close()
     }
-    const consistent = r.committed === r.api.answered && r.outOfOrder === 0 && r.unexpected.length === 0
+    const smooth = c.rows === 'smooth'
+    const m = r.marks
+    // One row per ask the component commits for: every answered ask, and under smooth scroll every
+    // ask the source had nothing new for as well.
+    const asks = r.api.answered + (smooth ? r.api.unchanged : 0)
+    const consistent = r.committed === asks && r.outOfOrder === 0 && r.unexpected.length === 0 && (!m || m.terminator)
     const clean = r.repeats === 0
     const gap = r.askGapMs
-    const text = `${r.committed} rows (asks ${Math.round(gap.min)}-${Math.round(gap.max)} ms apart), ${r.distinct} sweeps of ${r.published} published, ${r.repeats} repeated, ${r.published - r.distinct} never drawn`
+    const marked = m ? `, ${m.marked} marked, ${m.unmarked} unmarked, ${m.misaligned} misaligned` : ''
+    const text = `${r.committed} rows (asks ${Math.round(gap.min)}-${Math.round(gap.max)} ms apart), ${r.distinct} sweeps of ${r.published} published, ${r.repeats} repeated${marked}, ${r.published - r.distinct} never drawn`
     let outcome
     let verdict
     if (!consistent) {
       outcome = 'fail'
-      verdict = `FAIL (canvas ${r.committed} rows vs ${r.api.answered} answers, ${r.outOfOrder} out of order${r.unexpected.length ? `, asked for ${r.unexpected.join(',')}` : ''})`
+      verdict = `FAIL (canvas ${r.committed} rows vs ${asks} asks, ${r.outOfOrder} out of order${m && !m.terminator ? ', the ring does not end on the terminator' : ''}${r.unexpected.length ? `, asked for ${r.unexpected.join(',')}` : ''})`
     } else if (c.expect === 'control') {
-      outcome = r.repeats === 1 ? 'control-fired' : 'fail'
-      verdict = r.repeats === 1 ? `found at row ${r.repeatRows[0].row}, as it must be` : `FAIL (expected exactly 1 repeated row, read ${r.repeats})`
+      const found = smooth ? m?.unmarked ?? 0 : r.repeats
+      outcome = found === 1 ? 'control-fired' : 'fail'
+      verdict = found === 1 ? `found at row ${smooth ? m.unmarkedRows[0] : r.repeatRows[0].row}, as it must be` : `FAIL (expected exactly 1 ${smooth ? 'unmarked repeat' : 'repeated row'}, read ${found})`
     } else if (c.expect === 'known-failure' && !opt.plant) {
       outcome = clean ? 'fail' : 'known-failure'
       verdict = clean ? 'KNOWN FAILURE NOW PASSES — remove its marker in run.mjs' : 'known failure (repeated rows)'
+    } else if (c.expect === 'marked') {
+      const ok = m !== null && m.unmarked === 0 && m.misaligned === 0 && m.marked === r.repeats
+      outcome = ok ? 'pass' : 'fail'
+      verdict = ok ? 'ok (every repeat marked)' : `FAIL (${m ? `${m.unmarked} unmarked, ${m.misaligned} misaligned` : 'no ring rows to read the marks from'})`
     } else {
-      outcome = clean ? 'pass' : 'fail'
-      verdict = clean ? 'ok' : 'FAIL (repeated rows)'
+      const ok = clean && (!m || m.misaligned === 0)
+      outcome = ok ? 'pass' : 'fail'
+      verdict = ok ? 'ok' : `FAIL (${clean ? `${m.misaligned} misaligned` : 'repeated rows'})`
     }
     record({ kind: 'cadence', id: name, expect: c.expect, why: c.why, outcome, ...r })
     line('CADENCE', name, text, verdict)
@@ -522,8 +548,8 @@ async function ipcChecks(cdp, base) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The renderer core (ui/src/spectrum, the page's renderer.ts). No component mounts it yet, so it is
-// driven bare: rows fed directly, its canvas copied out in the task that drew it.
+// The renderer core (ui/src/spectrum, the page's renderer.ts), driven bare, without the component
+// around it: rows fed directly, its canvas copied out in the task that drew it.
 
 const RENDER_FIXTURES = [
   'scope-carrier',

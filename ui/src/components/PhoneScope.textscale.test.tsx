@@ -28,9 +28,16 @@ const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
 let rowsServed = 0
 let rowShape: { loHz: number; hiHz: number; source: string } = { loHz: 0, hiHz: 4000, source: 'rx' }
 vi.mock('../api', () => ({
-  getScopeRow: () => {
+  getScopeFrame: () => {
     rowsServed++
-    return Promise.resolve({ row: ROW, ...rowShape })
+    const rf = rowShape.source === 'civ'
+    return Promise.resolve({
+      seq: rowsServed,
+      tMs: Date.now(),
+      bins: ROW,
+      scale: rf ? { kind: 'relative' } : { kind: 'dbfs', loDb: -120, hiDb: 0 },
+      ...rowShape,
+    })
   },
 }))
 
@@ -49,6 +56,7 @@ function recordingCtx() {
     textBaseline: 'alphabetic',
     createLinearGradient: () => ({ addColorStop: () => {} }),
     fillRect: () => {},
+    clearRect: () => {},
     putImageData: () => {},
     beginPath: () => {},
     closePath: () => {},
@@ -63,6 +71,11 @@ function recordingCtx() {
     fill: () => {},
     stroke: () => {},
     setLineDash: () => {},
+    // The renderer's trace is clipped to its band.
+    save: () => {},
+    restore: () => {},
+    rect: () => {},
+    clip: () => {},
   }
   return { ctx, ops }
 }
@@ -87,22 +100,33 @@ function stubGeometry(zoom: number) {
 let realRaf: typeof requestAnimationFrame
 let realCaf: typeof cancelAnimationFrame
 
+/** A 2D paint target only: `webgl2` answers null, so the renderer draws on its canvas-2D path. */
+function paintOn(ctx: object) {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((kind: string) =>
+    kind === '2d' ? ctx : null) as unknown as HTMLCanvasElement['getContext'])
+}
+
 beforeEach(() => {
   rowsServed = 0
   rowShape = { loHz: 0, hiHz: 4000, source: 'rx' }
   const rec = recordingCtx()
   texts = rec.ops
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
-    rec.ctx as unknown as CanvasRenderingContext2D,
-  )
+  paintOn(rec.ctx)
+  // Both of ImageData's forms: (width, height), which the renderer's band takes, and (data, w, h).
   globalThis.ImageData = class {
     data: Uint8ClampedArray
     width: number
     height: number
-    constructor(d: Uint8ClampedArray, w: number, h: number) {
-      this.data = d
-      this.width = w
-      this.height = h
+    constructor(a: Uint8ClampedArray | number, b: number, c?: number) {
+      if (typeof a === 'number') {
+        this.width = a
+        this.height = b
+        this.data = new Uint8ClampedArray(a * b * 4)
+      } else {
+        this.data = a
+        this.width = b
+        this.height = c ?? a.length / 4 / b
+      }
     }
   } as unknown as typeof ImageData
   window.matchMedia = ((q: string) =>
@@ -164,9 +188,7 @@ describe('#215 the scope’s overlay text follows the UI scale', () => {
     const rec = recordingCtx()
     texts = rec.ops
     rowsServed = 0
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
-      rec.ctx as unknown as CanvasRenderingContext2D,
-    )
+    paintOn(rec.ctx)
     stubGeometry(1.5)
     render(
       <PhoneScope transmitting={false} theme="dark" viewLoHz={0} viewHiHz={4000} carrierCentered />,

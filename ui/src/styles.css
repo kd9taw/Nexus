@@ -10977,7 +10977,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-height: 0;
   display: flex;
 }
+/* The renderer's host (spectrum/index.ts): the trace, waterfall and 3D picture, on a canvas the
+   renderer owns and sizes to this box. Out of flow over the wrap's whole box, so it can never feed
+   a size back into the box that sizes it; the overlay canvas below fills the same box in flow. */
+.ph-scope-render {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+/* The overlay: the dial and carrier lines, their plates, the frequency scale and the pitch marker,
+   on a transparent canvas that also takes every pointer gesture. POSITIONED, so it paints over the
+   absolutely positioned picture under it (an unpositioned box would paint beneath it). */
 .ph-scope-canvas {
+  position: relative;
   flex: 1;
   width: 100%;
   min-height: 0;
@@ -19540,6 +19553,26 @@ button.cq-skiptx1.on {
   width: 56px;
   height: 10px;
   accent-color: var(--accent);
+}
+/* The scope's ⚙ strip, under the header row while ⚙ is on: the analysis window, averaging and the
+   detector (spectrum/ScaleStrip.tsx), then the slow-scope look. It wraps rather than clips, like
+   the header row above it, and is content height, so it takes its height from the canvas. */
+.ph-scope-gear,
+.ph-scope-strip,
+.ph-scope-strip > [role='group'] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+.ph-scope-strip > [role='group'] {
+  gap: var(--space-1);
+}
+.ph-scope-gz select {
+  font-size: calc(11px * var(--text-scale));
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: var(--space-1);
 }
 
 /* ---- Chat CQ run control (TempoHeader) — the keep-calling toggle ---- */
