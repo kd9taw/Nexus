@@ -137,6 +137,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   see every activation on the band at a glance. A park you still need keeps the full new-park
   green, and a real need such as a new country still shows its own colour first. The dim
   colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged.
+- **A park you still need now comes before a confirmation everywhere.** When an activator is at
+  a park or summit you have not worked in this activation and is also a confirmation opportunity
+  (worked before, not yet confirmed), the park now leads: Band activity and its band map show the
+  new-park green instead of the confirmation grey, as the decode list already showed the park,
+  and the Call Roster, the Needed board and Connect put the park first too. A new country or any
+  other award need still comes first. The board's order, alerts, sounds and logging are
+  unchanged.
 
 ### Added
 

@@ -679,6 +679,35 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
     }
 }
 
+/// Add the park need ([`NeedTag::NewPark`]) to a row's tags in its tier's place: ahead of a
+/// [`NeedTag::Confirm`], the one need ranked below it, and otherwise last, where it always went
+/// (operator, 2026-10-04, "New park wins"). Both places that add the need call this — the
+/// activator's own row ([`activation_alert`]) and the tag loop that decorates a cluster row — so
+/// the two can never order one station differently.
+///
+/// The row's first need picks the colour of the station's tick on the band strip and the band map,
+/// and of its Needed-board row, while the decode list ranks the same tags by its own precedence,
+/// where a park already outranks a confirmation. Appended after a Confirm, the park lost the first
+/// views and won the last, so one activator wore the confirmation grey on the strip and the map and
+/// the park's colour in the decode list.
+///
+/// Only that pair changes places. Every award above the park (a watched station, a new one, zone,
+/// state, grid, band and mode) still leads it, and the programme labels are appended after it, as
+/// before. A DXpedition label, which the station appends after the scored needs, stays ahead of the
+/// park on a row with no Confirm and falls behind it on a row with one, because the park now goes in
+/// ahead of the Confirm that label follows. No priority moves. A row that already carries the park
+/// is left as it is.
+pub fn add_park_need(tags: &mut Vec<NeedTag>) {
+    if tags.contains(&NeedTag::NewPark) {
+        return;
+    }
+    let at = tags
+        .iter()
+        .position(|t| *t == NeedTag::Confirm)
+        .unwrap_or(tags.len());
+    tags.insert(at, NeedTag::NewPark);
+}
+
 /// Build a Needed-board alert for a LIVE POTA/SOTA activator. Unlike [`score`] (which
 /// returns `None` unless the station advances a DXCC/zone/grid award), an active
 /// park/summit is ITSELF the opportunity a chaser wants — so this ALWAYS yields an alert
@@ -748,7 +777,7 @@ pub fn activation_alert(
     // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
     // chip everywhere downstream, and a park still to be worked is a reason, not a decoration.
     if reference_needed && !alert.tags.contains(&NeedTag::NewPark) {
-        alert.tags.push(NeedTag::NewPark);
+        add_park_need(&mut alert.tags);
     }
     if !alert.tags.contains(&program_tag) {
         alert.tags.push(program_tag);
@@ -3082,6 +3111,110 @@ mod tests {
         assert_eq!(NeedTag::NewPark.tier(), OTA_ACTIVATION_PRIORITY);
         assert!(NeedTag::NewPark.tier() > NeedTag::Confirm.tier());
         assert!(NeedTag::NewPark.tier() < NeedTag::NewMode.tier());
+    }
+
+    /// ⭐ A PARK STILL TO BE WORKED LEADS A CONFIRMATION ON ITS ROW (operator, 2026-10-04, "New park
+    /// wins": "The needed-park color shows on the strip, the band map and the decode list alike.").
+    /// The row's first need picks the colour of the station's tick on the band strip and the band
+    /// map, while the decode list ranks the same tags by its own precedence, park over confirmation.
+    /// Appended after a Confirm, the park lost the first two views and won the third. Only that pair
+    /// changes places: an award above the park still leads it, a row without a park need or without
+    /// a confirmation reads as it did, and no priority moves.
+    #[test]
+    fn a_park_still_to_be_worked_leads_a_confirmation_on_its_row() {
+        // USA worked on 20 m phone and never confirmed: a US activator on 20 m phone is a
+        // confirmation opportunity, and on 20 m CW a new mode whose zone is still to confirm.
+        let mut unconfirmed = LogNeeds::new();
+        unconfirmed.add("W1AW", "20m", "SSB", None, None, false);
+        let empty = LogNeeds::new(); // every entity a new one
+        let phone = ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB");
+        let cw = ota("POTA", "K-1234", "W1ABC", 14_030.0, "CW");
+        let cases = [
+            (
+                "a confirmation at a park still to be worked",
+                &unconfirmed,
+                &phone,
+                true,
+                vec![NeedTag::NewPark, NeedTag::Confirm, NeedTag::Pota],
+                20,
+            ),
+            (
+                "a new mode and a confirmation at a park still to be worked",
+                &unconfirmed,
+                &cw,
+                true,
+                vec![
+                    NeedTag::NewMode,
+                    NeedTag::NewPark,
+                    NeedTag::Confirm,
+                    NeedTag::Pota,
+                ],
+                30,
+            ),
+            (
+                "a confirmation at a park already worked today",
+                &unconfirmed,
+                &phone,
+                false,
+                vec![NeedTag::Confirm, NeedTag::Pota],
+                10,
+            ),
+            (
+                "a new one at a park still to be worked",
+                &empty,
+                &phone,
+                true,
+                vec![
+                    NeedTag::NewEntity,
+                    NeedTag::NewZone,
+                    NeedTag::NewPark,
+                    NeedTag::Pota,
+                ],
+                100,
+            ),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(name, needs, spot, park_needed, tags, priority)| {
+                let a = activation_alert(spot, *needs, &needs.slots(), *park_needed).unwrap();
+                (a.tags != *tags || a.priority != *priority).then(|| {
+                    format!(
+                        "{name}: {:?} at {}, want {tags:?} at {priority}",
+                        a.tags, a.priority
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+    }
+
+    /// What [`add_park_need`] moves and what it leaves: the park goes in just ahead of a Confirm and
+    /// nowhere else, so a row without one reads exactly as it did when the park was appended.
+    #[test]
+    fn the_park_need_passes_a_confirmation_and_nothing_else() {
+        use NeedTag::{Confirm, Dxped, NewEntity, NewMode, NewPark, Wanted};
+        let cases: [(Vec<NeedTag>, Vec<NeedTag>); 8] = [
+            (vec![], vec![NewPark]),
+            (vec![Confirm], vec![NewPark, Confirm]),
+            (vec![NewMode, Confirm], vec![NewMode, NewPark, Confirm]),
+            (vec![Wanted, Confirm], vec![Wanted, NewPark, Confirm]),
+            // No confirmation on the row: appended, as before, after a DXpedition label too.
+            (vec![NewEntity], vec![NewEntity, NewPark]),
+            (vec![NewEntity, Dxped], vec![NewEntity, Dxped, NewPark]),
+            // The label follows the Confirm, so the park passes it with the Confirm.
+            (vec![Confirm, Dxped], vec![NewPark, Confirm, Dxped]),
+            // Already there: left alone, wherever it is.
+            (vec![Confirm, NewPark], vec![Confirm, NewPark]),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(row, want)| {
+                let mut got = row.clone();
+                add_park_need(&mut got);
+                (got != *want).then(|| format!("{row:?} became {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
     }
 
     #[test]
