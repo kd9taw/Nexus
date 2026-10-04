@@ -463,8 +463,8 @@ impl FlexCat {
     ///
     /// ⚠️ THE ASYNC STATUS STREAM IS NOT COMMAND EXHAUST (Flex audit 2026-08-17, #1005/#1047).
     /// `command` drains the channel for its whole reply window, and everything that was not the
-    /// matching reply used to be dropped — a window that opens microseconds after the `dax_rx`
-    /// create in `flexdax`, and whose length scales with RTT. The dax_rx stream id has exactly one
+    /// matching reply used to be dropped — a window that opened microseconds after the `dax_rx`
+    /// create in the older native audio worker (since retired), and whose length scales with RTT. The dax_rx stream id has exactly one
     /// source (its create reply / the async `stream …` status), so the swallow could leave the
     /// audio path permanently filtered out with the feature looking enabled. Bounded FIFO, so
     /// order is preserved and nothing accumulates without limit.
@@ -789,8 +789,8 @@ mod tests {
     ///
     /// `command` drains the channel for its whole reply window. Everything that was not the
     /// matching reply used to be dropped — including the `stream … type=dax_rx` status that is the
-    /// only place the DAX RX stream id is learned, which `flexdax` creates microseconds before it
-    /// calls `command`. Both halves asserted: the reply still arrives, and the status survives.
+    /// only place the DAX RX stream id is learned, which the older native audio worker (since
+    /// retired) created microseconds before it called `command`. Both halves asserted: the reply still arrives, and the status survives.
     #[test]
     fn a_command_parks_the_async_status_that_arrives_in_its_reply_window() {
         let (mut peer, mut cat) = local_session();

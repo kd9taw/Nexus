@@ -359,3 +359,98 @@ fn dax_tx_goes_to_the_vita_port_not_4993() {
     assert_eq!(UDP_REGISTRATION_PORT, 4992);
     assert_eq!(DAX_RATE_HZ, 24_000);
 }
+
+/// What a source line, its comment cut off, says about a DAX sender: `Some(why)` for one of the
+/// two marks the retired sender left.
+fn retired_sender_mark(line: &str) -> Option<&'static str> {
+    let code = line.split("//").next().unwrap_or("");
+    let port = code.match_indices("4993").any(|(i, m)| {
+        let digit = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        !digit(code[..i].chars().next_back()) && !digit(code[i + m.len()..].chars().next())
+    });
+    if port {
+        return Some("names UDP 4993");
+    }
+    let int16_class = code.contains("REDUCED_CLASS") || code.contains("0x0123");
+    (int16_class && code.contains("<< 16"))
+        .then_some("builds a VITA class word from the int16 class")
+}
+
+/// Every `.rs` file under `dir`, test files and directories left out.
+fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            if name != "target" && name != "tests" && name != "node_modules" {
+                rust_sources(&path, out);
+            }
+        } else if name.ends_with(".rs") && name != "tests.rs" {
+            out.push(path);
+        }
+    }
+}
+
+/// ⭐ NO DAX SENDER TO 4993, OR IN INT16, COMES BACK (operator ruling, 2026-10-04, "Retire it").
+/// The older native audio worker sent DAX TX as int16 mono (`0x0123`, a format no tested client
+/// sends) to UDP 4993, where an over keyed with no audio. It is retired: the only DAX TX Nexus
+/// sends is [`dax_tx_packet`]'s float32 stereo, to [`VITA_PORT`]. Every Rust source of the
+/// workspace and the Tauri shell is scanned, test code left out (a file's code after its first
+/// `#[cfg(test)]`, test files, `tests/`), for the two marks that sender left. A merge that brings
+/// it back, or a new sender of its shape, fails here.
+#[test]
+fn no_dax_sender_to_4993_or_in_int16_remains() {
+    // The checker, both ways: the retired sender's own lines trip it, the live sender's do not,
+    // and neither does prose about the old port.
+    assert!(retired_sender_mark("const FLEX_VITA_PORT: u16 = 4993;").is_some());
+    assert!(retired_sender_mark(
+        "    let class_word = (u32::from(FLEX_INFO_CLASS) << 16) | u32::from(DAX_AUDIO_REDUCED_CLASS);"
+    )
+    .is_some());
+    assert!(retired_sender_mark("pub const VITA_PORT: u16 = 4991;").is_none());
+    assert!(retired_sender_mark(
+        "    out.extend_from_slice(&((FLEX_INFO_CLASS << 16) | u32::from(AUDIO_CLASS)).to_be_bytes());"
+    )
+    .is_none());
+    assert!(
+        retired_sender_mark("//! the older sender used 4993, where an over keyed silent").is_none()
+    );
+    assert!(retired_sender_mark("let port = 49930;").is_none());
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    for dir in ["crates", "src-tauri/src"] {
+        rust_sources(&root.join(dir), &mut files);
+    }
+    let mut marks = Vec::new();
+    let mut live_port = 0;
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a source file reads");
+        for (n, line) in text.lines().enumerate() {
+            if line.trim() == "#[cfg(test)]" {
+                break;
+            }
+            if line.split("//").next().unwrap_or("").contains("4991") {
+                live_port += 1;
+            }
+            if let Some(why) = retired_sender_mark(line) {
+                let at = file.strip_prefix(&root).unwrap_or(file).display();
+                marks.push(format!("{at}:{}: {why}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    // The scan read the real tree: hundreds of files, and the live sender's port among them.
+    assert!(files.len() > 300, "only {} source files found", files.len());
+    assert!(
+        live_port > 0,
+        "the scan never saw the radio's VITA port, 4991"
+    );
+    assert!(
+        marks.is_empty(),
+        "a retired DAX sender is back:\n{}",
+        marks.join("\n")
+    );
+}
