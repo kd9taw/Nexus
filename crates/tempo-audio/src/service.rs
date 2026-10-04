@@ -7542,18 +7542,31 @@ impl RadioLoop {
                                             }
                                         }
                                     }
-                                    (Some(hz), None) => {
-                                        if rig.set_passband(mode, hz).is_ok() {
-                                            {
-                                                let mut eng = engine_lock(engine);
-                                                eng.observe_rig_passband(Some(hz));
-                                                // optimistic; next read confirms
-                                            }
-                                        } else {
+                                    (Some(hz), None) => match rig.set_passband(mode, hz) {
+                                        Ok(()) => {
                                             let mut eng = engine_lock(engine);
-                                            eng.request_filter_width(hz); // re-queue for the next cycle
+                                            eng.observe_rig_passband(Some(hz)); // optimistic; next read confirms
                                         }
-                                    }
+                                        // THE RIG SAID NO (Hamlib answered with an RPRT that is
+                                        // not a link fault, `rprt_error`): final, as on the native
+                                        // path. Re-queued, the same width went out every cycle for
+                                        // good — and a waiting width now owes every poll's mode
+                                        // read. The `m` read just above already put the radio's
+                                        // own width back on screen.
+                                        Err(e) if e.kind() == std::io::ErrorKind::Other => {
+                                            tempo_core::applog::info(
+                                                "cat",
+                                                &format!(
+                                                    "the radio kept its filter width: a {hz} Hz \
+                                                     width was refused ({e})"
+                                                ),
+                                            );
+                                        }
+                                        Err(_) => {
+                                            let mut eng = engine_lock(engine);
+                                            eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                        }
+                                    },
                                 }
                             }
                         }

@@ -295,6 +295,83 @@ fn a_width_reaches_a_hamlib_rig_once_as_set_mode() {
     assert!(!engine.lock().unwrap().passband_request_pending());
 }
 
+/// A rigctld that REFUSES any width over 3.6 kHz (`RPRT -9`, as an Icom on Hamlib does past its
+/// table) and accepts everything else, logging every line — `mock_polled_rigctld` otherwise.
+fn width_refusing_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log2 = Arc::clone(&log);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let Ok(r) = stream.try_clone() else { continue };
+            let mut reader = BufReader::new(r);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let l = line.trim().to_string();
+                log2.lock().unwrap().push(l.clone());
+                let mut p = l.split_whitespace();
+                let too_wide = p.next() == Some("M")
+                    && p.nth(1)
+                        .and_then(|w| w.parse::<i64>().ok())
+                        .is_some_and(|w| w > 3600);
+                let reply = match l.as_str() {
+                    "f" => "14250000\n",
+                    "m" => "USB\n2400\n",
+                    _ if too_wide => "RPRT -9\n",
+                    _ => "RPRT 0\n",
+                };
+                if stream.write_all(reply.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    (addr, log)
+}
+
+/// ⛔ A WIDTH THE HAMLIB RIG REFUSES IS SENT ONCE, NOT FOREVER. It used to be re-queued and re-sent
+/// on every mode read for good; with a waiting width owing every poll's read, that would be a write
+/// every poll. The radio's own width stays on screen; a hiccup (no answer) still re-queues.
+#[test]
+fn a_width_a_hamlib_rig_refuses_is_sent_once() {
+    let (addr, log) = width_refusing_rigctld();
+    let mut rig = Rig::rigctld(&addr);
+    let engine = phone_engine(0);
+    let mut state = loop_state();
+    let mut t = 0.0;
+    steps(&engine, &mut state, &mut rig, 2, &mut t);
+    let from = log.lock().unwrap().len();
+    engine.lock().unwrap().request_filter_width(4000);
+    steps(&engine, &mut state, &mut rig, 6, &mut t);
+    assert_eq!(
+        width_lines(&log, from),
+        vec!["M USB 4000".to_string()],
+        "once"
+    );
+    assert!(
+        !engine.lock().unwrap().passband_request_pending(),
+        "dropped, not re-queued"
+    );
+    assert_eq!(
+        width_shown(&engine),
+        Some(2400),
+        "the radio's own width, from its `m`"
+    );
+    // POSITIVE CONTROL: a width it takes goes out, through the same scene.
+    let from = log.lock().unwrap().len();
+    engine.lock().unwrap().request_filter_width(3000);
+    steps(&engine, &mut state, &mut rig, 2, &mut t);
+    assert_eq!(width_lines(&log, from), vec!["M USB 3000".to_string()]);
+}
+
 /// ⛔ NO WIDTH IS WRITTEN TO A KEYED RADIO, on either backend: the apply rides the receive-time
 /// poll, which a keyed radio skips. The width waits and goes out at receive — the positive
 /// control, which also proves the scene can write at all.
