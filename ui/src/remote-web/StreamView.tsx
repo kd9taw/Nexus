@@ -834,13 +834,15 @@ const keyboardLock = () => (navigator as Navigator & { keyboard?: KeyboardLock }
 const orientationLock = () => screen.orientation as (ScreenOrientation & OrientationLock) | undefined
 
 /** Full screen for the whole page, Stop TX with it, never the picture alone; and Esc still a Stop
- *  wherever there is an Esc key (the operator's pick, 2026-10-03). Chrome and Edge lock Esc to the
- *  page (Keyboard Lock), so it reaches useEscapeStops and only a two-second hold leaves. A desktop
- *  browser without it (Firefox, Safari) leaves on Esc before the page can hear it, so there every
- *  exit the page did not ask for sends Stop TX: it cannot tell an Esc from any other way out. A
- *  phone or tablet (a coarse pointer) has no Esc: it turns to landscape where it can, and its back
- *  gesture leaves with no Stop, so a swipe never ends an over. An iPhone has no full screen for a
- *  page at all, so it is not offered there. */
+ *  wherever there is an Esc key (the operator's pick, 2026-10-03). On a desktop every exit the page
+ *  did not ask for sends Stop TX, in every browser: the page cannot tell an Esc from any other way
+ *  out. Chrome and Edge lock Esc to the page (Keyboard Lock), so it reaches useEscapeStops and only a
+ *  two-second hold leaves, and that exit stops again, harmlessly. The lock never stands in for that
+ *  Stop: it may resolve and still not hold Esc (unmeasured in WebView2), and then Esc leaves at once,
+ *  unheard, as it does in a desktop browser without it (Firefox, Safari). A phone or tablet (a coarse
+ *  pointer) has no Esc: it turns to landscape where it can, and its back gesture leaves with no Stop,
+ *  so a swipe never ends an over. An iPhone has no full screen for a page at all, so it is not
+ *  offered there. */
 function useFullScreen(stop: () => void): { offered: boolean; on: boolean; toggle: () => void } {
   const [on, setOn] = useState(() => !!document.fullscreenElement)
   const latest = useRef(stop)
@@ -888,10 +890,11 @@ function useFullScreen(stop: () => void): { offered: boolean; on: boolean; toggl
         try { await orientationLock()?.lock?.('landscape'); entry.locked = 'orientation' } catch { /* it stays as the operator holds it */ }
         return
       }
-      // Esc held for the page: leaving is then a two-second hold of a key whose press already stopped.
+      // Esc held for the page, so its press stops and full screen stays. Leaving still stops: a lock
+      // can resolve without holding Esc, and the page cannot tell.
       const keys = keyboardLock()
       if (!keys?.lock) return
-      try { await keys.lock(['Escape']); entry.locked = 'keyboard'; entry.stops = false } catch { /* not held: every exit not asked for stops */ }
+      try { await keys.lock(['Escape']); entry.locked = 'keyboard' } catch { /* not held: Esc leaves at once, unheard, and that exit stops */ }
     }, () => { if (mine.current === entry) mine.current = null })
   }
   return { offered: document.fullscreenEnabled === true, on, toggle }

@@ -1219,6 +1219,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         {const stop=await evaluate(`(()=>{const e=${button('Stop TX')},r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y))}})()`);assert.ok(stop.inside&&stop.hit,'Stop TX on screen in full screen: '+JSON.stringify(stop))}
         {const before=await stopsNow();await esc();await oneStop(before,'Esc in full screen is a Stop');assert.equal(await evaluate('document.fullscreenElement===document.documentElement'),true,'and full screen stays')}
         {await ready();const before=await stopsNow();await click(button('Exit full screen'));await until('!document.fullscreenElement',5000);await sleep(600);assert.deepEqual(await stopsNow(),before,'the page\'s own Exit sends no Stop')}
+        // A lock may resolve without holding Esc (WebView2 may). Chrome then hands the page no Esc, as below, and Esc leaves
+        // full screen unheard. The page cannot tell, so that exit is a Stop, as is every exit it did not ask for.
+        await evaluate(`navigator.keyboard.lock=k=>{__locks.push('unheld '+k);return Promise.resolve()};true`)
+        {await ready();await click(button('Full screen'));await until(`document.fullscreenElement===document.documentElement&&window.__locks.includes('unheld Escape')`,5000);const before=await stopsNow();await esc();await until('!document.fullscreenElement',5000);await oneStop(before,'a lock that resolved without holding Esc: Esc leaving full screen is a Stop')}
         // Firefox and Safari have no Keyboard Lock, and without it Chrome hands the page no Esc at all in full screen: Esc
         // leaves full screen first (measured, Chrome 140). There any exit the page did not ask for is a Stop. CONTROL: its
         // own Exit is not.

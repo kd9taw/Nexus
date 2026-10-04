@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure. If the station does refuse a Stop
   (station control taken back at the radio, for example), the stream page says **Could not stop
   transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
+- **Remote streaming: leaving full screen sends Stop TX in Chrome and Edge too.** In Firefox and
+  Safari, leaving full screen any way but **Exit full screen** already sent Stop TX. Chrome and Edge
+  skipped that Stop, trusting Esc to reach the page and stop first, so a browser that reported
+  holding Esc without doing it would let Esc leave full screen with nothing stopped. Now leaving full
+  screen any way but **Exit full screen** sends Stop TX in every desktop browser. Esc in full screen
+  still stops as before, so holding it to leave sends a second Stop, which is harmless. Phones and
+  tablets are unchanged: the back gesture leaves full screen without a Stop. It needs the Remote
+  page's update.
 - **Remote streaming: text in the picture is sharp.** A Nexus window larger than 2560×1600, a
   3440×1440 ultrawide's for one, went out at half its width and height and the browser enlarged it
   again, so every letter on the stream read soft. Now the Remote page tells Nexus at the shack how
