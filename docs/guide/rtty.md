@@ -199,7 +199,9 @@ at once and is kept with that set — there is no separate Settings save. Titles
 messages you write are shown as you wrote them, in any language; the built-in
 titles follow the app's language. A token Nexus does not know is flagged and cannot
 be saved (RTTY has no braces, so it would go out as a bare word), and a macro may
-not be titled **Stop** or **Esc** — those name the controls that stop a
+not have a title that reads as a stop — **Stop**, **Esc**, **Abort**, **Cancel** or
+the same in German, Spanish, French or Japanese (**Stopp**, **Parar**, **Arrêter**,
+**停止**), whatever language the app is in. Those name the controls that stop a
 transmission, and a macro only ever transmits. **Esc** closes the editor when
 nothing is on the air; while an over is going out, continuous TX is up or an auto
 sequence is running, Esc stops as it always does, editor open or not.

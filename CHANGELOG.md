@@ -111,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   within the same limits as before. **Fit** shows the whole picture again. A pinch on the buttons
   above the picture still zooms the browser, and the page now keeps its size when it does. It needs
   the Remote page's update; the sharper zoom also needs the new Nexus at the shack.
+- **RTTY and PSK macros: a caption that reads as a stop is refused in every language.** The F-key
+  editor refused a caption like Stop, Esc or Abort only in English, so a key that transmits could be
+  saved as "Stopp", "Parar", "Arrêter" or "停止", which looks like the key to press to stop. It now
+  refuses a caption that reads as a stop, halt, abort, cancel or Esc in English, German, Spanish,
+  French or Japanese, whichever language the screen is in, and says why; in English that adds Halt
+  and Cancel. Ordinary captions are not affected. A key captioned that way before keeps its caption
+  until it is edited.
 
 ### Changed
 
