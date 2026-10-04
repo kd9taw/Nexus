@@ -111,18 +111,29 @@ function snapWith(receivers: ReceiversStatus | undefined): AppSnapshot {
 }
 
 /** The rendered cockpit once its mount-time reads have settled, React's generated ids made
- *  position-independent (they count useId calls across the whole file). */
+ *  position-independent (they count useId calls across the whole file).
+ *
+ *  ⚠️ READ ON A HELD CLOCK (2026-10-04). The decode pane's typewriter reveals the transcript on a
+ *  50 ms interval, and the golden holds it unrevealed (`listening…`). On a real clock a loaded box
+ *  let the first tick land inside act's flush and drew `C` there instead: red, with nothing wrong.
+ *  With the timers faked no timer moves the document; the mount-time reads are promises and still
+ *  land. */
 async function cockpitHtml(receivers: ReceiversStatus | undefined): Promise<string> {
-  const { container } = render(
-    <CwCockpit snap={snapWith(receivers)} theme="dark" onWorkSpot={() => {}} spots={[]} />,
-  )
-  await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-  })
-  const html = container.innerHTML.replace(/:r[0-9a-z]+:/g, ':rID:')
-  cleanup()
-  return html
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  try {
+    const { container } = render(
+      <CwCockpit snap={snapWith(receivers)} theme="dark" onWorkSpot={() => {}} spots={[]} />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const html = container.innerHTML.replace(/:r[0-9a-z]+:/g, ':rID:')
+    cleanup()
+    return html
+  } finally {
+    vi.useRealTimers()
+  }
 }
 
 const GOLDEN = resolve(process.cwd(), 'src/components/__fixtures__/CwCockpit.single-receiver.golden.html')
