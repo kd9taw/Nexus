@@ -803,7 +803,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await browser.call('Runtime.enable',{},shack)
       const atShack=async expression=>{const v=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},shack);if(v.exceptionDetails)throw new Error('Station evaluation failed: '+String(v.exceptionDetails.exception?.description??v.exceptionDetails.text).split('\n')[0]);return v.result?.value}
       const untilShack=async(expression,timeout=12000)=>{for(let i=0;i<Math.ceil(timeout/100);i++){if(await atShack(expression))return;await sleep(100)}console.log('Station diagnostic',JSON.stringify(await atShack('({received:__shack.received,state:window.__pc?.connectionState})')));throw new Error('Expected station state did not appear: '+expression)}
-      await atShack(`window.__shack={received:{control:[],ptt:[],audio:[]},candidates:[]};(()=>{const c=document.createElement('canvas');c.width=640;c.height=360;document.body.appendChild(c);const x=c.getContext('2d');let n=0;setInterval(()=>{x.fillStyle='hsl('+(n*7%360)+' 55% 35%)';x.fillRect(0,0,640,360);x.fillStyle='#fff';x.font='40px sans-serif';x.fillText('Nexus at the shack '+(n++),24,190)},50);window.__picture=c.captureStream(20)})();true`)
+      // The shack's window: 16:9, and on the phone the 21:9 of an ultrawide (3440 x 1440 scaled), the shape the phone layout
+      // was measured against (2026-10-03).
+      await atShack(`window.__shack={received:{control:[],ptt:[],audio:[]},candidates:[]};(()=>{const c=document.createElement('canvas');c.width=${phone?860:640};c.height=360;document.body.appendChild(c);const x=c.getContext('2d');let n=0;setInterval(()=>{x.fillStyle='hsl('+(n*7%360)+' 55% 35%)';x.fillRect(0,0,c.width,c.height);x.fillStyle='#fff';x.font='40px sans-serif';x.fillText('Nexus at the shack '+(n++),24,190)},50);window.__picture=c.captureStream(20)})();true`)
       // The station's receive audio, as the contract has it on `audio`: when the channel opens it says
       // "audio started", then sends `audioRx` bundles of five 20 ms Opus frames every 100 ms for the
       // whole stream. The Opus is a tone from this Chrome's own encoder, run on a page of its own
@@ -879,6 +881,21 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             const at=await page(),fitted=await settledView()
             const stop=await evaluate(`(()=>{const e=${button('Stop TX')},r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y))}})()`)
             assert.ok(stop.inside&&stop.hit,`Stop TX reachable on a ${w}x${h} phone: ${JSON.stringify(stop)}`)
+            // THE PHONE LAYOUT (the operator's pick, 2026-10-03). Upright, a bar over the picture with Stop TX and a bar of
+            // thumb controls under it; on its side, a rail of controls beside the picture. Stop TX is the first control and the
+            // largest in both, the PTT is about 96 px, and the picture takes the room the header took: on its side the 21:9
+            // picture was 569 x 238 under the header (measured 2026-10-03), and the rail is 120 px.
+            const laid=await evaluate(`(()=>{const app=document.querySelector('.remote-stream-app'),box=e=>{const r=e.getBoundingClientRect();return {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}},buttons=[...app.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),stop=${button('Stop TX')},ptt=document.querySelector('.remote-stream-ptt'),v=document.querySelector('.remote-stream-video'),r=v.getBoundingClientRect(),s=Math.min(r.width/v.videoWidth,r.height/v.videoHeight),rail=app.querySelector('.remote-stream-header');return {layout:app.dataset.layout,railFits:app.dataset.layout==='rail'?rail.scrollHeight<=rail.clientHeight+1:null,first:buttons[0]===stop,stop:box(stop),ptt:box(ptt),picture:[+(v.videoWidth*s).toFixed(1),+(v.videoHeight*s).toFixed(1)],turn:document.querySelector('.remote-stream-turn')?.textContent??null,others:buttons.filter(e=>e!==stop).map(e=>({name:e.textContent,...box(e)}))}})()`)
+            console.log(`Phone layout ${w}x${h}: `+JSON.stringify(laid))
+            const upright=h>w
+            assert.equal(laid.layout,upright?'bars':'rail',`the ${upright?'upright':'turned'} layout`)
+            assert.equal(laid.railFits,upright?null:true,'on its side the rail holds every control with nothing to scroll')
+            assert.ok(laid.first&&laid.others.every(o=>o.y>=laid.stop.y),`Stop TX is the first control, and none sits above it: ${JSON.stringify(laid)}`)
+            assert.ok(laid.stop.w>=laid.ptt.w&&laid.stop.h>=laid.ptt.h&&laid.others.every(o=>o.w*o.h<=laid.stop.w*laid.stop.h),`Stop TX is the largest control: ${JSON.stringify(laid)}`)
+            assert.ok(Math.abs(laid.ptt.h-96)<=4&&(upright||Math.abs(laid.ptt.w-96)<=4),`a PTT of about 96 px: ${JSON.stringify(laid.ptt)}`)
+            const fills=upright?[412,412*360/860]:[915-120,(915-120)*360/860]
+            assert.ok(Math.abs(laid.picture[0]-fills[0])<=2&&Math.abs(laid.picture[1]-fills[1])<=2,`the picture is ${laid.picture.join(' x ')}, against ${fills.map(n=>n.toFixed(1)).join(' x ')}`)
+            assert.equal(laid.turn,upright?'Turn the phone on its side for a bigger picture.':null,'upright, a phone is told it can turn for a bigger picture')
             const centre={x:at.stage.x+at.stage.w/2,y:at.stage.y+at.stage.h/2}
             // A TAP: a press and a release at the shack, where the finger was.
             let mark=(await record()).pointers.length
@@ -897,7 +914,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await touch('touchEnd',[])
             await sleep(500)
             const after=await record(),pinched={pointers:after.pointers.slice(before.pointers.length),held:after.held.slice(before.held.length)}
-            const entry={phone:`${w}x${h}`,tap:tapped.map(m=>({action:m.action,x:+m.x.toFixed(3),y:+m.y.toFixed(3),pointerType:m.pointerType,clicks:m.clicks})),pinch:{pointers:pinched.pointers.map(m=>`${m.action} ${m.buttons}`),held:pinched.held.length}}
+            const entry={phone:`${w}x${h}`,layout:laid.layout,picture:laid.picture,stop:laid.stop,ptt:laid.ptt,tap:tapped.map(m=>({action:m.action,x:+m.x.toFixed(3),y:+m.y.toFixed(3),pointerType:m.pointerType,clicks:m.clicks})),pinch:{pointers:pinched.pointers.map(m=>`${m.action} ${m.buttons}`),held:pinched.held.length}}
             phoneRecord.push(entry)
             console.log(`Phone input record ${w}x${h}: `+JSON.stringify(entry))
             assert.deepEqual(pinched,{pointers:[],held:[]},`a pinch on a ${w}x${h} phone sends the shack nothing: no press, no drag`)
@@ -937,6 +954,24 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await settledView()
             if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`phone-${w}x${h}.png`),Buffer.from(shot.data,'base64'))}
           }
+          // MORE, on its side: End the stream, Disconnect, Sign out and the beta line, over the picture beside the rail, every one
+          // reachable and Stop TX still uncovered. A tap on the picture closes it and reaches nothing at the shack: the cover
+          // under it takes the tap, so a tap meant to close a menu is never a click at the shack.
+          await tap(await centreOf(button('More')))
+          await until(`!!document.querySelector('.remote-stream-more-panel')`,3000)
+          const opened=await evaluate(`(()=>{const p=document.querySelector('.remote-stream-more-panel'),r=p.getBoundingClientRect(),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {items:[...p.querySelectorAll('button')].map(b=>b.textContent),beta:p.querySelector('.remote-beta')?.textContent??null,reachable:[...p.querySelectorAll('button')].every(hit),stop:hit(${button('Stop TX')}),inside:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight}})()`)
+          assert.deepEqual(opened,{items:['End the stream','Disconnect and return to stations','Sign out'],beta:'Beta Remote streaming is a beta feature. Access could be revoked at any time.',reachable:true,stop:true,inside:true},'More, on its side')
+          if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-915x412-more.png'),Buffer.from(shot.data,'base64'))}
+          {
+            const stage=(await page()).stage,before=(await record()).pointers.length
+            await tap({x:stage.x+40,y:stage.y+stage.h/2})
+            await until(`!document.querySelector('.remote-stream-more-panel')`,3000)
+            await sleep(400)
+            assert.deepEqual((await record()).pointers.slice(before),[],'the tap that closed More reached nothing at the shack')
+            // CONTROL: the same tap with More closed is a click at the shack.
+            await tap({x:stage.x+40,y:stage.y+stage.h/2})
+            await untilShack(`__shack.received.control.filter(m=>m.type==='pointer').length>=${before+2}`)
+          }
           // FULL SCREEN, a phone's rule: the whole page, turned to landscape where the browser can (this emulation cannot,
           // and says NotSupportedError), no Esc to keep, and the back gesture leaving it sends no Stop.
           await evaluate(`window.__locks=[];const o=screen.orientation.lock.bind(screen.orientation);screen.orientation.lock=k=>{__locks.push('orientation '+k);return o(k)};const l=navigator.keyboard.lock.bind(navigator.keyboard);navigator.keyboard.lock=k=>{__locks.push('keyboard '+k);return l(k)};true`)
@@ -949,6 +984,52 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await sleep(600)
           assert.deepEqual([await atShack(`__shack.received.control.filter(m=>m.type==='stopTransmit').length`),stopRequests.length],stopsBefore,'on a phone, leaving full screen by the back gesture sends no Stop')
           assert.equal(await evaluate(`!!${button('Full screen')}`),true,'and Full screen is offered again')
+          // THE TYPING BOX, upright: Keyboard opens a one-line field, focused by the tap so a phone raises its keyboard. What the
+          // keyboard commits goes to the field focused at the shack as the contract's `text`, a word still being composed goes
+          // when it is finished, and Enter goes as Enter: exactly that, and nothing through the picture's own input.
+          await browser.call('Emulation.setDeviceMetricsOverride',{width:412,height:915,deviceScaleFactor:3,mobile:true},session)
+          await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+          await until(`document.querySelector('.remote-stream-app')?.dataset.layout==='bars'`,3000)
+          await settledLayout()
+          await tap(await centreOf(button('Keyboard')))
+          await until(`document.activeElement?.classList.contains('remote-stream-typing-field')`,3000)
+          {
+            const from=await atShack('__shack.received.control.length')
+            const typed=()=>atShack(`__shack.received.control.slice(${from}).filter(m=>['text','key','pointer','wheel'].includes(m.type)).map(m=>m.type==='text'?'text '+m.text:m.type+' '+(m.action??'')+' '+(m.key??''))`)
+            await browser.call('Input.insertText',{text:'W1AW'},session)
+            await untilShack(`__shack.received.control.slice(${from}).some(m=>m.type==='text')`)
+            await browser.call('Input.imeSetComposition',{text:'ka',selectionStart:2,selectionEnd:2},session)
+            await sleep(300)
+            const composing=await typed()
+            await browser.call('Input.insertText',{text:'か'},session)
+            await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'},session)
+            await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+            await untilShack(`__shack.received.control.slice(${from}).some(m=>m.type==='key'&&m.key==='Enter'&&m.action==='up')`)
+            await sleep(300)
+            const sent=await typed()
+            console.log('Phone typing record: '+JSON.stringify({composing,sent}))
+            assert.deepEqual(composing,['text W1AW'],'a word still being composed sends nothing')
+            assert.deepEqual(sent,['text W1AW','text か','key down Enter','key up Enter'],'exactly the committed text, then Enter')
+            assert.equal(await evaluate(`document.querySelector('.remote-stream-typing-field').value`),'','Enter empties the box')
+            if(artifacts){await browser.call('Input.insertText',{text:'CQ'},session);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-412x915-typing.png'),Buffer.from(shot.data,'base64'))}
+            phoneRecord.push({typing:sent})
+          }
+          // THE INSTALLABLE APP, under the Worker's real policy: Chrome reads the page's own manifest (`manifest-src 'self'`) with no
+          // error and no policy refusal. CONTROL: the same page pointed at another origin's manifest is refused by the policy, and
+          // that refusal is seen, so the empty list above means none was refused.
+          {
+            const manifest=await browser.call('Page.getAppManifest',{},session)
+            const installable=await browser.call('Page.getInstallabilityErrors',{},session).catch(error=>({error:String(error.message)}))
+            console.log('Phone manifest: '+JSON.stringify({url:manifest.url,errors:manifest.errors,installable}))
+            assert.ok(manifest.url.endsWith('/manifest.webmanifest')&&manifest.errors.length===0&&JSON.parse(manifest.data).name==='Nexus Remote',`Chrome read the page's manifest: ${JSON.stringify({url:manifest.url,errors:manifest.errors})}`)
+            assert.deepEqual({events:(await evaluate('window.__csp')).filter(v=>v.startsWith('manifest-src')),console:refused.filter(text=>/manifest/i.test(text))},{events:[],console:[]},'no policy refusal of the manifest')
+            await evaluate(`document.querySelector('link[rel=manifest]').href='https://example.invalid/app.webmanifest';true`)
+            await browser.call('Page.getAppManifest',{},session).catch(()=>null)
+            for(let i=0;i<30&&!(await evaluate(`window.__csp.some(v=>v.startsWith('manifest-src'))`));i++)await sleep(100)
+            assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('manifest-src https://example.invalid')),'control: another origin\'s manifest is refused by the policy: '+JSON.stringify(await evaluate('window.__csp')))
+            await evaluate(`document.querySelector('link[rel=manifest]').href='/manifest.webmanifest';true`)
+            phoneRecord.push({manifest:{url:manifest.url,errors:manifest.errors,installable}})
+          }
           console.log('Phone input record: '+JSON.stringify(phoneRecord))
           assert.equal(exceptions,0,'the stream view raised no runtime exception')
           assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')

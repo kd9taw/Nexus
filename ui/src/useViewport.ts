@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 
 // Responsive size-class driver.
 //
@@ -42,6 +42,31 @@ function subscribeViewportClass(onChange: () => void): () => void {
  */
 export function useViewportClass(): ViewportClass | null {
   return useSyncExternalStore(subscribeViewportClass, readViewportClass, () => null)
+}
+
+function readViewportSize(): string {
+  const style = document.documentElement.style
+  return `${style.getPropertyValue('--vw-eff')} ${style.getPropertyValue('--vh-eff')}`
+}
+
+function subscribeViewportSize(onChange: () => void): () => void {
+  if (typeof MutationObserver === 'undefined') return () => {}
+  const mo = new MutationObserver(onChange)
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+  return () => mo.disconnect()
+}
+
+/**
+ * The effective size `useViewport` publishes on <html> (`--vw-eff` × `--vh-eff`), for a layout that turns on
+ * the height as well as the width: a phone on its side is `sm` by its 915 px of width and has 412 px of height.
+ * Read, never computed again, as `useViewportClass` reads the class; null until the first stamp.
+ */
+export function useViewportSize(): { width: number; height: number } | null {
+  const raw = useSyncExternalStore(subscribeViewportSize, readViewportSize, () => '')
+  return useMemo(() => {
+    const [width, height] = raw.split(' ').map(parseFloat)
+    return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null
+  }, [raw])
 }
 
 /** Read the live `--ui-zoom` (defaults to 1 if unset/invalid). */

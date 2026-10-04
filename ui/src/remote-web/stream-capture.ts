@@ -10,7 +10,7 @@
 // it: they zoom and pan the picture on this page (PictureZoom), and a pinch once reached the shack
 // as two presses and a drag on whatever lay under them. The station forwards what does arrive into
 // Nexus's window as DOM events; there is no path from here to anything else on the shack PC.
-import { MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, type StreamKey, type StreamPointer, type StreamText, type StreamWheel } from './stream-protocol'
+import { MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, STREAM_CONTROL_BYTES, type StreamKey, type StreamPointer, type StreamText, type StreamWheel } from './stream-protocol'
 
 /** The picture's box as laid out, and the frame's own size. */
 export type PictureBox = { left: number; top: number; width: number; height: number; videoWidth: number; videoHeight: number }
@@ -97,6 +97,39 @@ export function keyMessage(action: StreamKey['action'], event: Modifiers & { key
 export function textMessage(text: string): StreamText | null {
   const clean = [...text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()].slice(0, 256).join('')
   return clean ? { type: 'text', text: clean } : null
+}
+
+/** Text from the page's typing box as it is committed, for the focused field at the shack: every character, spaces
+ *  included, since a word goes when it is finished and the space after it goes with the next. Control characters
+ *  are dropped, as the station drops them (C0, DEL and C1), and the rest goes in order in as many messages as the
+ *  contract's 256 characters and the control channel's bytes need. */
+export function typedText(text: string): StreamText[] {
+  const out: StreamText[] = []
+  let piece: string[] = []
+  const fits = (chars: string[]) => chars.length <= 256
+    && new TextEncoder().encode(JSON.stringify({ type: 'text', text: chars.join('') })).length <= STREAM_CONTROL_BYTES
+  for (const char of text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')) {
+    if (!fits([...piece, char])) { out.push({ type: 'text', text: piece.join('') }); piece = [] }
+    piece.push(char)
+  }
+  if (piece.length) out.push({ type: 'text', text: piece.join('') })
+  return out
+}
+
+/** A key pressed and let go at once, for the field focused at the shack: the typing box's Enter and Backspace. */
+export function keyPress(key: 'Enter' | 'Backspace'): StreamKey[] {
+  const press = { type: 'key', key, code: key, modifiers: 0, repeat: false } as const
+  return [{ ...press, action: 'down' }, { ...press, action: 'up' }]
+}
+
+/** What the typing box sends when its field goes from `sent` (what the shack's field was given) to `now`: a
+ *  Backspace for each character after the part the two share, then the rest of `now` as text. So the box always
+ *  reads what the shack's field was given, a word the keyboard corrected or one deleted here included. */
+export function typedChange(sent: string, now: string): (StreamKey | StreamText)[] {
+  const before = [...sent], after = [...now]
+  let same = 0
+  while (same < before.length && same < after.length && before[same] === after[same]) same++
+  return [...before.slice(same).flatMap(() => keyPress('Backspace')), ...typedText(after.slice(same).join(''))]
 }
 
 /** What this page has pressed at the shack and not yet released. A key or button that went DOWN

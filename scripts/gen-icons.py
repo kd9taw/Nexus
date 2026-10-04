@@ -10,6 +10,11 @@ Windows .ico, and a macOS .icns). Re-run after changing the design:
 
 Requires Pillow (PIL). On Windows the build script falls back to
 `cargo tauri icon` if this can't run.
+
+    python3 scripts/gen-icons.py --web
+
+writes only the Remote page's icons (its web app manifest's two and an
+iPhone's home-screen one) into ui/remote/public/, from the committed master.
 """
 import os
 from PIL import Image, ImageDraw
@@ -17,6 +22,7 @@ from PIL import Image, ImageDraw
 OUT = os.path.join(os.path.dirname(__file__), "..", "src-tauri", "icons")
 OUT = os.path.normpath(OUT)
 os.makedirs(OUT, exist_ok=True)
+WEB_OUT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ui", "remote", "public"))
 
 BG = (14, 21, 31, 255)        # deep slate (matches the dark theme)
 BARS = [0.34, 0.58, 0.88, 0.50, 0.40]   # relative heights of the 5 bars
@@ -73,5 +79,20 @@ def main():
     print(f"icons written to {OUT}")
 
 
+def web():
+    """The Remote page's icons, from the committed master so they are the app's own. The
+    home-screen one is square and opaque: iOS cuts its own corners and fills anything
+    transparent with black."""
+    master = Image.open(os.path.join(OUT, "icon-source.png")).convert("RGBA")
+    os.makedirs(WEB_OUT, exist_ok=True)
+    for px in (192, 512):
+        master.resize((px, px), Image.LANCZOS).save(os.path.join(WEB_OUT, f"icon-{px}.png"))
+    square = Image.new("RGBA", master.size, BG)
+    square.alpha_composite(master)
+    square.convert("RGB").resize((180, 180), Image.LANCZOS).save(os.path.join(WEB_OUT, "apple-touch-icon.png"))
+    print(f"web icons written to {WEB_OUT}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    web() if "--web" in sys.argv[1:] else main()

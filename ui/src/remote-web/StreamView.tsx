@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { flushSync } from 'react-dom'
 import { t } from '../i18n'
-import { useViewport } from '../useViewport'
+import { useViewport, useViewportSize } from '../useViewport'
 import { initialState, startMonitor } from '../remote-monitor/session'
 import { AudioListen, audioCaption, audioEnded } from './AudioListen'
 import { BetaNote } from './BetaNote'
@@ -8,7 +9,8 @@ import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { MIC_LEVEL_DB, MIC_METER_FLOOR_DB, MIC_METER_TOP_DB, meterDb } from './mic-level'
-import { ClickCount, HeldInput, PictureZoom, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox, type Stage } from './stream-capture'
+import { ClickCount, HeldInput, PictureZoom, keyMessage, keyPress, pointerMessage, textMessage, typedChange, wheelMessage, type PictureBox, type Stage } from './stream-capture'
+import { streamLayout, type StreamLayout } from './stream-layout'
 import { exactSize, observeDeviceSize, type StopTarget, type StreamLink, type StreamView as LinkView } from './stream-link'
 import type { AudioView } from './audio-listen'
 import { shortFingerprint, type StreamKey, type StreamPointer } from './stream-protocol'
@@ -157,21 +159,54 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   useEffect(() => { link.audio.setMuted(onAir) }, [onAir, link])
   const identify = useIdReminder(running, stream.station?.keyed === true)
 
-  return <div className="app remote-monitor-app remote-stream-app" data-stream-phase={stream.phase}>
+  // THE PHONE LAYOUT (the operator's pick, 2026-10-03), from the window this page has (streamLayout): the header row,
+  // a rail beside the picture on its side, bars above and below it upright. Every control keeps its place in the tree
+  // in all three, so turning the phone moves controls and never remounts one: a held PTT and Listen's sound carry on.
+  const [typingOpen, setTypingOpen] = useState(false)
+  const [typingFocus, setTypingFocus] = useState(false)
+  const layout = useLayout(typingOpen && typingFocus)
+  const phone = layout !== 'header', rail = layout === 'rail', bars = layout === 'bars'
+  const more = useMore(phone)
+  const typingField = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (!bars || !running) { setTypingOpen(false); setTypingFocus(false) } }, [bars, running])
+  const keyboard = () => {
+    if (typingOpen) { setTypingOpen(false); setTypingFocus(false); return }
+    // Opened and focused inside the press itself: a phone raises its keyboard only for a focus a press made.
+    flushSync(() => setTypingOpen(true))
+    typingField.current?.focus({ preventScroll: true })
+  }
+  const endButton = <button type="button" className="remote-button" onClick={end}>{t('remote.stream.end')}</button>
+  const fullScreenButton = !listen && fullScreen.offered && <button type="button" className="remote-button" onClick={fullScreen.toggle}
+    title={fullScreen.on ? undefined : t('remote.stream.fullscreen.title')}>{fullScreen.on ? t('remote.stream.fullscreen.exit') : t('remote.stream.fullscreen')}</button>
+  const leave = <>
+    <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
+    <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>
+  </>
+
+  return <div className="app remote-monitor-app remote-stream-app" data-stream-phase={stream.phase} data-layout={layout}>
     <header className="rm-header remote-stream-header">
       <span className="remote-stream-title"><strong>{BRAND}</strong> <span>{station}</span></span>
-      {/* While a stream runs this is where its state is said; otherwise the placeholder says it, once. */}
-      <span className="remote-stream-status" role="status">{running ? status : null}</span>
+      {/* Where the stream's state is said: in the header's row, in the bar over the picture upright, and on its side
+          in a chip over the picture, which carries the beta mark there because the beta line is under More. */}
+      <div className="remote-stream-state">
+        {rail && <span className="remote-beta-mark">{t('remote.beta.mark')}</span>}
+        {/* While a stream runs this is where its state is said; otherwise the placeholder says it, once. */}
+        <span className="remote-stream-status" role="status">{running ? status : null}</span>
+        {bars && running && coarsePointer() && <span className="remote-stream-turn" role="note">{t('remote.stream.turn')}</span>}
+      </div>
       <div className="remote-stream-controls">
+        <div className="remote-stream-safety">
         {/* THE STOP LINE. First in the row, so it is on the first line however the row wraps; rendered
             whenever this view is, never behind anything, and enabled whenever either path to the
-            station can carry a Stop. */}
+            station can carry a Stop. First in the rail and in the bar over the picture too, and the largest. */}
         <button type="button" className="remote-button remote-stream-stop" disabled={!canStop} onClick={stopTx}
           title={stopProgress === 'stopped' ? t('remote.stop.stopped.title') : stopProgress === 'sent' ? t('remote.stop.sent.title') : undefined}>{STOP_TX}</button>
         {stopProgress !== 'idle' && <span className="remote-stream-stopstate" role="status">
           {stopProgress === 'stopped' ? t('remote.stop.stopped') : stopProgress === 'sent' ? t('remote.stop.sent')
             : stopProgress === 'failed' ? t('shell.halt.failed') : t('remote.stop.sending')}</span>}
         {keyed === true && <span className="remote-stream-tx" role="status">{TX}</span>}
+        </div>
+        <div className="remote-stream-operate">
         {stream.control && <AudioListen audio={link.audio} client={operations} />}
         {stream.control && <button type="button" className="remote-button remote-stream-ptt" aria-pressed={stream.ptt}
           title={t('remote.stream.ptt.title')} disabled={stream.phase !== 'live' || !lease} data-keyed={stream.keyed || undefined}
@@ -194,14 +229,20 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
           onClick={() => void link.setMic(stream.mic !== 'on')}>
           {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
         {stream.control && stream.mic === 'on' && <MicLevel link={link} />}
-        {running && <button type="button" className="remote-button" onClick={end}>{t('remote.stream.end')}</button>}
+        {bars && stream.control && <button type="button" className="remote-button remote-stream-keyboard" aria-pressed={typingOpen}
+          disabled={stream.phase !== 'live'} onClick={keyboard}>{t('remote.stream.keyboard')}</button>}
+        {bars && typingOpen && running && <TypingBox link={link} live={stream.phase === 'live'} field={typingField} focused={setTypingFocus} />}
+        </div>
+        <div className="remote-stream-session">
+        {!phone && running && endButton}
         {listen && audioOn && <button type="button" className="remote-button" onClick={() => relayAudio.release()}>{t('remote.audio.stop')}</button>}
-        {!listen && fullScreen.offered && <button type="button" className="remote-button" onClick={fullScreen.toggle}
-          title={fullScreen.on ? undefined : t('remote.stream.fullscreen.title')}>{fullScreen.on ? t('remote.stream.fullscreen.exit') : t('remote.stream.fullscreen')}</button>}
-        <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
-        <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>
+        {!bars && fullScreenButton}
+        {!phone && leave}
+        {phone && <button type="button" ref={more.button} className="remote-button remote-stream-more" aria-expanded={more.open}
+          aria-controls={more.open ? more.id : undefined} onClick={more.toggle}>{t('remote.stream.more')}</button>}
+        </div>
       </div>
-      <BetaNote className="remote-stream-beta" />
+      {!rail && <BetaNote className="remote-stream-beta" />}
     </header>
     <main className="remote-stream-stage" aria-label={t('remote.stream.stage')}>
       {!listen && <video ref={video} className="remote-stream-video" tabIndex={0} muted autoPlay playsInline aria-label={t('remote.stream.picture')} />}
@@ -246,8 +287,93 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
         <button type="button" className="remote-button remote-button--primary">{t('remote.stream.idle.keep')}</button>
       </div>}
     </main>
+    {/* More, on a phone: what its bars have no room for, over the picture while open. A choice closes it, and so does
+        a press on the picture, which the cover under it takes for itself: a press meant to close a menu is never a
+        click at the shack. */}
+    {more.open && <div className="remote-stream-more-cover" onPointerDown={event => {
+      try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* it is still pressed here */ }
+      more.close()
+    }} />}
+    {more.open && <div id={more.id} ref={more.panel} className="remote-stream-more-panel" role="group" aria-label={t('remote.stream.more')}
+      onClick={more.close}>
+      {running && endButton}
+      {bars && fullScreenButton}
+      {leave}
+      {rail && <BetaNote className="remote-stream-beta" />}
+    </div>}
   </div>
 }
+
+/** The layout for the window this page has (streamLayout), held while the operator types in the typing box: the
+ *  phone's keyboard takes height and never width, and a layout that followed it could turn the page under the
+ *  operator's fingers and take the field away, and the keyboard with it. Turning the phone changes the width, and
+ *  the layout follows that at once. */
+function useLayout(typing: boolean): StreamLayout {
+  const size = useViewportSize()
+  const free = size ? streamLayout(size.width, size.height) : 'header'
+  const [held, setHeld] = useState<{ layout: StreamLayout; width: number } | null>(null)
+  const width = size?.width ?? null
+  useEffect(() => { if (!typing) setHeld(width === null ? null : { layout: free, width }) }, [typing, free, width])
+  return typing && held && held.width === width ? held.layout : free
+}
+
+/** A phone's More: End, Disconnect, Sign out and what else its bars have no room for. Open, it closes on a choice
+ *  in it, on a press anywhere else and on Esc, and it is never open outside the phone layouts. */
+function useMore(phone: boolean) {
+  const [open, setOpen] = useState(false)
+  const id = useId()
+  const panel = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null)
+  useEffect(() => { if (!phone) setOpen(false) }, [phone])
+  useEffect(() => {
+    if (!open) return
+    const away = (event: Event) => {
+      const target = event.target instanceof Node ? event.target : null
+      if (!target || !(panel.current?.contains(target) || button.current?.contains(target))) setOpen(false)
+    }
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('pointerdown', away, true)
+    document.addEventListener('keydown', key, true)
+    return () => { document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', key, true) }
+  }, [open])
+  return { open: phone && open, id, panel, button, toggle: () => setOpen(was => !was), close: () => setOpen(false) }
+}
+
+/** The typing box (the operator's pick, 2026-10-03). A phone has no keys to send through the picture: its keyboard
+ *  composes words, which the picture's key bridge cannot carry. Here the field always reads what the field focused at
+ *  the shack was given: a change goes as Backspaces and committed text (typedChange), a word still being composed goes
+ *  when it is finished, Enter goes as Enter and empties the box, and Backspace with the box empty goes as Backspace.
+ *  Nothing goes while the picture is not live (blind means no authority, as for a click): what was typed then is
+ *  taken back out of the box. Only the contract's `text` and `key` messages, on the input path the picture uses. */
+function TypingBox({ link, live, field, focused }: { link: StreamLink; live: boolean; field: RefObject<HTMLInputElement>; focused: (on: boolean) => void }) {
+  const sent = useRef('')
+  const sync = () => {
+    const input = field.current
+    if (!input) return
+    if (!live) { input.value = sent.current; return }
+    for (const message of typedChange(sent.current, input.value)) link.input(message)
+    sent.current = input.value
+  }
+  return <form className="remote-stream-typing" onSubmit={event => {
+    event.preventDefault()
+    sync()
+    if (!live || !field.current) return
+    for (const message of keyPress('Enter')) link.input(message)
+    field.current.value = ''
+    sent.current = ''
+  }}>
+    <input ref={field} type="text" className="remote-stream-typing-field" aria-label={t('remote.stream.typing')} placeholder={t('remote.stream.typing')}
+      maxLength={256} enterKeyHint="enter" autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false}
+      onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) sync() }} onCompositionEnd={sync}
+      onKeyDown={event => {
+        if (event.key !== 'Backspace' || event.nativeEvent.isComposing || event.currentTarget.value !== '' || !live) return
+        for (const message of keyPress('Backspace')) link.input(message)
+      }}
+      onFocus={() => focused(true)} onBlur={() => focused(false)} />
+  </form>
+}
+
+/** A phone or tablet: a coarse pointer, as useFullScreen reads it. */
+const coarsePointer = () => window.matchMedia?.('(pointer: coarse)').matches ?? false
 
 /** "Still there?" (the operator's pick, "15 min + prompt"): true while it is asked. Any click, key or
  *  turn of the wheel on this page is the operator's, wherever it lands, and the link counts a held PTT; watching,

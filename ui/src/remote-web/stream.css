@@ -28,8 +28,9 @@
 .remote-button.remote-stream-ptt[aria-pressed='true'][data-voice='keyed'] { color: var(--bg); background: var(--tx); border-color: var(--tx); }
 .remote-stream-tx { padding: 2px 8px; border: 1px solid var(--tx); border-radius: var(--radius-sm); color: var(--tx); font-weight: 800; font-size: var(--fs-body); }
 /* The microphone, on: the accent, never the transmit colour - a microphone that is on is not on the
-   air (PTT arms, the voice keys). */
-.remote-button.remote-stream-mic[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
+   air (PTT arms, the voice keys). The typing box's Keyboard, open, looks the same way. */
+.remote-button.remote-stream-mic[aria-pressed='true'],
+.remote-button.remote-stream-keyboard[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
 /* The Mic level, beside Mic while it is on: the slider and a meter of what is sent. The bar is the loudest
    of the voice lately, and takes the warning colour while the limiter holds a word down. */
 .remote-stream-miclevel { display: inline-flex; align-items: center; gap: .35em; color: var(--text-dim); font-size: var(--fs-label); }
@@ -99,3 +100,123 @@
 
 [data-viewport='xs'] .remote-stream-header { padding: 6px 8px; }
 [data-viewport='xs'] .remote-stream-status { flex-basis: 100%; }
+
+/* ── THE PHONE LAYOUTS (the operator's pick, 2026-10-03) ────────────────────────────────────────────────────────────
+   StreamView stamps `data-layout` from the window's effective size (stream-layout.ts): `rail` for a short window on its
+   side, a phone turned; `bars` for a narrow upright one, a phone held up; `header` for every other, the page as it
+   was. The elements are the same in all three and keep their places in the tree, so turning a phone moves them and
+   remounts none. Four wrappers group the header's contents (the state, then Stop TX, the controls that operate, the
+   session's own); in the header layout they draw no box at all, so its row lays out exactly as it did. Stop TX is
+   first in every layout and the largest control in each: no rule below may make the PTT wider or taller than it. */
+.remote-stream-state, .remote-stream-safety, .remote-stream-operate, .remote-stream-session { display: contents; }
+
+/* On its side: the picture, and a rail of controls on its right. The picture gets the window's whole height (the
+   header took 42% of a 412 px phone), and the rail scrolls if a short window cannot hold it, with Stop TX held at
+   its top where scrolling never takes it. The rail's width is one token, for the grid and for what sits over it. */
+.remote-stream-app[data-layout='rail'] {
+  --stream-rail: 120px;
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) var(--stream-rail); grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'stage rail';
+}
+.remote-stream-app[data-layout='rail'] .remote-stream-header {
+  grid-area: rail; flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start;
+  gap: 6px; max-height: none; padding: 0 6px 6px; overflow-y: auto; overscroll-behavior: contain;
+  border-bottom: 0; border-left: 1px solid var(--border);
+}
+.remote-stream-app[data-layout='rail'] .remote-stream-stage { grid-area: stage; }
+.remote-stream-app[data-layout='rail'] .remote-stream-title { display: none; }
+.remote-stream-app[data-layout='rail'] .remote-stream-controls { display: contents; }
+.remote-stream-app[data-layout='rail'] .remote-stream-safety,
+.remote-stream-app[data-layout='rail'] .remote-stream-operate,
+.remote-stream-app[data-layout='rail'] .remote-stream-session { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+/* Held at the top of the rail, opaque, so the controls under it scroll beneath and never through it. */
+.remote-stream-app[data-layout='rail'] .remote-stream-safety {
+  position: sticky; top: 0; z-index: 1; padding-top: 6px; background: var(--bg);
+}
+.remote-stream-app[data-layout='rail'] .remote-stream-stop { min-height: 96px; }
+/* The rail's buttons keep their labels on one line in its 107 px, so the rail holds them all on a phone on its side. */
+.remote-stream-app[data-layout='rail'] .remote-stream-header .remote-button { padding-inline: 8px; }
+/* Then the PTT, a square of 96 px and never wider than Stop TX, and the rest in the operator's order: Mic with its
+   level, Listen. */
+.remote-stream-app[data-layout='rail'] .remote-stream-ptt { order: 1; align-self: center; width: min(96px, 100%); min-height: 96px; }
+.remote-stream-app[data-layout='rail'] .remote-audio-toggle { display: inline-flex; align-items: center; justify-content: center; gap: .35em; }
+.remote-stream-app[data-layout='rail'] .remote-stream-mic { order: 2; }
+.remote-stream-app[data-layout='rail'] .remote-stream-miclevel { order: 3; display: flex; flex-direction: column; align-items: stretch; }
+.remote-stream-app[data-layout='rail'] .remote-stream-miclevel label { flex-direction: column; align-items: stretch; }
+.remote-stream-app[data-layout='rail'] .remote-stream-miclevel input,
+.remote-stream-app[data-layout='rail'] .remote-stream-micmeter { width: auto; }
+.remote-stream-app[data-layout='rail'] .remote-audio { order: 4; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.remote-stream-app[data-layout='rail'] .remote-audio-volume { display: flex; flex-direction: column; align-items: stretch; }
+.remote-stream-app[data-layout='rail'] .remote-audio-volume input { width: auto; }
+/* The chip over the picture's top-left corner: the beta mark and the stream's state, taking no press from the
+   picture under it. The stalled notice moves down out of its way. */
+.remote-stream-app[data-layout='rail'] .remote-stream-state {
+  position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; align-items: center; gap: 6px;
+  max-width: calc(100% - var(--stream-rail) - 16px); padding: 4px 10px; pointer-events: none;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev);
+}
+.remote-stream-app[data-layout='rail'] .remote-stream-status { flex: 0 1 auto; min-width: 0; color: var(--text); font-size: var(--fs-label); }
+.remote-stream-app[data-layout='rail'] .remote-stream-stalled { top: 48px; }
+
+/* Upright: a bar over the picture with Stop TX, the state and More, the beta line under it, and a bar of thumb
+   controls under the picture. The header and its controls draw no box, so each group is a cell of this grid. */
+.remote-stream-app[data-layout='bars'] {
+  position: relative;
+  grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: 'safety state session' 'beta beta beta' 'stage stage stage' 'operate operate operate';
+}
+.remote-stream-app[data-layout='bars'] .remote-stream-header,
+.remote-stream-app[data-layout='bars'] .remote-stream-controls { display: contents; }
+.remote-stream-app[data-layout='bars'] .remote-stream-title { display: none; }
+.remote-stream-app[data-layout='bars'] .remote-stream-stage { grid-area: stage; }
+.remote-stream-app[data-layout='bars'] .remote-stream-safety {
+  grid-area: safety; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 8px 0 8px 8px;
+}
+/* At least as wide as the PTT is allowed to grow, and as tall: the largest control, upright too. */
+.remote-stream-app[data-layout='bars'] .remote-stream-stop { min-width: 128px; min-height: 96px; }
+.remote-stream-app[data-layout='bars'] .remote-stream-state {
+  grid-area: state; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; padding: 8px;
+}
+.remote-stream-app[data-layout='bars'] .remote-stream-status { flex: none; }
+.remote-stream-turn { color: var(--text-dim); font-size: var(--fs-label); }
+.remote-stream-app[data-layout='bars'] .remote-stream-session {
+  grid-area: session; display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 8px 8px 0;
+}
+.remote-stream-app[data-layout='bars'] .remote-stream-beta { grid-area: beta; padding: 0 8px 6px; border-bottom: 1px solid var(--border); }
+/* The thumbs' bar: PTT, Mic, Listen and Keyboard in one row of tall targets, and under them what each opens (the
+   Mic level, Listen's state and volume, the typing box) on lines of their own. Nothing when there is nothing in it. */
+.remote-stream-app[data-layout='bars'] .remote-stream-operate {
+  grid-area: operate; display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.remote-stream-app[data-layout='bars'] .remote-stream-operate:empty { display: none; }
+.remote-stream-app[data-layout='bars'] .remote-stream-operate > .remote-button,
+.remote-stream-app[data-layout='bars'] .remote-audio-toggle { flex: 1 1 0; min-width: 0; min-height: 96px; padding-inline: 6px; }
+.remote-stream-app[data-layout='bars'] .remote-stream-operate > .remote-stream-ptt { order: 1; flex-grow: 1.4; max-width: 128px; }
+.remote-stream-app[data-layout='bars'] .remote-stream-mic { order: 2; }
+.remote-stream-app[data-layout='bars'] .remote-audio { display: contents; }
+.remote-stream-app[data-layout='bars'] .remote-audio-toggle { order: 3; }
+.remote-stream-app[data-layout='bars'] .remote-stream-keyboard { order: 4; }
+.remote-stream-app[data-layout='bars'] .remote-stream-miclevel,
+.remote-stream-app[data-layout='bars'] .remote-audio-state,
+.remote-stream-app[data-layout='bars'] .remote-audio-volume { order: 5; flex-basis: 100%; }
+.remote-stream-app[data-layout='bars'] .remote-stream-typing { order: 6; flex-basis: 100%; }
+
+/* While More is open, a clear cover over the picture takes a press there, which closes it and goes no further. */
+.remote-stream-more-cover { grid-area: stage; z-index: 3; }
+/* More's panel, over the picture: by the rail's More on its side, under the bar's More upright. */
+.remote-stream-more-panel {
+  grid-area: stage; z-index: 3; display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  width: max-content; max-width: min(22em, calc(100% - 16px)); max-height: calc(100% - 16px); margin: 8px; padding: 8px;
+  overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev);
+}
+.remote-stream-app[data-layout='rail'] .remote-stream-more-panel { align-self: end; justify-self: end; }
+.remote-stream-app[data-layout='bars'] .remote-stream-more-panel { align-self: start; justify-self: end; }
+
+/* The typing box: one line, the width of the bar. */
+.remote-stream-typing { display: flex; margin: 0; }
+.remote-stream-typing-field {
+  flex: 1 1 auto; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 8px; font: inherit;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
