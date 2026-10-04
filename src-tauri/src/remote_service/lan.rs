@@ -85,18 +85,29 @@
 //! itself, removing a computer and resetting the key each revoke it, after the authority has
 //! stopped reading it, so the revoke stands.
 //!
-//! ## What comes later
+//! ## The other end, and what comes later
 //!
-//! The window's own client, discovery and the firewall.
+//! The paired computer's side, its key, its pairing and its road, is `crate::lan_client`, which
+//! speaks this wire with this module's own functions and versions. Discovery and the firewall come
+//! later.
 mod book;
 mod channel;
 mod gate;
-mod pairing;
+pub(crate) mod pairing;
 #[cfg(test)]
 pub(super) mod tests;
 pub mod tls;
 
 pub use book::Book;
+pub(crate) use book::{device_id, valid_name, NAME_CHARS};
+
+/// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
+/// them: the shack's own, and the ones its paired computers' window says.
+pub(crate) const VERSIONS: (u8, u8, u8) = (
+    channel::PROTOCOL_VERSION,
+    tempo_stream::protocol::STREAM_VERSION,
+    channel::OPERATION_VERSION,
+);
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};

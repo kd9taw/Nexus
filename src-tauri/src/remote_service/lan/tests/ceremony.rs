@@ -39,7 +39,7 @@ struct Pairing {
 
 /// TLS with `key` and no shack key pinned, then the upgrade.
 async fn open_pairing(stream: tokio::net::TcpStream, key: &str) -> Result<Pairing, String> {
-    let connector = tokio_rustls::TlsConnector::from(tls::client::pairing(key));
+    let connector = tokio_rustls::TlsConnector::from(tls::client::pairing(key).unwrap());
     let name = rustls::pki_types::ServerName::try_from("nexus-station").unwrap();
     let tls = connector
         .connect(name, stream)

@@ -198,6 +198,21 @@ window reopens where you left it, fitted to the screens attached at the time, an
 closed in full screen reopens at its last size. The page in this window can reach nothing in
 Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
 
+**Stations on this network…** is the other end of **Remote over this network**. On a Windows
+computer you operate from, it opens a Nexus window of its own for the stations this computer is
+paired with over your own network, with no internet at all. To add one, choose **Pair with a
+station…** and type the station's address and the code it shows under **Pair a computer**
+(capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
+it in this computer's password store, with the station's key, the station's address and nothing
+else. **Stream** connects and opens the station's stream as the Remote page does, with the same
+**Stop TX**, **Esc** and **F11**. If the station's key ever changes (Nexus reinstalled there, or
+its network identity reset), this computer refuses it and says so: pair it again. If the two
+copies of Nexus are different versions, the window says which one to update. **Forget** deletes
+this computer's key for that station; remove this computer at the station too. If the station
+turns its hosted Remote on or off while you stream, control comes back to the station for a
+moment, and the window takes it again by itself. The page in this window reaches nothing in
+Nexus.
+
 ---
 
 ## Radio

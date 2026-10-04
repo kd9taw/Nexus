@@ -598,6 +598,59 @@ export const EN = {
   "remote.lan.reset": "Reset network identity",
   "remote.lan.unavailable": "This station and the other computer both need Windows, for now.",
 
+  // The Stations on this network window's page (lan.html). `Nexus`, `Remote over this network`, `Pair a
+  // computer` (the shack's own card and button) and `Stream` are names on screen; {{address}}, {{key}}
+  // and {{example}} are a station's address, its key's fingerprint and an address, all invariant.
+  "lanWindow.title": "Stations on this network",
+  "lanWindow.intro": "Operate a station on this computer’s network with no internet. Pair this computer with it once, with the code it shows, then stream it here.",
+  "lanWindow.opening": "Starting…",
+  "lanWindow.lost": "This window lost touch with Nexus. Close it, then open it again from Settings.",
+  "lanWindow.paired": "Paired stations",
+  "lanWindow.none": "No station is paired with this computer yet.",
+  "lanWindow.stationAt": "Station at {{address}}",
+  "lanWindow.stationKey": "Key {{key}}",
+  "lanWindow.stream": "Stream",
+  "lanWindow.connecting": "Connecting…",
+  "lanWindow.forget": "Forget",
+  "lanWindow.forgetConfirm": "Forget this station? This computer’s key for it is deleted, and pairing again needs a new code from the station. Remove this computer at the station too.",
+  "lanWindow.forgetYes": "Forget it",
+  "lanWindow.keep": "Keep it",
+  "lanWindow.otherAddress": "The station’s address now",
+  "lanWindow.pair": "Pair with a station…",
+  "lanWindow.pairTitle": "Pair with a station on this network",
+  "lanWindow.pairHint": "At the station, press Pair a computer under Remote over this network. It shows its address and a code that works once, within ten minutes.",
+  "lanWindow.address": "Station address",
+  "lanWindow.addressHint": "As the station shows it, like {{example}}.",
+  "lanWindow.code": "Pairing code",
+  "lanWindow.codeHint": "The sixteen characters the station shows. Capitals or not, spaces or not.",
+  "lanWindow.name": "This computer’s name",
+  "lanWindow.nameHint": "The station shows it beside this computer’s key.",
+  "lanWindow.pairSubmit": "Pair",
+  "lanWindow.pairing": "Pairing…",
+  "lanWindow.cancel": "Cancel",
+  "lanWindow.pairedNow": "Paired. Press Stream to operate the station.",
+  "lanWindow.disconnected": "Disconnected from the station.",
+  "lanWindow.reason.badAddress": "That is not a station’s address. Type it as the station shows it, on this network.",
+  "lanWindow.reason.badCode": "The code is sixteen characters, 0 to 9 and a to f. Check it against the station’s screen.",
+  "lanWindow.reason.badName": "Give this computer a name of 1 to 32 characters.",
+  "lanWindow.reason.unreachable": "Nothing answered. Check that the station is on, that Remote over this network is on there, and that this computer is on the same network.",
+  "lanWindow.reason.pairingClosed": "The station is not pairing now. Press Pair a computer at the station, then type the new code within ten minutes.",
+  "lanWindow.reason.wrongCode": "The station refused the code. Check it against the station’s screen. After three wrong codes the station needs a new one.",
+  "lanWindow.reason.stationProofFailed": "The code does not match the station’s. Check the code and the address. If both are right, something else on this network may be answering in the station’s place.",
+  "lanWindow.reason.pairingFull": "The station has eight computers paired already. Remove one there, then try again.",
+  "lanWindow.reason.stationUnavailable": "The station could not keep the pairing. Check its credential store, then pair again with a new code.",
+  "lanWindow.reason.updateStation": "This computer’s Nexus is newer than the station’s. Update Nexus at the station, then try again.",
+  "lanWindow.reason.updateComputer": "The station’s Nexus is newer than this computer’s. Update Nexus on this computer, then try again.",
+  "lanWindow.reason.stationsFull": "This computer is paired with eight stations already. Forget one, then try again.",
+  "lanWindow.reason.storeUnavailable": "This computer’s credential store did not answer. Unlock it, then try again.",
+  "lanWindow.reason.notStation": "Something answered there that is not a Nexus station. Check the address.",
+  "lanWindow.reason.unavailable": "Nexus could not do that on this computer. Try again.",
+  "lanWindow.reason.keyChanged": "This station’s key has changed. If Nexus was reinstalled at the station, or its network identity reset, pair this computer again.",
+  "lanWindow.reason.notPaired": "The station no longer knows this computer. It may have been removed there: pair it again.",
+  "lanWindow.reason.unknownStation": "This computer is no longer paired with that station.",
+  "lanWindow.reason.stationLeft": "The station ended the connection. Remote over this network may have been turned off there, or this computer removed.",
+  "lanWindow.reason.connectionLost": "The connection to the station was lost.",
+
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',
   'monitor.native': 'Desktop station',
@@ -6233,6 +6286,13 @@ export const EN = {
     'Nexus could not open the Remote stations window. Check this computer’s internet connection, then try again.',
   'settings.remoteStations.unavailable':
     'Available on Windows only, for now. Elsewhere, open Remote in your browser.',
+  // The Stations on this network window's entry, beside the one above: the same kind of window for a
+  // station paired over the operator's own network. `Nexus`, `Remote over this network` (the shack's
+  // card), `F11` and `Esc` are tokens.
+  "settings.lanStations.label": "Operate a station on this network from this computer",
+  "settings.lanStations.open": "Stations on this network…",
+  "settings.lanStations.hint": "Opens a Nexus window for stations you pair with over your own network, with no internet needed. Pair each station once with the code it shows under Remote over this network. F11 switches the window to full screen and back, and Esc over the picture still stops transmitting.",
+  "settings.lanStations.failed": "Nexus could not open the Stations on this network window. Try again.",
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
