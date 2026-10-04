@@ -3,18 +3,21 @@
 //!
 //! Two threads make a Flex slice's real RF panadapter appear in Nexus's waterfall:
 //! - a **TCP control** thread ([`FlexCat`]) registers Nexus as a SmartSDR client, creates a
-//!   panadapter centered on the dial, learns the pan's VITA **stream id** from the async status
-//!   stream, retunes the pan as the operator turns the dial, keeps the session alive, and
-//!   removes the pan on teardown; and
-//! - a **UDP FFT** thread receives VITA-49 datagrams, filters to that stream, reassembles the
-//!   sweep ([`FftReassembler`]), and hands each completed row to [`Engine::set_spectrum_rf`],
-//!   tagged with the absolute RF span so the UI draws a true RF scale.
+//!   panafall (a panadapter and the waterfall the radio pairs with it), sizes, centres and paces
+//!   the pan once its reply names it, follows the pan's own status (its row scale, its waterfall,
+//!   its centre and span), retunes the pan as the operator turns the dial, keeps the session
+//!   alive, and removes the pan AND its waterfall on teardown; and
+//! - a **UDP FFT** thread receives VITA-49 datagrams, keeps our pan's FFT stream (its stream id
+//!   is the pan's id), assembles each frame with the ported decoders ([`FftAssembler`]: every bin
+//!   present, the `x_pixels` growth placeholder held back), reads each bin as the pixel row it is,
+//!   and hands the frame to the spectrum feed, tagged with the absolute RF span so the UI draws a
+//!   true RF scale.
 //!
 //! It coexists with the shipped Hamlib network-CAT path (this is a *second*, read-only TCP
 //! client). Dropping the [`FlexSpectrum`] stops both threads and removes the pan.
 //!
-//! The pure helpers (command strings, RF span, bin normalization) are unit-tested here; the
-//! thread orchestration + exact SmartSDR command syntax are verified on a Flex.
+//! The pure helpers (command strings, reply and status reading, the stream filter, RF span) are
+//! unit-tested here; the thread orchestration is verified on a Flex.
 
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,20 +29,27 @@ use std::collections::HashMap;
 
 use tempo_app::dto::{Spectrum, SpectrumScale};
 use tempo_app::engine::{engine_lock, engine_lock_result, Engine, MeterFeed, SpectrumFeed};
-use tempo_net::flexcat::{
-    parse_create_stream_id, parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, FlexRecv,
-    MeterDef, PanStatus,
-};
+use tempo_net::flex::ownership::parse_panafall_create_pan_id;
+use tempo_net::flex::status::{decode, Decoded};
+use tempo_net::flex::vita::{decode_fft, FftAssembler, FftFrame, DEFAULT_DISPLAY_MAX, FFT_CLASS};
+use tempo_net::flex::wire::{split_status, Kvs, Status};
+use tempo_net::flexcat::{parse_meter_defs, FlexCat, FlexMsg, FlexRecv, MeterDef};
 use tempo_net::flexvita::{
-    convert_meter_raw, dbm_to_watts, parse_fft, parse_meter_values, parse_vita, FftReassembler,
-    FFT_PACKET_CLASS, METER_PACKET_CLASS,
+    convert_meter_raw, dbm_to_watts, parse_meter_values, parse_vita, METER_PACKET_CLASS,
 };
 
 /// Panadapter span: a 200 kHz window centered on the dial.
 const SPAN_HZ: f64 = 200_000.0;
 const FPS: u32 = 15;
-/// Flex FFT width cap; the UI downsamples to its pixel width.
+/// The pan's width in FFT bins; the UI downsamples to its pixel width.
 const X_PIXELS: u32 = 2048;
+/// The pan's height in rows: the scale its FFT bins are counted on, row 0 at the top. Upstream's
+/// value (A). Any height above the radio's default reads the same window; this one resolves a
+/// 100 dB window to a seventh of a dB.
+const Y_PIXELS: u32 = 700;
+/// The shortest gap between two re-sends of our pan's size after the radio reports its default
+/// size back: soon enough to recover from a profile load at once, never a command per status.
+const SIZE_PUSH_MIN: Duration = Duration::from_secs(1);
 /// Keep the SmartSDR client session alive with periodic traffic.
 const KEEPALIVE: Duration = Duration::from_secs(5);
 /// Retune the pan when the dial moves more than this (MHz) — ~500 Hz.
@@ -161,13 +171,44 @@ pub fn smeter_dbm_to_rel_s9(dbm: f32, dial_hz: u64) -> i32 {
     (dbm - s9_dbm).round() as i32
 }
 
-/// Command to create a panadapter `x_pixels` wide, centered at `center_mhz`, spanning `span_hz`
-/// (SmartSDR takes MHz for center and bandwidth).
-pub fn create_pan_command(center_mhz: f64, span_hz: f64, x_pixels: u32, fps: u32) -> String {
-    format!(
-        "display pan create x={x_pixels} center={center_mhz:.6} bw={:.6} fps={fps}",
-        span_hz / 1_000_000.0
-    )
+/// Command to create our panafall: a panadapter and the waterfall the radio pairs with it.
+///
+/// ⚠️ NOT `display pan create x=… center=… bw=… fps=…`, which this sent until 2026-10: D
+/// documents the create as `display panafall create` (with `freq=`, `x=`, `y=`, `ant=`), and `bw`
+/// is not a pan key anywhere. The dial, span and frame rate follow in [`pan_setup_commands`] once
+/// the reply names the pan.
+pub fn create_panafall_command() -> String {
+    format!("display panafall create x={X_PIXELS} y={Y_PIXELS}")
+}
+
+/// Command to set our pan's size: [`X_PIXELS`] bins of [`Y_PIXELS`] rows.
+///
+/// ⚠️ THE ROWS ARE THE SCALE. A new pan is the radio's default 50 × 20 display until a client
+/// sets its own (A), and nothing set ours until 2026-10, so every bin was one of 20 rows. Sent once
+/// the pan is ours, and again whenever its status reports the default size back (a profile load,
+/// a reconnect).
+pub fn set_pan_size_command(pan_id: u32) -> String {
+    format!("display pan set 0x{pan_id:08X} xpixels={X_PIXELS} ypixels={Y_PIXELS}")
+}
+
+/// What follows the create once its reply names our pan: the size first, so frames on the
+/// radio's default scale end as early as they can, then the dial, the span, the frame rate, and
+/// the operator's reference when one is chosen. One key per command, as upstream sends them, so a
+/// key the radio refuses costs only itself.
+pub fn pan_setup_commands(
+    pan_id: u32,
+    center_mhz: f64,
+    span_hz: f64,
+    ref_dbm: Option<i32>,
+) -> Vec<String> {
+    let mut cmds = vec![
+        set_pan_size_command(pan_id),
+        set_pan_center_command(pan_id, center_mhz),
+        set_pan_bw_command(pan_id, span_hz),
+        format!("display pan set 0x{pan_id:08X} fps={FPS}"),
+    ];
+    cmds.extend(ref_dbm.map(|r| set_pan_ref_command(pan_id, r)));
+    cmds
 }
 
 /// Command to retune an existing pan (by object id) to a new center.
@@ -175,10 +216,12 @@ pub fn set_pan_center_command(pan_id: u32, center_mhz: f64) -> String {
     format!("display pan set 0x{pan_id:08X} center={center_mhz:.6}")
 }
 
-/// Command to change an existing pan's BANDWIDTH (span) — SmartSDR takes MHz.
+/// Command to change an existing pan's BANDWIDTH (span) — SmartSDR takes MHz. The key is
+/// `bandwidth` (D); until 2026-10 this sent `bw=`, which is no pan key, so no span change reached
+/// the radio.
 pub fn set_pan_bw_command(pan_id: u32, span_hz: f64) -> String {
     format!(
-        "display pan set 0x{pan_id:08X} bw={:.6}",
+        "display pan set 0x{pan_id:08X} bandwidth={:.6}",
         span_hz / 1_000_000.0
     )
 }
@@ -198,17 +241,57 @@ pub fn remove_pan_command(pan_id: u32) -> String {
     format!("display pan remove 0x{pan_id:08X}")
 }
 
-/// The pan object id a `display pan create` REPLY grants us — or `None` (refused, or no id in the
-/// body), meaning we own no panadapter and must steer or remove none.
+/// Command to remove our pan's waterfall on teardown.
+pub fn remove_waterfall_command(waterfall_id: u32) -> String {
+    format!("display panafall remove 0x{waterfall_id:08X}")
+}
+
+/// What teardown sends: our pan, then its waterfall.
+///
+/// ⚠️ THE RADIO DOES NOT FREE A PAN'S WATERFALL WITH THE PAN (A, after FlexLib 4.2.18's
+/// `Panadapter.Close` and `Waterfall.Close`). Until 2026-10 only the pan was removed, which left a
+/// waterfall on the radio after every session. Both ids are ours: the waterfall's comes from our
+/// create reply or our own pan's status, never from another client's.
+pub fn teardown_commands(pan_id: Option<u32>, waterfall_id: Option<u32>) -> Vec<String> {
+    pan_id
+        .map(remove_pan_command)
+        .into_iter()
+        .chain(waterfall_id.map(remove_waterfall_command))
+        .collect()
+}
+
+/// The pan and waterfall a `display panafall create` REPLY grants us — or `None` (refused, or no
+/// pan id in the body), meaning we own no panadapter and must steer or remove none.
 ///
 /// ⚠️ THE REPLY IS THE ONLY THING THAT PROVES A PAN IS OURS. Same rule, same reason, as
 /// `flexdax::stream_from_create_reply`: `FlexCat::command`/`send` replies carry a code, and
 /// `R7|50000015|bad` parses as a perfectly good reply, so a refusal must not read as a grant.
-pub fn created_pan_id(code: u32, body: &str) -> Option<u32> {
+/// The body is `<pan>,<waterfall>` (D) or `pan=… waterfall=…`; a parser that expected one id read
+/// neither. The waterfall also rides our pan's own status ([`our_pan_status`]).
+pub fn created_panafall(code: u32, body: &str) -> Option<(u32, Option<u32>)> {
     if code != 0 {
         return None;
     }
-    parse_create_stream_id(body)
+    let pan = parse_panafall_create_pan_id(body)?;
+    let waterfall = match Kvs::parse(body).get("waterfall") {
+        Some(id) => object_id(id),
+        None => body.trim().split(',').nth(1).and_then(object_id),
+    };
+    Some((pan, waterfall))
+}
+
+/// An object id with or without its `0x` (a create reply may omit it): one to eight hex digits,
+/// and never zero.
+fn object_id(text: &str) -> Option<u32> {
+    let text = text.trim();
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    if digits.is_empty() || digits.len() > 8 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok().filter(|&id| id != 0)
 }
 
 /// Is this `display pan …` status about OUR panadapter?
@@ -237,34 +320,108 @@ pub fn created_pan_id(code: u32, body: &str) -> Option<u32> {
 /// a live radio exists here). RECIPE: attach with SmartSDR GUI running, `sub pan all`, and read
 /// whether the GUI's pan status carries `client_handle=` — if it does not, path 2 never fires and
 /// the create reply is the sole source, which is the intended primary anyway.
-pub fn pan_status_is_ours(pan_id: Option<u32>, our_handle: Option<u32>, st: &PanStatus) -> bool {
+pub fn pan_status_is_ours(
+    pan_id: Option<u32>,
+    our_handle: Option<u32>,
+    status_pan: u32,
+    status_owner: Option<u32>,
+) -> bool {
     match pan_id {
-        Some(ours) => st.pan_id == Some(ours),
-        None => our_handle.is_some() && st.client_handle == our_handle,
+        Some(ours) => status_pan == ours,
+        None => our_handle.is_some() && status_owner == our_handle,
     }
 }
 
-/// Normalize reassembled u16 FFT bins to the UI's 0..1 waterfall scale (the UI's AGC/LUT does
-/// the display stretch, same contract as the audio-FFT path). Monotonic; the on-Flex test
-/// calibrates the reference level.
-pub fn fft_to_row(bins: &[u16]) -> Vec<f32> {
-    bins.iter()
-        .map(|&b| f32::from(b) / f32::from(u16::MAX))
-        .collect()
+/// What one status line of OUR pan reported.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanReport {
+    pub pan: u32,
+    /// The waterfall the radio paired with our pan: ours to remove with it.
+    pub waterfall: Option<u32>,
+    /// The height the radio now counts our pan's rows on. Only a size a client set: a report at
+    /// or below [`DEFAULT_DISPLAY_MAX`] is the radio's default, which it can report while frames
+    /// on our scale are still arriving (A), so it never becomes the scale.
+    pub y_pixels: Option<u32>,
+    /// The radio put a dimension back to its default size: set ours again.
+    pub size_reset: bool,
+    pub center_mhz: Option<f64>,
+    pub bandwidth_mhz: Option<f64>,
 }
 
-/// Publish one reassembled sweep to the spectrum feed: ONE call per sweep, and the feed stamps it
+/// Read a status body, through the ported strict decoders, as one of OUR pan's status lines
+/// ([`pan_status_is_ours`]). `None` for anything else, our pan's removal included.
+pub fn our_pan_status(
+    pan_id: Option<u32>,
+    our_handle: Option<u32>,
+    body: &str,
+) -> Option<PanReport> {
+    let (object, kvs) = split_status(body);
+    let status = Status {
+        handle: 0,
+        object,
+        kvs,
+        body: body.to_string(),
+    };
+    let Decoded::Pan {
+        id,
+        delta,
+        removed: false,
+    } = decode(&status)
+    else {
+        return None;
+    };
+    if !pan_status_is_ours(pan_id, our_handle, id, delta.client_handle) {
+        return None;
+    }
+    let default_size = |v: Option<i32>| {
+        v.and_then(|v| u32::try_from(v).ok())
+            .is_some_and(|v| (1..=DEFAULT_DISPLAY_MAX).contains(&v))
+    };
+    Some(PanReport {
+        pan: id,
+        waterfall: delta.waterfall,
+        y_pixels: delta
+            .y_pixels
+            .and_then(|y| u32::try_from(y).ok())
+            .filter(|&y| y > DEFAULT_DISPLAY_MAX),
+        size_reset: default_size(delta.x_pixels) || default_size(delta.y_pixels),
+        center_mhz: delta.center_mhz,
+        bandwidth_mhz: delta.bandwidth_mhz,
+    })
+}
+
+/// Is this FFT packet from our pan? An FFT packet's stream id is its pan's id (A), so it is ours
+/// exactly when it names the pan our create reply granted.
+///
+/// ⚠️ UNTIL 2026-10 THIS FILTERED NOTHING. It waited for a `stream_id=` key in our pan's status,
+/// which pan status does not carry, and read every FFT stream reaching the port as ours meanwhile.
+/// Before our pan is known, nothing is.
+pub fn fft_is_ours(packet_stream: Option<u32>, pan_id: Option<u32>) -> bool {
+    pan_id.is_some() && packet_stream == pan_id
+}
+
+/// Publish one assembled frame to the spectrum feed: ONE call per frame, and the feed stamps it
 /// with the next frame number.
 ///
-/// - The scale is RELATIVE until the bin encoding is confirmed. Nexus maps `bin / 65535` and has
-///   never seen a real radio; how SmartSDR places a bin against the pan's `min_dbm`/`max_dbm`
-///   (which [`set_pan_ref_command`] sets) decides any dBm axis, and that is not established.
+/// - **Each value is its row's place in the pan's window**, 1 at `max_dbm` and 0 at `min_dbm`
+///   ([`FftFrame::levels`]): a bin is a pixel row counted from the top of a display `y_pixels`
+///   rows tall (A, port plan §4.7). Until 2026-10 this read `bin / 65535`, which put a carrier at
+///   the floor and the floor at the top, squashed into the bottom percent of the scale.
+/// - **The scale stays RELATIVE.** The values are exact fractions of the window, so a dBm axis is
+///   one label away; that label also needs the window the radio encoded each frame with, which
+///   lags a reference change by a frame or two, and nothing here matches the two yet.
 /// - The slice is the one the CAT link drives, when its address names one: our pan is centred on
 ///   that slice's dial and follows it.
-fn publish_sweep(feed: &SpectrumFeed, bins: &[u16], (lo_hz, hi_hz): (f64, f64), slice: Option<u8>) {
+fn publish_sweep(
+    feed: &SpectrumFeed,
+    frame: &FftFrame,
+    y_pixels: u32,
+    (lo_hz, hi_hz): (f64, f64),
+    slice: Option<u8>,
+) {
     feed.publish_rf_frame(
         Spectrum {
-            row: fft_to_row(bins),
+            row: frame.levels(y_pixels),
             lo_hz,
             hi_hz,
             source: "flex".into(),
@@ -370,6 +527,21 @@ fn withdraw_meters(engine: &Arc<Mutex<Engine>>, meters_out: &MeterFeed) {
     engine_lock(engine).clear_rig_smeter();
 }
 
+/// What both threads share about the pan this session created. The control thread writes it; the
+/// FFT thread copies it out per packet, so no guard is held across anything else.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PanView {
+    /// Our pan, from our create reply (or a status the radio stamped with our handle). Its FFT
+    /// stream id is this id (A).
+    pan: Option<u32>,
+    /// The height our pan's rows are counted on: what we asked for, then what the radio reports.
+    y_pixels: u32,
+    /// The pan's centre and span, for each frame's RF span: what we asked for, then what the
+    /// radio reports, so a span it adjusts is labelled as the span it shows.
+    center_mhz: f64,
+    span_hz: f64,
+}
+
 // ---- orchestrator ----
 
 /// A running Flex panadapter feed. Keep it alive while the Flex radio is the active scope
@@ -408,14 +580,17 @@ impl FlexSpectrum {
         let udp_port = udp.local_addr()?.port();
 
         let stop = Arc::new(AtomicBool::new(false));
-        // Shared: the pan's VITA stream id (learned from the async status stream) + its live RF
-        // center (MHz), so the UDP thread can filter/label and the TCP thread can retune.
-        let stream_id = Arc::new(Mutex::new(None::<u32>));
-        let center = Arc::new(Mutex::new(pan_center_mhz(dial_hz)));
-        // Live pan bandwidth (Hz), driven by the operator's Flex span control: the TCP thread
-        // applies changes to the rig, the UDP thread reads it to label the emitted RF span.
+        // Shared: our pan's id (its FFT stream id), the scale its rows are counted on, and its
+        // live RF centre and span (driven by the dial and the operator's Flex span control, then by
+        // the radio's own report), so the UDP thread can filter, read and label each frame and the
+        // TCP thread can retune.
         let (init_span, init_ref) = engine_flex_controls(&engine);
-        let span_hz = Arc::new(Mutex::new(init_span));
+        let view = Arc::new(Mutex::new(PanView {
+            pan: None,
+            y_pixels: Y_PIXELS,
+            center_mhz: pan_center_mhz(dial_hz),
+            span_hz: init_span,
+        }));
         // Meter registry (id → definition), learned from the control plane; the UDP thread decodes
         // 0x8002 value packets against it (match by source+name — ids are per-session).
         let meters = Arc::new(Mutex::new(HashMap::<u16, MeterDef>::new()));
@@ -424,9 +599,7 @@ impl FlexSpectrum {
         // --- TCP control thread ---
         {
             let stop = stop.clone();
-            let stream_id = stream_id.clone();
-            let center = center.clone();
-            let span_hz = span_hz.clone();
+            let view = view.clone();
             let engine = engine.clone();
             let meters = meters.clone();
             handles.push(std::thread::spawn(move || {
@@ -454,43 +627,55 @@ impl FlexSpectrum {
                     // Keep the create's sequence number: its reply is what proves the pan we steer is
                     // one WE created (see `pan_status_is_ours`). `send` rather than `command` so the
                     // async status stream still comes through this loop.
-                    let create_seq = flex
-                        .send(&create_pan_command(
-                            *center.lock().unwrap(),
-                            init_span,
-                            X_PIXELS,
-                            FPS,
-                        ))
-                        .ok();
+                    let create_seq = flex.send(&create_panafall_command()).ok();
                     let mut pan_id: Option<u32> = None;
+                    let mut waterfall_id: Option<u32> = None;
                     let mut last_ka = Instant::now();
-                    let mut last_center = *center.lock().unwrap();
+                    let mut last_center = view.lock().unwrap().center_mhz;
                     let mut last_span = init_span;
                     let mut last_ref = init_ref;
+                    let mut last_size_push: Option<Instant> = None;
                     while !stop.load(Ordering::Relaxed) {
-                        // Drain async status → learn the pan id + VITA stream id (send() left the
-                        // status stream for us; command() would have swallowed it).
+                        // The pan id, the moment it is first known.
+                        let mut learned: Option<u32> = None;
+                        // Our pan, when its status reports the radio's default size.
+                        let mut size_reset: Option<u32> = None;
+                        // Drain async status → learn the pan, its waterfall and its scale (send()
+                        // left the status stream for us; command() would have swallowed it).
                         match flex.recv(Duration::from_millis(300)) {
-                            // OUR create's reply: the authoritative id of the pan we own.
+                            // OUR create's reply: the authoritative ids of the pan and waterfall we
+                            // own.
                             FlexRecv::Msg(FlexMsg::Reply { seq, code, msg })
                                 if Some(seq) == create_seq =>
                             {
-                                if let Some(pid) = created_pan_id(code, &msg) {
-                                    pan_id = Some(pid);
+                                if let Some((pid, wf)) = created_panafall(code, &msg) {
+                                    learned = Some(pid);
+                                    waterfall_id = waterfall_id.or(wf);
                                 }
                             }
                             FlexRecv::Msg(FlexMsg::Status { body, .. }) => {
                                 // ⚠️ ONLY OUR OWN PAN — `sub pan all` also delivers SmartSDR's
                                 // (audit #1012/#1023; the rule and its bench recipe are on
                                 // `pan_status_is_ours`).
-                                if let Some(st) = parse_pan_status(&body) {
-                                    if pan_status_is_ours(pan_id, flex.handle(), &st) {
-                                        if let Some(pid) = st.pan_id {
-                                            pan_id = Some(pid);
+                                if let Some(report) = our_pan_status(pan_id, flex.handle(), &body) {
+                                    if pan_id.is_none() {
+                                        learned = Some(report.pan);
+                                    }
+                                    waterfall_id = report.waterfall.or(waterfall_id);
+                                    {
+                                        let mut v = view.lock().unwrap();
+                                        if let Some(y) = report.y_pixels {
+                                            v.y_pixels = y;
                                         }
-                                        if let Some(sid) = st.stream_id {
-                                            *stream_id.lock().unwrap() = Some(sid);
+                                        if let Some(c) = report.center_mhz {
+                                            v.center_mhz = c;
                                         }
+                                        if let Some(b) = report.bandwidth_mhz {
+                                            v.span_hz = b * 1_000_000.0;
+                                        }
+                                    }
+                                    if report.size_reset {
+                                        size_reset = Some(report.pan);
                                     }
                                 }
                                 // Learn meter definitions (id → source/name/unit) as they arrive.
@@ -506,19 +691,38 @@ impl FlexSpectrum {
                             // the whole UI with it. The outer loop re-dials with backoff.
                             FlexRecv::Closed => break,
                         }
+                        // The pan just became ours: size, centre and pace it (the create carries
+                        // no dial), and let the FFT thread read its stream.
+                        if let Some(pid) = learned {
+                            pan_id = Some(pid);
+                            view.lock().unwrap().pan = Some(pid);
+                            for cmd in pan_setup_commands(pid, last_center, last_span, last_ref) {
+                                let _ = flex.send(&cmd);
+                            }
+                            last_size_push = Some(Instant::now());
+                        }
+                        // The radio put our pan back to its default size (a profile load, a
+                        // reconnect): set ours again, at most once a second — and not on top of
+                        // the setup just sent.
+                        if let Some(pid) = size_reset {
+                            if last_size_push.is_none_or(|t| t.elapsed() >= SIZE_PUSH_MIN) {
+                                let _ = flex.send(&set_pan_size_command(pid));
+                                last_size_push = Some(Instant::now());
+                            }
+                        }
                         if let Some(pid) = pan_id {
                             // Retune the pan when the operator's dial moves.
                             let want = pan_center_mhz(engine_dial_hz(&engine));
                             if want > 0.0 && (want - last_center).abs() > RETUNE_EPS_MHZ {
                                 let _ = flex.send(&set_pan_center_command(pid, want));
-                                *center.lock().unwrap() = want;
+                                view.lock().unwrap().center_mhz = want;
                                 last_center = want;
                             }
                             // Apply the operator's span + reference controls when they change.
                             let (want_span, want_ref) = engine_flex_controls(&engine);
                             if (want_span - last_span).abs() > 1.0 {
                                 let _ = flex.send(&set_pan_bw_command(pid, want_span));
-                                *span_hz.lock().unwrap() = want_span;
+                                view.lock().unwrap().span_hz = want_span;
                                 last_span = want_span;
                             }
                             if want_ref != last_ref {
@@ -533,17 +737,22 @@ impl FlexSpectrum {
                             last_ka = Instant::now();
                         }
                     }
-                    // End of THIS session. Remove only what we created — `pan_id` can now only have
-                    // come from our own create reply or from a status the radio stamped with OUR
-                    // client handle, so this can no longer delete the operator's SmartSDR panadapter
-                    // (audit #1012/#1023). On a dropped socket the send fails harmlessly and the radio
-                    // reaps a departed client's objects itself.
-                    if let Some(pid) = pan_id {
-                        let _ = flex.send(&remove_pan_command(pid));
+                    // End of THIS session. Remove only what we created, the pan AND its waterfall
+                    // (see `teardown_commands`) — both ids can only have come from our own create
+                    // reply or from a status the radio stamped with OUR client handle, so this can no
+                    // longer delete the operator's SmartSDR panadapter (audit #1012/#1023). On a
+                    // dropped socket the send fails harmlessly and the radio reaps a departed client's
+                    // objects itself.
+                    for cmd in teardown_commands(pan_id, waterfall_id) {
+                        let _ = flex.send(&cmd);
                     }
-                    // Pan and stream ids are per-session: the UDP thread must filter against nothing
-                    // rather than against a dead id, or a reconnect's first sweeps are discarded.
-                    *stream_id.lock().unwrap() = None;
+                    // The pan is per-session: the UDP thread keeps nothing until the next session's
+                    // pan is ours, and that pan starts on our own scale again.
+                    {
+                        let mut v = view.lock().unwrap();
+                        v.pan = None;
+                        v.y_pixels = Y_PIXELS;
+                    }
                     // A session that stood up for a while was healthy — the next blip starts the
                     // ladder over rather than inheriting a long wait.
                     if session_start.elapsed() >= SESSION_STABLE_AFTER {
@@ -560,14 +769,15 @@ impl FlexSpectrum {
         // --- UDP FFT thread ---
         {
             let stop = stop.clone();
-            let stream_id = stream_id.clone();
-            let center = center.clone();
-            let span_hz = span_hz.clone();
+            let view = view.clone();
             let meters = meters.clone();
             let engine = engine.clone();
             let meters_out = meters_out.clone();
             handles.push(std::thread::spawn(move || {
-                let mut asm = FftReassembler::new();
+                let mut asm = FftAssembler::new();
+                // The pan `asm` is assembling for: a new pan (a reconnect) starts afresh, so no
+                // fragment or width of the old one carries over.
+                let mut assembling: Option<u32> = None;
                 let mut dg = vec![0u8; 16 * 1024];
                 while !stop.load(Ordering::Relaxed) {
                     let Ok((n, _)) = udp.recv_from(&mut dg) else {
@@ -576,30 +786,33 @@ impl FlexSpectrum {
                     let Some(pkt) = parse_vita(&dg[..n]) else {
                         continue;
                     };
+                    // A copy, taken in one statement: no guard outlives it, so nothing below
+                    // runs under the lock.
+                    let v = *view.lock().unwrap();
                     match pkt.packet_class {
-                        Some(FFT_PACKET_CLASS) => {
-                            // Filter to our pan's stream once it's known (accept all until then).
-                            // Read the id into a local FIRST: a guard built in an `if let`
-                            // scrutinee lives through the whole body, and this body goes on to
-                            // lock `center` and `span_hz` — an ordering hazard with no reason
-                            // to exist, since only the value is wanted.
-                            let want_id = *stream_id.lock().unwrap();
-                            if let (Some(want), Some(got)) = (want_id, pkt.stream_id) {
-                                if want != got {
-                                    continue;
-                                }
+                        Some(FFT_CLASS) => {
+                            if !fft_is_ours(pkt.stream_id, v.pan) {
+                                continue;
                             }
-                            let Some(frame) = parse_fft(pkt.payload) else {
+                            if assembling != v.pan {
+                                asm = FftAssembler::new();
+                                assembling = v.pan;
+                            }
+                            let Some(fragment) = decode_fft(pkt.payload, pkt.has_trailer) else {
                                 continue;
                             };
-                            if let Some(bins) = asm.push(&frame) {
-                                let span =
-                                    rf_span_hz(*center.lock().unwrap(), *span_hz.lock().unwrap());
+                            if let Some(frame) = asm.push(&fragment) {
                                 // Straight to the feed. This used to take the ENGINE mutex —
                                 // which the radio loop holds across its blocking boundary CAT —
                                 // so the Flex panadapter was starved by the same hold that
                                 // starved the audio row, despite already having its own thread.
-                                publish_sweep(&feed, &bins, span, slice);
+                                publish_sweep(
+                                    &feed,
+                                    &frame,
+                                    v.y_pixels,
+                                    rf_span_hz(v.center_mhz, v.span_hz),
+                                    slice,
+                                );
                             }
                         }
                         Some(METER_PACKET_CLASS) => {
@@ -608,10 +821,13 @@ impl FlexSpectrum {
                                 &meters_out,
                                 &meters,
                                 &parse_meter_values(pkt.payload, pkt.has_trailer),
-                                (*center.lock().unwrap() * 1_000_000.0) as u64,
+                                (v.center_mhz * 1_000_000.0) as u64,
                                 our_slice,
                             );
                         }
+                        // Our waterfall's tiles (`0x8004`) are not drawn yet: the feed has no slot
+                        // for the radio's own waterfall rows. `flex::vita::TileAssembler` decodes
+                        // them when one exists.
                         _ => {}
                     }
                 }
@@ -678,10 +894,6 @@ mod tests {
     #[test]
     fn pan_command_strings() {
         assert_eq!(
-            create_pan_command(145.0, SPAN_HZ, 2048, 15),
-            "display pan create x=2048 center=145.000000 bw=0.200000 fps=15"
-        );
-        assert_eq!(
             set_pan_center_command(0x40000000, 144.2),
             "display pan set 0x40000000 center=144.200000"
         );
@@ -695,7 +907,7 @@ mod tests {
     fn span_and_ref_command_strings() {
         assert_eq!(
             set_pan_bw_command(0x40000000, 50_000.0),
-            "display pan set 0x40000000 bw=0.050000"
+            "display pan set 0x40000000 bandwidth=0.050000"
         );
         // ref = top of the window; a 100 dB range sits below.
         assert_eq!(
@@ -705,12 +917,11 @@ mod tests {
     }
 
     /// A pan status as the radio sends it, with an owner.
-    fn pan_status(pan_id: u32, owner: u32) -> PanStatus {
-        parse_pan_status(&format!(
-            "display pan 0x{pan_id:08X} center=14.100 bandwidth=0.200 stream_id=0x42000000 \
+    fn pan_status(pan_id: u32, owner: u32) -> String {
+        format!(
+            "display pan 0x{pan_id:08X} center=14.100 bandwidth=0.200 waterfall=0x42000000 \
              client_handle=0x{owner:08X}"
-        ))
-        .expect("a pan status body")
+        )
     }
 
     /// NEXUS STEERS ONLY THE PANADAPTER IT CREATED (audit #1012/#1023).
@@ -723,33 +934,29 @@ mod tests {
         const OURS: u32 = 0x2ABC;
         const SMARTSDR: u32 = 0x1234;
 
+        // Through the decoder the worker uses, so the owner it reads is the owner on the wire.
+        let adopted = |pan: Option<u32>, handle: Option<u32>, body: &str| {
+            our_pan_status(pan, handle, body).is_some()
+        };
         // Before our create reply lands, the owning handle is the only proof available.
         assert!(
-            !pan_status_is_ours(None, Some(OURS), &pan_status(0x4000_0001, SMARTSDR)),
+            !adopted(None, Some(OURS), &pan_status(0x4000_0001, SMARTSDR)),
             "SmartSDR's own panadapter must never be adopted"
         );
         assert!(
-            pan_status_is_ours(None, Some(OURS), &pan_status(0x4000_0000, OURS)),
+            adopted(None, Some(OURS), &pan_status(0x4000_0000, OURS)),
             "a pan the radio says is ours is ours"
         );
         // Fail closed: no handle yet (the first ms of a session) → adopt nothing.
-        assert!(!pan_status_is_ours(
-            None,
-            None,
-            &pan_status(0x4000_0000, OURS)
-        ));
+        assert!(!adopted(None, None, &pan_status(0x4000_0000, OURS)));
 
         // Once the create reply has named our pan, only that object id is ours — a foreign status
         // cannot overwrite it, which is what "last-writer-wins" did.
-        let ours = created_pan_id(0, "0x40000000").expect("the create reply grants the id");
+        let (ours, _) = created_panafall(0, "0x40000000").expect("the create reply grants the id");
         assert_eq!(ours, 0x4000_0000);
-        assert!(pan_status_is_ours(
-            Some(ours),
-            Some(OURS),
-            &pan_status(ours, OURS)
-        ));
+        assert!(adopted(Some(ours), Some(OURS), &pan_status(ours, OURS)));
         assert!(
-            !pan_status_is_ours(Some(ours), Some(OURS), &pan_status(0x4000_0001, SMARTSDR)),
+            !adopted(Some(ours), Some(OURS), &pan_status(0x4000_0001, SMARTSDR)),
             "another pan's status must not repoint us at it"
         );
     }
@@ -757,13 +964,27 @@ mod tests {
     /// A REFUSED create is not a grant — the same rule the DAX TX create already follows.
     #[test]
     fn a_pan_is_owned_only_from_a_successful_create() {
-        assert_eq!(created_pan_id(0, "0x40000000"), Some(0x4000_0000));
+        assert_eq!(created_panafall(0, "0x40000000"), Some((0x4000_0000, None)));
         assert_eq!(
-            created_pan_id(0x5000_0015, "0x40000000"),
+            created_panafall(0x5000_0015, "0x40000000,0x42000000"),
             None,
             "an error code with an id-shaped body is still a refusal"
         );
-        assert_eq!(created_pan_id(0, ""), None);
+        assert_eq!(created_panafall(0, ""), None);
+        // Both shapes the reply comes in, and ids written without their `0x`.
+        assert_eq!(
+            created_panafall(0, "pan=0x40000001 waterfall=0x42000001"),
+            Some((0x4000_0001, Some(0x4200_0001)))
+        );
+        assert_eq!(
+            created_panafall(0, "40000000,42000000"),
+            Some((0x4000_0000, Some(0x4200_0000)))
+        );
+        assert_eq!(
+            created_panafall(0, "0x40000000,garbage"),
+            Some((0x4000_0000, None)),
+            "a waterfall id that does not parse is no waterfall, never a guess"
+        );
     }
 
     /// The reconnect ladder: doubling, capped, never zero (audit #1043's no-reconnect leg).
@@ -839,14 +1060,6 @@ mod tests {
             "{STOPPED_RUNS} already-stopped waits took {stopped:?}, against {real_wait:?} for \
              ONE real wait — the stop flag is being read after the sleep, not before it"
         );
-    }
-
-    #[test]
-    fn fft_bins_normalize_to_unit_range() {
-        let row = fft_to_row(&[0, 32768, 65535]);
-        assert_eq!(row[0], 0.0);
-        assert!((row[1] - 0.5).abs() < 0.01);
-        assert_eq!(row[2], 1.0);
     }
 
     /// The registry + value-pair shape [`slc_level_batch`] returns — named to keep
@@ -956,27 +1169,27 @@ mod tests {
     /// fragment that completes a sweep publishes it once, and the feed numbers it.
     #[test]
     fn each_reassembled_sweep_is_one_numbered_frame() {
-        use tempo_net::flexvita::FftFrame;
+        use tempo_net::flex::vita::FftFragment;
         let feed = SpectrumFeed::default();
         let newest = |last| {
             feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
                 unreachable!("a sweep was published, so the fallback is never asked")
             })
         };
-        let fragment = |frame_index: u32, start_bin: u16, bins: &[u16]| FftFrame {
+        let fragment = |frame_index: u32, start_bin: u16, rows: &[u16]| FftFragment {
             start_bin,
-            num_bins: bins.len() as u16,
             total_bins: 4,
             frame_index,
-            bins: bins.to_vec(),
+            rows: rows.to_vec(),
         };
         let span = rf_span_hz(14.1, SPAN_HZ);
-        let mut asm = FftReassembler::new();
-        assert!(asm.push(&fragment(7, 0, &[0, 65535])).is_none());
-        let bins = asm
-            .push(&fragment(7, 2, &[65535, 0]))
+        let mut asm = FftAssembler::new();
+        // Rows of a 701-row display: 700 is the bottom of the window, 0 its top.
+        assert!(asm.push(&fragment(7, 0, &[700, 0])).is_none());
+        let frame = asm
+            .push(&fragment(7, 2, &[0, 700]))
             .expect("covered end to end");
-        publish_sweep(&feed, &bins, span, Some(1));
+        publish_sweep(&feed, &frame, 701, span, Some(1));
         let first = newest(0).expect("the sweep reached the feed");
         assert_eq!(first.seq, 1);
         assert_eq!(first.source, "flex");
@@ -991,9 +1204,177 @@ mod tests {
             None,
             "half of the next sweep is not a new frame"
         );
-        let bins = asm.push(&fragment(8, 2, &[1, 1])).expect("the next sweep");
-        publish_sweep(&feed, &bins, span, Some(1));
+        let frame = asm.push(&fragment(8, 2, &[1, 1])).expect("the next sweep");
+        publish_sweep(&feed, &frame, 701, span, Some(1));
         let second = newest(first.seq).expect("the next sweep is a new frame");
         assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
+    }
+
+    // ── The shipped path's display defects (port plan §4.8) ─────────────────────────────────
+    //
+    // Each test below was first run against the code it replaces, reached through thin adapters,
+    // and failed there on the defect it names.
+
+    /// The pan status the radio sends for a new panafall (A: no `stream_id=` key; the FFT stream
+    /// id is the pan id).
+    const PAN_STATUS: &str =
+        "display pan 0x40000000 client_handle=0x2B6E1F40 waterfall=0x42000000 \
+         center=14.100000 bandwidth=0.200000 x_pixels=2048 y_pixels=700 fps=15 min_dbm=-140.00 \
+         max_dbm=-40.00";
+
+    fn publish_rows(feed: &SpectrumFeed, rows: &[u16], y_pixels: u32) {
+        let frame = FftFrame {
+            frame_index: 1,
+            rows: rows.to_vec(),
+            floor_from: None,
+        };
+        publish_sweep(feed, &frame, y_pixels, rf_span_hz(14.1, SPAN_HZ), Some(0));
+    }
+
+    /// The parts of a pan report the scale and the teardown depend on.
+    fn pan_report(
+        pan: Option<u32>,
+        handle: Option<u32>,
+        body: &str,
+    ) -> Option<(Option<u32>, Option<u32>, bool)> {
+        our_pan_status(pan, handle, body).map(|r| (r.waterfall, r.y_pixels, r.size_reset))
+    }
+
+    fn newest(feed: &SpectrumFeed) -> tempo_app::dto::SpectrumFrame {
+        feed.scope_frame_after(0.0, 0.0, Default::default(), 0, || {
+            unreachable!("a frame was published")
+        })
+        .expect("a frame")
+    }
+
+    /// (a) A BIN IS A PIXEL ROW COUNTED FROM THE TOP, NOT A MAGNITUDE. Row 0 is the pan's
+    /// `max_dbm`, the strongest reading, and row `y_pixels - 1` its `min_dbm`. Read as
+    /// `bin / 65535`, the carrier came out as the floor and the floor at the top: the trace
+    /// upside down, and squashed into the bottom percent of the scale.
+    #[test]
+    fn the_strongest_row_is_the_top_of_the_trace() {
+        let feed = SpectrumFeed::default();
+        publish_rows(&feed, &[700, 0, 700, 350], 701);
+        let frame = newest(&feed);
+        assert_eq!(frame.bins, vec![0.0, 1.0, 0.0, 0.5]);
+        assert_eq!(frame.scale, SpectrumScale::Relative);
+    }
+
+    /// (b) OUR PAN IS SIZED ONCE IT IS OURS. With no `ypixels` the radio keeps its default
+    /// 50 × 20 display, so every bin is one of 20 rows and nothing says which scale they count.
+    /// The create carries no dial, so the centre, span and frame rate follow it too.
+    #[test]
+    fn our_pan_is_sized_centred_and_paced_once_it_is_ours() {
+        assert_eq!(
+            pan_setup_commands(0x4000_0000, 14.1, 50_000.0, Some(-40)),
+            vec![
+                "display pan set 0x40000000 xpixels=2048 ypixels=700",
+                "display pan set 0x40000000 center=14.100000",
+                "display pan set 0x40000000 bandwidth=0.050000",
+                "display pan set 0x40000000 fps=15",
+                "display pan set 0x40000000 max_dbm=-40 min_dbm=-140",
+            ]
+        );
+        assert!(
+            !pan_setup_commands(0x4000_0000, 14.1, 50_000.0, None)
+                .iter()
+                .any(|c| c.contains("max_dbm")),
+            "no reference chosen, none sent"
+        );
+    }
+
+    /// (c) THE CREATE AND SPAN COMMANDS THE RADIO DOCUMENTS. `display pan create … bw=…` is not
+    /// the documented create (D: `display panafall create`, which gives the pan its waterfall),
+    /// and `bw` is not a pan key anywhere (D: `bandwidth`). The create reply names both objects
+    /// (D: `<pan>,<waterfall>`); a parser expecting one id read neither.
+    #[test]
+    fn the_pan_is_created_and_spanned_with_documented_commands() {
+        assert_eq!(
+            create_panafall_command(),
+            "display panafall create x=2048 y=700"
+        );
+        assert_eq!(
+            set_pan_bw_command(0x4000_0000, 50_000.0),
+            "display pan set 0x40000000 bandwidth=0.050000"
+        );
+        assert_eq!(
+            created_panafall(0, "0x40000000,0x42000000"),
+            Some((0x4000_0000, Some(0x4200_0000)))
+        );
+    }
+
+    /// (d) THE WATERFALL GOES WITH ITS PAN. The radio does not free a pan's waterfall when the
+    /// pan is removed (A, after FlexLib 4.2.18's close order), so removing only the pan left a
+    /// waterfall on the radio after every session.
+    #[test]
+    fn teardown_removes_the_waterfall_with_its_pan() {
+        assert_eq!(
+            teardown_commands(Some(0x4000_0000), Some(0x4200_0000)),
+            vec![
+                "display pan remove 0x40000000",
+                "display panafall remove 0x42000000",
+            ]
+        );
+        assert_eq!(
+            teardown_commands(None, None),
+            Vec::<String>::new(),
+            "nothing of ours, nothing removed"
+        );
+    }
+
+    /// OUR PAN'S FFT STREAM ID IS THE PAN'S OWN ID (A). The filter waited for a `stream_id=` key
+    /// that pan status does not carry, so it never filtered: every FFT stream reaching the port
+    /// was read as ours. Before our pan is known, nothing is.
+    #[test]
+    fn only_our_pans_fft_stream_is_read() {
+        assert!(fft_is_ours(Some(0x4000_0000), Some(0x4000_0000)));
+        assert!(
+            !fft_is_ours(Some(0x4000_0001), Some(0x4000_0000)),
+            "another pan's stream"
+        );
+        assert!(
+            !fft_is_ours(Some(0x4000_0000), None),
+            "before our pan is known"
+        );
+        assert!(
+            !fft_is_ours(None, Some(0x4000_0000)),
+            "a packet with no stream id"
+        );
+    }
+
+    /// OUR PAN'S STATUS SETS THE SCALE ITS ROWS ARE READ ON, and a size the radio put back to
+    /// its default is set again. A default-sized report never becomes the scale: the radio can
+    /// report its default while frames on our scale are still arriving (A).
+    #[test]
+    fn our_pans_status_sets_the_row_scale_and_a_reset_size_is_set_again() {
+        const HANDLE: Option<u32> = Some(0x2B6E_1F40);
+        assert_eq!(
+            pan_report(Some(0x4000_0000), HANDLE, PAN_STATUS),
+            Some((Some(0x4200_0000), Some(700), false))
+        );
+        let report = our_pan_status(Some(0x4000_0000), HANDLE, PAN_STATUS).expect("our pan");
+        assert_eq!(
+            (report.center_mhz, report.bandwidth_mhz),
+            (Some(14.1), Some(0.2)),
+            "the span a frame is labelled with is the one the radio reports"
+        );
+        assert_eq!(
+            pan_report(
+                Some(0x4000_0000),
+                HANDLE,
+                "display pan 0x40000000 x_pixels=50 y_pixels=20"
+            ),
+            Some((None, None, true)),
+            "the radio's default size: set ours again, and keep the scale we had"
+        );
+        assert_eq!(
+            pan_report(
+                Some(0x4000_0000),
+                HANDLE,
+                "display pan 0x40000001 client_handle=0x7A3C0001 waterfall=0x42000001 y_pixels=480"
+            ),
+            None,
+            "another client's pan tells us nothing"
+        );
     }
 }

@@ -1,10 +1,13 @@
 //! The native FlexRadio client's protocol core: the SmartSDR session, status decoding, typed
-//! command encoding, ownership, and the readback that proves an unkey.
+//! command encoding, ownership, the readback that proves an unkey, and the VITA-49 display
+//! streams.
 //!
-//! **Nothing in the app uses this module yet.** The shipped Flex paths (`crate::flexcat`,
-//! `crate::flexvita`, `crate::flexdisc` and their callers) are untouched. A later change builds the
-//! daemon that runs [`session::Connection`] for a radio and puts the engine's transmit gates in
-//! front of it.
+//! **The app uses only its display side yet.** The shipped native panadapter
+//! (`tempo_audio::flexspectrum`, still on the `crate::flexcat` session) assembles its FFT frames
+//! with [`vita`] and reads its create reply and its pan's status with [`ownership`] and
+//! [`status`]. A later change builds the daemon that runs [`session::Connection`] for a radio and
+//! puts the engine's transmit gates in front of it; until then `crate::flexcat`,
+//! `crate::flexvita` (the packet envelope, DAX audio, meters) and `crate::flexdisc` carry the rest.
 //!
 //! # Layers
 //!
@@ -22,6 +25,7 @@
 //! | [`keepalive`] | pings and the missed-reply count |
 //! | [`reconnect`] | the reconnect ladder |
 //! | [`session`] | one connection, from prologue to teardown, and the thread that runs it |
+//! | [`vita`] | the VITA-49 display streams: FFT frames and waterfall tiles, decoded and assembled |
 //!
 //! # The transmit rule
 //!
@@ -61,6 +65,7 @@ pub mod ptt_evidence;
 pub mod reconnect;
 pub mod session;
 pub mod status;
+pub mod vita;
 pub mod wire;
 
 #[cfg(test)]
@@ -207,6 +212,26 @@ pub const PROVENANCE: &[Ported] = &[
         references: &["src/models/RadioModel.cpp"],
         tests: &[],
         differences: "misses counted per ping; each miss reported; no kernel RTT",
+    },
+    Ported {
+        file: "vita.rs",
+        upstream: &[
+            "src/core/backends/flex/PanadapterStream.h",
+            "src/core/backends/flex/PanadapterStream.cpp",
+            "src/core/VitaBinCoverage.h",
+            "src/core/VitaTileFrequency.h",
+        ],
+        references: &[
+            "src/models/RadioModel.cpp",
+            "docs/architecture/vita49-format.md",
+        ],
+        tests: &[
+            "tests/panadapter_dbm_range_test.cpp",
+            "tests/vita_tile_frequency_test.cpp",
+        ],
+        differences: "pure payload decoders split from the socket; rows kept, levels and dBm a \
+                      separate step; three frames in flight; a completed frame takes nothing \
+                      more; a misfit fragment displaces nothing; no dBm-range echo handshake",
     },
 ];
 

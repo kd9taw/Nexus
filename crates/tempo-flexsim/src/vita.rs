@@ -297,6 +297,7 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempo_net::flex::vita;
     use tempo_net::flexvita;
 
     fn stream(content: Content) -> Stream {
@@ -361,19 +362,19 @@ mod tests {
         });
         let frags = s.tick(7);
         assert_eq!(frags.len(), 3, "10 bins in fragments of 4, 4 and 2");
-        let mut asm = flexvita::FftReassembler::new();
+        let mut asm = vita::FftAssembler::new();
         let mut row = None;
         for (i, (t, c, payload)) in frags.iter().enumerate() {
             let p = packet(*t, 0x4000_0000, *c, i as u8, payload);
             let v = flexvita::parse_vita(&p).unwrap();
-            let f = flexvita::parse_fft(v.payload).unwrap();
+            let f = vita::decode_fft(v.payload, v.has_trailer).unwrap();
             assert_eq!(f.frame_index, 7);
-            row = asm.push(&f);
+            row = asm.push(&f).map(|frame| frame.rows);
         }
         let mut expect = vec![400u16; 10];
         expect[5] = 20;
         assert_eq!(row, Some(expect));
-        // A real radio's bin size is 2 bytes (A rejects any other); the shipped parser skips it.
+        // A real radio's bin size is 2 bytes (A rejects any other, and so does the decoder).
         let (_, _, payload) = &frags[0];
         assert_eq!(&payload[4..6], &[0, 2]);
     }
