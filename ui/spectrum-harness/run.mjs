@@ -27,17 +27,22 @@
 //   rperf    the renderer at 2048 bins x 2048 rows filling a 1024x768 window, beside its budget.
 //   axis     the scale's axis (ui/src/spectrum/scale.ts) against the picture: a −20 dBFS level drawn
 //            by each backend must sit on the axis's −20 dBFS tick.
+//   offsets  what a click on the waterfall sets: real mouse events, every gesture, across every view
+//            and RX position, on both backends, against the values the waterfall set before it drew
+//            through the renderer (baselines/waterfall-offsets.json). The TX offset is where an FT
+//            over is keyed, so these are compared exactly.
 //
 // Controls run every time, because an instrument that cannot fail proves nothing: a WRONG PALETTE
 // must fail the pixel comparison (the components' and the renderer's, on each backend), a PLANTED
 // extra row must be found by the cadence probe, a BROKEN context must fail the renderer's self-test,
 // a DROPPED restore handler must fail the loss check, and an axis pinned to a WRONG REFERENCE must
-// miss the drawn line. A run where any control comes back clean is red.
+// miss the drawn line, and a click 2 px off must not set the recorded offsets. A run where any
+// control comes back clean is red.
 //
 // A check can carry a KNOWN-FAILURE marker: it is expected red and keeps the run green while it is,
 // and the run goes red the day it passes, so the marker cannot outlive the defect it names.
 //
-// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis]
+// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis,offsets]
 //          [--out DIR] [--record] [--palette NAME] [--plant N] [--chrome PATH] [--cpu-throttle N]
 // exit:  0 everything as expected · 1 something is not (a picture moved, a control stayed clean, a
 //        known failure passed, the backend is not the pinned one) · 2 could not run (usage, no
@@ -56,18 +61,19 @@ const UI = resolve(HERE, '..')
 const BASELINES = join(HERE, 'baselines')
 
 const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
-  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis (default: all;
-                      the backend always runs)
+  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis,offsets
+                      (default: all; the backend always runs)
   --out DIR           results.json, rendered pictures and diffs (default: $TMPDIR/nexus-spectrum-harness)
   --record            re-record the stored pictures of the probes selected (pixel, render): each
                       fixture rendered twice, written only if the two renders are identical, with
-                      the backend they were taken under
+                      the backend they were taken under; with offsets, the waterfall's recorded
+                      offsets (never to make a change pass: they are where the station transmits)
   --palette NAME      render the pixel fixtures in another palette (a manual control: they must fail)
   --plant N           plant an extra row at ask N in every cadence source (a manual control)
   --chrome PATH       Chrome binary (default: $CHROME_BIN or google-chrome)
   --cpu-throttle N    DevTools CPU throttling for the perf probe (default 1)`
 
-const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf', 'axis']
+const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf', 'axis', 'offsets']
 const opt = {
   only: new Set(PROBES),
   out: join(tmpdir(), 'nexus-spectrum-harness'),
@@ -257,7 +263,8 @@ async function openPage(cdp, url, { width = 1280, height = 900 } = {}) {
     const { metrics: list } = await cdp.call('Performance.getMetrics', {}, sessionId)
     return Object.fromEntries(list.map((m) => [m.name, m.value]))
   }
-  return { evaluate, metrics, close: () => cdp.call('Target.closeTarget', { targetId }).catch(() => {}) }
+  const mouse = (params) => cdp.call('Input.dispatchMouseEvent', params, sessionId)
+  return { evaluate, metrics, mouse, close: () => cdp.call('Target.closeTarget', { targetId }).catch(() => {}) }
 }
 
 /** Poll the page until `__harness` says done (or ready, for perf); returns its result. */
@@ -338,15 +345,26 @@ function record(check) {
 }
 
 const FIXTURE_SETS = ['carrier', 'two-tone', 'noise-step', 'ft8-slot']
-const COMPONENTS = ['phonescope', 'waterfall']
+const COMPONENTS = ['phonescope', 'waterfall', 'minispectrum']
+/** MiniSpectrum draws only the newest row, so two fixtures say all there is to say about it. */
+const setsOf = (comp) => (comp === 'minispectrum' ? ['carrier', 'two-tone'] : FIXTURE_SETS)
 const WRONG_PALETTE = 'viridis'
 
-async function renderFixture(cdp, base, comp, set, palette) {
-  const page = await openPage(cdp, `${base}/index.html?mode=pixel&comp=${comp}&set=${set}&palette=${palette}`)
+/** The Waterfall and MiniSpectrum draw through the spectrum renderer, so their pictures are taken on
+ *  BOTH backends and each must match the one stored picture (recorded on canvas-2D, the reference). */
+const backendsOf = (comp) => (comp === 'phonescope' ? ['webgl2'] : ['webgl2', 'canvas2d'])
+/** A picture that is all trace is stored PER BACKEND: the two rasterise a line differently (a stroked
+ *  path on canvas-2D, a shader ribbon on WebGL2; renderer.ts keeps per-backend pictures for the same
+ *  reason). The waterfall band runs one per-pixel mapping on both, so it has one picture. */
+const perBackend = (comp) => comp === 'minispectrum'
+const pictureOf = (comp, set, backend) => `${comp}-${set}${perBackend(comp) ? `.${backend}` : ''}.png`
+
+async function renderFixture(cdp, base, comp, set, palette, backend = 'webgl2') {
+  const page = await openPage(cdp, `${base}/index.html?mode=pixel&comp=${comp}&set=${set}&palette=${palette}&backend=${backend}`)
   try {
     const r = await waitFor(page, 'done', 90_000)
     if (r.unexpected.length) throw new Error(`the component asked for ${r.unexpected.join(', ')}`)
-    return { width: r.w, height: r.h, rgba: new Uint8Array(Buffer.from(r.b64, 'base64')) }
+    return { width: r.w, height: r.h, rgba: new Uint8Array(Buffer.from(r.b64, 'base64')), drawnBy: r.drawnBy }
   } finally {
     await page.close()
   }
@@ -356,20 +374,23 @@ async function pixelChecks(cdp, base, backend) {
   mkdirSync(join(opt.out, 'pixels'), { recursive: true })
   if (opt.record) {
     for (const comp of COMPONENTS) {
-      for (const set of FIXTURE_SETS) {
-        const id = `${comp}-${set}`
-        const a = await renderFixture(cdp, base, comp, set, opt.palette)
-        const b = await renderFixture(cdp, base, comp, set, opt.palette)
-        const same = comparePixels(a, b, { channel: 0, maxFraction: 0 })
-        if (!same.match) {
-          record({ kind: 'pixel', id, outcome: 'fail', detail: `two renders differ (${same.reason}); not recorded` })
-          line('PIXEL', id, same.reason, 'NOT DETERMINISTIC — not recorded')
-          continue
+      for (const set of setsOf(comp)) {
+        const refs = comp === 'phonescope' ? ['webgl2'] : perBackend(comp) ? ['webgl2', 'canvas2d'] : ['canvas2d']
+        for (const ref of refs) {
+          const id = pictureOf(comp, set, ref).slice(0, -4)
+          const a = await renderFixture(cdp, base, comp, set, opt.palette, ref)
+          const b = await renderFixture(cdp, base, comp, set, opt.palette, ref)
+          const same = comparePixels(a, b, { channel: 0, maxFraction: 0 })
+          if (!same.match) {
+            record({ kind: 'pixel', id, outcome: 'fail', detail: `two renders differ (${same.reason}); not recorded` })
+            line('PIXEL', id, same.reason, 'NOT DETERMINISTIC — not recorded')
+            continue
+          }
+          mkdirSync(BASELINES, { recursive: true })
+          writeFileSync(join(BASELINES, `${id}.png`), encodePng(a.width, a.height, a.rgba))
+          record({ kind: 'pixel', id, outcome: 'recorded', detail: `${a.width}x${a.height}, two renders identical` })
+          line('PIXEL', id, `${a.width}x${a.height}, two renders identical`, 'recorded')
         }
-        mkdirSync(BASELINES, { recursive: true })
-        writeFileSync(join(BASELINES, `${id}.png`), encodePng(a.width, a.height, a.rgba))
-        record({ kind: 'pixel', id, outcome: 'recorded', detail: `${a.width}x${a.height}, two renders identical` })
-        line('PIXEL', id, `${a.width}x${a.height}, two renders identical`, 'recorded')
       }
     }
     writeFileSync(
@@ -385,12 +406,12 @@ async function pixelChecks(cdp, base, backend) {
     line('PIXEL', 'stored pictures', `taken under "${stored?.key ?? 'nothing'}"`, 'NOT COMPARABLE with this backend — refused')
     return
   }
-  const compareOne = async (comp, set, palette) => {
+  const compareOne = async (comp, set, palette, backend = 'webgl2') => {
     const id = `${comp}-${set}`
-    const actual = await renderFixture(cdp, base, comp, set, palette)
-    const suffix = palette === stored.palette ? '' : `.${palette}`
+    const actual = await renderFixture(cdp, base, comp, set, palette, backend)
+    const suffix = `${palette === stored.palette ? '' : `.${palette}`}${comp === 'phonescope' ? '' : `.${backend}`}`
     writeFileSync(join(opt.out, 'pixels', `${id}${suffix}.png`), encodePng(actual.width, actual.height, actual.rgba))
-    const expected = decodePng(readFileSync(join(BASELINES, `${id}.png`)))
+    const expected = decodePng(readFileSync(join(BASELINES, pictureOf(comp, set, backend))))
     const cmp = comparePixels(actual, expected)
     if (!cmp.match && cmp.diff) {
       writeFileSync(join(opt.out, 'pixels', `${id}${suffix}.diff.png`), encodePng(actual.width, actual.height, cmp.diff))
@@ -398,11 +419,18 @@ async function pixelChecks(cdp, base, backend) {
     return { id, actual, cmp }
   }
   for (const comp of COMPONENTS) {
-    for (const set of FIXTURE_SETS) {
-      const { id, actual, cmp } = await compareOne(comp, set, opt.palette)
-      const text = `${actual.width}x${actual.height}  ${cmp.differing} px over tolerance (${(cmp.fraction * 100).toFixed(3)}%), max Δ ${cmp.maxDelta}`
-      record({ kind: 'pixel', id, palette: opt.palette, outcome: cmp.match ? 'pass' : 'fail', detail: cmp.reason || text, differing: cmp.differing, maxDelta: cmp.maxDelta })
-      line('PIXEL', id, text, cmp.match ? 'ok' : `FAIL (${cmp.reason})`)
+    for (const set of setsOf(comp)) {
+      for (const backend of backendsOf(comp)) {
+        const { id, actual, cmp } = await compareOne(comp, set, opt.palette, backend)
+        // The renderer's backend is asserted, as the Chrome backend is: a picture from the other one
+        // is not this check.
+        const pinned = comp === 'phonescope' || actual.drawnBy === backend
+        const name = comp === 'phonescope' ? id : `${id} [${backend}]`
+        const text = `${actual.width}x${actual.height}  ${cmp.differing} px over tolerance (${(cmp.fraction * 100).toFixed(3)}%), max Δ ${cmp.maxDelta}`
+        const ok = cmp.match && pinned
+        record({ kind: 'pixel', id: name, palette: opt.palette, drawnBy: actual.drawnBy, outcome: ok ? 'pass' : 'fail', detail: !pinned ? `drawn by ${actual.drawnBy}` : cmp.reason || text, differing: cmp.differing, maxDelta: cmp.maxDelta })
+        line('PIXEL', name, text, ok ? 'ok' : `FAIL (${!pinned ? `drawn by ${actual.drawnBy}` : cmp.reason})`)
+      }
     }
   }
   // CONTROL: the same fixture in the wrong palette must be rejected.
@@ -435,6 +463,7 @@ const CADENCE = [
   { comp: 'phonescope', rows: 'smooth', set: 'civ-10', expect: 'marked' },
   { comp: 'phonescope', rows: 'smooth', set: 'flex-15', expect: 'marked' },
   { comp: 'waterfall', set: 'audio-50', expect: 'pass' },
+  { comp: 'waterfall', set: 'audio-50', backend: 'canvas2d', expect: 'pass' },
   // CONTROLS: one planted row — an old sweep under a NEW number, the one way a copy could reach a
   // scope that commits only new frames — in a source that is otherwise clean. A row per sweep must
   // find exactly one repeated row, and smooth scroll exactly one UNMARKED repeat among its marked ones.
@@ -446,8 +475,9 @@ const CADENCE_WINDOW_MS = 6000
 async function cadenceChecks(cdp, base) {
   for (const c of CADENCE) {
     const plant = c.plant ?? opt.plant
-    const name = `${c.comp}${c.rows ? `[${c.rows}]` : ''}/${c.set}${plant ? ` +row@${plant}` : ''}`
-    const page = await openPage(cdp, `${base}/index.html?mode=cadence&comp=${c.comp}&set=${c.set}&window=${CADENCE_WINDOW_MS}&plant=${plant}&palette=${opt.palette}${c.rows ? `&rows=${c.rows}` : ''}`, { width: 1100, height: 800 })
+    const backend = c.backend ?? 'webgl2'
+    const name = `${c.comp}${c.rows ? `[${c.rows}]` : ''}/${c.set}${c.backend ? ` [${c.backend}]` : ''}${plant ? ` +row@${plant}` : ''}`
+    const page = await openPage(cdp, `${base}/index.html?mode=cadence&comp=${c.comp}&set=${c.set}&window=${CADENCE_WINDOW_MS}&plant=${plant}&palette=${opt.palette}&backend=${backend}${c.rows ? `&rows=${c.rows}` : ''}`, { width: 1100, height: 800 })
     let r
     try {
       r = await waitFor(page, 'done', CADENCE_WINDOW_MS + 30_000)
@@ -459,7 +489,7 @@ async function cadenceChecks(cdp, base) {
     // One row per ask the component commits for: every answered ask, and under smooth scroll every
     // ask the source had nothing new for as well.
     const asks = r.api.answered + (smooth ? r.api.unchanged : 0)
-    const consistent = r.committed === asks && r.outOfOrder === 0 && r.unexpected.length === 0 && (!m || m.terminator)
+    const consistent = r.committed === asks && r.outOfOrder === 0 && r.unexpected.length === 0 && (!m || m.terminator) && (c.comp !== 'waterfall' || r.drawnBy === backend)
     const clean = r.repeats === 0
     const gap = r.askGapMs
     const marked = m ? `, ${m.marked} marked, ${m.unmarked} unmarked, ${m.misaligned} misaligned` : ''
@@ -468,7 +498,7 @@ async function cadenceChecks(cdp, base) {
     let verdict
     if (!consistent) {
       outcome = 'fail'
-      verdict = `FAIL (canvas ${r.committed} rows vs ${asks} asks, ${r.outOfOrder} out of order${m && !m.terminator ? ', the ring does not end on the terminator' : ''}${r.unexpected.length ? `, asked for ${r.unexpected.join(',')}` : ''})`
+      verdict = `FAIL (canvas ${r.committed} rows vs ${asks} asks, ${r.outOfOrder} out of order${m && !m.terminator ? ', the ring does not end on the terminator' : ''}${r.unexpected.length ? `, asked for ${r.unexpected.join(',')}` : ''}, drawn by ${r.drawnBy})`
     } else if (c.expect === 'control') {
       const found = smooth ? m?.unmarked ?? 0 : r.repeats
       outcome = found === 1 ? 'control-fired' : 'fail'
@@ -498,14 +528,15 @@ const PERF = [
   { comp: 'phonescope', set: 'audio-50' },
   { comp: 'phonescope', set: 'flex-15' },
   { comp: 'waterfall', set: 'audio-50' },
+  { comp: 'waterfall', set: 'audio-50', backend: 'canvas2d' },
 ]
 const PERF_WINDOW_MS = 6000
 
 async function perfChecks(cdp, base) {
   for (const [w, h] of VIEWPORTS) {
     for (const p of PERF) {
-      const name = `${p.comp}/${p.set} @${w}x${h}`
-      const page = await openPage(cdp, `${base}/index.html?mode=perf&comp=${p.comp}&set=${p.set}&palette=${opt.palette}`, { width: w, height: h })
+      const name = `${p.comp}/${p.set}${p.backend ? ` [${p.backend}]` : ''} @${w}x${h}`
+      const page = await openPage(cdp, `${base}/index.html?mode=perf&comp=${p.comp}&set=${p.set}&palette=${opt.palette}&backend=${p.backend ?? 'webgl2'}`, { width: w, height: h })
       try {
         await waitFor(page, 'ready', 30_000)
         const m0 = await page.metrics()
@@ -526,7 +557,7 @@ async function perfChecks(cdp, base) {
         const ok = s.frames > 0 && s.rows > 0
         record({ kind: 'perf', id: name, outcome: ok ? 'measured' : 'fail', ...r })
         const lf = s.longFrames ? `${s.longFrames.n} long frames (max ${s.longFrames.maxMs} ms)` : 'long frames n/a'
-        line('PERF', name, `${s.fps} fps, gap p95 ${s.frameGapMs.p95} ms, ${lf}, main ${r.mainThreadMsPerFrame} ms/frame (${r.mainThreadBusyPct}%), row ${s.rowMs.p50}/${s.rowMs.p95} ms p50/p95, canvas ${s.canvas.w}x${s.canvas.h}`, ok ? '' : 'FAIL (measured nothing)')
+        line('PERF', name, `${s.fps} fps, gap p95 ${s.frameGapMs.p95} ms, ${lf}, main ${r.mainThreadMsPerFrame} ms/frame (${r.mainThreadBusyPct}%), row ${s.rowMs.p50}/${s.rowMs.p95} ms p50/p95, canvas ${s.canvas.w}x${s.canvas.h} (${s.drawnBy})`, ok ? '' : 'FAIL (measured nothing)')
       } finally {
         await page.close()
       }
@@ -824,6 +855,149 @@ async function axisChecks(cdp, base) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The offsets probe: what a click on the waterfall sets. A gesture on the waterfall sets the RX or TX
+// audio offset, and the TX offset is where the next FT over is keyed, so this is compared EXACTLY
+// against what the waterfall set before it drew through the renderer, on both backends.
+//
+// Real mouse events (Input.dispatchMouseEvent), so the browser's own hit-testing picks the element:
+// a layer drawn over the canvas that took the click would show up as a hit on something else, or as
+// no tune at all. Every gesture `tuneTarget` answers plus the middle button it refuses, at points across the
+// canvas, in the picture and on the axis strip under it, for every view the picker offers and WSPR's
+// fixed sub-band, with the RX marker walked so a zoomed window holds and then pages.
+
+const OFFSET_ZOOMS = ['0', '-1', '2000', '1500', '1000', '600', 'wspr']
+const OFFSET_RX = [1500, 1520, 2650, 230, 3990]
+/** CSS px from the canvas's left edge (it is 640 wide): both edges, beside them, and between. */
+const OFFSET_XS = [0, 1, 37, 100, 159, 160, 213, 320, 427, 480, 600, 638, 639]
+/** From the canvas's top: in the picture, and on the frequency axis drawn over its bottom strip. */
+const offsetYs = (h) => [Math.round(h / 2), Math.round(h) - 4]
+const OFFSET_GESTURES = [
+  { name: 'left', button: 'left', modifiers: 0 },
+  { name: 'Shift+left', button: 'left', modifiers: 8 },
+  { name: 'right', button: 'right', modifiers: 0 },
+  { name: 'Ctrl+left', button: 'left', modifiers: 2 },
+  { name: 'Ctrl+right', button: 'right', modifiers: 2 },
+  { name: 'Meta+left', button: 'left', modifiers: 4 },
+  // Refused by the waterfall. (The back button is refused too, but a real one navigates the page
+  // back; Waterfall.offsets.test.tsx clicks it.)
+  { name: 'middle', button: 'middle', modifiers: 0 },
+]
+const BUTTON_BITS = { left: 1, right: 2, middle: 4 }
+const OFFSET_BASELINE = join(BASELINES, 'waterfall-offsets.json')
+
+/** One view through one backend: every click, in order, as [hz, target, prevented]. */
+async function offsetRun(cdp, base, backend, zoom, shiftPx = 0) {
+  const page = await openPage(cdp, `${base}/index.html?mode=offsets&comp=waterfall&backend=${backend}&zoom=${zoom}&palette=${opt.palette}`)
+  try {
+    await waitFor(page, 'ready', 30_000)
+    const steps = []
+    const problems = []
+    let drawnBy = ''
+    let menus = 0
+    for (const rx of OFFSET_RX) {
+      await page.evaluate(`window.__harness.setRx(${rx})`)
+      const box = await page.evaluate('window.__harness.box()')
+      drawnBy = box.drawnBy
+      const sent = []
+      for (const g of OFFSET_GESTURES)
+        for (const px of OFFSET_XS)
+          for (const py of offsetYs(box.height)) sent.push({ g, x: box.left + px + shiftPx, y: box.top + py })
+      // Pipelined: the protocol delivers them in order, and the page logs each as it arrives.
+      await Promise.all(
+        sent.flatMap(({ g, x, y }) => [
+          page.mouse({ type: 'mousePressed', x, y, button: g.button, buttons: BUTTON_BITS[g.button], modifiers: g.modifiers, clickCount: 1 }),
+          page.mouse({ type: 'mouseReleased', x, y, button: g.button, buttons: 0, modifiers: g.modifiers, clickCount: 1 }),
+        ]),
+      )
+      const log = await page.evaluate('window.__harness.clicks()')
+      const downs = log.filter((e) => !e.menu)
+      for (const m of log.filter((e) => e.menu)) {
+        menus++
+        if (!m.prevented) problems.push(`RX ${rx}: a context menu was not cancelled`)
+      }
+      if (downs.length !== sent.length) {
+        problems.push(`RX ${rx}: ${sent.length} clicks sent, ${downs.length} reached the page`)
+        steps.push([])
+        continue
+      }
+      steps.push(
+        downs.map((d, i) => {
+          if (d.hit !== 'waterfall-canvas') problems.push(`RX ${rx}, ${sent[i].g.name} at (${sent[i].x}, ${sent[i].y}): the browser hit "${d.hit}", not the waterfall canvas`)
+          return [d.tuned ? d.tuned.hz : null, d.tuned ? d.tuned.target : null, d.prevented]
+        }),
+      )
+    }
+    return { steps, problems, drawnBy, menus }
+  } finally {
+    await page.close()
+  }
+}
+
+function offsetDiff(steps, want) {
+  const out = []
+  steps.forEach((s, r) =>
+    s.forEach((e, i) => {
+      const w = want[r]?.[i]
+      if (!w || e[0] !== w[0] || e[1] !== w[1] || e[2] !== w[2]) out.push({ rx: OFFSET_RX[r], click: i, got: e, want: w ?? null })
+    }),
+  )
+  if (steps.length !== want.length) out.push({ rx: null, click: null, got: `${steps.length} steps`, want: `${want.length} steps` })
+  return out
+}
+
+async function offsetChecks(cdp, base) {
+  const shape = { rx: OFFSET_RX, xs: OFFSET_XS, gestures: OFFSET_GESTURES.map((g) => g.name) }
+  if (opt.record) {
+    const views = {}
+    for (const zoom of OFFSET_ZOOMS) {
+      const a = await offsetRun(cdp, base, 'webgl2', zoom)
+      const b = await offsetRun(cdp, base, 'webgl2', zoom)
+      const same = JSON.stringify(a.steps) === JSON.stringify(b.steps)
+      if (!same || a.problems.length) {
+        record({ kind: 'offsets', id: `record ${zoom}`, outcome: 'fail', detail: same ? a.problems.join('; ') : 'two runs differ' })
+        line('OFFSETS', `record zoom ${zoom}`, same ? a.problems[0] : 'two runs differ', 'NOT RECORDED')
+        return
+      }
+      views[zoom] = a.steps
+      line('OFFSETS', `record zoom ${zoom}`, `${a.steps.flat().length} clicks, two runs identical (drawn by ${a.drawnBy})`, 'recorded')
+    }
+    // Where the numbers came from: the commit, and whether the waterfall was that commit's own.
+    const git = (...a) => spawnSync('git', ['-C', UI, ...a], { encoding: 'utf8' })
+    const from = { commit: git('rev-parse', '--short=9', 'HEAD').stdout.trim(), waterfallAsCommitted: git('diff', '--quiet', 'HEAD', '--', 'src/components/Waterfall.tsx').status === 0 }
+    // One line per RX position, so a diff of this file reads as which clicks moved.
+    const head = JSON.stringify({ recordedAt: results.startedAt.slice(0, 10), recordedFrom: from, ...shape }).slice(0, -1)
+    const body = OFFSET_ZOOMS.map((z) => `    ${JSON.stringify(z)}: [\n${views[z].map((st) => `      ${JSON.stringify(st)}`).join(',\n')}\n    ]`).join(',\n')
+    writeFileSync(OFFSET_BASELINE, `${head},\n  "views": {\n${body}\n  }\n}\n`)
+    record({ kind: 'offsets', id: 'record', outcome: 'recorded', detail: OFFSET_BASELINE })
+    return
+  }
+  const stored = existsSync(OFFSET_BASELINE) ? JSON.parse(readFileSync(OFFSET_BASELINE, 'utf8')) : null
+  if (!stored || JSON.stringify({ rx: stored.rx, xs: stored.xs, gestures: stored.gestures }) !== JSON.stringify(shape)) {
+    record({ kind: 'offsets', id: 'baseline', outcome: 'fail', detail: 'no recorded offsets for this matrix' })
+    line('OFFSETS', 'recorded offsets', 'missing, or recorded for another matrix', 'FAIL')
+    return
+  }
+  for (const backend of ['webgl2', 'canvas2d']) {
+    for (const zoom of OFFSET_ZOOMS) {
+      const id = `${backend} zoom ${zoom}`
+      const r = await offsetRun(cdp, base, backend, zoom)
+      const diff = offsetDiff(r.steps, stored.views[zoom])
+      const pinned = r.drawnBy === backend
+      const ok = diff.length === 0 && r.problems.length === 0 && pinned
+      const n = r.steps.flat().length
+      const why = !pinned ? `drawn by ${r.drawnBy}, not ${backend}` : r.problems[0] ?? (diff.length ? `${diff.length} of ${n} clicks differ, first ${JSON.stringify(diff[0])}` : '')
+      record({ kind: 'offsets', id, outcome: ok ? 'pass' : 'fail', clicks: n, differing: diff.length, menus: r.menus, drawnBy: r.drawnBy, problems: r.problems.slice(0, 5), firstDiffs: diff.slice(0, 5) })
+      line('OFFSETS', id, `${n} clicks, ${n - diff.length} as recorded, ${r.menus} menus cancelled, drawn by ${r.drawnBy}`, ok ? 'ok' : `FAIL (${why})`)
+    }
+  }
+  // CONTROL: the same clicks 2 px to the right must not set the recorded offsets.
+  const c = await offsetRun(cdp, base, 'webgl2', '600', 2)
+  const moved = offsetDiff(c.steps, stored.views['600']).length
+  record({ kind: 'control', id: 'offsets: clicks 2 px off', outcome: moved > 0 ? 'control-fired' : 'fail', detail: `${moved} clicks differ` })
+  line('CONTROL', 'offsets: clicks 2 px off (600 Hz)', `${moved} of ${c.steps.flat().length} clicks differ`, moved > 0 ? 'rejected, as it must be' : 'ACCEPTED — the comparison is blind')
+}
+
 async function main() {
   if (spawnSync(opt.chrome, ['--version'], { encoding: 'utf8' }).status !== 0) bail(2, `no Chrome at "${opt.chrome}" (set --chrome or CHROME_BIN)`)
   mkdirSync(opt.out, { recursive: true })
@@ -863,6 +1037,7 @@ async function main() {
       if (opt.only.has('loss')) await lossChecks(cdp, server.base)
       if (opt.only.has('rperf')) await rperfChecks(cdp, server.base)
       if (opt.only.has('axis')) await axisChecks(cdp, server.base)
+      if (opt.only.has('offsets')) await offsetChecks(cdp, server.base)
     }
   } catch (e) {
     record({ kind: 'harness', id: 'run', outcome: 'fail', detail: e.message })

@@ -13,13 +13,15 @@
 //
 // PhoneScope draws through the spectrum renderer, on a canvas of the renderer's own under its overlay,
 // so its picture is read from THAT canvas (WebGL2 or canvas-2D, whichever is drawing) by copying it
-// into a 2D one; the Waterfall's rows are read from its own canvas the same way.
+// into a 2D one; the Waterfall's and MiniSpectrum's, the renderer's too, are read the same way.
 import '../src/styles.css'
+import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { PhoneScope } from '../src/components/PhoneScope'
 import { Waterfall } from '../src/components/Waterfall'
+import { MiniSpectrum } from '../src/components/MiniSpectrum'
 import { SpectrumRing } from '../src/spectrum/ring'
-import { bakeLut, resolveColormap } from '../src/waterfall'
+import { WSPR_WATERFALL_WINDOW, bakeLut, resolveColormap } from '../src/waterfall'
 import { WF_PALETTE_KEY } from '../src/waterfallPalette'
 import { axis, capability, loss, render, rperf } from './renderer'
 import {
@@ -46,6 +48,9 @@ interface HarnessState {
   start?: () => void
   stop?: () => unknown
   gpu?: () => Promise<unknown>
+  setRx?: (hz: number) => Promise<void>
+  box?: () => { left: number; top: number; width: number; height: number; drawnBy: string }
+  clicks?: () => unknown[]
 }
 declare global {
   interface Window {
@@ -63,7 +68,7 @@ window.addEventListener('unhandledrejection', (e) => fail(`unhandled rejection: 
 
 const q = new URLSearchParams(location.search)
 const mode = q.get('mode') ?? 'backend'
-const comp = q.get('comp') === 'waterfall' ? 'waterfall' : 'phonescope'
+const comp = q.get('comp') === 'waterfall' ? 'waterfall' : q.get('comp') === 'minispectrum' ? 'minispectrum' : 'phonescope'
 const palette = q.get('palette') ?? 'turbo'
 const THEME = 'dark'
 
@@ -196,6 +201,9 @@ function mount(shape: Shape, opts: { fixedWindow?: boolean; rowMs?: number; stil
       // on an audio row they are the plain 0–4 kHz window. No dial, marker or carrier line, so
       // nothing is drawn as text over the picture.
       <PhoneScope transmitting={false} theme={THEME} viewLoHz={-1e9} viewHiHz={1e9} traceHoldMs={opts.stillTrace ? 0 : undefined} />
+    ) : comp === 'minispectrum' ? (
+      // A trace of the newest row only, so it is polled as fast as the rows are served.
+      <MiniSpectrum pollMs={20} height={96} />
     ) : (
       <Waterfall
         transmitting={false}
@@ -209,17 +217,48 @@ function mount(shape: Shape, opts: { fixedWindow?: boolean; rowMs?: number; stil
   createRoot(host).render(el)
 }
 
-/** The canvas the waterfall rows land on: PhoneScope's renderer canvas (the one drawing now, under
- *  the overlay), or the Waterfall's own (its overlay canvas is a separate layer). */
+/** The canvas the waterfall rows land on. PhoneScope and the Waterfall both draw through the spectrum
+ *  renderer: PhoneScope's canvas is in `.ph-scope-render`, under its overlay; the Waterfall's sits in
+ *  its own layer (`.waterfall-render`) over the gesture canvas and under the overlay. The one showing
+ *  is the one drawing (a stand-in for a lost context hides the other). */
 function rowCanvas(): HTMLCanvasElement {
   if (comp === 'phonescope') {
     const cv = [...document.querySelectorAll<HTMLCanvasElement>('.ph-scope-render canvas')].find((c) => c.style.visibility !== 'hidden')
     if (!cv) throw new Error('no renderer canvas in .ph-scope-render')
     return cv
   }
-  const cv = document.querySelector<HTMLCanvasElement>('.waterfall-canvas')
-  if (!cv) throw new Error('no .waterfall-canvas mounted')
-  return cv
+  // MiniSpectrum's trace is the renderer's too, in the strip's own box.
+  const layer = comp === 'minispectrum' ? '.mini-spectrum-canvas' : '.waterfall-render'
+  const shown = [...document.querySelectorAll<HTMLCanvasElement>(`${layer} canvas`)].filter((c) => c.style.visibility !== 'hidden')
+  if (shown.length !== 1) throw new Error(`${shown.length} renderer canvases showing in the ${comp}`)
+  return shown[0]
+}
+
+/** Which backend drew the picture (the renderer's canvas has one context or the other). */
+function drawnBy(): string {
+  const cv = rowCanvas()
+  return cv.getContext('webgl2') ? 'webgl2' : cv.getContext('2d') ? 'canvas2d' : 'none'
+}
+
+/** `backend=canvas2d`: take WebGL2 away before mounting, so the renderer stands on canvas-2D, the
+ *  path a webview without a WebGL2 context takes (the `capability` probe's `break=context`). */
+function withoutWebGl2(): void {
+  const get = HTMLCanvasElement.prototype.getContext
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, id: string, ...rest: unknown[]) {
+    return id === 'webgl2' ? null : (get as (...a: unknown[]) => unknown).call(this, id, ...rest)
+  } as typeof HTMLCanvasElement.prototype.getContext
+}
+const pickBackend = () => {
+  if (q.get('backend') === 'canvas2d') withoutWebGl2()
+}
+
+/** Keep a WebGL2 canvas's drawing buffer after it is shown, so the picture can be read in a later
+ *  task than the frame that drew it, as the pixel and cadence probes read it. Changes no pixel. */
+function keepDrawingBuffer(): void {
+  const get = HTMLCanvasElement.prototype.getContext
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, id: string, attrs?: Record<string, unknown>) {
+    return (get as (...a: unknown[]) => unknown).call(this, id, id === 'webgl2' ? { ...attrs, preserveDrawingBuffer: true } : attrs)
+  } as typeof HTMLCanvasElement.prototype.getContext
 }
 
 /** A canvas's pixels, whatever its context: copied into a 2D canvas and read there. */
@@ -260,6 +299,8 @@ async function backend() {
 async function pixel() {
   const set = INDEXED_SETS[q.get('set') ?? '']
   if (!set) throw new Error(`unknown pixel set ${q.get('set')}`)
+  pickBackend()
+  keepDrawingBuffer()
   const total = set.count + PAD_ROWS
   const frames = Array.from({ length: total }, (_, i) => indexedFrame(set, i))
   const payloads = frames.map(frameJson)
@@ -280,8 +321,10 @@ async function pixel() {
   mount('fixed', { rowMs: 50, stillTrace: true })
   // The ask after the last row starts only once that row's draw has finished.
   await until(() => refused, 60_000, `${total} rows`)
+  // The waterfall draws a committed row on the next frame (it draws nothing in between).
   await frame()
-  return { served, rows: total, ...capture(rowCanvas()), unexpected }
+  await frame()
+  return { served, rows: total, ...capture(rowCanvas()), drawnBy: drawnBy(), unexpected }
 }
 
 /** Map a canvas pixel back to the palette index it was painted with. */
@@ -357,6 +400,8 @@ function decodeRows(cv: HTMLCanvasElement): (number | 'end' | null)[] {
 async function cadence() {
   const set = TIMED_SETS[q.get('set') ?? '']
   if (!set) throw new Error(`unknown timed set ${q.get('set')}`)
+  pickBackend()
+  keepDrawingBuffer()
   const windowMs = Number(q.get('window') ?? 6000)
   const plant = Number(q.get('plant') ?? 0)
   // Sweeps whose time starts inside the window.
@@ -410,6 +455,7 @@ async function cadence() {
   mount('cadence', { fixedWindow: true })
   await until(() => stopped, windowMs + 15_000, 'the cadence window to close')
   await frame()
+  await frame()
   const cv = rowCanvas()
   const rows = decodeRows(cv)
   const top = rows.lastIndexOf('end')
@@ -428,9 +474,11 @@ async function cadence() {
   }
   // The band against the ring, newest first: the ring's last row is the terminator (its number is
   // `published + 1`), and band row i is the ring row i + 1 before it. A sweep's number is its index
-  // + 1 here, so a row whose pixels show sweep k must carry k + 1.
+  // + 1 here, so a row whose pixels show sweep k must carry k + 1. Only PhoneScope's ring carries the
+  // source's numbers: the Waterfall numbers its rows itself (its row command numbers nothing), so its
+  // ring says nothing about which sweep a row shows and is not read.
   let marks: { rows: number; terminator: boolean; misaligned: number; marked: number; unmarked: number; unmarkedRows: number[] } | null = null
-  if (ring.length > 0) {
+  if (comp === 'phonescope' && ring.length > 0) {
     const t = ring.length - 1
     const at = (i: number) => ring[t - 1 - i]
     let misaligned = 0
@@ -454,6 +502,7 @@ async function cadence() {
     windowMs,
     published,
     canvas: { w: cv.width, h: cv.height, bandTop: top + 1 },
+    drawnBy: drawnBy(),
     committed: seqs.length,
     distinct: new Set(seqs).size,
     repeats: repeats.length,
@@ -473,6 +522,7 @@ async function cadence() {
 async function perf() {
   const set = TIMED_SETS[q.get('set') ?? '']
   if (!set) throw new Error(`unknown timed set ${q.get('set')}`)
+  pickBackend()
   // A pool built BEFORE the clock starts: formatting floats is the backend's work, not the page's.
   const frames = Array.from({ length: 64 }, (_, s) => timedFrame(set, s, false))
   const pool = frames.map(frameJson)
@@ -536,6 +586,7 @@ async function perf() {
       set: set.id,
       secs: r3(secs),
       canvas: { w: cv.width, h: cv.height },
+      drawnBy: drawnBy(),
       frames: stamps.length,
       fps: r3(stamps.length / secs),
       frameGapMs: dist(gaps),
@@ -613,12 +664,82 @@ async function ipc() {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The offsets probe: what a click on the waterfall sets, through real input events.
+
+/**
+ * The waterfall mounted with a live audio source under it (so the picture under the pointer is a
+ * real drawn one) and an RX offset run.mjs can move. run.mjs dispatches real mouse events over the
+ * DevTools protocol; the page logs every mousedown as it reaches the document: where it was, which
+ * element the browser hit, whether the waterfall cancelled its default, and what `onTune` was handed
+ * during it. `backend=canvas2d` takes WebGL2 away first; `zoom` is the picker's span, or `wspr` for
+ * WSPR's fixed sub-band. Mounted as `comp=waterfall`.
+ */
+async function offsets() {
+  pickBackend()
+  const zoom = q.get('zoom') ?? '0'
+  if (zoom !== 'wspr') localStorage.setItem('nexus.waterfall.zoom', zoom)
+  const set = TIMED_SETS['audio-50']
+  const pool = Array.from({ length: 64 }, (_, s) => timedFrame(set, s, false))
+  const payloads = pool.map(frameJson)
+  const tails = pool.map(frameTail)
+  let n = 0
+  installIpc(() => {
+    const k = n++ % pool.length
+    return { json: payloads[k], seq: n, tMs: wallMs(performance.now()), tail: tails[k] }
+  })
+  let tuned: { hz: number; target: string } | null = null
+  const log: unknown[] = []
+  document.addEventListener('mousedown', (e) => {
+    const el = e.target as Element
+    log.push({ x: e.clientX, y: e.clientY, button: e.button, hit: el.getAttribute('class') ?? el.tagName, prevented: e.defaultPrevented, tuned })
+    tuned = null
+  })
+  document.addEventListener('contextmenu', (e) => log.push({ menu: true, prevented: e.defaultPrevented }))
+  const api: { setRx?: (hz: number) => void } = {}
+  function Host() {
+    const [rx, setRx] = useState(1500)
+    api.setRx = setRx
+    return (
+      <Waterfall
+        transmitting={false}
+        theme={THEME}
+        rxOffsetHz={rx}
+        txOffsetHz={1000}
+        rowMs={50}
+        fixedWindow={zoom === 'wspr' ? WSPR_WATERFALL_WINDOW : undefined}
+        onTune={(hz, target) => {
+          tuned = { hz, target }
+        }}
+      />
+    )
+  }
+  const host = document.getElementById('root')!
+  host.className = 'hx-fixed'
+  createRoot(host).render(<Host />)
+  // A picture under the pointer before the first click: rows have landed.
+  await until(() => n > 10, 10_000, 'rows under the waterfall')
+  H.setRx = async (hz) => {
+    api.setRx!(hz)
+    await frame()
+    await frame()
+  }
+  H.box = () => {
+    const r = document.querySelector('.waterfall-canvas')!.getBoundingClientRect()
+    return { left: r.left, top: r.top, width: r.width, height: r.height, drawnBy: drawnBy() }
+  }
+  H.clicks = () => log.splice(0)
+  H.ready = true
+  return null
+}
+
 const MODES: Record<string, () => Promise<unknown>> = {
   backend,
   pixel,
   cadence,
   perf,
   ipc,
+  offsets,
   // The renderer core (ui/src/spectrum), mounted bare: renderer.ts.
   render: () => render(q, palette),
   capability: () => capability(q),

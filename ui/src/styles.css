@@ -14614,7 +14614,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
   cursor: crosshair;
 }
-/* Axis + Rx/Tx marker layer over the spectrum canvas. Transparent, cleared each frame, and
+/* The waterfall's picture: the spectrum renderer's layer (ui/src/spectrum), which puts its own
+   canvas in here and fills it. It sits over `.waterfall-canvas`, which is no longer painted and
+   stays the box the tune gestures land on and measure, so it must be pointer-transparent: a click
+   falls through it exactly as it falls through the overlay. */
+.waterfall-render {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* Axis + Rx/Tx marker layer over the picture. Transparent, cleared whenever it redraws, and
    pointer-transparent so clicks fall through to the spectrum canvas's tune handler. */
 .waterfall-overlay {
   position: absolute;
@@ -23326,13 +23335,27 @@ button.sat-chip:disabled {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
-/* A display well (DISPLAY WELLS): `.well` paints the dark face, and the trace and gridline the
-   component reads off this canvas resolve to the dark theme's inks. */
+/* A display well (DISPLAY WELLS): `.well` paints the dark face, and the face and accent the
+   component reads off this box resolve to the dark theme's inks. The spectrum renderer puts its
+   canvas in it (absolutely, filling it), so it is positioned, and clips to its rounded border. */
 .mini-spectrum-canvas {
+  position: relative;
+  overflow: hidden;
   width: 100%;
   display: block;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+/* Its faint mid gridline, for scale, over the renderer's canvas. */
+.mini-spectrum-canvas::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--text-dim);
+  opacity: 0.2;
+  pointer-events: none;
 }
 .mini-spectrum-idle {
   color: var(--text-dim);
