@@ -276,6 +276,17 @@ impl FlexDaemon {
     /// What the operator must be told about the transmitter — the radio did not confirm an unkey,
     /// or a lost session of ours may still hold it — once it has happened.
     pub fn alarm(&self) -> Option<String> {
+        // The session publishes its closed state before it sends that step's events, so a daemon
+        // that reads dead may not have heard the alarm yet: wait for the watcher to read the
+        // session up to its last event (`Closed`) and end, at most `SETUP_TIMEOUT`.
+        if !self.is_alive() {
+            let deadline = std::time::Instant::now() + SETUP_TIMEOUT;
+            while self.watch_thread.as_ref().is_some_and(|t| !t.is_finished())
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         self.alarm
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -491,9 +502,15 @@ fn watch(
     };
     while !stop.load(Ordering::Relaxed) {
         let Some(conn) = conn.upgrade() else { break };
-        let event = conn.next_event(Duration::from_millis(200));
-        // A closed session's channel answers at once, with nothing: stop rather than spin.
+        let mut event = conn.next_event(Duration::from_millis(200));
+        // The session publishes a step's state before it sends that step's events, so one already
+        // reading closed may not have sent its last ones yet, the unkey alarm among them: a closed
+        // session is read up to its last event (`Closed`), waiting at most `SETUP_TIMEOUT`. Once
+        // it has sent them all, its channel answers at once, with nothing: stop rather than spin.
         let ended = event.is_none() && conn.snapshot().phase == Phase::Closed;
+        if ended {
+            event = conn.next_event(SETUP_TIMEOUT);
+        }
         drop(conn);
         let Some(event) = event else {
             if ended {

@@ -568,6 +568,61 @@ fn a_refused_registration_fails_the_start_with_the_reason() {
     );
 }
 
+/// Look at the daemon as the radio loop does, once a tick, until it reads dead.
+fn wait_dead(d: &FlexDaemon) {
+    let deadline = Instant::now() + WAIT;
+    while d.is_alive() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// ⭐ The radio never confirms the unkey: past the deadline the session sends `xmit 0` again and
+/// closes, and the operator is told the radio may still be transmitting. The radio loop reads the
+/// alarm once, when it first sees the daemon dead (`crate::service`, `daemon_died`), and the
+/// session publishes its closed state before it sends the events that carry the alarm, so that one
+/// read must already find it.
+#[test]
+fn an_unconfirmed_unkey_is_the_alarm_the_radio_loop_reads() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![Fault::StuckTransmit]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "t", "1\n");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_dead(&d);
+    let alarm = d.alarm();
+    assert!(
+        alarm
+            .as_deref()
+            .is_some_and(|a| a.contains("did not confirm the unkey")),
+        "{alarm:?}"
+    );
+}
+
+/// The control: a confirmed unkey raises no alarm, past the unkey deadline or once the session
+/// has ended.
+#[test]
+fn a_confirmed_unkey_raises_no_alarm() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "t", "1\n");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    // A whole deadline after the confirmation is past the deadline the stop started.
+    std::thread::sleep(Duration::from_millis(config(Vec::new()).unkey_deadline_ms));
+    assert!(d.is_alive());
+    assert_eq!(d.alarm(), None);
+    // The radio goes away.
+    drop(sim);
+    wait_dead(&d);
+    assert_eq!(d.alarm(), None);
+}
+
 /// ⭐ Teardown unkeys FIRST, then removes the slice and panadapter it made (the waterfall too),
 /// then closes.
 #[test]
