@@ -51,7 +51,6 @@ import {
   sidebandSign,
   TRACE_HOLD_MS,
   traceHoldDecay,
-  axisAbsoluteHz,
   axisTicks,
   overlayTextScale,
 } from '../waterfall'
@@ -75,6 +74,7 @@ import {
   type Edge,
 } from '../spectrum/markers'
 import {
+  axisToRf,
   drawOverlays,
   readOverlayInks,
   type FtOverlay,
@@ -1068,15 +1068,19 @@ export function PhoneScope({
       // ABSOLUTE frequency, not offset from the dial. The question being answered is "where will
       // I land", and an operator reading "-3.2k" still has arithmetic to do mid-QSO.
       //
-      // `axisAbsoluteHz` owns the one thing that is easy to get wrong here: on the carrier-centred
-      // AUDIO axis these bounds are offsets FROM the dial, while a native RF panadapter's are
-      // already absolute. It returns null when there is no honest answer (audio row, unknown
-      // dial), and then nothing is drawn — a wrong number on a scale someone tunes by is worse
-      // than a blank one.
+      // The axis model (`axisToRf`, the inverse of where the tags, the notch and the passband sit)
+      // owns the one thing that is easy to get wrong here: what a point on THIS axis is in RF. A
+      // native RF panadapter is absolute already; Phone's carrier-centred axis is the offset from
+      // the dial; CW's audio window hears a signal ON the dial at the pitch in true CW, while the
+      // soundcard keyer and plain SSB audio hear the carrier at 0, on the sideband's side. The
+      // scale read `dial + audio` everywhere until 2026-10-04, so in true CW it stood a pitch high
+      // under the very tags it labels (600 Hz by default), and ran backwards on the reverse
+      // sideband. It returns null where there is no honest answer (an audio row with the dial
+      // unknown, an AM/FM baseband, where a click does not tune either), and then nothing is
+      // drawn — a wrong number on a scale someone tunes by is worse than a blank one.
       {
-        const dialNow = dialRef.current
         for (const t of axisTicks(lo, hi, 6)) {
-          const abs = axisAbsoluteHz(t, src, dialNow)
+          const abs = axisToRf(axis, t)
           if (abs == null) break
           const tx = Math.round(((t - lo) / (hi - lo)) * Wd)
           // Skip a tick sitting on the dial line — its plate is already there and the two

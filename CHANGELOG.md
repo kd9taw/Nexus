@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CW scope: the frequency scale no longer reads the CW pitch off** (600 Hz by default). It also ran
+  backwards on reverse CW (CW-R) and with the soundcard keyer below 10 MHz. The numbers now match the
+  spot tags and where a click tunes. In AM and FM the Phone scope's audio picture shows no numbers,
+  since a click there does not tune.
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.

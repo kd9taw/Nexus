@@ -1040,32 +1040,6 @@ export function scopeView(
 }
 
 /**
- * The ABSOLUTE frequency (Hz) at a point on a drawn scope axis — what the operator is pointing at.
- *
- * Added because the Phone waterfall had no numbers on it at all: an operator could see a signal
- * and had no way to know where clicking would put them (operator, 2026-08-22).
- *
- * ⚠️ THE AXIS MEANS TWO DIFFERENT THINGS AND THAT IS THE WHOLE OF THIS FUNCTION. For an AUDIO row
- * on the carrier-centred axis, [`scopeView`] returns RF OFFSETS from the dial — the dial is axis
- * zero, which is what puts it at the 1/9 mark on USB and the 8/9 mark on LSB. For a NATIVE RF
- * panadapter row it already returns absolute RF, because that branch built its bounds from
- * `center + sign*(f - anchor)` with the dial as centre. Adding the dial in the second case would
- * label a 14 MHz scope at 28 MHz.
- *
- * Returns null when there is nothing honest to say: an audio axis with no known dial has no
- * absolute frequency, and a guessed one on a scale an operator tunes by is worse than a blank.
- */
-export function axisAbsoluteHz(
-  axisHz: number,
-  source: string,
-  dialHz: number | null,
-): number | null {
-  if (isRfScopeSource(source)) return axisHz
-  if (dialHz == null || !Number.isFinite(dialHz) || dialHz <= 0) return null
-  return dialHz + axisHz
-}
-
-/**
  * Tick positions for a frequency scale across `[loHz, hiHz]`, in the same axis units.
  *
  * Chooses a round step — 100 Hz to 100 kHz — so labels land on numbers an operator recognises
