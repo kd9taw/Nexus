@@ -18,7 +18,7 @@ import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
 import type { AppSnapshot, Js8State } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
-import { JS8_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
+import { JS8_PANEL_IDS, JS8_PANELS, panelStateIn, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
 
 const js8Fixture = (): Js8State => ({
   speed: 'normal',
@@ -89,6 +89,9 @@ vi.mock('./CockpitHeader', () => ({
   ),
 }))
 // The strip's box reaches its divider through `stripRef` (layout L2), so the stub forwards it.
+// The RF scope pane's picture is a renderer canvas jsdom cannot draw; its frame and place are what
+// these cases check.
+vi.mock('./PhoneScope', () => ({ PhoneScope: (p: { feed?: string }) => <div data-testid="rfscope-stub" data-feed={p.feed} /> }))
 vi.mock('./Waterfall', () => ({
   Waterfall: (p: { stripRef?: Ref<HTMLDivElement> }) => <div className="waterfall-wrap" ref={p.stripRef} />,
 }))
@@ -167,6 +170,23 @@ async function renderCockpit(props: Partial<Parameters<typeof Js8Cockpit>[0]> = 
 }
 
 describe('Js8Cockpit pane shell', () => {
+  it('the RF scope pane ships hidden; ticked, it heads the leading column of the region, under the TX strip', async () => {
+    // The stock record, read the vocabulary's way (this file's fixture docks every absent id).
+    const stock = { ...fakePanels(), stateOf: (id: Js8PanelId) => panelStateIn(JS8_PANELS, { v: 1, state: {}, share: {} }, id) }
+    await renderCockpit({ panels: stock })
+    expect(document.querySelector('[data-pane="rfScope"]'), 'the RF scope pane shipped visible').toBeNull()
+    expect(document.querySelector('[data-pane="activity"]'), 'control: the stock panes are on screen').not.toBeNull()
+    cleanup()
+    await renderCockpit({ panels: fakePanels() })
+    const region = document.querySelector('.cockpit-panes')!
+    const pane = region.querySelector('[data-pane="rfScope"]')
+    expect(pane, 'the RF scope pane is not in the region').not.toBeNull()
+    expect(pane!.parentElement?.classList.contains('cockpit-col'), 'it is not a column pane').toBe(true)
+    expect(pane!.parentElement!.firstElementChild, 'it does not head its column').toBe(pane)
+    expect(pane!.getAttribute('data-fit')).toBe('fill')
+    expect(pane!.querySelector('[data-testid="rfscope-stub"]')?.getAttribute('data-feed')).toBe('rf')
+  })
+
   it('the shell holds no child kinds beyond the census', async () => {
     state.current = { ...state.current, lastError: 'receive-only tier' }
     await renderCockpit()
@@ -242,7 +262,7 @@ describe('Js8Cockpit pane shell', () => {
     expect(region.getAttribute('data-cols'), 'a 3-track template with an empty log track').toBe('2')
     expect(document.querySelector('[data-pane="log"]')).toBeNull()
     cleanup()
-    await renderCockpit({ panels: fakePanels(['scope', 'activity', 'offsets', 'stations', 'inbox', 'log']) })
+    await renderCockpit({ panels: fakePanels([...JS8_PANEL_IDS]) })
     expect(document.querySelector('.waterfall-wrap')).toBeNull()
     expect(document.querySelector('.cockpit-panes'), 'the region is a shell child, hidden panes or not').not.toBeNull()
     expect(document.querySelectorAll('.pane-frame').length).toBe(0)

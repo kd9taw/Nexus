@@ -10877,6 +10877,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex: 1;
   min-height: 0;
 }
+/* THE RF SCOPE PANE's content (components/RfScopePane, the digital cockpits' opt-in pane): the rig
+   scope filling its frame's body, the CW decode's way (`.pane-body > .cw-decode`). `height: 100%`
+   takes the body's definite height wherever the frame has one, and `.ph-scope` above fills this
+   column. The floor is the readable minimum for the place where the body is content height (the
+   stacking flow); it is legal here because `.pane-body` scrolls, and nowhere else. */
+.pane-body > .rf-scope {
+  height: 100%;
+  min-height: 6em;
+  display: flex;
+  flex-direction: column;
+}
 .ph-scope-smeter {
   display: flex;
   align-items: center;

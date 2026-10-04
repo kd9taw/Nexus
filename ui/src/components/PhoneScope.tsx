@@ -16,7 +16,7 @@
 // it, which is also the element every pointer gesture lands on. The renderer swaps its canvas
 // while a lost WebGL2 context is away, so nothing here ever holds or listens on that one.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { getScopeFrame } from '../api'
+import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire } from '../types'
 import { useStationControl } from '../stationAccess'
 import {
@@ -180,8 +180,15 @@ interface Props {
   wheelSliders?: boolean
   /** Whose scale record this scope draws with — its analysis window, averaging, detector, G and Z
    *  (`spectrum/scaleSettings.ts`). CW passes 'cw', whose averaging defaults to off; Phone takes
-   *  the default. */
-  cockpit?: 'phone' | 'cw'
+   *  the default; the RF scope pane passes 'rfpan', its own record in every digital cockpit. */
+  cockpit?: 'phone' | 'cw' | 'rfpan'
+  /** What this scope draws. 'scope' (the default) is the rig scope of Phone and CW: the radio's
+   *  panadapter when one streams, else the audio FFT over the scope's window (`getScopeFrame`).
+   *  'rf' is the RF scope pane of the digital cockpits: the radio's panadapter ONLY (`getRfFrame`),
+   *  and while none streams it says so rather than drawing the audio FFT, which the cockpit's own
+   *  waterfall already shows. Its poll is also the pane's request for the stream (see getRfFrame).
+   *  Fixed for the scope's life: the loop reads it once. */
+  feed?: 'scope' | 'rf'
 }
 
 /**
@@ -233,9 +240,12 @@ export function PhoneScope({
   traceHoldMs = TRACE_HOLD_MS.normal,
   wheelSliders = false,
   cockpit = 'phone',
+  feed = 'scope',
 }: Props) {
   const control = useStationControl()
-  const [scopeAvailable, setScopeAvailable] = useState(control)
+  // The RF pane starts out saying the radio's scope is not there yet: it is only once a sweep lands.
+  const [scopeAvailable, setScopeAvailable] = useState(control && feed !== 'rf')
+  const rfOnly = feed === 'rf'
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven, and Amber
   // CRT at night — useNight.ts).
   const [palette] = useWaterfallPalette()
@@ -886,20 +896,24 @@ export function PhoneScope({
         // duplicating the RF test here against a source we only learn from the PREVIOUS row.
         // An unhonourable request returns exactly what `getSpectrumRow` would have, and the
         // frame's own loHz/hiHz below is what everything downstream reads anyway.
-        wire = await getScopeFrame(viewLoRef.current, viewHiRef.current, scaleRef.current.window, lastSeq)
+        wire = rfOnly
+          ? await getRfFrame(lastSeq)
+          : await getScopeFrame(viewLoRef.current, viewHiRef.current, scaleRef.current.window, lastSeq)
       } catch {
-        if (!control && latch.owns(myGen)) setScopeAvailable(false)
+        if ((!control || rfOnly) && latch.owns(myGen)) setScopeAvailable(false)
         return
       }
       // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
       // stale trace and a stale waterfall row on screen out of order.
       if (!latch.owns(myGen)) return
       if (wire) {
+        // An empty frame: the source went quiet — or, for the RF pane, no panadapter is streaming.
+        // The RF pane says so on every window; the rig scope only on a remote one, as before.
         if (!wire.bins || wire.bins.length === 0) {
-          if (!control) setScopeAvailable(false)
+          if (!control || rfOnly) setScopeAvailable(false)
           return
         }
-        if (!control) setScopeAvailable(true)
+        if (!control || rfOnly) setScopeAvailable(true)
         accept(wire)
       } else if (newest) {
         // The source has not swept since the last row. The view still follows the dial and the
@@ -1392,7 +1406,8 @@ export function PhoneScope({
       </div>
       {gear && (
         <div className="ph-scope-gear" id={gearId}>
-          <ScaleStrip settings={scale} onChange={setScale} windowControl control={control} />
+          {/* No analysis window on the RF pane: its rows are the radio's own sweep, not an FFT here. */}
+          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly} control={control} />
           <button
             type="button"
             className={`ph-scope-btn${rowCadence === 'sweep' ? ' on' : ''}`}
@@ -1441,7 +1456,11 @@ export function PhoneScope({
             }
           }}
         />
-        {!scopeAvailable && <div className="ph-scope-paused" role="status">{t('remote.scopeUnavailable')}</div>}
+        {!scopeAvailable && (
+          <div className="ph-scope-paused" role="status">
+            {rfOnly ? t('scope.rf.none') : t('remote.scopeUnavailable')}
+          </div>
+        )}
         {paused && <div className="ph-scope-paused">{t('scope.paused.badge')}</div>}
         {/* The drag passband box — imperatively positioned (60 fps), never intercepts events. */}
         <div ref={boxRef} className="ph-scope-box" aria-hidden="true" />

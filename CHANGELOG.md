@@ -162,6 +162,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FT8, JS8, RTTY, PSK and SSTV: the radio's own scope as a pane.** ⊞ Panels has a new **RF
+  scope** entry in the five digital cockpits, off until you tick it, so nobody's screen changes on
+  the update. It draws the radio's panadapter, an Icom's scope over CI-V at 115200 baud or a
+  FlexRadio's with the native panadapter on, and the audio waterfall stays where it was. In FT8 it
+  stands beside the waterfall and shares its height; in JS8 it heads the first column; in RTTY, PSK
+  and SSTV it is the first pane under the Stop TX strip. It only shows the band: a click on it does
+  not tune the radio. An Icom in a data mode streams its scope over CAT only while the pane is on
+  screen, and stops two seconds after you hide it; it still pauses while you transmit. Not yet
+  checked on a radio.
 - **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
   a new place, **Left side**: a column from under the header down to the dock, beside the scope,
   so the band map and the two boards get the whole height of the window instead of what is left

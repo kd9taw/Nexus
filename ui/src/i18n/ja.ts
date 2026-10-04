@@ -6342,6 +6342,8 @@ export const JA: PartialCatalog = {
   "scope.flow.up.title": "上へスクロール — 最新の行が下端に現れ、履歴は上へ流れます。クリックで最新を上端に。",
   "scope.canvas.title": "信号をクリックで同調・押したままドラッグで帯域をスライド",
   "scope.paused.badge": "⏸ 一時停止・ホイールで巻き戻し",
+  "rfScope.title": "RFスコープ",
+  "scope.rf.none": "無線機からのスコープデータがありません",
   "scope.strip.aria": "スコープの表示設定",
   "scope.strip.window.aria": "分解能",
   "scope.strip.window.fast.title": "高速 — 1024ポイント窓、85 ms。キーイングや音声の立ち上がりが分解できます。キャリアは倍の幅に見えます。",

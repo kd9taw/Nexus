@@ -30,8 +30,10 @@ import { surfaceGet } from '../features/windowScope'
 import { AVERAGE_MAX_MS, AVERAGE_STEPS_MS } from './scaleAverage'
 import type { Detector } from './types'
 
-/** The surfaces a scale record belongs to: the rig scope's two cockpits and the digital waterfall's. */
-export type ScopeCockpit = 'phone' | 'cw' | 'operate' | 'js8' | 'rtty' | 'psk' | 'sstv' | 'tempo'
+/** The surfaces a scale record belongs to: the rig scope's two cockpits, the digital waterfall's, and
+ *  the RF scope pane (`rfpan`) — one record for the pane in all five digital cockpits, because it is
+ *  one picture wherever it shows: the radio's own panadapter, never the audio FFT the waterfalls draw. */
+export type ScopeCockpit = 'phone' | 'cw' | 'operate' | 'js8' | 'rtty' | 'psk' | 'sstv' | 'tempo' | 'rfpan'
 
 export interface ScaleSettings {
   /** Log-recursive averaging time constant, ms (one of AVERAGE_STEPS_MS); 0 = off. */
@@ -55,6 +57,7 @@ export const SCALE_KEYS: Readonly<Record<ScopeCockpit, string>> = {
   psk: 'nexus.scope.psk',
   sstv: 'nexus.scope.sstv',
   tempo: 'nexus.scope.tempo',
+  rfpan: 'nexus.scope.rfpan',
 }
 
 /** What was stored before the records: the rig scope's window (per window), the waterfall's G and Z. */
@@ -148,7 +151,9 @@ function legacyBase(cockpit: ScopeCockpit): ScaleSettings {
   if (cockpit === 'phone' || cockpit === 'cw') {
     const w = surfaceGet(PHSCOPE_WIN_KEY)
     if (WINDOWS.includes(w as ScopeWindow)) base.window = w as ScopeWindow
-  } else {
+    // Not the RF scope pane's: it is new, and its picture is the radio's panadapter, so the audio
+    // waterfall's old G and Z — a calibration against another axis — are no starting point for it.
+  } else if (cockpit !== 'rfpan') {
     base.gain = storedKnob(WF_GAIN_KEY) ?? base.gain
     base.zero = storedKnob(WF_ZERO_KEY) ?? base.zero
   }

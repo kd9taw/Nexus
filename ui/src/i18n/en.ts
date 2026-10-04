@@ -10321,6 +10321,10 @@ export const EN = {
     'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.',
   'scope.canvas.title': 'Click a signal to tune it · press and drag to slide the passband',
   'scope.paused.badge': '⏸ paused · wheel to rewind',
+  // The RF scope pane (components/RfScopePane): its title in all five digital cockpits and ⊞ menus, and
+  // the chip it shows while the radio sends it no panadapter.
+  'rfScope.title': 'RF scope',
+  'scope.rf.none': 'No scope data from the radio',
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',

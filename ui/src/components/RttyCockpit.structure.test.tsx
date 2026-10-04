@@ -74,6 +74,9 @@ vi.mock('../toast', () => ({
 // ADIF mode, the Field Day class/section route — is RttyCockpit.log.test.tsx.
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
+// The RF scope pane's picture is a renderer canvas jsdom cannot draw; its frame and place are what
+// these cases check.
+vi.mock('./PhoneScope', () => ({ PhoneScope: (p: { feed?: string }) => <div data-testid="rfscope-stub" data-feed={p.feed} /> }))
 vi.mock('./Waterfall', () => ({
   // Capture the cadence prop: the liveliness pin below asserts RTTY runs the waterfall at the
   // live-instrument 50 ms cadence, not the FT surfaces' 120 ms default.
@@ -126,6 +129,27 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('RttyCockpit pane shell', () => {
+  it('the RF scope pane ships hidden; ticked, it is one more frame, FIRST under the TX strip, so the strip never moves', async () => {
+    // Stock (no record): exactly the frames this census has always counted.
+    await renderCockpit()
+    expect(document.querySelector('[data-pane="rfScope"]'), 'the RF scope pane shipped visible').toBeNull()
+    cleanup()
+    // Ticked (this fixture docks every id): a frame like the transcript's, between the TX strip and
+    // the transcript — the frames come after the strip, so a pane can never push the strip down.
+    await renderCockpit({ panels: fakePanels() })
+    const shell = document.querySelector('main.layout.single.rtty-cockpit')!
+    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
+    expect(frames).toEqual(['rfScope', 'stream', 'log'])
+    const strip = shell.querySelector(':scope > .cockpit-txstrip')!
+    expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the scope').toBe(true)
+    expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
+    const pane = shell.querySelector('[data-pane="rfScope"]')!
+    expect(pane.getAttribute('data-fit'), 'a scope can use the height it is given: a fill frame').toBe('fill')
+    expect(pane.querySelector('[data-testid="rfscope-stub"]')?.getAttribute('data-feed')).toBe('rf')
+    // Nothing in it transmits or stops: its one control is its own ✕.
+    expect([...pane.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))).toEqual([expect.stringMatching(/RF scope/)])
+  })
+
   it('the shell holds no child kinds beyond the contract (design3 §5 rule 1)', async () => {
     // RTTY's sanctioned kinds: header chrome, the waterfall, the keyer-error banner,
     // the shell-owned content frames, and the TX dock. Anything else is a new

@@ -272,6 +272,8 @@ const SHARED = [
   'nexus.scope.psk',
   'nexus.scope.sstv',
   'nexus.scope.tempo',
+  // The RF scope pane's, one record for the pane in all five digital cockpits (the same picture).
+  'nexus.scope.rfpan',
   'nexus.watchlist',
   'nexus.workspace',
   'tempo-onboarded',

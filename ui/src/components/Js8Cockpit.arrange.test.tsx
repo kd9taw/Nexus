@@ -212,6 +212,9 @@ function rng(seed: number) {
 describe('THE FIBER-IDENTITY SWEEP: no arrangement remounts the log form', () => {
   it('50 random moves with tier flips between them: the region is the placement and the log form the same node throughout', async () => {
     await mount()
+    // The RF scope pane ships hidden; ticked, it is one more pane every move may carry, which is
+    // the point — none of them may remount the log form either.
+    act(() => api!.setPanelState('rfScope', 'docked'))
     await tier(1800)
     const log0 = document.querySelector('[data-testid="log-stub"]')!
     const ids = arrangeIds(JS8_PANELS.arrange!)

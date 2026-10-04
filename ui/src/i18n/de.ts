@@ -6467,6 +6467,8 @@ export const DE: PartialCatalog = {
   "scope.flow.up.title": "Läuft nach oben — die neueste Zeile erscheint UNTEN, der Verlauf wandert nach oben. Klicken für neueste oben.",
   "scope.canvas.title": "Auf ein Signal klicken, um es abzustimmen · gedrückt ziehen verschiebt den Durchlassbereich",
   "scope.paused.badge": "⏸ angehalten · Rad zum Zurückspulen",
+  "rfScope.title": "HF-Scope",
+  "scope.rf.none": "Keine Scope-Daten vom Funkgerät",
   "scope.strip.aria": "Anzeigeeinstellungen des Scopes",
   "scope.strip.window.aria": "Auflösung",
   "scope.strip.window.fast.title": "Schnell — 1024-Punkte-Fenster, 85 ms. Tastung und Sprachansätze lösen sich auf; Träger erscheinen doppelt so breit.",
