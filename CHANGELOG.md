@@ -68,6 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the browser remembers your setting. A strong signal is held just under full scale instead of
   clipping. The faint hiss that marks a gap in the audio follows the volume, so it stays under the
   band.
+- **Remote streaming: the microphone message names the real cause.** Whatever kept the stream page
+  from your microphone, it said the browser did not allow it and to allow it in the browser's
+  settings for this site, which sent you to the wrong place whenever something else had stopped
+  it. Now it says which one it was and where to fix it: the microphone is blocked for this site
+  (the browser's settings for the site), your computer's privacy settings are blocking it (Settings
+  ▸ Privacy & security ▸ Microphone on Windows, System Settings ▸ Privacy & Security ▸ Microphone on
+  a Mac), the browser's question was closed without an answer, no microphone was found, or the
+  microphone was found but could not start because another program may be using it. Anything else
+  is said with the browser's own name for the error. Pressing PTT still never asks for the
+  microphone: only the Mic button does. It needs the Remote page's update.
 
 ### Changed
 

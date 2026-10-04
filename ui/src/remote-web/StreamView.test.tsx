@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StreamView } from './StreamView'
 import type { HostedConnection } from './client'
 import type { OperationState } from './operation-protocol'
@@ -468,6 +468,53 @@ it('R1: a press with the microphone off keys nothing, and the page says why; CON
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic on' })); await Promise.resolve() })
   v.station('mic over ended: released')
   expect(screen.queryByText(NEEDED)).toBeNull()
+})
+
+// Each way the browser gives no microphone is fixed in a different place, so each has its own words.
+const REFUSED = {
+  site: 'The microphone is blocked for this site. Allow it in the browser\'s settings for this site (the icon at the left of the address bar), then turn the microphone on again.',
+  system: 'Your computer\'s privacy settings are blocking the microphone for the browser. On Windows, open Settings ▸ Privacy & security ▸ Microphone and turn on microphone access, including for desktop apps. On a Mac, open System Settings ▸ Privacy & Security ▸ Microphone, turn the browser on, and reopen it. Then turn the microphone on again.',
+  dismissed: 'The browser\'s question about the microphone was closed without an answer. Turn the microphone on again and choose Allow.',
+  noDevice: 'No microphone was found on this computer. Plug one in, then turn the microphone on again.',
+  busy: 'The microphone was found but could not start. Another program may be using it: close that program, then turn the microphone on again.',
+  other: (name: string) => `The browser could not get the microphone (${name}). Check the browser's settings for this site and the computer's microphone settings, then turn the microphone on again.`,
+}
+
+it('says why the browser gave no microphone, and where to fix it, in the notes under the picture', async () => {
+  const cases = [
+    [{ micRefusal: 'NotAllowedError', micPermission: 'denied' }, REFUSED.site],
+    [{ micRefusal: 'NotAllowedError', micPermission: 'granted' }, REFUSED.system],
+    [{ micRefusal: 'NotAllowedError', micPermission: 'prompt' }, REFUSED.dismissed],
+    [{ micRefusal: 'NotFoundError', micPermission: 'granted' }, REFUSED.noDevice],
+    [{ micRefusal: 'NotReadableError', micPermission: 'granted' }, REFUSED.busy],
+    // Anything the page cannot place is said with the browser's own name for it.
+    [{ micRefusal: 'NotAllowedError', micPermission: null }, REFUSED.other('NotAllowedError')],
+    [{ micRefusal: 'AbortError', micPermission: 'granted' }, REFUSED.other('AbortError')],
+  ] as const
+  for (const [options, text] of cases) {
+    const v = view(controlling, { microphone: 'denied', ...options })
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await v.live()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic off' })) })
+    const notes = () => within(screen.getByRole('list', { name: 'Microphone' })).getAllByRole('alert').map(note => note.textContent)
+    await waitFor(() => expect(notes(), JSON.stringify(options)).toEqual([text]))
+    // The button is the operator's to press again: it says the microphone is off, and it is not held down.
+    expect(screen.getByRole('button', { name: 'Mic off' }).hasAttribute('disabled')).toBe(false)
+    cleanup()
+  }
+})
+
+it('a PTT press with the microphone off never asks the browser for it: the station arms the over and the page says the microphone is off', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = screen.getByRole('button', { name: 'Hold PTT' })
+  fireEvent.pointerDown(ptt, { button: 0 })
+  expect(v.peer.channel('ptt').sent.filter(m => m.type === 'pttHold'), 'the press was not sent').toHaveLength(1)
+  v.station(ARMED)
+  expect(screen.getByText(NEEDED)).toBeTruthy()
+  fireEvent.pointerUp(ptt)
+  expect(v.micAsks, 'a PTT press asked the browser for the microphone').toEqual([])
 })
 
 it('R2: the station seeing no power out while the voice arrives is said, DISPLAY ONLY; CONTROL: an over with power out says nothing', async () => {

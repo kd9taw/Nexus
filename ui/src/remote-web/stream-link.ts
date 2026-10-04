@@ -51,6 +51,10 @@ import {
 /** The page's microphone. `asking` is the browser's permission prompt; `denied` and `unavailable`
  *  are ends the operator is told about. */
 export type MicPhase = 'off' | 'asking' | 'on' | 'denied' | 'unavailable'
+/** Why the browser gave no microphone (`denied`), each fixed in its own place: this site's setting, the
+ *  computer's privacy settings, the browser's question closed without a choice, no microphone, one that
+ *  would not start, or `other`, which the page says with the browser's own name for the error. */
+export type MicDenial = 'site' | 'system' | 'dismissed' | 'noDevice' | 'busy' | 'other'
 /** What the station says its microphone over is doing (`micState`). */
 export type StationMic = { armed: boolean; keyed: boolean; noPowerOut: boolean; ended: MicEnded | null }
 
@@ -80,6 +84,8 @@ export type StreamView = {
   presence: boolean | null
   /** The page's microphone. */
   mic: MicPhase
+  /** While `mic` is `denied`: why, and the name the browser gave the error. Null otherwise. */
+  micDenied: { why: MicDenial; name: string } | null
   /** The browser kept processing on the microphone (echo cancellation, noise suppression or
    *  automatic gain) although the page asked it not to. */
   micProcessing: boolean
@@ -151,6 +157,9 @@ export type StreamEnvironment = {
   /** The microphone, asked for with the audio design's settings. Called only when the operator
    *  turns the microphone on, so the browser's permission prompt appears then and never before. */
   microphone?: (constraints: typeof MIC_CONSTRAINTS) => Promise<MicTrackLike>
+  /** This site's microphone permission as the browser states it now (`granted`, `denied` or `prompt`), or
+   *  null where it cannot say. Read only after the browser refused the microphone (`micDenial`). */
+  micPermission?: () => Promise<string | null>
   /** Wraps a lone track in a stream when the station's answer names none. */
   mediaStream: (track: unknown) => unknown
   audio: AudioEnvironment
@@ -201,7 +210,30 @@ const CONTROL_BUDGET_BYTES = 16 * 1024
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const OFF: StreamView = {
   phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null,
-  mic: 'off', micProcessing: false, station: null, uplinkStalled: false, stop: 'idle',
+  mic: 'off', micDenied: null, micProcessing: false, station: null, uplinkStalled: false, stop: 'idle',
+}
+
+/** Why the browser gave no microphone, from what it says about it: the error's standard name, and for a
+ *  refusal (NotAllowedError) this site's microphone permission as it stands just after. Chromium refuses
+ *  with NotAllowedError for a blocked site, a question closed without a choice and the computer's privacy
+ *  settings alike (blink's UserMediaRequest::Fail), and the permission it reports is the site's own setting,
+ *  with the computer's left out (content's PermissionServiceImpl::HasPermission). So `denied` is the site,
+ *  blocked before or answered Block just now; `prompt` is a question nobody answered; `granted`, a site the
+ *  operator allowed, leaves the computer. It is read after the refusal, never before, because Block turns
+ *  `prompt` into `denied`. A Permissions-Policy that refuses the microphone also reads `granted` (Chrome 140,
+ *  measured); the Worker's own policy allows it to this page's origin, and the browser sweep holds it there.
+ *  The error's message is never read: it is each browser's own wording, and Firefox and Safari give every
+ *  refusal the same one. */
+function micDenial(name: string, permission: string | null): MicDenial {
+  if (name === 'NotFoundError') return 'noDevice'
+  if (name === 'NotReadableError') return 'busy'
+  if (name !== 'NotAllowedError') return 'other'
+  return permission === 'denied' ? 'site' : permission === 'granted' ? 'system' : permission === 'prompt' ? 'dismissed' : 'other'
+}
+/** The name a browser gives an error: a DOMException's is the standard one (`NotAllowedError` and the rest). */
+function errorName(error: unknown): string {
+  const name = (error as { name?: unknown } | null)?.name
+  return typeof name === 'string' && name ? name : 'Error'
 }
 
 export class StreamLink {
@@ -418,13 +450,19 @@ export class StreamLink {
    *  permission prompt appears when the operator asks and at no other time. Off stops the track,
    *  and the browser's own microphone indicator goes out with it. */
   async setMic(on: boolean): Promise<void> {
-    if (!on) { this.micOff(); this.set({ mic: 'off', micProcessing: false }); return }
+    if (!on) { this.micOff(); this.set({ mic: 'off', micDenied: null, micProcessing: false }); return }
     if (this.view.mic === 'asking' || this.view.mic === 'on') return
     const sender = this.micSender, ask = this.env.microphone
-    if (!sender || !ask) { this.set({ mic: 'unavailable' }); return }
-    this.set({ mic: 'asking' })
+    if (!sender || !ask) { this.set({ mic: 'unavailable', micDenied: null }); return }
+    this.set({ mic: 'asking', micDenied: null })
     let track: MicTrackLike
-    try { track = await ask(MIC_CONSTRAINTS) } catch { if (this.micSender === sender) this.set({ mic: 'denied' }); return }
+    try { track = await ask(MIC_CONSTRAINTS) } catch (error) {
+      // Which refusal it was is the site's permission now that the browser has answered (`micDenial`).
+      const name = errorName(error)
+      const permission = name === 'NotAllowedError' ? await this.env.micPermission?.() ?? null : null
+      if (this.micSender === sender) this.set({ mic: 'denied', micDenied: { why: micDenial(name, permission), name } })
+      return
+    }
     // The stream ended, or the operator turned it off again, while the browser asked.
     if (this.micSender !== sender || !this.micAsking()) { try { track.stop() } catch { /* already stopped */ } return }
     this.micTrack = track
@@ -859,8 +897,14 @@ export function browserStream(): StreamEnvironment {
     microphone: async constraints => {
       const media = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false })
       const [track] = media.getAudioTracks()
-      if (!track) throw Error('noMicrophone')
+      // Named as the browser names no microphone at all, so the page says the same for both.
+      if (!track) throw new DOMException('No audio track', 'NotFoundError')
       return track as unknown as MicTrackLike
+    },
+    // A browser that does not know the name refuses the query (Firefox before 132), and one with no
+    // Permissions API has none: either way it cannot say.
+    micPermission: async () => {
+      try { return (await navigator.permissions.query({ name: 'microphone' })).state } catch { return null }
     },
     mediaStream: track => new MediaStream([track as MediaStreamTrack]),
     audio: browserAudio(),

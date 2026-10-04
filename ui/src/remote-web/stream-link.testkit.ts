@@ -101,7 +101,10 @@ export const silentAudio: AudioEnvironment = {
 }
 /** A relay as the service hands it over: synthetic names, never a minted credential. */
 export const RELAY = { urls: ['turn:turn.example.invalid:3478?transport=udp', 'turns:turn.example.invalid:443?transport=tcp'], username: 'synthetic-username', credential: 'synthetic-credential' }
-export function harness(options: { codecs?: boolean; peerThrows?: boolean; microphone?: 'granted' | 'denied' | 'none'; micSettings?: Record<string, unknown>; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>);
+export function harness(options: { codecs?: boolean; peerThrows?: boolean; microphone?: 'granted' | 'denied' | 'none'; micSettings?: Record<string, unknown>;
+  /** The DOMException name a `denied` microphone is refused with (NotAllowedError when absent), and this site's microphone
+   *  permission as the browser states it afterwards: null where it cannot say, absent where the page cannot ask. */
+  micRefusal?: string; micPermission?: 'granted' | 'denied' | 'prompt' | null; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>);
   /** The service's relay, when the page has one to ask; `refuseRelay` is a browser that will not build a peer with it. */
   relay?: () => Promise<unknown>; refuseRelay?: boolean } = {}) {
   let clock = 1000
@@ -125,11 +128,12 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
     audioCodecs: () => options.codecs === false ? null : [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2, sdpFmtpLine: 'minptime=10;useinbandfec=1' }],
     microphone: options.microphone === 'none' ? undefined : constraints => {
       micAsks.push(constraints)
-      if (options.microphone === 'denied') return Promise.reject(Error('NotAllowedError'))
+      if (options.microphone === 'denied') return Promise.reject(new DOMException('Permission denied', options.micRefusal ?? 'NotAllowedError'))
       const track = new FakeMicTrack(options.micSettings)
       micTracks.push(track)
       return Promise.resolve(track)
     },
+    micPermission: options.micPermission === undefined ? undefined : async () => options.micPermission ?? null,
     mediaStream: track => ({ wrapped: track }),
     audio: silentAudio,
     uuid: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
