@@ -6,6 +6,20 @@
 //! partial line is never returned as a value. The simulator's split-line fault exists to catch a
 //! client that skips this step.
 
+use std::io::{self, ErrorKind};
+
+/// Whether a failed read on a socket with a read timeout means "nothing yet, read again" rather
+/// than a dead peer. Besides the timeout itself, Linux fails such a read with EINTR when the
+/// process is stopped and continued, even with no signal handler installed (`man 7 signal`: socket
+/// reads with `SO_RCVTIMEO` are not restarted after a stop signal). A Ctrl-Z and `fg` must not end
+/// a recording or a simulated session.
+pub fn read_again(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+    )
+}
+
 /// The longest line accepted before the peer is treated as broken. The same 16 MiB cap as the
 /// session the port plan takes from AetherSDR (`RadioConnection`), so a peer that never sends a
 /// terminator cannot grow the buffer without bound.

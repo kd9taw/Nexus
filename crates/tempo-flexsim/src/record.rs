@@ -426,9 +426,7 @@ impl Rx {
                 .lines
                 .push(&buf[..n])
                 .map_err(|_| io::Error::other("the radio sent a line longer than 16 MiB")),
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                Ok(Vec::new())
-            }
+            Err(e) if line::read_again(&e) => Ok(Vec::new()),
             Err(_) => {
                 self.closed = true;
                 Ok(Vec::new())
@@ -788,8 +786,16 @@ mod tests {
         let mut buf = [0u8; 4096];
         let mut got: Vec<String> = Vec::new();
         let mut read_until = |got: &mut Vec<String>, from: usize, tag: &str| {
+            let deadline = Instant::now() + Duration::from_secs(10);
             while !got[from..].iter().any(|l| l.starts_with(tag)) {
-                let n = reader.read(&mut buf).expect("the simulator answers");
+                let n = match reader.read(&mut buf) {
+                    // EINTR after a stop and continue is not an answer (`line::read_again`),
+                    // but each one restarts the socket's timeout, hence the deadline.
+                    Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < deadline => {
+                        continue
+                    }
+                    read => read.expect("the simulator answers"),
+                };
                 assert!(n > 0, "the simulator closed the connection");
                 got.extend(lb.push(&buf[..n]).unwrap());
             }

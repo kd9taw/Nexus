@@ -27,7 +27,7 @@
 //! The simulator is test support. It binds 127.0.0.1 only and never talks to a radio.
 
 use std::collections::HashMap;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -571,7 +571,7 @@ fn serve(shared: &Arc<Shared>, tcp: TcpStream, peer: SocketAddr) {
                     close(shared, &conn, Closer::Simulator);
                 }
             },
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(e) if line::read_again(&e) => {}
             Err(_) => close(shared, &conn, Closer::Client),
         }
         if reader.keepalive && reader.last_ping.elapsed() > shared.config.keepalive_timeout {

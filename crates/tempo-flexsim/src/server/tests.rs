@@ -8,10 +8,36 @@ use crate::fault::Foreign;
 use crate::line::{parse_reply, LineBuf};
 use crate::vita::{Content, Start, Stream};
 use std::collections::VecDeque;
+use std::io::ErrorKind;
 use tempo_net::flexvita::{self, FftReassembler, VitaGap, VitaSequence};
 
 /// The longest any single wait may take before a test fails.
 const WAIT: Duration = Duration::from_secs(10);
+
+/// A read that rides out EINTR, which a stopped and continued test process gets on a socket with
+/// a read timeout ([`line::read_again`]). Each retry restarts the socket's timeout, so the retries
+/// have a deadline of their own: a test whose data never comes fails after [`WAIT`] rather than
+/// hanging. A timeout still fails it.
+fn read_some(stream: &mut TcpStream, buf: &mut [u8]) -> io::Result<usize> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match stream.read(buf) {
+            Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < deadline => {}
+            other => return other,
+        }
+    }
+}
+
+/// [`read_some`] for a datagram.
+fn recv_some(udp: &UdpSocket, buf: &mut [u8]) -> io::Result<usize> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match udp.recv_from(buf) {
+            Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < deadline => {}
+            other => return other.map(|(n, _)| n),
+        }
+    }
+}
 
 /// A minimal client: commands out, whole lines in.
 struct Client {
@@ -60,7 +86,7 @@ impl Client {
                 return l;
             }
             let mut buf = [0u8; 4096];
-            let n = self.reader.read(&mut buf).expect("a line within the wait");
+            let n = read_some(&mut self.reader, &mut buf).expect("a line within the wait");
             assert!(n > 0, "the simulator closed the connection");
             self.queue.extend(self.lines.push(&buf[..n]).unwrap());
         }
@@ -103,7 +129,7 @@ impl Client {
     fn closed_by_peer(&mut self) -> bool {
         let mut buf = [0u8; 4096];
         loop {
-            match self.reader.read(&mut buf) {
+            match read_some(&mut self.reader, &mut buf) {
                 Ok(0) => return true,
                 Ok(_) => {}
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
@@ -209,11 +235,14 @@ fn a_timed_block_is_sent_at_its_offset() {
     let sim = start(session("at 150\nsend S0|late\n"), Vec::new());
     let (mut c, _) = Client::greeted(&sim);
     assert_eq!(c.line(), "S0|late");
+    // A line is logged as sent once its write has returned, which can be after the client has
+    // already read it.
+    let late = |e: &Event| matches!(e, Event::Sent { line, .. } if line == "S0|late");
+    assert!(sim.wait_for(WAIT, |log| log.iter().any(|l| late(&l.event))));
     let log = sim.log();
     let at = |want: &dyn Fn(&Event) -> bool| log.iter().find(|l| want(&l.event)).unwrap().at;
     let connected = at(&|e| matches!(e, Event::Connected { .. }));
-    let sent = at(&|e| matches!(e, Event::Sent { line, .. } if line == "S0|late"));
-    assert!(sent - connected >= Duration::from_millis(150));
+    assert!(at(&late) - connected >= Duration::from_millis(150));
 }
 
 const SLICE: &str = "S0|slice 0 RF_frequency=14.074000 mode=DIGU";
@@ -241,7 +270,7 @@ fn a_split_line_arrives_in_pieces_and_the_rest_waits_for_the_next_command() {
     let mut raw = Vec::new();
     while raw.len() < want.len() {
         let mut buf = [0u8; 256];
-        let n = c.reader.read(&mut buf).unwrap();
+        let n = read_some(&mut c.reader, &mut buf).unwrap();
         assert!(n > 0);
         raw.extend_from_slice(&buf[..n]);
     }
@@ -264,7 +293,7 @@ fn a_split_line_arrives_in_pieces_and_the_rest_waits_for_the_next_command() {
     let mut rest = Vec::new();
     while !rest.iter().any(|l: &String| l.starts_with("R2|")) {
         let mut buf = [0u8; 256];
-        let n = c.reader.read(&mut buf).unwrap();
+        let n = read_some(&mut c.reader, &mut buf).unwrap();
         assert!(n > 0);
         rest.extend(assembler.push(&buf[..n]).unwrap());
     }
@@ -600,7 +629,7 @@ fn receive(udp: &UdpSocket, n: usize) -> Vec<Vec<u8>> {
     let mut buf = [0u8; 2048];
     (0..n)
         .map(|_| {
-            let (len, _) = udp.recv_from(&mut buf).expect("a packet within the wait");
+            let len = recv_some(udp, &mut buf).expect("a packet within the wait");
             buf[..len].to_vec()
         })
         .collect()
