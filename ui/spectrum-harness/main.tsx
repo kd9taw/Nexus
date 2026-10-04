@@ -77,7 +77,13 @@ function pct(xs: number[], p: number): number {
 }
 const r3 = (x: number) => Math.round(x * 1000) / 1000
 function dist(xs: number[]) {
-  return { n: xs.length, p50: r3(pct(xs, 0.5)), p95: r3(pct(xs, 0.95)), max: r3(xs.length ? Math.max(...xs) : NaN) }
+  return {
+    n: xs.length,
+    min: r3(xs.length ? Math.min(...xs) : NaN),
+    p50: r3(pct(xs, 0.5)),
+    p95: r3(pct(xs, 0.95)),
+    max: r3(xs.length ? Math.max(...xs) : NaN),
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -322,6 +328,8 @@ async function cadence() {
     if (seqs[i] === seqs[i + 1]) repeats.push({ row: i + 1, seq: seqs[i] })
     if (seqs[i] < seqs[i + 1]) outOfOrder++
   }
+  // How often the component asks: the row cadence it actually runs at, which is not its constant.
+  const askGaps = log.slice(1).map((e, i) => e.tMs - log[i].tMs)
   const apiDistinct = new Set(log.map((e) => e.seq)).size
   let apiRepeats = 0
   for (let i = 1; i < log.length; i++) if (log[i].seq === log[i - 1].seq) apiRepeats++
@@ -336,6 +344,7 @@ async function cadence() {
     repeats: repeats.length,
     repeatRows: repeats.slice(0, 5),
     outOfOrder,
+    askGapMs: dist(askGaps),
     api: { answered: log.length, distinct: apiDistinct, repeats: apiRepeats },
     unexpected,
   }

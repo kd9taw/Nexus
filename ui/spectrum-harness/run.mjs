@@ -428,7 +428,8 @@ async function cadenceChecks(cdp, base) {
     }
     const consistent = r.committed === r.api.answered && r.outOfOrder === 0 && r.unexpected.length === 0
     const clean = r.repeats === 0
-    const text = `${r.committed} rows, ${r.distinct} sweeps of ${r.published} published, ${r.repeats} repeated, ${r.published - r.distinct} never drawn`
+    const gap = r.askGapMs
+    const text = `${r.committed} rows (asks ${Math.round(gap.min)}-${Math.round(gap.max)} ms apart), ${r.distinct} sweeps of ${r.published} published, ${r.repeats} repeated, ${r.published - r.distinct} never drawn`
     let outcome
     let verdict
     if (!consistent) {
