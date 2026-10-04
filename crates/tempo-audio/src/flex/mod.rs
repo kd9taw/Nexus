@@ -175,7 +175,7 @@ impl FlexDaemon {
             remember_handle(radio, handle);
         }
         if !ready || snap.phase != Phase::Ready {
-            let why = drain_reason(&conn).unwrap_or_else(|| {
+            let why = drain_reason(&conn, snap.phase == Phase::Closed).unwrap_or_else(|| {
                 if ready {
                     "the radio closed the connection".to_string()
                 } else {
@@ -450,10 +450,17 @@ fn remove_ours(conn: &Connection) {
     }
 }
 
-/// Why a session that never became ready ended, from its events.
-fn drain_reason(conn: &Connection) -> Option<String> {
+/// Why a session that never became ready ended, from its events. The session publishes a step's
+/// state before it sends that step's events, so a session already reading closed may not have
+/// sent its reason yet: a closed one is read up to its last event (`Closed`).
+fn drain_reason(conn: &Connection, closed: bool) -> Option<String> {
+    let wait = if closed {
+        SETUP_TIMEOUT
+    } else {
+        Duration::ZERO
+    };
     let mut why = None;
-    while let Some(event) = conn.next_event(Duration::ZERO) {
+    while let Some(event) = conn.next_event(wait) {
         match event {
             Event::RegistrationRejected { code, detail } => {
                 why = Some(format!(
@@ -463,6 +470,7 @@ fn drain_reason(conn: &Connection) -> Option<String> {
             Event::ProtocolRejected if why.is_none() => {
                 why = Some("the radio's API version is not one this client knows".into());
             }
+            Event::Closed { .. } => break,
             _ => {}
         }
     }
