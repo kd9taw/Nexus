@@ -345,6 +345,22 @@ test('actual native S1-M1/S3-M1: the station\'s key is recorded for its pages, a
   }
 })
 
+/** One collection query, asked as the page's own collection source asks it (`RemoteCollections.page`
+ *  over `ApplicationQueryClient`): every answer is acknowledged at once, and `applicationBusy` is asked
+ *  again, three times at most and 250 ms apart. The station reads a collection with the Engine's
+ *  try_lock, so a read that lands while another thread holds the Engine (the radio loop; here the
+ *  probe's readings) is refused rather than queued. Every other answer goes back to the caller. */
+async function queryPage(socket, args) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID()
+    socket.send({ type: 'applicationQuery', requestId, ...args })
+    const page = await socket.take(value => value.requestId === requestId)
+    socket.send({ type: 'applicationQueryAck', requestId })
+    if (attempt === 3 || page.type !== 'applicationQueryError' || page.error !== 'applicationBusy') return page
+    await delay(250)
+  }
+}
+
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
@@ -532,15 +548,12 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     for (const collection of ['entities', 'log', 'decodes']) {
       let cursor = null, count = 0, snapshotId = null
       do {
-        const requestId = crypto.randomUUID()
-        query.send({ type: 'applicationQuery', requestId, collection, cursor, search: '', unconfirmed: false, after: null })
-        const page = await query.take(value => value.requestId === requestId)
+        const page = await queryPage(query, { collection, cursor, search: '', unconfirmed: false, after: null })
         assert.equal(page.type, 'applicationPage', 'real native producer must decode and answer the closed query envelope: ' + JSON.stringify({ collection, type: page.type, error: page.error }))
         assert.equal(page.offset, count)
         if (snapshotId) assert.equal(page.snapshotId, snapshotId)
         snapshotId = page.snapshotId; count += page.rows.length; cursor = page.nextCursor
         assert.ok(page.rows.length <= 128 && page.retained <= 3000)
-        query.send({ type: 'applicationQueryAck', requestId })
       } while (cursor)
       if (collection === 'entities') assert.ok(count > 300, 'positive control: actual station DXCC table crossed multiple pages')
     }
@@ -593,9 +606,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     recall.send({ type: 'applicationHello', version: 5 })
     assert.ok((await recall.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_recall'))
     for (const call of ['W1AW', 'W1AW/P', 'DL2ABC', 'JA1ABC', '000']) {
-      const requestId = crypto.randomUUID()
-      recall.send({ type: 'applicationQuery', requestId, collection: 'recall', cursor: null, search: call, unconfirmed: false, after: null })
-      const page = await recall.take(value => value.requestId === requestId)
+      const page = await queryPage(recall, { collection: 'recall', cursor: null, search: call, unconfirmed: false, after: null })
       assert.equal(page.type, 'applicationPage')
       const source = page.meta.source
       const { qsos, dupeThisBand: _dupe, ...history } = reference.callHistory(log, call, '20m', 'FT8', true)
@@ -606,7 +617,6 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
         const dupe = source.workedBandModes.some(([b, m]) => b === band.toLowerCase() && (!match || m === mode))
         assert.equal(dupe, reference.callHistory(log, call, band, mode, match).dupeThisBand)
       }
-      recall.send({ type: 'applicationQueryAck', requestId })
     }
     recall.close()
     const desktop = await probe.send({ type: 'seedRecallLog', adif: insightsAdif() })
@@ -619,9 +629,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     summaries.send({ type: 'applicationHello', version: 6 })
     assert.ok((await summaries.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_insights'))
     for (const collection of ['awards', 'statistics']) {
-      const requestId = crypto.randomUUID()
-      summaries.send({ type: 'applicationQuery', requestId, collection, cursor: null, search: '', unconfirmed: false, after: null })
-      const page = await summaries.take(value => value.requestId === requestId)
+      const page = await queryPage(summaries, { collection, cursor: null, search: '', unconfirmed: false, after: null })
       assert.equal(page.type, 'applicationPage', JSON.stringify({ collection, type: page.type, error: page.error }))
       const value = statsReference.parseInsights(page, collection)
       assert.equal(value.logCount, desktop.log.length)
@@ -631,7 +639,6 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
         assert.deepEqual(value.geography, desktop.geography, 'existing geographic result')
       }
       assert.ok(!JSON.stringify(page).includes('synthetic note'), 'the summary carries no contact notes')
-      summaries.send({ type: 'applicationQueryAck', requestId })
     }
     summaries.close()
     const dxpeditions = await probe.send({ type: 'seedDxpeditions' })
@@ -640,15 +647,13 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     await dx.take(value => value.type === 'session')
     dx.send({ type: 'applicationHello', version: 7 })
     assert.ok((await dx.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_dxpeditions'))
-    const dxRequest = crypto.randomUUID()
-    dx.send({ type: 'applicationQuery', requestId: dxRequest, collection: 'dxpeditions', cursor: null, search: '', unconfirmed: false, after: null })
-    const dxPage = await dx.take(value => value.requestId === dxRequest)
+    const dxPage = await queryPage(dx, { collection: 'dxpeditions', cursor: null, search: '', unconfirmed: false, after: null })
     assert.equal(dxPage.type, 'applicationPage', JSON.stringify({ collection: 'dxpeditions', type: dxPage.type, error: dxPage.error }))
     const board = statsReference.parseDxpeditions(dxPage)
     assert.deepEqual(board.dxpeditions, JSON.parse(dxpeditions.boardJson), 'the compiled native projection preserves every desktop wire field, including f32 scores')
     assert.equal(board.source, dxpeditions.source); assert.equal(board.asOf, dxpeditions.asOf)
     assert.equal(board.windows, null, 'a cold prediction cache remains absent')
-    dx.send({ type: 'applicationQueryAck', requestId: dxRequest }); dx.close()
+    dx.close()
     const bank = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/memories.json', import.meta.url), 'utf8'))
     assert.equal((await probe.send({ type: 'publishMemories', bank: JSON.stringify(bank) })).accepted, true)
     const { value: memoryTicket } = await browser.post(`stations/${stationId}/ticket`)
@@ -658,14 +663,11 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok((await memories.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_memories'))
     for (const valid of [true, false, true]) {
       assert.equal((await probe.send({ type: 'publishMemories', bank: valid ? JSON.stringify(bank) : '{}' })).accepted, valid)
-      const requestId = crypto.randomUUID()
-      memories.send({ type: 'applicationQuery', requestId, collection: 'memories', cursor: null, search: '', unconfirmed: false, after: null })
-      const page = await memories.take(value => value.requestId === requestId)
+      const page = await queryPage(memories, { collection: 'memories', cursor: null, search: '', unconfirmed: false, after: null })
       if (valid) {
         assert.equal(page.type, 'applicationPage')
         assert.deepEqual(statsReference.parseMemories(page).bank, bank, 'native cache and compiled UI parser preserve every canonical bank field')
       } else { assert.equal(page.type, 'applicationQueryError'); assert.equal(page.error, 'applicationUnavailable') }
-      memories.send({ type: 'applicationQueryAck', requestId })
     }
     memories.close()
     const { value: otaTicket } = await browser.post(`stations/${stationId}/ticket`)
@@ -675,9 +677,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok((await ota.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_ota'))
     for (const [age, missing] of [[0, null], [900, 'SOTA'], [0, null]]) {
       assert.equal((await probe.send({ type: 'seedOta', age, missing })).seeded, true)
-      const requestId = crypto.randomUUID()
-      ota.send({ type: 'applicationQuery', requestId, collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
-      const page = await ota.take(value => value.requestId === requestId)
+      const page = await queryPage(ota, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
       assert.equal(page.type, 'applicationPage')
       const value = statsReference.parseOta(page)
       assert.equal(value.feeds[0].status, age ? 'expired' : 'ready')
@@ -688,7 +688,6 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
         assert.equal(value.hunt.reference, 'US-0004')
         assert.equal(value.activation.reference, 'US-0001')
       }
-      ota.send({ type: 'applicationQueryAck', requestId })
     }
     ota.close()
     const { value: fdTicket } = await browser.post(`stations/${stationId}/ticket`)
@@ -698,9 +697,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok((await fd.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_field_day'))
     for (const active of [false, true]) {
       if (active) assert.equal((await probe.send({type:'seedFieldDay'})).seeded,true)
-      const requestId=crypto.randomUUID()
-      fd.send({type:'applicationQuery',requestId,collection:'fieldDay',cursor:null,search:'',unconfirmed:false,after:null})
-      const page=await fd.take(value=>value.requestId===requestId)
+      const page=await queryPage(fd,{collection:'fieldDay',cursor:null,search:'',unconfirmed:false,after:null})
       assert.equal(page.type,'applicationPage')
       const value=statsReference.parseFieldDay(page)
       assert.equal(value.active,active)
@@ -711,7 +708,6 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
         assert.deepEqual(value.settings.fdBonusesPlanned,['natural-power'])
         assert.deepEqual(value.settings.fdBonuses,['emergency-power'])
       } else assert.equal(value.fieldDay,null)
-      fd.send({type:'applicationQueryAck',requestId})
     }
     fd.close()
     const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
@@ -725,7 +721,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const js8Caps=await js8.take(value=>value.type==='applicationCapabilities')
     assert.equal(js8Caps.version,11)
     assert.ok(js8Caps.commands.includes('get_js8_state'))
-    let js8Request=crypto.randomUUID()
+    const js8Request=crypto.randomUUID()
     js8.send({type:'applicationSubscribe',topics:['get_js8_state'],requestId:js8Request})
     const js8Frame=await js8.take(value=>value.type==='applicationFrame')
     const js8Sample=js8Frame.updates.find(update=>update.command==='get_js8_state')
@@ -734,9 +730,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual(statsReference.parseJs8Sample(js8Sample.data,0,js8Sample.data.capturedAtMs),nativeJs8.state)
     js8.send({type:'applicationFrameAck',requestId:js8Request,nextRequestId:crypto.randomUUID()})
     js8.send({type:'applicationSubscribe',topics:[],requestId:null})
-    js8Request=crypto.randomUUID()
-    js8.send({type:'applicationQuery',requestId:js8Request,collection:'js8Context',cursor:null,search:'',unconfirmed:false,after:null})
-    const js8Page=await js8.take(value=>value.requestId===js8Request)
+    const js8Page=await queryPage(js8,{collection:'js8Context',cursor:null,search:'',unconfirmed:false,after:null})
     assert.equal(js8Page.type,'applicationPage')
     const js8Context=statsReference.parseJs8Context(js8Page)
     for(const call of ['W1AW','K2ABC']){
@@ -746,7 +740,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
         grid:(last?.grid??'').trim(),name:(last?.name??'').trim(),comment:(last?.comment??'').trim()})
     }
     assert.ok(js8Context.plan.length>0)
-    js8.send({type:'applicationQueryAck',requestId:js8Request});js8.close()
+    js8.close()
     const nativeModes=await probe.send({type:'seedStationModes'})
     const {value:modesTicket}=await browser.post(`stations/${stationId}/ticket`)
     const modes=await browser.open(stationId,modesTicket.ticket)
@@ -776,11 +770,8 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     modes.send({type:'applicationSubscribe',topics:[],requestId:null})
     const collectionSource={page:async args=>{
       await delay(140)
-      const requestId=crypto.randomUUID()
-      modes.send({type:'applicationQuery',requestId,...args})
-      const page=await modes.take(value=>value.requestId===requestId)
-      assert.equal(page.type,'applicationPage')
-      modes.send({type:'applicationQueryAck',requestId})
+      const page=await queryPage(modes,args)
+      assert.equal(page.type,'applicationPage',JSON.stringify({collection:args.collection,type:page.type,error:page.error}))
       return page
     }}
     const aprsRoster=await statsReference.loadAprsRoster(collectionSource,()=>true)
