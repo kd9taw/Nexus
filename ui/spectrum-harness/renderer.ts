@@ -3,10 +3,13 @@
 // component yet), fed rows directly, and read back by copying its canvas into a 2D one in the task
 // that drew it, which works for either backend.
 //
-// Modes (run.mjs drives them): `render` (one fixture, one backend), `capability`, `loss`, `rperf`.
+// Modes (run.mjs drives them): `render` (one fixture, one backend), `capability`, `loss`, `rperf`, `axis`.
 import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../src/spectrum'
+import { axisOf, axisTicks, dbAtY, rendererFrame } from '../src/spectrum/scale'
+import { autoRange, displayRange } from '../src/spectrum/scaleRange'
+import type { SpectrumFrameWire } from '../src/types'
 import { bakeLut, resolveColormap } from '../src/waterfall'
-import { dbfs, INDEXED_SETS, RENDERER_SETS, TIMED_SETS, timedFrame, type Frame } from './frames'
+import { dbfs, INDEXED_SETS, prng, RENDERER_SETS, TIMED_SETS, timedFrame, type Frame } from './frames'
 
 type Backend = 'webgl2' | 'canvas2d'
 
@@ -348,6 +351,69 @@ export async function rperf(q: URLSearchParams, palette: string, H: { ready?: bo
   }
   H.ready = true
   return null
+}
+
+/**
+ * The scale's axis against the renderer's picture (ui/src/spectrum/scale.ts). A −20 dBFS level, encoded
+ * as the producer encodes it, is drawn in the range scaleRange.ts gives the frame; the −20 dBFS tick of
+ * the axis the frame's own scale states must sit on the line the renderer actually drew.
+ *
+ * The level is a plateau 40 bins wide over noise near −60 dBFS, so the trace is flat where it is read: in
+ * the plateau's middle column the first pixel from the top that is not the trace band's background is the
+ * line's top edge, half its width over the level. `wrongY` is the same tick on an axis pinned to a −100
+ * dBFS floor, the control, which must miss the line.
+ */
+export async function axis(q: URLSearchParams, palette: string) {
+  const backend = (q.get('backend') ?? 'webgl2') as Backend
+  const w = 320
+  const traceH = 120
+  const lut = bakeLut(resolveColormap(palette, 'dark', false, null))
+  const r = open({ w, h: 192 }, backend)
+  const noise = prng(118)
+  // power_to_display: 0..1 is −120..0 dBFS. A sine of amplitude 0.1 is −20 dBFS.
+  const level = (db: number) => (db + 120) / 120
+  const bins = Array.from({ length: 512 }, (_, i) =>
+    i >= 192 && i < 232 ? level(20 * Math.log10(0.1)) : level(-60 + 5 * (noise() + noise() + noise() - 1.5)),
+  )
+  const wire: SpectrumFrameWire = { seq: 1, tMs: 0, source: 'audio', loHz: 0, hiHz: 4000, scale: { kind: 'dbfs', loDb: -120, hiDb: 0 }, bins }
+  const frame = rendererFrame(wire)
+  const range = displayRange(autoRange(frame.bins, frame.dbPerUnit), 0, 0, frame.dbPerUnit)
+  r.commitRow(frame, range)
+  r.draw({
+    view: { loHz: 0, hiHz: 4000 },
+    lut,
+    layout: { traceH, stripH: 0, lineWidth: 1 },
+    detector: 'peak',
+    mode: '2d',
+    offsetRows: 0,
+    newestAtTop: false,
+    trace: { frame, range },
+  })
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = 192
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(r.canvas!, 0, 0)
+  const x = Math.round((((1500 + 1812.5) / 2) / 4000) * w)
+  const px = ctx.getImageData(x, 0, 1, traceH).data
+  let topRow = -1
+  for (let y = 0; y < traceH && topRow < 0; y++) {
+    const d = Math.max(Math.abs(px[y * 4] - lut[0]), Math.abs(px[y * 4 + 1] - lut[1]), Math.abs(px[y * 4 + 2] - lut[2]))
+    if (d > 24) topRow = y
+  }
+  const right = axisOf(wire.scale, wire.source)
+  const tick = axisTicks(right, range, traceH).find((t) => t.db === -20)
+  const wrong = axisTicks(axisOf({ kind: 'dbfs', loDb: -100, hiDb: 0 }, 'audio'), range, traceH).find((t) => t.db === -20)
+  const out = {
+    backend: r.backend,
+    topRow,
+    tickY: tick?.y ?? null,
+    wrongY: wrong?.y ?? null,
+    // The axis read at the drawn line: its centre is half a line width under its top edge.
+    reading: dbAtY(right, range, traceH, topRow + 1),
+  }
+  r.destroy()
+  return out
 }
 
 function pct(xs: number[], p: number): number {

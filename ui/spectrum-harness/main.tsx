@@ -16,7 +16,7 @@ import { PhoneScope } from '../src/components/PhoneScope'
 import { Waterfall } from '../src/components/Waterfall'
 import { bakeLut, resolveColormap } from '../src/waterfall'
 import { WF_PALETTE_KEY } from '../src/waterfallPalette'
-import { capability, loss, render, rperf } from './renderer'
+import { axis, capability, loss, render, rperf } from './renderer'
 import {
   CODE_SLOTS,
   INDEXED_SETS,
@@ -548,6 +548,8 @@ const MODES: Record<string, () => Promise<unknown>> = {
   capability: () => capability(q),
   loss: () => loss(q, palette),
   rperf: () => rperf(q, palette, H),
+  // The scale's axis against the renderer's picture (ui/src/spectrum/scale.ts): renderer.ts.
+  axis: () => axis(q, palette),
 }
 // Every timing below rests on performance.now(), which Chrome coarsens to 100 µs unless the page is
 // cross-origin isolated (run.mjs serves it so: 5 µs). A sub-millisecond cost read at 100 µs is noise.
