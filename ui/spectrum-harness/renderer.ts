@@ -3,7 +3,7 @@
 // component yet), fed rows directly, and read back by copying its canvas into a 2D one in the task
 // that drew it, which works for either backend.
 //
-// Modes (run.mjs drives them): `render` (one fixture, one backend), `loss`, `rperf`.
+// Modes (run.mjs drives them): `render` (one fixture, one backend), `capability`, `loss`, `rperf`.
 import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../src/spectrum'
 import { bakeLut, resolveColormap } from '../src/waterfall'
 import { dbfs, INDEXED_SETS, RENDERER_SETS, TIMED_SETS, timedFrame, type Frame } from './frames'
@@ -118,9 +118,40 @@ export async function render(q: URLSearchParams, palette: string) {
   const r = open(fx, backend)
   const set = setOf(fx.set)
   const last = feed(r, fx, lut, set, 0, set.count)
-  r.draw(sceneFor(fx, lut, last, set.count - 1))
+  // `redraw=N`: N more draws of the same scene, as a host drawing at display rate between rows does.
+  const redraw = 1 + Number(q.get('redraw') ?? 0)
+  for (let i = 0; i < redraw; i++) r.draw(sceneFor(fx, lut, last, set.count - 1))
   const pic = picture(r)
-  const out = { ...pic, backend: r.backend, reason: r.reason, rows: r.rows }
+  const out = { ...pic, backend: r.backend, reason: r.reason, rows: r.rows, traceH: fx.traceH, mode: fx.mode }
+  r.destroy()
+  return out
+}
+
+/**
+ * Which backend the renderer picks, on a healthy context and on two broken ones: `break=context`
+ * (no WebGL2 context at all) and `break=upload` (a context that takes float uploads and keeps
+ * nothing, the kind of driver fault a context check alone never sees). The broken ones are the
+ * capability gate's positive controls: each must end on canvas-2D, and say why.
+ */
+export async function capability(q: URLSearchParams) {
+  const broken = q.get('break') ?? 'none'
+  if (broken === 'context') {
+    const get = HTMLCanvasElement.prototype.getContext
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, id: string, ...rest: unknown[]) {
+      return id === 'webgl2' ? null : (get as (...a: unknown[]) => unknown).call(this, id, ...rest)
+    } as typeof get
+  } else if (broken === 'upload') {
+    const sub = WebGL2RenderingContext.prototype.texSubImage2D
+    WebGL2RenderingContext.prototype.texSubImage2D = function (this: WebGL2RenderingContext, ...a: unknown[]) {
+      if (a.length >= 9 && a[6] === this.RED && a[7] === this.FLOAT) {
+        a[8] = new Float32Array((a[4] as number) * (a[5] as number))
+        a[9] = 0
+      }
+      return (sub as (...x: unknown[]) => void).apply(this, a)
+    } as typeof sub
+  }
+  const r = createSpectrumRenderer(host(64, 32))
+  const out = { broken, backend: r.backend, reason: r.reason }
   r.destroy()
   return out
 }

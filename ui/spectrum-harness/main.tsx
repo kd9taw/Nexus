@@ -15,7 +15,7 @@ import { PhoneScope } from '../src/components/PhoneScope'
 import { Waterfall } from '../src/components/Waterfall'
 import { bakeLut, resolveColormap } from '../src/waterfall'
 import { WF_PALETTE_KEY } from '../src/waterfallPalette'
-import { loss, render, rperf } from './renderer'
+import { capability, loss, render, rperf } from './renderer'
 import {
   CODE_SLOTS,
   INDEXED_SETS,
@@ -502,6 +502,7 @@ const MODES: Record<string, () => Promise<unknown>> = {
   ipc,
   // The renderer core (ui/src/spectrum), which no component mounts yet: renderer.ts.
   render: () => render(q, palette),
+  capability: () => capability(q),
   loss: () => loss(q, palette),
   rperf: () => rperf(q, palette, H),
 }

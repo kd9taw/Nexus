@@ -21,20 +21,22 @@
 //   render   the renderer core (ui/src/spectrum) on BOTH backends, WebGL2 and canvas-2D: the same
 //            fixtures against stored pictures per backend, the two backends against each other,
 //            and the 3-D stack's rejection of a one-row burst.
+//   capability  which backend the renderer picks on a healthy context and on two broken ones.
 //   loss     a forced WebGL2 context loss: canvas-2D must stand in, and WebGL2 must come back with
 //            the same picture, without a reload.
 //   rperf    the renderer at 2048 bins x 2048 rows filling a 1024x768 window, beside its budget.
 //
 // Controls run every time, because an instrument that cannot fail proves nothing: a WRONG PALETTE
 // must fail the pixel comparison (the components' and the renderer's, on each backend), a PLANTED
-// extra row must be found by the cadence probe, and a DROPPED restore handler must fail the loss
-// check. A run where any control comes back clean is red.
+// extra row must be found by the cadence probe, a BROKEN context must fail the renderer's self-test,
+// and a DROPPED restore handler must fail the loss check. A run where any control comes back clean
+// is red.
 //
 // A check can carry a KNOWN-FAILURE marker: it is expected red and keeps the run green while it is,
 // and the run goes red the day it passes, so the marker cannot outlive the defect it names.
 //
-// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,loss,rperf] [--out DIR]
-//          [--record] [--palette NAME] [--plant N] [--chrome PATH] [--cpu-throttle N]
+// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,capability,loss,rperf]
+//          [--out DIR] [--record] [--palette NAME] [--plant N] [--chrome PATH] [--cpu-throttle N]
 // exit:  0 everything as expected · 1 something is not (a picture moved, a control stayed clean, a
 //        known failure passed, the backend is not the pinned one) · 2 could not run (usage, no
 //        Chrome, the harness did not build)
@@ -52,8 +54,8 @@ const UI = resolve(HERE, '..')
 const BASELINES = join(HERE, 'baselines')
 
 const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
-  --only LIST         backend,pixel,cadence,perf,ipc,render,loss,rperf (default: all; the backend
-                      always runs)
+  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf (default: all;
+                      the backend always runs)
   --out DIR           results.json, rendered pictures and diffs (default: $TMPDIR/nexus-spectrum-harness)
   --record            re-record the stored pictures of the probes selected (pixel, render): each
                       fixture rendered twice, written only if the two renders are identical, with
@@ -63,7 +65,7 @@ const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
   --chrome PATH       Chrome binary (default: $CHROME_BIN or google-chrome)
   --cpu-throttle N    DevTools CPU throttling for the perf probe (default 1)`
 
-const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'loss', 'rperf']
+const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf']
 const opt = {
   only: new Set(PROBES),
   out: join(tmpdir(), 'nexus-spectrum-harness'),
@@ -534,19 +536,19 @@ const RENDER_FIXTURES = [
 ]
 const RENDER_BACKENDS = ['webgl2', 'canvas2d']
 const RENDER_BASELINES = join(BASELINES, 'renderer')
-/** Fixtures whose picture is a waterfall band and nothing else: the two backends run the same
- *  per-pixel mapping there, so they must agree within the comparator's tolerance. The trace and the
- *  3-D stack are rasterised differently on each (a stroked path against a shader ribbon; 256
- *  columns against one per pixel), so there the difference is reported, not asserted. */
-const SAME_ON_BOTH = new Set(['wf-ft8-slot', 'wf-retune', 'wf-scrollback'])
 const EXACT = { channel: 0, maxFraction: 0 }
 
-async function renderFixture2(cdp, base, fixture, backend, palette, set) {
-  const page = await openPage(cdp, `${base}/index.html?mode=render&fixture=${fixture}&backend=${backend}&palette=${palette}${set ? `&set=${set}` : ''}`)
+/** Rows `y0..` of a picture. */
+function rowsFrom(p, y0) {
+  return { width: p.width, height: p.height - y0, rgba: p.rgba.subarray(y0 * p.width * 4) }
+}
+
+async function renderFixture2(cdp, base, fixture, backend, palette, set, redraw = 0) {
+  const page = await openPage(cdp, `${base}/index.html?mode=render&fixture=${fixture}&backend=${backend}&palette=${palette}${set ? `&set=${set}` : ''}&redraw=${redraw}`)
   try {
     const r = await waitFor(page, 'done', 90_000)
     if (r.backend !== backend) throw new Error(`${fixture}: drew on ${r.backend}, not ${backend} (${r.reason})`)
-    return { width: r.w, height: r.h, rgba: new Uint8Array(Buffer.from(r.b64, 'base64')) }
+    return { width: r.w, height: r.h, rgba: new Uint8Array(Buffer.from(r.b64, 'base64')), traceH: r.traceH, mode: r.mode }
   } finally {
     await page.close()
   }
@@ -605,13 +607,34 @@ async function renderChecks(cdp, base, backend) {
       line('RENDER', id, text, cmp.match ? 'ok' : `FAIL (${cmp.reason})`)
     }
   }
-  // The two backends against each other: the same mapping must give the same waterfall.
+  // The two backends against each other. Below the trace both draw the waterfall band through the
+  // same per-pixel mapping (aggregate.ts and its GLSL twin), so there they must agree within the
+  // comparator's tolerance, detectors included. The trace line and the 3-D stack are rasterised
+  // differently on each (a stroked path against a shader ribbon; 256 columns against one per
+  // pixel), so the whole picture's difference is reported, not asserted.
+  const pct = (c) => `${c.differing} px over tolerance (${(c.fraction * 100).toFixed(3)}%), max Δ ${c.maxDelta}`
   for (const fx of RENDER_FIXTURES) {
-    const cmp = comparePixels(drawn[`webgl2-${fx}`], drawn[`canvas2d-${fx}`])
-    const asserted = SAME_ON_BOTH.has(fx)
-    const text = `${cmp.differing} px over tolerance (${(cmp.fraction * 100).toFixed(3)}%), max Δ ${cmp.maxDelta}`
-    record({ kind: 'render-cross', id: fx, outcome: asserted ? (cmp.match ? 'pass' : 'fail') : 'measured', detail: cmp.reason || text, differing: cmp.differing, fraction: cmp.fraction, maxDelta: cmp.maxDelta })
-    line('BOTH', `webgl2 vs canvas2d: ${fx}`, text, asserted ? (cmp.match ? 'agree' : `FAIL (${cmp.reason})`) : 'reported')
+    const a = drawn[`webgl2-${fx}`]
+    const b = drawn[`canvas2d-${fx}`]
+    const whole = comparePixels(a, b)
+    if (a.mode === 'dss') {
+      record({ kind: 'render-cross', id: fx, outcome: 'measured', detail: pct(whole), fraction: whole.fraction, maxDelta: whole.maxDelta })
+      line('BOTH', `webgl2 vs canvas2d: ${fx}`, `whole ${pct(whole)}`, 'reported')
+      continue
+    }
+    const band = comparePixels(rowsFrom(a, a.traceH), rowsFrom(b, b.traceH))
+    record({ kind: 'render-cross', id: fx, outcome: band.match ? 'pass' : 'fail', detail: band.reason || `band ${pct(band)}; whole ${pct(whole)}`, band: { differing: band.differing, maxDelta: band.maxDelta }, whole: { fraction: whole.fraction, maxDelta: whole.maxDelta } })
+    line('BOTH', `webgl2 vs canvas2d: ${fx}`, `band ${pct(band)}; whole ${(whole.fraction * 100).toFixed(3)}%`, band.match ? 'agree' : `FAIL (${band.reason})`)
+  }
+  // Drawing again changes nothing. A host draws at display rate and commits rows far slower, so a
+  // draw that leaves anything behind (canvas-2D blits its band only when a row arrives) builds up
+  // between rows. The fixture whose trace lies on the floor, drawn 30 more times, must be the same
+  // picture to the bit.
+  for (const be of RENDER_BACKENDS) {
+    const again = await renderFixture2(cdp, base, 'scope-wide-average', be, opt.palette, undefined, 30)
+    const cmp = comparePixels(again, drawn[`${be}-scope-wide-average`], EXACT)
+    record({ kind: 'render', id: `${be} redraw is idempotent`, outcome: cmp.match ? 'pass' : 'fail', detail: cmp.reason || 'identical' })
+    line('RENDER', `${be} 30 more draws, no new row`, cmp.match ? 'identical' : cmp.reason, cmp.match ? 'ok' : 'FAIL (a draw leaves something behind)')
   }
   // The 3-D stack's median of three: with identical rows around it, a one-row broadband burst must
   // leave the stack exactly as it was. The same burst MUST show on the 2-D waterfall, which has no
@@ -634,6 +657,29 @@ async function renderChecks(cdp, base, backend) {
     const fired = !cmp.match
     record({ kind: 'control', id: `${be} wrong palette (${WRONG_PALETTE})`, outcome: fired ? 'control-fired' : 'fail', detail: cmp.reason || 'matched the stored picture' })
     line('CONTROL', `wrong palette: ${be}-scope-carrier`, `${(cmp.fraction * 100).toFixed(1)}% of pixels differ`, fired ? 'rejected, as it must be' : 'ACCEPTED — the comparator is blind')
+  }
+}
+
+/** The capability gate, both directions: a healthy context must get WebGL2, and each broken one
+ *  must end on canvas-2D with the reason. */
+async function capabilityChecks(cdp, base) {
+  const cases = [
+    { broken: 'none', want: 'webgl2', why: '' },
+    { broken: 'upload', want: 'canvas2d', why: 'self-test:' },
+    { broken: 'context', want: 'canvas2d', why: 'no WebGL2 context' },
+  ]
+  for (const c of cases) {
+    const page = await openPage(cdp, `${base}/index.html?mode=capability&break=${c.broken}`)
+    let r
+    try {
+      r = await waitFor(page, 'done', 30_000)
+    } finally {
+      await page.close()
+    }
+    const ok = r.backend === c.want && (c.why ? r.reason.startsWith(c.why) : r.reason === '')
+    const control = c.broken !== 'none'
+    record({ kind: control ? 'control' : 'capability', id: `capability, ${c.broken === 'none' ? 'healthy' : `broken ${c.broken}`}`, outcome: ok ? (control ? 'control-fired' : 'pass') : 'fail', detail: `${r.backend}: ${r.reason || 'no reason'}` })
+    line(control ? 'CONTROL' : 'CAPABLE', `${c.broken === 'none' ? 'a healthy context' : `a broken ${c.broken}`}`, `${r.backend}${r.reason ? ` (${r.reason})` : ''}`, ok ? (control ? 'refused, as it must be' : 'ok') : `FAIL (expected ${c.want}${c.why ? `, "${c.why}…"` : ''})`)
   }
 }
 
@@ -747,6 +793,7 @@ async function main() {
       if (opt.only.has('perf')) await perfChecks(cdp, server.base)
       if (opt.only.has('ipc')) await ipcChecks(cdp, server.base)
       if (opt.only.has('render')) await renderChecks(cdp, server.base, backend)
+      if (opt.only.has('capability')) await capabilityChecks(cdp, server.base)
       if (opt.only.has('loss')) await lossChecks(cdp, server.base)
       if (opt.only.has('rperf')) await rperfChecks(cdp, server.base)
     }

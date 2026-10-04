@@ -264,6 +264,13 @@ export class Canvas2dBackend implements Backend {
       const v = px[x]
       return traceH - (Number.isNaN(v) ? 0 : strengthIn(v, floor, ceil)) * (traceH - 1)
     }
+    // Clipped to the band. A line lying on the floor is half its width below it, in the waterfall's
+    // top row, and the band is blitted only when a row arrives: unclipped, every draw in between
+    // blended the line into that row again (a line across the top of the waterfall at a slow source).
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(0, 0, w, traceH)
+    ctx.clip()
     ctx.beginPath()
     ctx.moveTo(0, traceH)
     for (let x = 0; x < w; x++) ctx.lineTo(x, yFor(x))
@@ -277,5 +284,6 @@ export class Canvas2dBackend implements Backend {
     ctx.strokeStyle = this.stroke
     ctx.lineWidth = Math.max(1, scene.layout.lineWidth)
     ctx.stroke()
+    ctx.restore()
   }
 }

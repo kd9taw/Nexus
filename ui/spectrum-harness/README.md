@@ -25,7 +25,8 @@ check, and `results.json` plus every rendered picture (and a diff for a failed o
 | cadence | sources on the real clock at their producers' rates — audio 50/s, CI-V 3/s and 10/s, Flex 15/s, FT-710 84/s — each sweep carrying a barcode of its own number. The canvas is read back: rows committed, distinct sweeps shown, and **repeats** (a committed row showing the same sweep as the row before it). | repeats = 0 |
 | perf | each component filling a 1024×768 and a 3440×1440 window: frame pacing, long animation frames, main-thread time per frame, the cost of one committed row | measured only |
 | ipc | a `Spectrum` row parsed from its JSON on every frame at 60 Hz, 512 and 2048 bins, beside the same values taken from a binary buffer | measured only |
-| render | the renderer core (`ui/src/spectrum`, mounted bare: no component uses it yet) on **both** backends, WebGL2 and canvas-2D: nine fixtures (`renderer.ts`) against `baselines/renderer/<backend>-<fixture>.png`; the two backends against each other; and the 3-D stack against a one-row burst | yes, except the cross-backend difference where the backends rasterise differently (the trace line, the 3-D stack), which is printed |
+| render | the renderer core (`ui/src/spectrum`, mounted bare: no component uses it yet) on **both** backends, WebGL2 and canvas-2D: nine fixtures (`renderer.ts`) against `baselines/renderer/<backend>-<fixture>.png`; the two backends against each other on the waterfall band, where both run the same per-pixel mapping; and the 3-D stack against a one-row burst | yes. The whole-picture difference between backends (the trace line and the 3-D stack are rasterised differently) is printed |
+| capability | which backend the renderer picks: WebGL2 on a healthy context, canvas-2D (with the reason) when there is no context or when the context takes float uploads and keeps nothing | yes |
 | loss | a forced WebGL2 context loss (`WEBGL_lose_context`): canvas-2D must stand in at once from the same history, and WebGL2 must come back without a reload and draw exactly what a renderer that never lost its context draws | yes |
 | rperf | the renderer at 2048 bins × 2048 rows filling a 1024×768 window, one new row and one redraw per frame, on each backend, flat and 3-D: the renderer's own main-thread time, the main-thread task time, and draw-to-pixels (plus the GPU timer query where the context has one), beside the renderer's budget (under 2 ms of GPU and 1 ms of main thread a frame) | measured only |
 
@@ -37,9 +38,10 @@ An instrument that cannot fail proves nothing, so controls are part of every run
 if any comes back clean: the carrier fixture rendered in a **wrong palette** must fail the pixel
 comparison (the components' fixture, and the renderer's on each backend); a **planted extra row**
 (one ask answered with the previous sweep again) must be found by the cadence probe, exactly once;
-the loss check run with the renderer's **restore handler dropped** (the page swallows every
-`webglcontextrestored` listener) must fail; and the burst the 3-D stack rejects must show on the 2-D
-waterfall, or that check proves nothing. The long-frame observer gets its own: an 80 ms frame
+a **broken context** (none at all, or one that drops float uploads) must fail the renderer's
+self-test and leave it on canvas-2D; the loss check run with the renderer's **restore handler
+dropped** (the page swallows every `webglcontextrestored` listener) must fail; and the burst the 3-D
+stack rejects must show on the 2-D waterfall, or that check proves nothing. The long-frame observer gets its own: an 80 ms frame
 is planted during warm-up and must be seen, or long frames are reported as unmeasured rather than
 as zero. `--palette NAME` and `--plant N` apply the same controls to every check by hand.
 
