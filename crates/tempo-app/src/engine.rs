@@ -9972,6 +9972,12 @@ impl Engine {
         self.pending_passband.take()
     }
 
+    /// Is a filter width waiting for the radio loop? Asked without draining, so the loop can
+    /// owe the mode read the width's apply rides on.
+    pub fn passband_request_pending(&self) -> bool {
+        self.pending_passband.is_some()
+    }
+
     /// Queue a native-scope SPAN change (Hz, ± half-width) from the UI. Native Icom CI-V only;
     /// the loop drains it and drives the rig's real panadapter width while not keyed.
     pub fn request_scope_span(&mut self, span_hz: u32) {
