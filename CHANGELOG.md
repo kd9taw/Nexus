@@ -121,6 +121,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   172.16–31.x or 192.168.x) or the computer's own public one, and only to a browser whose stream
   it has admitted, through the Remote service: never a VPN's 100.x address, and nothing else about
   your network. It needs the new Nexus at the shack; the Remote site is unchanged.
+- **Band activity: every POTA activator shows in a dim POTA green.** In the Phone and CW
+  cockpits' Band activity strip and in its pop-out band map, a station activating a park now
+  gets a dim green mark with its P, even when there is nothing new to gain from it, so you can
+  see every activation on the band at a glance. A park you still need keeps the full new-park
+  green, and a real need such as a new country still shows its own colour first. The dim
+  colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged.
 
 ### Added
 

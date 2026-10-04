@@ -263,6 +263,11 @@ export function BandStrip({
           // Flag the activity type (POTA/SOTA/DXped) independent of the colour.
           const type = typeByCall?.get(cu)
           const badge = type ? TYPE_BADGE[type] : null
+          // A POTA activator nothing above colours wears the dim POTA colour (operator, 2026-10-03:
+          // "Dim POTA color for all"); a real need, a park still to be worked (NewPark, the full
+          // POTA colour) included, keeps its own. It reads the P's own entry, so whatever takes the
+          // P away takes the colour too. Not `is-need`: it labels the station, so the bar stays thin.
+          const dimCls = !chip && !beacon && type === 'Pota' ? ' pota-dim' : ''
           const detail = [
             s.call,
             beacon?.word,
@@ -292,7 +297,7 @@ export function BandStrip({
                 <span className={`bandstrip-type spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>
               )}
               {badge && <span className={`bandstrip-type spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
-              <span className={`bandstrip-tick${needCls}`} />
+              <span className={`bandstrip-tick${needCls}${dimCls}`} />
               <span className="bandstrip-spot-call mono">{s.call}</span>
             </button>
           )
