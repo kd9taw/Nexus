@@ -500,6 +500,9 @@ const MIGRATED = [
   'components/TuningStrip.tsx',
   'components/PhoneScope.tsx',
   'components/Waterfall.tsx',
+  // The scope's ⚙ strip, migrated from birth: its only literals are the window widths and the
+  // averaging times, measurements held as named constants.
+  'spectrum/ScaleStrip.tsx',
   'components/FastGraph.tsx',
   'components/LevelMeter.tsx',
   'components/LiveMeters.tsx',
