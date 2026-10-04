@@ -8044,6 +8044,8 @@ export const EN = {
   'aprs.status.msg.missing': 'Enter a callsign and a message first.',
   'aprs.status.msg.sending': 'Sending message…',
   'aprs.status.msg.queued': 'Message to {{call}} queued — keying now.',
+  'aprs.status.radioHasMic':
+    'APRS can\'t send while the radio has the mic: with Flex native DAX audio on, a voice mode such as FM uses the radio\'s own mic, so the packet would not go out. Nothing was keyed.',
   'aprs.status.tune.deferred':
     'Transmitting right now — the radio will move to {{freq}} when this over ends.',
   'aprs.status.tune.now': 'Tuning to {{freq}} FM…',
@@ -9091,6 +9093,8 @@ export const EN = {
     'Transmit this image with {{call}} burned in — switches to Phone (USB/LSB) and keys the rig',
   'sstv.tx.send.noCallsign': 'Set your callsign — SSTV identifies by burning it into the picture',
   'sstv.tx.send.noCallsign.action': 'Set callsign',
+  'sstv.tx.send.radioHasMic':
+    'SSTV can\'t send while the radio has the mic: with Flex native DAX audio on, Phone at the shack uses the radio\'s own mic, so the picture would not go out. Nothing was keyed.',
   'sstv.tx.iss.confirm':
     '{{freq}} MHz is the ISS SSTV downlink. Transmit only during a sanctioned ARISS uplink event. Send anyway?',
   'sstv.tx.send.failed': 'SSTV send refused',

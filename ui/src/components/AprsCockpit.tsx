@@ -605,6 +605,9 @@ export function AprsCockpit({
     transmitting?: boolean
     /** Receive coverage from Hamlib's caps; EMPTY = unknown = allow (see `radioCoversMhz`). */
     rxRangesMhz?: [number, number][]
+    /** The radio has the mic while Nexus's native Flex audio is on (FM is a voice mode to the
+     * radio), so a packet would not go out: a beacon or a message is refused and says why. */
+    flexRadioHasMic?: boolean
   }
   /** THE TX STRIP (CockpitTxStrip, FT's cluster: TX On/Off · Tune · ATU · Stop TX), drawn by App
    *  and placed here as a SHELL CHILD right under the header line — APRS has no scope there. It
@@ -966,6 +969,15 @@ export function AprsCockpit({
 
   const sendBeacon = () => {
     if (!canControl) return
+    // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like the voice keyer"). With
+    // Nexus's own Flex client and native audio on, FM takes the radio's own mic while a packet
+    // goes out over DAX, so the radio would ignore the packet and the mic would carry the over.
+    // Nothing is sent, so nothing keys; the engine refuses the same send, and skips an automatic
+    // ack.
+    if (radio?.flexRadioHasMic) {
+      setStatus(t('aprs.status.radioHasMic'))
+      return
+    }
     // ⚠️ THIS GOES ON THE AIR, so the parse is the one that matters most in the app.
     // `parseFloat('37,98')` is 37 — it stops at the comma and reports success. On a Greek,
     // German or French Windows (Greek-Windows report, 2026-08) that beaconed a position a
@@ -995,6 +1007,11 @@ export function AprsCockpit({
 
   const sendMessage = () => {
     if (!canControl) return
+    // The radio has the mic: refused, as a beacon is (above), and what was typed stays.
+    if (radio?.flexRadioHasMic) {
+      setStatus(t('aprs.status.radioHasMic'))
+      return
+    }
     const to = msgTo.trim()
     const text = msgText.trim()
     if (!to || !text) {

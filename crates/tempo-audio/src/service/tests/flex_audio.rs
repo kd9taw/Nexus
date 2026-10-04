@@ -246,20 +246,22 @@ fn without_native_audio_the_client_leaves_audio_to_the_sound_card() {
         .any(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("stream create") || text.starts_with("transmit set dax"))));
 }
 
-/// The bundled session, except that the radio reports a slice it switched to USB, as a radio does
-/// (the bundled session answers a mode change without a status).
-fn reports_usb() -> SimSession {
+/// The bundled session, except that the radio reports a slice it switched to one of `modes`, as a
+/// radio does (the bundled session answers a mode change without a status).
+fn reports(modes: &[&str]) -> SimSession {
     let mut s = SimSession::v4_gui_client();
-    let usb = (
-        Pattern::Exact("slice set 0 mode=USB".to_string()),
-        vec![Rule {
-            code: "0".to_string(),
-            message: String::new(),
-            items: vec![Item::Send("S{h}|slice 0 mode=USB".to_string())],
-        }],
-    );
-    s.rules.retain(|(p, _)| *p != usb.0);
-    s.rules.push(usb);
+    for mode in modes {
+        let rule = (
+            Pattern::Exact(format!("slice set 0 mode={mode}")),
+            vec![Rule {
+                code: "0".to_string(),
+                message: String::new(),
+                items: vec![Item::Send(format!("S{{h}}|slice 0 mode={mode}"))],
+            }],
+        );
+        s.rules.retain(|(p, _)| *p != rule.0);
+        s.rules.push(rule);
+    }
     s
 }
 
@@ -290,7 +292,7 @@ fn run_until(s: &mut FlexScene, what: &str, done: impl Fn(&FlexScene) -> bool) {
 /// and the same message keys the radio and plays, as it always has.
 #[test]
 fn the_voice_keyer_refuses_in_phone_at_the_shack_with_native_audio_on() {
-    let mut s = FlexScene::with_session(true, reports_usb());
+    let mut s = FlexScene::with_session(true, reports(&["USB"]));
     {
         let mut e = s.engine.lock().unwrap();
         e.set_operating_mode("phone", false); // arms TX
@@ -366,6 +368,227 @@ fn the_voice_keyer_plays_while_the_radio_takes_dax() {
             .iter()
             .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1))
     });
+}
+
+/// Whether the radio has the mic, as the engine was last told.
+fn has_mic(s: &FlexScene) -> bool {
+    s.engine.lock().unwrap().snapshot().radio.flex_radio_has_mic
+}
+
+/// Whether nothing holds the transmitter: no over on the air or in its tail, and the radio has
+/// let go of it since the last unkey (its interlock READY naming no client). An over keyed
+/// before that can be refused by the client's admission, which made the next key a race.
+fn idle(s: &FlexScene) -> bool {
+    let log = s.log();
+    let released = log
+        .iter()
+        .rposition(|(_, e)| command(e, "xmit 0"))
+        .is_none_or(|i| {
+            log[i..].iter().any(|(_, e)| {
+                matches!(e, SimEvent::Sent { line, .. }
+                    if line.contains("tx_client_handle=0x00000000 state=READY"))
+            })
+        });
+    released && s.state.tx_until_ms.is_none() && s.engine.lock().unwrap().tx_owner().is_none()
+}
+
+/// The scene on APRS in FM with native audio on, once the radio has the mic: FM is a voice mode,
+/// so the radio takes its transmit audio from its own mic. TX is on, as the APRS cockpit's TX
+/// strip turns it on: the tune is a context change, and from Digital that leaves the latch down.
+fn aprs_in_fm() -> FlexScene {
+    let mut s = FlexScene::with_session(true, reports(&["FM"]));
+    s.engine
+        .lock()
+        .unwrap()
+        .aprs_tune(144.390)
+        .expect("the APRS channel tunes");
+    run_until(&mut s, "the radio never had the mic", has_mic);
+    s.engine.lock().unwrap().set_tx_enabled(true);
+    s
+}
+
+/// A second of a picture, as the SSTV encoder hands it over.
+fn picture() -> Vec<f32> {
+    vec![0.05; 12_000]
+}
+
+/// ⭐ APRS CAN'T SEND WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like the
+/// voice keyer"). APRS in FM with native audio on: a packet, which Nexus sends as DAX, would not
+/// reach the air, and the mic would carry the over in its place. A beacon and a message are
+/// refused with the reason before anything is queued, so nothing keys and nothing plays. The
+/// control, in the same scene: native audio off, and the same beacon keys the radio.
+#[test]
+fn an_aprs_send_refuses_in_fm_with_native_audio_on() {
+    let mut s = aprs_in_fm();
+    let sent = {
+        let mut e = s.engine.lock().unwrap();
+        [
+            e.aprs_beacon(41.88, -87.63, '/', '>', "", &[]),
+            e.aprs_send_message("N0CALL", "test"),
+        ]
+    };
+    s.run(1_000);
+    assert_eq!(keys(&s), 0, "nothing was keyed");
+    assert!(
+        s.backend.played.lock().unwrap().is_empty(),
+        "nothing played"
+    );
+    for sent in sent {
+        let why = sent.expect_err("APRS refuses while the radio has the mic");
+        assert!(
+            why.contains("the radio has the mic"),
+            "the refusal says why: {why}"
+        );
+    }
+
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio kept the mic for native audio", |s| {
+        !has_mic(s)
+    });
+    // TX On again, as the strip would: native audio going off is a context change, and from
+    // Digital that leaves the latch down.
+    s.engine.lock().unwrap().set_tx_enabled(true);
+    s.engine
+        .lock()
+        .unwrap()
+        .aprs_beacon(41.88, -87.63, '/', '>', "", &[])
+        .unwrap();
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+}
+
+/// …and the UNATTENDED half: an automatic ack, with both operator acts behind it (Monitor armed by
+/// hand, TX on), is skipped while the radio has the mic, so nothing keys; it is not held to go out
+/// later either. The control: native audio off, and the next ack keys.
+#[test]
+fn an_aprs_auto_ack_is_skipped_in_fm_with_native_audio_on() {
+    let mut s = aprs_in_fm();
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_aprs_arm(tempo_app::engine::AprsArm::Explicit);
+        e.aprs_auto_ack("N0CALL", "W9XYZ", "001");
+    }
+    s.run(1_000);
+    assert_eq!(keys(&s), 0, "nothing was keyed");
+    assert!(
+        s.backend.played.lock().unwrap().is_empty(),
+        "nothing played"
+    );
+
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio kept the mic for native audio", |s| {
+        !has_mic(s)
+    });
+    // TX On again, as the strip would: native audio going off is a context change, and from
+    // Digital that leaves the latch down.
+    s.engine.lock().unwrap().set_tx_enabled(true);
+    s.run(500);
+    assert_eq!(keys(&s), 0, "the skipped ack was not held for later");
+    s.engine
+        .lock()
+        .unwrap()
+        .aprs_auto_ack("N0CALL", "W9XYZ", "002");
+    run_until(&mut s, "the ack never keyed", |s| keys(s) == 1);
+}
+
+/// ⭐ SSTV CAN'T SEND WHILE THE RADIO HAS THE MIC (the same ruling). SSTV in plain SSB (a radio
+/// set for plain SSB instead of the DATA submode) with native audio on: the TX slice stays in USB,
+/// so the radio takes its own mic, and the picture, which Nexus sends as DAX, would not reach the
+/// air. The send is refused with the reason before anything waits, so nothing keys and nothing
+/// plays. The control, in the same scene: native audio off, and the same picture keys the radio.
+#[test]
+fn an_sstv_send_refuses_in_plain_ssb_with_native_audio_on() {
+    let mut s = FlexScene::with_session(true, reports(&["USB"]));
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.data_modes_plain_ssb = true;
+        e.apply_settings(settings);
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.230, "20m", "USB");
+    }
+    run_until(&mut s, "the radio never had the mic", has_mic);
+    let sent = s
+        .engine
+        .lock()
+        .unwrap()
+        .sstv_send(picture(), "Scottie 1".to_string());
+    s.run(1_000);
+    assert_eq!(keys(&s), 0, "nothing was keyed");
+    assert!(
+        s.backend.played.lock().unwrap().is_empty(),
+        "nothing played"
+    );
+    let why = sent.expect_err("SSTV refuses while the radio has the mic");
+    assert!(
+        why.contains("the radio has the mic"),
+        "the refusal says why: {why}"
+    );
+
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio kept the mic for native audio", |s| {
+        !has_mic(s)
+    });
+    s.engine
+        .lock()
+        .unwrap()
+        .sstv_send(picture(), "Scottie 1".to_string())
+        .unwrap();
+    run_until(&mut s, "the picture never keyed", |s| keys(s) == 1);
+}
+
+/// …and the client in a digital mode with native audio on (the TX slice in DIGU, the radio on
+/// DAX): the radio does not have the mic, and a beacon, an automatic ack and a picture each key as
+/// before, the packets going out over DAX. The picture rides Phone with the data submode held
+/// while the SSTV receiver runs, which keeps the slice digital.
+#[test]
+fn aprs_and_sstv_key_while_the_radio_takes_dax() {
+    let mut s = FlexScene::new(true);
+    run_until(&mut s, "the DAX tee never went in", |s| {
+        s.backend.tee.lock().unwrap().is_some()
+            && s.log()
+                .iter()
+                .any(|(_, e)| command(e, "transmit set dax=1"))
+    });
+    s.run(300);
+    assert!(!has_mic(&s));
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_aprs_arm(tempo_app::engine::AprsArm::Explicit);
+        e.aprs_beacon(41.88, -87.63, '/', '>', "", &[]).unwrap();
+    }
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+    // An ack that arrives while the transmitter is busy is not sent (as before), so the next
+    // message arrives after the beacon's over.
+    run_until(&mut s, "the beacon's over never ended", idle);
+    s.engine
+        .lock()
+        .unwrap()
+        .aprs_auto_ack("N0CALL", "W9XYZ", "001");
+    run_until(&mut s, "the ack never keyed", |s| keys(s) == 2);
+    run_until(&mut s, "no DAX transmit audio reached the radio", |s| {
+        s.log()
+            .iter()
+            .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1))
+    });
+
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.sstv_hold_data_submode = true;
+        e.apply_settings(settings);
+        e.set_sstv_armed(true);
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.230, "20m", "USB");
+    }
+    s.run(500);
+    run_until(&mut s, "the ack's over never ended", idle);
+    assert!(!has_mic(&s), "the slice stayed digital");
+    s.engine
+        .lock()
+        .unwrap()
+        .sstv_send(picture(), "Scottie 1".to_string())
+        .unwrap();
+    run_until(&mut s, "the picture never keyed", |s| keys(s) == 3);
 }
 
 /// The percentiles of a sample, in ms.

@@ -459,11 +459,11 @@ impl FlexDaemon {
 
     /// Whether the radio has the mic while native audio is on: Nexus is the only program feeding
     /// DAX, and the radio takes its transmit audio from its own mic, as the routing has it for
-    /// Phone at the shack. Audio Nexus makes (a recorded voice message) would then go over DAX,
-    /// which the radio ignores, and the mic would carry the over; the voice keyer refuses while
-    /// this holds (operator ruling, 2026-10-04). Beside another program's DAX the flag is not
-    /// Nexus's to judge, as for the digital refusal at `T 1`. Cheap: what the audio control
-    /// thread last read.
+    /// Phone at the shack. Audio Nexus makes (a recorded voice message, an APRS packet, an SSTV
+    /// picture) would then go over DAX, which the radio ignores, and the mic would carry the
+    /// over; the voice keyer, APRS and SSTV refuse while this holds (operator rulings,
+    /// 2026-10-04). Beside another program's DAX the flag is not Nexus's to judge, as for the
+    /// digital refusal at `T 1`. Cheap: what the audio control thread last read.
     pub fn radio_has_mic(&self) -> bool {
         self.state.native_audio.load(Ordering::Relaxed)
             && self

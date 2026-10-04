@@ -1427,9 +1427,10 @@ export interface RadioStatus {
    * modulator takes DAX and the physical microphone is disconnected — radio-wide, on every
    * slice and in every program. Display-only; the Phone cockpit warns on it. */
   flexDaxTx?: boolean
-  /** The radio has the mic while Nexus's native Flex audio is on (Phone at the shack): a
-   * recorded message would go out over DAX, which the radio then ignores, so the voice keyer
-   * refuses with a message and keys nothing. Absent when false. */
+  /** The radio has the mic while Nexus's native Flex audio is on (Phone at the shack, or APRS
+   * in FM): a recorded message, a packet or a picture would go out over DAX, which the radio
+   * then ignores, so the voice keyer, APRS and SSTV refuse with a message and key nothing.
+   * Absent when false. */
   flexRadioHasMic?: boolean
   /** The Flex VITA **meter** worker is running — on a Flex the only producer of a
    * FlexLib-scaled SWR. Observed from the worker, never read from `flexNativePan` (the toggle

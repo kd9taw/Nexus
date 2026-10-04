@@ -135,7 +135,10 @@ native client), where the radio takes its transmit audio from follows the
 transmit slice's mode. In Phone the radio keeps its own mic, so the mic works as
 it always does. The **voice keyer can't play** then: the radio is listening to
 its mic, not to Nexus, so a recorded message would not go out. The keyer says so
-and keys nothing.
+and keys nothing. **SSTV and APRS can't send** then either: SSTV rides Phone, and
+APRS uses FM, which the radio treats as a voice mode too. Each says so and keys
+nothing, and an automatic APRS ack that can't go out is skipped and noted in the
+diagnostic log.
 
 The radio takes DAX instead of the mic for the digital modes and for a
 streamed operator's voice on the Remote page. That is a **radio-wide** setting:

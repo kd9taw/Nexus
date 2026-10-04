@@ -1495,6 +1495,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       )
       return
     }
+    // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like the voice keyer"). With
+    // Nexus's own Flex client and native audio on, Phone at the shack takes the radio's own mic
+    // while the picture goes out over DAX, so the radio would ignore the picture and the mic would
+    // carry the over. Nothing is sent, so nothing keys; the engine refuses the same send.
+    if (snapRef.current?.radio.flexRadioHasMic) {
+      pushToast(t('sstv.tx.send.radioHasMic'), 'error', 6000)
+      return
+    }
     const m = MODE_BY_SLUG[packed.slug]
     // Soft ISS guard: 145.800 is the ISS SSTV DOWNLINK — transmit there only for a
     // sanctioned ARISS uplink event, never by accident. The frequency is a CONSTANT and is

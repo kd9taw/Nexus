@@ -1273,6 +1273,15 @@ const AB_NO_DRIVABLE_MAPPING: &str =
 const FLEX_RADIO_HAS_MIC: &str = "The voice keyer can't play while the radio has the mic: with \
      Flex native DAX audio on, Phone at the shack uses the radio's own mic, so a recorded message \
      would not go out. Nothing was keyed.";
+/// …and what [`Engine::aprs_tx_gate`] answers then, for a beacon or a message: the APRS cockpit
+/// says it first, in the operator's language.
+const APRS_RADIO_HAS_MIC: &str = "APRS can't send while the radio has the mic: with Flex native \
+     DAX audio on, a voice mode such as FM uses the radio's own mic, so the packet would not go \
+     out. Nothing was keyed.";
+/// …and [`Engine::sstv_tx_gate`], for a picture: the SSTV cockpit says it first.
+const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: with Flex native \
+     DAX audio on, Phone at the shack uses the radio's own mic, so the picture would not go out. \
+     Nothing was keyed.";
 
 /// What the CW cockpit's warning line says when [`Engine::poll_cw_one`] drops a refused send.
 /// English at the engine, like the keyer's own errors and JS8's refusals, and the same
@@ -1319,6 +1328,9 @@ const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the
 const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
      privileges, so the picture that was waiting was dropped, not held for later. Send it again \
      from inside them.";
+const SSTV_REFUSED_RADIO_HAS_MIC: &str = "SSTV not sent: the radio has the mic (Flex native DAX \
+     audio, Phone at the shack), so the picture that was waiting was dropped, not held for later. \
+     Nothing was keyed.";
 /// …and when the operator LEFT the Phone section, which SSTV rides, with a picture still waiting
 /// ([`Engine::set_operating_mode_with_reset`]).
 const SSTV_LEFT_SECTION: &str = "SSTV stopped: you moved to another mode's screen, so the \
@@ -1339,6 +1351,9 @@ const APRS_REFUSED_TX_OFF: &str = "APRS stopped: transmit was turned off, so wha
 const APRS_REFUSED_PRIVILEGES: &str = "APRS not sent: this frequency is outside your license \
      privileges, so what was queued was dropped, not held for later. Send it again from inside \
      them.";
+const APRS_REFUSED_RADIO_HAS_MIC: &str = "APRS not sent: the radio has the mic (Flex native DAX \
+     audio, in a voice mode such as FM), so what was queued was dropped, not held for later. \
+     Nothing was keyed.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -2417,9 +2432,10 @@ pub struct Engine {
     /// radio and the operator's MICROPHONE is disconnected. Display-only; see
     /// [`Self::observe_flex_dax_tx`].
     flex_dax_tx: bool,
-    /// The radio has the mic while Nexus's native Flex audio is on (Phone at the shack), so a
-    /// recorded message sent over DAX would not reach the air. The voice keyer refuses while it
-    /// stands; see [`Self::observe_flex_radio_has_mic`].
+    /// The radio has the mic while Nexus's native Flex audio is on (Phone at the shack, or APRS
+    /// in FM), so a recorded message, a packet or a picture sent over DAX would not reach the
+    /// air. The voice keyer, APRS and SSTV refuse while it stands; see
+    /// [`Self::observe_flex_radio_has_mic`].
     flex_radio_has_mic: bool,
     /// The Flex VITA **meter** worker is running — the only thing that produces a
     /// FlexLib-scaled SWR on this radio. Display-only; see
@@ -6979,11 +6995,14 @@ impl Engine {
     /// and the stream's browser voice, the radio's own mic for Phone at the shack. Audio Nexus
     /// makes still leaves over DAX, so while the radio has the mic a recorded voice message would
     /// not reach the air and the mic would carry the over in its place. The voice keyer refuses
-    /// while this stands and keys nothing (operator ruling, 2026-10-04, "Refuse with a message").
+    /// while this stands and keys nothing (operator ruling, 2026-10-04, "Refuse with a message"),
+    /// and so do APRS and SSTV, whose packets and pictures leave over DAX the same way: APRS in
+    /// FM, a voice mode to the radio, and SSTV in plain SSB (operator ruling, 2026-10-04, "Refuse
+    /// like the voice keyer"). An automatic APRS ack that can't go out is skipped and logged.
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
-    /// the voice keyer reads it; nothing else is refused on it.
+    /// the voice keyer, APRS and SSTV read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
     }
@@ -16782,7 +16801,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// action on whatever the rig is set to — typically FM on 144.390); [`Engine::tx_owner`]
     /// keeps it from ever keying over ANY other transmission — including a held mic, which the
     /// old four-flag copy of this preamble did not know about.
+    ///
+    /// The radio having the mic comes first, as in [`Self::send_voice`]: with Nexus's own Flex
+    /// client and native audio on, a voice mode such as FM puts the radio on its own mic while
+    /// the packet leaves over DAX, so the mic would carry the over (operator ruling, 2026-10-04,
+    /// "Refuse like the voice keyer").
     fn aprs_tx_gate(&self) -> Result<(), String> {
+        if self.flex_radio_has_mic {
+            return Err(APRS_RADIO_HAS_MIC.to_string());
+        }
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
@@ -17052,7 +17079,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Auto-ack an incoming message addressed to us — called by the RX decode thread. An ACK is a
     /// message whose text is `ack<their-id>` sent back to `from`. Silent no-op unless the message
-    /// truly targets our base callsign AND TX is enabled/allowed (we never key an ack on our own).
+    /// truly targets our base callsign AND TX is enabled/allowed (we never key an ack on our own);
+    /// while the radio has the mic ([`Self::observe_flex_radio_has_mic`]) it is skipped, and the
+    /// log says so.
     pub fn aprs_auto_ack(&mut self, from: &str, addressee: &str, msg_id: &str) {
         use tempo_core::aprs;
         // ⚠️ THE AUTO-ARM GATE. An ack is an UNATTENDED transmission — nobody asked for it at the
@@ -17082,7 +17111,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return; // never ack ourselves (a digipeated loopback)
         }
         if self.aprs_tx_gate().is_err() {
-            return; // TX off / outside privileges / busy → don't auto-ack
+            // The radio has the mic: the gate's first answer, and the one skip that is logged
+            // (operator ruling, 2026-10-04: "An auto-ack that can't go out is skipped and
+            // logged"). Nobody is at the cockpit for an unattended ack, so the log is where the
+            // reason is found. Nothing is queued, so nothing is retried into the mic.
+            if self.flex_radio_has_mic {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "APRS auto-ack to {from} skipped: the radio has the mic (Flex native audio)"
+                    ),
+                );
+            }
+            return; // TX off / outside privileges / busy / the radio has the mic → don't auto-ack
         }
         let Some(src) = self.aprs_source() else {
             return;
@@ -17104,12 +17145,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// loop to key, or `None`.
     ///
     /// ⛔ A REFUSED FRAME IS DROPPED, NEVER HELD (the operator, 2026-09-30: "a refused picture or
-    /// beacon is dropped with a notice, never sent later"). With TX off, or the dial outside the
-    /// licence's privileges, everything still queued is cleared: the log says why once, and the
-    /// APRS cockpit's status line ([`Self::aprs_tx_notice`]) says so. Held, it keyed the moment
-    /// TX was allowed again, at a time the operator did not choose. TX Off itself drops the queue
-    /// ([`Self::set_tx_enabled`]), so the TX-off arm here is the backstop for a latch lowered any
-    /// other way (a watchdog trip, leaving a manual mode for Digital).
+    /// beacon is dropped with a notice, never sent later"). With TX off, the dial outside the
+    /// licence's privileges, or the radio on its own mic ([`Self::observe_flex_radio_has_mic`]:
+    /// sent over DAX, the frame would not go out and the mic would carry the over), everything
+    /// still queued is cleared: the log says why once, and the APRS cockpit's status line
+    /// ([`Self::aprs_tx_notice`]) says so. Held, it keyed the moment TX was allowed again, at a
+    /// time the operator did not choose. TX Off itself drops the queue ([`Self::set_tx_enabled`]),
+    /// so the TX-off arm here is the backstop for a latch lowered any other way (a watchdog trip,
+    /// leaving a manual mode for Digital).
     ///
     /// HELD while anything else owns the transmitter: that is a wait for the rig, not a refusal,
     /// and the frame keys when it is free. Ownership comes from the ONE arbiter
@@ -17125,6 +17168,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some((
                 "the dial is outside the licence's privileges",
                 APRS_REFUSED_PRIVILEGES,
+            ))
+        } else if self.flex_radio_has_mic {
+            Some((
+                "the radio has the mic (Flex native audio)",
+                APRS_REFUSED_RADIO_HAS_MIC,
             ))
         } else {
             None
@@ -19187,6 +19235,13 @@ contact yourself."
         if self.settings.operating_mode != OperatingMode::Phone {
             return Err("Switch to Phone (USB) first — SSTV rides the phone segment".to_string());
         }
+        // Nexus's own Flex client with native audio on, Phone at the shack: the picture would
+        // leave over DAX while the radio takes its own mic, so the mic would carry the over.
+        // Refused before anything waits, so nothing keys (operator ruling, 2026-10-04, "Refuse
+        // like the voice keyer"); first after the section, as in `send_voice`.
+        if self.flex_radio_has_mic {
+            return Err(SSTV_RADIO_HAS_MIC.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -19260,11 +19315,13 @@ contact yourself."
     /// ⛔ A PICTURE REFUSED WHILE IT WAITS IS DROPPED, NEVER HELD (the operator, 2026-09-30: "a
     /// refused picture or beacon is dropped with a notice, never sent later"). A picture waits
     /// here from [`Self::sstv_send`] until the loop is idle: another over or its PTT tail, a held
-    /// mic, a radio handoff. If in that time TX went off, or the dial left the licence's Phone
-    /// privileges, the picture is dropped: the log says why once, and the SSTV cockpit's warning
-    /// line ([`Self::sstv_tx_notice`]) says so. Held, it keyed the moment TX was allowed again, at
-    /// a time the operator did not choose. TX Off itself already drops it (`set_tx_enabled`), so
-    /// the TX-off arm here is the backstop for a latch lowered any other way.
+    /// mic, a radio handoff. If in that time TX went off, the dial left the licence's Phone
+    /// privileges, or the radio took its own mic ([`Self::observe_flex_radio_has_mic`]: sent over
+    /// DAX, the picture would not go out), the picture is dropped: the log says why once, and the
+    /// SSTV cockpit's warning line ([`Self::sstv_tx_notice`]) says so. Held, it keyed the moment
+    /// TX was allowed again, at a time the operator did not choose. TX Off itself already drops it
+    /// (`set_tx_enabled`), so the TX-off arm here is the backstop for a latch lowered any other
+    /// way.
     ///
     /// HELD, as before, while a tune carrier is up. Outside the Phone section there is none to
     /// hold: leaving Phone drops a waiting picture ([`Self::set_operating_mode_with_reset`]), and
@@ -19285,6 +19342,11 @@ contact yourself."
             Some((
                 "the dial is outside the licence's privileges",
                 SSTV_REFUSED_PRIVILEGES,
+            ))
+        } else if self.flex_radio_has_mic {
+            Some((
+                "the radio has the mic (Flex native audio)",
+                SSTV_REFUSED_RADIO_HAS_MIC,
             ))
         } else {
             None
@@ -29122,6 +29184,56 @@ mod tests {
             None,
             "…and the picture that keys clears the notice"
         );
+    }
+
+    /// ⭐ SSTV CAN'T SEND WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like
+    /// the voice keyer"). With Nexus's own Flex client and native audio on, Phone at the shack
+    /// takes the radio's own mic, so a picture sent over DAX would not reach the air and the mic
+    /// would carry the over. The send is refused with the reason and nothing waits; a picture
+    /// waiting when the radio took the mic is dropped with a notice, never held; and once the
+    /// radio is off the mic, a picture keys as before.
+    #[test]
+    fn sstv_refuses_while_the_radio_has_the_mic() {
+        let mut e = phone_armed_engine();
+        e.observe_flex_radio_has_mic(true);
+        let why = e.sstv_tx_gate().unwrap_err();
+        assert!(
+            why.contains("the radio has the mic"),
+            "the gate says why: {why}"
+        );
+        let why = e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err();
+        assert!(
+            why.contains("the radio has the mic"),
+            "the send says why: {why}"
+        );
+        assert!(!e.sstv_sending(), "nothing waits");
+        assert!(e.poll_sstv_tx().is_none(), "nothing keys");
+
+        // Waiting for the loop when the radio took the mic: dropped, not held for later.
+        e.observe_flex_radio_has_mic(false);
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        e.observe_flex_radio_has_mic(true);
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "nothing keys once the radio has the mic"
+        );
+        assert!(!e.sstv_sending(), "the cockpit's TX indicator is down");
+        assert_eq!(
+            e.sstv_tx_notice(),
+            Some(SSTV_REFUSED_RADIO_HAS_MIC),
+            "the SSTV cockpit is told"
+        );
+        e.observe_flex_radio_has_mic(false);
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "nothing refused keys when the radio lets go of the mic"
+        );
+
+        // The control: the radio off the mic, and a picture keys.
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e.poll_sstv_tx().is_some());
     }
 
     /// ⛔ LEAVING PHONE DROPS AN SSTV PICTURE STILL WAITING (the operator, 2026-09-30: "Drop it on
@@ -48152,6 +48264,53 @@ mod tests {
         );
     }
 
+    /// ⭐ APRS CAN'T SEND WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like
+    /// the voice keyer"). With Nexus's own Flex client and native audio on, the radio takes its
+    /// own mic in FM, so a packet sent over DAX would not reach the air and the mic would carry
+    /// the over. A beacon and a message are refused with the reason and nothing is queued; a
+    /// frame queued before the radio took the mic is dropped with a notice, never held; and once
+    /// the radio is off the mic, a beacon keys as before.
+    #[test]
+    fn aprs_refuses_while_the_radio_has_the_mic() {
+        let mut e = aprs_tx_engine();
+        e.observe_flex_radio_has_mic(true);
+        for why in [
+            e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[])
+                .unwrap_err(),
+            e.aprs_send_message("N0CALL", "hello").unwrap_err(),
+        ] {
+            assert!(
+                why.contains("the radio has the mic"),
+                "the send says why: {why}"
+            );
+        }
+        assert!(e.poll_aprs_tx().is_none(), "nothing was queued");
+
+        // Queued while the radio took DAX, and the radio took the mic before the loop keyed it:
+        // dropped with a notice, not held for later.
+        e.observe_flex_radio_has_mic(false);
+        queue_aprs_beacon(&mut e);
+        e.observe_flex_radio_has_mic(true);
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "nothing keys once the radio has the mic"
+        );
+        assert_eq!(
+            e.aprs_tx_notice(),
+            Some(APRS_REFUSED_RADIO_HAS_MIC),
+            "the APRS cockpit is told"
+        );
+        e.observe_flex_radio_has_mic(false);
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "nothing refused keys when the radio lets go of the mic"
+        );
+
+        // The control: the radio off the mic, and a beacon keys.
+        queue_aprs_beacon(&mut e);
+        assert!(e.poll_aprs_tx().is_some());
+    }
+
     /// …but a frame waiting for the TRANSMITTER is not refused: it keys when the rig is free.
     #[test]
     fn an_aprs_frame_waiting_for_the_transmitter_is_held_not_dropped() {
@@ -48255,6 +48414,33 @@ mod tests {
         assert!(
             e.poll_aprs_tx().is_some(),
             "explicit arm + TX enabled is the configuration that acks"
+        );
+    }
+
+    /// …and while the radio has the mic (Nexus's own Flex client, native audio on, FM), the ack
+    /// can't go out: it is skipped with both operator acts present, and not held to key once the
+    /// radio lets go (operator ruling, 2026-10-04). The log line is pinned in
+    /// `tests/aprs_ack_skip_log.rs`, a process of its own because the log is process-wide.
+    #[test]
+    fn explicitly_armed_with_tx_on_skips_the_ack_while_the_radio_has_the_mic() {
+        let mut e = armed_engine(AprsArm::Explicit);
+        e.observe_flex_radio_has_mic(true);
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "042");
+        assert!(e.poll_aprs_tx().is_none(), "nothing keys");
+        assert_eq!(
+            e.aprs_tx_notice(),
+            None,
+            "nothing was queued (the poll drops a queued frame with a notice)"
+        );
+        e.observe_flex_radio_has_mic(false);
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "the skipped ack is not held for later"
+        );
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "043");
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "off the mic, the next ack keys as before"
         );
     }
 
