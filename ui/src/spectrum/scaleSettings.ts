@@ -65,20 +65,28 @@ const WF_ZERO_KEY = 'nexus.waterfall.zero'
 const WINDOWS: readonly ScopeWindow[] = ['fast', 'balanced', 'sharp']
 const DETECTORS: readonly Detector[] = ['peak', 'average']
 
+/** The averaging default, deskHPSDR's 250 ms, on every cockpit but Phone and CW. */
+export const AVERAGE_DEFAULT_MS = 250
+/** Phone's averaging default: 250 ms. Set 2026-10-04 ahead of the operator's ruling on it. */
+export const PHONE_AVERAGE_DEFAULT_MS = 250
 /**
- * A cockpit's settings before the operator touches anything.
- *
- * The averaging default is 250 ms, deskHPSDR's, except on CW, where it is off. CW's trace already has
- * its own fast hold (TRACE_HOLD_MS.fast, 120 ms), and a 250 ms log-recursive average on top flattens
- * 25 WPM keying: of a 40 dB keyed carrier, 6.6 dB of swing is left at the producer's 20 ms frames
- * (scaleAverage.test.ts), the near-static bar the fast hold was chosen to remove.
+ * CW's averaging default: off. Set 2026-10-04 ahead of the operator's ruling on it. CW's trace
+ * already has its own fast hold (TRACE_HOLD_MS.fast, 120 ms), and a 250 ms log-recursive average on
+ * top flattens 25 WPM keying: of a 40 dB keyed carrier, 6.6 dB of swing is left at the producer's
+ * 20 ms frames (scaleAverage.test.ts), the near-static bar the fast hold was chosen to remove.
+ */
+export const CW_AVERAGE_DEFAULT_MS = 0
+
+/**
+ * A cockpit's settings before the operator touches anything. The averaging default is each
+ * cockpit's named constant above.
  *
  * The detector defaults to PEAK, which is what every scope and waterfall draws today (`resampleRow`);
  * deskHPSDR's default is AVERAGE.
  */
 export function scaleDefaults(cockpit: ScopeCockpit): ScaleSettings {
   return {
-    averageMs: cockpit === 'cw' ? 0 : 250,
+    averageMs: cockpit === 'cw' ? CW_AVERAGE_DEFAULT_MS : cockpit === 'phone' ? PHONE_AVERAGE_DEFAULT_MS : AVERAGE_DEFAULT_MS,
     detector: 'peak',
     gain: 0,
     zero: 0,
