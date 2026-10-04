@@ -4441,6 +4441,8 @@ export const FR: PartialCatalog = {
   "sat.work.title.noRotor": "Contacter sur ce passage : ouvre le satellite, choisit son transpondeur, lance l'horloge du passage et le Doppler (aucun rotor configuré — rien ne bougera)",
   "sat.work.title.rotor": "Contacter sur ce passage : ouvre le satellite, choisit son transpondeur, arme le suivi automatique du rotor et l'horloge du passage (le Doppler accorde si ses interrupteurs sont actifs)",
   "scope.canvas.title": "Cliquez un signal pour l'accorder · maintenez et glissez pour déplacer la bande passante",
+  "scope.canvas.edges.title": "Cliquez un signal pour l'accorder · maintenez et glissez pour déplacer la bande passante · glissez un bord du filtre pour changer la largeur",
+  "scope.canvas.keys.aria": "Scope : ← et → accordent, avec Maj par plus grands pas ; Entrée accorde sur le signal de la bande passante ; [ et ] rétrécissent et élargissent le filtre ; ↑ et ↓ remontent l'historique en pause",
   "scope.dss.off.title": "Passer à la vue 3D en spectres empilés (remplit le panneau ; masque la trace)",
   "scope.dss.on.title": "Revenir à la trace plate + cascade",
   "scope.dynamic.title": "De combien le signal le plus fort de cette vue dépasse le plancher de bruit. L'échelle verticale du scope est FIXE à 50 dB au-dessus du bruit, donc un signal plus fort trace vraiment un pic plus haut — utilisez G pour élargir ou resserrer cette fenêtre.",

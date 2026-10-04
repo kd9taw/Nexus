@@ -29,6 +29,15 @@ trace and a scrolling waterfall, with per-frame AGC so signals stay visible as
 conditions shift. **Span chips** above the scope — Full / Voice / Low / High —
 zoom the view to the part of the passband you care about.
 
+**The passband and its edge.** Where your radio reports its filter width, the scope shades
+the passband it is listening through, hung on the dial. Drag the far edge (the one away from
+the carrier) to set the width, in the same range and 100 Hz steps as the BW buttons; the
+radio follows within a second or two. A manual notch the radio reports on shows as a red
+line. The edge is not offered in FM, in a DATA mode, on the Remote page or while anything is
+transmitting. Tab to the scope and the keys work too: ← and → tune (Shift for bigger steps),
+Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and ↓
+scroll back while paused.
+
 **RF power slider.** Wired to CAT and *follows the rig*: turn the rig's power
 knob and the slider tracks it (it won't sit lying at 100%). Your drags win while
 you're dragging.

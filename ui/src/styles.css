@@ -11000,6 +11000,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-scope-canvas.tunable {
   cursor: crosshair;
 }
+/* The focused scope takes the tuning keys; its ring is drawn inside the box, so the panel around
+   it cannot clip it (the .pane-splitter pattern). */
+.ph-scope-canvas:focus-visible {
+  outline-offset: -2px;
+}
 /* The Flex-style passband box while press-dragging: shows exactly where the rig will be
    listening. Imperatively positioned; display:block only during a drag. */
 .ph-scope-box {
