@@ -715,4 +715,76 @@ export class WebGl2Backend implements Backend {
     }
     return why
   }
+
+  /**
+   * The backend-choice probe's WebGL2 frame (choose.ts): the waterfall pass, a frame's dominant cost,
+   * drawn at `w`×`h` into a framebuffer of its own from a full history of its own (`h` rows of `cols`
+   * bins), through the program already built, so the probe compiles nothing. `frame()` commits a row
+   * and redraws; `settle()` reads one pixel back, which returns once everything drawn so far is drawn;
+   * `done()` deletes it all and puts the bindings back, as the self-test does. The history and the
+   * picture on screen are untouched. Null while the backend cannot draw.
+   */
+  scratch(w: number, h: number, cols: number): { frame: () => void; settle: () => void; done: () => void } | null {
+    const gl = this.gl
+    const res = this.res
+    if (!res || gl.isContextLost()) return null
+    const values = new Float32Array(cols * h)
+    for (let i = 0; i < values.length; i++) values[i] = ((i * 7919) % 997) / 997
+    const ringTex = texture(gl, U_RING, gl.R16F, cols, h)
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cols, h, gl.RED, gl.FLOAT, values)
+    const spans = new Float32Array(8 * h)
+    for (let r = 0; r < h; r++) spans.set([0, cols, cols, 120, 0, 1, 0, 1], r * 8)
+    const metaTex = texture(gl, U_META, gl.RGBA32F, 2, h)
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 2, h, gl.RGBA, gl.FLOAT, spans)
+    const target = texture(gl, 7, gl.RGBA8, w, h)
+    const fbo = gl.createFramebuffer()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0)
+    const p = res.waterfall
+    const px = new Uint8Array(4)
+    let head = 0
+    return {
+      frame: () => {
+        head = (head + 1) % h
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+        gl.activeTexture(gl.TEXTURE0 + U_RING)
+        gl.bindTexture(gl.TEXTURE_2D, ringTex)
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, head, cols, 1, gl.RED, gl.FLOAT, values, head * cols)
+        gl.activeTexture(gl.TEXTURE0 + U_META)
+        gl.bindTexture(gl.TEXTURE_2D, metaTex)
+        gl.viewport(0, 0, w, h)
+        gl.disable(gl.SCISSOR_TEST)
+        gl.disable(gl.BLEND)
+        gl.bindVertexArray(res.vao)
+        gl.useProgram(p.program)
+        gl.uniform1f(p.u.uH, h)
+        gl.uniform1f(p.u.uTop, 0)
+        gl.uniform1f(p.u.uBandH, h)
+        gl.uniform1f(p.u.uW, w)
+        gl.uniform1f(p.u.uViewLo, 0)
+        gl.uniform1f(p.u.uViewHi, cols)
+        gl.uniform1i(p.u.uHead, head)
+        gl.uniform1i(p.u.uCount, h)
+        gl.uniform1i(p.u.uDepth, h)
+        gl.uniform1i(p.u.uOffset, 0)
+        gl.uniform1i(p.u.uNewestAtTop, 0)
+        gl.uniform1i(p.u.uDetector, 0)
+        gl.drawArrays(gl.TRIANGLES, 0, 3)
+      },
+      settle: () => {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px)
+      },
+      done: () => {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.bindVertexArray(null)
+        gl.deleteFramebuffer(fbo)
+        for (const t of [ringTex, metaTex, target]) gl.deleteTexture(t)
+        gl.activeTexture(gl.TEXTURE0 + U_RING)
+        gl.bindTexture(gl.TEXTURE_2D, res.ring)
+        gl.activeTexture(gl.TEXTURE0 + U_META)
+        gl.bindTexture(gl.TEXTURE_2D, res.meta)
+      },
+    }
+  }
 }

@@ -4,7 +4,8 @@
 // that drew it, which works for either backend.
 //
 // Modes (run.mjs drives them): `render` (one fixture, one backend), `capability`, `loss`, `rperf`, `axis`.
-import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../src/spectrum'
+import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumRendererOptions, type SpectrumScene } from '../src/spectrum'
+import { probed } from '../src/spectrum/choose'
 import { axisOf, axisTicks, dbAtY, rendererFrame } from '../src/spectrum/scale'
 import { autoRange, displayRange } from '../src/spectrum/scaleRange'
 import type { SpectrumFrameWire } from '../src/types'
@@ -83,7 +84,7 @@ function sceneFor(fx: Fixture, lut: Uint8ClampedArray, last: Frame | null, seq: 
 }
 
 function open(fx: { w: number; h: number }, backend: Backend): SpectrumRenderer {
-  const r = createSpectrumRenderer(host(fx.w, fx.h), { backend: backend === 'canvas2d' ? 'canvas2d' : 'auto' })
+  const r = createSpectrumRenderer(host(fx.w, fx.h), { backend })
   if (r.backend !== backend) throw new Error(`asked for ${backend}, got ${r.backend} (${r.reason})`)
   r.resize(fx.w, fx.h)
   return r
@@ -135,12 +136,40 @@ export async function render(q: URLSearchParams, palette: string) {
 }
 
 /**
- * Which backend the renderer picks, on a healthy context and on two broken ones: `break=context`
- * (no WebGL2 context at all) and `break=upload` (a context that takes float uploads and keeps
- * nothing, the kind of driver fault a context check alone never sees). The broken ones are the
- * capability gate's positive controls: each must end on canvas-2D, and say why.
+ * Which backend the renderer picks. WebGL2 here is SwiftShader, a software rasteriser, so the
+ * automatic choice must be canvas-2D, and say why; asked for (`backend=webgl2`, or `setting=webgl2`
+ * for the hidden setting, which main.tsx sets), WebGL2 must still be built, as every WebGL2 probe in
+ * this harness needs. `name=gpu` makes the renderer string read as a hardware GPU's, which must get
+ * WebGL2; `name=masked`
+ * hides it, as WebKitGTK does, which leaves the choice to the timed probe; with `slow=canvas2d` as
+ * well, every canvas-2D frame is made slow, and the probe must then keep WebGL2 (its control: a
+ * probe that always answered canvas-2D would pass the masked check). Two broken contexts are the
+ * gate's positive controls: `break=context` (no WebGL2 context at all) and `break=upload` (a
+ * context that takes float uploads and keeps nothing, the kind of driver fault a context check alone
+ * never sees). Each must end on canvas-2D, and say why.
  */
 export async function capability(q: URLSearchParams) {
+  const name = q.get('name')
+  if (name === 'gpu' || name === 'masked') {
+    const getExtension = WebGL2RenderingContext.prototype.getExtension
+    WebGL2RenderingContext.prototype.getExtension = function (this: WebGL2RenderingContext, ext: string) {
+      return name === 'masked' && ext === 'WEBGL_debug_renderer_info' ? null : (getExtension as (...a: unknown[]) => unknown).call(this, ext)
+    } as typeof getExtension
+    const getParameter = WebGL2RenderingContext.prototype.getParameter
+    WebGL2RenderingContext.prototype.getParameter = function (this: WebGL2RenderingContext, p: number) {
+      return name === 'gpu' && p === UNMASKED_RENDERER ? STUB_GPU : (getParameter as (...a: unknown[]) => unknown).call(this, p)
+    } as typeof getParameter
+  }
+  if (q.get('slow') === 'canvas2d') {
+    const put = CanvasRenderingContext2D.prototype.putImageData
+    CanvasRenderingContext2D.prototype.putImageData = function (this: CanvasRenderingContext2D, ...a: unknown[]) {
+      const until = performance.now() + 10
+      while (performance.now() < until) {
+        /* a slow canvas-2D */
+      }
+      return (put as (...x: unknown[]) => void).apply(this, a)
+    } as typeof put
+  }
   const broken = q.get('break') ?? 'none'
   if (broken === 'context') {
     const get = HTMLCanvasElement.prototype.getContext
@@ -157,11 +186,19 @@ export async function capability(q: URLSearchParams) {
       return (sub as (...x: unknown[]) => void).apply(this, a)
     } as typeof sub
   }
-  const r = createSpectrumRenderer(host(64, 32))
-  const out = { broken, backend: r.backend, reason: r.reason }
+  const r = createSpectrumRenderer(host(64, 32), { backend: (q.get('backend') ?? 'auto') as SpectrumRendererOptions['backend'] })
+  // A masked name leaves WebGL2 drawing until the probe has run, after the first paint. The renderer
+  // has taken the verdict by the time this await returns: it asked first.
+  const probe = (await probed())?.probe ?? null
+  const out = { broken, backend: r.backend, reason: r.reason, probe }
   r.destroy()
   return out
 }
+
+/** `WEBGL_debug_renderer_info.UNMASKED_RENDERER_WEBGL`. */
+const UNMASKED_RENDERER = 0x9246
+/** A hardware GPU's renderer string, as WebView2 reports one. */
+const STUB_GPU = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002503) Direct3D11 vs_5_0 ps_5_0, D3D11)'
 
 /**
  * A forced context loss. A WebGL2 renderer draws rows 0–59; its context is lost (WEBGL_lose_context);
@@ -259,7 +296,7 @@ export async function rperf(q: URLSearchParams, palette: string, H: { ready?: bo
   const rect = el.getBoundingClientRect()
   const w = Math.round(rect.width * devicePixelRatio)
   const h = Math.round(rect.height * devicePixelRatio)
-  const r = createSpectrumRenderer(el, { backend: backend === 'canvas2d' ? 'canvas2d' : 'auto', depth })
+  const r = createSpectrumRenderer(el, { backend, depth })
   if (r.backend !== backend) throw new Error(`asked for ${backend}, got ${r.backend} (${r.reason})`)
   r.resize(w, h)
   const set = TIMED_SETS['flex-15']

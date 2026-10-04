@@ -7,8 +7,9 @@
 // from the same ring on a cold change. Canvas-2D is NOT a fallback afterthought. On Linux and the
 // Pi the WebKitGTK webview masks the GPU, so it is the common case there, and both paths draw the
 // same pixel fixtures in the real-browser harness (ui/spectrum-harness). `createSpectrumRenderer`
-// (index.ts) picks one by creating a WebGL2 context and reading a test picture back from it, never
-// by asking `gpu.ts`, whose probe fails closed on WebKitGTK.
+// (index.ts) picks the faster of the two here (choose.ts: canvas-2D on a software rasteriser), and
+// WebGL2 only once it has created a context and read a test picture back from it, never by asking
+// `gpu.ts`, whose probe fails closed on WebKitGTK.
 //
 // The renderer draws pixels and nothing else: no fetching, no AGC, no text. The host decides when
 // a row is committed (when its source's sweep counter advances), which display range it is drawn
@@ -114,8 +115,10 @@ export interface SpectrumRenderer {
 }
 
 export interface SpectrumRendererOptions {
-  /** `canvas2d` skips WebGL2 altogether; `auto` (default) uses it when the self-test passes. */
-  backend?: 'auto' | 'canvas2d'
+  /** `auto` (default) picks the faster backend here (choose.ts). `webgl2` uses WebGL2 whenever its
+   *  self-test passes, even where `auto` would not (the harness tests it on a software rasteriser);
+   *  `canvas2d` skips WebGL2 altogether. Either one also beats the hidden setting. */
+  backend?: 'auto' | 'webgl2' | 'canvas2d'
   /** Rows of history kept. */
   depth?: number
 }
