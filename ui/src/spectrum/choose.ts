@@ -19,8 +19,12 @@
 //     the time (a backend slow enough to need no sharing reads back every frame). WebGL2 draws through the renderer's own program (webgl2.ts `scratch`), so nothing is
 //     compiled; canvas-2D on a canvas of its own. Neither touches the history or the picture on
 //     screen. Each backend draws for two windows of at least SPAN_MS, long enough for a clock rounded
-//     to the millisecond. WebGL2 draws until the probe has run; it runs once per page, and every
-//     renderer made later takes its verdict.
+//     to the millisecond, unless WebGL2's one timed frame has already decided: on a software
+//     rasteriser it is slower by so wide a factor (`decisive`) that the probe stops there, after two
+//     WebGL2 frames, the cold one and the timed one. Those two frames are its floor: it cannot decide
+//     without them, so on the machines it is for its cost is counted in WebGL2 frames, not in ms.
+//     WebGL2 draws until the probe has run; it runs once per page, and every renderer made later
+//     takes its verdict.
 //
 // WebGL2 loses the probe only when it is more than MARGIN times slower AND over FLOOR_NS a pixel. A
 // software rasteriser measures many times slower and far over the floor; anything closer stays on
@@ -46,8 +50,9 @@ export type Choice = 'webgl2' | 'canvas2d'
 export interface Verdict {
   pick: Choice
   why: string
-  /** When the probe decided: ms a frame on each backend, and how long the probe took. */
-  probe?: { glMs: number; cpuMs: number; tookMs: number }
+  /** When the probe decided: ms a frame on each backend, how long the probe took, and how many
+   *  frames WebGL2 drew for it (the cold one included). */
+  probe?: { glMs: number; cpuMs: number; tookMs: number; glFrames: number }
 }
 
 /** The backend the hidden setting asks for, or null. */
@@ -94,6 +99,18 @@ export function byTimes(glMs: number, cpuMs: number): Verdict {
         why: `the probe timed WebGL2 at ${glMs.toFixed(2)} ms a frame and canvas-2D at ${cpuMs.toFixed(2)} ms`,
       }
     : { pick: 'webgl2', why: '' }
+}
+
+/** WebGL2's one timed frame decides alone when WebGL2 would still lose with that frame's time
+ *  divided by this: more than 32 times canvas-2D and over 16 ns a pixel. SwiftShader measured
+ *  127–178 times canvas-2D and 30–68 ns a pixel on CI's runners (2026-10-04). A GPU's frame passes
+ *  for decisive only if something else stalls it (a collection, a busy GPU process) by more than
+ *  4 ms, or by more than 32 of canvas-2D's frames where those cost more than 0.13 ms. */
+const DECISIVE = 16
+
+/** Whether WebGL2's timed frame (ms) already decides, against canvas-2D's ms a frame. */
+export function decisive(glMs: number, cpuMs: number): boolean {
+  return byTimes(glMs / DECISIVE, cpuMs).pick === 'canvas2d'
 }
 
 /** The page's verdict, once the renderer string or the probe has given one. */
@@ -178,23 +195,31 @@ function probe(backend: WebGl2Backend): Verdict | null {
   }
   // The first frame of each is the cold one (first use of the framebuffer, the band built whole);
   // the second, timed alone, sets the step.
+  let timed = 0
   for (const r of [gl, cpu]) {
     r.frame()
     r.settle()
     const t = performance.now()
     r.frame()
     r.settle()
-    if (performance.now() - t >= SLOW_MS) r.step = 1
+    const ms = performance.now() - t
+    if (ms >= SLOW_MS) r.step = 1
+    if (r === gl) timed = ms
   }
-  for (let i = 0; i < 2; i++) {
+  // Canvas-2D's first window costs little. Against it, WebGL2's timed frame may be the answer already,
+  // and WebGL2 then draws no more; otherwise each draws its two windows, interleaved.
+  run(cpu)
+  const early = decisive(timed, cpu.ms / cpu.frames)
+  if (!early) {
     run(gl)
     run(cpu)
+    run(gl)
   }
   gl.done()
   cpu.done()
-  const glMs = gl.ms / gl.frames
+  const glMs = early ? timed : gl.ms / gl.frames
   const cpuMs = cpu.ms / cpu.frames
-  return { ...byTimes(glMs, cpuMs), probe: { glMs, cpuMs, tookMs: performance.now() - t0 } }
+  return { ...byTimes(glMs, cpuMs), probe: { glMs, cpuMs, tookMs: performance.now() - t0, glFrames: 2 + gl.frames } }
 }
 
 /** Canvas-2D drawing the same frame: a canvas, a ring and a band of its own. */

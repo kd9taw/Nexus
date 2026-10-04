@@ -129,6 +129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Linux and Raspberry Pi without a graphics card: a shorter pause as the scope and waterfall
+  start.** On Linux, Nexus times its two ways of drawing the scope and waterfall once, just after
+  the window opens, and keeps the faster. Where graphics are drawn in software, the first timed
+  frame already settles it by a wide margin, so the check now stops there: on a slow test machine
+  its pause went from 89–105 ms to 57–70 ms. With a graphics card, or wherever the two ways are
+  close, the check runs in full as before.
 - **Remote access says what a streaming browser can do.** A browser approved for station
   controls that streams this station operates Nexus as you would at the shack, transmit
   included, whether or not its FT8/FT4 transmit box is ticked. Settings ▸ Station ▸ Remote

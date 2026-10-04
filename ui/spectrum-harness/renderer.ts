@@ -143,7 +143,9 @@ export async function render(q: URLSearchParams, palette: string) {
  * WebGL2; `name=masked`
  * hides it, as WebKitGTK does, which leaves the choice to the timed probe; with `slow=canvas2d` as
  * well, every canvas-2D frame is made slow, and the probe must then keep WebGL2 (its control: a
- * probe that always answered canvas-2D would pass the masked check). Two broken contexts are the
+ * probe that always answered canvas-2D would pass the masked check). With `slow=webgl2` instead,
+ * every WebGL2 read-back waits SLOW_WEBGL2_MS: the probe must stop at its timed frame, and its time
+ * must break the budget run.mjs holds it to (that check's control). Two broken contexts are the
  * gate's positive controls: `break=context` (no WebGL2 context at all) and `break=upload` (a
  * context that takes float uploads and keeps nothing, the kind of driver fault a context check alone
  * never sees). Each must end on canvas-2D, and say why.
@@ -169,6 +171,15 @@ export async function capability(q: URLSearchParams) {
       }
       return (put as (...x: unknown[]) => void).apply(this, a)
     } as typeof put
+  } else if (q.get('slow') === 'webgl2') {
+    const read = WebGL2RenderingContext.prototype.readPixels
+    WebGL2RenderingContext.prototype.readPixels = function (this: WebGL2RenderingContext, ...a: unknown[]) {
+      const until = performance.now() + SLOW_WEBGL2_MS
+      while (performance.now() < until) {
+        /* a slow WebGL2 */
+      }
+      return (read as (...x: unknown[]) => void).apply(this, a)
+    } as typeof read
   }
   const broken = q.get('break') ?? 'none'
   if (broken === 'context') {
@@ -199,6 +210,9 @@ export async function capability(q: URLSearchParams) {
 const UNMASKED_RENDERER = 0x9246
 /** A hardware GPU's renderer string, as WebView2 reports one. */
 const STUB_GPU = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002503) Direct3D11 vs_5_0 ps_5_0, D3D11)'
+/** What each WebGL2 read-back costs under `slow=webgl2`, ms. The probe reads back twice before it
+ *  can decide (its cold frame and its timed one), so that alone is over run.mjs's budget. */
+const SLOW_WEBGL2_MS = 60
 
 /**
  * A forced context loss. A WebGL2 renderer draws rows 0–59; its context is lost (WEBGL_lose_context);
