@@ -10,6 +10,7 @@ use super::*;
 use crate::flex::routing::FileMemory;
 use crate::flex::{FlexDaemon, Options};
 use tempo_flexsim::server::Event as SimEvent;
+use tempo_flexsim::session::{Item, Pattern, Rule};
 use tempo_flexsim::{
     vita as sim_vita, Config as SimConfig, Content, Session as SimSession, Simulator, Start, Stream,
 };
@@ -55,8 +56,13 @@ impl FlexScene {
     /// `native`: the operator's `flex_native_audio`. The simulator streams DAX receive audio once
     /// a receive stream is created, so the receive floor never starves native audio.
     fn new(native: bool) -> FlexScene {
+        FlexScene::with_session(native, SimSession::v4_gui_client())
+    }
+
+    /// The same scene on a simulated radio that follows `session`.
+    fn with_session(native: bool, session: SimSession) -> FlexScene {
         let sim = Simulator::start(
-            SimSession::v4_gui_client(),
+            session,
             SimConfig {
                 streams: vec![Stream {
                     stream_id: 0x0400_0001,
@@ -187,7 +193,7 @@ fn command(e: &SimEvent, want: &str) -> bool {
 
 /// ⭐ Native audio through the client, both ways, on its ONE session: the decoder takes the
 /// client's DAX receive audio in place of the sound card, the over leaves through its DAX tee, the
-/// older native worker never opens a second session, and the Phone cockpit is told the mic is off
+/// radio carries no second Nexus session, and the Phone cockpit is told the mic is off
 /// exactly while the radio takes DAX (the TX slice is digital here).
 #[test]
 fn native_audio_on_the_client_carries_both_ways_on_one_session() {
@@ -202,7 +208,6 @@ fn native_audio_on_the_client_carries_both_ways_on_one_session() {
         s.state.dax_last_audio.is_some(),
         "DAX receive audio reached the decoder"
     );
-    assert!(s.state.dax_src.is_none(), "the older worker never started");
     let log = s.log();
     let connections = log
         .iter()
@@ -239,6 +244,128 @@ fn without_native_audio_the_client_leaves_audio_to_the_sound_card() {
         .log()
         .iter()
         .any(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("stream create") || text.starts_with("transmit set dax"))));
+}
+
+/// The bundled session, except that the radio reports a slice it switched to USB, as a radio does
+/// (the bundled session answers a mode change without a status).
+fn reports_usb() -> SimSession {
+    let mut s = SimSession::v4_gui_client();
+    let usb = (
+        Pattern::Exact("slice set 0 mode=USB".to_string()),
+        vec![Rule {
+            code: "0".to_string(),
+            message: String::new(),
+            items: vec![Item::Send("S{h}|slice 0 mode=USB".to_string())],
+        }],
+    );
+    s.rules.retain(|(p, _)| *p != usb.0);
+    s.rules.push(usb);
+    s
+}
+
+/// A second of a recorded message, as the keyer's WAV reader hands it over.
+fn message() -> Vec<f32> {
+    vec![0.05; 12_000]
+}
+
+/// How many `xmit 1` the simulated radio has been sent.
+fn keys(s: &FlexScene) -> usize {
+    s.log().iter().filter(|(_, e)| command(e, "xmit 1")).count()
+}
+
+/// Run the loop until `done` holds, or fail with `what`.
+fn run_until(s: &mut FlexScene, what: &str, done: impl Fn(&FlexScene) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done(s) {
+        assert!(Instant::now() < deadline, "{what}");
+        s.run(100);
+    }
+}
+
+/// ⭐ THE VOICE KEYER CAN'T PLAY WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04,
+/// "Refuse with a message"). Phone at the shack with native audio on: the TX slice is in USB, so
+/// the radio takes its transmit audio from its own mic, and a recorded message, which Nexus sends
+/// as DAX, would not reach the air. The send is refused with the reason before anything is
+/// queued, so nothing keys and nothing plays. The control, in the same scene: native audio off,
+/// and the same message keys the radio and plays, as it always has.
+#[test]
+fn the_voice_keyer_refuses_in_phone_at_the_shack_with_native_audio_on() {
+    let mut s = FlexScene::with_session(true, reports_usb());
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    run_until(&mut s, "the radio never had the mic", |s| {
+        s.engine.lock().unwrap().snapshot().radio.flex_radio_has_mic
+    });
+    let sent = s.engine.lock().unwrap().send_voice(message());
+    s.run(1_000);
+    assert_eq!(keys(&s), 0, "nothing was keyed");
+    assert!(
+        s.backend.played.lock().unwrap().is_empty(),
+        "nothing played"
+    );
+    assert!(s.state.tx_until_ms.is_none());
+    let why = sent.expect_err("the voice keyer refuses while the radio has the mic");
+    assert!(
+        why.contains("the radio has the mic"),
+        "the refusal says why: {why}"
+    );
+
+    // The client's own answer follows native audio at once, whatever the radio last reported.
+    let d = s
+        .state
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::flex)
+        .expect("the client serves the radio");
+    assert!(d.radio_has_mic());
+    d.set_native_audio(false);
+    assert!(
+        !d.radio_has_mic(),
+        "with native audio off the radio's mic is the operator's own"
+    );
+
+    // Native audio off: the radio is the operator's again, and the message plays.
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio kept the mic for native audio", |s| {
+        !s.engine.lock().unwrap().snapshot().radio.flex_radio_has_mic
+    });
+    s.engine.lock().unwrap().send_voice(message()).unwrap();
+    run_until(&mut s, "the message never keyed", |s| keys(s) == 1);
+    assert_eq!(
+        s.backend.played.lock().unwrap().len(),
+        1,
+        "the message played"
+    );
+}
+
+/// …and the client in a digital mode with native audio on (the TX slice in DIGU, the radio on
+/// DAX): the radio does not have the mic, and the message keys and goes out over DAX.
+#[test]
+fn the_voice_keyer_plays_while_the_radio_takes_dax() {
+    let mut s = FlexScene::new(true);
+    run_until(&mut s, "the DAX tee never went in", |s| {
+        s.backend.tee.lock().unwrap().is_some()
+            && s.log()
+                .iter()
+                .any(|(_, e)| command(e, "transmit set dax=1"))
+    });
+    s.run(300);
+    assert!(!s.engine.lock().unwrap().snapshot().radio.flex_radio_has_mic);
+    s.engine.lock().unwrap().send_voice(message()).unwrap();
+    run_until(&mut s, "the message never keyed", |s| keys(s) == 1);
+    assert_eq!(
+        s.backend.played.lock().unwrap().len(),
+        1,
+        "the message played"
+    );
+    run_until(&mut s, "no DAX transmit audio reached the radio", |s| {
+        s.log()
+            .iter()
+            .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1))
+    });
 }
 
 /// The percentiles of a sample, in ms.

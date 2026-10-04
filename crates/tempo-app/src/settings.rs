@@ -1651,15 +1651,15 @@ pub struct Settings {
     #[serde(default)]
     pub flex_native_pan: bool,
     /// Opt-in to native FlexRadio DAX audio (VITA-49 audio streams) instead of the WDM-KS "DAX
-    /// Audio RX" / "DAX TX" soundcard devices — which break under Remote Desktop. OFF by default:
-    /// the worker + SmartSDR command syntax are UNVERIFIED on a real Flex, so a tester enables it
-    /// here. BOTH DIRECTIONS, not RX only (which is what this said while the opposite shipped):
-    /// receive audio comes straight off the network and feeds the decoders like soundcard audio,
-    /// and transmit audio is routed to the radio over DAX as well — which disconnects the rig's
-    /// microphone for as long as the toggle is on. That is deliberate (operator ruling 2026-07-26):
-    /// one toggle means native audio both ways, since a half-native path is a configuration that
-    /// mostly exists to be got wrong. Turning it off, switching radio or exiting Nexus puts the mic
-    /// back. Mirrors `flex_native_pan`.
+    /// Audio RX" / "DAX TX" soundcard devices — which break under Remote Desktop. OFF by default
+    /// (Beta, UNVERIFIED on a real Flex). It works only through Nexus's own Flex client
+    /// (`flex_native_cat`): receive audio comes straight off the network and feeds the decoders
+    /// like soundcard audio, and where the transmitter takes its audio from follows the TX slice's
+    /// mode (operator ruling, 2026-10-03): DAX for the digital modes and the stream's browser
+    /// voice, the radio's own mic for Phone at the shack. On SmartSDR CAT it is kept and does
+    /// nothing (operator ruling, 2026-10-04, "Retire it"): the older worker that served it there,
+    /// both ways under the 2026-07-26 ruling, sent DAX TX where the radio does not take it.
+    /// Mirrors `flex_native_pan`.
     #[serde(default)]
     pub flex_native_audio: bool,
     /// Opt-in to Nexus's own FlexRadio client as the radio's CAT (Beta): Nexus connects to the
@@ -6837,6 +6837,74 @@ mod tests {
         let other = s.radios.iter().find(|p| p.id == 0).expect("radio 0");
         assert_eq!(other.flex_radio_ip, "");
         assert!(!other.flex_native_pan);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A stored `flex_native_audio` on a SmartSDR-CAT radio (Nexus's own Flex client off) still
+    /// LOADS and goes back out as the operator left it, though it does nothing there any more
+    /// (operator ruling, 2026-10-04, "Retire it"): a stored choice is never dropped, and it applies
+    /// once the client serves the radio. Through a load, a save and a load again, and through a
+    /// switch to another radio and back (the per-radio profile's round trip).
+    #[test]
+    fn a_stored_native_audio_choice_on_smartsdr_cat_loads_and_round_trips() {
+        let dir = std::env::temp_dir().join("tempo_settings_flexaudio_kept");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("flexaudio_{}.json", std::process::id()));
+        let stored = serde_json::json!({
+            "mycall": "KD9TAW",
+            "activeRadio": 1,
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "FLEX-6400", "rigModel": 2036, "rigConn": "network",
+                  "rigAddr": "127.0.0.1:5002", "flexRadioIp": "192.0.2.77",
+                  "flexNativeAudio": true, "flexNativeCat": false },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&stored).unwrap()).unwrap();
+
+        let s = Settings::load(&path);
+        assert!(
+            !s.flex_native_cat,
+            "precondition: the radio is on SmartSDR CAT"
+        );
+        assert!(s.flex_native_audio, "the flat mirror loads the choice");
+        assert!(
+            s.active_profile().unwrap().flex_native_audio,
+            "and so does the radio's profile"
+        );
+
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["flexNativeAudio"], serde_json::json!(true));
+        let flex = written["radios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == serde_json::json!(1))
+            .expect("the Flex's profile is written");
+        assert_eq!(
+            flex["flexNativeAudio"],
+            serde_json::json!(true),
+            "saved as it was"
+        );
+        let again = Settings::load(&path);
+        assert!(again.flex_native_audio, "and loads again");
+
+        // The engine as the app builds it at launch, from the file it loaded.
+        let mut e = crate::engine::Engine::with_settings(again);
+        assert!(e.settings().flex_native_audio, "the engine starts with it");
+        e.set_active_radio(0);
+        assert!(
+            !e.settings().flex_native_audio,
+            "the other radio has its own, off"
+        );
+        e.set_active_radio(1);
+        assert!(
+            e.settings().flex_native_audio,
+            "the Flex's choice comes back with it"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

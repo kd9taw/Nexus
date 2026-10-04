@@ -5,10 +5,10 @@
 > control chain is in **final verification**. Expect this path to be solid;
 > please send field reports if anything on your Flex behaves differently.
 >
-> The **native SmartSDR path** (the two *early access* toggles further down —
-> native panadapter and native DAX audio) is a different story: it is **off by
-> default and has never been run against a real Flex**. Treat it as an
-> experiment you opt into, not part of the setup.
+> The **native SmartSDR path** (the *early access* and *Beta* toggles further
+> down — native panadapter, native DAX audio and the Flex native client) is a
+> different story: it is **off by default and has never been run against a real
+> Flex**. Treat it as an experiment you opt into, not part of the setup.
 
 FlexRadio is the one brand that connects over **Network**, not a serial port.
 Nexus drives a Flex the same way WSJT-X does — through the **SmartSDR CAT** app
@@ -86,8 +86,8 @@ is what actually assigns them.
 always chooses **DAX Audio RX 1**, so on the slice-B window select *DAX Audio
 RX 2* by hand in **Settings ▸ Radio ▸ Audio**. Nexus keeps a hand-picked DAX
 device — the button only bootstraps, it never overrides you. The **native DAX
-audio** toggle cannot do this at all: it is hard-wired to DAX channel 1, so
-leave it off on every window but the slice-A one.
+audio** toggle does nothing on SmartSDR CAT (it works only through the Flex
+native client), so it does not help here.
 
 ---
 
@@ -130,18 +130,20 @@ whether Stop TX cuts the *one* word already inside the radio or lets it finish.
 Plain SSB needs nothing special: set the band, pick Phone, and the mic on your
 Flex works the way it always does.
 
-**One thing will catch you out.** If you switched on **Flex native DAX audio**
-(the early-access toggle below) for FT8, your microphone is disconnected — on
-every slice, in every program, including SmartSDR's own MOX. That toggle tells
-the radio to take transmit audio from DAX, and that is a **radio-wide** setting,
-not a Nexus one. Pick up the mic and you will transmit silence with no error
-anywhere.
+**With Flex native DAX audio on** (the Beta toggle below, through the Flex
+native client), where the radio takes its transmit audio from follows the
+transmit slice's mode. In Phone the radio keeps its own mic, so the mic works as
+it always does. The **voice keyer can't play** then: the radio is listening to
+its mic, not to Nexus, so a recorded message would not go out. The keyer says so
+and keys nothing.
 
-Nexus now says so: with native DAX audio running, the Phone screen shows a
-**mic off (DAX)** marker beside the frequency. The fix is to turn **Flex native
-DAX audio** off in **Settings ▸ Radio ▸ Rig & CAT** — the mic comes straight
-back. Leaving Nexus normally does the same thing; a crash or a force-quit may
-not, and then you set it back in SmartSDR yourself.
+The radio takes DAX instead of the mic for the digital modes and for a
+streamed operator's voice on the Remote page. That is a **radio-wide** setting:
+while it stands, the mic is disconnected on every slice and in every program,
+SmartSDR's own MOX included, and the Phone screen shows a **mic off (DAX)**
+marker beside the frequency. Nexus puts your own setting back when native DAX
+audio goes off or Nexus disconnects, and again at the next connect if a crash
+left it changed.
 
 Nexus does not touch the Flex's transmit filter, processor or TX profile, so the
 audio bandwidth an SSB over occupies is whatever your SmartSDR profile last set.
@@ -151,22 +153,29 @@ audio bandwidth an SSB over occupies is whatever your SmartSDR profile last set.
 ## The native SmartSDR path (early access — read this first)
 
 Two toggles in **Settings ▸ Radio ▸ Rig & CAT** talk to the radio's own SmartSDR
-API on port `4992`, alongside the CAT path above:
+API on port `4992`:
 
 - **Flex native panadapter** — streams the radio's real panadapter (VITA-49 FFT)
-  into the cockpit scope instead of the audio FFT.
-- **Flex native DAX audio** — takes RX audio straight off the network instead of
-  the *DAX Audio RX* sound device, which is invisible under Remote Desktop.
+  into the cockpit scope instead of the audio FFT, alongside the CAT path above.
+- **Flex native DAX audio** (Beta) — carries the radio's audio over the network
+  instead of the *DAX Audio RX* / *DAX TX* sound devices, which are invisible
+  under Remote Desktop. It works **only through the Flex native client** (the
+  Beta toggle beside it, which makes Nexus a SmartSDR client of its own). With
+  SmartSDR CAT it does nothing: audio stays on the sound devices, and the
+  setting is kept for when the client serves the radio. On the client, receive
+  audio comes straight from the radio, and the digital modes transmit over DAX
+  (see *Phone (SSB) on a Flex* above for what that means for the mic).
 
 Both are **off by default and unverified on hardware** — nobody has run either
 against a real Flex. They need **Flex radio IP** filled in (Detect fills it); with
 it empty they do nothing at all. If the scope stays blank or decodes stop, turn
 them back off.
 
-Three limits worth knowing before you switch one on:
+Two limits worth knowing before you switch one on:
 
-- **Same LAN only — not SmartLink, not through NAT.** Both workers bind a local
-  UDP port and hand the radio *that* number, and the radio streams back to it.
+- **Same LAN only — not SmartLink, not through NAT.** The native pan and the
+  client's audio each bind a local UDP port and hand the radio *that* number,
+  and the radio streams back to it.
   Behind NAT that number means nothing on the far side, and the panadapter
   socket never sends anything outbound, so no mapping is ever created. LAN
   discovery has the same limit: it listens for the radio's broadcast, which does
@@ -174,23 +183,20 @@ Three limits worth knowing before you switch one on:
   port-forward, use the SmartSDR CAT path and leave these toggles off** — a
   routed VPN that puts you on the same subnet is the only remote arrangement the
   native path can work on.
-- **Native DAX changes transmit audio too.** Switching it on sends
-  `transmit set dax=1`, which is a **radio-wide** setting: while it is on, the
-  Flex's modulator takes its audio from DAX, not the microphone, for every
-  client. Nexus sends the restore on a clean shutdown — but if it is killed, or
-  if the DAX transmit stream never came up, the radio is left taking transmit
-  audio from DAX and your microphone stays dead until you put it back in
-  SmartSDR.
-- **One DAX channel.** Native DAX is hard-wired to channel 1, so it cannot serve
-  a second slice — see *Running more than one slice* above.
+- **Native DAX changes transmit audio too.** The radio's DAX transmit setting
+  is **radio-wide**. Nexus changes it only between overs, when the transmit
+  slice or its mode changes (or native DAX audio, or a streamed operator's
+  voice), and never while SmartSDR's own DAX is connected. It puts your setting
+  back when it lets go, and at the next connect after a crash.
 
 ---
 
 ## macOS
 
 Every Flex flow leaves your Mac and goes out to the LAN: discovery, CAT to a
-SmartSDR CAT host, and the native path's connections to the radio on `4992` /
-`4993`. macOS 15 gates that behind the **Local Network** privacy permission.
+SmartSDR CAT host, and the native path's connections to the radio on `4992`
+(and UDP `4991` for native DAX audio). macOS 15 gates that behind the **Local
+Network** privacy permission.
 
 **Nexus does not ship a local-network usage description**, so you may never see
 a permission prompt — and a denial does not produce an error. It produces

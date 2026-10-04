@@ -11,8 +11,9 @@
 //! - Restore the operator's own setting on disconnect and at the next connect.
 //! - When SmartSDR's DAX is also connected, never write the flag.
 //!
-//! It replaces, for this client only, the 2026-07-26 ruling that one toggle means DAX both ways
-//! (that one still governs the older native audio worker, `crate::flexdax`).
+//! It replaces the 2026-07-26 ruling that one toggle means DAX both ways. That ruling governed the
+//! older native audio worker on SmartSDR CAT, retired 2026-10-04 (operator ruling, "Retire it"):
+//! native audio now rides this client only.
 //!
 //! ## How each part holds
 //! - **Follow the mode.** [`wanted_source`] maps the TX slice's mode to the source: the digital

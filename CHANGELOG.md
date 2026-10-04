@@ -196,6 +196,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now shows **New park**, the full green of a park you still need, and beside it **POTA
   activator**, the dim green of any other activator, between MODE and LoTW. In a narrow pane the
   key can wrap onto one or two more lines.
+- **FlexRadio: native DAX audio (Beta) now works only through the Flex native client.** With the
+  client on, receive audio comes straight from the radio, the digital modes transmit over DAX,
+  and Phone at the shack keeps the radio's own mic. Nexus changes the radio's DAX transmit
+  setting only between overs, never while SmartSDR's own DAX is connected, and puts yours back
+  when it lets go. On SmartSDR CAT the toggle now does nothing and audio stays on the sound
+  devices (SmartSDR's DAX): the older native audio path there sent transmit audio where the radio
+  does not take it, so an over keyed with no audio. Your setting is kept for when the client
+  serves the radio, and its hint in Settings ▸ Radio ▸ Rig & CAT says so. Native DAX audio is
+  Beta and has not been run on a real Flex yet: before you use it for FT8, check your own
+  signal's DT on a second receiver.
+- **Voice keyer: it says so when the radio has the mic.** With Flex native DAX audio on, Phone at
+  the shack uses the radio's own mic, so a recorded message would not go out and the mic would
+  in its place. The keyer now says it can't play, and keys nothing. Everywhere else it plays as
+  before.
 
 ### Added
 

@@ -1267,6 +1267,13 @@ const AB_NO_DRIVABLE_MAPPING: &str =
     "Nexus drives Main = downlink / Sub = uplink only through its own native CI-V backend, and \
      that backend has no path to this radio — so no VFO mapping carries this pass's uplink here.";
 
+/// What [`Engine::send_voice`] answers while the radio has the mic (Nexus's own Flex client with
+/// native audio on, Phone at the shack). The keyer says it first, in the operator's language,
+/// from the snapshot; this English answer is for a send that reaches the engine anyway.
+const FLEX_RADIO_HAS_MIC: &str = "The voice keyer can't play while the radio has the mic: with \
+     Flex native DAX audio on, Phone at the shack uses the radio's own mic, so a recorded message \
+     would not go out. Nothing was keyed.";
+
 /// What the CW cockpit's warning line says when [`Engine::poll_cw_one`] drops a refused send.
 /// English at the engine, like the keyer's own errors and JS8's refusals, and the same
 /// sentence shape as the log line beside it.
@@ -2410,6 +2417,10 @@ pub struct Engine {
     /// radio and the operator's MICROPHONE is disconnected. Display-only; see
     /// [`Self::observe_flex_dax_tx`].
     flex_dax_tx: bool,
+    /// The radio has the mic while Nexus's native Flex audio is on (Phone at the shack), so a
+    /// recorded message sent over DAX would not reach the air. The voice keyer refuses while it
+    /// stands; see [`Self::observe_flex_radio_has_mic`].
+    flex_radio_has_mic: bool,
     /// The Flex VITA **meter** worker is running — the only thing that produces a
     /// FlexLib-scaled SWR on this radio. Display-only; see
     /// [`Self::observe_flex_meter_stream`].
@@ -4988,6 +4999,7 @@ impl Engine {
             seen_decode: false,
             rig_confirmed: false,
             flex_dax_tx: false,
+            flex_radio_has_mic: false,
             flex_meter_stream: false,
             last_dx_tier: None,
             last_msg_tier: None,
@@ -6958,6 +6970,22 @@ impl Engine {
     /// nothing.
     pub fn observe_flex_dax_tx(&mut self, on: bool) {
         self.flex_dax_tx = on;
+    }
+
+    /// The radio started or stopped having the mic while Nexus's native Flex audio is on.
+    ///
+    /// On a radio Nexus's own Flex client serves, the transmit slice's mode decides where the
+    /// transmitter takes its audio from (operator ruling, 2026-10-03): DAX for the digital modes
+    /// and the stream's browser voice, the radio's own mic for Phone at the shack. Audio Nexus
+    /// makes still leaves over DAX, so while the radio has the mic a recorded voice message would
+    /// not reach the air and the mic would carry the over in its place. The voice keyer refuses
+    /// while this stands and keys nothing (operator ruling, 2026-10-04, "Refuse with a message").
+    ///
+    /// Pushed by the radio loop on the transition, from what the radio reports, never from the
+    /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
+    /// the voice keyer reads it; nothing else is refused on it.
+    pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
+        self.flex_radio_has_mic = on;
     }
 
     /// The Flex VITA **meter** worker just started or stopped.
@@ -10048,10 +10076,11 @@ impl Engine {
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
 
     /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. REFUSED while
-    /// TX is disabled (Monitor) or the dial is outside the licence's privileges, so a stray
-    /// F-key never keys unexpectedly: nothing is queued, the log says why, and so does the
-    /// `Err`, which the keyer's toast shows. It used to be ignored without a word. Replaces any
-    /// still-pending message (one voice over at a time).
+    /// TX is disabled (Monitor), the dial is outside the licence's privileges, or the radio has
+    /// the mic ([`Self::observe_flex_radio_has_mic`]), so a stray F-key never keys unexpectedly
+    /// and a message never puts the mic on the air in its place: nothing is queued, the log says
+    /// why, and so does the `Err`, which the keyer's toast shows. It used to be ignored without a
+    /// word. Replaces any still-pending message (one voice over at a time).
     pub fn send_voice(&mut self, samples: Vec<f32>) -> Result<(), String> {
         // A streamed operator's microphone over owns the transmitter from its arm: a canned
         // message queued under it would be appended to the output ring behind their voice, and
@@ -10062,6 +10091,16 @@ impl Engine {
                 "voice-keyer over refused: the Remote microphone is transmitting",
             );
             return Err(TxOwner::Mic.busy_reason());
+        }
+        // Nexus's own Flex client with native audio on, in Phone at the shack: the message would
+        // leave over DAX while the radio takes the mic, so the mic would carry the over. Refused
+        // before anything is queued, so nothing keys (operator ruling, 2026-10-04).
+        if self.flex_radio_has_mic {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: the radio has the mic (Flex native audio)",
+            );
+            return Err(FLEX_RADIO_HAS_MIC.to_string());
         }
         if !self.tx_enabled {
             tempo_core::applog::info("tx", "voice-keyer message refused: transmit is off");
@@ -10088,18 +10127,21 @@ impl Engine {
         Ok(())
     }
 
-    /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges).
+    /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges,
+    /// and on the radio not having the mic).
     ///
     /// ⛔ A message REFUSED here is DROPPED, never held (operator, 2026-09-30: the rule CW, RTTY
-    /// and PSK follow): TX went off, or the dial left the privileges, after it was queued. Held,
-    /// it played the moment TX was allowed again. The log says why; the keyer has no warning
-    /// line to carry it, its toasts being the answer to the send itself.
+    /// and PSK follow): TX went off, the dial left the privileges, or the radio took the mic,
+    /// after it was queued. Held, it played the moment TX was allowed again. The log says why;
+    /// the keyer has no warning line to carry it, its toasts being the answer to the send itself.
     pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
         self.voice_tx.as_ref()?;
         let refused = if !self.tx_enabled {
             Some("transmit is off")
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if self.flex_radio_has_mic {
+            Some("the radio has the mic (Flex native audio)")
         } else {
             None
         };
@@ -20656,6 +20698,7 @@ contact yourself."
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
+        s.radio.flex_radio_has_mic = self.flex_radio_has_mic;
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -27655,6 +27698,51 @@ mod tests {
             Some(vec![0.5; 100]),
             "a message sent once TX is allowed plays as before"
         );
+    }
+
+    /// ⭐ THE VOICE KEYER CAN'T PLAY WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04,
+    /// "Refuse with a message"). With Nexus's own Flex client and native audio on, Phone at the
+    /// shack puts the radio on its own mic while a recorded message still leaves over DAX, so the
+    /// message would not reach the air and the mic would carry the over. The send is refused with
+    /// the reason and nothing is queued; a message queued before the radio took the mic is
+    /// dropped, never held; and once the radio is off the mic, a message plays as before.
+    #[test]
+    fn the_voice_keyer_refuses_while_the_radio_has_the_mic() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+        e.observe_flex_radio_has_mic(true);
+        assert!(e.snapshot().radio.flex_radio_has_mic, "the keyer is told");
+        let why = e.send_voice(vec![0.5; 100]).unwrap_err();
+        assert!(
+            why.contains("the radio has the mic"),
+            "the send says why: {why}"
+        );
+        assert_eq!(e.tx_owner(), None, "nothing was queued");
+        assert_eq!(e.poll_voice(), None, "nothing plays");
+
+        // Queued while the radio took DAX (the stream's browser voice, say), and the radio took
+        // the mic before the loop played it: dropped, not held for later.
+        e.observe_flex_radio_has_mic(false);
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.observe_flex_radio_has_mic(true);
+        assert_eq!(
+            e.poll_voice(),
+            None,
+            "nothing plays once the radio has the mic"
+        );
+        e.observe_flex_radio_has_mic(false);
+        assert_eq!(
+            e.poll_voice(),
+            None,
+            "nothing refused plays when the radio lets go of the mic"
+        );
+
+        // The control: the radio off the mic, and the message plays.
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert_eq!(e.poll_voice(), Some(vec![0.5; 100]));
+        assert!(!e.snapshot().radio.flex_radio_has_mic);
     }
 
     /// …and a send made while TX is off or outside the privileges, which was ignored without

@@ -103,6 +103,8 @@ struct Shared {
     /// The radio's DAX source flag as the control thread last read it: 0 unknown, 1 the mic,
     /// 2 DAX.
     radio_dax: AtomicU8,
+    /// Another program feeds the radio's DAX transmit audio, as the control thread last saw it.
+    other_feeder: AtomicBool,
     tx: Arc<DaxTx>,
 }
 
@@ -125,6 +127,7 @@ impl Audio {
             rings: Mutex::new(BTreeMap::new()),
             served_channel: AtomicU8::new(0),
             radio_dax: AtomicU8::new(0),
+            other_feeder: AtomicBool::new(false),
             tx,
         });
         let mut threads = Vec::new();
@@ -171,6 +174,12 @@ impl Audio {
             2 => Some(true),
             _ => None,
         }
+    }
+
+    /// Whether another program feeds the radio's DAX transmit audio, as last seen while native
+    /// audio was on.
+    pub(crate) fn other_feeder(&self) -> bool {
+        self.shared.other_feeder.load(Ordering::Acquire)
     }
 
     /// The transmit route.
@@ -461,6 +470,7 @@ fn tick(
     shared.served_channel.store(served, Ordering::Release);
     // Transmit: our own stream, while Nexus is the only program feeding DAX.
     let other = another_dax_feeder(model, ours, snap.dax_tx_stream).is_some();
+    shared.other_feeder.store(other, Ordering::Release);
     shared
         .tx
         .set_route(snap.dax_tx_stream.filter(|_| wanted && !other));
