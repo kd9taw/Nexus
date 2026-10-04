@@ -1227,8 +1227,24 @@ export interface AmpStatus {
   kpaFault?: number | null
 }
 
-/** Which receiver — the radio's Main, or its Sub. */
-export type ReceiverId = 'main' | 'sub'
+/** Which receiver — the radio's Main, its Sub, or a receiver the radio numbers itself (a Flex
+ *  slice; its number is the receiver's `index`). */
+export type ReceiverId = 'main' | 'sub' | 'slice'
+/** Whose a numbered receiver is. Nexus never touches one that is not `ours`. */
+export type ReceiverOwner = 'ours' | 'foreign' | 'unknown'
+/** What Nexus may ask of a Flex slice of ours that is not the transmit slice (`setSlice`):
+ *  the engine's `SliceIntent`, by `kind`. Modes are rigctld words (`USB`, `PKTUSB`, `CW`, …);
+ *  filter edges are Hz from the slice's frequency; gains are 0..1. */
+export type SliceIntent =
+  | { kind: 'tune'; mhz: number }
+  | { kind: 'mode'; mode: string }
+  | { kind: 'filter'; lowHz: number; highHz: number }
+  | { kind: 'agc'; speed: 'fast' | 'mid' | 'slow' | 'off' }
+  | { kind: 'afGain'; gain: number }
+  | { kind: 'mute'; muted: boolean }
+  | { kind: 'noiseBlanker'; on: boolean }
+  | { kind: 'noiseReduction'; on: boolean }
+  | { kind: 'autoNotch'; on: boolean }
 /** Whose receive stage it is (`dualrx::StageOwner`). `unknown` is NEVER a "no". */
 export type StageOwner = 'own' | 'sharedWithMain' | 'unknown'
 /** The three-state capability answer — the same words and the same rule as `rigControls.ts`'s
@@ -1275,6 +1291,13 @@ export interface ReceiverStatus {
   scopeFixStartMhz?: number | null
   scopeSpanRefused?: string | null
   scopeError?: string | null
+  /** A numbered receiver's own, absent on Main and the Sub: the radio's index (0 is slice
+   *  A), its letter, whose it is, whether the radio transmits from it, and its mute. */
+  index?: number
+  letter?: string
+  owner?: ReceiverOwner
+  transmits?: boolean
+  muted?: boolean
 }
 
 /** THE RADIO'S RECEIVERS — Main always, the Sub only where this build offers one. ADDITIVE:
@@ -1296,6 +1319,9 @@ export interface ReceiversStatus {
   /** Can Nexus command the Sub's controls on the CAT path serving this radio. null = not
    *  known, which offers nothing. */
   subCommandable?: boolean | null
+  /** The receivers the radio numbers itself — a Flex's slices, ours and other clients', in
+   *  the radio's order. Absent on every radio whose receivers are Main and the Sub. */
+  set?: ReceiverStatus[]
 }
 
 export interface RadioStatus {
@@ -3759,6 +3785,9 @@ export interface Settings {
   /** Read the FT-710's own spectrum over its internal USB-SPI bridge. Per radio. */
   yaesuRfScope: boolean
   flexNativeAudio: boolean
+  /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
+   *  stays the default and the fallback. */
+  flexNativeCat?: boolean
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
@@ -4355,6 +4384,8 @@ export interface RadioProfile {
   yaesuRfScope?: boolean
   /** This radio's native DAX audio opt-in (both directions). */
   flexNativeAudio?: boolean
+  /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
+  flexNativeCat?: boolean
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured

@@ -853,6 +853,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     flexNativePan: s.flexNativePan ?? false,
     yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
+    flexNativeCat: s.flexNativeCat ?? false,
   }
 }
 
@@ -5728,6 +5729,30 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+
+              {/* Nexus's own Flex client as this radio's CAT: Beta, opt-in per radio (operator
+                  ruling, 2026-10-03), with SmartSDR CAT the default and the fallback. The Rust
+                  side serves it only on these two model numbers and with the radio's own address
+                  set (`flex_client_reachable`), so the toggle shows on the models alone. */}
+              {form.rigConn === 'network' && [2036, 23005].includes(form.rigModel) && (
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.rigControl.flexClient.label')}
+                  </span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.flexNativeCat ?? false}
+                    className={`toggle${form.flexNativeCat ? ' on' : ''}`}
+                    onClick={() => updateBool('flexNativeCat', !form.flexNativeCat)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.flexClient.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              )}
 
               {form.rigConn !== 'network' &&
                 /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&

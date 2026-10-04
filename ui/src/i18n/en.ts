@@ -5684,6 +5684,9 @@ export const EN = {
   'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio straight over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices — which are <b>invisible under Remote Desktop</b>. <b>Both directions:</b> the decoders read the rig\'s receive audio directly, and transmit audio goes out over DAX too, which disconnects the rig\'s microphone while this is on. Turning it off, switching radio or quitting Nexus puts the mic back. <b>Unverified on hardware</b>, opt-in: needs the Flex IP set and SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to apply.',
+  'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
+  'settings.rigControl.flexClient.hint':
+    "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
   // ⚠️ `{{path}}` is a file path the backend chose. Markers are parsed BEFORE values are
   // substituted, so a path that happens to contain `<b>` is text, never markup.
   'settings.rigControl.civLog.label': 'CI-V bus diagnostic log',

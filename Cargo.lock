@@ -2752,6 +2752,7 @@ dependencies = [
  "serialport",
  "tempo-app",
  "tempo-core",
+ "tempo-flexsim",
  "tempo-net",
  "tempo-sstv",
  "windows 0.54.0",

@@ -34,6 +34,7 @@ pub mod remote_transmit;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
+pub mod slices;
 pub mod sub_controls;
 #[cfg(test)]
 mod tx_gate_table;
@@ -3059,6 +3060,9 @@ pub struct Engine {
     /// The SUB receiver's levels — what the operator asked of it and what the radio accepted,
     /// keyed to the radio in play. See [`sub_controls`].
     sub_controls: sub_controls::SubControls,
+    /// A FlexRadio's slices as Nexus's own Flex client reports them, and the intents waiting for
+    /// them, keyed to the radio in play. See [`slices`].
+    flex_slices: slices::FlexSlices,
     /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
@@ -5138,6 +5142,7 @@ impl Engine {
             squelch: None,
             rig_squelch: None,
             sub_controls: Default::default(),
+            flex_slices: Default::default(),
             nr_level: None,
             rig_nr_level: None,
             comp_level: None,
@@ -45763,6 +45768,7 @@ mod tests {
             yaesu_rf_scope: None,
             yaesu_fix_starts: None,
             flex_native_audio: p.flex_native_audio,
+            flex_native_cat: p.flex_native_cat,
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);

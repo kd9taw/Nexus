@@ -57,6 +57,9 @@ enum CatDaemon {
     /// (`crate::omnirig`). A third thing that can listen on the radio's rigctld port, exactly
     /// like `Native` — everything downstream stays agnostic.
     Omni(crate::omnirig::OmniDaemon),
+    /// Nexus's own FlexRadio client (`crate::flex`, opt-in per radio, Beta): the same rigctld
+    /// protocol on the same port, served from a SmartSDR session to the radio itself.
+    Flex(crate::flex::FlexDaemon),
 }
 
 impl CatDaemon {
@@ -65,20 +68,28 @@ impl CatDaemon {
             CatDaemon::Spawned(p) => p.is_alive(),
             CatDaemon::Native(d) => d.is_alive(),
             CatDaemon::Omni(d) => d.is_alive(),
+            CatDaemon::Flex(d) => d.is_alive(),
         }
     }
     /// The native daemon, when that's what this is (scope drain / enable).
     fn native(&self) -> Option<&crate::civ::broker::CivDaemon> {
         match self {
             CatDaemon::Native(d) => Some(d),
-            CatDaemon::Spawned(_) | CatDaemon::Omni(_) => None,
+            CatDaemon::Spawned(_) | CatDaemon::Omni(_) | CatDaemon::Flex(_) => None,
         }
     }
     /// The OmniRig shim, when that's what this is — for the status detail and TX intent.
     fn omni(&self) -> Option<&crate::omnirig::OmniDaemon> {
         match self {
             CatDaemon::Omni(d) => Some(d),
-            CatDaemon::Native(_) | CatDaemon::Spawned(_) => None,
+            CatDaemon::Native(_) | CatDaemon::Spawned(_) | CatDaemon::Flex(_) => None,
+        }
+    }
+    /// Nexus's own Flex client, when that's what this is — for the slices and the TX intent.
+    fn flex(&self) -> Option<&crate::flex::FlexDaemon> {
+        match self {
+            CatDaemon::Flex(d) => Some(d),
+            CatDaemon::Native(_) | CatDaemon::Spawned(_) | CatDaemon::Omni(_) => None,
         }
     }
 }
@@ -108,6 +119,14 @@ fn native_civ_model(t: &Transport) -> Option<crate::civ::commands::IcomModel> {
         return None;
     }
     crate::rigmodels::icom_scope_model(t.rig_model)
+}
+
+/// The radio's own address when this radio is opted into Nexus's own Flex client (Beta) and the
+/// client could serve it ([`tempo_app::settings::flex_client_reachable`], the single source of
+/// truth). `None` on every radio not opted in, so nothing about the default path depends on it.
+fn flex_client_ip(t: &Transport) -> Option<&str> {
+    (t.flex_native_cat && tempo_app::settings::flex_client_reachable(t.rig_model, &t.flex_radio_ip))
+        .then(|| t.flex_radio_ip.trim())
 }
 
 /// The CI-V bus address for [`native_civ_model`]'s rig. Split out from the model rather
@@ -194,8 +213,27 @@ fn spawn_cat_daemon(
         return crate::omnirig::OmniDaemon::start(t.omnirig_slot(), t.rigctld_port)
             .map(|d| (CatDaemon::Omni(d), None));
     }
-    #[cfg_attr(not(feature = "serial"), allow(unused_mut))] // only mutated on the serial path
     let mut native_fallback: Option<String> = None;
+    // Nexus's own Flex client, when the operator opted this radio in (Beta). It talks to the radio
+    // itself, so it is tried before anything that opens a port or launches a daemon. When it cannot
+    // start (no radio at that address, a refused registration, no slice of ours), SmartSDR CAT
+    // through rigctld below is the fallback, and the reason is recorded as the CI-V daemon's is.
+    if let Some(ip) = flex_client_ip(t) {
+        match crate::flex::FlexDaemon::start_for_ip(ip, t.rigctld_port) {
+            Ok(d) => return Ok((CatDaemon::Flex(d), None)),
+            Err(e) => {
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!(
+                        "{}: Nexus's Flex client could not start at {ip} ({e}); falling back to \
+                         SmartSDR CAT",
+                        t.radio_label
+                    ),
+                );
+                native_fallback = Some(e.to_string());
+            }
+        }
+    }
     #[cfg(feature = "serial")]
     if let Some(model) = native_civ_model(t).filter(|_| ptt_line.is_none()) {
         match crate::civ::broker::CivDaemon::start(
@@ -1314,6 +1352,11 @@ pub struct RadioConfig {
     /// Native Icom CI-V opt-in (Nexus owns the CI-V serial port + serves the rigctld
     /// protocol itself — unlocks the rig's real scope waveform). Off = classic rigctld.
     pub icom_native_cat: bool,
+    /// Opt-in to Nexus's own Flex client (Beta; `RadioProfile::flex_native_cat`) and the radio's
+    /// own address for it, so the first launch starts the client rather than replacing a SmartSDR
+    /// CAT daemon a tick later.
+    pub flex_native_cat: bool,
+    pub flex_radio_ip: String,
     /// The port our OWN CAT broker serves on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     pub broker_self_port: Option<u16>,
@@ -1364,6 +1407,8 @@ impl Default for RadioConfig {
             // trap, broker axis) — 27 scenes failed exactly that way when these two drifted.
             rigctld_port: 4534,
             icom_native_cat: false,
+            flex_native_cat: false,
+            flex_radio_ip: String::new(),
             broker_self_port: Some(4532),
             dial_hz: 14_090_500,
             mode: "USB".to_string(),
@@ -2108,6 +2153,8 @@ impl Transport {
             omnirig_slot: p.omnirig_slot,
             rigctld_port: safe_rigctld_port(p.rigctld_port),
             icom_native_cat: p.icom_native_cat,
+            flex_native_cat: p.flex_native_cat,
+            flex_radio_ip: p.flex_radio_ip.clone(),
             broker_self_port: None,
             audio_in: String::new(),
             audio_out: String::new(),
@@ -4841,6 +4888,9 @@ impl RadioLoop {
         if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::omni) {
             d.set_tx_intent(true);
         }
+        if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
+            d.set_tx_intent(true);
+        }
     }
 
     /// Clear the shared audio-error banner IF `owner` still holds it, and hand the line back.
@@ -5815,12 +5865,22 @@ impl RadioLoop {
             let suspect_rebuild = self.cat_rebuild_due(&want, now, rig.has_control());
             if daemon_died {
                 crate::civ::diag::note("rigctld died: respawning the active radio's CAT daemon");
+                // Nexus's Flex client says why its session ended when the transmitter is the
+                // reason (the radio did not confirm an unkey): that is what the operator must
+                // read, not that a helper stopped.
+                let flex_alarm = self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .and_then(crate::flex::FlexDaemon::alarm);
                 let mut eng = engine_lock(engine);
                 eng.set_cat_status(
                     Some(false),
-                    "the CAT helper (rigctld) stopped — restarting it. If this keeps happening, \
-                     check the radio's cable/port and Test CAT."
-                        .to_string(),
+                    flex_alarm.unwrap_or_else(|| {
+                        "the CAT helper (rigctld) stopped — restarting it. If this keeps \
+                         happening, check the radio's cable/port and Test CAT."
+                            .to_string()
+                    }),
                 );
             }
             if self.handoff_deferred {
@@ -6540,6 +6600,15 @@ impl RadioLoop {
             // gate, so this is the whole of its per-tick work: tell the broker whether Nexus is
             // on the air, so a reconnect of our own Rig cannot unkey an over in flight.
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::omni) {
+                d.set_tx_intent(
+                    rig.keyed
+                        || self.tx_until_ms.is_some()
+                        || self.tuning_keyed
+                        || self.manual_ptt_applied,
+                );
+            }
+            // Nexus's own Flex client carries the same fail-safe (it reuses `serve_connection`).
+            if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
                 d.set_tx_intent(
                     rig.keyed
                         || self.tx_until_ms.is_some()
@@ -7605,6 +7674,30 @@ impl RadioLoop {
                                     )
                                     .is_ok();
                                 engine_lock(engine).observe_sub_level(w, ok);
+                            }
+                        }
+                        // A FLEX'S SLICES (Nexus's own Flex client; `tempo_app::engine::slices`).
+                        // Every poll hands the engine the client's view of every slice, which is
+                        // the receiver set, or says that no client of ours serves this radio.
+                        // Intents for slices other than the transmit slice go out only while
+                        // nothing is keyed (the Sub levels' rule), drained under the lock and sent
+                        // with it released; the client checks the transmit flag and the owner
+                        // again at the wire.
+                        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+                        // The client's view is read first, so the engine lock is not held over it.
+                        let report = flex.map(crate::flex::FlexDaemon::slices);
+                        engine_lock(engine).observe_flex_slices(report);
+                        if let Some(d) = flex.filter(|_| !self.operator_keyed()) {
+                            let writes = engine_lock(engine).take_slice_writes();
+                            for w in writes {
+                                let outcome = d.apply(w.index, &w.intent);
+                                if let Err(why) = &outcome {
+                                    tempo_core::applog::info(
+                                        "cat",
+                                        &format!("Flex slice {}: {why}", w.index),
+                                    );
+                                }
+                                engine_lock(engine).observe_slice_write(&w, outcome);
                             }
                         }
                         // ⚠️ THE ATU TUNE-UP — THIS KEYS THE TRANSMITTER. The radio puts its own
@@ -12559,6 +12652,10 @@ struct Transport {
     /// Native Icom CI-V opt-in for this radio (see `RadioProfile::icom_native_cat`) —
     /// selects Nexus's own CI-V daemon instead of rigctld at the spawn sites.
     icom_native_cat: bool,
+    /// Opt-in to Nexus's own Flex client for this radio (`RadioProfile::flex_native_cat`), and the
+    /// radio's own address it connects to. Read through [`flex_client_ip`] only.
+    flex_native_cat: bool,
+    flex_radio_ip: String,
     /// The operator's D1/D2/D3 choice (`RadioProfile::icom_data_mode`), handed to the CI-V
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
@@ -12617,6 +12714,8 @@ impl Transport {
             omnirig_slot: c.omnirig_slot,
             rigctld_port: safe_rigctld_port(c.rigctld_port),
             icom_native_cat: c.icom_native_cat,
+            flex_native_cat: c.flex_native_cat,
+            flex_radio_ip: c.flex_radio_ip.clone(),
             broker_self_port: c.broker_self_port,
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
@@ -12667,6 +12766,8 @@ impl Transport {
             cat_rts_keys_ptt: s.cat_rts_keys_ptt,
             baud: s.baud,
             icom_native_cat: s.icom_native_cat,
+            flex_native_cat: s.flex_native_cat,
+            flex_radio_ip: s.flex_radio_ip.clone(),
             rig_conn: s.rig_conn.clone(),
             rig_addr: s.rig_addr.clone(),
             omnirig_slot: s.omnirig_slot,
@@ -12716,6 +12817,10 @@ impl Transport {
             || self.omnirig_slot != o.omnirig_slot
             || self.rigctld_port != o.rigctld_port
             || self.icom_native_cat != o.icom_native_cat
+            // The Flex client's opt-in and the radio address it connects to, compared only where
+            // the client is in play: an address edit on a radio NOT opted in restarts nothing, as
+            // before the client existed.
+            || flex_client_ip(self) != flex_client_ip(o)
             || self.broker_self_port != o.broker_self_port
     }
 
@@ -13532,15 +13637,24 @@ fn open_cat(
             let native_wanted = native_civ_addr(t).is_some() && ptt_line.is_none();
             probe.detail = with_backend(
                 probe.detail,
-                match proc.omni() {
-                    Some(d) => omnirig_backend_label(d.slot()),
-                    None => {
+                match (proc.omni(), proc.flex()) {
+                    (Some(d), _) => omnirig_backend_label(d.slot()),
+                    (None, Some(_)) => "Nexus's Flex client (Beta)",
+                    (None, None) if flex_client_ip(t).is_some() => {
+                        "Hamlib rigctld — Nexus's Flex client didn't start"
+                    }
+                    (None, None) => {
                         cat_backend_label(native_wanted, Some(matches!(proc, CatDaemon::Native(_))))
                     }
                 },
             );
             if let Some(e) = native_fallback {
-                probe.detail = format!("{} Native CI-V start error: {e}.", probe.detail);
+                let which = if flex_client_ip(t).is_some() {
+                    "Flex client"
+                } else {
+                    "Native CI-V"
+                };
+                probe.detail = format!("{} {which} start error: {e}.", probe.detail);
             }
             // The link did not come up: hand the operator the DAEMON's own diagnosis rather
             // than only our outside-in one. Hamlib's is scraped off its stderr ring
@@ -13557,7 +13671,7 @@ fn open_cat(
                             probe.detail = format!("{} {e}", probe.detail);
                         }
                     }
-                    CatDaemon::Native(_) => {}
+                    CatDaemon::Native(_) | CatDaemon::Flex(_) => {}
                 }
             }
             (rig, Some(proc), probe)
@@ -28773,6 +28887,8 @@ mod tests {
             control_lines: crate::rigctld_proc::ControlLines::hold_low(),
             baud: 38400,
             icom_native_cat: false,
+            flex_native_cat: false,
+            flex_radio_ip: String::new(),
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,
@@ -28787,6 +28903,84 @@ mod tests {
             monitor_device: String::new(),
             monitor_level: 0.5,
         }
+    }
+
+    /// Nexus's own Flex client is chosen only where the operator opted the radio in AND the client
+    /// could serve it (a Flex profile with the radio's own address), from the first launch on; an
+    /// address edit on a radio not opted in restarts nothing, exactly as before the client existed.
+    #[test]
+    fn the_flex_client_serves_only_an_opted_in_flex_with_its_address() {
+        let base = || {
+            let mut t = cat_transport(4534, Some(4532));
+            t.rig_model = 2036;
+            t.rig_conn = "network".into();
+            t.rig_addr = "127.0.0.1:5002".into();
+            t
+        };
+        let mut t = base();
+        assert_eq!(flex_client_ip(&t), None, "not opted in");
+        t.flex_radio_ip = "192.0.2.20".into();
+        assert_eq!(flex_client_ip(&t), None, "an address is not an opt-in");
+        assert!(
+            !t.rig_differs(&base()),
+            "an address edit on a radio not opted in restarts nothing"
+        );
+        t.flex_native_cat = true;
+        assert_eq!(flex_client_ip(&t), Some("192.0.2.20"));
+        assert!(
+            t.rig_differs(&base()),
+            "opting in restarts CAT on the client"
+        );
+        let mut moved = t.clone();
+        moved.flex_radio_ip = "192.0.2.21".into();
+        assert!(
+            moved.rig_differs(&t),
+            "a new radio address restarts the client"
+        );
+        let mut icom = t.clone();
+        icom.rig_model = 3073;
+        assert_eq!(
+            flex_client_ip(&icom),
+            None,
+            "the opt-in means nothing elsewhere"
+        );
+        let mut blank = t.clone();
+        blank.flex_radio_ip = "  ".into();
+        assert_eq!(flex_client_ip(&blank), None, "no address, no client");
+        // The first launch: the startup config carries the opt-in, so the first daemon is the
+        // client rather than a SmartSDR CAT daemon replaced a tick later.
+        let cfg = RadioConfig {
+            rig_model: 2036,
+            rig_conn: "network".into(),
+            flex_native_cat: true,
+            flex_radio_ip: "192.0.2.20".into(),
+            ..RadioConfig::default()
+        };
+        assert_eq!(
+            flex_client_ip(&Transport::from_cfg(&cfg)),
+            Some("192.0.2.20")
+        );
+        // The live rebuild from settings, and a monitored radio's profile, read the same opt-in.
+        let s = tempo_app::settings::Settings {
+            rig_model: 2036,
+            flex_native_cat: true,
+            flex_radio_ip: "192.0.2.20".into(),
+            ..tempo_app::settings::Settings::default()
+        };
+        assert_eq!(
+            flex_client_ip(&Transport::from_settings(&s)),
+            Some("192.0.2.20")
+        );
+        let p = tempo_app::settings::RadioProfile {
+            rig_model: 2036,
+            flex_native_cat: true,
+            flex_radio_ip: "192.0.2.20".into(),
+            ..tempo_app::settings::RadioProfile::default()
+        };
+        assert_eq!(
+            flex_client_ip(&Transport::from_profile(&p)),
+            Some("192.0.2.20")
+        );
     }
 
     /// ⭐ #145 AT THE **FIRST** LAUNCH, which is the launch that keys.

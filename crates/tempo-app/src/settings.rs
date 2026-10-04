@@ -472,6 +472,21 @@ pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> b
         && !rig_conn_is_omnirig(rig_conn)
 }
 
+/// The FlexRadio profiles Nexus's own Flex client can serve: the SmartSDR CAT profile (2036) and
+/// Hamlib's native SmartSDR backend (23005), the two models the Flex settings are offered on.
+pub const FLEX_CLIENT_RIGS: [u32; 2] = [2036, 23005];
+
+/// Could Nexus's own Flex client serve this radio — a FlexRadio profile with the radio's own
+/// address set? The client talks to the radio itself (`flex_radio_ip`, the SmartSDR API's port
+/// 4992), so the profile's CAT connection and address do not enter into it.
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for the daemon choice (`tempo_audio::service` asks this), for
+/// the same reason [`native_civ_reachable`] is one. Not gated on the operator's `flex_native_cat`
+/// opt-in: that is the separate "is it switched on" question.
+pub fn flex_client_reachable(rig_model: u32, flex_radio_ip: &str) -> bool {
+    FLEX_CLIENT_RIGS.contains(&rig_model) && !flex_radio_ip.trim().is_empty()
+}
+
 impl Settings {
     /// Is the RECEIVE dial Doppler's to correct?
     ///
@@ -1647,6 +1662,14 @@ pub struct Settings {
     /// back. Mirrors `flex_native_pan`.
     #[serde(default)]
     pub flex_native_audio: bool,
+    /// Opt-in to Nexus's own FlexRadio client as the radio's CAT (Beta): Nexus connects to the
+    /// radio's SmartSDR API at `flex_radio_ip` as a client of its own, serves the transmit slice to
+    /// the radio loop as rigctld, and reports every slice. OFF by default (operator ruling,
+    /// 2026-10-03: Beta, opt-in per radio profile): SmartSDR CAT stays the default path, and the
+    /// fallback whenever the client cannot connect. Mirrors the Icom `icom_native_cat` opt-in; the
+    /// per-radio truth is `RadioProfile::flex_native_cat` and this is the active radio's mirror.
+    #[serde(default)]
+    pub flex_native_cat: bool,
 
     // --- multi-radio (dual-radio) ---
     /// Configured radios. EMPTY in older settings files → migrated to a single profile 0 mirroring
@@ -3511,6 +3534,10 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_audio`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_audio: bool,
+    /// Opt-in to Nexus's own Flex client as THIS radio's CAT (Beta; see
+    /// [`Settings::flex_native_cat`]). Per-radio, as above.
+    #[serde(default)]
+    pub flex_native_cat: bool,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -3603,6 +3630,10 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::flex_native_audio`.
     #[serde(default)]
     pub flex_native_audio: bool,
+    /// See `RadioProfile::flex_native_cat`. No serde default on purpose: the desktop form always
+    /// sends it, and a payload without it must fail loudly rather than quietly turn the opt-in
+    /// off on every save.
+    pub flex_native_cat: bool,
 }
 
 impl Settings {
@@ -3663,6 +3694,7 @@ impl RadioProfilePatch {
             p.yaesu_fix_starts = v.clone();
         }
         p.flex_native_audio = self.flex_native_audio;
+        p.flex_native_cat = self.flex_native_cat;
     }
 }
 
@@ -3774,6 +3806,7 @@ impl Default for RadioProfile {
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
+            flex_native_cat: false,
         }
     }
 }
@@ -4297,6 +4330,7 @@ impl Default for Settings {
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
+            flex_native_cat: false,
             radios: Vec::new(), // migrated to a single profile on load()
             active_radio: 0,
             radio_pegged: false,
@@ -4609,6 +4643,7 @@ impl Settings {
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
+            flex_native_cat: self.flex_native_cat,
         }
     }
 
@@ -4986,6 +5021,7 @@ impl Settings {
         self.flex_radio_ip = p.flex_radio_ip;
         self.flex_native_pan = p.flex_native_pan;
         self.flex_native_audio = p.flex_native_audio;
+        self.flex_native_cat = p.flex_native_cat;
     }
 
     /// Copy the flat mirror back INTO the active profile — so edits made through today's flat rig/
@@ -5027,6 +5063,7 @@ impl Settings {
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
+            flex_native_cat,
         ) = (
             self.ptt_method.clone(),
             self.rig_model,
@@ -5059,6 +5096,7 @@ impl Settings {
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
+            self.flex_native_cat,
         );
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == active) {
             p.ptt_method = ptt_method;
@@ -5092,6 +5130,7 @@ impl Settings {
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
+            p.flex_native_cat = flex_native_cat;
         }
     }
 
@@ -6014,6 +6053,7 @@ mod tests {
                 14.150_f64,
             )])),
             flex_native_audio: true,
+            flex_native_cat: true,
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -6350,6 +6390,7 @@ mod tests {
             yaesu_rf_scope: Some(false),
             yaesu_fix_starts: None,
             flex_native_audio: false,
+            flex_native_cat: false,
         })
         .expect("patch serializes");
         let patch_keys: Vec<&str> = patch
@@ -6499,6 +6540,7 @@ mod tests {
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
+            flex_native_cat: false,
             // Added by this branch. `yaesu_rf_scope` has a UI counterpart (`yaesuRfScope?`);
             // `yaesu_fix_starts` deliberately does NOT — its own doc says nothing writes it yet
             // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
@@ -6565,7 +6607,7 @@ mod tests {
             "txLevel": 0.9, "rxGain": 1.0,
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
-            "flexNativePan": false, "flexNativeAudio": false,
+            "flexNativePan": false, "flexNativeAudio": false, "flexNativeCat": false,
             "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
         let patch: RadioProfilePatch =
@@ -6753,6 +6795,7 @@ mod tests {
             yaesu_rf_scope: Some(p.yaesu_rf_scope),
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
+            flex_native_cat: p.flex_native_cat,
         }
     }
 

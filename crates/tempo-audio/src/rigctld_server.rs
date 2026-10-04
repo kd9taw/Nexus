@@ -168,6 +168,13 @@ pub trait RigBackend: Send + Sync {
     /// endpoint, "is VarAC actually connected?" must be answerable from the app's own
     /// connection log rather than by guesswork). Default: no-op.
     fn client_event(&self, _peer: &str, _connected: bool) {}
+    /// The radio's capabilities when they are AUTHORED by the backend rather than read out of
+    /// Hamlib (`\dump_caps`, rendered by [`crate::baud_ladder::render_caps`] in the lines the
+    /// radio loop's reader takes). `None` (the default) answers `RPRT -11`, exactly what every
+    /// backend answered before the verb existed.
+    fn caps(&self) -> Option<crate::baud_ladder::RigCaps> {
+        None
+    }
 }
 
 /// The classic protocol-0 `\dump_state` capability dump. Wide HF–UHF ranges, all
@@ -404,6 +411,10 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
     match line {
         "" => Handled::Reply(String::new()),
         "\\dump_state" => Handled::Reply(dump_state(backend)),
+        "\\dump_caps" => Handled::Reply(match backend.caps() {
+            Some(caps) => crate::baud_ladder::render_caps(&caps),
+            None => NOT_IMPLEMENTED.into(),
+        }),
         // No VFO mode → the client sends commands without an explicit VFO argument.
         "\\chk_vfo" => Handled::Reply("CHKVFO 0\n".into()),
         // ⚠️ A CONSTANT, not a reading — Nexus has no rig power state to report.
@@ -1552,6 +1563,46 @@ pub(crate) mod tests {
     /// point rather than a shortcut: that parser is itself pinned to REAL `\dump_state`
     /// replies captured from Hamlib's own `rigctld` (`tests/fixtures/dump_state_ic*.txt`),
     /// so agreeing with it is agreeing with Hamlib's format — not with our own opinion of it.
+    /// `\dump_caps` is the one verb a backend may AUTHOR its capabilities through. A backend that
+    /// does not answers exactly what every backend answered before the verb existed — the same
+    /// bytes, so it also still counts as unrecognised — and one that does is read back by the
+    /// radio loop's own reader as exactly what it authored.
+    #[test]
+    fn dump_caps_is_not_implemented_unless_the_backend_authors_its_caps() {
+        assert_eq!(reply("\\dump_caps", &MockRig::default()), NOT_IMPLEMENTED);
+        struct Authored;
+        impl RigBackend for Authored {
+            fn freq_hz(&self) -> u64 {
+                7_074_000
+            }
+            fn mode(&self) -> (String, u32) {
+                ("PKTUSB".into(), 3000)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _hz: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _m: &str, _p: u32) -> bool {
+                true
+            }
+            fn set_ptt(&self, _on: bool) -> bool {
+                true
+            }
+            fn caps(&self) -> Option<crate::baud_ladder::RigCaps> {
+                Some(crate::baud_ladder::RigCaps {
+                    rfpower_floor_milli: Some(0),
+                    vfo_read_native: true,
+                    ..Default::default()
+                })
+            }
+        }
+        let caps = crate::baud_ladder::parse_caps(&reply("\\dump_caps", &Authored));
+        assert_eq!(caps.rfpower_floor_milli, Some(0));
+        assert!(caps.vfo_read_native);
+    }
+
     #[test]
     fn dump_state_declares_the_backends_attenuator_and_preamp_steps() {
         struct Stepped;

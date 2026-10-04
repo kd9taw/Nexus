@@ -60,6 +60,11 @@ pub mod control_line;
 /// The table lives in `tempo-app`, where the engine can consult it (the engine cannot depend
 /// on this crate); re-exported here so `crate::dualrx` reads as it always did.
 pub use tempo_app::dualrx;
+/// Nexus's own FlexRadio client as a CAT daemon (Beta, opt-in per radio): the SmartSDR session,
+/// the rigctld shim for the transmit slice, and the slices' report and intents. Needs tempo-net,
+/// so it rides the `device` feature like the other Flex code.
+#[cfg(feature = "device")]
+pub mod flex;
 /// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
 #[cfg(feature = "device")]
 pub mod flexdax;
