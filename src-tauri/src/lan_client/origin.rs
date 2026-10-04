@@ -18,15 +18,21 @@
 //! 3. `Origin`, exactly `http://127.0.0.1:<port>` on the WebSocket, and never another origin on
 //!    anything else (refused: 403).
 //!
-//! **The page's words** (JSON text frames). From the page: `stations`, `pair` (`address`, `code`,
-//! `name`), `forget` (`stationId`), `connect` (`stationId`, and an `address` the operator typed, if
-//! any), `disconnect`, and on an open road the station's own `operationRequest` and
-//! `streamSignal`. To the page: `stations` (`stations`, `computer`), `paired` (`station`) or
-//! `pairRefused`, `connected` (`stationId`, `deviceId`, `sessionId`, `stationKey`, `address`) or
-//! `connectRefused`, `closed` (`stationLeft`, `connectionLost`), `answerRefused`, and the
-//! station's own `operationResponse`, `streamSignal`, `streamState` and `status`. Every refusal is
-//! a code the page says in a sentence. Anything else from the page ends the session.
-use std::net::{Ipv4Addr, SocketAddr};
+//! **The page's words** (JSON text frames). From the page: `stations`, `find`, `pair` (`address`,
+//! `code`, `name`), `forget` (`stationId`), `connect` (`stationId`, and an `address` the operator
+//! typed, if any), `disconnect`, and on an open road the station's own `operationRequest` and
+//! `streamSignal`. To the page: `stations` (`stations`, `computer`), `found` (`shacks`,
+//! `available`), `paired` (`station`) or `pairRefused`, `connected` (`stationId`, `deviceId`,
+//! `sessionId`, `stationKey`, `address`) or `connectRefused`, `closed` (`stationLeft`,
+//! `connectionLost`), `answerRefused`, and the station's own `operationResponse`, `streamSignal`,
+//! `streamState` and `status`. Every refusal is a code the page says in a sentence. Anything else
+//! from the page ends the session.
+//!
+//! **Found by name** (`find`, as ruled on 2026-10-04: "By name, or typed"). The stations Windows'
+//! own DNS-SD finds on this computer's networks (`tempo_stream::lan::dnssd`), for the pairing
+//! dialog's address field to offer: a hint, never an identity, since the road pins the key. The
+//! look runs beside the session, never in its way, so an open road's Stop never waits for it.
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +41,7 @@ use futures_util::{SinkExt, StreamExt};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::Deserialize;
 use serde_json::json;
+use tempo_stream::lan::dnssd::{Found, Unavailable};
 use tempo_stream::protocol::BrowserSignal;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -47,6 +54,7 @@ use tokio_tungstenite::WebSocketStream;
 use super::road::{self, Road, ToPage};
 use super::{address, code, hex, pairing, StationView, Stations, MAX_STATIONS};
 use crate::remote_service::lan::valid_name;
+use crate::remote_service::vault::PairedStation;
 
 /// The port the origin asks for first, beside the station's own 42075: the same one each time, so
 /// the page keeps its origin, and with it the microphone permission the operator gave it and the
@@ -61,6 +69,11 @@ const HEAD_WITHIN: Duration = Duration::from_secs(5);
 const CONNECTIONS: usize = 32;
 /// The largest message the page may send: an offer is the largest, at the stream's own bound.
 const FROM_PAGE_BYTES: usize = 16 * 1024;
+/// How long a look for stations by name listens for their answers.
+pub(crate) const FIND_FOR: Duration = Duration::from_secs(3);
+/// The longest advertised name the page is shown, in UTF-16 units as the page counts them: a
+/// station's own is "Nexus" and eight characters of its key.
+const FOUND_NAME_UNITS: usize = 64;
 /// The page's own policy: its own files and its own socket, nothing from anywhere else.
 fn policy(port: u16) -> String {
     format!(
@@ -74,12 +87,17 @@ fn policy(port: u16) -> String {
 /// The page's own files, by path (`lan.html`, `assets/…`): the bytes and their media type.
 pub(crate) type Assets = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
 
-/// All the page can reach through the origin: its own files and this computer's paired stations.
-/// No engine, no command and no other file.
+/// The stations that answer by name within a wait (`tempo_stream::lan::dnssd::find`). It blocks
+/// for that long, so it is only called on a thread that may wait.
+pub(crate) type Find = Arc<dyn Fn(Duration) -> Result<Vec<Found>, Unavailable> + Send + Sync>;
+
+/// All the page can reach through the origin: its own files, this computer's paired stations and
+/// the stations found by name. No engine, no command and no other file.
 #[derive(Clone)]
 pub(crate) struct Reach {
     pub assets: Assets,
     pub stations: Arc<Stations>,
+    pub find: Find,
     /// This computer's name, offered as the one a station shows beside its key.
     pub name: String,
 }
@@ -451,6 +469,7 @@ async fn request(
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum FromPage {
     Stations {},
+    Find {},
     Pair {
         address: String,
         code: String,
@@ -508,6 +527,19 @@ async fn stations(reach: &Reach) -> String {
     .to_string()
 }
 
+/// What a look by name found, as the page is told it: each station's advertised name (one the page
+/// can show), address, protocol and key tag, and whether the look could be made at all.
+fn found(looked: Result<Vec<Found>, Unavailable>) -> String {
+    match looked {
+        Ok(mut shacks) => {
+            shacks.retain(|shack| shack.name.encode_utf16().count() <= FOUND_NAME_UNITS);
+            json!({"type":"found","shacks":shacks,"available":true})
+        }
+        Err(Unavailable) => json!({"type":"found","shacks":[],"available":false}),
+    }
+    .to_string()
+}
+
 /// A pairing the page asked for, with what the operator typed: the station paired and kept, or
 /// why not, by name.
 async fn pair(
@@ -542,6 +574,8 @@ async fn page(
 ) {
     let (mut to_page, mut from_page) = socket.split();
     let mut road: Option<Road> = None;
+    // A look by name under way, on a thread that may wait: a second `find` has its answer.
+    let mut finding: Option<tokio::task::JoinHandle<Result<Vec<Found>, Unavailable>>> = None;
     loop {
         let told = tokio::select! {
             biased;
@@ -561,6 +595,10 @@ async fn page(
                     }
                 }
             }
+            looked = async { finding.as_mut().expect("guarded look").await }, if finding.is_some() => {
+                finding = None;
+                found(looked.unwrap_or(Err(Unavailable)))
+            }
             message = from_page.next() => {
                 let text = match message {
                     Some(Ok(Message::Text(text))) => text,
@@ -570,6 +608,13 @@ async fn page(
                 let Ok(asked) = serde_json::from_str::<FromPage>(&text) else { break };
                 match asked {
                     FromPage::Stations {} => stations(&reach).await,
+                    FromPage::Find {} => {
+                        if finding.is_none() {
+                            let find = reach.find.clone();
+                            finding = Some(tokio::task::spawn_blocking(move || find(FIND_FOR)));
+                        }
+                        continue
+                    }
                     FromPage::Pair { address, code, name } => {
                         if let Some(open) = road.take() { open.close().await }
                         match pair(&reach, &address, &code, &name).await {
@@ -624,7 +669,9 @@ async fn page(
     }
 }
 
-/// The road to station `id`, opened: the road, and what the page is told of it.
+/// The road to station `id`, opened: the road, and what the page is told of it. It is tried at the
+/// address the operator typed, then at the remembered ones, the last that worked first, and only
+/// when none of them answered, where a look by name finds the station now ([`found_at`]).
 async fn connect(
     reach: &Reach,
     id: &str,
@@ -639,7 +686,13 @@ async fn connect(
     let record = store(move || kept.get(&wanted))
         .await?
         .ok_or("unknownStation")?;
-    let (opened, at) = road::connect(&record, typed).await?;
+    let (opened, at) = match road::connect(&record, typed).await {
+        Err("unreachable") => {
+            let tried = road::order(&record, typed);
+            road::connect_at(&record, &found_at(reach, &record, &tried).await).await?
+        }
+        reached => reached?,
+    };
     // Remembered first for next time. A store that will not keep it changes nothing now.
     let kept = reach.stations.clone();
     let station = record.station_id.clone();
@@ -648,4 +701,29 @@ async fn connect(
         "deviceId":opened.ids.device,"sessionId":opened.ids.session,
         "stationKey":record.station_key,"address":at.to_string()});
     Ok((opened, told.to_string()))
+}
+
+/// Where a look by name finds the station `record` names, at addresses not in `tried`: each advert
+/// whose key tag starts the fingerprint of the key pinned for it, so another station's is never
+/// tried (it could only fail the handshake, and tell the page the key had changed).
+async fn found_at(
+    reach: &Reach,
+    record: &PairedStation,
+    tried: &[SocketAddrV4],
+) -> Vec<SocketAddrV4> {
+    let Some(pinned) = StationView::of(record) else {
+        return Vec::new();
+    };
+    let find = reach.find.clone();
+    let looked = tokio::task::spawn_blocking(move || find(FIND_FOR)).await;
+    let mut at = Vec::new();
+    for shack in looked.ok().and_then(Result::ok).unwrap_or_default() {
+        if pinned.key.starts_with(&shack.key)
+            && !tried.contains(&shack.address)
+            && !at.contains(&shack.address)
+        {
+            at.push(shack.address);
+        }
+    }
+    at
 }

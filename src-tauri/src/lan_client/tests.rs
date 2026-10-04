@@ -459,6 +459,7 @@ fn reach(store: StationStore) -> Reach {
     Reach {
         assets,
         stations: Arc::new(Stations::new(Arc::new(store))),
+        find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
     }
 }
@@ -641,5 +642,101 @@ async fn the_pages_socket_answers_its_own_words_only() {
     assert!(
         matches!(ended, Ok(None | Some(Ok(Message::Close(_))) | Some(Err(_)))),
         "the session outlived a word the page never says: {ended:?}"
+    );
+}
+
+/// The window's own page socket on `origin`: the secret in its path and the window's own origin.
+async fn page_socket(
+    origin: &Origin,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let port = origin.port();
+    let url = format!("ws://127.0.0.1:{port}/{}/socket", secret_of(origin));
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+            url.as_str(),
+        )
+        .unwrap();
+    request.headers_mut().insert(
+        "Origin",
+        format!("http://127.0.0.1:{port}").parse().unwrap(),
+    );
+    tokio_tungstenite::connect_async(request).await.unwrap().0
+}
+
+/// ★ Found by name, for the pairing dialog's address field: `find` answers `found` with each
+/// station a look found (its advertised name, address, protocol and key tag), and says whether
+/// the look could be made at all. The look runs beside the session: while it waits, the page's
+/// other words are answered, and a second `find` starts no second look. CONTROL: where Windows'
+/// name service cannot be used the list is empty and says so; a name longer than the page reads
+/// is left out, the rest kept.
+#[tokio::test]
+async fn the_pages_find_offers_the_stations_found_by_name() {
+    use tempo_stream::lan::dnssd::{Found, Unavailable};
+    let shack = Found {
+        name: "Nexus 3F2A 9B1C".into(),
+        address: "192.168.1.20:42075".parse().unwrap(),
+        protocol: 1,
+        key: "3f2a9b1c00c0ffee".into(),
+    };
+    let long = Found {
+        name: "N".repeat(65),
+        ..shack.clone()
+    };
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = Arc::new(Mutex::new(held));
+    let looks = Arc::new(AtomicUsize::new(0));
+    let (counted, found) = (looks.clone(), vec![long, shack.clone()]);
+    let origin = Origin::start(Reach {
+        find: Arc::new(move |wait| {
+            assert_eq!(wait, origin::FIND_FOR);
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = held.lock().unwrap().recv();
+            Ok(found.clone())
+        }),
+        ..reach(StationStore::default())
+    })
+    .unwrap();
+    let mut socket = page_socket(&origin).await;
+    for word in ["find", "find", "stations"] {
+        socket
+            .send(Message::Text(json!({ "type": word }).to_string().into()))
+            .await
+            .unwrap();
+    }
+    fn told(next: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>) -> Value {
+        let Some(Ok(Message::Text(text))) = next else {
+            panic!("no answer: {next:?}")
+        };
+        serde_json::from_str(&text).unwrap()
+    }
+    let first = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+    let first = told(first.expect("a look in progress held up the page's other words"));
+    assert_eq!(first["type"], "stations", "{first}");
+    release.send(()).unwrap();
+    release.send(()).unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+    assert_eq!(
+        told(answer.expect("the look found nothing to say")),
+        json!({"type":"found","available":true,"shacks":[
+            {"name":"Nexus 3F2A 9B1C","address":"192.168.1.20:42075","protocol":1,
+             "key":"3f2a9b1c00c0ffee"}]})
+    );
+    assert_eq!(looks.load(Ordering::SeqCst), 1, "a second look at once");
+    drop(origin);
+
+    let origin = Origin::start(Reach {
+        find: Arc::new(|_| Err(Unavailable)),
+        ..reach(StationStore::default())
+    })
+    .unwrap();
+    let mut socket = page_socket(&origin).await;
+    socket
+        .send(Message::Text(json!({"type":"find"}).to_string().into()))
+        .await
+        .unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+    assert_eq!(
+        told(answer.unwrap()),
+        json!({"type":"found","available":false,"shacks":[]})
     );
 }

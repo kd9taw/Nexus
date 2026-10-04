@@ -219,11 +219,15 @@ Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for 
 **Stations on this network…** is the other end of **Remote over this network**. On a Windows
 computer you operate from, it opens a Nexus window of its own for the stations this computer is
 paired with over your own network, with no internet at all. To add one, choose **Pair with a
-station…** and type the station's address and the code it shows under **Pair a computer**
-(capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
+station…**: the window looks for stations by name on your network and offers each one it finds
+("Nexus" and the first characters of its key, as the station's card shows it). Press one to use
+its address, or type the address the station shows, then the code it shows under **Pair a
+computer** (capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
 it in this computer's password store, with the station's key, the station's address and nothing
 else. **Stream** connects and opens the station's stream as the Remote page does, with the same
-**Stop TX**, **Esc** and **F11**. If the station's key ever changes (Nexus reinstalled there, or
+**Stop TX**, **Esc** and **F11**. It tries the address that worked last first; if the station is
+not there any more (a new address from the router, say), the window looks for it by name and
+connects where it is found. If the station's key ever changes (Nexus reinstalled there, or
 its network identity reset), this computer refuses it and says so: pair it again. If the two
 copies of Nexus are different versions, the window says which one to update. **Forget** deletes
 this computer's key for that station; remove this computer at the station too. If the station

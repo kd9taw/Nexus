@@ -5,7 +5,7 @@
 // typed, a station opens its stream, and control taken back by the station (a decision about the
 // hosted road there) is acquired again once, by the page, when nobody else holds it.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { LanApp, type PageSocket } from './LanApp'
 import { CLOSED_REASONS, CONNECT_REASONS, PAIR_REASONS } from './protocol'
 import { EN } from '../i18n/en'
@@ -116,6 +116,50 @@ describe('the pairing dialog', () => {
     expect(screen.getByRole('status').textContent).toBe(EN['lanWindow.pairedNow'])
     expect(screen.queryByRole('button', { name: EN['lanWindow.pairSubmit'] })).toBeNull()
     expect(last(socket.sent)).toEqual({ type: 'stations' })
+  })
+
+  it('offers the stations found by name in its address field, and a typed address still works', () => {
+    const foundAt = (name: string, address: string) => EN['lanWindow.foundAt'].replace('{{name}}', name).replace('{{address}}', address)
+    page()
+    socket.tell({ type: 'stations', stations: [], computer: 'DEN-PC' })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pair'] }))
+    // Opening the dialog looks for stations by name, and says so while it does.
+    expect(last(socket.sent)).toEqual({ type: 'find' })
+    expect(screen.getByText(EN['lanWindow.finding'])).toBeTruthy()
+    socket.tell({ type: 'found', available: true, shacks: [
+      { name: 'Nexus 3F2A 9B1C', address: '192.168.1.20:42075', protocol: 1, key: '3f2a9b1c00c0ffee' },
+      { name: 'Nexus 00C0 FFEE', address: '192.168.1.31:42075', protocol: 1, key: '00c0ffee00c0ffee' }] })
+    expect(screen.queryByText(EN['lanWindow.finding'])).toBeNull()
+    const address = screen.getByLabelText(EN['lanWindow.address']) as HTMLInputElement
+    const offered = within(screen.getByRole('group', { name: EN['lanWindow.found'] }))
+    expect(offered.getByRole('button', { name: foundAt('Nexus 3F2A 9B1C', '192.168.1.20:42075') })).toBeTruthy()
+    const shack = offered.getByRole('button', { name: foundAt('Nexus 00C0 FFEE', '192.168.1.31:42075') })
+    fireEvent.click(shack)
+    expect(address.value).toBe('192.168.1.31:42075')
+    expect(shack.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.change(screen.getByLabelText(EN['lanWindow.code']), { target: { value: '0a1b2c3d4e5f6071' } })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pairSubmit'] }))
+    expect(last(socket.sent)).toEqual({ type: 'pair', address: '192.168.1.31:42075', code: '0a1b2c3d4e5f6071', name: 'DEN-PC' })
+    // Typed still works, at an address no look found.
+    socket.tell({ type: 'pairRefused', reason: 'wrongCode' })
+    fireEvent.change(address, { target: { value: '192.168.1.44' } })
+    expect(shack.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pairSubmit'] }))
+    expect(last(socket.sent)).toEqual({ type: 'pair', address: '192.168.1.44', code: '0a1b2c3d4e5f6071', name: 'DEN-PC' })
+  })
+
+  it('says why no station was found by name, and looks again only where it can', () => {
+    page()
+    socket.tell({ type: 'stations', stations: [], computer: 'DEN-PC' })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pair'] }))
+    socket.tell({ type: 'found', available: true, shacks: [] })
+    expect(screen.getByText(EN['remote.lan.find.none'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.findAgain'] }))
+    expect(socket.sent.filter(m => m.type === 'find')).toHaveLength(2)
+    expect(screen.getByText(EN['lanWindow.finding'])).toBeTruthy()
+    socket.tell({ type: 'found', available: false, shacks: [] })
+    expect(screen.getByText(EN['remote.lan.find.unavailable'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: EN['lanWindow.findAgain'] })).toBeNull()
   })
 
   it('shows each paired station by its address and the first 128 bits of its key, never more', () => {

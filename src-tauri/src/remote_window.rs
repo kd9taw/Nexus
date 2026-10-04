@@ -321,8 +321,9 @@ pub async fn open_remote_stations_window(app: tauri::AppHandle) -> Result<(), St
 pub struct LanOrigin(Mutex<Option<Origin>>);
 
 /// What the window's page can reach: the app's own embedded files (the same the main window
-/// loads, so nothing is read from disk and nothing can differ from the shipped page), and this
-/// computer's paired stations in the OS credential store.
+/// loads, so nothing is read from disk and nothing can differ from the shipped page), this
+/// computer's paired stations in the OS credential store, and the stations Windows' own DNS-SD
+/// finds by name.
 fn reach(app: &tauri::AppHandle) -> Reach {
     let files = app.clone();
     Reach {
@@ -334,6 +335,7 @@ fn reach(app: &tauri::AppHandle) -> Reach {
             Some((asset.bytes, asset.mime_type))
         }),
         stations: Arc::new(Stations::new(Arc::new(SystemVault))),
+        find: Arc::new(tempo_stream::lan::dnssd::find),
         name: computer_name(),
     }
 }

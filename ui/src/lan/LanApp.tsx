@@ -10,7 +10,8 @@ import { useViewport } from '../useViewport'
 import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanStation, type PairReason } from './protocol'
+import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanFound, type LanStation, type PairReason } from './protocol'
+import { lanFindLine } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
 import '../remote-web/remote-site.css'
@@ -86,6 +87,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [storeFailed, setStoreFailed] = useState(false)
   const [pairing, setPairing] = useState(false)
   const [address, setAddress] = useState('')
+  const [found, setFound] = useState<{ shacks: LanFound[]; available: boolean } | null>(null)
   const [code, setCode] = useState('')
   const [name, setName] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -120,6 +122,9 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setStations(told.stations)
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
+          return
+        case 'found':
+          setFound({ shacks: told.shacks, available: told.available })
           return
         case 'paired':
           setBusy(null); setPairing(false); setCode('')
@@ -192,6 +197,13 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
     return () => { offLink(); offOps() }
   }, [road])
 
+  // The pairing dialog's address field offers the stations a look by name finds (the operator's
+  // ruling of 2026-10-04, "By name, or typed"); typing an address always works, found or not.
+  const look = () => {
+    setFound(null)
+    say({ type: 'find' })
+  }
+
   const connect = (id: string, typed?: string) => {
     connecting.current = id
     setBusy(`connect:${id}`)
@@ -244,7 +256,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           </form>}
         </div>)}
         {!pairing && <div className="remote-actions">
-          <button type="button" className="remote-button" disabled={phase !== 'open'} onClick={() => { setPairing(true); setSaid(null) }}>{t('lanWindow.pair')}</button>
+          <button type="button" className="remote-button" disabled={phase !== 'open'} onClick={() => { setPairing(true); setSaid(null); look() }}>{t('lanWindow.pair')}</button>
         </div>}
       </section>
       {pairing && <section className="rm-card remote-section remote-site-card--action" aria-label={t('lanWindow.pairTitle')}>
@@ -260,6 +272,20 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <label>{t('lanWindow.address')}<input autoComplete="off" spellCheck={false} value={address} maxLength={21} required
             onChange={event => setAddress(event.target.value)} /></label>
           <span className="settings-hint">{t('lanWindow.addressHint', { example: EXAMPLE_ADDRESS })}</span>
+          {found === null
+            ? <p className="remote-site-status" role="status">{t('lanWindow.finding')}</p>
+            : found.shacks.length === 0
+              ? <p className="settings-hint">{lanFindLine(found.available)}</p>
+              : <div role="group" aria-labelledby="lan-found">
+                <span id="lan-found" className="settings-hint">{t('lanWindow.found')}</span>
+                <div className="remote-actions">{found.shacks.map(shack =>
+                  <button type="button" key={shack.name} className="remote-button remote-button--quiet"
+                    aria-pressed={address.trim() === shack.address} onClick={() => setAddress(shack.address)}>
+                    {t('lanWindow.foundAt', { name: shack.name, address: shack.address })}</button>)}</div>
+              </div>}
+          {found?.available && <div className="remote-actions">
+            <button type="button" className="remote-button remote-button--quiet" onClick={look}>{t('lanWindow.findAgain')}</button>
+          </div>}
           <label>{t('lanWindow.code')}<input className="remote-site-code-input" autoComplete="off" spellCheck={false} value={code} maxLength={24} required
             onChange={event => setCode(event.target.value)} /></label>
           <span className="settings-hint">{t('lanWindow.codeHint')}</span>

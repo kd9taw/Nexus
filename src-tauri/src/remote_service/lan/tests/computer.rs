@@ -965,6 +965,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
         let origin = Origin::start(Reach {
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
+            find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
         })
         .unwrap();
@@ -1041,4 +1042,123 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     });
+}
+
+/// The page's connect to the station, at `typed` if the operator typed an address, and what the
+/// page is told of it.
+async fn page_connect(page: &mut Client2, typed: Option<SocketAddrV4>) -> Value {
+    let mut asked = json!({"type":"connect","stationId":STATION});
+    if let Some(typed) = typed {
+        asked["address"] = json!(typed.to_string());
+    }
+    page.send(Message::Text(asked.to_string().into()))
+        .await
+        .unwrap();
+    told(page).await
+}
+
+/// ★ Found by name, for a station that is not where it was (as ruled on 2026-10-04, "By name, or
+/// typed"), through the window's own page socket: the road is tried at the address the operator
+/// typed, then at the remembered ones, the last that worked first, and only when none of them
+/// answered, where a look by name finds this station (an advert whose key tag starts the key
+/// pinned for it). The address that welcomed it is remembered first. CONTROL: a remembered address
+/// that works is the road and no look is made; a typed one is tried first; an advert with another
+/// station's key tag is never tried, though it names a port of this one, so with only that found
+/// the answer stays `unreachable`. Skipped, saying so, on a box with no private address of its own.
+#[tokio::test]
+async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
+    use ring::digest::{digest, SHA256};
+    use tempo_stream::lan::dnssd::Found;
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let live = behind_a_port_on(&s, private, stop).await;
+    let (_stop_too, stop_too) = watch::channel(false);
+    let also = behind_a_port_on(&s, private, stop_too).await;
+    let dead = {
+        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
+        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
+            unreachable!()
+        };
+        at
+    };
+    let spki = tempo_stream::protocol::hex_bytes(&s.public_key).unwrap();
+    let tag = hex(digest(&SHA256, &spki).as_ref())[..16].to_string();
+    let advert = |address: SocketAddrV4, key: &str| Found {
+        name: "Nexus 3F2A 9B1C".into(),
+        address,
+        protocol: 1,
+        key: key.into(),
+    };
+    // Another station's advert first, at a port of this one: were it tried, it would welcome.
+    let other = advert(also, "00c0ffee00c0ffee");
+    let adverts = Arc::new(Mutex::new(vec![other.clone(), advert(live, &tag)]));
+    let looks = Arc::new(AtomicUsize::new(0));
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let origin = Origin::start(Reach {
+        assets: Arc::new(|_: &str| None),
+        stations: Arc::new(Stations::new(Arc::new(store.clone()))),
+        find: {
+            let (adverts, looks) = (adverts.clone(), looks.clone());
+            Arc::new(move |_| {
+                looks.fetch_add(1, Ordering::SeqCst);
+                Ok(adverts.lock().unwrap().clone())
+            })
+        },
+        name: "Den PC".into(),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    let remembered = |addresses: &[SocketAddrV4]| {
+        let mut kept = paired_record(&s, live);
+        kept.addresses = addresses.iter().map(|a| a.to_string()).collect();
+        stations.keep(&kept).unwrap();
+    };
+
+    remembered(&[dead]);
+    let connected = page_connect(&mut page, None).await;
+    assert_eq!(connected["type"], "connected", "{connected}");
+    assert_eq!(
+        connected["address"],
+        live.to_string(),
+        "where it is found by name, past another station's advert"
+    );
+    assert_eq!(looks.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stations.get(STATION).unwrap().unwrap().addresses,
+        [live.to_string(), dead.to_string()],
+        "remembered first for next time"
+    );
+
+    remembered(&[also, live]);
+    let connected = page_connect(&mut page, None).await;
+    assert_eq!(
+        connected["address"],
+        also.to_string(),
+        "the last that worked, first"
+    );
+    let connected = page_connect(&mut page, Some(live)).await;
+    assert_eq!(
+        connected["address"],
+        live.to_string(),
+        "the typed one, first"
+    );
+    assert_eq!(
+        looks.load(Ordering::SeqCst),
+        1,
+        "a look past one that worked"
+    );
+
+    *adverts.lock().unwrap() = vec![other];
+    remembered(&[dead]);
+    assert_eq!(
+        page_connect(&mut page, None).await,
+        json!({"type":"connectRefused","reason":"unreachable"}),
+        "the control"
+    );
+    assert_eq!(looks.load(Ordering::SeqCst), 2);
 }

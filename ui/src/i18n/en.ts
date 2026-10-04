@@ -620,7 +620,8 @@ export const EN = {
 
   // The Stations on this network window's page (lan.html). `Nexus`, `Remote over this network`, `Pair a
   // computer` (the shack's own card and button) and `Stream` are names on screen; {{address}}, {{key}}
-  // and {{example}} are a station's address, its key's fingerprint and an address, all invariant.
+  // and {{example}} are a station's address, its key's fingerprint and an address, and {{name}} the
+  // name a station advertises (`Nexus` and the start of its key), all invariant.
   "lanWindow.title": "Stations on this network",
   "lanWindow.intro": "Operate a station on this computer’s network with no internet. Pair this computer with it once, with the code it shows, then stream it here.",
   "lanWindow.opening": "Starting…",
@@ -641,6 +642,10 @@ export const EN = {
   "lanWindow.pairHint": "At the station, press Pair a computer under Remote over this network. It shows its address and a code that works once, within ten minutes.",
   "lanWindow.address": "Station address",
   "lanWindow.addressHint": "As the station shows it, like {{example}}.",
+  "lanWindow.finding": "Looking for stations on this network…",
+  "lanWindow.found": "Found by name on this network. Press one to use its address.",
+  "lanWindow.foundAt": "{{name}} at {{address}}",
+  "lanWindow.findAgain": "Look again",
   "lanWindow.code": "Pairing code",
   "lanWindow.codeHint": "The sixteen characters the station shows. Capitals or not, spaces or not.",
   "lanWindow.name": "This computer’s name",

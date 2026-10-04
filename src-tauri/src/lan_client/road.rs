@@ -236,6 +236,18 @@ async fn hello(
     }
 }
 
+/// The addresses the road to the station `record` names is tried at, in turn: `typed` first when
+/// the operator gave an address, then each remembered one, the last that worked first.
+pub(crate) fn order(record: &PairedStation, typed: Option<SocketAddrV4>) -> Vec<SocketAddrV4> {
+    let mut order: Vec<SocketAddrV4> = typed.into_iter().collect();
+    for remembered in record.addresses.iter().filter_map(|a| address(a)) {
+        if !order.contains(&remembered) {
+            order.push(remembered);
+        }
+    }
+    order
+}
+
 /// Open the road to the station `record` names: at `typed` first when the operator gave an
 /// address, then at each remembered one in turn. The road and the address that welcomed this
 /// computer, or the most telling reason none did.
@@ -243,17 +255,21 @@ pub(crate) async fn connect(
     record: &PairedStation,
     typed: Option<SocketAddrV4>,
 ) -> Result<(Road, SocketAddrV4), &'static str> {
+    connect_at(record, &order(record, typed)).await
+}
+
+/// Open the road to the station `record` names at each of `order` in turn: the road and the
+/// address that welcomed this computer, or the most telling reason none did (`unreachable`, with
+/// nowhere to try).
+pub(crate) async fn connect_at(
+    record: &PairedStation,
+    order: &[SocketAddrV4],
+) -> Result<(Road, SocketAddrV4), &'static str> {
     let key = ComputerKey::restore(&record.pkcs8).ok_or("storeUnavailable")?;
     let config =
         tls::client::config(&record.pkcs8, &record.station_key).ok_or("storeUnavailable")?;
-    let mut order: Vec<SocketAddrV4> = typed.into_iter().collect();
-    for remembered in record.addresses.iter().filter_map(|a| address(a)) {
-        if !order.contains(&remembered) {
-            order.push(remembered);
-        }
-    }
     let mut told = "unreachable";
-    for at in order {
+    for &at in order {
         let reached = tokio::time::timeout(HANDSHAKE, hello(at, config.clone(), record))
             .await
             .unwrap_or(Err("unreachable"));
