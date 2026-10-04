@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
+  as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
+  wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
 - **Remote: Stop TX is never refused.** For about a second after any stop at the station (an Esc
   over the stream's picture, a band change, a Stop TX or a logger's halt at the shack, the high-SWR
   cutoff, a switch of radio), the browser's Stop TX was refused, and the page said nothing. A
