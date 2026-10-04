@@ -6,6 +6,7 @@ import {
   parseReceivedMessage, parseStreamInput, secureAnswer, viewMessage,
 } from './stream-protocol'
 import { ANSWER, CHANNEL, FINGERPRINT, FakeMicTrack, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { MIC_LEVEL_DB, MIC_PEAK, micGain } from './mic-level'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
 const TARGET = { stationBootId: stopCase.stationBootId as string, leaseId: LEASE, transmitEpoch: stopCase.transmitEpoch as string }
@@ -808,6 +809,131 @@ it('M6: an uplink that backs up lets go of the over within 250 ms and stops the 
   h.link.holdPtt()
   expect(h.link.getSnapshot()).toMatchObject({ ptt: true, uplinkStalled: false })
   expect(h.micTracks[0].enabled).toBe(true)
+})
+
+// "Outbound is a little quiet" (the operator, 2026-10-03). The station plays what arrives at unity, so the
+// operator's level is applied here, between the browser's microphone and the line, and kept by this browser.
+it('Mic level: the microphone goes through the operator\'s level, built from the browser\'s own track, and the line carries what comes out', async () => {
+  const h = harness({ micLevel: 'ok', storedLevel: '6' })
+  await h.live()
+  expect(h.link.micLevel, 'the level this browser kept').toBe(6)
+  await h.link.setMic(true)
+  expect(h.levelGraphs).toHaveLength(1)
+  const [graph] = h.levelGraphs
+  expect(graph.from, 'the level was not built from the browser\'s microphone').toBe(h.micTracks[0])
+  expect(graph.gains).toEqual([micGain(6)])
+  expect(h.peer.mic.track, 'the line does not carry the microphone through its level').toBe(graph.track)
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'on', micProcessing: false })
+  expect(h.link.micMeter.getSnapshot().live).toBe(true)
+  // Off: the line empties, the browser's microphone stops (its indicator goes out), and so does the level.
+  await h.link.setMic(false)
+  expect(h.peer.mic.track).toBeNull()
+  expect({ microphone: h.micTracks[0].stopped, line: graph.track.stopped, level: graph.closed }).toEqual({ microphone: true, line: true, level: true })
+  expect(h.link.micMeter.getSnapshot().live).toBe(false)
+})
+
+it('Mic level: kept by this browser inside its range and applied at once; one it cannot read is today\'s level', async () => {
+  const h = harness({ micLevel: 'ok' })
+  await h.live()
+  expect(h.link.micLevel).toBe(MIC_LEVEL_DB.default)
+  await h.link.setMic(true)
+  const [graph] = h.levelGraphs
+  let told = 0
+  h.link.subscribe(() => { told++ })
+  h.link.setMicLevel(12)
+  expect({ level: h.link.micLevel, kept: h.savedLevels, applied: last(graph.gains) }).toEqual({ level: 12, kept: [12], applied: micGain(12) })
+  expect(told, 'the control was not told').toBeGreaterThan(0)
+  h.link.setMicLevel(40)
+  expect({ level: h.link.micLevel, kept: last(h.savedLevels), applied: last(graph.gains) }).toEqual({ level: MIC_LEVEL_DB.max, kept: MIC_LEVEL_DB.max, applied: micGain(MIC_LEVEL_DB.max) })
+  h.link.setMicLevel(-40)
+  expect(h.link.micLevel).toBe(MIC_LEVEL_DB.min)
+  for (const stored of ['loud', null, '']) expect(harness({ micLevel: 'ok', storedLevel: stored }).link.micLevel).toBe(MIC_LEVEL_DB.default)
+  expect(harness({ micLevel: 'ok', storedLevel: '99' }).link.micLevel, 'a kept level past the ceiling').toBe(MIC_LEVEL_DB.max)
+})
+
+it('Mic level never asks for the microphone and never keys anything: moving it sends nothing on any channel', async () => {
+  const h = harness({ micLevel: 'ok' })
+  await h.live()
+  const sent = () => ['control', 'ptt', 'audio'].map(label => h.peer.channel(label).sent.length)
+  const before = sent()
+  h.link.setMicLevel(12)
+  expect(h.micAsks, 'a level moved with the microphone off asked the browser for it').toEqual([])
+  expect(sent()).toEqual(before)
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'off', ptt: false, keyed: false })
+  await h.link.setMic(true)
+  const on = sent()
+  h.link.setMicLevel(3)
+  h.link.setMicLevel(MIC_LEVEL_DB.max)
+  expect(sent(), 'a level moved with the microphone on sent something').toEqual(on)
+  expect(h.link.getSnapshot()).toMatchObject({ ptt: false, keyed: false })
+  expect(h.micAsks).toHaveLength(1)
+})
+
+it('Mic level: a browser that cannot build the level sends the microphone as it is, and offers no level', async () => {
+  const h = harness({ micLevel: 'fails' })
+  await h.live()
+  await h.link.setMic(true)
+  expect(h.peer.mic.track).toBe(h.micTracks[0])
+  expect(h.link.getSnapshot().mic).toBe('on')
+  expect(h.link.micMeter.getSnapshot().live).toBe(false)
+  // CONTROL: a page with no level at all is the same microphone, unchanged.
+  const none = harness()
+  await none.live()
+  await none.link.setMic(true)
+  expect(none.peer.mic.track).toBe(none.micTracks[0])
+  expect(none.link.micMeter.getSnapshot().live).toBe(false)
+})
+
+it('Mic level: turned off while the level is being built, nothing goes on the line and the microphone stops', async () => {
+  const h = harness({ micLevel: 'slow' })
+  await h.live()
+  const turningOn = h.link.setMic(true)
+  for (let i = 0; i < 20 && !h.levelGraphs.length; i++) await Promise.resolve()
+  expect(h.levelGraphs).toHaveLength(1)
+  await h.link.setMic(false)
+  h.releaseLevel()
+  await turningOn
+  expect(h.peer.mic.replaced.filter(track => track !== null), 'something went on the line').toEqual([])
+  expect({ microphone: h.micTracks[0].stopped, level: h.levelGraphs[0].closed }).toEqual({ microphone: true, level: true })
+  expect(h.link.getSnapshot().mic).toBe('off')
+  expect(h.link.micMeter.getSnapshot().live).toBe(false)
+})
+
+it('M8 and M6 through the level: focus and a backed-up uplink switch the microphone and its line together', async () => {
+  const h = harness({ micLevel: 'ok' })
+  const listeners = new Map<string, () => void>()
+  h.env.window = { addEventListener: (type, f) => { listeners.set(type, f) }, removeEventListener: type => { listeners.delete(type) } }
+  await h.live()
+  await h.link.setMic(true)
+  const both = () => [h.micTracks[0].enabled, h.levelGraphs[0].track.enabled]
+  expect(both()).toEqual([true, true])
+  listeners.get('blur')!()
+  expect(both(), 'a blurred window kept sending').toEqual([false, false])
+  listeners.get('focus')!()
+  expect(both()).toEqual([true, true])
+  h.link.holdPtt()
+  const ptt = h.peer.channel('ptt')
+  ptt.bufferedAmount = STREAM_UPLINK_BUDGET_BYTES + 1
+  h.advance(100); h.advance(100); h.advance(100)
+  expect(h.link.getSnapshot().uplinkStalled).toBe(true)
+  expect(both(), 'a backed-up page kept sending').toEqual([false, false])
+  ptt.bufferedAmount = 0
+  h.link.holdPtt()
+  expect(both()).toEqual([true, true])
+})
+
+it('Mic level: the meter hears what the level sends while the microphone is on, and nothing once it is off', async () => {
+  const h = harness({ micLevel: 'ok' })
+  await h.live()
+  await h.link.setMic(true)
+  const [graph] = h.levelGraphs
+  graph.meter(0.5, false)
+  expect(h.link.micMeter.getSnapshot()).toEqual({ live: true, peak: 0.5, limited: false })
+  graph.meter(MIC_PEAK, true)
+  expect(h.link.micMeter.getSnapshot()).toEqual({ live: true, peak: MIC_PEAK, limited: true })
+  await h.link.setMic(false)
+  graph.meter(0.7, true)
+  expect(h.link.micMeter.getSnapshot()).toEqual({ live: false, peak: 0, limited: false })
 })
 
 it('shows the station\'s microphone over as the contract carries it, and refuses anything else', async () => {

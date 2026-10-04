@@ -8,6 +8,7 @@ import type { OperationView } from './operation-client'
 import type { MonitorSource } from '../remote-monitor/session'
 import { fixtureSource } from '../remote-monitor/fixtureSource'
 import { ANSWER, CHANNEL, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { MIC_PEAK, micGain } from './mic-level'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { chainOf, contrast, expandWith, parseRules, toRgb, tokensAt, winnerAt, type Mode } from '../cssCascade'
@@ -56,7 +57,7 @@ function view(initial: Partial<OperationView>, options: Parameters<typeof harnes
   return {
     // `h.peer` is a getter over the peers made so far; spreading would freeze it at none.
     link: h.link, peers: h.peers, signals: h.signals, get peer() { return h.peer }, tick: h.tick, advance: h.advance, operations, connection, video,
-    micAsks: h.micAsks, micTracks: h.micTracks,
+    micAsks: h.micAsks, micTracks: h.micTracks, levelGraphs: h.levelGraphs,
     /** The station's word on its microphone over, as the contract carries it. */
     station: (name: string) => act(() => { h.peer.channel('control').deliver(byName(CHANNEL.controlStationToBrowser, name)) }),
     set: (next: Partial<OperationView>) => act(() => { snapshot = { ...snapshot, ...next }; for (const f of listeners) f() }),
@@ -453,6 +454,44 @@ it('the microphone is off until the operator turns it on; only then does the bro
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic on' })); await Promise.resolve() })
   expect(v.micTracks[0].stopped).toBe(true)
   expect(screen.queryByText(USB_NOTE)).toBeNull()
+})
+
+// "Outbound is a little quiet" (the operator, 2026-10-03): the level the voice goes at, beside Mic.
+it('Mic level: beside Mic while it is on, read in dB, applied at once, with a meter of what is sent; CONTROL: not with the microphone off', async () => {
+  const v = view(controlling, { micLevel: 'ok' })
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  expect(screen.queryByRole('slider', { name: 'Mic level' }), 'a level with the microphone off').toBeNull()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic off' })); for (let i = 0; i < 5; i++) await Promise.resolve() })
+  const slider = screen.getByRole('slider', { name: 'Mic level' })
+  expect(slider.getAttribute('aria-valuetext')).toBe('0 dB')
+  fireEvent.change(slider, { target: { value: '6' } })
+  expect(v.link.micLevel).toBe(6)
+  expect(screen.getByRole('slider', { name: 'Mic level' }).getAttribute('aria-valuetext')).toBe('+6 dB')
+  expect(last(v.levelGraphs[0].gains)).toBeCloseTo(micGain(6), 9)
+  fireEvent.change(screen.getByRole('slider', { name: 'Mic level' }), { target: { value: '-3' } })
+  expect(screen.getByRole('slider', { name: 'Mic level' }).getAttribute('aria-valuetext')).toBe('-3 dB')
+  // The meter: the loudest of what the level sends, in dBFS, marked while the limiter holds it down.
+  act(() => { v.levelGraphs[0].meter(0.5, false) })
+  const meter = () => screen.getByRole('meter', { name: 'Microphone level sent' })
+  expect(meter().getAttribute('aria-valuenow')).toBe('-6')
+  expect(meter().hasAttribute('data-limited')).toBe(false)
+  act(() => { v.levelGraphs[0].meter(MIC_PEAK, true) })
+  expect(meter().getAttribute('data-limited')).toBe('true')
+  // Off: the control goes with the microphone.
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic on' })); await Promise.resolve() })
+  expect(screen.queryByRole('slider', { name: 'Mic level' })).toBeNull()
+  expect(screen.queryByRole('meter', { name: 'Microphone level sent' })).toBeNull()
+})
+
+it('Mic level: a browser that cannot build the level shows none, and its microphone still goes as it is', async () => {
+  const v = view(controlling, { micLevel: 'fails' })
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic off' })); for (let i = 0; i < 5; i++) await Promise.resolve() })
+  expect(screen.getByRole('button', { name: 'Mic on' })).toBeTruthy()
+  expect(v.peer.mic.track).toBe(v.micTracks[0])
+  expect(screen.queryByRole('slider', { name: 'Mic level' })).toBeNull()
 })
 
 it('R1: a press with the microphone off keys nothing, and the page says why; CONTROL: with it on, or nothing armed, nothing is said', async () => {

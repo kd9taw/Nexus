@@ -29,7 +29,9 @@
 // on - so the browser asks for nothing and sends nothing before that. Once on, the voice goes for
 // as long as the page has focus (a blurred window stops it, M8) and the station takes it only
 // while an over is armed (M5: no voice activation, ever). What the station's over is doing comes
-// back as `micState`.
+// back as `micState`. The voice goes through the operator's Mic level on its way to the line
+// (`mic-level.ts`): the station plays what arrives at unity, so this is where a quiet microphone is
+// lifted, and moving the level sends nothing and keys nothing.
 //
 // THE RELAY (the operator, 2026-10-03: "Turn on the TURN relay (Cloudflare) for networks that block a
 // direct path"). Every stream has a STUN server, and the page also asks the service for a relay:
@@ -40,6 +42,7 @@
 // RELAY_FLAG is a test switch that makes a stream use the relay alone.
 import { AudioLink, browserAudio, type AudioEnvironment } from './audio-listen'
 import { IdleWatch } from './stream-idle'
+import { MicMeter, browserMicLevel, micGain, micLevel, type MicLevelEnvironment, type MicLevelGraph } from './mic-level'
 import {
   MIC_CONSTRAINTS, STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS,
   STREAM_HELD_REASSERT_MS, STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, STREAM_UPLINK_BUDGET_BYTES,
@@ -160,6 +163,9 @@ export type StreamEnvironment = {
   /** This site's microphone permission as the browser states it now (`granted`, `denied` or `prompt`), or
    *  null where it cannot say. Read only after the browser refused the microphone (`micDenial`). */
   micPermission?: () => Promise<string | null>
+  /** The operator's Mic level, built around the microphone when it is turned on, and where this browser keeps
+   *  it. Absent, or where the browser cannot build it, the microphone goes as it is. */
+  micLevel?: MicLevelEnvironment
   /** Wraps a lone track in a stream when the station's answer names none. */
   mediaStream: (track: unknown) => unknown
   audio: AudioEnvironment
@@ -281,9 +287,15 @@ export class StreamLink {
   private attempts = 0
   /** Removes the hidden/pagehide/blur listeners; set while a stream is running. */
   private unwatchPage: (() => void) | undefined
-  /** The microphone's line and, while it is on, its track. */
+  /** The microphone's line and, while it is on, the track it carries: the microphone through the level, or the
+   *  microphone itself where the level could not be built. `micRaw` is the browser's own track, and `micGraph`
+   *  the level around it. */
   private micSender: SenderLike | null = null
   private micTrack: MicTrackLike | null = null
+  private micRaw: MicTrackLike | null = null
+  private micGraph: MicLevelGraph | null = null
+  /** The operator's Mic level in dB, remembered by this browser. */
+  private level: number
   /** Whether the page has the focus: a microphone that is on sends only while it does (M8). */
   private focused = true
   /** Since when the `ptt` channel's send queue has stood over its budget (M6), or null. */
@@ -297,6 +309,8 @@ export class StreamLink {
    *  with each stream, and every re-assertion of a held PTT or of what the picture holds counts, so
    *  a press held down is never idle; the page adds its clicks and keys and decides what follows. */
   readonly idle: IdleWatch
+  /** What the microphone is sending, for the meter beside the Mic level. */
+  readonly micMeter = new MicMeter()
 
   constructor(private readonly signal: (payload: BrowserStreamPayload, leaseId: string) => void, private readonly env: StreamEnvironment) {
     this.audio = new AudioLink(message => {
@@ -305,10 +319,26 @@ export class StreamLink {
       if (state) queueMicrotask(() => this.audio.receive(state))
     }, env.audio)
     this.idle = new IdleWatch(() => this.env.now())
+    let stored: unknown = null
+    try { stored = env.micLevel?.store?.load() } catch { /* the default, then */ }
+    this.level = micLevel(stored)
   }
 
   subscribe = (f: () => void): (() => void) => { this.listeners.add(f); return () => { this.listeners.delete(f) } }
   getSnapshot = (): StreamView => this.view
+  /** The operator's Mic level in dB. */
+  get micLevel(): number { return this.level }
+
+  /** The operator's Mic level, kept by this browser and applied at once. It changes how loud the voice goes and
+   *  nothing else: it asks the browser for nothing, sends the station nothing, and keys nothing. */
+  setMicLevel(db: number): void {
+    const level = micLevel(db)
+    if (level === this.level) return
+    try { this.env.micLevel?.store?.save(level) } catch { /* this session only */ }
+    this.level = level
+    this.micGraph?.gain(micGain(level))
+    for (const f of this.listeners) f()
+  }
 
   /** Offer a stream under `leaseId`, the lease this browser's session holds right now. Refuses -
    *  creating nothing and sending nothing - without one. */
@@ -465,14 +495,26 @@ export class StreamLink {
     }
     // The stream ended, or the operator turned it off again, while the browser asked.
     if (this.micSender !== sender || !this.micAsking()) { try { track.stop() } catch { /* already stopped */ } return }
-    this.micTrack = track
-    track.enabled = this.focused && !this.view.uplinkStalled
     // A request that "succeeded" proves nothing: some browsers keep the processing on and say so
     // only here. The operator is told; the audio still goes, because refusing it would be worse.
     const settings = track.getSettings?.() ?? {}
     const processing = settings.echoCancellation === true || settings.noiseSuppression === true || settings.autoGainControl === true
-    try { await sender.replaceTrack(track) } catch { this.micOff(); this.set({ mic: 'unavailable' }); return }
+    // The operator's level, between the microphone and the line. A browser that cannot build it sends the
+    // microphone as it is, as every stream did before there was a level.
+    const graph = await this.levelGraph(track)
+    if (this.micSender !== sender || !this.micAsking()) { graph?.close(); try { track.stop() } catch { /* already stopped */ } return }
+    this.micRaw = track
+    this.micGraph = graph
+    this.micTrack = graph?.track ?? track
+    if (graph) this.micMeter.start()
+    this.micEnabled(this.focused && !this.view.uplinkStalled)
+    try { await sender.replaceTrack(this.micTrack) } catch { this.micOff(); this.set({ mic: 'unavailable' }); return }
     this.set({ mic: 'on', micProcessing: processing })
+  }
+  private async levelGraph(track: MicTrackLike): Promise<MicLevelGraph | null> {
+    const build = this.env.micLevel?.graph
+    if (!build) return null
+    try { return await build(track, micGain(this.level), (peak, limited) => { if (this.micGraph) this.micMeter.report(peak, limited) }) } catch { return null }
   }
 
   /** PTT pressed: a fresh hold id, re-asserted every STREAM_PTT_REASSERT_MS until released. The
@@ -639,15 +681,23 @@ export class StreamLink {
   }
   private focus(focused: boolean): void {
     this.focused = focused
-    if (this.micTrack) this.micTrack.enabled = focused && !this.view.uplinkStalled
+    this.micEnabled(focused && !this.view.uplinkStalled)
+  }
+  /** The microphone sends, or is silent: the browser's track and the line's together, so the meter beside the
+   *  level shows what goes. */
+  private micEnabled(on: boolean): void {
+    if (this.micRaw) this.micRaw.enabled = on
+    if (this.micTrack) this.micTrack.enabled = on
   }
   /** Read fresh: the browser's prompt is awaited, and the operator may have turned it off meanwhile. */
   private micAsking(): boolean { return this.view.mic === 'asking' }
   private micOff(): void {
-    const track = this.micTrack
-    this.micTrack = null
+    const track = this.micTrack, raw = this.micRaw, graph = this.micGraph
+    this.micTrack = null; this.micRaw = null; this.micGraph = null
+    this.micMeter.stop()
     if (this.micSender) void this.micSender.replaceTrack(null).catch(() => {})
-    try { track?.stop() } catch { /* already stopped */ }
+    for (const stopping of new Set([track, raw])) { try { stopping?.stop() } catch { /* already stopped */ } }
+    graph?.close()
   }
   /** M6 over WebRTC. Every re-assertion of the over (a hold, the held keys) is a send on `ptt`; a
    *  send queue that stays over its budget for STREAM_UPLINK_STALL_MS means the uplink has backed
@@ -658,7 +708,7 @@ export class StreamLink {
     const ptt = this.channels?.ptt
     if (!ptt || ptt.bufferedAmount <= STREAM_UPLINK_BUDGET_BYTES) {
       this.backedUpSince = null
-      if (this.view.uplinkStalled) { this.set({ uplinkStalled: false }); if (this.micTrack) this.micTrack.enabled = this.focused }
+      if (this.view.uplinkStalled) { this.set({ uplinkStalled: false }); this.micEnabled(this.focused) }
       return false
     }
     const now = this.env.now()
@@ -666,7 +716,7 @@ export class StreamLink {
     if (now - this.backedUpSince < STREAM_UPLINK_STALL_MS) return false
     if (!this.view.uplinkStalled) {
       this.set({ uplinkStalled: true })
-      if (this.micTrack) this.micTrack.enabled = false
+      this.micEnabled(false)
       this.releasePtt()
       this.heldSet = null
       clearInterval(this.heldTimer); this.heldTimer = undefined
@@ -906,6 +956,7 @@ export function browserStream(): StreamEnvironment {
     micPermission: async () => {
       try { return (await navigator.permissions.query({ name: 'microphone' })).state } catch { return null }
     },
+    micLevel: browserMicLevel(),
     mediaStream: track => new MediaStream([track as MediaStreamTrack]),
     audio: browserAudio(),
     uuid: () => crypto.randomUUID(),

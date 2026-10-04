@@ -55,6 +55,16 @@ export class FakeMicTrack {
   stop() { this.stopped = true }
   getSettings() { return this.settings }
 }
+/** The operator's level as the page builds it: the track it was built from, every gain it was given,
+ *  its line's own track, the meter it reports to, and whether it was closed. */
+export class FakeLevelGraph {
+  readonly track = new FakeMicTrack()
+  readonly gains: number[]
+  closed = false
+  constructor(readonly from: unknown, gain: number, readonly meter: (peak: number, limited: boolean) => void) { this.gains = [gain] }
+  gain(linear: number) { this.gains.push(linear) }
+  close() { this.closed = true }
+}
 export class FakePeer implements PeerLike {
   /** The ICE servers the page built this peer with. */
   constructor(readonly iceServers: readonly IceServerLike[] = []) {}
@@ -106,13 +116,21 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
    *  permission as the browser states it afterwards: null where it cannot say, absent where the page cannot ask. */
   micRefusal?: string; micPermission?: 'granted' | 'denied' | 'prompt' | null; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>);
   /** The service's relay, when the page has one to ask; `refuseRelay` is a browser that will not build a peer with it. */
-  relay?: () => Promise<unknown>; refuseRelay?: boolean } = {}) {
+  relay?: () => Promise<unknown>; refuseRelay?: boolean
+  /** The operator's Mic level: a browser that builds it (`ok`), one that cannot (`fails`), one that builds it only when
+   *  the test says (`slow`, with `releaseLevel`); absent, a page with no level at all. `storedLevel` is what this browser
+   *  kept, as its storage hands it back. */
+  micLevel?: 'ok' | 'fails' | 'slow'; storedLevel?: unknown } = {}) {
   let clock = 1000
   const peers: FakePeer[] = []
   const signals: { payload: BrowserStreamPayload; leaseId: string }[] = []
   /** Every time the page asked the browser for the microphone, with what it asked for. */
   const micAsks: unknown[] = []
   const micTracks: FakeMicTrack[] = []
+  /** Every level the page built, and every level it asked this browser to keep. */
+  const levelGraphs: FakeLevelGraph[] = []
+  const savedLevels: number[] = []
+  let releaseLevel = () => {}
   /** Where the page's picture area reports its size, while the link watches it. */
   let report: ((width: number, height: number) => void) | null = null
   let ids = 0
@@ -134,6 +152,16 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
       return Promise.resolve(track)
     },
     micPermission: options.micPermission === undefined ? undefined : async () => options.micPermission ?? null,
+    micLevel: options.micLevel === undefined ? undefined : {
+      graph: async (track, gain, meter) => {
+        if (options.micLevel === 'fails') throw new DOMException('No AudioWorklet', 'NotSupportedError')
+        const graph = new FakeLevelGraph(track, gain, meter)
+        levelGraphs.push(graph)
+        if (options.micLevel === 'slow') await new Promise<void>(resolve => { releaseLevel = resolve })
+        return graph
+      },
+      store: { load: () => options.storedLevel ?? null, save: db => { savedLevels.push(db) } },
+    },
     mediaStream: track => ({ wrapped: track }),
     audio: silentAudio,
     uuid: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
@@ -145,8 +173,10 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
   const video = new FakeVideo()
   link.attachVideo(video)
   return {
-    link, env, peers, signals, video, micAsks, micTracks,
+    link, env, peers, signals, video, micAsks, micTracks, levelGraphs, savedLevels,
     get peer() { return peers[peers.length - 1] },
+    /** A `slow` level is built now. */
+    releaseLevel: () => releaseLevel(),
     advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms) },
     /** Move the link's clock only, for tests on real timers. */
     tick: (ms: number) => { clock += ms },

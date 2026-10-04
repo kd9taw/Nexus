@@ -68,6 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the browser remembers your setting. A strong signal is held just under full scale instead of
   clipping. The faint hiss that marks a gap in the audio follows the volume, so it stays under the
   band.
+- **Remote streaming: a Mic level for your voice.** Your voice went to the rig at your microphone's own
+  level, because the stream page keeps the browser's automatic gain off (it pumps the level and
+  fights the rig's ALC), so a quiet microphone, such as a laptop's built-in one, sounded quiet on the
+  air. Nexus at the shack passes the voice on as it arrives, within half a dB, so the fix is on the
+  page: **Mic level**, beside **Mic on**, raises your voice by up to 20 dB or lowers it by up to 12,
+  and your browser remembers it. Its bar shows how loud your voice goes: raise it until your loudest
+  words reach the end. At any setting every peak is held 3 dB under full scale, so your voice never
+  clips on its way to the rig. It starts at your microphone's own level. The rig's own level for USB
+  audio still applies (Icom: USB MOD Level; FTDX10: RPORT GAIN in the SSB menu). It needs the Remote
+  page's update.
 - **Remote streaming: the microphone message names the real cause.** Whatever kept the stream page
   from your microphone, it said the browser did not allow it and to allow it in the browser's
   settings for this site, which sent you to the wrong place whenever something else had stopped

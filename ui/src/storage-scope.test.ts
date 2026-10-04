@@ -217,6 +217,9 @@ const SHARED = [
   // The Remote listener's volume (remote-web/audio-listen, 2026-10-03). SHARED: how loud this
   // browser plays the station is the listener's choice, not one window's, like the alert opt-ins.
   'nexus.remote.listenVolume',
+  // The Remote operator's Mic level (remote-web/mic-level, 2026-10-03). SHARED for the same reason: how
+  // loud this browser's microphone goes is a fact about the operator's microphone, not one window.
+  'nexus.remote.micLevel',
   // Remote need alerts, opted in per browser. SHARED like autopop: whether this operator wants
   // to be told about new needs is not a fact about one window (remote-web/useNeedAlerts).
   'nexus.remote.needAlerts',

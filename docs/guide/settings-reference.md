@@ -131,8 +131,8 @@ window is sent: a dialog that opens outside it, such as a file picker, is not, a
 minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
 anything else on this computer. While a browser is attached, every transmission at the
 station stops within five seconds if its connection drops, and within seven if its picture
-freezes. In Phone, the browser can talk on the rig with its own microphone; see
-[Talk from Remote](phone.md#talk-from-remote).
+freezes. In Phone, the browser can talk on the rig with its own microphone, at a **Mic level**
+that browser remembers; see [Talk from Remote](phone.md#talk-from-remote).
 
 **How long a browser stays approved.** An approval lasts 30 days, and each time that browser
 opens the station it moves on to 30 days from then, up to 90 days after you approved it here.
