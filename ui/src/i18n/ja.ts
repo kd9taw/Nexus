@@ -3595,6 +3595,8 @@ export const JA: PartialCatalog = {
   "settings.rigControl.flexPan.hint": "このFlexRadioの実際のSmartSDRパナアダプター（VITA-49 FFT）をコックピットのスコープにストリーミングします。ダイヤル周辺のRFスペクトラムを、Flexのスパン/リファレンス操作付きで表示します。<b>実機では未検証</b>のためオプトインです。FlexのIP設定（「無線機を検出」から）と、このネットワークからSmartSDRに到達できることが必要です。スコープが表示されない、またはアプリが引っかかる場合はオフに戻してください。保存で適用されます。",
   "settings.rigControl.flexAudio.label": "FlexネイティブDAXオーディオ（早期アクセス）",
   "settings.rigControl.flexAudio.hint": "「DAX Audio RX」/「DAX TX」サウンドデバイス — <b>リモートデスクトップでは見えません</b> — の代わりに、このFlexRadioのオーディオを直接ネットワーク経由（VITA-49 DAX）でやり取りします。<b>双方向です:</b> デコーダーは無線機の受信オーディオを直接読み取り、送信オーディオもDAX経由で送られます。この間、無線機のマイクは切り離されます。オフにする、無線機を切り替える、またはNexusを終了するとマイクは元に戻ります。<b>実機では未検証</b>のオプトインです。FlexのIP設定とSmartSDRへの到達が必要です。デコードや送信が止まった場合はオフに戻してください。保存で適用されます。",
+  "settings.rigControl.flexClient.label": "Flexネイティブクライアント（ベータ）",
+  "settings.rigControl.flexClient.hint": "Nexusは<b>FlexのIP</b>で無線機に直接接続し、SmartSDRクライアントの一つとして自身のスライスでCATとPTTを扱います。ベータ版で<b>実機では未検証</b>です。送信はまずダミーロードで試してください。Nexusが接続できない場合はSmartSDR CATに戻ります。保存で適用されます。",
   "settings.rigControl.civLog.label": "CI-Vバス診断ログ",
   "settings.rigControl.civLog.failed": "CI-V診断ログを切り替えられませんでした",
   "settings.rigControl.civLog.recording": "<code>{{path}}</code>に<b>記録中</b>です。他の画面を開いている間も記録は続くので、今すぐFT8またはPhoneコックピットへ移動して問題を再現してください（チューンまたは送信）。終わったらここに戻ってオフにし、そのファイルを送ってください。障害発生時にバス上を流れた内容がそのまま記録されています。",

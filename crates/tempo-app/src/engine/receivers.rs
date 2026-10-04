@@ -62,6 +62,20 @@
 //! names Main on the wire for the receive-chain commands its CI-V reference marks; its dial and
 //! mode verbs are unmarked and follow the panel the same way.
 //!
+//! ## The indexed set: a radio that numbers its receivers
+//! A FlexRadio's receivers are its slices, up to eight, numbered by the radio and owned by
+//! whichever of its connected clients made them. They are [`Receiver`]s like Main and the Sub,
+//! one model for both shapes (operator ruling, 2026-10-03, "Take all three": the dual-receiver
+//! model widened to an indexed receiver set), keyed [`RxId::Slice`] by the radio's own index and
+//! carried in [`Receivers::set`]. Only Nexus's own Flex client reports them (`engine::slices`).
+//!
+//! ADDITIVE, like everything above: Main and the Sub keep their named fields and their meaning,
+//! the set is empty on every radio that names its receivers Main and Sub, and the fields only a
+//! numbered receiver has (its letter, its owner, whether it transmits, its mute) are `None` on
+//! Main and the Sub, so their snapshot is byte-identical to the one before the set existed. On a
+//! Flex served by Nexus's client, Main is still the flat fields read again, and those describe
+//! the slice the client serves as the radio's dial: the transmit slice when it is ours.
+//!
 //! ## D1: the licence gate judges the TX source
 //! [`Engine::tx_source_verdict`] is the licence gate (operator sign-off, 2026-09-23):
 //! `tx_allowed`, which every transmit path ANDs in, is its answer, and the snapshot's phone
@@ -98,6 +112,55 @@ impl RxStages {
             audio: dualrx::stage_on(model, rx, RxStage::Audio),
         }
     }
+
+    /// A FlexRadio slice. FlexRadio's API documentation (`TCPIP-slice`) gives every slice its own
+    /// noise blanker, noise reduction, notches and filter, and its own audio level, pan and mute,
+    /// so the DSP and the audio are the slice's. The front end is not one thing on a Flex: the
+    /// AGC is set per slice, while the preamp and the antenna are set on the panadapter the slice
+    /// sits on (`TCPIP-display-pan`), which other slices can share. So no single answer is true
+    /// for it, and it stays unknown (never a "no", D3).
+    pub(super) const FLEX_SLICE: RxStages = RxStages {
+        front_end: StageOwner::Unknown,
+        dsp: StageOwner::Own,
+        audio: StageOwner::Own,
+    };
+}
+
+/// WHICH RECEIVER, in the indexed set: one of the two a Main/Sub radio names, or a receiver the
+/// radio numbers itself — a FlexRadio slice, by the radio's own index.
+///
+/// ⚠️ Deliberately NOT a third `dualrx::ReceiverId`. That one names the two receivers CAT can
+/// ADDRESS (`L Sub …`, the CI-V broker's per-receiver verbs, the TX source), and a slice is not
+/// addressed through CAT at all: Nexus's Flex client serves one slice as the radio's dial and
+/// reaches the others by typed intents (`engine::slices`). Widening the CAT name would hand every
+/// CAT path a receiver it has no command for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RxId {
+    Main,
+    Sub,
+    /// A slice, by the radio's index (0 is slice A).
+    Slice(u8),
+}
+
+impl From<ReceiverId> for RxId {
+    fn from(id: ReceiverId) -> Self {
+        match id {
+            ReceiverId::Main => RxId::Main,
+            ReceiverId::Sub => RxId::Sub,
+        }
+    }
+}
+
+/// Whose a receiver is, where the radio says: a FlexRadio reports the client that owns each
+/// slice. Nexus never touches a receiver that is not [`RxOwner::Ours`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RxOwner {
+    /// This station's connection to the radio.
+    Ours,
+    /// Another client of the radio (SmartSDR, a Maestro, another program).
+    Foreign,
+    /// The radio has not said, or said something Nexus could not read.
+    Unknown,
 }
 
 /// ONE RECEIVER'S VALUES — the survey's 25 per-receiver fields, four of its unresolved ones
@@ -110,9 +173,19 @@ impl RxStages {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Receiver {
     /// Which receiver this is.
-    pub id: ReceiverId,
+    pub id: RxId,
     /// D7 — the receive stages this receiver may be credited with.
     pub stages: RxStages,
+
+    // ── What only a numbered receiver has: `None` on Main and the Sub ──
+    /// The radio's letter for it (a Flex slice's `A`…`H`).
+    pub letter: Option<String>,
+    /// Whose it is.
+    pub owner: Option<RxOwner>,
+    /// It is the receiver the radio transmits from (a Flex's transmit slice).
+    pub transmits: Option<bool>,
+    /// Its audio is muted.
+    pub muted: Option<bool>,
 
     // ── Tuning ──
     /// The receive dial, MHz.
@@ -184,10 +257,14 @@ pub struct Receiver {
 
 impl Receiver {
     /// A receiver nothing has been read from: every value unknown.
-    fn unread(id: ReceiverId, stages: RxStages) -> Self {
+    pub(super) fn unread(id: RxId, stages: RxStages) -> Self {
         Self {
             id,
             stages,
+            letter: None,
+            owner: None,
+            transmits: None,
+            muted: None,
             dial_mhz: None,
             band: None,
             sideband: None,
@@ -238,6 +315,10 @@ pub struct Receivers {
     /// D6 — may the two receivers sit where they sit now? `None` when there is no Sub in the
     /// model. [`Pairing::Unknown`] is NOT a refusal (see [`Engine::receiver_pairing_for`]).
     pub pairing: Option<Pairing>,
+    /// The receivers the radio numbers itself, in the radio's order: a Flex's slices, ours and
+    /// other clients', as Nexus's Flex client reports them (`engine::slices`). Empty on a radio
+    /// whose receivers are Main and the Sub above.
+    pub set: Vec<Receiver>,
 }
 
 /// THE LICENCE GATE'S VERDICT, judged against the TX SOURCE (D1): [`Engine::tx_allowed`] is its
@@ -299,6 +380,7 @@ impl Engine {
             sub,
             sub_capability: dualrx::sub_receiver(model),
             pairing,
+            set: self.slice_receivers(),
         }
     }
 
@@ -403,8 +485,12 @@ impl Engine {
     /// Main, built from the flat fields exactly as `Engine::snapshot` composes them.
     fn main_receiver(&self, model: u32) -> Receiver {
         Receiver {
-            id: ReceiverId::Main,
+            id: RxId::Main,
             stages: RxStages::of(model, ReceiverId::Main),
+            letter: None,
+            owner: None,
+            transmits: None,
+            muted: None,
             dial_mhz: Some(self.settings.dial_mhz),
             band: Some(self.settings.band.clone()),
             sideband: Some(self.settings.sideband.clone()),
@@ -441,7 +527,7 @@ impl Engine {
     /// The Sub, from the one Sub fact the engine has: the uplink an acknowledged split wrote
     /// into its band. Everything else stays unknown.
     fn sub_receiver(&self, model: u32) -> Receiver {
-        let mut sub = Receiver::unread(ReceiverId::Sub, RxStages::of(model, ReceiverId::Sub));
+        let mut sub = Receiver::unread(RxId::Sub, RxStages::of(model, ReceiverId::Sub));
         if let Some(up) = self.sub_uplink() {
             sub.dial_mhz = Some(up.mhz);
             sub.band = Some(band_for_dial(up.mhz).unwrap_or("").to_string());
@@ -495,7 +581,8 @@ mod tests {
         let rs = station(3078, "general", "phone", 14.250, "20m", "USB").receivers();
         assert_eq!(rs.sub_capability, CapState::Present, "IC-7610 has a Sub");
         let sub = rs.sub.expect("IC-7610 is offered a Sub");
-        assert_eq!((rs.main.id, sub.id), (ReceiverId::Main, ReceiverId::Sub));
+        assert_eq!((rs.main.id, sub.id), (RxId::Main, RxId::Sub));
+        assert!(rs.set.is_empty(), "a Main/Sub radio numbers no receivers");
         // ⭐ D7 IN ONE RADIO: Main owns every stage; the Sub owns its front end and its AF (Icom:
         // "independent AF/RF knobs"), but no vendor statement gives it its own DSP.
         assert_eq!(rs.main.stages, OWN_ALL);

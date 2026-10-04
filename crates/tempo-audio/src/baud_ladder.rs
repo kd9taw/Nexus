@@ -306,6 +306,40 @@ pub fn parse_caps(dump_caps: &str) -> RigCaps {
     caps
 }
 
+/// [`RigCaps`] as the `--dump-caps` lines [`parse_caps`] reads — for a backend whose capabilities
+/// are AUTHORED rather than read out of Hamlib (Nexus's own Flex client), so the radio loop's one
+/// reader takes them unchanged. Only the lines [`parse_caps`] reads are written: this is not a
+/// Hamlib dump, and nothing else should parse it as one.
+pub fn render_caps(caps: &RigCaps) -> String {
+    let mut out = String::new();
+    if let Some((lo, hi)) = caps.serial_rates {
+        out.push_str(&format!("Serial speed: {lo}..{hi} baud\n"));
+    }
+    out.push_str("RX ranges #1 for all regions:\n");
+    for (lo, hi) in &caps.rx_coverage {
+        out.push_str(&format!("\t{lo} Hz - {hi} Hz\n"));
+    }
+    let (split_vfo, split_freq, targetable) = match caps.split_detect {
+        SplitDetect::Native => ('Y', 'Y', "FREQ"),
+        SplitDetect::Emulated => ('E', 'E', "None"),
+        SplitDetect::Absent => ('N', 'N', "None"),
+    };
+    out.push_str(&format!("Targetable features: {targetable}\n"));
+    out.push_str(&format!("Can get Split VFO: {split_vfo}\n"));
+    out.push_str(&format!("Can get Split Freq: {split_freq}\n"));
+    out.push_str(&format!(
+        "Can get VFO: {}\n",
+        if caps.vfo_read_native { 'Y' } else { 'N' }
+    ));
+    if let Some(milli) = caps.rfpower_floor_milli {
+        out.push_str(&format!(
+            "Get level: RFPOWER({:.6}..1.000000/0.010000)\n",
+            f64::from(milli) / 1000.0
+        ));
+    }
+    out
+}
+
 /// Does this Icom's built-in USB enumerate TWO virtual COM ports? Only the IC-7610 and
 /// IC-9700 carry the dual-UART CP2105 ("Enhanced"/"Standard"); the IC-7300/705/905 show a
 /// single port, so "try the other COM port" advice would send their owners hunting for a
@@ -1461,6 +1495,36 @@ pub fn run(port: &str, configured_baud: u32, civ_addr: u8) -> LadderReport {
 
 #[cfg(test)]
 mod tests {
+
+    /// AUTHORED caps reach the loop through the same reader as parsed ones: what is rendered reads
+    /// back as exactly what was authored, for every split answer and with or without a floor.
+    #[test]
+    fn rendered_caps_read_back_as_authored() {
+        use super::{parse_caps, render_caps, RigCaps, SplitDetect};
+        for split_detect in [
+            SplitDetect::Native,
+            SplitDetect::Emulated,
+            SplitDetect::Absent,
+        ] {
+            for rfpower_floor_milli in [None, Some(0), Some(50)] {
+                for vfo_read_native in [false, true] {
+                    let caps = RigCaps {
+                        serial_rates: None,
+                        rx_coverage: vec![(30_000, 54_000_000), (135_000_000, 165_000_000)],
+                        split_detect,
+                        rfpower_floor_milli,
+                        vfo_read_native,
+                    };
+                    assert_eq!(parse_caps(&render_caps(&caps)), caps, "{caps:?}");
+                }
+            }
+        }
+        let rates = RigCaps {
+            serial_rates: Some((4800, 38400)),
+            ..RigCaps::default()
+        };
+        assert_eq!(parse_caps(&render_caps(&rates)), rates);
+    }
 
     /// A port refused for PERMISSIONS is not a port another program is holding, and the cure is
     /// not the same one. Reported 2026-08-28 on Ubuntu 24.04 LTS with an FT-991A: Test CAT said

@@ -745,6 +745,13 @@ pub struct ReceiversDto {
     /// than one that is not drawn.
     #[serde(default)]
     pub sub_commandable: Option<bool>,
+    /// The receivers the radio numbers itself — a FlexRadio's slices, ours and other clients',
+    /// in the radio's order, each with `id: "slice"` and its `index`. Only Nexus's own Flex client
+    /// reports them. ABSENT, not empty, on every other radio, so a Main/Sub radio's snapshot is
+    /// byte-identical to the one before this field existed; a page reads its absence as "no
+    /// numbered receivers", never as "no receivers".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set: Vec<ReceiverDto>,
 }
 
 /// ONE RECEIVER'S VALUES. Every field is named exactly as the flat [`RadioStatus`] field it
@@ -826,14 +833,51 @@ pub struct ReceiverDto {
     pub scope_span_refused: Option<String>,
     #[serde(default)]
     pub scope_error: Option<String>,
+    // ── A numbered receiver's own: ABSENT on Main and the Sub (byte-identical snapshots) ──
+    /// The radio's index for this receiver, with `id: "slice"` (0 is slice A).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u8>,
+    /// The radio's letter for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter: Option<String>,
+    /// Whose it is: `"ours"` | `"foreign"` | `"unknown"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RxOwnerDto>,
+    /// It is the receiver the radio transmits from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transmits: Option<bool>,
+    /// Its audio is muted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
 }
 
-/// Which receiver — `"main"` | `"sub"`.
+/// Which receiver — `"main"` | `"sub"` | `"slice"` (a receiver the radio numbers itself; its
+/// number is the receiver's `index`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReceiverIdDto {
     Main,
     Sub,
+    Slice,
+}
+
+/// Whose a receiver is — `"ours"` | `"foreign"` | `"unknown"` (`engine::receivers::RxOwner`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RxOwnerDto {
+    Ours,
+    Foreign,
+    Unknown,
+}
+
+impl From<crate::engine::receivers::RxOwner> for RxOwnerDto {
+    fn from(o: crate::engine::receivers::RxOwner) -> Self {
+        match o {
+            crate::engine::receivers::RxOwner::Ours => RxOwnerDto::Ours,
+            crate::engine::receivers::RxOwner::Foreign => RxOwnerDto::Foreign,
+            crate::engine::receivers::RxOwner::Unknown => RxOwnerDto::Unknown,
+        }
+    }
 }
 
 /// Whose stage it is — `"own"` | `"sharedWithMain"` | `"unknown"` (`dualrx::StageOwner`).
@@ -937,8 +981,19 @@ impl From<crate::dualrx::Pairing> for PairingDto {
 
 impl From<&crate::engine::receivers::Receiver> for ReceiverDto {
     fn from(r: &crate::engine::receivers::Receiver) -> Self {
+        use crate::engine::receivers::RxId;
+        let (id, index) = match r.id {
+            RxId::Main => (ReceiverIdDto::Main, None),
+            RxId::Sub => (ReceiverIdDto::Sub, None),
+            RxId::Slice(n) => (ReceiverIdDto::Slice, Some(n)),
+        };
         ReceiverDto {
-            id: r.id.into(),
+            id,
+            index,
+            letter: r.letter.clone(),
+            owner: r.owner.map(RxOwnerDto::from),
+            transmits: r.transmits,
+            muted: r.muted,
             stages: RxStagesDto {
                 front_end: r.stages.front_end.into(),
                 dsp: r.stages.dsp.into(),
@@ -995,6 +1050,7 @@ impl From<&crate::engine::receivers::Receivers> for ReceiversDto {
             pairing: rs.pairing.map(PairingDto::from),
             // The engine's model does not carry it; the radio loop reports it.
             sub_commandable: None,
+            set: rs.set.iter().map(ReceiverDto::from).collect(),
         }
     }
 }
@@ -4189,8 +4245,8 @@ mod winlink_dto_tests {
 #[cfg(test)]
 mod receivers_dto_tests {
     use super::*;
-    use crate::dualrx::{CapState, Pairing, ReceiverId, StageOwner};
-    use crate::engine::receivers::{Receiver, Receivers, RxStages};
+    use crate::dualrx::{CapState, Pairing, StageOwner};
+    use crate::engine::receivers::{Receiver, Receivers, RxId, RxOwner, RxStages};
 
     /// A receiver in which no two fields of the same type hold the same value, so a crossed
     /// wire — RF gain read into squelch, the refused dial into the dial — cannot pass. The four
@@ -4203,7 +4259,11 @@ mod receivers_dto_tests {
             (Some(true), Some(false), None, Some(true))
         };
         Receiver {
-            id: ReceiverId::Sub,
+            id: RxId::Sub,
+            letter: None,
+            owner: None,
+            transmits: None,
+            muted: None,
             stages: RxStages {
                 front_end: StageOwner::Own,
                 dsp: StageOwner::SharedWithMain,
@@ -4288,6 +4348,71 @@ mod receivers_dto_tests {
         }
     }
 
+    /// A Flex slice of another client's, every value set and no two alike.
+    fn slice() -> Receiver {
+        let mut r = receiver(true);
+        r.id = RxId::Slice(2);
+        r.letter = Some("C".into());
+        r.owner = Some(RxOwner::Foreign);
+        r.transmits = Some(true);
+        r.muted = Some(false);
+        r
+    }
+
+    /// ⭐ A SLICE CROSSES THE WIRE as `id: "slice"` with the radio's index, letter and owner and
+    /// its transmit and mute flags, beside every value a receiver has — and Main and the Sub
+    /// carry none of those five keys at all (the byte-identical half of the indexed set).
+    #[test]
+    fn a_slice_crosses_the_wire_with_its_index_owner_and_flags() {
+        let got = serde_json::to_value(ReceiverDto::from(&slice())).unwrap();
+        assert_eq!(got["id"], "slice");
+        assert_eq!(got["index"], 2);
+        assert_eq!(got["letter"], "C");
+        assert_eq!(got["owner"], "foreign");
+        assert_eq!(got["transmits"], true);
+        assert_eq!(got["muted"], false);
+        assert_eq!(got["dialMhz"], 145.965, "a slice's values are a receiver's");
+        for owner in [RxOwner::Ours, RxOwner::Foreign, RxOwner::Unknown] {
+            let mut s = slice();
+            s.owner = Some(owner);
+            let word = serde_json::to_value(ReceiverDto::from(&s)).unwrap()["owner"].clone();
+            assert_eq!(
+                word,
+                match owner {
+                    RxOwner::Ours => "ours",
+                    RxOwner::Foreign => "foreign",
+                    RxOwner::Unknown => "unknown",
+                }
+            );
+        }
+        for r in [receiver(false), receiver(true)] {
+            let wire = serde_json::to_value(ReceiverDto::from(&r)).unwrap();
+            for key in ["index", "letter", "owner", "transmits", "muted"] {
+                assert!(
+                    wire.get(key).is_none(),
+                    "{key} on a Main/Sub receiver: {wire}"
+                );
+            }
+        }
+        let rs = Receivers {
+            main: receiver(false),
+            sub: None,
+            sub_capability: CapState::Unknown,
+            pairing: None,
+            set: vec![],
+        };
+        let wire = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
+        assert!(wire.get("set").is_none(), "an empty set is absent: {wire}");
+        let rs = Receivers {
+            set: vec![slice()],
+            ..rs
+        };
+        let wire = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
+        assert_eq!(wire["set"][0]["index"], 2);
+        let back: ReceiversDto = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, ReceiversDto::from(&rs), "round trip");
+    }
+
     /// UNKNOWN is null, never a zero or an "A": a receiver nothing was read from crosses the
     /// wire with every value null and its identity intact.
     #[test]
@@ -4344,7 +4469,7 @@ mod receivers_dto_tests {
     fn the_receiver_set_says_why_a_sub_is_missing_and_how_a_pair_stands() {
         let main = || {
             let mut m = receiver(false);
-            m.id = ReceiverId::Main;
+            m.id = RxId::Main;
             m
         };
         for (cap, word) in [
@@ -4357,6 +4482,7 @@ mod receivers_dto_tests {
                 sub: None,
                 sub_capability: cap,
                 pairing: None,
+                set: vec![],
             };
             let got = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
             assert_eq!(got["subCapability"], word);
@@ -4382,6 +4508,7 @@ mod receivers_dto_tests {
                 sub: Some(receiver(true)),
                 sub_capability: CapState::Present,
                 pairing: Some(pairing),
+                set: vec![],
             };
             let got = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
             assert_eq!(got["pairing"]["state"], state);
@@ -4423,18 +4550,31 @@ mod receivers_dto_tests {
     #[test]
     fn the_typescript_mirror_declares_exactly_the_serialized_keys() {
         let mut main = receiver(false);
-        main.id = ReceiverId::Main;
+        main.id = RxId::Main;
         let rs = Receivers {
             main,
             sub: Some(receiver(true)),
             sub_capability: CapState::Present,
             pairing: Some(Pairing::Allowed),
+            set: vec![],
         };
         let mut dto = ReceiversDto::from(&rs);
         dto.sub_commandable = Some(true);
+        dto.set = vec![ReceiverDto::from(&slice())];
         let wire = serde_json::to_value(&dto).unwrap();
-        for (interface, obj) in [("ReceiversStatus", &wire), ("ReceiverStatus", &wire["sub"])] {
-            let mut want: Vec<String> = obj.as_object().unwrap().keys().cloned().collect();
+        let keys = |v: &serde_json::Value| -> Vec<String> {
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        // A receiver's keys are the union of what Main/Sub and a slice carry: the slice's own
+        // fields are absent from the other two.
+        let mut receiver_keys = keys(&wire["sub"]);
+        receiver_keys.extend(keys(&wire["set"][0]));
+        receiver_keys.sort();
+        receiver_keys.dedup();
+        for (interface, mut want) in [
+            ("ReceiversStatus", keys(&wire)),
+            ("ReceiverStatus", receiver_keys),
+        ] {
             let mut got = ts_keys(interface);
             want.sort();
             got.sort();
@@ -4454,12 +4594,13 @@ mod receivers_dto_tests {
         let rs = Receivers {
             main: {
                 let mut m = receiver(false);
-                m.id = ReceiverId::Main;
+                m.id = RxId::Main;
                 m
             },
             sub: None,
             sub_capability: CapState::Unknown,
             pairing: None,
+            set: vec![],
         };
         let mut v = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
         let back: ReceiversDto = serde_json::from_value(v.clone()).unwrap();

@@ -64,6 +64,7 @@ import type {
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
+import type { SliceIntent } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
@@ -1968,6 +1969,18 @@ export async function setSubLevel(level: 'rf' | 'af' | 'sql', value: number): Pr
   return invoke<AppSnapshot>('set_sub_level', { level, value })
 }
 
+/** Ask for a change to one of a FlexRadio's slices through Nexus's own Flex client — a slice of
+ * ours that is not the transmit slice (the transmit slice follows the radio's dial). `index` is
+ * the radio's slice number (0 is slice A). The radio's own report shows the result in a later
+ * snapshot's `radio.receivers.set`.
+ *
+ * REJECTS, with the reason, where it could not or must not reach the slice: no Flex client
+ * serving this radio, no such slice, another program's slice, the transmit slice, or a value a
+ * slice cannot take. */
+export async function setSlice(index: number, intent: SliceIntent): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_slice', { index, intent })
+}
+
 /** Set the TRANSMIT-MONITOR gain (0.0–1.0) — how loud the rig plays your own audio back
  * while you are talking. Its on/off half is `setRigFunc('monitor', …)`.
  *
@@ -2263,6 +2276,8 @@ export interface RadioProfilePatch {
   yaesuFixStarts?: Record<string, number>
   /** This radio's native-DAX-audio opt-in (per-radio, as above). */
   flexNativeAudio: boolean
+  /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
+  flexNativeCat: boolean
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio

@@ -17896,6 +17896,27 @@ fn set_sub_level(
     Ok(eng.snapshot())
 }
 
+/// Ask for a change to one of a FlexRadio's slices — a slice of ours that is not the transmit
+/// slice — through Nexus's own Flex client. `index` is the radio's slice number (0 is slice A);
+/// `intent` is a typed request (`{"kind":"tune","mhz":7.0355}`, `{"kind":"mute","muted":true}`,
+/// …). The radio loop sends it while nothing is keyed, and the radio's own report shows the
+/// result in the next snapshot's `radio.receivers.set`.
+///
+/// REFUSED with the reason where it could not or must not reach the slice: no Flex client serving
+/// this radio, no such slice, another client's slice, the transmit slice (it follows the radio's
+/// dial and the transmit gates), or a value that cannot be sent.
+#[tauri::command(async)]
+fn set_slice(
+    state: State<'_, SharedEngine>,
+    index: u8,
+    intent: tempo_app::engine::slices::SliceIntent,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.request_slice(index, intent)
+        .map_err(|refusal| refusal.to_string())?;
+    Ok(eng.snapshot())
+}
+
 /// Set the TRANSMIT-MONITOR GAIN as a 0.0–1.0 fraction — how loud the rig plays your own
 /// audio back while you are talking. Its on/off half is the `MON` func, reached through
 /// [`set_rig_func`] as `"monitor"`.
@@ -30133,6 +30154,8 @@ pub fn run() {
         omnirig_slot: settings.omnirig_slot,
         rigctld_port: settings.rigctld_port,
         icom_native_cat: settings.icom_native_cat,
+        flex_native_cat: settings.flex_native_cat,
+        flex_radio_ip: settings.flex_radio_ip.clone(),
         broker_self_port: if settings.cat_broker {
             Some(settings.cat_broker_port)
         } else {
@@ -32255,6 +32278,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_rf_gain,
             set_squelch,
             set_sub_level,
+            set_slice,
             set_agc,
             set_split,
             set_rig_func,
