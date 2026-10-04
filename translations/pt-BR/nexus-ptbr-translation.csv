@@ -3346,7 +3346,7 @@
 "5","sstv.viewer.close.label","Close","","","Short label on: SSTV view — the picture viewer. The same English text ""Close"" is used by 6 different keys (e.g. logbook.form.close, logbook.qrzCorrect.close, memories.packs.close.aria) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "5","sstv.viewer.close.title","Close this window (Esc)","","",""
 "5","sstv.gallery.reveal.label","Reveal","","","A button on the SSTV gallery that opens the folder of received pictures in the computer's file manager. Its tooltip is the next row."
-"5","sstv.gallery.reveal.title","Open the folder the received pictures are saved in (Pictures/Nexus SSTV)","","Nexus | SSTV","""Pictures/Nexus SSTV"" is a folder: the computer's own Pictures folder (it has its Portuguese name on a Portuguese system) and, inside it, the folder ""Nexus SSTV""."
+"5","sstv.gallery.reveal.title","Open the folder the received pictures are saved in (Pictures/Nexus SSTV)","","Nexus | SSTV","""Pictures/Nexus SSTV"" is a folder: the computer's own Pictures folder, which the system names in its own language, and inside it the folder ""Nexus SSTV""."
 "5","sstv.gallery.reveal.failed","Could not open the SSTV gallery folder","","SSTV",""
 "5","sstv.gallery.thumb.alt","{{mode}} image received {{when}}","","{{mode}} | {{when}}",""
 "5","sstv.gallery.delete.aria","Delete the {{mode}} image received {{when}}","","{{mode}} | {{when}}",""
