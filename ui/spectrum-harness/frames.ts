@@ -275,8 +275,29 @@ export function f32Json(v: number): string {
   return String(f)
 }
 
+/** One f64 span edge the way serde_json writes it. */
+function spanJson(x: number): string {
+  return Number.isInteger(x) ? `${x}.0` : String(x)
+}
+
 /** `Spectrum` serialised field for field as the backend sends it (row f32, span f64). */
 export function frameJson(f: Frame): string {
-  const span = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x))
-  return `{"row":[${f.row.map(f32Json).join(',')}],"loHz":${span(f.loHz)},"hiHz":${span(f.hiHz)},"source":${JSON.stringify(f.source)}}`
+  return `{"row":[${f.row.map(f32Json).join(',')}],"loHz":${spanJson(f.loHz)},"hiHz":${spanJson(f.hiHz)},"source":${JSON.stringify(f.source)}}`
+}
+
+/**
+ * `SpectrumFrame` (`crates/tempo-app/src/dto.rs`) as the backend writes it, after its first two fields: `seq` and
+ * `tMs` change with every answer and `frameReply` puts them in front, so the bins are still formatted once, before
+ * the clock starts. The scale and slice are what each source's producer says: the audio FFT's exact dBFS axis, the
+ * radio's own relative scale otherwise, and the Main receiver for the CI-V and FT-710 scopes.
+ */
+export function frameTail(f: Frame): string {
+  const scale = f.source === 'audio' ? '{"kind":"dbfs","loDb":-120.0,"hiDb":0.0}' : '{"kind":"relative"}'
+  const slice = f.source === 'civ' || f.source === 'yaesu' ? ',"slice":0' : ''
+  return `"source":${JSON.stringify(f.source)},"loHz":${spanJson(f.loHz)},"hiHz":${spanJson(f.hiHz)},"scale":${scale}${slice},"bins":[${f.row.map(f32Json).join(',')}]}`
+}
+
+/** One answer to the frame command: a frame's number and time in front of its `frameTail`. */
+export function frameReply(seq: number, tMs: number, tail: string): string {
+  return `{"seq":${seq},"tMs":${tMs},${tail}`
 }

@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { comparePixels, TOLERANCE } from './compare.mjs'
 import { decodePng, encodePng } from './png.mjs'
-import { CODE_SLOTS, codeBits, decodeBits, f32Json, frameJson } from './frames'
+import { CODE_SLOTS, codeBits, decodeBits, f32Json, frameJson, frameReply, frameTail } from './frames'
 
 function picture(width, height, fill) {
   const rgba = new Uint8Array(width * height * 4)
@@ -73,5 +73,16 @@ describe('the wire format', () => {
     const back = JSON.parse(frameJson({ row, loHz: 0, hiHz: 4000, source: 'audio' }))
     expect(back.row.map(Math.fround)).toEqual(row.map(Math.fround))
     expect([back.loHz, back.hiHz, back.source]).toEqual([0, 4000, 'audio'])
+  })
+  it('writes a frame byte for byte as the backend does', () => {
+    // The same two frames `spectrum_frame_dto_tests` in crates/tempo-app/src/dto.rs pins.
+    const civ = { row: [0, 0.5, 1], loHz: 144_975_000, hiHz: 145_025_000, source: 'civ' }
+    expect(frameReply(7, 1_700_000_000_123, frameTail(civ))).toBe(
+      '{"seq":7,"tMs":1700000000123,"source":"civ","loHz":144975000.0,"hiHz":145025000.0,"scale":{"kind":"relative"},"slice":0,"bins":[0.0,0.5,1.0]}',
+    )
+    const audio = { row: [0.25], loHz: 0, hiHz: 4000, source: 'audio' }
+    expect(frameReply(8, 1_700_000_000_143, frameTail(audio))).toBe(
+      '{"seq":8,"tMs":1700000000143,"source":"audio","loHz":0.0,"hiHz":4000.0,"scale":{"kind":"dbfs","loDb":-120.0,"hiDb":0.0},"bins":[0.25]}',
+    )
   })
 })
