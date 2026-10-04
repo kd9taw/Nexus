@@ -117,7 +117,7 @@ import {
   SSTV_PANEL_IDS,
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
-import { arrangeIds, coercePlacement, movePane, type ArrangeSpec, type PaneMove, type PanePlacement } from '../features/panelPlace'
+import { arrangeIds, coerceLeftSide, coercePlacement, moveArranged, movePane, type Arrangement, type ArrangeSpec, type PaneMove, type PanePlacement } from '../features/panelPlace'
 import type { AppSnapshot, FieldDayStatus, Js8State, PskState, RttyState, SstvState } from '../types'
 
 const decodeState = {
@@ -361,9 +361,9 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>): PanelLayoutApi<P> {
+function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>, leftSide?: P[]): PanelLayoutApi<P> {
   return {
-    layout: place ? { v: 2, state: {}, share: {}, place } : { v: 1, state: {}, share: {} },
+    layout: place || leftSide ? { v: 2, state: {}, share: {}, ...(place ? { place } : {}), ...(leftSide ? { leftSide } : {}) } : { v: 1, state: {}, share: {} },
     stateOf: (id) => (removed.includes(id) ? 'removed' : 'docked'),
     setPanelState: () => {},
     shareOf: () => 1,
@@ -919,6 +919,71 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
     // Phone took 15 s alone, 57 s in the full suite, 83 s at a fifth of a CPU and 160 s at a
     // tenth; CW 17 s alone and 90 s at a fifth. Only one of Phone's 50 placements repeats, so
     // there is no repeated render left to skip.
+    240_000,
+  )
+})
+
+/** `n` arrangements of Phone's spec with its LEFT SIDE in play (2026-10-03), alternately menu-built
+ *  (every move made as on a window wide enough for the side, so ◀ puts listed panes there and ▶ takes
+ *  them back) and a coerced junk record (any id, stop controls included, on the side). */
+function randomArrangements<P extends string>(spec: ArrangeSpec<P>, n: number, seed: number): Array<Arrangement<P>> {
+  const next = rng(seed)
+  const ids = arrangeIds(spec)
+  const pick = <T,>(xs: readonly T[]) => xs[Math.floor(next() * xs.length)]
+  const out: Array<Arrangement<P>> = []
+  while (out.length < n) {
+    if (out.length % 2 === 0) {
+      let arr: Arrangement<P> = {}
+      for (let k = 2 + Math.floor(next() * 14); k > 0; k--) {
+        arr = moveArranged(spec, arr, pick(ids), pick(['up', 'down', 'left', 'right'] as PaneMove[]), () => true, true) ?? arr
+      }
+      out.push(arr)
+    } else {
+      const raw = [...ids, 'ptt', 'stopTx', 'tune', 'scope', 'txmeters'].filter(() => next() < 0.5)
+      out.push({ place: randomPlacements(spec, 1, Math.floor(next() * 1e9))[0], leftSide: coerceLeftSide(spec, raw) })
+    }
+  }
+  return out
+}
+
+describe('THE LEFT SIDE SWEEP (2026-10-03): no arrangement with Phone’s left side gates a control that stops a transmission', () => {
+  // The side stands between the header and the dock, beside the scope, the TX strip and the region;
+  // the strip moves into the stage beside it. Swept on a window wide enough for the side, with every
+  // id hidden singly and all at once, as the arrangement sweep above does for the columns.
+  afterEach(() => document.documentElement.style.removeProperty('--vw-eff'))
+
+  it(
+    'Phone: 30 random arrangements on a wide window, every id hidden singly and all at once, every stop control where it was',
+    async () => {
+      document.documentElement.style.setProperty('--vw-eff', '1600px')
+      const spec = ALL_PANEL_VOCABULARIES.find((v) => v.view === 'phone')!.arrange! as ArrangeSpec<string>
+      phone.render(panelsWith<(typeof PHONE_PANEL_IDS)[number]>([]))
+      await settle()
+      const shown = stopsOnScreen(phone.stopControls)
+      const baseline = new Map(phone.stopControls.map(([label]) => [label, shown.get(label)!.some((e) => !e.disabled)]))
+      cleanup()
+      let sided = 0
+      for (const [i, arr] of randomArrangements(spec, 30, 20261003).entries()) {
+        const combos: Array<readonly string[]> = [[], ...phone.ids.map((id: string) => [id]), [...phone.ids]]
+        for (const removed of combos) {
+          ;(phone.render as (p: PanelLayoutApi<string>) => void)(panelsWith(removed, arr.place, arr.leftSide))
+          await settle()
+          if (removed.length === 0 && document.querySelector('.cockpit-left')) sided++
+          const on = stopsOnScreen(phone.stopControls)
+          for (const [label] of phone.stopControls) {
+            const els = on.get(label)!
+            const where = `Phone, arrangement #${i} ${JSON.stringify(arr)}, hiding {${removed.join(', ')}}`
+            expect(els.length, `${where} took "${label}" with it`).toBeGreaterThan(0)
+            expect(els.some((e) => !e.disabled), `${where} left "${label}" on screen but DISABLED`).toBe(baseline.get(label))
+            // …and none of them is on the side.
+            expect(els.some((e) => e.closest('.cockpit-left') != null), `${where} put "${label}" on the left side`).toBe(false)
+          }
+          cleanup()
+        }
+      }
+      expect(sided, 'the random arrangements never put the side on screen — the sweep is reading nothing').toBeGreaterThan(10)
+    },
+    // 330 fresh mounts; the budget of the arrangement sweep above, scaled.
     240_000,
   )
 })

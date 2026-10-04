@@ -213,6 +213,17 @@ export interface StripSeamProps {
    *  Splitter). A strip that shares its container with something that must keep its room says so
    *  here: Connect's bottom strip, which leaves the map at least half of the grid (layout L7). */
   maxShare?: number
+  /** Added to the divider's own classes: `in-column` gives back the gap of a column the divider's
+   *  sheet may not name (Phone's scope divider, in its stage — styles.css). */
+  className?: string
+  /** The box the STORED percentage is a share of, where that is not the strip's flex container.
+   *  Phone's scope (2026-10-03) keeps its share of the whole SHELL when the left side puts it in a
+   *  shorter stage, so showing the side narrows the scope without shortening it and the TX strip
+   *  under it keeps its height on the screen. What is painted is still a % of the container (the
+   *  same height, re-based); the stored value never changes meaning. Absent: the flex container.
+   *  A function, not a ref: it is read from the divider's first layout effect, which runs before an
+   *  ANCESTOR's ref is attached. */
+  shareOf?: () => HTMLElement | null
 }
 
 /** The container's CONTENT box along the axis, in CSS px: a flex item's % basis resolves against
@@ -277,16 +288,39 @@ function honouredRange(
 }
 
 interface StripBox {
+  /** Where the variable is written: the strip's parent. */
+  host: HTMLElement
+  /** The box the strip's % basis resolves against: the parent, or the nearest ancestor with a box. */
   el: HTMLElement
   /** Content span, CSS px. */
   span: number
+  /** The span the stored percentage is a share of (`shareOf`'s, else `span`), CSS px. */
+  ref: number
   z: number
   lo: number
   hi: number
 }
 
-function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9 }: StripSeamProps) {
-  const container = () => strip.current?.parentElement ?? null
+/** The box `el`'s children are laid out in: `el` itself, or — where it generates no box
+ *  (`display: contents`: Phone's stage while its left side is not shown, cockpit-panes.css
+ *  `.cockpit-flat`) — the nearest ancestor that does. */
+function layoutBox(el: HTMLElement | null): HTMLElement | null {
+  let b = el
+  while (b && getComputedStyle(b).display === 'contents') b = b.parentElement
+  return b
+}
+
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, shareOf }: StripSeamProps) {
+  // The variable lives on the strip's PARENT, so it inherits to the strip whatever box the strip is
+  // laid out in; the box it is measured against is the flex container its % basis resolves in — the
+  // same element, unless the parent generates no box (`layoutBox`).
+  const host = () => strip.current?.parentElement ?? null
+  const container = () => layoutBox(host())
+  // Read through a ref: a caller's inline function is a new one every render, and as a dependency of
+  // the observer's effect below it re-ran the whole setup — a measure and a new ResizeObserver — on
+  // every render of a cockpit the app keeps mounted.
+  const shareOfRef = useRef(shareOf)
+  shareOfRef.current = shareOf
   // The operator's PREFERENCE as stored (null: none, and the sheet's own size stands — only for a
   // strip whose default is the sheet's). A re-clamp never writes it. `undefined` = not read yet.
   const pref = useRef<number | null | undefined>(undefined)
@@ -312,26 +346,29 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
 
   const box = (): StripBox | null => {
     const el = container()
-    if (!el) return null
+    const target = host()
+    if (!el || !target) return null
     const z = elZoom(el)
     const span = contentSpan(el, axis, z)
     if (!(span > 0)) return null
     const g = { ...splitGeom(el, z), span }
     let lo = resolveClamp(min, g)
     let hi = Math.min(resolveClamp(max, g), maxShare * span)
-    const honoured = honouredRange(strip.current!, el, varName, axis, z, ownSize)
+    const honoured = honouredRange(strip.current!, target, varName, axis, z, ownSize)
     if (honoured) {
       lo = Math.max(lo, honoured[0])
       hi = Math.min(hi, honoured[1])
     }
     // The layout wins a disagreement: past its ceiling the divider could not move at all.
-    return { el, span, z, lo: Math.min(lo, hi), hi }
+    const of = shareOfRef.current?.()
+    const refSpan = of && of !== el ? contentSpan(of, axis, z) : span
+    return { host: target, el, span, ref: refSpan > 0 ? refSpan : span, z, lo: Math.min(lo, hi), hi }
   }
   const clampIn = (b: StripBox, px: number) => Math.min(b.hi, Math.max(b.lo, px))
   /** Paint a size (CSS px) as the container's %, with no React render (a drag's moves). */
   const write = (b: StripBox, px: number) => {
     const pct = (px / b.span) * 100
-    b.el.style.setProperty(varName, `${pct}%`)
+    b.host.style.setProperty(varName, `${pct}%`)
     mark(true)
     painted.current = pct
     return pct
@@ -349,7 +386,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
       // No preference and the sheet's own size stands: nothing painted, nothing marked, and the
       // value is what renders (the range is measured in the sized shape all the same, and
       // stretched to hold that value, so what is announced is always inside it).
-      container()?.style.removeProperty(varName)
+      host()?.style.removeProperty(varName)
       mark(false)
       painted.current = null
       const b = box()
@@ -364,12 +401,12 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     if (!b) {
       // Hidden (a keep-alive host's 0×0): the stored % raw, as Splitter's mount did. The next real
       // box is re-fitted before it paints.
-      container()?.style.setProperty(varName, `${pct}%`)
+      host()?.style.setProperty(varName, `${pct}%`)
       mark(true)
       painted.current = pct
       return
     }
-    settle(b, clampIn(b, (pct / 100) * b.span))
+    settle(b, clampIn(b, (pct / 100) * b.ref))
   }
   /** Where the strip stands, CSS px: the painted size, or the sheet's own. */
   const current = (b: StripBox) => clampIn(b, painted.current != null ? (painted.current / 100) * b.span : stripSize(b.z))
@@ -391,8 +428,24 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     fitRef.current()
     const el = strip.current?.parentElement
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => fitRef.current())
-    ro.observe(el)
+    // The parent, and the box the strip is laid out in, which may be a different element and may
+    // CHANGE: Phone's stage has no box until its left side shows, then has one (a resize of the
+    // parent from nothing to something, observed here), and after it goes the shell's resizes are
+    // the ones that matter again. Every box it has been laid out in stays observed.
+    const watched = new Set<Element>()
+    const ro = new ResizeObserver(() => {
+      watch(container())
+      fitRef.current()
+    })
+    function watch(e: Element | null) {
+      if (e && !watched.has(e)) {
+        watched.add(e)
+        ro.observe(e)
+      }
+    }
+    watch(el)
+    watch(container())
+    watch(shareOfRef.current?.() ?? null)
     if (ownSize && strip.current) ro.observe(strip.current)
     return () => ro.disconnect()
   }, [strip, ownSize, after, findTries])
@@ -400,14 +453,17 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
   const commit = (px: number) => {
     const b = box()
     if (!b) return
-    const pct = settle(b, clampIn(b, px))
+    const at = clampIn(b, px)
+    settle(b, at)
+    // Stored as a share of the box it is a share of (the container, unless `shareOf` says otherwise).
+    const pct = (at / b.ref) * 100
     pref.current = pct
     surfaceSet(storageKey, String(pct))
   }
 
   return (
     <SeamHandle
-      className={`pane-splitter ${axis === 'y' ? 'horizontal' : 'vertical-inline'}`}
+      className={`pane-splitter ${axis === 'y' ? 'horizontal' : 'vertical-inline'}${className ? ` ${className}` : ''}`}
       axis={axis}
       label={label}
       value={view?.px ?? null}
@@ -441,9 +497,9 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
           paint: (px) => write(b, px),
           restore: () => {
             if (was == null) {
-              b.el.style.removeProperty(varName)
+              b.host.style.removeProperty(varName)
               mark(false)
-            } else b.el.style.setProperty(varName, `${was}%`)
+            } else b.host.style.setProperty(varName, `${was}%`)
             painted.current = was
           },
         }

@@ -203,13 +203,26 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
  *    74 px strip), and more padding than the strip only scrolls a target a little lower.
  *  Re-read on every render as well as on a resize: station control arriving turns the observer's
  *  dock and strip sticky with no change of size for an observer to see. */
+const isDock = (c: Element): c is HTMLElement =>
+  c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
+
+/** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
+ *  (Phone's stage and the left side's row, 2026-10-03), the nearest ancestor holding the dock, up to
+ *  the cockpit's own `<main>`. With no dock that far up, the parent, as before. */
+function shellOf(strip: HTMLElement): HTMLElement | null {
+  for (let p = strip.parentElement; p; p = p.parentElement) {
+    if (Array.from(p.children).some(isDock)) return p
+    if (p.tagName === 'MAIN') break
+  }
+  return strip.parentElement
+}
+
 function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
   const apply = () => {
     const strip = ref.current
-    const shell = strip?.parentElement
+    const shell = strip && shellOf(strip)
     if (!strip || !shell) return
-    const dock = Array.from(shell.children).find((c): c is HTMLElement =>
-      c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar')))
+    const dock = Array.from(shell.children).find(isDock)
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${dock.offsetHeight}px` : '0px')
     shell.style.setProperty('--cockpit-txstrip-h',
@@ -218,9 +231,9 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
   useLayoutEffect(apply)
   useLayoutEffect(() => {
     const strip = ref.current
-    const shell = strip?.parentElement
+    const shell = strip && shellOf(strip)
     if (!strip || !shell) return
-    const dock = Array.from(shell.children).find((c) => c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
+    const dock = Array.from(shell.children).find(isDock)
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply)
     observer?.observe(strip)
     if (dock) observer?.observe(dock)

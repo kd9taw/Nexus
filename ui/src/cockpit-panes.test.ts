@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { logColValue } from './features/paneColumns'
+import { LEFT_SIDE_MAX_SHARE, LEFT_SIDE_MIN_EM, leftSideRange, logColValue } from './features/paneColumns'
 
 // THE PANE-GRID STRUCTURAL SHEET (2026-07-30 layout assessment, design3 §3/§5).
 //
@@ -240,8 +240,10 @@ describe('the fence: styles.css never names a structural class', () => {
   // The 19k-line sheet is where every previous override crept in. If it cannot name these
   // classes it cannot fight them — the isolation is the guarantee, not a convention.
   // The dashboard rail's track and its parts (components/DashRail) are structural too: the rail is a
-  // column beside the cockpit, sized only here.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col']) {
+  // column beside the cockpit, sized only here. So are Phone's LEFT SIDE and the two wrappers it
+  // stands in (2026-10-03): a styles.css rule naming one could give the wrappers a box, or the side a
+  // size, from the sheet that has lost every one of these fights before.
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -264,6 +266,153 @@ describe('the fence: styles.css never names a structural class', () => {
       'cockpit-panes.css must be imported after styles.css: equal-specificity ties go to ' +
         'the later sheet, and the structural rules must win those.',
     ).toBeGreaterThan(styles)
+  })
+})
+
+/** Cascade winner of a per-block-computed property for an element carrying exactly the class `cls`,
+ *  across BOTH sheets (colWinner's rule: styles.css sorts first, so an equal-specificity structural
+ *  rule wins a tie). Subject-only. */
+function classWinner<T>(
+  cls: string,
+  blockValue: (body: string) => T | null,
+): { value: T; selector: string; sheet: string } | null {
+  const candidates: Array<{ r: Rule; sheet: string; rank: number }> = [
+    ...STYLES_RULES.map((r) => ({ r, sheet: 'styles.css', rank: 0 })),
+    ...RULES.map((r) => ({ r, sheet: 'cockpit-panes.css', rank: 1 })),
+  ]
+  let win: { value: T; selector: string; sheet: string; spec: number; key: number } | null = null
+  for (const { r, sheet, rank } of candidates) {
+    const parts = r.selector.split(/\s*[>+~]\s*|\s+/)
+    if (!new RegExp(`\\.${cls}(?![a-z0-9-])`).test(parts[parts.length - 1])) continue
+    const v = blockValue(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    const key = rank * 1e6 + r.order
+    if (!win || spec > win.spec || (spec === win.spec && key >= win.key)) win = { value: v, selector: r.selector, sheet, spec, key }
+  }
+  return win && { value: win.value, selector: win.selector, sheet: win.sheet }
+}
+
+/** Final value of one longhand (or a shorthand read whole) a block computes. */
+const blockDecl = (prop: string) => (body: string): string | null => {
+  let v: string | null = null
+  for (const decl of body.split(';')) {
+    const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(decl)
+    if (m) v = m[1].replace(/\s+/g, ' ')
+  }
+  return v
+}
+
+/** The Phone shell's own gap, from styles.css — the gap its scope divider's margins give back. */
+const phoneShellGap = () => {
+  let v: string | null = null
+  for (const r of STYLES_RULES) if (r.selector === '.layout.single.phone-cockpit') v = blockDecl('gap')(r.body) ?? v
+  return v
+}
+
+describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and the five-kind shell is unchanged without it', () => {
+  // The operator's pick: ⊞ Panels ▸ Arrange's "Left side", a column from under the header to the
+  // dock, beside the scope, the TX strip and the pane region, for Band Activity, Spots and Needed.
+  // Phone renders the scope, the strip and the region inside TWO WRAPPERS that are always there — so
+  // showing the side never moves the voice keyer or the log form to a new parent — and the wrappers
+  // generate NO BOX until the side shows. These compute that the two states are what they claim.
+
+  it('the wrappers generate no box until the side shows, so the shell lays out exactly as the five-kind one', () => {
+    const win = classWinner('cockpit-flat', blockDecl('display'))
+    expect(win, 'nothing declares display on .cockpit-flat — a wrapper with a box changes every Phone screen').not.toBeNull()
+    expect(
+      win!.value,
+      `\`${win!.sheet}: ${win!.selector} { display: ${win!.value} }\` — the scope, the TX strip and the region ` +
+        'must stay flex items of the SHELL while no side shows: the strip\'s sticky edges are measured against ' +
+        'the shell, which is what keeps Stop TX on screen at a 175 % pin.',
+    ).toBe('contents')
+    // A flat wrapper is never a scroll container or a clip edge either.
+    expect(classWinner('cockpit-flat', blockOverflowY)).toBeNull()
+  })
+
+  it('with the side shown, the row lays the side beside the stage, and the stage stacks with the shell’s own gap', () => {
+    expect(classWinner('cockpit-leftrow', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('cockpit-leftrow', blockDecl('flex-direction'))?.value).toBe('row')
+    expect(classWinner('cockpit-stage', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('cockpit-stage', blockDecl('flex-direction'))?.value).toBe('column')
+    // The scope's divider gives back a gap of the shell's size (cockpit-shells.test.ts computes the net
+    // in both states), so the stage must stack with that same gap or the stock layout moves when the
+    // side shows.
+    const stage = classWinner('cockpit-stage', blockDecl('gap'))
+    expect(stage, '.cockpit-stage declares no gap').not.toBeNull()
+    expect(stage!.value, 'the stage stacks with a different gap than the shell it stands in for').toBe(phoneShellGap())
+    // The row is the shell's grower in the side state, as the region is the stage's: basis 0, so the
+    // scope keeps the height it was dragged to.
+    expect(classWinner('cockpit-leftrow', blockDecl('flex'))?.value).toBe('1 1 0')
+    expect(classWinner('cockpit-stage', blockDecl('flex'))?.value).toBe('1 1 0')
+  })
+
+  it('neither the row nor the stage scrolls or clips: the TX strip keeps the SHELL as its scroll container', () => {
+    // A sticky box sticks within its nearest scroll container. A stage that scrolled or clipped would
+    // become the strip's, and Stop TX would park inside the stage instead of on the screen.
+    for (const cls of ['cockpit-leftrow', 'cockpit-stage']) {
+      const win = classWinner(cls, blockOverflowY)
+      expect(win, `\`${win?.sheet}: ${win?.selector} { overflow-y: ${win?.value} }\``).toBeNull()
+    }
+  })
+
+  it('the width is the operator’s, clamped by the layout itself between an em floor and a share of the row', () => {
+    const r = RULES.filter((x) => x.selector === '.cockpit-left')
+    expect(r.length, 'exactly one .cockpit-left rule').toBe(1)
+    const flex = blockDecl('flex')(r[0].body)
+    const m = /^0 0 clamp\((\d+(?:\.\d+)?)em, var\(--cockpit-left-w, (\d+(?:\.\d+)?)em\), (\d+(?:\.\d+)?)%\)$/.exec(flex ?? '')
+    expect(
+      m,
+      `.cockpit-left { flex: ${flex} } — the side must neither grow nor shrink, and its basis must be the ` +
+        "operator's width clamped by the sheet: clamp(<floor>em, var(--cockpit-left-w, <default>em), <share>%). " +
+        'A width stored on a wide window is then clamped on load and on every resize without being rewritten.',
+    ).not.toBeNull()
+    const [floorEm, defaultEm, sharePct] = [Number(m![1]), Number(m![2]), Number(m![3])]
+    expect(defaultEm, 'the default sits on (or under) the floor').toBeGreaterThan(floorEm)
+    expect(sharePct, 'the side may take more than half of the row it shares with the scope and the panes').toBeLessThanOrEqual(50)
+    // The divider moves through exactly the range the sheet honours (features/paneColumns).
+    expect(floorEm).toBe(LEFT_SIDE_MIN_EM)
+    expect(sharePct).toBe(LEFT_SIDE_MAX_SHARE * 100)
+    for (const [rowW, font] of [[1200, 14], [1900, 14], [3300, 16], [400, 14]]) {
+      expect(leftSideRange(rowW, font)).toEqual({ min: floorEm * font, max: Math.max(floorEm * font, (sharePct / 100) * rowW) })
+    }
+  })
+
+  it('the width token rides inline on the side: no rule declares it, and only .cockpit-left reads it', () => {
+    const reads = [
+      ...RULES.filter((r) => r.body.includes('var(--cockpit-left-w')).map((r) => `cockpit-panes.css: ${r.selector}`),
+      ...STYLES_RULES.filter((r) => r.body.includes('var(--cockpit-left-w')).map((r) => `styles.css: ${r.selector}`),
+    ]
+    expect(reads).toEqual(['cockpit-panes.css: .cockpit-left'])
+    expect([...RULES, ...STYLES_RULES].filter((r) => /--cockpit-left-w\s*:/.test(r.body)).map((r) => r.selector)).toEqual([])
+  })
+
+  it('the side’s panes can never stretch the row: its column is out of flow, fills the side, and scrolls', () => {
+    // Its content taller than the row would otherwise raise the row's automatic minimum and make the
+    // whole SHELL scroll for a long Spots list. Out of flow it contributes nothing; the deficit is the
+    // column's own scrollbar — the pane contract's second legal fate.
+    expect(classWinner('cockpit-left', blockDecl('position'))?.value, 'the side is not the containing block of its column').toBe('relative')
+    expect(classWinner('cockpit-left-col', blockDecl('position'))?.value).toBe('absolute')
+    expect(classWinner('cockpit-left-col', blockDecl('inset'))?.value).toBe('0')
+    const y = classWinner('cockpit-left-col', blockOverflowY)
+    expect(y && SCROLLS(y.value), `the side's column does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('cockpit-left-col', blockDecl('flex-direction'))?.value).toBe('column')
+    // Its frames stack with the region's columns' gap.
+    expect(classWinner('cockpit-left-col', blockDecl('gap'))?.value).toBe(classWinner('cockpit-col', blockDecl('gap'))?.value)
+    // A fill pane there floors as it does in a bounded column, and the floor yields.
+    expect(classWinner('cockpit-left-col', blockVar('--cockpit-fill-min'))?.value).toMatch(/^min\(\d+(\.\d+)?em, ?100%\)$/)
+  })
+
+  it('the side’s divider straddles the gap beside it, the full height, over no pane', () => {
+    const seam = RULES.filter((x) => x.selector === '.cockpit-left-seam')
+    expect(seam.length).toBe(1)
+    const d = (p: string) => blockDecl(p)(seam[0].body)
+    expect([d('position'), d('top'), d('bottom'), d('margin')]).toEqual(['absolute', '0', '0', '0'])
+    const w = /^(\d+)px$/.exec(d('width') ?? '')
+    expect(w, `.cockpit-left-seam { width: ${d('width')} }`).not.toBeNull()
+    // Centred on the gap between the side and the stage: half the row's gap, then half its own width.
+    const gap = classWinner('cockpit-leftrow', blockDecl('gap'))!.value
+    expect(d('right')).toBe(`calc(${gap} / -2 - ${Number(w![1]) / 2}px)`)
   })
 })
 
@@ -801,7 +950,9 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
       '.layout.single.psk-cockpit',
       '.layout.single.sstv-view',
     ])
-    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']"])
+    // …and Phone's LEFT SIDE (2026-10-03), whose column IS the scroller its frames sit in
+    // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above).
+    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col'])
     const offenders = [
       ...STYLES_RULES.filter(
         (r) => /--cockpit-fill-min\s*:/.test(r.body) && !ALLOWED_KNOB.has(r.selector),

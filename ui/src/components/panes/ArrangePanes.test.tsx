@@ -3,6 +3,7 @@
 // ⊞ PANELS ▸ ARRANGE (layout L3), by itself: the three columns with the panes on screen, the four
 // moves as named buttons, what a pinned pane may do, and that a press is one undoable step in the
 // REAL panel record (usePanelLayout). Where the moved panes then render is PhoneCockpit.arrange's.
+// THE LEFT SIDE (2026-10-03): Phone's fourth place, first in the menu, with and without room for it.
 import { useRef } from 'react'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
@@ -27,14 +28,14 @@ const SHOWN = new Set<PhonePanelId>(['bandActivity', 'voiceKeyer', 'receiver', '
 const shown = (id: PhonePanelId) => SHOWN.has(id)
 
 let api: PanelLayoutApi<PhonePanelId> | null = null
-function Host() {
+function Host({ sideRoom = false }: { sideRoom?: boolean }) {
   const panels = usePanelLayout(PHONE_PANELS, 'main')
   const ref = useRef(panels)
   ref.current = panels
   api = panels
   return (
     <>
-      <ArrangePanes spec={PHONE_PANELS.arrange!} layout={panels.layout} shown={shown} labels={LABELS} onMove={(id, m) => panels.movePane!(id, m, shown)} />
+      <ArrangePanes spec={PHONE_PANELS.arrange!} layout={panels.layout} shown={shown} labels={LABELS} sideRoom={sideRoom} onMove={(id, m) => panels.movePane!(id, m, shown, sideRoom)} />
       <button type="button" onClick={panels.undo}>Undo</button>
       <button type="button" onClick={panels.reset}>Reset</button>
     </>
@@ -49,16 +50,18 @@ afterEach(cleanup)
 
 const btn = (name: string) => screen.getByRole('button', { name })
 const cols = () => placedColumns(PHONE_PANELS.arrange!, api!.layout.place)
+const groups = () => screen.getAllByRole('group').filter((g) => g.className === 'panels-arrange-col')
+const group = (head: string) => groups().find((g) => g.querySelector('.panels-arrange-colhead')!.textContent === head)!
+const names = (g: HTMLElement) => [...g.querySelectorAll('.panels-arrange-name')].map((n) => n.textContent)
 
 describe('⊞ Arrange', () => {
-  it('lists the three columns and, in each, the panes on screen, top to bottom', () => {
+  it('lists the left side and the three columns and, in each, the panes on screen, top to bottom', () => {
     render(<Host />)
-    const groups = screen.getAllByRole('group').filter((g) => g.className === 'panels-arrange-col')
-    expect(groups.map((g) => g.querySelector('.panels-arrange-colhead')!.textContent)).toEqual(['Column 1', 'Column 2', 'Log column'])
-    const names = (g: HTMLElement) => [...g.querySelectorAll('.panels-arrange-name')].map((n) => n.textContent)
-    expect(names(groups[0])).toEqual(['Band Activity', 'Voice Keyer'])
-    expect(names(groups[1])).toEqual(['Receiver', 'Transmitter'])
-    expect(names(groups[2]), 'the log form has no entry').toEqual([])
+    expect(groups().map((g) => g.querySelector('.panels-arrange-colhead')!.textContent)).toEqual(['Left side', 'Column 1', 'Column 2', 'Log column'])
+    expect(names(groups()[0]), 'nothing is on the left side yet').toEqual([])
+    expect(names(groups()[1])).toEqual(['Band Activity', 'Voice Keyer'])
+    expect(names(groups()[2])).toEqual(['Receiver', 'Transmitter'])
+    expect(names(groups()[3]), 'the log form has no entry').toEqual([])
   })
 
   it('names every move by pane and direction, and disables one that would do nothing', () => {
@@ -74,8 +77,7 @@ describe('⊞ Arrange', () => {
     render(<Host />)
     fireEvent.click(btn('Move Receiver to the column on the left'))
     expect(cols().a).toEqual(['bandActivity', 'voiceKeyer', 'spots', 'receiver'])
-    const first = screen.getAllByRole('group').find((g) => g.className === 'panels-arrange-col')!
-    expect(within(first).getByText('Receiver')).toBeTruthy()
+    expect(within(group('Column 1')).getByText('Receiver')).toBeTruthy()
     fireEvent.click(btn('Undo'))
     expect(api!.layout.place).toBeUndefined()
     fireEvent.click(btn('Move Transmitter up'))
@@ -127,5 +129,81 @@ describe('⊞ Arrange', () => {
     fireEvent.click(btn('Move Transmitter up'))
     expect(cols().b.filter(shown)).toEqual(['transmitter', 'receiver'])
     expect(document.activeElement).toBe(undo)
+  })
+})
+
+describe('⊞ Arrange ▸ Left side (2026-10-03)', () => {
+  it('with room for it: ◀ in Column 1 puts a listed pane there, and only a listed one', () => {
+    render(<Host sideRoom />)
+    expect(group('Left side').textContent, 'the side says what it takes').toMatch(/Band Activity, Spots,? or Needed/)
+    const toSide = btn('Move Band Activity to the left side') as HTMLButtonElement
+    expect(toSide.disabled).toBe(false)
+    // The voice keyer has no ◀ at all (pinned); a rig strip moved into Column 1 has one, disabled.
+    expect(screen.queryByRole('button', { name: /Move Voice Keyer to/ })).toBeNull()
+    fireEvent.click(btn('Move Receiver to the column on the left'))
+    expect((btn('Move Receiver to the column on the left') as HTMLButtonElement).disabled, 'a rig strip cannot go on the left side').toBe(true)
+    fireEvent.click(toSide)
+    expect(api!.layout.leftSide).toEqual(['bandActivity'])
+    expect(names(group('Left side'))).toEqual(['Band Activity'])
+    expect(names(group('Column 1')), 'it is listed where it is: on the side, not in its column').toEqual(['Voice Keyer', 'Receiver'])
+    // Its place in the columns is kept, for a narrower window and for ▶.
+    expect(cols().a).toContain('bandActivity')
+  })
+
+  it('on the side: ▲ ▼ among the panes there, ▶ back to its column, and no ◀', () => {
+    localStorage.setItem('nexus.panels.phone.main', JSON.stringify({ v: 2, state: {}, share: {}, leftSide: ['bandActivity'] }))
+    SHOWN.add('spots')
+    try {
+      render(<Host sideRoom />)
+      fireEvent.click(btn('Move Spots to the left side'))
+      expect(api!.layout.leftSide).toEqual(['bandActivity', 'spots'])
+      expect(screen.queryByRole('button', { name: 'Move Spots to the left side' }), 'nothing stands left of the side').toBeNull()
+      fireEvent.click(btn('Move Spots up'))
+      expect(api!.layout.leftSide).toEqual(['spots', 'bandActivity'])
+      expect((btn('Move Spots up') as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.click(btn('Move Band Activity from the left side back to its column'))
+      expect(api!.layout.leftSide).toEqual(['spots'])
+      expect(names(group('Column 1'))[0], 'back where it stood').toBe('Band Activity')
+      fireEvent.click(btn('Move Spots from the left side back to its column'))
+      expect(api!.layout.leftSide, 'an empty side is no entry at all').toBeUndefined()
+    } finally {
+      SHOWN.delete('spots')
+    }
+  })
+
+  it('each move is one undoable step, and Reset clears the side with everything else', () => {
+    render(<Host sideRoom />)
+    fireEvent.click(btn('Move Band Activity to the left side'))
+    fireEvent.click(btn('Undo'))
+    expect(api!.layout.leftSide).toBeUndefined()
+    fireEvent.click(btn('Move Band Activity to the left side'))
+    fireEvent.click(btn('Reset'))
+    expect(api!.layout.leftSide).toBeUndefined()
+  })
+
+  it('too narrow for it: the stored side is named and KEPT — its panes move in their columns, and no move reaches it', () => {
+    localStorage.setItem('nexus.panels.phone.main', JSON.stringify({ v: 2, state: {}, share: {}, leftSide: ['bandActivity'] }))
+    render(<Host />)
+    expect(group('Left side').textContent).toMatch(/Band Activity stands here on a window about 1280 px wide or wider/)
+    expect(names(group('Left side')), 'no rows: the panes are listed where they are on screen').toEqual([])
+    expect(names(group('Column 1'))).toEqual(['Band Activity', 'Voice Keyer'])
+    expect(screen.queryByRole('button', { name: /to the left side|from the left side/ })).toBeNull()
+    // Every enabled button of every listed pane, pressed: the side is exactly as stored.
+    for (let i = 0; i < 3; i++) {
+      for (const b of screen.getAllByRole('button').filter((x) => (x as HTMLButtonElement).dataset.arrange && !(x as HTMLButtonElement).disabled)) {
+        fireEvent.click(b)
+      }
+    }
+    expect(api!.layout.place, 'the moves did happen').toBeDefined()
+    expect(api!.layout.leftSide).toEqual(['bandActivity'])
+    expect(JSON.parse(localStorage.getItem('nexus.panels.phone.main')!).leftSide).toEqual(['bandActivity'])
+  })
+
+  it('a move to the side pressed from a focused button keeps focus with that pane, on its ▶ there', () => {
+    render(<Host sideRoom />)
+    const toSide = btn('Move Band Activity to the left side')
+    toSide.focus()
+    fireEvent.click(toSide)
+    expect(document.activeElement).toBe(btn('Move Band Activity from the left side back to its column'))
   })
 })

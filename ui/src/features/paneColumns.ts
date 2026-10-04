@@ -40,3 +40,32 @@ export function logColRange(contentW: number, fontPx: number): { min: number; ma
   const min = LOG_COL_MIN_EM * fontPx
   return { min, max: Math.max(min, LOG_COL_MAX_SHARE * contentW) }
 }
+
+// ── THE LEFT SIDE (operator's pick, 2026-10-03; Phone) ─────────────────────────────────────────────
+// A full-height column beside the scope that ⊞ Panels ▸ Arrange fills (features/panelPlace). Its width
+// is the operator's (the record's `cols.leftSide`, CSS px, written on the side as `--cockpit-left-w`),
+// and the SHEET clamps it — `clamp(<floor>em, the width, <share>)` of the row (cockpit-panes.css
+// `.cockpit-left`) — so a width stored on a wide window is clamped by the layout itself on load, on
+// every resize and on every zoom change, before any script runs, and the preference is never rewritten.
+// The divider's range below is the same pair of numbers, measured.
+
+/** The side shows only on a window at least this wide, in EFFECTIVE CSS px (`--vw-eff`): the
+ *  operator's "about 1280 px". Below it its panes stand in their usual columns. The supported floor
+ *  window (1024×768, about 1205 px at its own zoom) is under it, so every cockpit there is unchanged. */
+export const LEFT_SIDE_MIN_VW = 1280
+/** The side's floor, in its own em — the sheet's `clamp()` floor. */
+export const LEFT_SIDE_MIN_EM = 16
+/** The widest a dragged side may be, as a share of the row it shares with the scope and the panes. */
+export const LEFT_SIDE_MAX_SHARE = 0.4
+
+/** `--cockpit-left-w` for a width the operator set (the sheet clamps it). */
+export function leftSideValue(px: number): string {
+  return `${Math.round(px)}px`
+}
+
+/** The range the side's divider moves through, in CSS px, for a row `rowW` CSS px wide whose font is
+ *  `fontPx`: the sheet's em floor up to its share of the row. The floor wins a disagreement. */
+export function leftSideRange(rowW: number, fontPx: number): { min: number; max: number } {
+  const min = LEFT_SIDE_MIN_EM * fontPx
+  return { min, max: Math.max(min, LEFT_SIDE_MAX_SHARE * rowW) }
+}

@@ -242,8 +242,9 @@ import { SLOT_IDS, type SlotId } from './connectConfig'
 import { DASH_SLOT_IDS, type DashSlotId } from './dashRail'
 import {
   coerceColumnOrder,
+  coerceLeftSide,
   coercePlacement,
-  movePane as movePlacedPane,
+  moveArranged,
   type ArrangeSpec,
   type PaneColumn,
   type PaneMove,
@@ -280,6 +281,12 @@ export interface PanelLayout<P extends string> {
   /** The columns' order on screen ("swap columns"): kept by the record, rendered by no cockpit yet
    *  (see features/panelPlace). Absent is a | b | log. */
   colOrder?: PaneColumn[]
+  /** THE LEFT SIDE (2026-10-03, ⊞ Panels ▸ Arrange's fourth place; Phone): the panes the operator put
+   *  there, top to bottom — only those the vocabulary's `arrange.leftSide` lists. Each keeps its
+   *  `place`, where it stands whenever the side does not show (a narrower window), so this is never
+   *  rewritten by a window's width. Absent is nothing there. Older builds' coercion never reads it:
+   *  they open those panes in their columns and lose nothing else. */
+  leftSide?: P[]
   /** A CONNECT BOX'S OWN TEXT SIZE (⋯ ▸ A− / A+), per slot: a factor on the app's Text size,
    *  BOX_SCALE_MIN–BOX_SCALE_MAX (the section at the foot of this file). Absent, or 1, is the app's
    *  size — so an older record, and every cockpit's (none writes one), reads exactly as before. An
@@ -292,11 +299,15 @@ export interface PanelLayout<P extends string> {
  *      splits the pair the way a divider between two panes does (seamShares, summing to 2);
  *    · `log` — the log column's width in CSS px at two and three columns (the width divider on its
  *      left edge). The sheet caps it at half the region and floors it at 24em, so a width stored on
- *      a wide window is clamped by the layout itself wherever it is read (features/paneColumns). */
+ *      a wide window is clamped by the layout itself wherever it is read (features/paneColumns);
+ *    · `leftSide` — the left side's width in CSS px (the divider on its right edge). The same
+ *      discipline: the sheet clamps it into its em floor … share of the row on load and on every
+ *      resize, and the stored preference is never rewritten (features/paneColumns). */
 export interface PanelCols {
   a?: number
   b?: number
   log?: number
+  leftSide?: number
 }
 export type PanelColId = keyof PanelCols
 
@@ -306,7 +317,7 @@ const clampShare = (v: number) => Math.min(2 - MIN_SHARE, Math.max(MIN_SHARE, v)
 /** One stored column value, or null for a value no writer could have produced. */
 function colValue(id: PanelColId, v: unknown): number | null {
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null
-  return id === 'log' ? Math.round(v) : clampShare(v)
+  return id === 'log' || id === 'leftSide' ? Math.round(v) : clampShare(v)
 }
 
 /** A view's panel vocabulary: its storage namespace plus the coercion whitelist. */
@@ -376,7 +387,7 @@ export function coercePanelLayout<P extends string>(
 ): PanelLayout<P> {
   const out = emptyPanelLayout<P>()
   if (!raw || typeof raw !== 'object') return out
-  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; scale?: unknown }
+  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; leftSide?: unknown; scale?: unknown }
   if (obj.state && typeof obj.state === 'object') {
     const src = obj.state as Record<string, unknown>
     for (const id of spec.panelIds) {
@@ -400,7 +411,7 @@ export function coercePanelLayout<P extends string>(
   if (obj.cols && typeof obj.cols === 'object') {
     const src = obj.cols as Record<string, unknown>
     const cols: PanelCols = {}
-    for (const id of ['a', 'b', 'log'] as const) {
+    for (const id of ['a', 'b', 'log', 'leftSide'] as const) {
       const v = colValue(id, src[id])
       if (v != null) cols[id] = v
     }
@@ -413,6 +424,9 @@ export function coercePanelLayout<P extends string>(
     if (place) out.place = place
     const colOrder = coerceColumnOrder(obj.colOrder)
     if (colOrder) out.colOrder = colOrder
+    // The left side only where the vocabulary has one, and only its listed panes (panelPlace).
+    const leftSide = coerceLeftSide(spec.arrange, obj.leftSide)
+    if (leftSide) out.leftSide = leftSide
   }
   // A box's text size (Connect's A− / A+), clamped on read into the range the menu writes; a factor
   // of 1 is no entry at all, and junk is dropped rather than guessed at.
@@ -570,10 +584,11 @@ export interface PanelLayoutApi<P extends string> {
   setCols?: (updates: Partial<Record<PanelColId, number | null>>) => void
   /** Move one pane in the three-column placement (⊞ Panels ▸ Arrange, layout L3): up or down in its
    *  column past the panes `shown` says are on screen, or into the column beside it. ONE undoable
-   *  step; a move that would change nothing (features/panelPlace `movePane` → null) is no step at
+   *  step; a move that would change nothing (features/panelPlace `moveArranged` → null) is no step at
    *  all, so it cannot spend the one Undo. Optional: only a vocabulary with `arrange` has a
-   *  placement. */
-  movePane?: (id: P, move: PaneMove, shown: (id: P) => boolean) => void
+   *  placement. `sideShows` (the LEFT SIDE, 2026-10-03): whether the cockpit's left side is on screen
+   *  on this window — then ◀ ▶ and ▲ ▼ reach it as well (panelPlace `moveArranged`); absent, false. */
+  movePane?: (id: P, move: PaneMove, shown: (id: P) => boolean, sideShows?: boolean) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
@@ -699,14 +714,18 @@ export function usePanelLayout<P extends string>(
     [key],
   )
   const movePane = useCallback(
-    (id: P, move: PaneMove, shown: (id: P) => boolean) =>
+    (id: P, move: PaneMove, shown: (id: P) => boolean, sideShows = false) =>
       setHist((h) => {
         if (!spec.arrange) return h
         // ◀ ▶ go to the neighbouring column ON SCREEN, and no cockpit renders a stored column order
         // yet (features/panelPlace): the stock one is what the operator sees.
-        const place = movePlacedPane(spec.arrange, h.cur.place, undefined, id, move, shown)
-        if (!place) return h
-        const cur: PanelLayout<P> = { ...h.cur, v: 2, place }
+        const next = moveArranged(spec.arrange, { place: h.cur.place, leftSide: h.cur.leftSide }, id, move, shown, sideShows)
+        if (!next) return h
+        // Everything else in the record rides along; the placement and the left side are the move's.
+        const { place: _place, leftSide: _side, ...rest } = h.cur
+        const cur: PanelLayout<P> = { ...rest, v: 2 }
+        if (next.place) cur.place = next.place
+        if (next.leftSide && next.leftSide.length > 0) cur.leftSide = next.leftSide
         savePanelLayout(key, cur)
         return { cur, prev: h.cur }
       }),
@@ -926,6 +945,10 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   // the region's, so they are not here and can never be given a place. THE VOICE KEYER IS PINNED
   // (D9): it transmits, and a pane that changes column is remounted, which would stop its over and
   // discard its recording. Below three tracks the feeds follow the rig strips (`stockMerged`).
+  // THE LEFT SIDE (operator's pick, 2026-10-03): Band Activity, Spots and Needed may stand in a
+  // full-height column beside the scope. Never the voice keyer or the log form: the side comes and
+  // goes with the window's width (about 1280 px), and a pane that changes parent is remounted, which
+  // would cut off a voice message or a half-typed contact. The rig strips stay in the region.
   arrange: {
     columns: {
       a: ['bandActivity', 'voiceKeyer', 'spots'],
@@ -934,6 +957,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
     },
     pinned: ['voiceKeyer'],
     stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'],
+    leftSide: ['bandActivity', 'spots', 'needed'],
   },
 }
 

@@ -223,7 +223,13 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
 
 - A cockpit shell has five child kinds only: header, scope, the TX strip under it (FT's cluster —
   TX On/Off · Tune · ATU · Stop TX — sticky on both edges, `.cockpit-txstrip`), ONE pane region,
-  one TX dock.
+  one TX dock — and Phone's may show one more, its **left side** (2026-10-03): a full-height column
+  of feeds (Band Activity, Spots, Needed; never the voice keyer or the log form) beside the scope,
+  the strip and the region, between the header and the dock, on windows from about 1280 effective
+  px. So Phone's scope, strip and region render inside two wrappers that are always there (the side
+  coming and going never re-parents the keyer or the log form) and have no box (`display: contents`)
+  until the side shows; the header and the dock stay shell children, so PTT and the dock never move.
+  The spec is "THE LEFT SIDE" in `cockpit-panes.css`.
   Every operator-content block renders through `CockpitPaneFrame` with a **role**:
   `fit="content"` for control strips (exactly content height — a strip cannot use surplus),
   fill + `weight` for feeds and the log column. A pane never sizes itself; structural size

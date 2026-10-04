@@ -10104,12 +10104,25 @@ export const EN = {
   'panels.arrange.down.aria': 'Move {{pane}} down',
   'panels.arrange.left.aria': 'Move {{pane}} to the column on the left',
   'panels.arrange.right.aria': 'Move {{pane}} to the column on the right',
+  // THE LEFT SIDE (2026-10-03, Phone): ⊞ Arrange's place beside the scope. `{{panes}}` is the
+  // cockpit's own pane names, joined by the locale's list format ("A, B or C" / "A and B").
+  'panels.arrange.side': 'Left side',
+  'panels.arrange.side.how': '◀ in Column 1 puts {{panes}} here, the full height beside the scope.',
+  'panels.arrange.side.narrow': 'Shows on a window about 1280 px wide or wider.',
+  'panels.arrange.side.kept': {
+    one: '{{panes}} stands here on a window about 1280 px wide or wider. On this one it is in its usual column.',
+    other: '{{panes}} stand here on a window about 1280 px wide or wider. On this one they are in their usual columns.',
+  },
+  'panels.arrange.toSide.aria': 'Move {{pane}} to the left side',
+  'panels.arrange.fromSide.aria': 'Move {{pane}} from the left side back to its column',
 
   // ── The cockpit pane frame ──────────────────────────────────────────────────────────
   // `{{title}}` is the pane's own name, supplied by the cockpit.
   'pane.popOut.aria': 'Open {{title}} in its own window',
   'pane.popOut.title': 'Open this pane in its own window (for a second monitor)',
   'pane.seam.logWidth.label': 'log column width',
+  'pane.seam.leftWidth.label': 'left side width',
+  'pane.left.label': 'Left side',
   'pane.hide.aria': 'Hide {{title}}',
   'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
 
