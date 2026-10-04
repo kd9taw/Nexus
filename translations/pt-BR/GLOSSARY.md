@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,515 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,527 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -98,7 +98,7 @@ word in, and use only that word in the CSV.
 | band | 326 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 237 | The rig itself, and the radio list in Settings. | |
 | mode | 213 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
-| rig | 157 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
+| rig | 158 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 141 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 129 | The Settings screen and every reference to it. | |
 | grid | 125 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
