@@ -277,35 +277,47 @@ async fn a_silent_road_ends_a_voice_over_at_its_gap() {
         Arc::default(),
         Instant::now() + PRESENCE,
     );
-    let started = Instant::now();
-    let (mut held, mut spoke, mut beat): (Option<Instant>, Instant, Instant) =
-        (None, started, started);
-    let samples = MIC.samples(20);
-    let mut k = 0;
-    while Instant::now() < started + 3 * HEARTBEAT {
-        let now = Instant::now();
-        if held.is_none_or(|held| now >= held + HOLD_EVERY) {
-            hold.hold(PRESS, now);
-            held = Some(now);
-        }
-        // Refused until the press has armed the over, as the page's first frames are.
-        let _ = feed.push(MicFrame {
-            seq: k + 1,
-            media: samples * k,
-            arrived: now,
-            samples: vec![0.5; samples as usize],
-        });
-        spoke = now;
-        k += 1;
-        if now >= beat + HEARTBEAT {
-            beat = renewed(&r.s, &mut socket, &session, &state).await;
-        }
-        tokio::time::sleep(TICK).await;
+    // The page's held PTT and voice on a thread of their own, as the page's microphone and its
+    // heartbeats are independent of each other: when each last reached the station.
+    let fed = Arc::new(Mutex::new(None::<(Instant, Instant)>));
+    let speaking = Arc::new(AtomicBool::new(true));
+    let page = {
+        let (hold, feed, fed, speaking) =
+            (hold.clone(), feed.clone(), fed.clone(), speaking.clone());
+        std::thread::spawn(move || {
+            let samples = MIC.samples(20);
+            let (mut held, mut k): (Option<Instant>, u64) = (None, 0);
+            while speaking.load(Ordering::SeqCst) {
+                let now = Instant::now();
+                if held.is_none_or(|held| now >= held + HOLD_EVERY) {
+                    hold.hold(PRESS, now);
+                    held = Some(now);
+                }
+                // Refused until the press has armed the over, as the page's first frames are.
+                let _ = feed.push(MicFrame {
+                    seq: k + 1,
+                    media: samples * k,
+                    arrived: now,
+                    samples: vec![0.5; samples as usize],
+                });
+                k += 1;
+                *fed.lock().unwrap() = held.map(|held| (held, now));
+                std::thread::sleep(TICK);
+            }
+        })
+    };
+    for _ in 0..3 {
+        tokio::time::sleep(HEARTBEAT).await;
+        renewed(&r.s, &mut socket, &session, &state).await;
     }
-    let held = held.unwrap();
-    let cut = Instant::now();
+    let dropped = Instant::now();
+    speaking.store(false, Ordering::SeqCst);
     cable.cut.send(true).unwrap();
-    let (before, off) = came_off(&ticks(radio).await, cut);
+    tokio::task::spawn_blocking(move || page.join().unwrap())
+        .await
+        .unwrap();
+    let (held, spoke) = fed.lock().unwrap().expect("premise: the page spoke");
+    let (before, off) = came_off(&ticks(radio).await, dropped);
     eprintln!(
         "measured: a voice over, the road silent mid-over: unkeyed {:?} after the last held PTT, \
          {:?} after the last voice frame; the bound is the {VOICE_GAP:?} gap plus one {TICK:?} \
