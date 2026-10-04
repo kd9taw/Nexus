@@ -661,6 +661,114 @@ pub fn parse_data_mode(f: &Frame) -> Option<bool> {
     }
 }
 
+// ---- IF FILTER WIDTH (`1A 03`) — the passband the scope's filter edges move ----
+
+/// Which of Icom's IF-filter-width tables a mode reads its `1A 03` code from. "Send/read the
+/// selected IF filter width": the width of the filter slot (FIL1/2/3) the receiver is on now,
+/// which the radio remembers per mode, exactly as turning its own width control does.
+///
+/// | Mode | Data | Steps |
+/// |---|---|---|
+/// | SSB/CW/RTTY (PSK on the IC-7610) | 00 – 09 | 50 – 500 Hz (50 Hz) |
+/// | SSB/CW (PSK) | 10 – 40 | 600 Hz – 3.6 kHz (100 Hz) |
+/// | RTTY | 10 – 31 | 600 Hz – 2.7 kHz (100 Hz) |
+/// | AM | 00 – 49 | 200 Hz – 10.0 kHz (200 Hz) |
+///
+/// The same table in every CI-V reference this daemon drives: IC-9700 (A7508-3EX-4 p. 16),
+/// IC-7610 (A7380-7EX-4 p. 13), IC-705 (A7560-8EX-6), IC-905 (A7711-9EX-2), IC-7300MK2 (rev 0,
+/// p. 19), and the original IC-7300's Full Manual command table ("AM: 00=200 Hz to 49=10 kHz;
+/// other than AM modes: 00=50 Hz to 31/40=2700 Hz/3600 Hz"). **FM has no row in any of them**:
+/// its filters are fixed, so it has no table and no width is ever written in it.
+/// ⚠️ NEEDS-BENCH: the table is the vendor's; that the radio takes a write from Nexus, and what
+/// it does with one in a mode it has no row for, is not measured here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterWidthTable {
+    SsbCw,
+    Rtty,
+    Am,
+}
+
+impl FilterWidthTable {
+    /// The table `mode` uses; `None` = no settable width (FM). DATA rides its base mode
+    /// (USB-D is SSB), which is why this takes the bare [`Mode`].
+    pub fn for_mode(mode: Mode) -> Option<Self> {
+        match mode {
+            Mode::Usb | Mode::Lsb | Mode::Cw | Mode::CwR => Some(Self::SsbCw),
+            Mode::Rtty | Mode::RttyR => Some(Self::Rtty),
+            Mode::Am => Some(Self::Am),
+            Mode::Fm => None,
+        }
+    }
+
+    /// The table for a mode NAME as the broker reports it (`USB`, `PKTUSB`, `CWR`, …); `None`
+    /// for FM, its DATA form, and anything this build cannot name.
+    pub fn for_mode_name(name: &str) -> Option<Self> {
+        let up = name.trim().to_ascii_uppercase();
+        let base = match up.as_str() {
+            "PKTUSB" | "DATA-U" | "PKT-U" => Mode::Usb,
+            "PKTLSB" | "DATA-L" | "PKT-L" => Mode::Lsb,
+            other => Mode::from_name(other)?,
+        };
+        Self::for_mode(base)
+    }
+
+    /// The width (Hz) that `code` means in this table — `None` for a code the table does not
+    /// define. It VALIDATES rather than clamps: a code outside the table is a frame read wrong,
+    /// never a very narrow filter.
+    pub fn hz(self, code: u8) -> Option<u32> {
+        let c = u32::from(code);
+        match self {
+            Self::Am => (c <= 49).then(|| 200 + 200 * c),
+            Self::SsbCw | Self::Rtty => {
+                let top = if self == Self::SsbCw { 40 } else { 31 };
+                if c <= 9 {
+                    Some(50 + 50 * c)
+                } else {
+                    (c <= top).then(|| 600 + 100 * (c - 10))
+                }
+            }
+        }
+    }
+
+    /// The code whose width is NEAREST `hz` — a request outside the table lands on its nearest
+    /// end, so no write can leave the radio's range. A tie (550 Hz, halfway across the jump
+    /// from 50 Hz steps to 100 Hz steps) takes the WIDER code. Found by searching [`Self::hz`]
+    /// rather than inverting it, so the two cannot disagree across that jump.
+    pub fn code_for(self, hz: u32) -> u8 {
+        let mut best = (0u8, u32::MAX);
+        for code in 0..=49u8 {
+            if let Some(w) = self.hz(code) {
+                let d = w.abs_diff(hz);
+                if d <= best.1 {
+                    best = (code, d);
+                }
+            }
+        }
+        best.0
+    }
+}
+
+/// Read the selected IF filter's width (`1A 03`).
+pub fn read_filter_width(radio: u8) -> Frame {
+    Frame::command(radio, 0x1A, &[0x03])
+}
+
+/// Set the selected IF filter's width (`1A 03 <code>`), the code as ONE BCD byte: 40 goes on
+/// the wire as `0x40`. The binary byte (`0x28`) is a different, valid code — 2.4 kHz for a
+/// 3.6 kHz ask — and the radio would take it without a word.
+pub fn set_filter_width(radio: u8, code: u8) -> Frame {
+    Frame::command(radio, 0x1A, &[0x03, to_bcd(code.min(49))])
+}
+
+/// The code from a `1A 03` reply. `None` for any other frame, or a byte that is not BCD.
+pub fn parse_filter_width_code(f: &Frame) -> Option<u8> {
+    if f.cmd != 0x1A || f.data.first() != Some(&0x03) {
+        return None;
+    }
+    let b = *f.data.get(1)?;
+    (b >> 4 <= 9 && b & 0x0F <= 9).then(|| from_bcd(b))
+}
+
 // ---- BAND-DIRECTED commands (`29`) — name the Main or Sub receiver without selecting it ----
 
 /// Icom's BAND-DIRECTED command: `29 <band> <command…>` performs `<command…>` on the named
@@ -2011,5 +2119,111 @@ mod tests {
         assert!(attenuator_steps_db(IcomModel::Ic905).is_empty());
         // The IC-7610's preamp is a different control and did not move either.
         assert_eq!(preamp_steps_db(IcomModel::Ic7610), &[12, 20]);
+    }
+
+    /// ⭐ THE IF FILTER WIDTH, BY VALUE, AGAINST THE VENDOR'S ROWS (`1A 03`). Every row of the
+    /// table in five CI-V references — IC-9700 A7508-3EX-4 p. 16 among them — is read back
+    /// here through the code, its ends and its one discontinuity (500 Hz → 600 Hz) named.
+    #[test]
+    fn filter_width_codes_are_the_vendor_table() {
+        use FilterWidthTable::*;
+        // SSB/CW: 00–09 = 50–500 in 50s, 10–40 = 600–3600 in 100s.
+        assert_eq!(SsbCw.hz(0), Some(50));
+        assert_eq!(SsbCw.hz(9), Some(500));
+        assert_eq!(SsbCw.hz(10), Some(600), "there is no 550 Hz code");
+        assert_eq!(SsbCw.hz(22), Some(1800));
+        assert_eq!(SsbCw.hz(24), Some(2000));
+        assert_eq!(SsbCw.hz(28), Some(2400));
+        assert_eq!(SsbCw.hz(40), Some(3600));
+        assert_eq!(SsbCw.hz(41), None, "past the SSB row is not a filter");
+        // RTTY: the same low ladder, then 600–2700.
+        assert_eq!(Rtty.hz(9), Some(500));
+        assert_eq!(Rtty.hz(31), Some(2700));
+        assert_eq!(Rtty.hz(32), None);
+        // AM: 00–49 = 200–10 000 in 200s.
+        assert_eq!(Am.hz(0), Some(200));
+        assert_eq!(Am.hz(29), Some(6000));
+        assert_eq!(Am.hz(49), Some(10_000));
+        assert_eq!(Am.hz(50), None);
+        // Every defined code inverts to itself — encode and decode cannot drift apart.
+        for t in [SsbCw, Rtty, Am] {
+            for code in 0..=49u8 {
+                if let Some(w) = t.hz(code) {
+                    assert_eq!(t.code_for(w), code, "{t:?} {w} Hz");
+                }
+            }
+        }
+        // FM has no row: no table, so nothing is ever written in it. DATA rides its base mode.
+        assert_eq!(FilterWidthTable::for_mode(Mode::Fm), None);
+        assert_eq!(FilterWidthTable::for_mode_name("FM"), None);
+        assert_eq!(FilterWidthTable::for_mode_name("PKTFM"), None);
+        assert_eq!(FilterWidthTable::for_mode_name("PKTUSB"), Some(SsbCw));
+        assert_eq!(FilterWidthTable::for_mode_name("cw-r"), Some(SsbCw));
+        assert_eq!(FilterWidthTable::for_mode_name("RTTYR"), Some(Rtty));
+        assert_eq!(FilterWidthTable::for_mode_name("AM"), Some(Am));
+        assert_eq!(
+            FilterWidthTable::for_mode_name("DV"),
+            None,
+            "a mode this build cannot name"
+        );
+    }
+
+    /// A request is CLAMPED into the radio's range by construction — the nearest code, never a
+    /// code past either end — and a tie on the 500/600 jump takes the wider filter.
+    #[test]
+    fn a_filter_width_request_lands_on_the_nearest_code_inside_the_table() {
+        use FilterWidthTable::*;
+        assert_eq!(
+            SsbCw.code_for(0),
+            0,
+            "below the table: its narrowest, 50 Hz"
+        );
+        assert_eq!(
+            SsbCw.code_for(4000),
+            40,
+            "above it: 3.6 kHz, never a code the rig lacks"
+        );
+        assert_eq!(SsbCw.code_for(1_000_000), 40);
+        assert_eq!(Rtty.code_for(3000), 31, "RTTY stops at 2.7 kHz");
+        assert_eq!(Am.code_for(12_000), 49);
+        assert_eq!(SsbCw.code_for(550), 10, "the tie takes the wider (600 Hz)");
+        assert_eq!(SsbCw.code_for(1840), 22, "1.84 kHz → 1.8 kHz");
+        assert_eq!(SsbCw.code_for(1860), 23, "1.86 kHz → 1.9 kHz");
+        assert_eq!(
+            Am.code_for(2500),
+            12,
+            "AM in 200s: 2.5 kHz → 2.6 kHz (the wider of a tie)"
+        );
+    }
+
+    /// THE BCD BYTE, which is the whole encoding: 40 is `0x40` on the wire. Sending the binary
+    /// value would put `0x28` there — code 28, 2.4 kHz for a 3.6 kHz ask, and a radio that
+    /// accepts it silently.
+    #[test]
+    fn filter_width_frames_carry_one_bcd_byte() {
+        assert_eq!(
+            set_filter_width(0xA2, 40).to_bytes(),
+            vec![0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x03, 0x40, 0xFD]
+        );
+        assert_eq!(
+            set_filter_width(0xA2, 22).to_bytes(),
+            vec![0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x03, 0x22, 0xFD]
+        );
+        assert_eq!(
+            set_filter_width(0xA2, 0).to_bytes(),
+            vec![0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x03, 0x00, 0xFD]
+        );
+        assert_eq!(
+            read_filter_width(0xA2).to_bytes(),
+            vec![0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x03, 0xFD]
+        );
+        let reply = Frame::parse(&[0xFE, 0xFE, 0xE0, 0xA2, 0x1A, 0x03, 0x28, 0xFD]).unwrap();
+        assert_eq!(parse_filter_width_code(&reply), Some(28));
+        // Not BCD: a frame read wrong, never a filter.
+        let junk = Frame::parse(&[0xFE, 0xFE, 0xE0, 0xA2, 0x1A, 0x03, 0x2A, 0xFD]).unwrap();
+        assert_eq!(parse_filter_width_code(&junk), None);
+        // Another `1A` reply is not this one.
+        let data = Frame::parse(&[0xFE, 0xFE, 0xE0, 0xA2, 0x1A, 0x06, 0x01, 0x01, 0xFD]).unwrap();
+        assert_eq!(parse_filter_width_code(&data), None);
     }
 }

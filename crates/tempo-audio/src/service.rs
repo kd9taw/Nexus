@@ -7443,37 +7443,130 @@ impl RadioLoop {
                         // apply nested inside it, which is correct — `take_passband_request` is
                         // never called, so the operator's click stays QUEUED for the next poll
                         // rather than being drained against a mode we did not read.
-                        if self.rig_poll_ticks.is_multiple_of(4) {
+                        //
+                        // …EXCEPT while a filter width is waiting. Its apply is nested in this
+                        // read, so a width dragged on the scope would reach the radio up to three
+                        // polls late; owed now, the radio follows the edge on the next poll. Still
+                        // one read and at most one width per poll, and still budgeted.
+                        if self.rig_poll_ticks.is_multiple_of(4)
+                            || engine_lock(engine).passband_request_pending()
+                        {
                             self.read_turns.owe(HeavyRead::Mode);
                         }
                         if self.read_turns.take_owed(HeavyRead::Mode, have_budget()) {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
+                            // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
+                            // passband: `m` answers 0 there on purpose, because the FT8 arm's width
+                            // check reads it and `M PKTUSB 3000` must not start rewriting the
+                            // operator's DATA filter (see `CivBackend`'s filter-width note). Asked
+                            // in the mode `m` just named; FM has no width.
+                            use crate::civ::broker::FilterWidthReading;
+                            let native = self.rigctld_proc.as_ref().and_then(CatDaemon::native);
+                            let native_pb = match (native, m.as_deref()) {
+                                (Some(d), Some(mode)) => Some(d.filter_width(mode)),
+                                _ => None,
+                            };
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.remote_observe_mode(remote_mode.as_ref(), m.as_deref());
                                 if let Some(ref mm) = m {
                                     eng.observe_rig_mode(mm.clone());
                                 }
-                                eng.observe_rig_passband(pb); // None (a split read) keeps the last width
+                                match native_pb {
+                                    Some(FilterWidthReading::Width(w)) => {
+                                        eng.observe_rig_passband(Some(w))
+                                    }
+                                    // A mode with no width: unknown, never the last mode's width.
+                                    Some(FilterWidthReading::Fixed) => eng.clear_rig_passband(),
+                                    Some(FilterWidthReading::Unread) => {} // keeps the last width
+                                    None => eng.observe_rig_passband(pb), // None (a split read) keeps the last width
+                                }
                             }
                             // Apply a pending RX filter-width change (Hamlib carries width as the
                             // 2nd arg of set_mode). Only drain the request when we KNOW the mode to
                             // set it against, and re-queue on a failed/rejected set — so a CAT
                             // hiccup or a split `m` read never silently swallows the operator's click.
+                            // This whole block is receive-time work (see the guard above it), so
+                            // no width is ever written to a keyed radio.
                             if let Some(ref mode) = m {
                                 let width_req = engine_lock(engine).take_passband_request();
-                                if let Some(hz) = width_req {
-                                    if rig.set_passband(mode, hz).is_ok() {
-                                        {
+                                match (width_req, native) {
+                                    (None, _) => {}
+                                    // The native daemon: `1A 03` on Main, clamped to the radio's
+                                    // table by construction; the answer is the width it now has.
+                                    (Some(hz), Some(d)) => {
+                                        use crate::civ::broker::FilterWidthRefusal as Refusal;
+                                        // ⛔ NEVER WITH A DATA MODE COMMANDED (FT8, and the
+                                        // soundcard CW keyer's PKTUSB): that filter is the one FT8
+                                        // decodes through, and the FT8 arm on this daemon never
+                                        // sets a width, so nothing would ever put it back.
+                                        let set = if mode_is_data(&self.last_mode) {
+                                            Err(Refusal::DataMode)
+                                        } else {
+                                            d.set_filter_width(hz)
+                                        };
+                                        match set {
+                                            Ok(w) => {
+                                                engine_lock(engine).observe_rig_passband(Some(w))
+                                            }
+                                            // Nothing answered: the same re-queue as the Hamlib path.
+                                            Err(Refusal::NoAnswer) => {
+                                                engine_lock(engine).request_filter_width(hz)
+                                            }
+                                            // A REFUSAL IS FINAL — FM, DATA, an NG. Re-queued, it
+                                            // would be re-sent every cycle forever. Drop it, say why
+                                            // in the log, and put the radio's real width back where
+                                            // the optimistic one stands.
+                                            Err(why) => {
+                                                tempo_core::applog::info(
+                                                    "cat",
+                                                    &format!(
+                                                        "the radio kept its filter width: a {hz} Hz \
+                                                         width was not set ({why:?})"
+                                                    ),
+                                                );
+                                                // Read first: no CAT round trip under the engine lock.
+                                                let now = d.filter_width(mode);
+                                                let mut eng = engine_lock(engine);
+                                                match now {
+                                                    FilterWidthReading::Width(w) => {
+                                                        eng.observe_rig_passband(Some(w))
+                                                    }
+                                                    FilterWidthReading::Fixed => {
+                                                        eng.clear_rig_passband()
+                                                    }
+                                                    FilterWidthReading::Unread => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    (Some(hz), None) => match rig.set_passband(mode, hz) {
+                                        Ok(()) => {
                                             let mut eng = engine_lock(engine);
                                             eng.observe_rig_passband(Some(hz)); // optimistic; next read confirms
                                         }
-                                    } else {
-                                        let mut eng = engine_lock(engine);
-                                        eng.request_filter_width(hz); // re-queue for the next cycle
-                                    }
+                                        // THE RIG SAID NO (Hamlib answered with an RPRT that is
+                                        // not a link fault, `rprt_error`): final, as on the native
+                                        // path. Re-queued, the same width went out every cycle for
+                                        // good — and a waiting width now owes every poll's mode
+                                        // read. The `m` read just above already put the radio's
+                                        // own width back on screen.
+                                        Err(e) if e.kind() == std::io::ErrorKind::Other => {
+                                            tempo_core::applog::info(
+                                                "cat",
+                                                &format!(
+                                                    "the radio kept its filter width: a {hz} Hz \
+                                                     width was refused ({e})"
+                                                ),
+                                            );
+                                        }
+                                        Err(_) => {
+                                            let mut eng = engine_lock(engine);
+                                            eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                        }
+                                    },
                                 }
                             }
                         }
@@ -13784,6 +13877,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod filter_width;
     mod receive_source;
     mod remote_radio;
     use super::should_command_rf_power;

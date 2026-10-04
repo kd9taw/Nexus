@@ -4446,6 +4446,8 @@ export const ES: PartialCatalog = {
   "sat.work.title.noRotor": "Trabajar esta pasada: abre el satélite, elige su transpondedor y arranca el reloj de la pasada + el Doppler (no hay rotor configurado — no se moverá nada)",
   "sat.work.title.rotor": "Trabajar esta pasada: abre el satélite, elige su transpondedor y arma el autoseguimiento del rotor + el reloj de la pasada (el Doppler sintoniza si sus interruptores están activados)",
   "scope.canvas.title": "Pulsa una señal para sintonizarla · mantén pulsado y arrastra para deslizar la banda de paso",
+  "scope.canvas.edges.title": "Pulsa una señal para sintonizarla · mantén pulsado y arrastra para deslizar la banda de paso · arrastra un borde del filtro para cambiar el ancho",
+  "scope.canvas.keys.aria": "Espectro: ← y → sintonizan, con Mayús en pasos mayores; Intro sintoniza la señal de la banda de paso; [ y ] estrechan y ensanchan el filtro; ↑ y ↓ retroceden en pausa",
   "scope.dss.off.title": "Cambiar a la vista 3D de espectro apilado (llena el panel; oculta la traza)",
   "scope.dss.on.title": "Volver a la traza plana + cascada",
   "scope.dynamic.title": "Cuánto sobresale del suelo de ruido la señal más fuerte de esta vista. La escala vertical del espectro está FIJA a 50 dB sobre el ruido, así que una señal más fuerte dibuja de verdad un pico más alto — usa G para ensanchar o estrechar esa ventana.",

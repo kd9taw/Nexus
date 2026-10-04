@@ -15,6 +15,15 @@
 // their plates, the frequency scale and the pitch marker — is drawn on `.ph-scope-canvas` above
 // it, which is also the element every pointer gesture lands on. The renderer swaps its canvas
 // while a lost WebGL2 context is away, so nothing here ever holds or listens on that one.
+//
+// THE RECEIVER MARKERS (`spectrum/markers.ts`). Where the host passes the rig's REPORTED width, the
+// receiver's passband is drawn over the picture, and where it also passes `onPassband` the edges a
+// width can move are grabbable: dragging one, or [ and ] on the focused scope, commands the filter
+// through the host's coalescing. A press on an edge that does not move is still a click — the snap
+// is untouched, as are the box drag, the edge scan and the wheel. Every gesture has a key on the
+// focused scope (←/→ tune, Shift for bigger steps; Enter snaps onto the signal in the passband; [ ]
+// the width; ↑/↓ scroll back while paused), and none of them is Esc or Space, which belong to the
+// cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { getScopeFrame } from '../api'
 import type { SpectrumFrameWire } from '../types'
@@ -41,6 +50,23 @@ import {
 } from '../waterfall'
 import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCenter } from '../tuneSnap'
 import type { ScopeTuneRequest } from '../useScopeTune'
+import {
+  MARK_RGB,
+  PASSBAND_LIMITS,
+  clampPassband,
+  drawNotch,
+  drawPassband,
+  edgeNear,
+  edgesOnAxis,
+  keyStepHz,
+  notchOnAxis,
+  passbandOnAxis,
+  stepPassband,
+  widthForEdge,
+  type AxisKind,
+  type AxisPassband,
+  type Edge,
+} from '../spectrum/markers'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { useNightActive } from '../useNight'
 import { useSkinActive } from '../useSkin'
@@ -60,6 +86,19 @@ const DB = 'dB'
 const FLEX_RF = 'FLEX RF'
 const CIV_RF = 'CI-V RF'
 const DIAL_PLATE = 'DIAL'
+/** The plate on a second receiver's dial line: the rig's own name for it. */
+const SUB_PLATE = 'SUB'
+/** How close (CSS px) a press must land to a filter edge to grab it. */
+const EDGE_TOL_PX = 5
+/** How long a width just commanded stands on screen ahead of the rig's read-back (ms). */
+const PENDING_WIDTH_MS = 2000
+/** A pause between tuning keys after which the next press starts again from the live dial (ms). */
+const KEY_IDLE_MS = 800
+/** The outer band where a held drag scrolls the band (the edge scan), in CSS px for a scope
+ *  `widthPx` wide. A filter edge is never grabbed inside it: that band is the scan's. */
+const scanZonePx = (widthPx: number) => Math.min(36, widthPx / 4)
+/** The focused scope's keys, for `aria-keyshortcuts` (key names, not prose). */
+const SCOPE_KEYS = 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Enter [ ] ArrowUp ArrowDown'
 
 /** Persisted 3D-view toggle for the rig scope (shared by the Phone + CW cockpits; per-surface
  * so a popped-out cockpit keeps its own choice). Static literal — the storage-scope test
@@ -155,6 +194,22 @@ interface Props {
   /** Effective RX filter width (Hz) for the drag box — the cockpit passes the rig's
    * read-back width or its per-mode fallback. */
   filterWidthHz?: number
+  /** The rig's REPORTED passband width (Hz): the receiver marker's. null/absent = the rig does not
+   *  report one, and then no passband is drawn and no edge can be grabbed — a marker drawn from
+   *  the fallback above would place a filter the radio never said it had. */
+  passbandHz?: number | null
+  /** Commands a filter width (Hz) from a grabbed edge or the [ ] keys, already clamped to the
+   *  cockpit's range; the host coalesces it (`useScopePassband`). Absent = the edges are drawn but
+   *  cannot be moved. Never used by a click-only (Remote) scope. */
+  onPassband?: (widthHz: number) => void
+  /** The MANUAL notch's audio frequency (Hz), passed only while CAT reports the notch on: drawn as
+   *  a band through the picture. Absent = no notch mark. */
+  notchHz?: number | null
+  /** A SECOND receiver's marker — the Sub of a dual-receiver radio: its dial, mode and reported
+   *  width (null = unknown), drawn in its own colour on an RF row and never grabbable. ⚠️ PER
+   *  HOST: the dual-receiver ruling of 2026-09-22 puts the Sub's scope per host and no scope host
+   *  has been named, so no host passes it yet — and a host that does not draws what it always did. */
+  subReceiver?: { dialHz: number; sideband: string; widthHz: number | null } | null
   /** CW sidetone pitch (Hz) for the click math (zero-beat targets). Distinct from
    * `markerHz`, which is only the audio-row visual hairline. Phone omits. */
   pitchHz?: number
@@ -227,6 +282,10 @@ export function PhoneScope({
   onTune,
   onBeginClick,
   filterWidthHz,
+  passbandHz = null,
+  onPassband,
+  notchHz = null,
+  subReceiver = null,
   pitchHz = 600,
   cwPitchRefDial = true,
   interactive = false,
@@ -304,6 +363,19 @@ export function PhoneScope({
   const onTuneRef = useRef(onTune)
   const onBeginClickRef = useRef(onBeginClick)
   const filterWidthRef = useRef(filterWidthHz)
+  const passbandRef = useRef(passbandHz)
+  const onPassbandRef = useRef(onPassband)
+  const notchRef = useRef(notchHz)
+  const subRef = useRef(subReceiver)
+  const cockpitRef = useRef(cockpit)
+  /** A width just commanded, shown until the rig's read-back agrees (or PENDING_WIDTH_MS passes):
+   *  the flush and the radio loop's apply are both still ahead of it. */
+  const pendingWidthRef = useRef<{ hz: number; until: number } | null>(null)
+  /** The dial the tuning keys are walking, so a held key never re-reads a dial the flush has not
+   *  moved yet; re-seeded from the live dial after KEY_IDLE_MS. */
+  const keyDialRef = useRef<{ hz: number; at: number } | null>(null)
+  /** Redraw only the overlay — a gesture or a mark's prop between two sweeps, or while paused. */
+  const overlayRef = useRef<(() => void) | null>(null)
   const pitchRef = useRef(pitchHz)
   const cwPitchRefRef = useRef(cwPitchRefDial)
   const interactiveRef = useRef(interactive)
@@ -331,6 +403,10 @@ export function PhoneScope({
     grabAfHz: number
     /** …and the dial at grab (null = needs re-seeding, e.g. after an edge-scan). */
     grabDialHz: number | null
+    /** A press on a grabbable FILTER EDGE: which edge, the passband and axis it was grabbed on,
+     *  and the width (`hz`) the drag has reached. Moved, it resizes; released unmoved, it is a
+     *  click. */
+    edge?: { edge: Edge; p: AxisPassband; axis: AxisKind; hz: number }
   } | null>(null)
   // Edge-scan while dragging: holding the box in the outer edge zone keeps scrolling the
   // band. The BOX stays pinned under the cursor (never repainted from Hz — the view is
@@ -357,10 +433,43 @@ export function PhoneScope({
   onTuneRef.current = onTune
   onBeginClickRef.current = onBeginClick
   filterWidthRef.current = filterWidthHz
+  passbandRef.current = passbandHz
+  onPassbandRef.current = onPassband
+  notchRef.current = notchHz
+  subRef.current = subReceiver
+  cockpitRef.current = cockpit
   pitchRef.current = pitchHz
   cwPitchRefRef.current = cwPitchRefDial
   interactiveRef.current = interactive && (!onBeginClick || scopeAvailable)
   traceHoldRef.current = traceHoldMs
+
+  // ---- The receiver marker's state, read by the overlay and the gestures alike (refs only) ----
+  /** The width the marker shows: an edge being dragged, else a width just commanded (until the
+   *  rig's read-back agrees, or it expires), else the rig's own. null = no width to show. */
+  const shownWidth = (): number | null => {
+    const g = dragRef.current
+    if (g?.edge && g.dragging) return g.edge.hz
+    const pend = pendingWidthRef.current
+    const rig = passbandRef.current
+    if (pend) {
+      if (performance.now() < pend.until && pend.hz !== rig) return pend.hz
+      pendingWidthRef.current = null
+    }
+    return rig != null && rig > 0 ? rig : null
+  }
+  /** The drawn axis, for the marks: the newest row's kind and the live props. */
+  const axisKind = (rf: boolean): AxisKind => ({
+    rf,
+    carrierCentered: carrierCenteredRef.current && !rf,
+    sideband: sidebandRef.current,
+    dialHz: dialRef.current,
+    pitchHz: pitchRef.current,
+    cwPitchRefDial: cwPitchRefRef.current !== false,
+  })
+  /** May the marker's edges be grabbed now: the cockpit's tuning gate (CAT up, not transmitting),
+   *  a host that commands widths, a width the rig reported, and not the click-only Remote scope. */
+  const canEditPassband = () =>
+    interactiveRef.current && onPassbandRef.current != null && onBeginClickRef.current == null && shownWidth() != null
 
   useLayoutEffect(() => {
     lutRef.current = bakeLut(resolveColormap(palette, theme, night, skin))
@@ -491,6 +600,11 @@ export function PhoneScope({
      *  outside the row). See scopeView. Done on every poll, so the view and the pointer's mapping
      *  follow the dial and the props between two sweeps of a slow source. */
     const project = (src: string, rowLo: number, rowHi: number) => {
+      // ⚠️ A FILTER EDGE BEING DRAGGED HOLDS THE AXIS STILL. Phone's Auto span and CW's window are
+      // sized FROM the filter, so every width the drag commands would rescale the axis under the
+      // hand and run the edge away from it. The axis follows the new width on release instead.
+      const held = dragRef.current
+      if (held?.edge && held.dragging && lastViewRef.current) return
       view = scopeView(
         rowLo,
         rowHi,
@@ -687,6 +801,9 @@ export function PhoneScope({
       drawOverlay()
     }
     rebuildRef.current = draw
+    overlayRef.current = () => {
+      if (devW > 0 && devH > 0) drawOverlay()
+    }
 
     /** The marks over the picture: what the operator reads and aims with. Cleared every draw. */
     const drawOverlay = () => {
@@ -701,6 +818,40 @@ export function PhoneScope({
       // UI scale it does not. Only the plates and the frequency scale use it; the rules, ticks
       // and the trace stay on `scaleY`, because they are graphics the operator does not read.
       const textPx = scaleY * textScale
+
+      // ---- The receivers' passbands and the manual notch: under every line and plate below ----
+      // Main's passband from the rig's REPORTED width (`spectrum/markers.ts`), its grabbable edges
+      // heavier; a second receiver in its own colour, on an RF row only (an audio row is Main's own
+      // receiver audio, with no place for another dial).
+      const xOf = (hz: number) => ((hz - lo) / (hi - lo)) * Wd
+      const rfRow = isRfScopeSource(src)
+      const axis = axisKind(rfRow)
+      const sub = subRef.current
+      if (sub && rfRow) {
+        const subAxis: AxisKind = { ...axis, sideband: sub.sideband, dialHz: sub.dialHz, cwPitchRefDial: true }
+        const sp = sub.widthHz != null ? passbandOnAxis(subAxis, sub.widthHz) : null
+        if (sp) drawPassband(ctx, xOf, devH, sp, MARK_RGB.sub, [], scaleY)
+        if (sub.dialHz >= lo && sub.dialHz <= hi) {
+          const sx = Math.round(xOf(sub.dialHz))
+          ctx.strokeStyle = `rgba(${MARK_RGB.sub}, 0.8)`
+          ctx.lineWidth = Math.max(1, scaleY)
+          ctx.beginPath()
+          ctx.moveTo(sx, 0)
+          ctx.lineTo(sx, devH)
+          ctx.stroke()
+          ctx.fillStyle = `rgba(${MARK_RGB.sub}, 0.8)`
+          ctx.font = `${Math.max(8, Math.round(10 * textPx))}px system-ui, sans-serif`
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'top'
+          ctx.fillText(SUB_PLATE, sx + 3 * textPx, 2 * textPx)
+        }
+      }
+      const width = shownWidth()
+      const mp = width != null ? passbandOnAxis(axis, width) : null
+      if (mp) drawPassband(ctx, xOf, devH, mp, MARK_RGB.main, canEditPassband() ? edgesOnAxis(axis) : [], scaleY)
+      const notchAudio = notchRef.current
+      const notchAt = notchAudio != null ? notchOnAxis(axis, notchAudio) : null
+      if (notchAt != null && notchAt > lo && notchAt < hi) drawNotch(ctx, xOf(notchAt), devH, scaleY)
 
       // ---- Carrier line (Phone): the DIAL, at the 1/9 mark (USB) or the 8/9 mark (LSB) ----
       //
@@ -951,6 +1102,7 @@ export function PhoneScope({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       ro.disconnect()
       rebuildRef.current = null
+      overlayRef.current = null
       rendererRef.current = null
       // Hands a WebGL2 context back at once (browsers cap live contexts) and takes the canvas out.
       renderer.destroy()
@@ -975,6 +1127,46 @@ export function PhoneScope({
     // answer: it says "this many Hz the other side of the dial", which is exactly how
     // clickTuneTarget's `dial + sign·(af − lowcut)` then moves the dial toward the click.
     return view.mirrored ? -axisHz : axisHz
+  }
+  /** The AXIS Hz under a client x — the drawn axis, never un-mirrored (`xToHz` answers row Hz),
+   *  which is where the receiver marks are placed. */
+  const axisAt = (clientX: number): number | null => {
+    const canvas = canvasRef.current
+    const view = lastViewRef.current
+    if (!canvas || !view) return null
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width < 2 || !(view.hi > view.lo)) return null
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    return view.lo + frac * (view.hi - view.lo)
+  }
+  /** The grabbable filter edge under a client x, with the passband and axis it was found on and
+   *  the width it starts from; null where there is none to grab. */
+  const edgeUnder = (clientX: number): { edge: Edge; p: AxisPassband; axis: AxisKind; hz: number } | null => {
+    if (!canEditPassband()) return null
+    const canvas = canvasRef.current
+    const view = lastViewRef.current
+    const width = shownWidth()
+    if (!canvas || !view || width == null || !(view.hi > view.lo)) return null
+    const axis = axisKind(view.rf)
+    const p = passbandOnAxis(axis, width)
+    if (!p) return null
+    const rect = canvas.getBoundingClientRect()
+    const xIn = clientX - rect.left
+    const zone = scanZonePx(rect.width)
+    if (xIn <= zone || xIn >= rect.width - zone) return null // the edge scan's band, as it always was
+    const px = (hz: number) => ((hz - view.lo) / (view.hi - view.lo)) * rect.width
+    const edge = edgeNear(xIn, px(p.lo), px(p.hi), edgesOnAxis(axis), EDGE_TOL_PX)
+    return edge ? { edge, p, axis, hz: width } : null
+  }
+  /** Review mode's scrollback: `step` rows older (+) or newer (−), held inside the ring. The wheel
+   *  and the ↑/↓ keys both land here. */
+  const scrollBack = (step: number) => {
+    const cur = offsetRef.current
+    const next = Math.max(0, Math.min(Math.max(0, (rendererRef.current?.rows ?? 0) - 1), cur + step))
+    if (next !== cur) {
+      offsetRef.current = next
+      rebuildRef.current?.()
+    }
   }
   // Imperative box positioning — pointer-rate (60 fps), decoupled from the 20 Hz canvas.
   const positionBox = (centerHz: number, widthHz: number) => {
@@ -1122,15 +1314,42 @@ export function PhoneScope({
       scanDialHz: null,
       grabAfHz: xToHz(e.clientX) ?? 0,
       grabDialHz: dialRef.current,
+      // On a grabbable filter edge, a move resizes the passband instead of sliding the box.
+      edge: click ? undefined : (edgeUnder(e.clientX) ?? undefined),
     }
   }
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = dragRef.current
-    if (!g) return
+    if (!g) {
+      // Hovering: say where a filter edge can be grabbed.
+      if (canvasRef.current) canvasRef.current.style.cursor = edgeUnder(e.clientX) ? 'ew-resize' : ''
+      return
+    }
     if (g.click && e.pointerId !== g.pointerId) return
     if (!g.moved && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) <= 6) return // click wobble
     g.moved = true
     if (g.click) return // click-only Remote cannot start a native drag or edge scan
+    if (g.edge) {
+      // A grabbed FILTER EDGE: the width follows the hand, legal for this cockpit, and each new
+      // width goes to the host's coalescer (one write per flush, the last width wins). The
+      // tuning gate is asked on every move, so a transmitter keying mid-drag ends it here.
+      if (!canEditPassband()) {
+        endGesture()
+        overlayRef.current?.()
+        return
+      }
+      const hz = axisAt(e.clientX)
+      if (hz == null) return
+      g.dragging = true
+      if (canvasRef.current) canvasRef.current.style.cursor = 'ew-resize'
+      const w = clampPassband(widthForEdge(g.edge.axis, g.edge.p, g.edge.edge, hz), PASSBAND_LIMITS[cockpitRef.current])
+      if (w !== g.edge.hz) {
+        g.edge.hz = w
+        onPassbandRef.current?.(w)
+      }
+      overlayRef.current?.()
+      return
+    }
     const view = lastViewRef.current
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!view || !rect || rect.width < 4) return
@@ -1144,7 +1363,7 @@ export function PhoneScope({
     // Runs for BOTH row sources: scanTick works in absolute dial Hz seeded from the
     // rig's real dial, so the audio scope (Yaesu — no native panadapter) scans the
     // band exactly like the RF scopes do.
-    const EDGE = Math.min(36, rect.width / 4)
+    const EDGE = scanZonePx(rect.width)
     const xIn = e.clientX - rect.left
     if (xIn <= EDGE) scanRef.current = { dir: -1, depth: Math.min(1, (EDGE - xIn) / EDGE) }
     else if (xIn >= rect.width - EDGE)
@@ -1207,6 +1426,14 @@ export function PhoneScope({
     const centerHz = g.centerHz
     endGesture()
     if (g.click && (g.moved || !interactiveRef.current || g.clickContext !== clickContext())) return
+    if (g.edge && wasDragging) {
+      // The last width rides the coalescer's pending flush, and stands on screen until the rig's
+      // read-back agrees. An edge pressed and released WITHOUT moving falls through to the click.
+      pendingWidthRef.current = { hz: g.edge.hz, until: performance.now() + PENDING_WIDTH_MS }
+      if (canEditPassband()) onPassbandRef.current?.(g.edge.hz)
+      overlayRef.current?.()
+      return
+    }
     if (wasDragging) {
       // Final position rides the coalescer's pending timer — latest target wins.
       // centerHz 0 = an audio-row drag that never reached an edge zone (no tune
@@ -1242,6 +1469,90 @@ export function PhoneScope({
     if (g.click) g.click(Math.round(r.dialHz))
     else onTuneRef.current?.({ dialHz: Math.round(r.dialHz), kind: 'click' })
   }
+
+  // ---- The keys: one for every gesture, on the focused scope -----------------------------------
+  //
+  // ←/→ tune down/up, the box drag's path (a drag report, so the host coalesces it), a hundredth
+  // of the view per press and ten with Shift — the edge scan's; Enter snaps onto the signal in the
+  // passband, the click's; [ and ] narrow and widen the filter, the edge's; ↑/↓ scroll back while
+  // paused, the wheel's. ⛔ NOT Esc (the shared stop listener's: this handler lets it pass and
+  // never cancels it) and NOT Space (Phone's PTT); nor PageUp/PageDown, which are CW's speed
+  // keys. Chords with Ctrl, Alt or ⌘ belong to the app.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const chord = e.ctrlKey || e.altKey || e.metaKey
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !chord) {
+      if (!pausedRef.current) return
+      e.preventDefault()
+      // The wheel's own direction: ↓ is a wheel turned toward you.
+      const back = newestAtTopRef.current ? e.key === 'ArrowDown' : e.key === 'ArrowUp'
+      scrollBack(back ? 3 : -3)
+      return
+    }
+    const view = lastViewRef.current
+    if (!interactiveRef.current || !view) return
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !chord) {
+      if (clickOnly || !onTuneRef.current) return // the Remote scope is click-only
+      const now = performance.now()
+      const k = keyDialRef.current
+      const from = k && now - k.at < KEY_IDLE_MS ? k.hz : dialRef.current
+      if (from == null || !(from > 0)) return
+      e.preventDefault()
+      const step = keyStepHz(view.hi - view.lo) * (e.shiftKey ? 10 : 1)
+      // On the step's grid, the way a radio's own tuning step moves: off the grid, the first press
+      // lands on the next grid point in its direction.
+      const next = e.key === 'ArrowRight' ? Math.floor(from / step) * step + step : Math.ceil(from / step) * step - step
+      if (!(next > 0)) return
+      keyDialRef.current = { hz: next, at: now }
+      onTuneRef.current({ dialHz: next, kind: 'drag' })
+      return
+    }
+    if (e.key === 'Enter' && !chord) {
+      // The click at the passband's centre: what the box is sitting on, snapped onto.
+      const data = lastRowRef.current
+      const dial = dialRef.current
+      if (!data || dial == null) return
+      if (!view.rf && isSymmetricMode(sidebandRef.current)) return
+      const p = passbandOnAxis(axisKind(view.rf), boxWidthFor(sidebandRef.current, filterWidthRef.current ?? null))
+      if (!p) return
+      e.preventDefault()
+      const centre = (p.lo + p.hi) / 2
+      const r = clickTuneTarget({
+        row: data.row,
+        rowLoHz: data.rowLo,
+        rowHiHz: data.rowHi,
+        source: sourceRef.current,
+        clickHz: view.mirrored ? -centre : centre,
+        dialHz: dial,
+        sideband: sidebandRef.current,
+        pitchHz: pitchRef.current,
+        cwPitchRefDial: cwPitchRefRef.current,
+      })
+      if (clickOnly) {
+        if (!scopeAvailable) return
+        onBeginClickRef.current?.()?.(Math.round(r.dialHz))
+      } else onTuneRef.current?.({ dialHz: Math.round(r.dialHz), kind: 'click' })
+      return
+    }
+    // The character, not the key position: [ and ] sit behind AltGr on many layouts.
+    if (e.key === '[' || e.key === ']') {
+      const width = shownWidth()
+      if (!canEditPassband() || width == null) return
+      e.preventDefault()
+      const next = stepPassband(width, e.key === ']' ? 1 : -1, PASSBAND_LIMITS[cockpitRef.current])
+      if (next === width) return
+      pendingWidthRef.current = { hz: next, until: performance.now() + PENDING_WIDTH_MS }
+      onPassbandRef.current?.(next)
+      overlayRef.current?.()
+    }
+  }
+  /** Keys belong to a scope the host made a tuning surface (native or click-only). */
+  const keyable = onTune != null || clickOnly
+  const passbandGrabbable = tunable && !clickOnly && onPassband != null && (passbandHz ?? 0) > 0
+
+  // A mark's props changing between two sweeps (or while paused) redraws the marks now.
+  useEffect(() => {
+    overlayRef.current?.()
+  }, [passbandHz, notchHz, subReceiver, onPassband, interactive])
 
   // Real CAT S-meter (dB rel S9). Absent when the rig doesn't report STRENGTH, or during
   // TX (STRENGTH is RX-only) → the meter reads "—" rather than faking a level.
@@ -1421,7 +1732,22 @@ export function PhoneScope({
           ref={canvasRef}
           className={`ph-scope-canvas${tunable ? ' tunable' : ''}`}
           style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
-          title={tunable ? (clickOnly ? t('remote.scopeClick') : t('scope.canvas.title')) : undefined}
+          title={
+            tunable
+              ? clickOnly
+                ? t('remote.scopeClick')
+                : passbandGrabbable
+                  ? t('scope.canvas.edges.title')
+                  : t('scope.canvas.title')
+              : undefined
+          }
+          // An instrument the keys can drive: `application`, so a screen reader hands the arrows to
+          // it rather than reading the page with them.
+          tabIndex={keyable ? 0 : undefined}
+          role={keyable ? 'application' : undefined}
+          aria-label={keyable ? t('scope.canvas.keys.aria') : undefined}
+          aria-keyshortcuts={keyable ? SCOPE_KEYS : undefined}
+          onKeyDown={keyable ? onKeyDown : undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -1432,13 +1758,7 @@ export function PhoneScope({
             if (!pausedRef.current) return
             // Wheel-back follows the scroll direction, exactly as the FT8 waterfall's does.
             const back = newestAtTopRef.current ? e.deltaY > 0 : e.deltaY < 0
-            const step = back ? 3 : -3
-            const cur = offsetRef.current
-            const next = Math.max(0, Math.min(Math.max(0, (rendererRef.current?.rows ?? 0) - 1), cur + step))
-            if (next !== cur) {
-              offsetRef.current = next
-              rebuildRef.current?.()
-            }
+            scrollBack(back ? 3 : -3)
           }}
         />
         {!scopeAvailable && <div className="ph-scope-paused" role="status">{t('remote.scopeUnavailable')}</div>}
