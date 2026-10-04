@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure. If the station does refuse a Stop
   (station control taken back at the radio, for example), the stream page says **Could not stop
   transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
+- **Remote streaming: a held PTT no longer lets go by itself mid-over in current Chrome.** Every few
+  seconds the stream page's PTT greyed out for a few milliseconds while the page re-read the station's
+  state. Current Chrome took a held PTT that greyed out as let go, so a long over could end while you
+  still held the button; older Chrome kept the over but could miss the key-up of a Space held on PTT,
+  leaving the over held after you let go. A PTT you hold now stays lit until you let go of it. Letting
+  go, Stop TX, leaving the window, the picture freezing, a backed-up connection or the stream ending
+  still end the over, and the station still decides whether to key. Pressing PTT while it is greyed
+  out now does nothing, as the button shows; a press that lands in one of those few milliseconds needs
+  pressing again.
 - **Remote streaming: leaving full screen sends Stop TX in Chrome and Edge too.** In Firefox and
   Safari, leaving full screen any way but **Exit full screen** already sent Stop TX. Chrome and Edge
   skipped that Stop, trusting Esc to reach the page and stop first, so a browser that reported
@@ -144,6 +153,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Linux and Raspberry Pi without a graphics card: a shorter pause as the scope and waterfall
+  start.** On Linux, Nexus times its two ways of drawing the scope and waterfall once, just after
+  the window opens, and keeps the faster. Where graphics are drawn in software, the first timed
+  frame already settles it by a wide margin, so the check now stops there: on a slow test machine
+  its pause went from 89–105 ms to 57–70 ms. With a graphics card, or wherever the two ways are
+  close, the check runs in full as before.
 - **Remote access says what a streaming browser can do.** A browser approved for station
   controls that streams this station operates Nexus as you would at the shack, transmit
   included, whether or not its FT8/FT4 transmit box is ticked. Settings ▸ Station ▸ Remote

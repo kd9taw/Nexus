@@ -83,6 +83,11 @@ const APPLICATION_VERSIONS = (await readFile(new URL('../../ui/src/remote-web/ap
   .match(/export const APPLICATION_VERSIONS = \[([^\]]*)\]/)[1].split(',').map(v => Number(v.trim()))
 if (!APPLICATION_VERSIONS.length || APPLICATION_VERSIONS.some(Number.isNaN)) throw new Error('could not read APPLICATION_VERSIONS')
 const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
+// What a held PTT may go without: the station ends the over once no hold has arrived for GAP. Read
+// from the station's own source, so the stream scenario judges a held press by the real number.
+const PTT_GAP_MS = Number((await readFile(new URL('../../crates/tempo-app/src/remote_control/ptt_hold.rs', import.meta.url), 'utf8'))
+  .match(/pub const GAP: Duration = Duration::from_millis\((\d+)\);/)?.[1])
+if (!(PTT_GAP_MS > 0)) throw new Error('could not read the station\'s PTT hold GAP')
 // Every scenario this suite runs. Extracted from the `for` head on 2026-09-20 so CI can
 // shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
@@ -1177,20 +1182,81 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX').focus();true`)
         await typeKey('b','KeyB','b')
         assert.equal(await atShack('__shack.received.control.filter(m=>m.type==="key").length'),before,'a key on Stop TX never reaches the station')
-        // S7: a held PTT is re-asserted under one hold id until let go, then released at once.
-        await press(await center('.remote-stream-ptt'),450)
-        await untilShack(`__shack.received.ptt.some(m=>m.type==='pttRelease')`)
-        const ptt=await atShack('__shack.received.ptt')
-        const holds=ptt.filter(m=>m.type==='pttHold')
-        assert.ok(holds.length>=3,'held for 450 ms: re-asserted about every 100 ms ('+holds.length+')')
-        assert.equal(new Set(ptt.filter(m=>m.type!=='held').map(m=>m.holdId)).size,1,'one press, one hold id')
-        assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
+        // S7: a held PTT is re-asserted under one hold id until let go, then released at once. Judged on the
+        // page's own clock, from what it sent and when the button was pressed and let go, so the count follows
+        // how long the page held it, whatever this runner slept: the station ends an over that goes PTT_GAP_MS
+        // without a hold, so no gap may pass that (the press to the first hold, hold to hold, the last to the
+        // let-go), and the release goes when the button is let go, not before. The button's own disabled and
+        // focus changes are logged beside them: a press the page ends early names what ended it. So is the page's
+        // operations state going stale and fresh again. It lapses for a round trip now and then, and a press on the
+        // PTT greyed out by a lapse starts nothing (the operator's pick, 2026-10-04), so each press goes just after
+        // a read lands, never into a lapse; held, the PTT stays lit through one (the operator's pick, the same day).
+        await evaluate(`(()=>{const log=window.__ptt=[],at=()=>performance.now(),b=document.querySelector('.remote-stream-ptt'),send=RTCDataChannel.prototype.send
+          RTCDataChannel.prototype.send=function(data){if(this.label==='ptt')log.push({...JSON.parse(data),at:at()});return send.call(this,data)}
+          for(const type of ['pointerdown','pointerup','focusout'])b.addEventListener(type,()=>log.push({type,at:at()}),true)
+          for(const type of ['keydown','keyup'])addEventListener(type,e=>log.push({type,on:e.target===b?'PTT':e.target.tagName,at:at()}),true)
+          new MutationObserver(()=>log.push({type:b.disabled?'disabled':'enabled',at:at()})).observe(b,{attributeFilter:['disabled']})
+          const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f&&!f.memoizedProps?.connection)f=f.return
+          const ops=f.memoizedProps.connection.operations,reads=[];let {fresh,state}=ops.getSnapshot()
+          ops.subscribe(()=>{const s=ops.getSnapshot();if(s.fresh!==fresh){fresh=s.fresh;log.push({type:fresh?'fresh':'stale',at:at()})}if(s.state!==state){state=s.state;if(s.fresh)for(const read of reads.splice(0))read(true)}})
+          window.__afterRead=()=>new Promise((resolve,reject)=>{reads.push(resolve);setTimeout(()=>reject(new Error('the station state was not read again within 5 s')),5000)});return true})()`)
+        // One press of the PTT, held `hold` ms, by the mouse or by `key` on the focused button; `meanwhile` runs from the press.
+        const heldPress=async(hold,meanwhile,key)=>{
+          const from=await evaluate('window.__ptt.length'),got=(await atShack('__shack.received.ptt')).length,point=await center('.remote-stream-ptt')
+          // Focused only once the read lands: a lapse greys out a PTT that is not held, and the browser blurs it.
+          await evaluate(`window.__afterRead().then(()=>{${key?"document.querySelector('.remote-stream-ptt').focus();":''}return true})`)
+          await Promise.all([key?(async()=>{await browser.call('Input.dispatchKeyEvent',{type:'keyDown',text:key.key,...key},session);await sleep(hold);await browser.call('Input.dispatchKeyEvent',{type:'keyUp',...key},session);await sleep(50)})():press(point,hold),meanwhile?.()])
+          // The page's own release, waited for no longer than it could take: a press the page never lets go is the red.
+          const released=`window.__ptt.slice(${from}).some(m=>m.type==='pttRelease')`
+          for(let i=0;i<20&&!await evaluate(released);i++)await sleep(100)
+          if(await evaluate(released))await untilShack(`__shack.received.ptt.slice(${got}).some(m=>m.type==='pttRelease')`)
+          const sent=(await evaluate('window.__ptt')).slice(from).filter(m=>m.type!=='held'),ptt=(await atShack('__shack.received.ptt')).slice(got).filter(m=>m.type!=='held')
+          const pressed=sent.find(m=>m.type===(key?'keydown':'pointerdown'))?.at,letGo=sent.find(m=>m.type===(key?'keyup':'pointerup'))?.at
+          const holds=sent.filter(m=>m.type==='pttHold'),pttReleases=sent.filter(m=>m.type==='pttRelease')
+          const told=` (ms after the press: ${sent.map(m=>`${m.type}${m.on?' '+m.on:''}${m.seq===undefined?'':' '+m.seq} ${Math.round(m.at-pressed)}`).join(', ')}; the station got ${ptt.map(m=>m.type+' '+m.seq).join(', ')})`
+          assert.ok(pressed!==undefined&&letGo!==undefined&&pttReleases.length===1,'the page saw one press and one let-go, and sent one release'+told)
+          const gaps=[pressed,...holds.map(m=>m.at),letGo].map((at,i,all)=>at-all[i-1]).slice(1)
+          assert.ok(Math.max(...gaps)<=PTT_GAP_MS&&holds.length>=Math.ceil((letGo-pressed)/PTT_GAP_MS),`held ${Math.round(letGo-pressed)} ms: ${holds.length} holds, never ${PTT_GAP_MS} ms without one`+told)
+          assert.ok(pttReleases[0].at>=letGo&&pttReleases[0].at-letGo<50,'released when let go, not before and not after'+told)
+          assert.equal(new Set([...holds,...pttReleases,...ptt].map(m=>m.holdId)).size,1,'one press, one hold id')
+          assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
+          assert.ok(!sent.some(m=>m.type==='disabled'&&m.at>pressed&&m.at<letGo),'held, the PTT is never greyed out'+told)
+          return {holds,lapsed:sent.some(m=>m.type==='stale'&&m.at>pressed&&m.at<letGo),told}
+        }
+        const {holds}=await heldPress(450)
+        // Held through a lapse: heartbeats answered 400 ms late from just after the press, so the state's 1.2 s runs
+        // out between replies while the PTT is held 1.5 s. Chrome 154 blurs a focused button it disables, and a held
+        // PTT greyed out by the lapse was let go through its blur, mid-over.
+        const throughLapse=await heldPress(1500,async()=>{await sleep(20);heartbeatReplyDelayMs=400})
+        heartbeatReplyDelayMs=0
+        assert.ok(throughLapse.lapsed,'the state lapsed while the PTT was held'+throughLapse.told)
+        console.log('Stream PTT held through a lapse of the state'+throughLapse.told)
+        // Space held on the focused PTT through a lapse, let go by its key-up, which reaches the button only while it
+        // keeps its focus: a browser that blurs a button it disables sends that key-up to the page instead.
+        const spaceThroughLapse=await heldPress(1500,async()=>{await sleep(20);heartbeatReplyDelayMs=400},{key:' ',code:'Space',windowsVirtualKeyCode:32})
+        heartbeatReplyDelayMs=0
+        assert.ok(spaceThroughLapse.lapsed,'the state lapsed while Space held the PTT'+spaceThroughLapse.told)
+        console.log('Stream PTT held by Space through a lapse of the state'+spaceThroughLapse.told)
+        await evaluate('window.__afterRead()')
         // THE DEAD-MAN, the page's half: a key held on the picture goes as itself and is re-asserted on
-        // ptt at once and every 100 ms while held, and not after; a button held on the picture likewise.
+        // ptt at once and every 100 ms while held, and not after; a button held on the picture likewise. Judged on
+        // the page's own clock as S7 is: the shack's window lets go of whatever is not re-asserted within the held
+        // PTT's own gap (STREAM_HELD_GAP_MS is STREAM_PTT_GAP_MS), so none may pass PTT_GAP_MS from the press to the
+        // first `held`, `held` to `held` and the last to the let-go, and none is sent once let go.
         const helds=async()=>(await atShack('__shack.received.ptt')).filter(m=>m.type==='held')
         const consecutive=list=>{const seqs=list.map(m=>m.seq).sort((a,b)=>a-b);return seqs.every((seq,i)=>seq===seqs[0]+i)}
+        await evaluate(`(()=>{const v=document.querySelector('.remote-stream-video');for(const type of ['keydown','keyup','pointerdown','pointerup'])v.addEventListener(type,()=>window.__ptt.push({type:'picture '+type,at:performance.now()}),true);return true})()`)
+        const heldOnPicture=(what,log,down,up,station,itself)=>{
+          const pressed=log.find(m=>m.type===down)?.at,letGo=log.find(m=>m.type===up)?.at,sent=log.filter(m=>m.type==='held'),during=sent.filter(m=>m.at<=letGo)
+          const told=` (ms after the press: ${log.map(m=>`${m.type}${m.seq===undefined?'':' '+m.seq} ${Math.round(m.at-pressed)}`).join(', ')}; the station got ${station.map(m=>m.seq).join(', ')})`
+          assert.ok(pressed!==undefined&&letGo!==undefined,`${what}: the page saw the press and the let-go`+told)
+          const gaps=[pressed,...during.map(m=>m.at),letGo].map((at,i,all)=>at-all[i-1]).slice(1)
+          assert.ok(Math.max(...gaps)<=PTT_GAP_MS&&during.length>=Math.ceil((letGo-pressed)/PTT_GAP_MS),`${what} ${Math.round(letGo-pressed)} ms: ${during.length} re-assertions, never ${PTT_GAP_MS} ms without one`+told)
+          assert.deepEqual(sent.filter(m=>m.at>letGo),[],`${what}: nothing re-asserted once let go`+told)
+          assert.ok(station.length>0&&station.every(itself)&&consecutive(station),`${what}: re-asserted as itself, in order`+told)
+        }
         await evaluate(`document.querySelector('.remote-stream-video').focus();true`)
-        let heldBefore=(await helds()).length
+        let heldBefore=(await helds()).length,logged=await evaluate('window.__ptt.length')
         const space={key:' ',code:'Space',windowsVirtualKeyCode:32}
         await browser.call('Input.dispatchKeyEvent',{type:'keyDown',text:' ',...space},session)
         await sleep(450)
@@ -1198,8 +1264,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.code==='Space'&&m.action==='up')`)
         await sleep(300)
         const keyHeld=(await helds()).slice(heldBefore)
-        assert.ok(keyHeld.length>=4&&keyHeld.length<=7&&keyHeld.every(m=>m.keys.join()==='Space'&&m.buttons===0)&&consecutive(keyHeld),'Space held 450 ms, then let go: re-asserted at once and every 100 ms, and not after ('+JSON.stringify(keyHeld)+')')
-        heldBefore=(await helds()).length
+        heldOnPicture('Space held on the picture',(await evaluate('window.__ptt')).slice(logged),'picture keydown','picture keyup',keyHeld,m=>m.keys.join()==='Space'&&m.buttons===0)
+        heldBefore=(await helds()).length;logged=await evaluate('window.__ptt.length')
         const point=await center('.remote-stream-video'),ups=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up').length`)
         await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
         await sleep(450)
@@ -1207,7 +1273,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await untilShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up').length>${ups}`)
         await sleep(300)
         const buttonHeld=(await helds()).slice(heldBefore)
-        assert.ok(buttonHeld.length>=4&&buttonHeld.length<=7&&buttonHeld.every(m=>m.keys.length===0&&m.buttons===1)&&consecutive(buttonHeld),'a button held 450 ms, then let go: re-asserted likewise ('+JSON.stringify(buttonHeld)+')')
+        heldOnPicture('A button held on the picture',(await evaluate('window.__ptt')).slice(logged),'picture pointerdown','picture pointerup',buttonHeld,m=>m.keys.length===0&&m.buttons===1)
         // THE STOP LINE, in real layout: Stop TX is on screen and nothing covers it, at every size.
         for(const [w,h] of [[360,640],[390,844],[844,390],[1024,768],[1280,800],[1920,1080]])for(const theme of ['dark','light']){
           await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false},session)
@@ -1375,7 +1441,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok(blobRefused(),'control: a blob: worklet module is reported as refused: '+JSON.stringify(refused.slice(seen)))
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
-        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, "Still there?" at 15:00 with Stop TX unmoved and reachable at 12 layouts and its press reaching nothing at the shack, the idle end at 16:00 as close and release, no CSP violation`)
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds, and through a lapse of the state ${throughLapse.holds.length} by the mouse and ${spaceThroughLapse.holds.length} by Space), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, "Still there?" at 15:00 with Stop TX unmoved and reachable at 12 layouts and its press reaching nothing at the shack, the idle end at 16:00 as close and release, no CSP violation`)
       }finally{
         shackLive=false
         await Promise.allSettled([signalling,trickle])

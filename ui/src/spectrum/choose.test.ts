@@ -4,7 +4,7 @@
 // setting. The probe itself draws, so it is proved in a real browser (ui/spectrum-harness,
 // `capability`); how the renderer acts on all of this is in index.test.ts.
 import { afterEach, describe, expect, it } from 'vitest'
-import { askedFor, byName, byTimes, rendererName } from './choose'
+import { askedFor, byName, byTimes, decisive, rendererName } from './choose'
 
 describe('byName', () => {
   it.each([
@@ -75,6 +75,30 @@ describe('byTimes', () => {
   it('says what it timed, and gives WebGL2 no reason', () => {
     expect(byTimes(2.06, 0.03)).toEqual({ pick: 'canvas2d', why: 'the probe timed WebGL2 at 2.06 ms a frame and canvas-2D at 0.03 ms' })
     expect(byTimes(0.05, 0.3)).toEqual({ pick: 'webgl2', why: '' })
+  })
+})
+
+describe("decisive (WebGL2's timed frame answering alone)", () => {
+  it('answers where WebGL2 is software, at the frames CI measured', () => {
+    // SwiftShader on CI's runners, the probe's times a frame (2026-10-04).
+    expect(decisive(17.81, 0.1)).toBe(true)
+    expect(decisive(7.8, 0.06)).toBe(true)
+  })
+
+  it('leaves a near tie, a frame a GPU could take, and quick software to the windows', () => {
+    // Canvas-2D made slow, the harness's control: 12 against 10 ms.
+    expect(decisive(12, 10)).toBe(false)
+    // Over the windows' margin of 2, under 32 times canvas-2D.
+    expect(decisive(10, 0.5)).toBe(false)
+    // Under 16 ns a pixel (4.19 ms for the probe's band) however cheap canvas-2D is, and SwiftShader
+    // on all 32 cores of the dev box.
+    expect(decisive(4.19, 0.01)).toBe(false)
+    expect(decisive(2.3, 0.07)).toBe(false)
+  })
+
+  it('never answers anything the windows would not', () => {
+    for (let gl = 0.01; gl < 200; gl *= 1.37)
+      for (let cpu = 0.001; cpu < 50; cpu *= 1.41) if (decisive(gl, cpu)) expect(byTimes(gl, cpu).pick).toBe('canvas2d')
   })
 })
 

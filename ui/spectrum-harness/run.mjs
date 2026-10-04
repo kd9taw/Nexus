@@ -735,7 +735,15 @@ async function renderChecks(cdp, base, backend) {
   }
 }
 
-/** The probe's whole run, ms: it must stay well under 100 ms, whatever this runner's load. */
+/** The probe's whole run, ms: one task on the main thread, once per page, that input waits behind.
+ *  It cannot be under any number whatever the machine: it decides only after two WebGL2 frames,
+ *  and WebGL2 is slow exactly where it runs. What holds by design is its shape: on a software
+ *  rasteriser it stops at its timed frame, so it costs those two frames, canvas-2D's band built and
+ *  timed for one window, and the setup of both. Measured 57–70 ms on one core of the dev box at
+ *  11.5–13.2 ms a WebGL2 frame (89–105 ms before, when it timed two windows of WebGL2 as well);
+ *  CI's four runs measured 58–108 ms the old way at 7.8–17.8 ms a frame, which is 38–68 ms less
+ *  the frames no longer drawn (2026-10-04). It reaches 100 ms only where WebGL2's frame is over
+ *  about 30 ms, 1.7 times CI's slowest. */
 const PROBE_BUDGET_MS = 100
 
 /** The capability gate. WebGL2 on this pinned browser is SwiftShader, a software rasteriser: the
@@ -746,11 +754,12 @@ const PROBE_BUDGET_MS = 100
 async function capabilityChecks(cdp, base) {
   const cases = [
     { q: '', id: 'auto, software WebGL2', want: 'canvas2d', why: 'WebGL2 is software-rendered here (' },
-    { q: 'name=masked', id: 'auto, renderer string masked', want: 'canvas2d', why: 'the probe timed WebGL2 at ' },
+    { q: 'name=masked', id: 'auto, renderer string masked', want: 'canvas2d', why: 'the probe timed WebGL2 at ', budget: 'under' },
     { q: 'name=gpu', id: "auto, a GPU's renderer string", want: 'webgl2', why: '' },
     { q: 'backend=webgl2', id: 'WebGL2 asked for', want: 'webgl2', why: '' },
     { q: 'setting=webgl2', id: 'WebGL2 asked for by the hidden setting', want: 'webgl2', why: '' },
-    { q: 'name=masked&slow=canvas2d', id: 'the probe, canvas-2D made slow', want: 'webgl2', why: '', control: 'kept WebGL2: the probe measures' },
+    { q: 'name=masked&slow=canvas2d', id: 'the probe, canvas-2D made slow', want: 'webgl2', why: '', windows: true, control: 'kept WebGL2, timed over its windows: the probe measures' },
+    { q: 'name=masked&slow=webgl2', id: 'the probe, WebGL2 made slow', want: 'canvas2d', why: 'the probe timed WebGL2 at ', frames: 2, budget: 'over', control: 'stopped at its timed frame, over budget: the budget measures' },
     { q: 'backend=webgl2&break=upload', id: 'a broken upload, WebGL2 asked for', want: 'canvas2d', why: 'self-test:', control: 'refused, as it must be' },
     { q: 'break=context', id: 'a broken context', want: 'canvas2d', why: 'no WebGL2 context', control: 'refused, as it must be' },
   ]
@@ -762,15 +771,25 @@ async function capabilityChecks(cdp, base) {
     } finally {
       await page.close()
     }
-    // The probe runs only where the renderer string is masked, and must be quick there (bar the
-    // control, whose canvas-2D is slow on purpose); anywhere else the string or the ask decides, with
-    // no probe.
+    // The probe runs only where the renderer string is masked; anywhere else the string or the ask
+    // decides, with no probe. Where it runs, what it must show: its time against the budget (under it
+    // for SwiftShader as it is; over it with WebGL2 slowed, the budget's control), how many WebGL2
+    // frames it drew (two, the cold and the timed one, where that frame decides), and the windows
+    // timed where the frames are close (canvas-2D slowed).
     const masked = c.q.includes('name=masked')
-    const probed = masked ? r.probe !== null && (c.control || r.probe.tookMs < PROBE_BUDGET_MS) : r.probe === null
+    const p = r.probe
+    const wanted = !masked ? ['no probe'] : [
+      ...(c.budget ? [`a probe ${c.budget} ${PROBE_BUDGET_MS} ms`] : []),
+      ...(c.frames ? [`${c.frames} WebGL2 frames`] : []),
+      ...(c.windows ? ['its windows timed'] : []),
+    ]
+    const probed = !masked ? p === null : p !== null
+      && (c.budget !== 'under' || p.tookMs < PROBE_BUDGET_MS) && (c.budget !== 'over' || p.tookMs >= PROBE_BUDGET_MS)
+      && (!c.frames || p.glFrames === c.frames) && (!c.windows || p.glFrames > 2)
     const ok = r.backend === c.want && (c.why ? r.reason.startsWith(c.why) : r.reason === '') && probed
-    const timed = r.probe ? `; probe ${r.probe.tookMs.toFixed(1)} ms, WebGL2 ${r.probe.glMs.toFixed(2)} / canvas-2D ${r.probe.cpuMs.toFixed(2)} ms a frame` : ''
-    record({ kind: c.control ? 'control' : 'capability', id: `capability, ${c.id}`, outcome: ok ? (c.control ? 'control-fired' : 'pass') : 'fail', detail: `${r.backend}: ${r.reason || 'no reason'}${timed}`, probe: r.probe })
-    line(c.control ? 'CONTROL' : 'CAPABLE', c.id, `${r.backend}${r.reason ? ` (${r.reason})` : ''}${timed}`, ok ? (c.control ?? 'ok') : `FAIL (expected ${c.want}${c.why ? `, "${c.why}…"` : ''}${probed ? '' : masked ? `, a probe under ${PROBE_BUDGET_MS} ms` : ', no probe'})`)
+    const timed = p ? `; probe ${p.tookMs.toFixed(1)} ms, WebGL2 ${p.glMs.toFixed(2)} / canvas-2D ${p.cpuMs.toFixed(2)} ms a frame, ${p.glFrames} WebGL2 frames` : ''
+    record({ kind: c.control ? 'control' : 'capability', id: `capability, ${c.id}`, outcome: ok ? (c.control ? 'control-fired' : 'pass') : 'fail', detail: `${r.backend}: ${r.reason || 'no reason'}${timed}`, probe: p })
+    line(c.control ? 'CONTROL' : 'CAPABLE', c.id, `${r.backend}${r.reason ? ` (${r.reason})` : ''}${timed}`, ok ? (c.control ?? 'ok') : `FAIL (expected ${[c.want, ...(c.why ? [`"${c.why}…"`] : []), ...wanted].join(', ')})`)
   }
 }
 
