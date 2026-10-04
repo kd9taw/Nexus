@@ -15,9 +15,10 @@
 // so its picture is read from THAT canvas (WebGL2 or canvas-2D, whichever is drawing) by copying it
 // into a 2D one; the Waterfall's and MiniSpectrum's, the renderer's too, are read the same way.
 import '../src/styles.css'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { PhoneScope } from '../src/components/PhoneScope'
+import type { FtOverlay, ScopeSpot } from '../src/spectrum/overlays'
 import { Waterfall } from '../src/components/Waterfall'
 import { MiniSpectrum } from '../src/components/MiniSpectrum'
 import { SpectrumRing } from '../src/spectrum/ring'
@@ -142,7 +143,9 @@ let collectRowCost = false
 /** Wall-clock milliseconds for a page time, as the backend stamps `tMs`. */
 const wallMs = (pageMs: number) => Math.round(performance.timeOrigin + pageMs)
 
-function installIpc(answer: (drawn: Drawn) => Answer): void {
+/** `extra`: stand-ins for the few other commands a probe's mount asks (the overlays probe's
+ *  `get_privilege_spans`); anything else is still refused and listed in `unexpected`. */
+function installIpc(answer: (drawn: Drawn) => Answer, extra: Record<string, (args?: Record<string, unknown>) => unknown> = {}): void {
   const deliver = new MessageChannel()
   const after = new MessageChannel()
   const pending: (() => void)[] = []
@@ -150,6 +153,7 @@ function installIpc(answer: (drawn: Drawn) => Answer): void {
   deliver.port1.onmessage = () => pending.shift()?.()
   after.port1.onmessage = () => afterQ.shift()?.()
   const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+    if (Object.prototype.hasOwnProperty.call(extra, cmd)) return Promise.resolve(extra[cmd](args) as T)
     const asksFrame = cmd === 'get_scope_frame'
     if (!asksFrame && cmd !== 'get_scope_row' && cmd !== 'get_spectrum_row') {
       unexpected.push(cmd)
@@ -744,6 +748,135 @@ async function offsets() {
   return null
 }
 
+/**
+ * The overlays (`src/spectrum/overlays.ts`) in a real browser, on the Flex set (14.000–14.200 MHz, the
+ * dial at 14.100): the licence-class tint from a stand-in `get_privilege_spans`, a spot's tick and the
+ * FT RX offset, each read back BY VALUE off the overlays' own canvas. Then a spot storm with the scope
+ * paused, the picture's draw calls counted beside the overlays' redraws: a spot change may redraw the
+ * overlays and never the picture. The control is palette changes under the same count, which must
+ * redraw the picture. Live, the picture's draw calls with and without a storm are measured only.
+ */
+async function overlays() {
+  const set = TIMED_SETS['flex-15']
+  const pool = Array.from({ length: 64 }, (_, s) => timedFrame(set, s, false))
+  const payloads = pool.map(frameJson)
+  const tails = pool.map(frameTail)
+  let n = 0
+  installIpc(
+    () => {
+      const k = n++ % pool.length
+      return { json: payloads[k], seq: n, tMs: wallMs(performance.now()), tail: tails[k] }
+    },
+    // A stand-in, not the gate's table: one span, so the view holds a privilege edge at each end of it.
+    { get_privilege_spans: (args) => ({ class: 'general', mode: args?.mode, unrestricted: false, spans: [[14.025, 14.15]] }) },
+  )
+  // What is drawn, per canvas: any draw call on the renderer's (the picture, in .ph-scope-render), and
+  // each clear of the overlays' (one per redraw of them).
+  const counts = { picture: 0, overlays: 0 }
+  const wrap = (proto: object, names: string[]) => {
+    const p = proto as Record<string, (...a: unknown[]) => unknown>
+    for (const name of names) {
+      const f = p[name]
+      p[name] = function (this: { canvas: unknown }, ...a: unknown[]) {
+        const cv = this.canvas
+        if (cv instanceof HTMLCanvasElement) {
+          if (cv.closest('.ph-scope-render')) counts.picture++
+          else if (name === 'clearRect' && cv.classList.contains('ph-scope-overlays')) counts.overlays++
+        }
+        return f.apply(this, a)
+      }
+    }
+  }
+  wrap(CanvasRenderingContext2D.prototype, ['putImageData', 'drawImage', 'fillRect', 'fill', 'stroke', 'clearRect'])
+  wrap(WebGL2RenderingContext.prototype, ['drawArrays', 'drawElements'])
+  const spotsFor = (k: number): ScopeSpot[] => [
+    {
+      spot: { call: `K${k}XYZ`, entity: '', zone: 0, band: '20m', freqMhz: 14.05, mode: 'CW', spotter: 'W1AW', corroborators: [], ageSecs: 0, comment: '', licensed: true },
+      ink: null,
+    },
+  ]
+  const ft: FtOverlay = { side: 1, rxHz: 1500, txHz: 1700, decodes: [] }
+  const api: { spots?: (k: number) => void; theme?: (t: string) => void } = {}
+  function Host() {
+    const [k, setK] = useState(0)
+    const [theme, setTheme] = useState(THEME)
+    api.spots = setK
+    api.theme = setTheme
+    const spots = useMemo(() => spotsFor(k), [k])
+    return (
+      <PhoneScope transmitting={false} theme={theme} viewLoHz={-1e9} viewHiHz={1e9} dialHz={14_100_000} privilegeMode="cw" spots={spots} ft={ft} />
+    )
+  }
+  const host = document.getElementById('root')!
+  host.className = 'hx-fixed'
+  createRoot(host).render(<Host />)
+  await until(() => n > 10, 10_000, 'rows under the scope')
+  await sleep(300)
+
+  // ---- By value, off the overlays' canvas: alpha at points whose frequency is known ----
+  const cv = document.querySelector<HTMLCanvasElement>('.ph-scope-overlays')
+  if (!cv) throw new Error('no overlays canvas')
+  const W = cv.width
+  const px = cv.getContext('2d')!.getImageData(0, 0, W, cv.height).data
+  const alpha = (x: number, y: number) => px[(Math.round(y) * W + Math.min(W - 1, Math.max(0, Math.round(x)))) * 4 + 3]
+  const peak = (x: number, y: number) => Math.max(alpha(x - 1, y), alpha(x, y), alpha(x + 1, y))
+  const xOf = (hz: number) => ((hz - 14_000_000) / 200_000) * W
+  const mid = cv.height / 2
+  const reading = {
+    w: W,
+    h: cv.height,
+    // Outside the span (no privilege), inside it, and its two edges.
+    below: alpha(xOf(14_010_000), mid),
+    inside: alpha(xOf(14_080_000), mid),
+    above: alpha(xOf(14_180_000), mid),
+    edgeLo: peak(xOf(14_025_000), mid),
+    edgeHi: peak(xOf(14_150_000), mid),
+    // The RX offset at dial + 1500 Hz, and the spot's tick under the tag lane (27–33 px).
+    rx: peak(xOf(14_101_500), mid),
+    tick: peak(xOf(14_050_000), 30),
+    beside: alpha(xOf(14_050_000) + 25, 30),
+  }
+
+  // ---- A spot storm with the picture held: the picture must not be drawn for it ----
+  const pause = [...document.querySelectorAll<HTMLButtonElement>('.ph-scope-btn')].find((b) => b.textContent === '⏸')
+  if (!pause) throw new Error('no pause button')
+  pause.click()
+  await sleep(300)
+  counts.picture = 0
+  counts.overlays = 0
+  const changes = 40
+  for (let i = 1; i <= changes; i++) {
+    api.spots!(i)
+    await sleep(25)
+  }
+  await sleep(300)
+  const storm = { ...counts, changes }
+  // The control: the same count, and changes that do redraw the picture.
+  counts.picture = 0
+  for (let i = 0; i < 6; i++) {
+    api.theme!(i % 2 ? THEME : 'light')
+    await sleep(50)
+  }
+  await sleep(200)
+  const control = { picture: counts.picture }
+
+  // ---- Live: the picture's own draw calls, quiet and in a storm (measured only) ----
+  pause.click()
+  await sleep(300)
+  counts.picture = 0
+  await sleep(2000)
+  const quiet = counts.picture
+  counts.picture = 0
+  let k = 100
+  const end = performance.now() + 2000
+  while (performance.now() < end) {
+    api.spots!(k++)
+    await sleep(20)
+  }
+  const live = { quiet, storm: counts.picture, changes: k - 100 }
+  return { reading, storm, control, live, drawnBy: drawnBy(), unexpected }
+}
+
 const MODES: Record<string, () => Promise<unknown>> = {
   backend,
   pixel,
@@ -751,6 +884,7 @@ const MODES: Record<string, () => Promise<unknown>> = {
   perf,
   ipc,
   offsets,
+  overlays,
   // The renderer core (ui/src/spectrum), mounted bare: renderer.ts.
   render: () => render(q, palette),
   capability: () => capability(q),

@@ -10997,6 +10997,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
+/* The overlays (spectrum/overlays.ts): spot tags, the licence-class band edges and the FT offsets, on
+   a transparent canvas over the picture and, by document order, under the marks canvas below. Out of
+   flow like the picture, and it takes no pointer event: every gesture lands on the marks canvas. It
+   carries `.well` for the dark palette's inks only (a well is the dark theme, not a dark background:
+   DISPLAY WELLS), so the well's background is taken off here, or it would cover the picture. */
+.ph-scope-overlays {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  background-color: transparent;
+  border-radius: var(--radius-sm);
+}
 /* The overlay: the dial and carrier lines, their plates, the frequency scale and the pitch marker,
    on a transparent canvas that also takes every pointer gesture. POSITIONED, so it paints over the
    absolutely positioned picture under it (an unpositioned box would paint beneath it). */

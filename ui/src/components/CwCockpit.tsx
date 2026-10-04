@@ -15,7 +15,7 @@ import { useEscStop } from '../useEscStop'
 // transmit path and move exactly as PTT Method did. WPM, pitch and filter width in Hz, the
 // scope spans and reference levels, the macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH}
 // tokens and every <select> value are invariant tokens and stay in the code.
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
@@ -91,6 +91,7 @@ import { subRowShown } from '../features/rigControls'
 import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
+import { scopeSpots } from '../spectrum/scopeSpots'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeSideSign, cwScopeWindow, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
@@ -574,6 +575,11 @@ export function CwCockpit({
     null,
   )
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The scope's spot tags: Band Activity's set (CW spots on this band), each with its mark.
+  const scopeTags = useMemo(
+    () => scopeSpots(spots ?? [], 'CW', snap.radio.band, needByCall, typeByCall),
+    [spots, snap.radio.band, needByCall, typeByCall],
+  )
   // The FT-710's span is commandable over plain CAT, so its row is the rig's own ladder rather
   // than a client-side crop — the app then shows exactly what the radio sweeps. Mirror of Phone.
   // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
@@ -2015,6 +2021,11 @@ export function CwCockpit({
           cwPitchRefDial={keyer !== 'soundcard'}
           traceHoldMs={TRACE_HOLD_MS.fast}
           interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+          spots={scopeTags}
+          // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote
+          // page's scope is click-only, so its tags are display only.
+          onSpot={control ? onWorkSpot : undefined}
+          privilegeMode={snap.radio.operatingMode}
         />
       </section>
       {details && <PaneSeam

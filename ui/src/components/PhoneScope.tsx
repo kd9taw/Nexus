@@ -9,12 +9,19 @@
 // does the DIAL plate drawn on the overlay, which is an instrument mark placed by canvas
 // arithmetic rather than a sentence. (The window widths moved to the ⚙ strip, ScaleStrip.tsx.)
 //
-// TWO LAYERS. The picture — the trace, the waterfall and the 3D stack — is the spectrum
+// THREE LAYERS. The picture — the trace, the waterfall and the 3D stack — is the spectrum
 // renderer's (`spectrum/`, WebGL2 or canvas-2D behind one contract), on its own canvas in
 // `.ph-scope-render`. Everything the operator reads or aims with — the dial and carrier lines,
-// their plates, the frequency scale and the pitch marker — is drawn on `.ph-scope-canvas` above
-// it, which is also the element every pointer gesture lands on. The renderer swaps its canvas
+// their plates, the frequency scale and the pitch marker — is drawn on `.ph-scope-canvas` on top,
+// which is also the element every pointer gesture lands on. The renderer swaps its canvas
 // while a lost WebGL2 context is away, so nothing here ever holds or listens on that one.
+//
+// THE OVERLAYS (`spectrum/overlays.ts`) sit between the two, on `.ph-scope-overlays`: spot tags,
+// the licence-class band edges, and on the RF scope pane the FT decodes and the RX/TX offsets.
+// They are data-only layers, drawn again only when their data or the axis under them moves (the
+// overlay key below), so a spot change redraws no waterfall. The band edges SHOW the transmit
+// gate and never decide anything; a tag's click is the host's BandMap action, offered only where
+// the scope tunes, and a grabbable filter edge keeps the press.
 //
 // THE RECEIVER MARKERS (`spectrum/markers.ts`). Where the host passes the rig's REPORTED width, the
 // receiver's passband is drawn over the picture, and where it also passes `onPassband` the edges a
@@ -26,7 +33,7 @@
 // cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
-import type { SpectrumFrameWire } from '../types'
+import type { SpectrumFrameWire, SpotRow } from '../types'
 import { useStationControl } from '../stationAccess'
 import {
   applyGainZero,
@@ -67,6 +74,16 @@ import {
   type AxisPassband,
   type Edge,
 } from '../spectrum/markers'
+import {
+  drawOverlays,
+  readOverlayInks,
+  type FtOverlay,
+  type OverlayHit,
+  type OverlayInks,
+  type OverlaySpans,
+  type ScopeSpot,
+} from '../spectrum/overlays'
+import { usePrivilegeSpans } from '../spectrum/usePrivilegeSpans'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { useNightActive } from '../useNight'
 import { useSkinActive } from '../useSkin'
@@ -244,6 +261,21 @@ interface Props {
    *  waterfall already shows. Its poll is also the pane's request for the stream (see getRfFrame).
    *  Fixed for the scope's life: the loop reads it once. */
   feed?: 'scope' | 'rf'
+  /** Spot tags (`spectrum/overlays.ts` `scopeSpots`): BandMap's set for this scope — its mode on its
+   *  band, each with its mark — drawn above the trace with BandMap's fade and collision rules.
+   *  Absent = no tags. */
+  spots?: ScopeSpot[] | null
+  /** Work the spot whose tag was clicked: the host's BandMap action (QSY to it and prefill the log).
+   *  Offered only while the scope tunes (`interactive`), never on the click-only Remote scope, and a
+   *  grabbable filter edge keeps the press. Absent = the tags are display only. */
+  onSpot?: (s: SpotRow) => void
+  /** The live operating section whose licence-class band edges are tinted ('phone' | 'cw' | 'digital'
+   *  | 'rtty' | 'keyboard': the snapshot's `radio.operatingMode`), read from the transmit gate's own
+   *  table. Display only. Absent = no edges. */
+  privilegeMode?: string | null
+  /** The FT cockpit's newest decodes and its RX/TX offsets, drawn at dial ± offset (the RF scope
+   *  pane). Display only. Absent = none. */
+  ft?: FtOverlay | null
 }
 
 /**
@@ -300,8 +332,14 @@ export function PhoneScope({
   wheelSliders = false,
   cockpit = 'phone',
   feed = 'scope',
+  spots = null,
+  onSpot,
+  privilegeMode = null,
+  ft = null,
 }: Props) {
   const control = useStationControl()
+  // The licence-class spans for the band edges: the gate's own table, for the live section.
+  const privSpans = usePrivilegeSpans(privilegeMode, active)
   // The RF pane starts out saying the radio's scope is not there yet: it is only once a sweep lands.
   const [scopeAvailable, setScopeAvailable] = useState(control && feed !== 'rf')
   const rfOnly = feed === 'rf'
@@ -378,6 +416,20 @@ export function PhoneScope({
   const notchRef = useRef(notchHz)
   const subRef = useRef(subReceiver)
   const cockpitRef = useRef(cockpit)
+  const onSpotRef = useRef(onSpot)
+  /** The overlays' canvas: spot tags, band edges and the FT offsets, between the picture and the marks. */
+  const overlaysRef = useRef<HTMLCanvasElement>(null)
+  /** What the overlays draw from, and a count that moves whenever any of it does (in the overlay key). */
+  const overlayDataRef = useRef<{ v: number; spots: ScopeSpot[]; spans: OverlaySpans | null; ft: FtOverlay | null }>({
+    v: 0,
+    spots: [],
+    spans: null,
+    ft: null,
+  })
+  /** Draw the overlays again if their key moved: their data changed between two sweeps, or while paused. */
+  const overlaysSyncRef = useRef<(() => void) | null>(null)
+  /** The spot labels as last drawn — the click targets — in the overlay canvas's device px. */
+  const hitsRef = useRef<{ w: number; h: number; hits: OverlayHit[] }>({ w: 0, h: 0, hits: [] })
   /** A width just commanded, shown until the rig's read-back agrees (or PENDING_WIDTH_MS passes):
    *  the flush and the radio loop's apply are both still ahead of it. */
   const pendingWidthRef = useRef<{ hz: number; until: number } | null>(null)
@@ -417,6 +469,8 @@ export function PhoneScope({
      *  and the width (`hz`) the drag has reached. Moved, it resizes; released unmoved, it is a
      *  click. */
     edge?: { edge: Edge; p: AxisPassband; axis: AxisKind; hz: number }
+    /** A press on a spot's tag (where no edge was grabbed): released unmoved, it works that spot. */
+    spot?: SpotRow
   } | null>(null)
   // Edge-scan while dragging: holding the box in the outer edge zone keeps scrolling the
   // band. The BOX stays pinned under the cursor (never repainted from Hz — the view is
@@ -448,6 +502,7 @@ export function PhoneScope({
   notchRef.current = notchHz
   subRef.current = subReceiver
   cockpitRef.current = cockpit
+  onSpotRef.current = onSpot
   pitchRef.current = pitchHz
   cwPitchRefRef.current = cwPitchRefDial
   interactiveRef.current = interactive && (!onBeginClick || scopeAvailable)
@@ -480,6 +535,9 @@ export function PhoneScope({
    *  a host that commands widths, a width the rig reported, and not the click-only Remote scope. */
   const canEditPassband = () =>
     interactiveRef.current && onPassbandRef.current != null && onBeginClickRef.current == null && shownWidth() != null
+  /** May a spot's tag be clicked now: the cockpit's tuning gate (CAT up, not transmitting), a host that
+   *  works spots, and not the click-only Remote scope. */
+  const spotsClickable = () => interactiveRef.current && onSpotRef.current != null && onBeginClickRef.current == null
 
   useLayoutEffect(() => {
     lutRef.current = bakeLut(resolveColormap(palette, theme, night, skin))
@@ -507,6 +565,10 @@ export function PhoneScope({
     // picture itself is the renderer's (see the file header), on its own canvas in `host`.
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    // The overlays' own canvas (`spectrum/overlays.ts`). Where it has no context the scope draws as it
+    // always did, without tags or edges.
+    const overlays = overlaysRef.current
+    const octx = overlays?.getContext('2d') ?? null
     const renderer = createSpectrumRenderer(host, { depth: HISTORY_ROWS })
     rendererRef.current = renderer
 
@@ -808,12 +870,65 @@ export function PhoneScope({
         // Paused = review: the trace band is the floor, as it always was while scrolled back.
         trace: !pausedNow && traceFrame && newest ? { frame: oriented(traceFrame), range: newest.range } : null,
       })
+      syncOverlays()
       drawOverlay()
     }
     rebuildRef.current = draw
     overlayRef.current = () => {
-      if (devW > 0 && devH > 0) drawOverlay()
+      if (devW > 0 && devH > 0) {
+        syncOverlays()
+        drawOverlay()
+      }
     }
+
+    /** Everything the overlays last drew from, as one string; '' = draw them again. */
+    let overlaysKey = ''
+    let inks: OverlayInks | null = null
+    let inksTheme = ''
+    /** The overlays, drawn again only when their data or the axis under them moved: a sweep that moves
+     *  neither leaves them as they are, and nothing here ever asks the picture to redraw. */
+    const syncOverlays = () => {
+      if (!octx || !overlays || !(devW > 0 && devH > 0)) return
+      const d = overlayDataRef.current
+      // 3D maximize: the stack fills the panel and carries no marks, as with the marks layer.
+      const shown = !dssRef.current && newest != null
+      const rf = newest != null && isRfScopeSource(newest.src)
+      const axis = axisKind(rf)
+      const theme = `${themeRef.current}|${nightRef.current}|${skinRef.current}`
+      const key = shown
+        ? [devW, devH, scaleY, textScale, view.loHz, view.hiHz, rf, axis.carrierCentered, axis.sideband,
+            axis.dialHz, axis.pitchHz, axis.cwPitchRefDial, txRef.current, theme, d.v].join('|')
+        : 'off'
+      if (key === overlaysKey) return
+      overlaysKey = key
+      octx.clearRect(0, 0, devW, devH)
+      hitsRef.current = { w: devW, h: devH, hits: [] }
+      // Nothing to overlay (a host that passes none): no inks read, nothing drawn.
+      if (!shown || (d.spots.length === 0 && d.spans == null && d.ft == null)) return
+      if (!inks || inksTheme !== theme) {
+        inks = readOverlayInks(overlays)
+        inksTheme = theme
+      }
+      const out = drawOverlays(
+        octx,
+        {
+          w: devW,
+          h: devH,
+          textPx: scaleY * textScale,
+          lineW: Math.max(1, scaleY),
+          lo: view.loHz,
+          hi: view.hiHz,
+          axis,
+          spans: d.spans,
+          spots: d.spots,
+          ft: d.ft,
+          transmitting: txRef.current,
+        },
+        inks,
+      )
+      hitsRef.current = { w: devW, h: devH, hits: out.hits }
+    }
+    overlaysSyncRef.current = syncOverlays
 
     /** The marks over the picture: what the operator reads and aims with. Cleared every draw. */
     const drawOverlay = () => {
@@ -1020,6 +1135,10 @@ export function PhoneScope({
       if (dW === devW && dH === devH) return
       canvas.width = dW
       canvas.height = dH
+      if (overlays) {
+        overlays.width = dW
+        overlays.height = dH
+      }
       devW = dW
       devH = dH
       // Redraw the history at the new geometry (smear-free), not a stretched old bitmap.
@@ -1117,6 +1236,7 @@ export function PhoneScope({
       ro.disconnect()
       rebuildRef.current = null
       overlayRef.current = null
+      overlaysSyncRef.current = null
       rendererRef.current = null
       // Hands a WebGL2 context back at once (browsers cap live contexts) and takes the canvas out.
       renderer.destroy()
@@ -1124,6 +1244,14 @@ export function PhoneScope({
     // run once; live props read via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // The overlays' data: a new spot list, a privilege answer or a slot's decodes draws the overlays
+  // again now, between two sweeps or while paused — and only them, never the picture.
+  useEffect(() => {
+    const d = overlayDataRef.current
+    overlayDataRef.current = { v: d.v + 1, spots: spots ?? [], spans: privSpans, ft }
+    overlaysSyncRef.current?.()
+  }, [spots, privSpans, ft])
 
   // ---- Click-to-tune + drag-a-passband-box (Flex-style) ----------------------------
   // All handlers read refs (never stale) and hit-test against exactly the drawn window.
@@ -1171,6 +1299,18 @@ export function PhoneScope({
     const px = (hz: number) => ((hz - view.lo) / (view.hi - view.lo)) * rect.width
     const edge = edgeNear(xIn, px(p.lo), px(p.hi), edgesOnAxis(axis), EDGE_TOL_PX)
     return edge ? { edge, p, axis, hz: width } : null
+  }
+  /** The spot whose tag is under a client point, where a tag can be clicked now; null elsewhere. */
+  const tagUnder = (clientX: number, clientY: number): SpotRow | null => {
+    if (!spotsClickable()) return null
+    const canvas = canvasRef.current
+    const { w, h, hits } = hitsRef.current
+    if (!canvas || hits.length === 0) return null
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width < 2 || rect.height < 2) return null
+    const x = ((clientX - rect.left) / rect.width) * w
+    const y = ((clientY - rect.top) / rect.height) * h
+    return hits.find((t) => x >= t.l && x <= t.r && y >= t.t && y <= t.b)?.spot ?? null
   }
   /** Review mode's scrollback: `step` rows older (+) or newer (−), held inside the ring. The wheel
    *  and the ↑/↓ keys both land here. */
@@ -1313,6 +1453,9 @@ export function PhoneScope({
     const click = onBeginClickRef.current?.()
     if (onBeginClickRef.current && !click) return
     e.currentTarget.setPointerCapture(e.pointerId)
+    // On a grabbable filter edge, a move resizes the passband instead of sliding the box. The edge
+    // keeps the press over a spot's tag: a tag is asked for only where no edge is.
+    const edge = click ? undefined : (edgeUnder(e.clientX) ?? undefined)
     // rf captured at press so a mid-gesture feed swap can't change the semantics.
     dragRef.current = {
       click: click ?? undefined,
@@ -1328,15 +1471,16 @@ export function PhoneScope({
       scanDialHz: null,
       grabAfHz: xToHz(e.clientX) ?? 0,
       grabDialHz: dialRef.current,
-      // On a grabbable filter edge, a move resizes the passband instead of sliding the box.
-      edge: click ? undefined : (edgeUnder(e.clientX) ?? undefined),
+      edge,
+      spot: edge ? undefined : (tagUnder(e.clientX, e.clientY) ?? undefined),
     }
   }
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = dragRef.current
     if (!g) {
-      // Hovering: say where a filter edge can be grabbed.
-      if (canvasRef.current) canvasRef.current.style.cursor = edgeUnder(e.clientX) ? 'ew-resize' : ''
+      // Hovering: say where a filter edge can be grabbed, and where a spot's tag can be clicked.
+      if (canvasRef.current)
+        canvasRef.current.style.cursor = edgeUnder(e.clientX) ? 'ew-resize' : tagUnder(e.clientX, e.clientY) ? 'pointer' : ''
       return
     }
     if (g.click && e.pointerId !== g.pointerId) return
@@ -1442,6 +1586,13 @@ export function PhoneScope({
     const centerHz = g.centerHz
     endGesture()
     if (g.click && (g.moved || !interactiveRef.current || g.clickContext !== clickContext())) return
+    if (g.spot && !g.moved) {
+      // A tag clicked: work that spot, BandMap's action (the host QSYs to its frequency and prefills
+      // the log), rather than snapping to the signal under it. Asked again at release, so a
+      // transmitter keyed mid-press works nothing.
+      if (spotsClickable()) onSpotRef.current?.(g.spot)
+      return
+    }
     if (g.edge && wasDragging) {
       // The last width rides the coalescer's pending flush, and stands on screen until the rig's
       // read-back agrees. An edge pressed and released WITHOUT moving falls through to the click.
@@ -1743,6 +1894,14 @@ export function PhoneScope({
         <div
           ref={renderHostRef}
           className="ph-scope-render"
+          style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
+          aria-hidden="true"
+        />
+        {/* The overlays: data-only layers over the picture and under the marks, taking no pointer
+            event. A display well, so what it draws on the dark floor takes the dark palette's inks. */}
+        <canvas
+          ref={overlaysRef}
+          className="ph-scope-overlays well"
           style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
           aria-hidden="true"
         />

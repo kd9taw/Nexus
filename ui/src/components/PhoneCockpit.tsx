@@ -19,7 +19,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // reading, split offset, filter and scope width, reference level, percentage, band and mode
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
-import { Fragment, useEffect, useState, useRef } from 'react'
+import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, PHONE_PANELS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
@@ -103,6 +103,7 @@ import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
+import { scopeSpots } from '../spectrum/scopeSpots'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
 import { SplitControl } from './SplitControl'
@@ -818,6 +819,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The scope's spot tags: Band Activity's set (SSB spots on this band), each with its mark.
+  const scopeTags = useMemo(
+    () => scopeSpots(spots ?? [], 'Phone', snap.radio.band, needByCall, typeByCall),
+    [spots, snap.radio.band, needByCall, typeByCall],
+  )
   // The FT-710 is the one native scope whose SPAN this app can command over plain CAT, so its
   // control row is the rig's own ladder rather than a client-side crop. Icom/Flex keep the crop:
   // their hardware span already has its own row (RIG_SPANS / FLEX_SPANS) further down.
@@ -2745,6 +2751,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onPassband={passbandEditable ? onScopePassband : undefined}
             notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
             interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            spots={scopeTags}
+            // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote
+            // page's scope is click-only, so its tags are display only.
+            onSpot={control ? onWorkSpot : undefined}
+            privilegeMode={snap.radio.operatingMode}
           />
         </div>
       </section>

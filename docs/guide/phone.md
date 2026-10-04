@@ -38,6 +38,16 @@ transmitting. Tab to the scope and the keys work too: ← and → tune (Shift fo
 Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and ↓
 scroll back while paused.
 
+**Spots and your privileges on the scope.** The SSB spots Band Activity lists for your band are
+tagged on the scope at their frequencies, coloured as Band Activity colours them and fading over
+half an hour; where too many crowd together the freshest are shown and the rest counted as
+"+N". Click a tag to work that station, as a click in Band Activity does: Nexus tunes to it and
+fills in the log. A tag is only a label while you transmit, on the Remote page, and while CAT is
+down. The scope also tints the frequencies your licence class (Settings ▸ Station) may not
+transmit phone on. The tint only shows the transmit lock: 🔒 TX LOCKED still decides, and it
+judges your whole signal, so a dial just inside the tint's edge can still be locked. An Open
+licence class has no tint.
+
 **RF power slider.** Wired to CAT and *follows the rig*: turn the rig's power
 knob and the slider tracks it (it won't sit lying at 100%). Your drags win while
 you're dragging.

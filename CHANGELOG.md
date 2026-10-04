@@ -193,6 +193,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not tune the radio. An Icom in a data mode streams its scope over CAT only while the pane is on
   screen, and stops two seconds after you hide it; it still pauses while you transmit. Not yet
   checked on a radio.
+- **The scopes: spot tags, your licence-class edges, and FT8 decodes on the RF scope.** The Phone
+  and CW scopes tag the spots Band Activity shows for your band (SSB on Phone, CW on CW) at their
+  frequencies, in Band Activity's colours, fading over half an hour; where too many crowd together
+  the freshest are shown and the rest counted. Click a tag to work the station, as a click in Band
+  Activity does; while you transmit, on the Remote page or with CAT down a tag is only a label,
+  and a filter edge you can drag keeps the click. Every scope also tints the frequencies your
+  licence class (Settings ▸ Station) may not transmit the current mode on, from the same table
+  as the transmit lock. It only shows the lock: 🔒 TX LOCKED still decides, judging your whole
+  signal, and an Open class has no tint. In FT8 and FT4 the RF scope pane tags the last slot's
+  decodes at the dial plus their offset and draws the RX and TX offsets; it still tunes nothing.
+  The tags and tint draw on a layer of their own, so a new spot never redraws the waterfall. The
+  tint is not on the Remote page yet. Not yet checked on a radio.
 - **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
   a new place, **Left side**: a column from under the header down to the dock, beside the scope,
   so the band map and the two boards get the whole height of the window instead of what is left

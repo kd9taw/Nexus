@@ -15,6 +15,7 @@ import type {
   AwardSummary,
   GeoLogStats,
   BandChannel,
+  PrivilegeSpans,
   CatTestResult,
   CatProbeResult,
   CwDecodeResult,
@@ -2055,6 +2056,15 @@ export async function setLicenseClass(licenseClass: string): Promise<AppSnapshot
  * segment start. Mode is passed explicitly (not read from the engine) to avoid a mount race. */
 export async function getLicensedBandPlan(mode: string): Promise<BandChannel[]> {
   return invoke<BandChannel[]>('get_licensed_band_plan', { mode })
+}
+/** The licence-class band edges a scope tints: where the station's class may transmit the section
+ * `mode`'s emission ('digital' | 'phone' | 'cw' | 'rtty' | 'keyboard', the snapshot's
+ * `radio.operatingMode`), from the transmit gate's own table. Display only. The Remote page's
+ * commands are a closed set this is not part of, so there it answers null without asking, and its
+ * scopes draw no edges. */
+export async function getPrivilegeSpans(mode: string): Promise<PrivilegeSpans | null> {
+  if (remoteApplicationTransport()) return null
+  return invoke<PrivilegeSpans>('get_privilege_spans', { mode })
 }
 
 /** Every current DXCC entity name (sorted) — the full table behind the country-hide

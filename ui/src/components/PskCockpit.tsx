@@ -774,6 +774,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           keyed={sending || latched || (snap?.radio.tuning ?? false)}
           theme={theme}
           active={active}
+          privilegeMode={snap?.radio.operatingMode}
         />
       )}
 

@@ -709,6 +709,7 @@ export function Js8Cockpit({
       keyed={sending || (snap?.radio.tuning ?? false)}
       theme={theme}
       active={active}
+      privilegeMode={snap?.radio.operatingMode}
     />
   )
 

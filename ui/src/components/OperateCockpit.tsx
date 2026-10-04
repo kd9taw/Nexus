@@ -48,6 +48,7 @@ import {
 } from '../txMessages'
 import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
+import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
@@ -457,6 +458,11 @@ export function OperateCockpit({
   // mid-session (operator report 2026-07-21).
   const bandHistRef = useRef(new DecodeHistory())
   const rxHistRef = useRef(new DecodeHistory())
+  // The RF scope pane's FT overlay: the newest slot's decodes and the RX/TX offsets, at dial ± offset.
+  const rfFt = useMemo(
+    () => ftOverlay(snap.recentDecodes ?? [], snap.radio.rxOffsetHz, snap.radio.txOffsetHz, snap.radio.sideband),
+    [snap.recentDecodes, snap.radio.rxOffsetHz, snap.radio.txOffsetHz, snap.radio.sideband],
+  )
   const slotBase = useRef({ ms: snap.radio.nextSlotMs, at: Date.now() })
   useEffect(() => {
     slotBase.current = { ms: snap.radio.nextSlotMs, at: Date.now() }
@@ -1475,6 +1481,8 @@ export function OperateCockpit({
                   keyed={snap.radio.transmitting || snap.radio.tuning}
                   theme={theme}
                   active={active}
+                  privilegeMode={snap.radio.operatingMode}
+                  ft={rfFt}
                 />
               )}
             </section>

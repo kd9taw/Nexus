@@ -1998,6 +1998,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           keyed={sending || (snap?.radio.tuning ?? false)}
           theme={theme}
           active={active}
+          privilegeMode={snap?.radio.operatingMode}
         />
       )}
 
