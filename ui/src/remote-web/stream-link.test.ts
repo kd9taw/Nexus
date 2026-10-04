@@ -5,7 +5,7 @@ import {
   MIC_CONSTRAINTS, MIC_ENDED, STREAM_UPLINK_BUDGET_BYTES, STREAM_VIEW_MAX, STREAM_VIEW_SETTLE_MS, parseHeld, parseMicState,
   parseReceivedMessage, parseStreamInput, secureAnswer, viewMessage,
 } from './stream-protocol'
-import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { ANSWER, CHANNEL, FINGERPRINT, FakeMicTrack, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
 const TARGET = { stationBootId: stopCase.stationBootId as string, leaseId: LEASE, transmitEpoch: stopCase.transmitEpoch as string }
@@ -539,7 +539,7 @@ it('an operator\'s own close tells the station, lets go of PTT, and returns to i
   expect(last(h.signals)?.payload).toEqual({ kind: 'close' })
   expect(last(ptt.sent)).toMatchObject({ type: 'pttRelease' })
   expect(h.link.getSnapshot()).toEqual({ phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null,
-    mic: 'off', micProcessing: false, station: null, uplinkStalled: false, stop: 'idle' })
+    mic: 'off', micDenied: null, micProcessing: false, station: null, uplinkStalled: false, stop: 'idle' })
   expect(h.video.srcObject).toBeNull()
   const sent = control.sent.length + ptt.sent.length
   h.advance(5000)
@@ -651,16 +651,101 @@ it('the microphone is off until the operator turns it on, and only then is the b
 })
 
 it('a microphone the browser refuses is said, and nothing is sent', async () => {
-  const h = harness({ microphone: 'denied' })
+  const h = harness({ microphone: 'denied', micPermission: 'denied' })
   await h.live()
   await h.link.setMic(true)
-  expect(h.link.getSnapshot().mic).toBe('denied')
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'denied', micDenied: { why: 'site', name: 'NotAllowedError' } })
   expect(h.peer.mic.replaced).toEqual([])
   // A browser with no way to capture at all says so too.
   const none = harness({ microphone: 'none' })
   await none.live()
   await none.link.setMic(true)
-  expect(none.link.getSnapshot().mic).toBe('unavailable')
+  expect(none.link.getSnapshot()).toMatchObject({ mic: 'unavailable', micDenied: null })
+})
+
+// Every way a browser gives no microphone read "the browser did not allow the microphone" (the operator,
+// 2026-10-03), and each is fixed in a different place. Chromium names them (user_media_request.cc): NotFoundError
+// for no microphone, NotReadableError for one that would not start (another program holding it), NotAllowedError
+// for a refusal. A refusal comes from the site's setting, the prompt closed without a choice, or the computer's
+// privacy settings below a site the operator allowed, and this site's permission, read after the refusal, says
+// which: denied, still prompt, or granted.
+it('says why the browser gave no microphone: the error\'s name, and for a refusal the site\'s permission after it', async () => {
+  const cases = [
+    ['NotAllowedError', 'denied', 'site'],
+    ['NotAllowedError', 'granted', 'system'],
+    ['NotAllowedError', 'prompt', 'dismissed'],
+    // A browser that cannot say: a refusal from either place, so the page says it cannot tell them apart.
+    ['NotAllowedError', null, 'other'],
+    ['NotFoundError', 'prompt', 'noDevice'],
+    ['NotReadableError', 'granted', 'busy'],
+    ['AbortError', 'granted', 'other'],
+    ['SecurityError', 'granted', 'other'],
+  ] as const
+  for (const [name, permission, why] of cases) {
+    const h = harness({ microphone: 'denied', micRefusal: name, micPermission: permission })
+    await h.live()
+    await h.link.setMic(true)
+    expect(h.link.getSnapshot(), `${name}, the site's permission ${permission}`).toMatchObject({ mic: 'denied', micDenied: { why, name } })
+    expect(h.peer.mic.replaced).toEqual([])
+  }
+  // A page that cannot ask for the permission reads as one the browser will not answer.
+  const unasked = harness({ microphone: 'denied' })
+  await unasked.live()
+  await unasked.link.setMic(true)
+  expect(unasked.link.getSnapshot().micDenied).toEqual({ why: 'other', name: 'NotAllowedError' })
+})
+
+it('the site\'s permission is read after the refusal: Block answered in the prompt is the site, not a prompt closed', async () => {
+  const h = harness({ microphone: 'denied' })
+  await h.live()
+  // Chrome 140, measured: before the request the permission is `prompt`; Block refuses with NotAllowedError
+  // and leaves it `denied`.
+  let site: 'prompt' | 'denied' = 'prompt'
+  h.env.micPermission = async () => site
+  h.env.microphone = () => { site = 'denied'; return Promise.reject(new DOMException('Permission denied', 'NotAllowedError')) }
+  await h.link.setMic(true)
+  expect(h.link.getSnapshot().micDenied).toEqual({ why: 'site', name: 'NotAllowedError' })
+})
+
+it('turning the microphone on again forgets the last refusal while the browser asks; off forgets it too', async () => {
+  const h = harness({ microphone: 'denied', micRefusal: 'NotFoundError' })
+  await h.live()
+  await h.link.setMic(true)
+  expect(h.link.getSnapshot().micDenied?.why).toBe('noDevice')
+  // A microphone plugged in: the next turn on asks again, says nothing old while it waits, and works.
+  let answer!: (track: FakeMicTrack) => void
+  h.env.microphone = () => new Promise<FakeMicTrack>(resolve => { answer = resolve })
+  const asking = h.link.setMic(true)
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'asking', micDenied: null })
+  answer(new FakeMicTrack())
+  await asking
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'on', micDenied: null })
+  // Refused again, then turned off: nothing is left to say.
+  await h.link.setMic(false)
+  h.env.microphone = () => Promise.reject(new DOMException('Device in use', 'NotReadableError'))
+  await h.link.setMic(true)
+  expect(h.link.getSnapshot().micDenied?.why).toBe('busy')
+  await h.link.setMic(false)
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'off', micDenied: null })
+})
+
+it('the browser\'s microphone: a stream with no audio track is no microphone, and the permission comes from the Permissions API, or null', async () => {
+  const queried: unknown[] = []
+  vi.stubGlobal('navigator', {
+    mediaDevices: { getUserMedia: async () => ({ getAudioTracks: () => [] }) },
+    permissions: { query: async (descriptor: unknown) => { queried.push(descriptor); return { state: 'denied' } } },
+  })
+  try {
+    const env = browserStream()
+    await expect(env.microphone!(MIC_CONSTRAINTS)).rejects.toMatchObject({ name: 'NotFoundError' })
+    expect(await env.micPermission!()).toBe('denied')
+    expect(queried).toEqual([{ name: 'microphone' }])
+    // A browser that does not know the name (Firefox before 132) refuses the query; one with no API has none.
+    vi.stubGlobal('navigator', { permissions: { query: () => Promise.reject(new TypeError('not a valid PermissionName')) } })
+    expect(await env.micPermission!()).toBeNull()
+    vi.stubGlobal('navigator', {})
+    expect(await env.micPermission!()).toBeNull()
+  } finally { vi.unstubAllGlobals() }
 })
 
 it('§4.7: processing the browser kept on despite the ask is said; CONTROL: none kept on, nothing said', async () => {

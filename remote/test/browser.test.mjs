@@ -919,6 +919,18 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(await evaluate(`navigator.mediaDevices.getUserMedia({video:true}).then(()=>'granted',e=>e.name)`),'NotAllowedError','control: the camera is still refused')
         await click(`document.querySelector('.remote-stream-mic')`)
         await until(`document.querySelector('.remote-stream-mic')?.getAttribute('aria-pressed')==='false'`,5000)
+        // The microphone blocked for this site, as the browser's own Block leaves it: Chrome refuses with
+        // NotAllowedError and reports the site's permission as denied, and the page names that place, not
+        // the computer's settings or a question left unanswered, in a note on screen under the picture.
+        await browser.call('Browser.setPermission',{origin:app.origin,permission:{name:'microphone'},setting:'denied'})
+        const asked=await evaluate('window.__media.length')
+        await click(`document.querySelector('.remote-stream-mic')`)
+        await until(`window.__media.length>${asked}`,10000)
+        assert.deepEqual(await evaluate(`window.__media.slice(${asked})`),[{audio:true,video:false,ok:false,error:'NotAllowedError'}],'Chrome refuses the blocked site')
+        const blocked=JSON.stringify("The microphone is blocked for this site. Allow it in the browser's settings for this site (the icon at the left of the address bar), then turn the microphone on again.")
+        await until(`[...document.querySelectorAll('.remote-stream-note')].some(e=>e.textContent===${blocked})`,5000)
+        assert.deepEqual(await evaluate(`(()=>{const e=[...document.querySelectorAll('.remote-stream-note')].find(e=>e.textContent===${blocked}),r=e.getBoundingClientRect();return {role:e.getAttribute('role'),onScreen:r.width>0&&r.height>0&&r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,notes:document.querySelectorAll('.remote-stream-note').length,mic:document.querySelector('.remote-stream-mic')?.textContent}})()`),
+          {role:'alert',onScreen:true,notes:1,mic:'Mic off'},'the site block is said, alone and on screen, and the Mic button is off')
         // S11 / A2, the page's half: a click on the picture arrives as a pointer at the frame's own
         // coordinates; a key typed on the focused picture arrives; Tab stays here and leaves the picture.
         await press(await center('.remote-stream-video'))

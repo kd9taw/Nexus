@@ -298,7 +298,7 @@ function MicNotes({ stream, identify }: { stream: LinkView; identify: 'due' | 'e
     const why = endedNote(station.ended)
     if (why) notes.push({ key: `ended-${station.ended}`, text: why, warn: true })
   }
-  if (stream.mic === 'denied') notes.push({ key: 'denied', text: t('remote.stream.mic.denied'), warn: true })
+  if (stream.mic === 'denied') notes.push({ key: 'denied', text: deniedNote(stream.micDenied), warn: true })
   if (stream.mic === 'unavailable') notes.push({ key: 'unavailable', text: t('remote.stream.mic.unavailable'), warn: true })
   if (stream.mic === 'on' && stream.micProcessing) notes.push({ key: 'processing', text: t('remote.stream.mic.processing') })
   // The operator's ruling "State it + warn": said where the microphone is turned on.
@@ -309,6 +309,18 @@ function MicNotes({ stream, identify }: { stream: LinkView; identify: 'due' | 'e
     {notes.map(note => <li key={note.key} className="remote-stream-note" data-tone={note.warn ? 'warn' : undefined}
       role={note.warn ? 'alert' : 'status'}>{note.text}</li>)}
   </ul>
+}
+/** Why the browser gave no microphone, said with where to fix it: this site's setting, the computer's privacy
+ *  settings, the browser's question again, a microphone to connect, or the program holding it. Anything else
+ *  goes with the browser's own name for the error. */
+function deniedNote(denied: LinkView['micDenied']): string {
+  const why = denied?.why
+  return why === 'site' ? t('remote.stream.mic.denied.site')
+    : why === 'system' ? t('remote.stream.mic.denied.system')
+    : why === 'dismissed' ? t('remote.stream.mic.denied.dismissed')
+    : why === 'noDevice' ? t('remote.stream.mic.denied.noDevice')
+    : why === 'busy' ? t('remote.stream.mic.denied.busy')
+    : t('remote.stream.mic.denied.other', { name: denied?.name ?? 'Error' })
 }
 function endedNote(ended: string): string | null {
   return ended === 'audioGap' ? t('remote.stream.mic.ended.audioGap')
