@@ -158,6 +158,12 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   const onAir = stream.ptt || stream.station?.keyed === true || keyed === true
   useEffect(() => { link.audio.setMuted(onAir) }, [onAir, link])
   const identify = useIdReminder(running, stream.station?.keyed === true)
+  // What the PTT shows, and all that starts a hold: a live picture under a fresh lease. A press on a greyed-out PTT
+  // sends nothing (the operator's pick "Refuse it on the page", 2026-10-04); its handlers ask too, because pointer
+  // events reach a disabled button. A HELD PTT stays lit whatever this says (the operator's pick "Keep held PTT
+  // enabled", 2026-10-04): the state is stale for a round trip now and then, and a browser that blurs a focused button
+  // it disables (Chrome 154 does) would end the over through onBlur. Every other way an over ends still ends it.
+  const pttReady = stream.phase === 'live' && !!lease
 
   // THE PHONE LAYOUT (the operator's pick, 2026-10-03), from the window this page has (streamLayout): the header row,
   // a rail beside the picture on its side, bars above and below it upright. Every control keeps its place in the tree
@@ -209,16 +215,16 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
         <div className="remote-stream-operate">
         {stream.control && <AudioListen audio={link.audio} client={operations} />}
         {stream.control && <button type="button" className="remote-button remote-stream-ptt" aria-pressed={stream.ptt}
-          title={t('remote.stream.ptt.title')} disabled={stream.phase !== 'live' || !lease} data-keyed={stream.keyed || undefined}
+          title={t('remote.stream.ptt.title')} disabled={!stream.ptt && !pttReady} data-keyed={stream.keyed || undefined}
           data-voice={stream.station?.keyed ? 'keyed' : undefined}
           onPointerDown={event => {
-            if (event.button !== 0) return
+            if (event.button !== 0 || !pttReady) return
             try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* the hold still starts */ }
             link.holdPtt()
           }}
           onPointerUp={() => link.releasePtt()} onPointerCancel={() => link.releasePtt()}
           onLostPointerCapture={() => link.releasePtt()} onBlur={() => link.releasePtt()}
-          onKeyDown={event => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); link.holdPtt() } }}
+          onKeyDown={event => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); if (pttReady) link.holdPtt() } }}
           onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); link.releasePtt() } }}
           onContextMenu={event => event.preventDefault()}>{t('remote.stream.ptt')}</button>}
         {/* The microphone: OFF until the operator turns it on, and only then does the browser ask.

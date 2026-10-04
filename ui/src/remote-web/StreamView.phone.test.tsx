@@ -63,10 +63,11 @@ function coarse(on: boolean) {
 async function streaming(width: number, height: number) {
   await windowSize(width, height)
   const h = harness()
-  const snapshot = { supported: true, state: state('controlling'), fresh: true, connected: true, busy: false, stopAvailable: true,
+  let snapshot = { supported: true, state: state('controlling'), fresh: true, connected: true, busy: false, stopAvailable: true,
     stopSending: false, stopAccepted: false } as OperationView
+  const listeners = new Set<() => void>()
   const operations = {
-    subscribe: () => () => {}, getSnapshot: () => snapshot,
+    subscribe: (f: () => void) => { listeners.add(f); return () => { listeners.delete(f) } }, getSnapshot: () => snapshot,
     acquire: vi.fn(async () => {}), release: vi.fn(async () => {}), stopTransmit: vi.fn(async () => ({ stop: 'accepted' })),
   }
   const disconnect = vi.fn(), signOut = vi.fn()
@@ -92,6 +93,8 @@ async function streaming(width: number, height: number) {
     /** What the page sent on `control` that is input for Nexus's window. */
     input: () => h.peer.channel('control').sent.filter(m => m.type === 'text' || m.type === 'key' || m.type === 'pointer'),
     ptt: () => h.peer.channel('ptt').sent,
+    /** The operations state moves on: `fresh: false` is the lease lapsed for a re-read. */
+    set: (next: Partial<OperationView>) => act(() => { snapshot = { ...snapshot, ...next }; for (const f of listeners) f() }),
   }
 }
 
@@ -298,6 +301,28 @@ describe('turning the phone moves controls and remounts none', () => {
     expect(v.ptt().slice(before).filter(m => m.type === 'pttRelease'), 'nothing let go of it').toEqual([])
     expect(v.app.querySelector('video'), 'the same picture').toBe(v.video)
     fireEvent.pointerUp(ptt, { pointerId: 1 })
+    expect(last(v.ptt())?.type).toBe('pttRelease')
+  })
+})
+
+// A press on a greyed-out PTT sends nothing (the operator's pick "Refuse it on the page", 2026-10-04): the rail's PTT
+// and the thumbs' bar's are the one button, and a finger is a pointer press on it.
+describe('a greyed-out PTT on a phone', () => {
+  it.each([[915, 412, 'rail'], [412, 915, 'bars']] as const)('a finger on the PTT greyed out by a lapse of the lease starts nothing (%i x %i, %s); CONTROL: lit again, it holds', async (width, height, layout) => {
+    const v = await streaming(width, height)
+    expect(v.app.dataset.layout).toBe(layout)
+    const ptt = button('Hold PTT') as HTMLButtonElement
+    const holds = () => v.ptt().filter(m => m.type === 'pttHold')
+    v.set({ fresh: false })
+    expect(ptt.disabled, 'greyed out by the lapse').toBe(true)
+    fireEvent.pointerDown(ptt, { button: 0, pointerId: 1, pointerType: 'touch' })
+    expect(holds(), 'a finger on the greyed-out PTT').toEqual([])
+    fireEvent.pointerUp(ptt, { button: 0, pointerId: 1, pointerType: 'touch' })
+    v.set({ fresh: true })
+    expect(ptt.disabled).toBe(false)
+    fireEvent.pointerDown(ptt, { button: 0, pointerId: 2, pointerType: 'touch' })
+    expect(holds(), 'lit, the finger holds').toHaveLength(1)
+    fireEvent.pointerUp(ptt, { button: 0, pointerId: 2, pointerType: 'touch' })
     expect(last(v.ptt())?.type).toBe('pttRelease')
   })
 })

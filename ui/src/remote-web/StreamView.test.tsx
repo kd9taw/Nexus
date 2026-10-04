@@ -9,6 +9,7 @@ import type { MonitorSource } from '../remote-monitor/session'
 import { fixtureSource } from '../remote-monitor/fixtureSource'
 import { ANSWER, CHANNEL, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
 import { MIC_PEAK, micGain } from './mic-level'
+import { STREAM_BLIND_MS, STREAM_UPLINK_BUDGET_BYTES } from './stream-protocol'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { chainOf, contrast, expandWith, parseRules, toRgb, tokensAt, winnerAt, type Mode } from '../cssCascade'
@@ -56,7 +57,7 @@ function view(initial: Partial<OperationView>, options: Parameters<typeof harnes
   video.getBoundingClientRect = () => ({ left: 0, top: 100, width: 1600, height: 900, right: 1600, bottom: 1000, x: 0, y: 100, toJSON: () => ({}) })
   return {
     // `h.peer` is a getter over the peers made so far; spreading would freeze it at none.
-    link: h.link, peers: h.peers, signals: h.signals, get peer() { return h.peer }, tick: h.tick, advance: h.advance, operations, connection, video,
+    link: h.link, env: h.env, peers: h.peers, signals: h.signals, get peer() { return h.peer }, tick: h.tick, advance: h.advance, operations, connection, video,
     micAsks: h.micAsks, micTracks: h.micTracks, levelGraphs: h.levelGraphs,
     /** The station's word on its microphone over, as the contract carries it. */
     station: (name: string) => act(() => { h.peer.channel('control').deliver(byName(CHANNEL.controlStationToBrowser, name)) }),
@@ -395,6 +396,113 @@ it('holds PTT while the button is held, and lets go when it is released', async 
   fireEvent.pointerUp(ptt)
   expect(ptt.getAttribute('aria-pressed')).toBe('false')
   expect(last(channel.sent)).toEqual({ type: 'pttRelease', holdId: holds[0].holdId, seq: 1 })
+})
+
+// ── A held PTT and a greyed-out one (the operator's picks "Keep held PTT enabled" and "Refuse it on the page",
+// 2026-10-04). The PTT is lit on a live picture under a fresh lease, and the operations state goes stale for a round
+// trip now and then. Held, it stays lit through that: a browser that blurs a focused button it disables would end the
+// over through the button's blur. Not held, a press on it while it is greyed out sends nothing, however it is pressed.
+
+const pageTimers = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+/** Every way the page's PTT is pressed, and its let-go: a mouse, a pen or a finger on it (the phone's rail and thumbs'
+ *  bar are this same button), or Space or Enter on it. */
+const PRESSES: [string, (ptt: HTMLElement) => void, (ptt: HTMLElement) => void][] = [
+  ['a mouse', ptt => fireEvent.pointerDown(ptt, { button: 0, pointerId: 1, pointerType: 'mouse' }), ptt => fireEvent.pointerUp(ptt, { button: 0, pointerId: 1, pointerType: 'mouse' })],
+  ['a pen', ptt => fireEvent.pointerDown(ptt, { button: 0, pointerId: 2, pointerType: 'pen' }), ptt => fireEvent.pointerUp(ptt, { button: 0, pointerId: 2, pointerType: 'pen' })],
+  ['a finger', ptt => fireEvent.pointerDown(ptt, { button: 0, pointerId: 3, pointerType: 'touch' }), ptt => fireEvent.pointerUp(ptt, { button: 0, pointerId: 3, pointerType: 'touch' })],
+  ['Space', ptt => fireEvent.keyDown(ptt, { key: ' ', code: 'Space' }), ptt => fireEvent.keyUp(ptt, { key: ' ', code: 'Space' })],
+  ['Enter', ptt => fireEvent.keyDown(ptt, { key: 'Enter', code: 'Enter' }), ptt => fireEvent.keyUp(ptt, { key: 'Enter', code: 'Enter' })],
+]
+
+it.each(PRESSES)('%s on a greyed-out PTT starts nothing, the lease lapsed or the picture blind; CONTROL: lit again, the same press holds', async (_, press, letGo) => {
+  pageTimers()
+  try {
+    const v = view(controlling)
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await v.live()
+    const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
+    const holds = () => v.peer.channel('ptt').sent.filter(m => m.type === 'pttHold')
+    // Focused while lit: a key still lands on a focused button that greys out, until the browser blurs it.
+    ptt.focus()
+    // The state stale for a round trip: no lease, so greyed out, and the press sends nothing.
+    v.set({ fresh: false })
+    expect(ptt.disabled, 'greyed out by the lapse').toBe(true)
+    press(ptt)
+    expect(holds(), 'a press on the PTT greyed out by the lapse').toEqual([])
+    expect(ptt.getAttribute('aria-pressed')).toBe('false')
+    letGo(ptt)
+    v.set({ fresh: true })
+    // The picture blind: greyed out, and the press sends nothing.
+    act(() => { v.advance(STREAM_BLIND_MS + 250) })
+    expect(v.link.getSnapshot().phase).toBe('stalled')
+    expect(ptt.disabled, 'greyed out by the blind picture').toBe(true)
+    press(ptt)
+    expect(holds(), 'a press on the PTT greyed out by the blind picture').toEqual([])
+    letGo(ptt)
+    // CONTROL: a picture again, under the fresh lease: lit, and the same press holds.
+    act(() => { frames.get(v.video)?.(0, { rtpTimestamp: 270000 }) })
+    expect(ptt.disabled).toBe(false)
+    press(ptt)
+    expect(holds(), 'the press holds once the PTT is lit').toHaveLength(1)
+    letGo(ptt)
+    expect(last(v.peer.channel('ptt').sent)).toMatchObject({ type: 'pttRelease' })
+  } finally { vi.useRealTimers() }
+})
+
+const mouseDown = (ptt: HTMLElement) => fireEvent.pointerDown(ptt, { button: 0, pointerId: 1 })
+const spaceDown = (ptt: HTMLElement) => fireEvent.keyDown(ptt, { key: ' ', code: 'Space' })
+/** Every way an over ends, each after the PTT was pressed and the lease then lapsed, which leaves it lit. */
+const ENDINGS: [string, (ptt: HTMLElement) => void, (v: ReturnType<typeof view>, ptt: HTMLElement) => void][] = [
+  ['letting go', mouseDown, (_, ptt) => fireEvent.pointerUp(ptt, { button: 0, pointerId: 1 })],
+  ['letting go of Space', spaceDown, (_, ptt) => fireEvent.keyUp(ptt, { key: ' ', code: 'Space' })],
+  ['the pointer cancelled', mouseDown, (_, ptt) => fireEvent.pointerCancel(ptt, { pointerId: 1 })],
+  ['its pointer capture lost', mouseDown, (_, ptt) => fireEvent.lostPointerCapture(ptt, { pointerId: 1 })],
+  ['focus moved off it', spaceDown, (_, ptt) => fireEvent.blur(ptt)],
+  ['the window losing focus', mouseDown, () => act(() => { window.dispatchEvent(new Event('blur')) })],
+  ['the picture going blind', mouseDown, v => act(() => { v.advance(STREAM_BLIND_MS + 250) })],
+  // A re-assertion each 100 ms, each reading the clock it moved to.
+  ['the uplink backing up', mouseDown, v => { v.peer.channel('ptt').bufferedAmount = STREAM_UPLINK_BUDGET_BYTES + 1; for (let i = 0; i < 3; i++) act(() => { v.advance(100) }) }],
+  ['End the stream', mouseDown, () => fireEvent.click(screen.getByRole('button', { name: 'End the stream' }))],
+  ['station control going', mouseDown, v => v.set({ state: state('available') })],
+  ['the socket going', mouseDown, v => v.set({ connected: false })],
+]
+
+it.each(ENDINGS)('a PTT held through a lapse of the lease stays lit, and still ends on %s', async (_, press, end) => {
+  pageTimers()
+  try {
+    const v = view(controlling)
+    v.env.window = window
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await v.live()
+    const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
+    const releases = () => v.peer.channel('ptt').sent.filter(m => m.type === 'pttRelease')
+    ptt.focus()
+    press(ptt)
+    v.set({ fresh: false })
+    expect(ptt.disabled, 'held: lit through the lapse').toBe(false)
+    expect(ptt.getAttribute('aria-pressed')).toBe('true')
+    expect(releases(), 'nothing let go of it').toEqual([])
+    end(v, ptt)
+    expect(v.link.getSnapshot().ptt, 'still held').toBe(false)
+    expect(releases(), 'released once').toHaveLength(1)
+    // Let go under the lapse, it is greyed out at once, as it always was (where a teardown has not taken it away).
+    const after = screen.queryByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
+    if (after) expect(after.disabled, 'let go: greyed out by the lapse').toBe(true)
+  } finally { vi.useRealTimers() }
+})
+
+it('Stop TX still goes both ways for a PTT held through a lapse of the lease: the station ends the over', async () => {
+  const v = view({ ...controlling, stopAvailable: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
+  mouseDown(ptt)
+  v.set({ fresh: false })
+  expect(ptt.disabled, 'held: lit through the lapse').toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Stop TX' }))
+  expect(v.peer.channel('control').sent.filter(m => m.type === 'stopTransmit'), 'on the stream')
+    .toEqual([expect.objectContaining({ stationBootId: BOOT, leaseId: LEASE, transmitEpoch: EPOCH })])
+  expect(v.operations.stopTransmit, 'on the socket').toHaveBeenCalledTimes(1)
 })
 
 it('a stream the station ended stays ended: nothing is re-offered until the operator asks again', async () => {
