@@ -18,15 +18,22 @@
 //            a 1024x768 and a 3440x1440 window.
 //   ipc      the main-thread cost of a `Spectrum` row parsed from its JSON at 60 Hz, at 512 and
 //            2048 bins, beside the same values taken from a binary buffer.
+//   render   the renderer core (ui/src/spectrum) on BOTH backends, WebGL2 and canvas-2D: the same
+//            fixtures against stored pictures per backend, the two backends against each other,
+//            and the 3-D stack's rejection of a one-row burst.
+//   loss     a forced WebGL2 context loss: canvas-2D must stand in, and WebGL2 must come back with
+//            the same picture, without a reload.
+//   rperf    the renderer at 2048 bins x 2048 rows filling a 1024x768 window, beside its budget.
 //
-// Two controls run every time, because an instrument that cannot fail proves nothing: a WRONG
-// PALETTE must fail the pixel comparison, and a PLANTED extra row must be found by the cadence
-// probe. A run where either control comes back clean is red.
+// Controls run every time, because an instrument that cannot fail proves nothing: a WRONG PALETTE
+// must fail the pixel comparison (the components' and the renderer's, on each backend), a PLANTED
+// extra row must be found by the cadence probe, and a DROPPED restore handler must fail the loss
+// check. A run where any control comes back clean is red.
 //
 // A check can carry a KNOWN-FAILURE marker: it is expected red and keeps the run green while it is,
 // and the run goes red the day it passes, so the marker cannot outlive the defect it names.
 //
-// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc] [--out DIR]
+// usage: node ui/spectrum-harness/run.mjs [--only backend,pixel,cadence,perf,ipc,render,loss,rperf] [--out DIR]
 //          [--record] [--palette NAME] [--plant N] [--chrome PATH] [--cpu-throttle N]
 // exit:  0 everything as expected · 1 something is not (a picture moved, a control stayed clean, a
 //        known failure passed, the backend is not the pinned one) · 2 could not run (usage, no
@@ -45,17 +52,20 @@ const UI = resolve(HERE, '..')
 const BASELINES = join(HERE, 'baselines')
 
 const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
-  --only LIST         backend,pixel,cadence,perf,ipc (default: all; the backend always runs)
+  --only LIST         backend,pixel,cadence,perf,ipc,render,loss,rperf (default: all; the backend
+                      always runs)
   --out DIR           results.json, rendered pictures and diffs (default: $TMPDIR/nexus-spectrum-harness)
-  --record            re-record the stored pictures: each fixture rendered twice, written only if
-                      the two renders are identical, with the backend they were taken under
+  --record            re-record the stored pictures of the probes selected (pixel, render): each
+                      fixture rendered twice, written only if the two renders are identical, with
+                      the backend they were taken under
   --palette NAME      render the pixel fixtures in another palette (a manual control: they must fail)
   --plant N           plant an extra row at ask N in every cadence source (a manual control)
   --chrome PATH       Chrome binary (default: $CHROME_BIN or google-chrome)
   --cpu-throttle N    DevTools CPU throttling for the perf probe (default 1)`
 
+const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'loss', 'rperf']
 const opt = {
-  only: new Set(['backend', 'pixel', 'cadence', 'perf', 'ipc']),
+  only: new Set(PROBES),
   out: join(tmpdir(), 'nexus-spectrum-harness'),
   record: false,
   palette: 'turbo',
@@ -102,7 +112,7 @@ const opt = {
     }
   }
   for (const k of opt.only) {
-    if (!['backend', 'pixel', 'cadence', 'perf', 'ipc'].includes(k)) bail(2, `unknown probe ${k}\n${USAGE}`)
+    if (!PROBES.includes(k)) bail(2, `unknown probe ${k}\n${USAGE}`)
   }
 }
 
@@ -508,6 +518,199 @@ async function ipcChecks(cdp, base) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The renderer core (ui/src/spectrum, the page's renderer.ts). No component mounts it yet, so it is
+// driven bare: rows fed directly, its canvas copied out in the task that drew it.
+
+const RENDER_FIXTURES = [
+  'scope-carrier',
+  'scope-two-tone',
+  'scope-noise-step',
+  'wf-ft8-slot',
+  'wf-retune',
+  'wf-scrollback',
+  'scope-wide-peak',
+  'scope-wide-average',
+  'dss-two-tone',
+]
+const RENDER_BACKENDS = ['webgl2', 'canvas2d']
+const RENDER_BASELINES = join(BASELINES, 'renderer')
+/** Fixtures whose picture is a waterfall band and nothing else: the two backends run the same
+ *  per-pixel mapping there, so they must agree within the comparator's tolerance. The trace and the
+ *  3-D stack are rasterised differently on each (a stroked path against a shader ribbon; 256
+ *  columns against one per pixel), so there the difference is reported, not asserted. */
+const SAME_ON_BOTH = new Set(['wf-ft8-slot', 'wf-retune', 'wf-scrollback'])
+const EXACT = { channel: 0, maxFraction: 0 }
+
+async function renderFixture2(cdp, base, fixture, backend, palette, set) {
+  const page = await openPage(cdp, `${base}/index.html?mode=render&fixture=${fixture}&backend=${backend}&palette=${palette}${set ? `&set=${set}` : ''}`)
+  try {
+    const r = await waitFor(page, 'done', 90_000)
+    if (r.backend !== backend) throw new Error(`${fixture}: drew on ${r.backend}, not ${backend} (${r.reason})`)
+    return { width: r.w, height: r.h, rgba: new Uint8Array(Buffer.from(r.b64, 'base64')) }
+  } finally {
+    await page.close()
+  }
+}
+
+async function renderChecks(cdp, base, backend) {
+  const dir = join(opt.out, 'renderer')
+  mkdirSync(dir, { recursive: true })
+  if (opt.record) {
+    for (const be of RENDER_BACKENDS) {
+      for (const fx of RENDER_FIXTURES) {
+        const id = `${be}-${fx}`
+        const a = await renderFixture2(cdp, base, fx, be, opt.palette)
+        const b = await renderFixture2(cdp, base, fx, be, opt.palette)
+        const same = comparePixels(a, b, EXACT)
+        if (!same.match) {
+          record({ kind: 'render', id, outcome: 'fail', detail: `two renders differ (${same.reason}); not recorded` })
+          line('RENDER', id, same.reason, 'NOT DETERMINISTIC — not recorded')
+          continue
+        }
+        mkdirSync(RENDER_BASELINES, { recursive: true })
+        writeFileSync(join(RENDER_BASELINES, `${id}.png`), encodePng(a.width, a.height, a.rgba))
+        record({ kind: 'render', id, outcome: 'recorded', detail: `${a.width}x${a.height}, two renders identical` })
+        line('RENDER', id, `${a.width}x${a.height}, two renders identical`, 'recorded')
+      }
+    }
+    writeFileSync(
+      join(RENDER_BASELINES, 'backend.json'),
+      `${JSON.stringify({ key: backendKey(backend), palette: opt.palette, chrome: backend.chrome, webgl2: backend.webgl2, canvas2d: backend.canvas2d, recordedAt: results.startedAt.slice(0, 10) }, null, 2)}\n`,
+    )
+    return
+  }
+  const storedPath = join(RENDER_BASELINES, 'backend.json')
+  const stored = existsSync(storedPath) ? JSON.parse(readFileSync(storedPath, 'utf8')) : null
+  if (!stored || stored.key !== backendKey(backend)) {
+    record({ kind: 'render', id: 'backend', outcome: 'fail', detail: `stored pictures were taken under ${stored?.key ?? 'nothing'}; this run is ${backendKey(backend)}` })
+    line('RENDER', 'stored pictures', `taken under "${stored?.key ?? 'nothing'}"`, 'NOT COMPARABLE with this backend — refused')
+    return
+  }
+  const compareOne = async (fx, be, palette) => {
+    const id = `${be}-${fx}`
+    const actual = await renderFixture2(cdp, base, fx, be, palette)
+    const suffix = palette === stored.palette ? '' : `.${palette}`
+    writeFileSync(join(dir, `${id}${suffix}.png`), encodePng(actual.width, actual.height, actual.rgba))
+    const cmp = comparePixels(actual, decodePng(readFileSync(join(RENDER_BASELINES, `${id}.png`))))
+    if (!cmp.match && cmp.diff) writeFileSync(join(dir, `${id}${suffix}.diff.png`), encodePng(actual.width, actual.height, cmp.diff))
+    return { id, actual, cmp }
+  }
+  const drawn = {}
+  for (const be of RENDER_BACKENDS) {
+    for (const fx of RENDER_FIXTURES) {
+      const { id, actual, cmp } = await compareOne(fx, be, opt.palette)
+      drawn[id] = actual
+      const text = `${actual.width}x${actual.height}  ${cmp.differing} px over tolerance (${(cmp.fraction * 100).toFixed(3)}%), max Δ ${cmp.maxDelta}`
+      record({ kind: 'render', id, palette: opt.palette, outcome: cmp.match ? 'pass' : 'fail', detail: cmp.reason || text, differing: cmp.differing, maxDelta: cmp.maxDelta })
+      line('RENDER', id, text, cmp.match ? 'ok' : `FAIL (${cmp.reason})`)
+    }
+  }
+  // The two backends against each other: the same mapping must give the same waterfall.
+  for (const fx of RENDER_FIXTURES) {
+    const cmp = comparePixels(drawn[`webgl2-${fx}`], drawn[`canvas2d-${fx}`])
+    const asserted = SAME_ON_BOTH.has(fx)
+    const text = `${cmp.differing} px over tolerance (${(cmp.fraction * 100).toFixed(3)}%), max Δ ${cmp.maxDelta}`
+    record({ kind: 'render-cross', id: fx, outcome: asserted ? (cmp.match ? 'pass' : 'fail') : 'measured', detail: cmp.reason || text, differing: cmp.differing, fraction: cmp.fraction, maxDelta: cmp.maxDelta })
+    line('BOTH', `webgl2 vs canvas2d: ${fx}`, text, asserted ? (cmp.match ? 'agree' : `FAIL (${cmp.reason})`) : 'reported')
+  }
+  // The 3-D stack's median of three: with identical rows around it, a one-row broadband burst must
+  // leave the stack exactly as it was. The same burst MUST show on the 2-D waterfall, which has no
+  // median, or the check proves nothing.
+  for (const be of RENDER_BACKENDS) {
+    const clean = await renderFixture2(cdp, base, 'dss-two-tone', be, opt.palette, 'steady')
+    const burst = await renderFixture2(cdp, base, 'dss-two-tone', be, opt.palette, 'steady-burst')
+    const stack = comparePixels(burst, clean, EXACT)
+    record({ kind: 'render', id: `${be} 3-D burst rejected`, outcome: stack.match ? 'pass' : 'fail', detail: stack.reason || 'identical' })
+    line('RENDER', `${be} 3-D: one-row burst rejected`, stack.match ? 'identical to the stack without it' : stack.reason, stack.match ? 'ok' : 'FAIL (the burst reached the stack)')
+    const flatClean = await renderFixture2(cdp, base, 'wf-ft8-slot', be, opt.palette, 'steady')
+    const flatBurst = await renderFixture2(cdp, base, 'wf-ft8-slot', be, opt.palette, 'steady-burst')
+    const flat = comparePixels(flatBurst, flatClean, EXACT)
+    record({ kind: 'control', id: `${be} burst shows on 2-D`, outcome: flat.match ? 'fail' : 'control-fired', detail: flat.reason || 'identical' })
+    line('CONTROL', `${be} 2-D: the same burst shows`, flat.reason || 'identical', flat.match ? 'NOT SEEN — the burst check proves nothing' : 'seen, as it must be')
+  }
+  // CONTROL: the wrong palette must fail each backend's stored picture.
+  for (const be of RENDER_BACKENDS) {
+    const { cmp } = await compareOne('scope-carrier', be, WRONG_PALETTE)
+    const fired = !cmp.match
+    record({ kind: 'control', id: `${be} wrong palette (${WRONG_PALETTE})`, outcome: fired ? 'control-fired' : 'fail', detail: cmp.reason || 'matched the stored picture' })
+    line('CONTROL', `wrong palette: ${be}-scope-carrier`, `${(cmp.fraction * 100).toFixed(1)}% of pixels differ`, fired ? 'rejected, as it must be' : 'ACCEPTED — the comparator is blind')
+  }
+}
+
+async function lossOnce(cdp, base, dropRestore) {
+  const page = await openPage(cdp, `${base}/index.html?mode=loss&palette=${opt.palette}&dropRestore=${dropRestore ? 1 : 0}`)
+  try {
+    return await waitFor(page, 'done', 60_000)
+  } finally {
+    await page.close()
+  }
+}
+
+/** The loss check's verdict: everything that must hold, and what did not. */
+function lossVerdict(r) {
+  const pic = (p) => p && { width: p.w, height: p.h, rgba: new Uint8Array(Buffer.from(p.b64, 'base64')) }
+  const faults = []
+  if (!r.fellBack) faults.push('canvas-2D never stood in')
+  if (r.visibleCanvasesWhileLost !== 1) faults.push(`${r.visibleCanvasesWhileLost} canvases visible while lost`)
+  if (!r.restored) faults.push('WebGL2 never came back')
+  if (r.backendAtEnd !== 'webgl2') faults.push(`ended on ${r.backendAtEnd}`)
+  const after = comparePixels(pic(r.after), pic(r.reference), EXACT)
+  if (!after.match) faults.push(`after the restore the picture differs from a renderer that never lost its context (${after.reason})`)
+  const standIn = r.standIn ? comparePixels(pic(r.standIn), pic(r.standInReference), EXACT) : { match: false, reason: 'no stand-in picture' }
+  if (!standIn.match) faults.push(`the stand-in's picture differs from canvas-2D fed the same rows (${standIn.reason})`)
+  return { faults, after, standIn }
+}
+
+async function lossChecks(cdp, base) {
+  const r = await lossOnce(cdp, base, false)
+  const v = lossVerdict(r)
+  const text = `fell back in ${r.fallbackMs} ms, restored in ${r.restoreMs} ms, ${r.rows} rows; after restore ${v.after.differing} px differ from never-lost, stand-in ${v.standIn.differing ?? '?'} px from canvas-2D`
+  record({ kind: 'loss', id: 'lose and restore', outcome: v.faults.length ? 'fail' : 'pass', detail: v.faults.join('; ') || text, fallbackMs: r.fallbackMs, restoreMs: r.restoreMs, reasonWhileLost: r.reasonWhileLost })
+  line('LOSS', 'lose, stand in, restore, no reload', text, v.faults.length ? `FAIL (${v.faults.join('; ')})` : 'ok')
+  // CONTROL: with the restore handler dropped, the check must fail.
+  const c = await lossOnce(cdp, base, true)
+  const cv = lossVerdict(c)
+  const fired = cv.faults.length > 0
+  record({ kind: 'control', id: 'dropped restore handler', outcome: fired ? 'control-fired' : 'fail', detail: cv.faults.join('; ') || 'passed without a restore handler' })
+  line('CONTROL', 'loss with the restore handler dropped', cv.faults.join('; ') || 'passed', fired ? 'failed, as it must' : 'PASSED — the loss check is blind')
+}
+
+const RPERF = [
+  { backend: 'webgl2', layout: 'scope' },
+  { backend: 'canvas2d', layout: 'scope' },
+  { backend: 'webgl2', layout: 'dss' },
+  { backend: 'canvas2d', layout: 'dss' },
+]
+/** The renderer's budget: < 2 ms GPU and < 1 ms main thread per frame, 2048 bins x 2048 rows, on the
+ *  1024x768 floor. Printed beside the numbers, never asserted: this runner is nobody's shack PC. */
+const BUDGET = { mainMs: 1, gpuMs: 2 }
+
+async function rperfChecks(cdp, base) {
+  for (const p of RPERF) {
+    const name = `${p.backend} ${p.layout} 2048x2048 @1024x768`
+    const page = await openPage(cdp, `${base}/index.html?mode=rperf&backend=${p.backend}&layout=${p.layout}&palette=${opt.palette}`, { width: 1024, height: 768 })
+    try {
+      await waitFor(page, 'ready', 60_000)
+      const m0 = await page.metrics()
+      await page.evaluate('window.__harness.start()')
+      await sleep(PERF_WINDOW_MS)
+      const s = await page.evaluate('window.__harness.stop()')
+      const m1 = await page.metrics()
+      const g = await page.evaluate('window.__harness.gpu()')
+      const secs = m1.Timestamp - m0.Timestamp
+      const task = (m1.TaskDuration - m0.TaskDuration) * 1000
+      const r = { ...s, ...g, mainThreadMsPerFrame: Math.round((task / Math.max(1, s.frames)) * 100) / 100, mainThreadBusyPct: Math.round((task / (secs * 1000)) * 1000) / 10 }
+      const ok = s.frames > 0 && s.rows === s.depth
+      record({ kind: 'rperf', id: name, outcome: ok ? 'measured' : 'fail', budget: BUDGET, ...r })
+      const tq = g.timerQuery ? `, timer query p50 ${g.timerQuery.p50} ms` : ', no timer query'
+      line('RPERF', name, `${Math.round(s.fps)} fps, renderer ${s.mainMs.p50}/${s.mainMs.p95} ms p50/p95 on the main thread (task ${r.mainThreadMsPerFrame} ms/frame), draw-to-pixels ${g.drawToPixelsMs.p50}/${g.drawToPixelsMs.p95} ms${tq}`, ok ? '' : 'FAIL (measured nothing)')
+    } finally {
+      await page.close()
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 
 async function main() {
   if (spawnSync(opt.chrome, ['--version'], { encoding: 'utf8' }).status !== 0) bail(2, `no Chrome at "${opt.chrome}" (set --chrome or CHROME_BIN)`)
@@ -543,6 +746,9 @@ async function main() {
       if (opt.only.has('cadence')) await cadenceChecks(cdp, server.base)
       if (opt.only.has('perf')) await perfChecks(cdp, server.base)
       if (opt.only.has('ipc')) await ipcChecks(cdp, server.base)
+      if (opt.only.has('render')) await renderChecks(cdp, server.base, backend)
+      if (opt.only.has('loss')) await lossChecks(cdp, server.base)
+      if (opt.only.has('rperf')) await rperfChecks(cdp, server.base)
     }
   } catch (e) {
     record({ kind: 'harness', id: 'run', outcome: 'fail', detail: e.message })
