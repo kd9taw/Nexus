@@ -220,6 +220,33 @@ AetherSDR's `PanadapterStream` as a **reference for the public wire-format layou
 implementation itself is original (see the FlexRadio SmartSDR note below). AetherSDR
 is an independent project; Nexus is not affiliated with it.
 
+### AetherSDR — the FlexRadio SmartSDR client core
+License: **GNU GPL, version 3** — the repository's LICENSE, with README and CONTRIBUTING
+licensing contributions under GPLv3. The ported files carry no per-file licence header; the
+licence is the project-level grant. <https://github.com/aethersdr/AetherSDR>, ported from
+commit `32fa50e4` (2026-10-03).
+
+Nexus's native FlexRadio client (`crates/tempo-net/src/flex/`) is **ported from AetherSDR's
+FlexRadio backend**, translated from C++/Qt to Rust:
+
+- the SmartSDR TCP line codec and session (`CommandParser`, `RadioMessageTypes`,
+  `RadioConnection`);
+- the status decoders and command encodings (`FlexBackend`, `FlexKvCarry`, and the delta types
+  `SliceDelta`, `TransmitDelta`, `RadioDelta`, `MeterDef` and `ProfileDelta`);
+- the interlock readback (`FlexPttStopTracker`, `FlexPttWireSession`);
+- the ownership and registration policies (`RadioStatusOwnership`, `StreamStatus`,
+  `DisplayInventoryPolicy`, `SliceRecreatePolicy`, `GuiClientRegistrationState`,
+  `UdpRegistrationPolicy`, `GuiClientIdentityPolicy`);
+- the matching unit tests.
+
+Nexus does not port AetherSDR's model layer (where setters emit wire commands), its transmit
+coordinator or its radio abstraction. In Nexus, models hold state, a separate encoder renders
+typed intents, and every transmit gate sits on the typed intent; no guard matches rendered
+command text. Each ported file names its upstream file, commit and these differences in its
+header. AetherSDR states that it wrote its SmartSDR implementation by consulting FlexRadio's
+FlexLib source and that it incorporates no FlexLib code; Nexus adds none. AetherSDR is an
+independent project, and Nexus is not affiliated with it.
+
 ### fldigi — RTTY demodulator
 License: **GNU GPL, version 3 or later** (GPL-3.0-or-later). <http://www.w1hkj.com/> ·
 <https://sourceforge.net/p/fldigi/fldigi/>
@@ -789,7 +816,9 @@ Ethernet-API client, written from FlexRadio's **publicly-documented API**
 (<https://github.com/flexradio/smartsdr-api-docs>) and the **open VITA-49 Radio
 Transport standard** (VITA), and validated against synthetic frames. The FFT-packet
 field layout is cross-checked against the open-source **FlexLib** reference as a wire-
-format fact, not a code copy. **FlexRadio's proprietary FlexLib .NET library is NOT
+format fact, not a code copy. The native client's protocol core (`crates/tempo-net/src/flex/`)
+is ported from AetherSDR (see *Upstream lineage*); its protocol facts come from FlexRadio's
+public API documentation. **FlexRadio's proprietary FlexLib .NET library is NOT
 included or redistributed** — it is redistributable with third-party apps and requires
 a license only for *commercial* products, and Nexus neither bundles it nor is a
 commercial product. FlexRadio publishes this API expressly for third-party developers,
@@ -1089,8 +1118,8 @@ operators and communities who provide them:
 
 The bundled and linked components combine into the GPLv3 whole:
 
-- GPLv3 / LGPL / GPLv2-or-later (WSJT-X, Hamlib, FFTW, fldigi) combine into the
-  GPLv3 whole (FFTW's v2-or-later and fldigi's v3-or-later are satisfied by
+- GPLv3 / LGPL / GPLv2-or-later (WSJT-X, Hamlib, FFTW, fldigi, AetherSDR) combine into
+  the GPLv3 whole (FFTW's v2-or-later and fldigi's v3-or-later are satisfied by
   electing v3).
 - Permissive licenses (BSL-1.0 for Boost; MIT / Apache-2.0 for Tauri, cpal,
   sgp4, keyring, reqwest, hound, socket2, serde, React, TypeScript, Vite,

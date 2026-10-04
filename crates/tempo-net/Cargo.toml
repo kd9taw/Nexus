@@ -22,3 +22,8 @@ socket2 = "0.6"
 # new external code enters the tree.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# The SmartSDR simulator, for the Flex session's fault suites (`flex::sim_tests`). Test support from
+# this workspace, std only; nothing outside the tests depends on it.
+tempo-flexsim = { path = "../tempo-flexsim" }

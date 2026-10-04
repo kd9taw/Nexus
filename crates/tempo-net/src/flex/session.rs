@@ -1,0 +1,1328 @@
+//! The SmartSDR session: one TCP connection to the radio, from prologue to teardown.
+//!
+//! [`Session`] is the protocol core, with no I/O of its own: bytes in ([`Session::on_bytes`]),
+//! commands out through the writer each call is given, time passed in as milliseconds on a
+//! monotonic clock. [`Connection`] runs it on a std thread over any `Read + Write` (a
+//! `TcpStream` to the radio's port 4992 in production, the simulator in tests).
+//!
+//! **What the session does.**
+//! - *Line assembly* ([`LineAssembler`]): bytes are held until a `\n` arrives; only whole lines
+//!   are parsed, so a line split across reads is never a value (spec §10.5, "A partial reply is
+//!   never a reading"). The terminator and one CR are stripped; blank lines are dropped; a run of
+//!   [`MAX_LINE`] bytes with no terminator ends the session.
+//! - *The prologue*: `V` then `H`. Only a TCP API version reviewed for transmit (1.4, any build;
+//!   [`supports_protocol`]) on a first, well-formed prologue lets this session transmit. A late,
+//!   repeated or malformed `V` or `H`, or handle zero, makes it receive-only for its lifetime,
+//!   and never takes away an unkey.
+//! - *The connect sequence* ([`super::handshake`]), then registration's verdict: a refusal ends the
+//!   session for good ([`Event::RegistrationRejected`]).
+//! - *Replies matched by sequence number*: every command gets a number and every reply is matched
+//!   by it, never by arrival order.
+//! - *Status*: decoded ([`super::status`]) and folded into the model ([`super::model`]).
+//! - *Keepalive* ([`super::keepalive`]): one ping a second; five missed replies end the session; a
+//!   missed reply while keyed unkeys at once.
+//! - *Teardown*: a best-effort `xmit 0` if ours may be keyed, `stream remove` for our streams,
+//!   each acknowledged (or the wait times out) before the close, then the byte `0x04`, then the
+//!   close.
+//!
+//! **Transmit.** [`Session::start`] runs admission ([`super::admission`]); only an admitted start
+//! is rendered, and the readback ([`super::ptt_evidence`]) is armed and "keyed" set before the
+//! write, so an attempt that fails partway still needs its unkey. [`Session::stop`] is never
+//! gated: it asks only "are we keyed?" (an unconfirmed start of ours, or an interlock naming this
+//! session's handle or one of our previous sessions'). Keyed clears only when the readback proves
+//! the unkey; a reply to `xmit 0` is not that proof. If the proof does not come within the
+//! deadline after the first stop, the session sends `xmit 0` again, reports
+//! [`Event::UnkeyUnconfirmed`] and closes (spec §10.5). The session itself never starts a
+//! transmission: none of its reactions to lines, replies, time or teardown is a start.
+//!
+//! PORTED from AetherSDR (https://github.com/aethersdr/AetherSDR, GPL-3.0; the upstream file
+//! carries no per-file header, the licence is the repository's), `src/core/backends/flex/RadioConnection.h`
+//! and `src/core/backends/flex/RadioConnection.cpp`, with the write-and-observe composition of
+//! `src/core/backends/flex/FlexPttWireSession.h` and `src/core/backends/flex/FlexPttWireSession.cpp`,
+//! at commit `32fa50e4896a846a6970fa3f443bd49d667c139d` (2026-10-03), restructured from C++/Qt to
+//! Rust. Kept: the 16 MiB line cap, the CR strip, one session per connection (upstream's
+//! per-session generation), `stream remove` acknowledged before the close, the `0x04` disconnect
+//! marker, the strict prologue rules and the composition that writes the key, stamps every write
+//! and line at the transport and always attempts the unkey. Deliberate differences: a sans-I/O
+//! core on a std thread instead of `QTcpSocket`/`QThread`; typed commands, so the composition's
+//! text match on other writers' commands (`otherCommand`) is replaced by the kind the encoder
+//! gives each command; the demo-radio branches, kernel RTT sampling and WAN paths are dropped;
+//! evidence is consumed in the step that completes it rather than queued to a coordinator; a
+//! failed write ends the session. Recorded in the repo-root NOTICE (AetherSDR entry).
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::io::{self, ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use super::admission::{self, Facts, Refusal};
+use super::encode::{
+    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxStart, TxStop,
+};
+use super::handshake::{self, ConnectConfig, Registration, NOT_SUPPORTED};
+use super::keepalive::{Keepalive, Tick};
+use super::model::{ObjectRef, Owner, StatusModel};
+use super::ptt_evidence::{Operation, Stamp, StopRequest, StopTracker, TRANSITION_TIMEOUT_MS};
+use super::reconnect::End;
+use super::status::{decode, ClientAction, Decoded};
+use super::wire::{self, parse_line, Line, Reply, Severity, Status, WireError, MAX_LINE};
+
+/// Whether a prologue's version text names a TCP API reviewed for transmit: exactly four
+/// dot-separated decimal numbers, no signs, spaces or leading zeros, each fitting an `i32`, with
+/// major 1 and minor 4. The last two numbers are builds, not compatibility selectors, so any build
+/// of 1.4 qualifies; firmware versions (`4.2.18.41174`) and other APIs do not.
+pub fn supports_protocol(version: &str) -> bool {
+    if version.is_empty() || version.len() > 32 {
+        return false;
+    }
+    let parts: Vec<&str> = version.split('.').collect();
+    let well_formed = parts.len() == 4
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && p.bytes().all(|b| b.is_ascii_digit())
+                && (p.len() == 1 || !p.starts_with('0'))
+                && p.parse::<i32>().is_ok()
+        });
+    well_formed && parts[0] == "1" && parts[1] == "4"
+}
+
+/// Holds bytes until a whole line has arrived.
+#[derive(Debug, Default)]
+pub struct LineAssembler {
+    buf: Vec<u8>,
+}
+
+/// More than [`MAX_LINE`] bytes arrived without a terminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooLong;
+
+impl LineAssembler {
+    /// Append bytes; return every line they complete, terminator and one trailing CR removed,
+    /// blank lines dropped. Bytes after the last terminator stay held, never returned.
+    pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, TooLong> {
+        self.buf.extend_from_slice(bytes);
+        let mut lines = Vec::new();
+        let mut start = 0;
+        while let Some(pos) = self.buf[start..].iter().position(|b| *b == b'\n') {
+            let end = start + pos;
+            let mut line = &self.buf[start..end];
+            if line.last() == Some(&b'\r') {
+                line = &line[..line.len() - 1];
+            }
+            if !line.iter().all(u8::is_ascii_whitespace) {
+                lines.push(line.to_vec());
+            }
+            start = end + 1;
+        }
+        self.buf.drain(..start);
+        if self.buf.len() > MAX_LINE {
+            self.buf.clear();
+            return Err(TooLong);
+        }
+        Ok(lines)
+    }
+
+    /// Whether bytes of an unfinished line are held.
+    pub fn has_partial(&self) -> bool {
+        !self.buf.is_empty()
+    }
+}
+
+/// How the session is set up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Config {
+    pub connect: ConnectConfig,
+    pub ping_interval_ms: u64,
+    /// How long after the first stop the radio has to confirm the unkey, and how long each
+    /// readback transition may take ([`TRANSITION_TIMEOUT_MS`] by default).
+    pub unkey_deadline_ms: u64,
+    /// How long the radio has to send its prologue, and then to answer `client gui`.
+    pub registration_timeout_ms: u64,
+    /// How long teardown waits for its `stream remove` replies.
+    pub teardown_timeout_ms: u64,
+    /// Our recent sessions' handles on this radio, newest first ([`super::reconnect::Ladder`]).
+    pub previous_handles: Vec<u32>,
+}
+
+impl Config {
+    /// The production settings for a station name.
+    pub fn new(station: Station) -> Config {
+        Config {
+            connect: ConnectConfig {
+                station,
+                client_id: None,
+                low_bandwidth: false,
+                network_mtu: handshake::DEFAULT_NETWORK_MTU,
+                udp_port: None,
+            },
+            ping_interval_ms: super::keepalive::PING_INTERVAL_MS,
+            unkey_deadline_ms: TRANSITION_TIMEOUT_MS,
+            registration_timeout_ms: 10_000,
+            teardown_timeout_ms: 2_000,
+            previous_handles: Vec::new(),
+        }
+    }
+}
+
+/// Where the session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    AwaitVersion,
+    AwaitHandle,
+    /// `client gui` sent, its reply awaited.
+    Registering,
+    /// Registered; the setup batch is out and `slice list` is awaited.
+    Subscribing,
+    /// Registered and subscribed.
+    Ready,
+    /// Teardown: waiting for `stream remove` replies.
+    Closing,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Protocol {
+    Unknown,
+    Supported,
+    Rejected,
+}
+
+/// What the session reports, in order.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    /// The prologue's version, and whether this session may transmit on it.
+    Prologue {
+        version: String,
+        transmit_protocol: bool,
+    },
+    /// This connection's client handle.
+    Handle(u32),
+    /// The prologue broke its rules or named an API not reviewed for transmit: receive only.
+    ProtocolRejected,
+    /// The radio accepted `client gui`; the id to store and present next time, if it gave one.
+    Registered { client_id: Option<ClientId> },
+    /// The radio refused `client gui`. The session closes; do not retry until the operator asks.
+    RegistrationRejected { code: u32, detail: String },
+    /// Registered and subscribed. The slices the radio already has for us (`slice list`), or
+    /// `None` if that reply did not parse.
+    Ready { slices: Option<Vec<u8>> },
+    /// The reply to a command the caller sent, or to a start or stop.
+    Reply {
+        seq: u32,
+        code: u32,
+        message: String,
+    },
+    /// A setup command the radio refused.
+    SetupRefused { command: String, code: u32 },
+    /// `client udpport` was refused because the port is taken: rebind, then send it again.
+    UdpPortInUse { port: u16 },
+    Message {
+        severity: Severity,
+        number: u32,
+        text: String,
+    },
+    /// A line that was not a value. It was dropped.
+    LineRejected { error: WireError },
+    /// Our key command was written to the transport in full.
+    KeyWritten { seq: u32 },
+    /// The radio proved our unkey: keyed is cleared.
+    UnkeyConfirmed,
+    /// A ping went unanswered while keyed, and the session sent `xmit 0` before anything else.
+    UnkeyedOnMissedPing { misses: u32 },
+    /// The radio did not confirm the unkey in time. The session sent `xmit 0` again and is
+    /// closing. The operator must be told: the radio may still be transmitting.
+    UnkeyUnconfirmed,
+    /// The interlock names the handle of one of our previous sessions: that session's
+    /// transmitter may still be keyed. Keying is refused while it holds the transmitter.
+    PreviousSessionHoldsTransmitter { handle: u32 },
+    /// The session ended. Nothing follows.
+    Closed {
+        end: End,
+        was_keyed: bool,
+        handle: Option<u32>,
+    },
+}
+
+/// Why a command was not sent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SendError {
+    /// Not registered and subscribed, or closing.
+    NotReady,
+    Encode(encode::EncodeError),
+    /// The command is aimed at an object that is not this connection's.
+    NotOurs {
+        target: Target,
+        owner: Owner,
+    },
+}
+
+/// What a stop did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopOutcome {
+    /// The stop went out with this sequence number.
+    Sent { seq: u32 },
+    /// Nothing of ours to stop: no unconfirmed start, and the interlock names no session of ours.
+    /// Another client's transmission is never stopped from here.
+    NothingOfOurs,
+    /// The connection is closed; nothing can be written.
+    NotConnected,
+}
+
+/// A copy of the session's state, for whoever drives it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub phase: Phase,
+    /// This session may transmit on the radio's API version.
+    pub transmit_protocol: bool,
+    pub handle: Option<u32>,
+    /// A start of ours is unconfirmed.
+    pub keyed: bool,
+    /// The readback has seen the radio idle and nothing of ours is keyed.
+    pub transmit_ready: bool,
+    pub model: StatusModel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pending {
+    Ping,
+    Gui,
+    Setup(String),
+    MicList,
+    UdpPort(u16),
+    SliceList,
+    Caller,
+    Key,
+    Stop,
+    Teardown(u32),
+}
+
+/// An unconfirmed start of ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Keyed {
+    operation: Operation,
+    kind: StartKind,
+    stop: Option<StopRequest>,
+    stop_seq: Option<u32>,
+    /// The readback accepted the stop binding: its write is reported to it.
+    stop_tracked: bool,
+    first_stop_ms: Option<u64>,
+    escalated: bool,
+}
+
+/// Session identities are process-wide, nonzero and never reused.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// The protocol core of one connection.
+pub struct Session {
+    config: Config,
+    generation: u64,
+    phase: Phase,
+    protocol: Protocol,
+    handle: Option<u32>,
+    assembler: LineAssembler,
+    next_seq: u32,
+    pending: BTreeMap<u32, Pending>,
+    registration: Registration,
+    keepalive: Keepalive,
+    model: StatusModel,
+    tracker: StopTracker,
+    ordinal: u64,
+    keyed: Option<Keyed>,
+    next_operation: u64,
+    cwx_block: u32,
+    phase_deadline_ms: Option<u64>,
+    closing: Option<(End, BTreeSet<u32>, u64)>,
+    warned_previous: BTreeSet<u32>,
+    events: VecDeque<Event>,
+    /// Every command written, with its kind, for the tests' independent checks.
+    #[cfg(test)]
+    wrote: Vec<(u32, Kind, String)>,
+}
+
+impl Session {
+    /// A session for a connection that has just opened.
+    pub fn new(config: Config, now_ms: u64) -> Session {
+        let deadline = now_ms + config.registration_timeout_ms;
+        Session {
+            keepalive: Keepalive::new(config.ping_interval_ms),
+            tracker: StopTracker::new(config.unkey_deadline_ms),
+            config,
+            generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+            phase: Phase::AwaitVersion,
+            protocol: Protocol::Unknown,
+            handle: None,
+            assembler: LineAssembler::default(),
+            next_seq: 1,
+            pending: BTreeMap::new(),
+            registration: Registration::default(),
+            model: StatusModel::default(),
+            ordinal: 0,
+            keyed: None,
+            next_operation: 1,
+            cwx_block: 1,
+            phase_deadline_ms: Some(deadline),
+            closing: None,
+            warned_previous: BTreeSet::new(),
+            events: VecDeque::new(),
+            #[cfg(test)]
+            wrote: Vec::new(),
+        }
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.phase == Phase::Closed
+    }
+
+    pub fn handle(&self) -> Option<u32> {
+        self.handle
+    }
+
+    pub fn model(&self) -> &StatusModel {
+        &self.model
+    }
+
+    pub fn keyed(&self) -> bool {
+        self.keyed.is_some()
+    }
+
+    /// The readback can track a key: the API is reviewed, the radio has been seen idle, and
+    /// nothing of ours is keyed. Admission asks this and more.
+    pub fn transmit_ready(&self) -> bool {
+        self.protocol == Protocol::Supported
+            && self.tracker.phase() == super::ptt_evidence::Phase::Idle
+            && self.keyed.is_none()
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            phase: self.phase,
+            transmit_protocol: self.protocol == Protocol::Supported,
+            handle: self.handle,
+            keyed: self.keyed.is_some(),
+            transmit_ready: self.transmit_ready(),
+            model: self.model.clone(),
+        }
+    }
+
+    /// Everything reported since the last call, in order.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        self.events.drain(..).collect()
+    }
+
+    fn facts(&self) -> Facts {
+        Facts {
+            ready: self.phase == Phase::Ready,
+            transmit_protocol: self.protocol == Protocol::Supported,
+            handle: self.handle,
+            keyed: self.keyed.is_some(),
+            readback_idle: self.tracker.phase() == super::ptt_evidence::Phase::Idle,
+        }
+    }
+
+    fn stamp(&mut self) -> Stamp {
+        self.ordinal += 1;
+        Stamp {
+            session: self.generation,
+            ordinal: self.ordinal,
+        }
+    }
+
+    fn take_seq(&mut self) -> u32 {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        seq
+    }
+
+    /// Whether `handle` is this session's or one of our previous sessions'.
+    fn is_ours(&self, handle: u32) -> bool {
+        handle != 0
+            && (Some(handle) == self.handle || self.config.previous_handles.contains(&handle))
+    }
+
+    // ── Writing ──────────────────────────────────────────────────────────────────────────────
+
+    /// Write one rendered command and report it to the readback. A failed write ends the session.
+    fn write(&mut self, out: &mut dyn Write, seq: u32, rendered: &Rendered, now: u64) -> bool {
+        if self.phase == Phase::Closed {
+            return false;
+        }
+        let bytes = wire::frame(seq, rendered.text());
+        let ok = out.write_all(&bytes).and_then(|()| out.flush()).is_ok();
+        #[cfg(test)]
+        self.wrote
+            .push((seq, rendered.kind(), rendered.text().to_string()));
+        self.report_write(seq, rendered.kind(), ok, now);
+        if !ok {
+            self.transport_closed(now);
+        }
+        ok
+    }
+
+    /// Tell the readback about a transmit-capable write, stamped where it happened. The key and
+    /// the bound unkey are its inputs; any other transmit-capable write during an attempt spoils
+    /// the attempt's evidence, as another writer's would (upstream's `otherCommand`, typed here).
+    fn report_write(&mut self, seq: u32, kind: Kind, ok: bool, now: u64) {
+        let Some(keyed) = self.keyed else { return };
+        let tracked_key = keyed.kind == StartKind::Key;
+        match kind {
+            Kind::Ordinary => {}
+            Kind::Start(StartKind::Key) if tracked_key && keyed.stop.is_none() => {
+                let stamp = self.stamp();
+                self.tracker.command_written(stamp, seq, true, ok, now);
+            }
+            Kind::Stop(TxStop::Unkey) if keyed.stop_seq == Some(seq) => {
+                if keyed.stop_tracked {
+                    let stamp = self.stamp();
+                    self.tracker.command_written(stamp, seq, false, ok, now);
+                }
+            }
+            // A repeated unkey is not another writer: it is the same stop again, unreported, as
+            // upstream sends it.
+            Kind::Stop(TxStop::Unkey) => {}
+            Kind::Start(_) | Kind::Stop(_) => {
+                if tracked_key {
+                    let stamp = self.stamp();
+                    self.tracker.command_written(stamp, 0, true, false, now);
+                }
+            }
+        }
+    }
+
+    /// Send a command the session itself needs (setup, pings, teardown).
+    fn send_internal(
+        &mut self,
+        out: &mut dyn Write,
+        command: &Command,
+        pending: Pending,
+        now: u64,
+    ) -> Option<u32> {
+        let rendered = encode::render(command).ok()?;
+        let seq = self.take_seq();
+        self.pending.insert(seq, pending);
+        self.write(out, seq, &rendered, now).then_some(seq)
+    }
+
+    /// Send a caller's command. Only once registered and subscribed, and only at our own objects.
+    pub fn send(
+        &mut self,
+        out: &mut dyn Write,
+        command: &Command,
+        now: u64,
+    ) -> Result<u32, SendError> {
+        if self.phase != Phase::Ready {
+            return Err(SendError::NotReady);
+        }
+        let rendered = encode::render(command).map_err(SendError::Encode)?;
+        if let Some(target) = rendered.target() {
+            let object = match target {
+                Target::Slice(i) => ObjectRef::Slice(i),
+                Target::Pan(id) => ObjectRef::Pan(id),
+                Target::Waterfall(id) => ObjectRef::Waterfall(id),
+                Target::Stream(id) => ObjectRef::Stream(id),
+            };
+            let owner = self.model.owner(object, self.handle);
+            if owner != Owner::Ours {
+                return Err(SendError::NotOurs { target, owner });
+            }
+        }
+        let seq = self.take_seq();
+        self.pending.insert(seq, Pending::Caller);
+        self.write(out, seq, &rendered, now);
+        Ok(seq)
+    }
+
+    // ── Transmit ─────────────────────────────────────────────────────────────────────────────
+
+    /// Start a transmission, if admission allows it. The readback is armed and keyed is set before
+    /// the write.
+    pub fn start(&mut self, out: &mut dyn Write, start: TxStart, now: u64) -> Result<u32, Refusal> {
+        let kind = start.kind();
+        let admitted = admission::admit(&self.model, &self.facts(), start)?;
+        let operation = Operation(
+            NonZeroU64::new(self.next_operation).expect("operation numbers start at one"),
+        );
+        self.next_operation += 1;
+        let seq = self.take_seq();
+        if !self.tracker.begin(operation, seq, now) {
+            return Err(Refusal::ReadbackNotIdle);
+        }
+        self.keyed = Some(Keyed {
+            operation,
+            kind,
+            stop: None,
+            stop_seq: None,
+            stop_tracked: false,
+            first_stop_ms: None,
+            escalated: false,
+        });
+        let rendered = encode::render_start(admitted, self.cwx_block);
+        if kind == StartKind::Cwx {
+            self.cwx_block += 1;
+        }
+        self.pending.insert(seq, Pending::Key);
+        if self.write(out, seq, &rendered, now) {
+            self.events.push_back(Event::KeyWritten { seq });
+        }
+        Ok(seq)
+    }
+
+    /// Whether there is something of ours for this stop to end.
+    fn ours_to_stop(&self, stop: TxStop) -> bool {
+        let named = self
+            .model
+            .interlock
+            .last_tx_client_handle
+            .is_some_and(|h| self.is_ours(h));
+        let started = self.keyed.map(|k| k.kind);
+        match stop {
+            TxStop::Unkey => started.is_some() || named,
+            TxStop::TuneOff => {
+                started == Some(StartKind::Tune)
+                    || (self.model.transmit.tune == Some(true) && named)
+            }
+            TxStop::CwxClear => started == Some(StartKind::Cwx),
+        }
+    }
+
+    /// End a transmission. Never gated: if anything of ours may be keyed, the stop is written,
+    /// whatever else is true.
+    pub fn stop(&mut self, out: &mut dyn Write, stop: TxStop, now: u64) -> StopOutcome {
+        if self.phase == Phase::Closed {
+            return StopOutcome::NotConnected;
+        }
+        if !self.ours_to_stop(stop) {
+            return StopOutcome::NothingOfOurs;
+        }
+        let seq = self.take_seq();
+        if stop == TxStop::Unkey {
+            if let Some(keyed) = self.keyed.as_mut() {
+                if keyed.kind == StartKind::Key && keyed.stop.is_none() {
+                    let request = StopRequest {
+                        operation: keyed.operation,
+                        attempt: NonZeroU64::MIN,
+                    };
+                    keyed.stop = Some(request);
+                    keyed.stop_seq = Some(seq);
+                    keyed.stop_tracked =
+                        self.tracker
+                            .request_stop(keyed.operation, request, seq, now);
+                }
+                keyed.first_stop_ms.get_or_insert(now);
+            }
+        }
+        self.pending.insert(seq, Pending::Stop);
+        self.write(out, seq, &encode::render_stop(stop), now);
+        StopOutcome::Sent { seq }
+    }
+
+    /// Take the readback's proof, if it has completed: keyed clears.
+    fn check_evidence(&mut self, now: u64) {
+        let Some(request) = self.keyed.and_then(|k| k.stop) else {
+            return;
+        };
+        if self.tracker.evidence(now) == Some(request) && self.tracker.consume(request, now) {
+            self.keyed = None;
+            self.events.push_back(Event::UnkeyConfirmed);
+        }
+    }
+
+    /// The unkey was not proven in time: unkey again, tell the operator, close.
+    fn escalate(&mut self, out: &mut dyn Write, now: u64) {
+        if let Some(keyed) = self.keyed.as_mut() {
+            keyed.escalated = true;
+        }
+        let seq = self.take_seq();
+        self.pending.insert(seq, Pending::Stop);
+        self.write(out, seq, &encode::render_stop(TxStop::Unkey), now);
+        self.events.push_back(Event::UnkeyUnconfirmed);
+        self.close_with(out, End::UnkeyUnconfirmed, now);
+    }
+
+    // ── Input ────────────────────────────────────────────────────────────────────────────────
+
+    /// Bytes from the radio.
+    pub fn on_bytes(&mut self, out: &mut dyn Write, bytes: &[u8], now: u64) {
+        if self.phase == Phase::Closed {
+            return;
+        }
+        match self.assembler.push(bytes) {
+            Ok(lines) => {
+                for raw in lines {
+                    if self.phase == Phase::Closed {
+                        break;
+                    }
+                    match String::from_utf8(raw) {
+                        Ok(line) => self.on_line(out, &line, now),
+                        Err(e) => {
+                            // The readback still sees it, as upstream's lossy decode would show
+                            // it; a garbled line during an attempt must spoil the attempt.
+                            let lossy = String::from_utf8_lossy(e.as_bytes()).into_owned();
+                            let stamp = self.stamp();
+                            self.tracker.observe(stamp, &lossy, now);
+                            self.events.push_back(Event::LineRejected {
+                                error: WireError::NotUtf8,
+                            });
+                        }
+                    }
+                }
+            }
+            Err(TooLong) => self.close_with(out, End::ProtocolError, now),
+        }
+    }
+
+    /// One whole line from the radio.
+    pub fn on_line(&mut self, out: &mut dyn Write, line: &str, now: u64) {
+        // The readback sees every line first, raw, in arrival order.
+        let stamp = self.stamp();
+        self.tracker.observe(stamp, line, now);
+        match parse_line(line) {
+            Ok(Line::Version(v)) => self.on_version(Some(v)),
+            Err(WireError::BadVersion) => {
+                self.events.push_back(Event::LineRejected {
+                    error: WireError::BadVersion,
+                });
+                self.on_version(None);
+            }
+            Ok(Line::Handle(h)) => self.on_handle(out, Some(h), now),
+            Err(WireError::BadHandle) => {
+                self.events.push_back(Event::LineRejected {
+                    error: WireError::BadHandle,
+                });
+                self.on_handle(out, None, now);
+            }
+            Ok(Line::Reply(r)) => self.on_reply(out, r, now),
+            Ok(Line::Status(s)) => self.on_status(&s, now),
+            Ok(Line::Message(m)) => {
+                self.registration.note_radio_message(&m.text, m.severity);
+                self.events.push_back(Event::Message {
+                    severity: m.severity,
+                    number: m.number,
+                    text: m.text,
+                });
+            }
+            Err(error) => self.events.push_back(Event::LineRejected { error }),
+        }
+        self.check_evidence(now);
+    }
+
+    /// This session may no longer transmit. The unkey path stays: keyed is kept, and stops are
+    /// still written.
+    fn reject_protocol(&mut self) {
+        if self.protocol != Protocol::Rejected {
+            self.protocol = Protocol::Rejected;
+            self.events.push_back(Event::ProtocolRejected);
+        }
+        self.tracker.disconnect();
+    }
+
+    fn on_version(&mut self, version: Option<String>) {
+        if self.phase != Phase::AwaitVersion {
+            // A late or repeated prologue cannot renegotiate transmit.
+            self.reject_protocol();
+            return;
+        }
+        self.phase = Phase::AwaitHandle;
+        let supported = version.as_deref().is_some_and(supports_protocol);
+        if let Some(version) = version {
+            self.events.push_back(Event::Prologue {
+                version,
+                transmit_protocol: supported,
+            });
+        }
+        if supported {
+            self.protocol = Protocol::Supported;
+        } else {
+            self.reject_protocol();
+        }
+    }
+
+    fn on_handle(&mut self, out: &mut dyn Write, handle: Option<u32>, now: u64) {
+        match self.phase {
+            Phase::AwaitVersion => {
+                // No version first: receive only, but the session goes on.
+                self.reject_protocol();
+            }
+            Phase::AwaitHandle => {}
+            _ => {
+                self.reject_protocol();
+                return;
+            }
+        }
+        match handle.filter(|h| *h != 0) {
+            Some(h) => {
+                self.handle = Some(h);
+                self.events.push_back(Event::Handle(h));
+                if self.protocol == Protocol::Supported {
+                    self.tracker.reset(self.generation, h);
+                }
+            }
+            None => self.reject_protocol(),
+        }
+        self.phase = Phase::Registering;
+        self.phase_deadline_ms = Some(now + self.config.registration_timeout_ms);
+        for command in handshake::opening(&self.config.connect) {
+            let pending = if matches!(command, Command::ClientGui(_)) {
+                self.registration.begin();
+                Pending::Gui
+            } else {
+                Pending::Setup(
+                    encode::render(&command)
+                        .map(|r| r.text().to_string())
+                        .unwrap_or_default(),
+                )
+            };
+            if self.send_internal(out, &command, pending, now).is_none() {
+                return;
+            }
+        }
+    }
+
+    fn on_reply(&mut self, out: &mut dyn Write, reply: Reply, now: u64) {
+        let Some(pending) = self.pending.remove(&reply.seq) else {
+            // Not a number this session issued (or already answered): never someone else's
+            // answer.
+            return;
+        };
+        let ok = reply.is_success();
+        match pending {
+            Pending::Ping => {
+                self.keepalive.reply(reply.seq, now);
+            }
+            Pending::Gui => self.on_registration(out, &reply, now),
+            Pending::Setup(command) => {
+                if !ok {
+                    self.events.push_back(Event::SetupRefused {
+                        command,
+                        code: reply.code,
+                    });
+                }
+            }
+            Pending::MicList => {
+                if ok {
+                    self.model.mic_inputs = Some(super::kv::split_list(&reply.message));
+                } else {
+                    self.events.push_back(Event::SetupRefused {
+                        command: "mic list".into(),
+                        code: reply.code,
+                    });
+                }
+            }
+            Pending::UdpPort(port) => {
+                if handshake::is_udp_port_in_use(reply.code, &reply.message) {
+                    self.events.push_back(Event::UdpPortInUse { port });
+                } else if !ok && reply.code != NOT_SUPPORTED {
+                    self.events.push_back(Event::SetupRefused {
+                        command: format!("client udpport {port}"),
+                        code: reply.code,
+                    });
+                }
+            }
+            Pending::SliceList => {
+                let slices = if ok {
+                    reply
+                        .message
+                        .split(' ')
+                        .filter(|w| !w.is_empty())
+                        .map(|w| wire::parse_dec_u32(w).and_then(|n| u8::try_from(n).ok()))
+                        .collect::<Option<Vec<u8>>>()
+                } else {
+                    None
+                };
+                if self.phase == Phase::Subscribing {
+                    self.phase = Phase::Ready;
+                }
+                self.events.push_back(Event::Ready { slices });
+            }
+            Pending::Caller | Pending::Key | Pending::Stop => {
+                self.events.push_back(Event::Reply {
+                    seq: reply.seq,
+                    code: reply.code,
+                    message: reply.message,
+                });
+            }
+            Pending::Teardown(stream) => {
+                let done = match self.closing.as_mut() {
+                    Some((_, waiting, _)) => {
+                        waiting.remove(&stream);
+                        waiting.is_empty()
+                    }
+                    None => false,
+                };
+                if done {
+                    self.finish_close(out);
+                }
+            }
+        }
+    }
+
+    fn on_registration(&mut self, out: &mut dyn Write, reply: &Reply, now: u64) {
+        let result = self.registration.complete(reply.code, &reply.message);
+        if !result.accepted() {
+            self.events.push_back(Event::RegistrationRejected {
+                code: result.code,
+                detail: result.detail.clone(),
+            });
+            self.close_with(
+                out,
+                End::RegistrationRejected {
+                    code: result.code,
+                    detail: result.detail,
+                },
+                now,
+            );
+            return;
+        }
+        self.events.push_back(Event::Registered {
+            client_id: ClientId::parse(reply.message.trim()),
+        });
+        self.phase = Phase::Subscribing;
+        self.phase_deadline_ms = None;
+        for command in handshake::after_registration(&self.config.connect) {
+            let pending = match &command {
+                Command::MicList => Pending::MicList,
+                Command::SliceList => Pending::SliceList,
+                Command::ClientUdpPort(port) => Pending::UdpPort(*port),
+                other => Pending::Setup(
+                    encode::render(other)
+                        .map(|r| r.text().to_string())
+                        .unwrap_or_default(),
+                ),
+            };
+            if self.send_internal(out, &command, pending, now).is_none() {
+                return;
+            }
+            if command == Command::KeepaliveEnable {
+                self.keepalive.start(now);
+            }
+        }
+    }
+
+    fn on_status(&mut self, status: &Status, now: u64) {
+        let decoded = decode(status);
+        if let Decoded::Client {
+            handle,
+            action: ClientAction::Connected,
+            ..
+        } = &decoded
+        {
+            if Some(*handle) != self.handle {
+                self.keepalive.note_foreign_client_connected(now);
+            }
+        }
+        self.model.apply(&decoded);
+        if let Decoded::Interlock(d) = &decoded {
+            if let Some(h) = d.tx_client_handle {
+                let previous =
+                    h != 0 && Some(h) != self.handle && self.config.previous_handles.contains(&h);
+                if previous && self.warned_previous.insert(h) {
+                    self.events
+                        .push_back(Event::PreviousSessionHoldsTransmitter { handle: h });
+                }
+            }
+        }
+    }
+
+    // ── Time ─────────────────────────────────────────────────────────────────────────────────
+
+    /// Let time pass: pings, deadlines, the readback's clock.
+    pub fn poll(&mut self, out: &mut dyn Write, now: u64) {
+        if self.phase == Phase::Closed {
+            return;
+        }
+        if let Some(deadline) = self.phase_deadline_ms {
+            if now >= deadline
+                && matches!(
+                    self.phase,
+                    Phase::AwaitVersion | Phase::AwaitHandle | Phase::Registering
+                )
+            {
+                self.close_with(out, End::ProtocolError, now);
+                return;
+            }
+        }
+        match self.keepalive.tick(now) {
+            Tick::Idle => {}
+            Tick::Ping => self.ping(out, now),
+            Tick::Missed { misses } => {
+                // A missed ping while keyed unkeys before anything else.
+                if self.keyed.is_some() {
+                    self.stop(out, TxStop::Unkey, now);
+                    self.events.push_back(Event::UnkeyedOnMissedPing { misses });
+                }
+                self.ping(out, now);
+            }
+            Tick::Lost { .. } => {
+                self.close_with(out, End::KeepaliveLost, now);
+                return;
+            }
+        }
+        self.tracker.poll(now);
+        self.check_evidence(now);
+        if let Some(keyed) = self.keyed {
+            let due = keyed
+                .first_stop_ms
+                .is_some_and(|first| now >= first.saturating_add(self.config.unkey_deadline_ms));
+            if due && !keyed.escalated {
+                self.escalate(out, now);
+                return;
+            }
+        }
+        if let Some((_, _, deadline)) = &self.closing {
+            if now >= *deadline {
+                self.finish_close(out);
+            }
+        }
+    }
+
+    fn ping(&mut self, out: &mut dyn Write, now: u64) {
+        if let Some(seq) = self.send_internal(out, &Command::Ping, Pending::Ping, now) {
+            self.keepalive.sent(seq, now);
+        }
+    }
+
+    // ── Ending ───────────────────────────────────────────────────────────────────────────────
+
+    /// Close on purpose: teardown, then [`Event::Closed`] with [`End::Closed`].
+    pub fn close(&mut self, out: &mut dyn Write, now: u64) {
+        self.close_with(out, End::Closed, now);
+    }
+
+    /// Teardown: a best-effort unkey if ours may be keyed and no stop has gone out, `stream
+    /// remove` for our streams, then the marker and the close once they are answered or the wait
+    /// runs out.
+    fn close_with(&mut self, out: &mut dyn Write, end: End, now: u64) {
+        if matches!(self.phase, Phase::Closing | Phase::Closed) {
+            return;
+        }
+        let unstopped = self.keyed.is_some_and(|k| k.first_stop_ms.is_none());
+        let named = self
+            .model
+            .interlock
+            .last_tx_client_handle
+            .is_some_and(|h| self.is_ours(h));
+        if unstopped || (named && self.keyed.is_none()) {
+            self.stop(out, TxStop::Unkey, now);
+            if self.phase == Phase::Closed {
+                return;
+            }
+        }
+        self.phase = Phase::Closing;
+        self.phase_deadline_ms = None;
+        let mut waiting = BTreeSet::new();
+        for stream in self.model.our_streams(self.handle) {
+            if self
+                .send_internal(
+                    out,
+                    &Command::StreamRemove { stream },
+                    Pending::Teardown(stream),
+                    now,
+                )
+                .is_some()
+            {
+                waiting.insert(stream);
+            }
+            if self.phase == Phase::Closed {
+                return;
+            }
+        }
+        let empty = waiting.is_empty();
+        self.closing = Some((end, waiting, now + self.config.teardown_timeout_ms));
+        if empty {
+            self.finish_close(out);
+        }
+    }
+
+    /// The disconnect marker, then closed.
+    fn finish_close(&mut self, out: &mut dyn Write) {
+        if self.phase == Phase::Closed {
+            return;
+        }
+        let _ = out.write_all(&[0x04]).and_then(|()| out.flush());
+        let end = self
+            .closing
+            .take()
+            .map(|(end, _, _)| end)
+            .unwrap_or(End::Closed);
+        self.finished(end);
+    }
+
+    /// The connection is gone (end of stream, a read or write error). Nothing more can be written.
+    /// A close already under way keeps the reason it was started for: a refused registration stays
+    /// terminal even when the radio drops the connection first.
+    pub fn transport_closed(&mut self, _now: u64) {
+        if self.phase == Phase::Closed {
+            return;
+        }
+        let end = self
+            .closing
+            .take()
+            .map(|(end, _, _)| end)
+            .unwrap_or(End::Lost);
+        self.finished(end);
+    }
+
+    fn finished(&mut self, end: End) {
+        self.phase = Phase::Closed;
+        self.registration.reset();
+        self.tracker.disconnect();
+        self.events.push_back(Event::Closed {
+            end,
+            was_keyed: self.keyed.is_some(),
+            handle: self.handle,
+        });
+    }
+}
+
+// ── The thread driver ────────────────────────────────────────────────────────────────────────
+
+/// How long the driver waits for bytes before it looks at requests and time again. A stop waits
+/// at most this long behind a read.
+pub const READ_POLL: Duration = Duration::from_millis(20);
+
+/// How long [`Connection::connect`] may take to open TCP. Bounded so that nothing waiting on it
+/// (ultimately the radio loop, which unkeys) can be held by an unreachable address.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long one write may block before the session counts the connection as gone.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Why a request through [`Connection`] got no reply.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnError {
+    /// The session refused to send it.
+    Refused(SendError),
+    /// No reply within the wait.
+    Timeout,
+    /// The session is closed.
+    Closed,
+}
+
+enum Request {
+    Send(Command, Sender<Result<Reply, ConnError>>),
+    Start(TxStart, Sender<Result<u32, Refusal>>),
+    Stop(TxStop, Sender<StopOutcome>),
+    Close,
+}
+
+struct Shared {
+    snapshot: Mutex<Snapshot>,
+    changed: Condvar,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A [`Session`] running on its own thread over one connection.
+pub struct Connection {
+    requests: Sender<Request>,
+    events: Receiver<Event>,
+    shared: Arc<Shared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Connection {
+    /// Open TCP to the radio and start the session.
+    pub fn connect(addr: SocketAddr, config: Config) -> io::Result<Connection> {
+        let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(READ_POLL))?;
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+        Connection::spawn(stream, config)
+    }
+
+    /// Start the session over an open transport. Its reads must time out (the driver interleaves
+    /// them with requests and time).
+    pub fn spawn<S: Read + Write + Send + 'static>(
+        io: S,
+        config: Config,
+    ) -> io::Result<Connection> {
+        let (requests, request_rx) = mpsc::channel();
+        let (event_tx, events) = mpsc::channel();
+        let epoch = Instant::now();
+        let session = Session::new(config, 0);
+        let shared = Arc::new(Shared {
+            snapshot: Mutex::new(session.snapshot()),
+            changed: Condvar::new(),
+        });
+        let thread = {
+            let shared = Arc::clone(&shared);
+            std::thread::Builder::new()
+                .name("flex-session".into())
+                .spawn(move || drive(io, session, epoch, &request_rx, &event_tx, &shared))?
+        };
+        Ok(Connection {
+            requests,
+            events,
+            shared,
+            thread: Some(thread),
+        })
+    }
+
+    /// Send a command and wait for its reply.
+    pub fn request(&self, command: Command, timeout: Duration) -> Result<Reply, ConnError> {
+        let (tx, rx) = mpsc::channel();
+        self.requests
+            .send(Request::Send(command, tx))
+            .map_err(|_| ConnError::Closed)?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ConnError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ConnError::Closed),
+        }
+    }
+
+    /// Start a transmission (admission decides). `Err(None)` when the session is gone.
+    pub fn start(&self, start: TxStart) -> Result<u32, Option<Refusal>> {
+        let (tx, rx) = mpsc::channel();
+        self.requests
+            .send(Request::Start(start, tx))
+            .map_err(|_| None)?;
+        rx.recv().map_err(|_| None)?.map_err(Some)
+    }
+
+    /// End a transmission. Never gated.
+    pub fn stop(&self, stop: TxStop) -> StopOutcome {
+        let (tx, rx) = mpsc::channel();
+        if self.requests.send(Request::Stop(stop, tx)).is_err() {
+            return StopOutcome::NotConnected;
+        }
+        rx.recv().unwrap_or(StopOutcome::NotConnected)
+    }
+
+    /// The next event, waiting up to `timeout`.
+    pub fn next_event(&self, timeout: Duration) -> Option<Event> {
+        self.events.recv_timeout(timeout).ok()
+    }
+
+    /// The session's state as of its last step.
+    pub fn snapshot(&self) -> Snapshot {
+        lock(&self.shared.snapshot).clone()
+    }
+
+    /// Wait until `done` holds for the state, or `timeout` passes. Returns whether it held.
+    pub fn wait_until(&self, timeout: Duration, done: impl Fn(&Snapshot) -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut snapshot = lock(&self.shared.snapshot);
+        loop {
+            if done(&snapshot) {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            snapshot = self
+                .shared
+                .changed
+                .wait_timeout(snapshot, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+
+    /// Close on purpose, waiting for teardown to finish.
+    pub fn close(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        let _ = self.requests.send(Request::Close);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn retryable(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+    )
+}
+
+fn drive<S: Read + Write>(
+    mut io: S,
+    mut session: Session,
+    epoch: Instant,
+    requests: &Receiver<Request>,
+    events: &Sender<Event>,
+    shared: &Shared,
+) {
+    let now = || u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut waiters: BTreeMap<u32, Sender<Result<Reply, ConnError>>> = BTreeMap::new();
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        // Requests first, so a stop never waits behind more than one read.
+        loop {
+            match requests.try_recv() {
+                Ok(Request::Send(command, reply)) => match session.send(&mut io, &command, now()) {
+                    Ok(seq) => {
+                        waiters.insert(seq, reply);
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(ConnError::Refused(e)));
+                    }
+                },
+                Ok(Request::Start(start, reply)) => {
+                    let _ = reply.send(session.start(&mut io, start, now()));
+                }
+                Ok(Request::Stop(stop, reply)) => {
+                    let _ = reply.send(session.stop(&mut io, stop, now()));
+                }
+                Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
+                    session.close(&mut io, now());
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+            }
+        }
+        if !session.is_closed() {
+            match io.read(&mut buf) {
+                Ok(0) => session.transport_closed(now()),
+                Ok(n) => session.on_bytes(&mut io, &buf[..n], now()),
+                Err(e) if retryable(&e) => {}
+                Err(_) => session.transport_closed(now()),
+            }
+            session.poll(&mut io, now());
+        }
+        for event in session.take_events() {
+            if let Event::Reply { seq, code, message } = &event {
+                if let Some(waiter) = waiters.remove(seq) {
+                    let _ = waiter.send(Ok(Reply {
+                        seq: *seq,
+                        code: *code,
+                        message: message.clone(),
+                    }));
+                }
+            }
+            let _ = events.send(event);
+        }
+        *lock(&shared.snapshot) = session.snapshot();
+        shared.changed.notify_all();
+        if session.is_closed() {
+            break;
+        }
+    }
+    // Waiters still pending see their channel close.
+    drop(waiters);
+    let _ = io.flush();
+}
+
+#[cfg(test)]
+mod tests;
