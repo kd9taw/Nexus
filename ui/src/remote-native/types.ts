@@ -12,6 +12,9 @@ export type RemoteStationStatus = {
   loggingController?: string | null
   /** A5: the browsers whose listed key is the one pinned here, the ones that can stream. */
   pinnedDevices?: string[]
+  /** S3-M1: the service holds another signing key for this station, so browsers refuse its stream
+   *  until it is paired again. */
+  keyRefused?: boolean
   observationGeneration?: string | null
   error: string | null
 }

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Remote: the stream proves it comes from your station.** Nexus at the shack now signs every
+  stream it answers with a key of its own, made when the station is paired (or, for a station
+  paired before, the first time this Nexus starts) and kept in the computer's password store. The
+  Remote service records that key once, and the Remote page takes a stream only if it carries
+  the station's signature for that very request. Before, anything that could answer in the
+  station's place on the Remote service's relay would have been taken for your station, and would
+  have been sent what you typed on the picture and your microphone. A stream from a station that
+  cannot sign is refused, and the page says to update Nexus at the shack. If the station's key is
+  ever lost, revoke station access and pair again.
+- **Remote: control, Listen and commands carry the browser's own key.** Taking control, keeping
+  it, releasing it, **Listen**, and every command and log entry from the Remote page now carry
+  the signature of that browser's key, the one you compare when you approve it at the shack, and
+  Nexus refuses anything without it. Before, Nexus took the Remote service's word for which
+  browser was asking. **Stop TX** needs no signature, so nothing can hold it up. A browser approved
+  before browser keys existed is asked for again at the shack before it can take control.
 - **Remote: the hosted page opens only over https://.** An `http://` address for the Remote page,
   typed without the `https://` or followed from an old link, loaded the whole page, sign-in
   included, unencrypted, where anyone on the same network (public Wi-Fi, a hostile router) could

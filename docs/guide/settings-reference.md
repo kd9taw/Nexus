@@ -151,6 +151,20 @@ control and clear permissions** and **Revoke browser approval** clear permission
 **Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
+**This station's key.** Pairing gives this station a signing key of its own, kept in this
+computer's password store with the pairing; a station paired by an earlier Nexus gets one the
+first time this Nexus starts. The station signs every stream it answers with it, and the
+Remote service records it the first time the station connects. A browser takes only a stream
+this key signed, so nothing between the two can pass itself off as your station. If the key is
+lost (the password store was cleared, say) or you want a new one, use **Revoke station access**
+and pair again: a new pairing makes a new key. Until you do, the card says the Remote service
+holds a different key for this station, and browsers refuse its stream.
+
+Each browser has a key too, which you compare when you approve it. Taking control, keeping it,
+**Listen** and every command from a browser carry that browser's key, and Nexus takes them
+only from the key you approved; **Stop TX** never needs it. A browser approved before browser
+keys existed is asked for again, here, before it can take control.
+
 ---
 
 ## Radio

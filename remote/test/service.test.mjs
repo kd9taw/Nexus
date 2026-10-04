@@ -2688,3 +2688,66 @@ test('the relay route mints TURN credentials for an approved, entitled browser, 
     assert.equal((await looping.browser.post(`stations/${looping.stationId}/turn`, {}, 429)).value.error, 'tryLater')
   } finally { release(); await relayed.mf.dispose() }
 })
+
+// --- The relay's older lanes and the station's own key (security review S1-M1, S3-M1) -----------
+// The page proves each message on the operation and audio lanes with its device key, and the
+// station requires it; the relay checks a proof's shape and hands it on only to a station that
+// advertised it. The station's own key, which signs its stream answers, is recorded once here and
+// listed to the account's pages, never through the relay.
+const LANE_PROOF = { publicKey: `3059301306072a8648ce3d020106082a8648ce3d03010703420004${'1'.repeat(128)}`, seq: 1, signature: 'a'.repeat(128) }
+const AUDIO_HEADERS = { ...OPERATION_HEADERS, 'x-nexus-audio-version': '1' }
+
+test('S1-M1: the relay hands the browser\'s proof on, with the request as sent, only to a station that takes it', async () => {
+  for (const [headers, takes] of [[{ ...AUDIO_HEADERS, 'x-nexus-lane-signature-version': '1' }, true], [AUDIO_HEADERS, false]]) {
+    const pair = await app.paired(), live = await admitted(pair, 1, headers)
+    const request = { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: crypto.randomUUID() }
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request, proof: LANE_PROOF })
+    const routed = await live.station.take(type('operationRequest'))
+    // The bytes the proof covers: the request's own fields, in the order the page wrote them.
+    assert.equal(JSON.stringify(routed.request), JSON.stringify(request))
+    assert.deepEqual(routed.proof, takes ? LANE_PROOF : undefined, `takes=${takes}: an older station is never handed a field it refuses`)
+    const leaseId = crypto.randomUUID()
+    live.browser.send({ type: 'audioListen', listening: true, leaseId, proof: { ...LANE_PROOF, seq: 2 } })
+    const asked = await live.station.take(type('audioListen'))
+    assert.equal(asked.leaseId, leaseId)
+    assert.deepEqual(asked.proof, takes ? { ...LANE_PROOF, seq: 2 } : undefined, `takes=${takes}`)
+    // Control: a message with no proof reaches either station as it always did.
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request: { ...request, requestId: crypto.randomUUID() } })
+    assert.equal('proof' in await live.station.take(type('operationRequest')), false)
+  }
+})
+
+test('S1-M1: a proof of the wrong shape closes the browser and never reaches the station', async () => {
+  for (const proof of [{ ...LANE_PROOF, seq: 0 }, { ...LANE_PROOF, signature: 'A'.repeat(128) }, { ...LANE_PROOF, publicKey: '04' }, { ...LANE_PROOF, extra: 1 }]) {
+    const pair = await app.paired(), live = await admitted(pair, 1, { ...AUDIO_HEADERS, 'x-nexus-lane-signature-version': '1' })
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request: { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: crypto.randomUUID() }, proof })
+    assert.equal((await live.browser.take(type('closed'))).code, 1008, JSON.stringify(proof))
+    await assert.rejects(live.station.take(type('operationRequest'), 200), /timeout/)
+  }
+  // Control: the same message with a proof of the right shape is handed on.
+  const pair = await app.paired(), live = await admitted(pair, 1, { ...AUDIO_HEADERS, 'x-nexus-lane-signature-version': '1' })
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: crypto.randomUUID() }, proof: LANE_PROOF })
+  assert.deepEqual((await live.station.take(type('operationRequest'))).proof, LANE_PROOF)
+})
+
+test('S3-M1: a station\'s key is recorded once: the same key is kept, another is refused by name, and its pages see it', async () => {
+  const spki = async () => {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+    return Buffer.from(await crypto.subtle.exportKey('spki', pair.publicKey)).toString('hex')
+  }
+  const pair = await app.paired(), first = await spki(), other = await spki()
+  const listed = async () => (await pair.browser.post('session')).value.stations.find(station => station.id === pair.stationId).stationKey
+  assert.equal(await listed(), null, 'a station that has sent none is listed with none')
+  const path = `stations/${pair.stationId}/native/key`
+  assert.deepEqual((await pair.native.post(path, { publicKey: first })).value, { ok: true })
+  assert.equal(await listed(), first)
+  assert.deepEqual((await pair.native.post(path, { publicKey: first })).value, { ok: true }, 'the same key again is kept')
+  assert.equal((await pair.native.post(path, { publicKey: other }, 409)).value.error, 'stationKeyPinned')
+  assert.equal(await listed(), first, 'and never replaced')
+  // Not a P-256 point, or no key at all: refused before anything is written.
+  await pair.native.post(path, { publicKey: `3059301306072a8648ce3d020106082a8648ce3d03010703420004${'1'.repeat(128)}` }, 400)
+  await pair.native.post(path, {}, 400)
+  // Only the station's own credential reaches it: a page (which sends an Origin) cannot.
+  await pair.browser.post(path, { publicKey: other }, 403)
+  assert.equal(await listed(), first)
+})

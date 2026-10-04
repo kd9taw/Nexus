@@ -11,6 +11,31 @@ import { runtime, roomStatus } from './runtime.mjs'
 import { recallReference, recallAdif } from './recall-reference.mjs'
 import { insightsReference, insightsAdif } from './insights-reference.mjs'
 
+/** A browser's device key, made for the run, and the proof it puts on what the relay's older lanes
+ *  carry (security review S1-M1), made the way the page makes it: the real station requires it on
+ *  every operation request but Stop and `state`, and on every Listen. */
+async function deviceKey() {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+  const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey))
+  const hex = bytes => Buffer.from(bytes).toString('hex'), text = new TextEncoder()
+  let seq = 0
+  return {
+    publicKey: hex(spki),
+    fingerprint: hex(await crypto.subtle.digest('SHA-256', spki)),
+    async prove(message, { stationId, deviceId, sessionId }) {
+      if (message.type === 'operationRequest' && ['stopTransmit', 'state'].includes(message.request.type)) return message
+      const listen = message.type === 'audioListen'
+      const body = listen ? `{"listening":${message.listening},"leaseId":"${message.leaseId}"}` : JSON.stringify(message.request)
+      const number = new Uint8Array(8)
+      new DataView(number.buffer).setBigUint64(0, BigInt(++seq))
+      const signed = new Uint8Array([...text.encode(listen ? 'nexus-listen/1' : 'nexus-operation/1'),
+        ...new Uint8Array(await crypto.subtle.digest('SHA-256', text.encode(body))),
+        ...text.encode(stationId), ...text.encode(deviceId), ...text.encode(sessionId), ...number])
+      return { ...message, proof: { publicKey: hex(spki), seq, signature: hex(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, signed)) } }
+    },
+  }
+}
+
 for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`actual cloud ${tier} QSO exchange finishes with durable ${prompt ? 'confirmed' : 'current'} logging`, { timeout: 90000 }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
   const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
@@ -21,9 +46,11 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
     const stationId = begin.status.pairingId
     await browser.post('pair/claim', { code: begin.status.pairingCode }); await browser.post('pair/confirm', { id: stationId }); await probe.send({ type: 'refresh' })
     assert.equal((await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })).ok, true)
-    const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'FT logging browser' })
+    // The browser's key, shown at the radio and pinned with the approval (A5, S1-M1).
+    const key = await deviceKey()
+    const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'FT logging browser', publicKey: key.publicKey })
     browser.setCookie(response.headers.get('set-cookie')); await probe.send({ type: 'refresh' })
-    await probe.send({ type: 'device', deviceId: device.deviceId, approve: true }); await probe.send({ type: 'enable' })
+    await probe.send({ type: 'device', deviceId: device.deviceId, approve: true, key: key.fingerprint }); await probe.send({ type: 'enable' })
     const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(stationId))
     for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
     assert.equal((await roomStatus(room)).online, true)
@@ -33,11 +60,12 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
       assert.equal(result.ok, true, `${type}: ${result.error}`)
     }
     const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
-    socket = await browser.open(stationId, ticket.ticket); socket.ackObservations(); await socket.take(v => v.type === 'session')
+    socket = await browser.open(stationId, ticket.ticket); socket.ackObservations()
+    const { sessionId } = await socket.take(v => v.type === 'session')
     const send = async args => {
       await delay(270)
       const request = { requestId: crypto.randomUUID(), ...args }
-      socket.send({ type: 'operationRequest', operationVersion: 4, request })
+      socket.send(await key.prove({ type: 'operationRequest', operationVersion: 4, request }, { stationId, deviceId: device.deviceId, sessionId }))
       return { request, response: await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId) }
     }
     // stationBusy means the request was refused before anything changed, so an operator clicks
@@ -251,6 +279,68 @@ test('actual native A5: approving the pairing pins the key the confirming browse
     const { value: session } = await browser.post('session')
     assert.equal(session.stations.find(s => s.id === stationId).device.publicKey, publicKey, 'the page reads its own key back')
   } finally {
+    try { await probe.stop() } finally { await app.mf.dispose() }
+  }
+})
+
+// S1-M1 and S3-M1 through the real relay and the real station: the station records its own key with
+// the service when it connects, and its pages read it there; and the station takes control only on
+// the proof of the key pinned for the browser at the radio, while state and Stop need none.
+test('actual native S1-M1/S3-M1: the station\'s key is recorded for its pages, and control is taken only on the pinned key\'s proof', { timeout: 60000 }, async () => {
+  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+  const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  let socket
+  try {
+    await probe.ready()
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'Lane proof bench' })
+    const stationId = begin.status.pairingId, key = await deviceKey(), forger = await deviceKey()
+    await browser.post('pair/claim', { code: begin.status.pairingCode })
+    const { response } = await browser.post('pair/confirm', { id: stationId, publicKey: key.publicKey })
+    browser.setCookie(response.headers.get('set-cookie'))
+    await probe.send({ type: 'refresh' })
+    assert.equal((await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })).ok, true)
+    // S3-M1: the station sent its key before it connected; the account's page reads it from the service.
+    let listed = null
+    for (let i = 0; i < 50 && !listed; i++) {
+      listed = (await browser.post('session')).value.stations.find(s => s.id === stationId)?.stationKey ?? null
+      if (!listed) await delay(100)
+    }
+    assert.match(listed ?? '', /^3059301306072a8648ce3d020106082a8648ce3d03010703420004[0-9a-f]{128}$/, 'a P-256 key, recorded at the first connection')
+    const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(stationId))
+    for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
+    for (let i = 0; i < 50; i++) { const { status } = await probe.send({ type: 'status' }); if (status.stationPermissions?.length && status.pinnedDevices?.length) break; await delay(100) }
+    const { value: device } = await browser.post(`stations/${stationId}/device`, { name: 'Lane browser' })
+    const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
+    socket = await browser.open(stationId, ticket.ticket); socket.ackObservations()
+    const { sessionId } = await socket.take(v => v.type === 'session')
+    const ids = { stationId, deviceId: device.deviceId, sessionId }
+    // A request, proved with `by` (the pinned key unless said), or sent with none at all.
+    const ask = async ({ by = key, unsigned = false, ...message }) => {
+      for (let attempt = 0; ; attempt++) {
+        await delay(270)
+        const sent = { ...message, request: { ...message.request, requestId: crypto.randomUUID() } }
+        socket.send(unsigned ? sent : await by.prove(sent, ids))
+        const answer = await socket.take(v => v.type === 'operationResponse' && v.requestId === sent.request.requestId)
+        if (answer.error !== 'stationBusy' || attempt) return answer
+      }
+    }
+    const request = request => ({ type: 'operationRequest', operationVersion: 4, request })
+    const state = (await ask(request({ type: 'state' }))).value
+    assert.equal(state.phase, 'available', 'state needs no proof')
+    // THE FINDING, through the real relay: an acquire with no proof. Then one signed by another key.
+    const acquire = { type: 'acquire', stationBootId: state.stationBootId }
+    const unsigned = await ask({ ...request(acquire), unsigned: true })
+    assert.equal(unsigned.error, 'stationUnsupported', JSON.stringify(unsigned))
+    assert.equal((await ask({ ...request(acquire), by: forger })).error, 'deviceKeyMismatch')
+    // CONTROL: the same acquire, proved with the pinned key, takes control; Stop needs no proof.
+    const owner = await ask(request(acquire))
+    assert.equal(owner.value?.phase, 'controlling', JSON.stringify(owner))
+    const held = (await ask(request({ type: 'state' }))).value
+    const stop = await ask(request({ type: 'stopTransmit', stationBootId: held.stationBootId, leaseId: held.leaseId,
+      transmitEpoch: held.transmitEpoch }))
+    assert.deepEqual(stop.value, { stop: 'accepted' }, JSON.stringify(stop))
+  } finally {
+    try { socket?.close() } catch { /* already closed */ }
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
 })
@@ -822,7 +912,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   await probe.ready();const browser=await app.owner();const begin=await probe.send({type:'begin',name:'Logging synthetic bench'}),stationId=begin.status.pairingId
   // One approval (operator decisions 2026-09-13/14): this browser confirms the pairing, so approving
   // the pairing approves it and turns Remote on. Enable again for a fresh authority, as before.
-  await browser.post('pair/claim',{code:begin.status.pairingCode});const confirmed=await browser.post('pair/confirm',{id:begin.status.pairingId});browser.setCookie(confirmed.response.headers.get('set-cookie'));await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
+  // The confirming browser's key, pinned with the pairing (A5, ruling D4): what it sends carries a proof (S1-M1).
+  const key=await deviceKey();let session=null
+  await browser.post('pair/claim',{code:begin.status.pairingCode});const confirmed=await browser.post('pair/confirm',{id:begin.status.pairingId,publicKey:key.publicKey});browser.setCookie(confirmed.response.headers.get('set-cookie'));await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
   const {value:device}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});assert.equal(device.approved,true,'the pairing browser is approved with the station');await probe.send({type:'refresh'});await probe.send({type:'enable'})
   const roomNamespace=await app.mf.getDurableObjectNamespace('STATIONS'),room=roomNamespace.get(roomNamespace.idFromName(stationId));for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
   assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})
@@ -837,9 +929,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   // next operation added below can spend, or this comes back the moment the block grows again.
   const observing=(peer,sessionId)=>{const timer=setInterval(()=>{void browser.post(`stations/${stationId}/renew`,{sessionId}).catch(()=>{})},30000);timer.unref?.();renewals.set(peer,timer)}
   const leaving=peer=>{clearInterval(renewals.get(peer));renewals.delete(peer);peer.close()}
-  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);socket.ackObservations();observing(socket,(await socket.take(v=>v.type==='session')).sessionId)
+  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
   const envelope=request=>({type:'operationRequest',...(operationVersion>=2?{operationVersion}:{}),request})
-  const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));
+  const signed=message=>key.prove(message,{stationId,deviceId:device.deviceId,sessionId:session})
+  const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(await signed(envelope(request)));
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
     catch(error){throw new Error(`operation ${request.type}/${request.action?.action??''} v${operationVersion} timed out; socket closed=${socket.closed} code=${socket.closeCode} reason=${socket.closeReason}`,{cause:error})}}
   // stationBusy means the request was refused before anything changed, so an operator clicks again. A request
@@ -867,7 +960,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const logRequest=s=>({type:'logManual',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,record})
   const logged=await allowed(()=>operation(logRequest(state)),async()=>operation(logRequest((await heartbeat()).response.value)));assert.equal(logged.response.value?.outcome,'applied');assert.equal(logged.response.value?.evidence,'fileSynced')
   let evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
-  await delay(270);socket.send(envelope(logged.request));const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+  await delay(270);socket.send(await signed(envelope(logged.request)));const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
   if(operationVersion===4){
    // Edit and delete a contact through the real relay and native authority, found by the key of the
    // row the station's own log page serves. The logging grant alone allows it; nothing keys.
@@ -891,7 +984,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const edited=await write(s=>changeRequest(s,{kind:'edit',target:target(before),record:{...second,comment:'Edited from the browser'}}))
    assert.deepEqual(edited.response.value,{operation:'logChange',operationId:edited.request.requestId,outcome:'applied',evidence:'fileSynced'})
    const afterEdit=await probe.send({type:'loggingEvidence'});assert.equal(afterEdit.count,2);assert.match(afterEdit.adif,/Edited from the browser/);assert.equal(afterEdit.txEnabled,false)
-   await delay(270);socket.send(envelope(edited.request));assert.deepEqual(await labeled(socket,'edit replay',v=>v.type==='operationResponse'&&v.requestId===edited.request.requestId),edited.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
+   await delay(270);socket.send(await signed(envelope(edited.request)));assert.deepEqual(await labeled(socket,'edit replay',v=>v.type==='operationResponse'&&v.requestId===edited.request.requestId),edited.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
    // Positive control: the pre-edit row is stale now, so a delete aimed at it changes nothing.
    const stale=await write(s=>changeRequest(s,{kind:'delete',target:target(before)}))
    assert.equal(stale.response.value?.outcome,'rejected',JSON.stringify(stale.response));assert.equal(stale.response.value?.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
@@ -1181,7 +1274,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])
    for(let i=0;i<50&&restarted.status.phase!=='connected';i++){await delay(100);restarted=await probe.send({type:'status'})}
    for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100)
-   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,(await socket.take(v=>v.type==='session')).sessionId)
+   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
    assert.equal((await probe.send({type:'seedFt',tier:'FT8'})).txEnabled,false)
    const fresh=(await allowed(()=>operation({type:'state'}))).response.value
    const leased=(await allowed(()=>operation({type:'acquire',stationBootId:fresh.stationBootId}))).response.value;assert.equal(leased.phase,'controlling')

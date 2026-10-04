@@ -142,6 +142,17 @@
       }
     },
     {
+      "name": "answer (signed with the station's key; the signature is a placeholder)",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "payload": {
+          "kind": "answer",
+          "sdp": "v=0\r\no=str0m-0.24.0 4389733109591419431 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS u1EFEIkbR3zlQzckgmuCzd2oxM3Pht\r\na=nexus-station-signature:a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendonly\r\na=msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=rtcp-mux\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc:1337055881 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:1337055881 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc:3730304321 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:3730304321 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc-group:FID 1337055881 3730304321\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
       "name": "candidate (host: the shack's own LAN address, for a browser on its network)",
       "message": {
         "type": "streamSignal",
@@ -272,6 +283,16 @@
         "payload": {
           "kind": "answer",
           "sdp": "v=0\r\no=str0m-0.24.0 4389733109591419431 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS u1EFEIkbR3zlQzckgmuCzd2oxM3Pht\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendonly\r\na=msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=rtcp-mux\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc:1337055881 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:1337055881 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc:3730304321 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:3730304321 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc-group:FID 1337055881 3730304321\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
+      "name": "answer (signed with the station's key; the signature is a placeholder)",
+      "message": {
+        "type": "streamSignal",
+        "payload": {
+          "kind": "answer",
+          "sdp": "v=0\r\no=str0m-0.24.0 4389733109591419431 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS u1EFEIkbR3zlQzckgmuCzd2oxM3Pht\r\na=nexus-station-signature:a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendonly\r\na=msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=rtcp-mux\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc:1337055881 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:1337055881 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc:3730304321 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:3730304321 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc-group:FID 1337055881 3730304321\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
         }
       }
     },

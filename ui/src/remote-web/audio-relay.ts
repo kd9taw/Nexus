@@ -11,11 +11,14 @@ import type { Peer } from '../remote-monitor/relay'
 import {
   AUDIO_CONTROL_BYTES, AUDIO_MESSAGE_BYTES, parseAudioBundle, parseAudioListen, parseAudioState,
 } from './audio-protocol'
+import { LANE_PROOF_BYTES } from './lane-proof'
 
 type Browser = { sessionId: string; deviceId: string; peer: Peer }
 /** A station that never advertised the audio lane must never be handed an `audioListen`:
- *  its message parser rejects unknown fields and would drop the whole control socket. */
-type Station = { peer: Peer; supported: boolean } | null
+ *  its message parser rejects unknown fields and would drop the whole control socket. For the same
+ *  reason only a station with `laneVersion` 1 is handed the browser's proof (S1-M1), which it
+ *  requires. */
+type Station = { peer: Peer; supported: boolean; laneVersion?: number } | null
 /** Consecutive failed deliveries before a listener's socket is given up on. At one
  *  bundle every 60 ms this is about three seconds of a browser that cannot take data. */
 const DELIVERY_FAILURES = 50
@@ -46,8 +49,9 @@ export class AudioRelay {
     // Not a protocol error and not a close: a browser whose build knows the lane may
     // legitimately meet a station whose build does not. Say so and carry on.
     if (!this.station?.supported) { this.tell(browser.peer, { type: 'audioState', listening: false, reason: 'audioUnavailable' }); return }
-    const message = JSON.stringify({ type: 'audioListen', sessionId, deviceId: browser.deviceId, listening: listen.listening, leaseId: listen.leaseId })
-    if (new TextEncoder().encode(message).length > AUDIO_CONTROL_BYTES + 96) { browser.peer.close(1008, 'invalidAudio'); return }
+    const proof = listen.proof && this.station.laneVersion === 1 ? listen.proof : undefined
+    const message = JSON.stringify({ type: 'audioListen', sessionId, deviceId: browser.deviceId, listening: listen.listening, leaseId: listen.leaseId, ...(proof ? { proof } : {}) })
+    if (new TextEncoder().encode(message).length > AUDIO_CONTROL_BYTES + 96 + (proof ? LANE_PROOF_BYTES : 0)) { browser.peer.close(1008, 'invalidAudio'); return }
     try { this.station.peer.send(message) }
     catch { this.tell(browser.peer, { type: 'audioState', listening: false, reason: 'audioUnavailable' }) }
   }

@@ -20,6 +20,13 @@
 //! make every older Nexus read the whole record as unreadable and leave Remote off with nothing
 //! restored, and the operator moves between builds. An older Nexus never reads this entry at all.
 //! It is bound to its pairing like the state entry, so a leftover from another pairing pins nothing.
+//!
+//! A fourth entry holds the station's own signing key (security review S3-M1), which signs its
+//! stream answers so a browser can tell the station from a relay standing in for it
+//! (`station_key`). Its own entry for the same reason as the pins: an older Nexus never reads it,
+//! and nothing it reads changes. Bound to its pairing like the others, so a key left behind by
+//! another pairing signs nothing for this one. This entry and this process are the only places the
+//! private key exists: it is never logged, shown or sent.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -27,6 +34,7 @@ const SERVICE: &str = "org.hamradiotools.nexus.remote";
 const ACCOUNT: &str = "pairing";
 const STATE: &str = "state";
 const PINS: &str = "pins";
+const STATION_KEY: &str = "station-key";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -88,6 +96,16 @@ pub struct Pins {
     pub keys: BTreeMap<String, String>,
 }
 
+/// The station's signing key for exactly one pairing (S3-M1): its PKCS#8 document, lowercase hex.
+/// Deliberately no `Debug` and no `Clone`: nothing may print it, and it is copied only from this
+/// entry into the signer and back.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StationKey {
+    pub binding: Binding,
+    pub pkcs8: String,
+}
+
 pub trait Vault: Send + Sync {
     fn binding(&self) -> Result<Option<Binding>, &'static str>;
     fn credential(&self, binding: &Binding) -> Result<String, &'static str>;
@@ -100,6 +118,9 @@ pub trait Vault: Send + Sync {
     fn pins(&self) -> Result<Option<Pins>, &'static str>;
     fn save_pins(&self, pins: &Pins) -> Result<(), &'static str>;
     fn remove_pins(&self) -> Result<(), &'static str>;
+    fn station_key(&self) -> Result<Option<StationKey>, &'static str>;
+    fn save_station_key(&self, key: &StationKey) -> Result<(), &'static str>;
+    fn remove_station_key(&self) -> Result<(), &'static str>;
 }
 
 pub struct SystemVault;
@@ -197,6 +218,27 @@ impl Vault for SystemVault {
     }
     fn remove_pins(&self) -> Result<(), &'static str> {
         match entry(PINS)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn station_key(&self) -> Result<Option<StationKey>, &'static str> {
+        match entry(STATION_KEY)?.get_password() {
+            // Unreadable is no key: the caller makes a new one, and the service, which already
+            // holds the old one, refuses it by name. Pairing again is the way back.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_station_key(&self, key: &StationKey) -> Result<(), &'static str> {
+        let value = serde_json::to_string(key).map_err(|_| "credentialStoreUnavailable")?;
+        entry(STATION_KEY)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_station_key(&self) -> Result<(), &'static str> {
+        match entry(STATION_KEY)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }

@@ -26,6 +26,11 @@ export const OFFER_SIGNATURE = (({ publicKey, signature }) => ({ publicKey, sign
 export const ANSWER = (byName(SIGNAL.roomToBrowser, 'answer').payload as { sdp: string }).sdp
 export const FINGERPRINT = ANSWER.split('\r\n').find(line => line.startsWith('a=fingerprint:'))!
 export const last = <T,>(items: readonly T[]): T | undefined => items[items.length - 1]
+/** The page checks the station's answer before the browser is handed it (S3-M1): the harness's check
+ *  answers at once, and this lets it, and the hand-over behind it, land. */
+export async function answerChecked(): Promise<void> {
+  for (let i = 0; i < 4; i++) await Promise.resolve()
+}
 
 export class FakeChannel implements ChannelLike {
   readyState = 'connecting'
@@ -115,6 +120,9 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
   /** The DOMException name a `denied` microphone is refused with (NotAllowedError when absent), and this site's microphone
    *  permission as the browser states it afterwards: null where it cannot say, absent where the page cannot ask. */
   micRefusal?: string; micPermission?: 'granted' | 'denied' | 'prompt' | null; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>);
+  /** S3-M1: the page's check on the station's answer. Absent, every answer is the station's own; `false`
+   *  leaves the link without one, for a test that hands it the page's real check. */
+  verify?: false | ((answer: string, offer: string) => Promise<string | null>);
   /** The service's relay, when the page has one to ask; `refuseRelay` is a browser that will not build a peer with it. */
   relay?: () => Promise<unknown>; refuseRelay?: boolean
   /** The operator's Mic level: a browser that builds it (`ok`), one that cannot (`fails`), one that builds it only when
@@ -167,6 +175,8 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
     uuid: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
     // A5: signs as the contract's offer is signed, unless a test asks otherwise.
     signOffer: options.sign === false ? undefined : options.sign ?? (async () => OFFER_SIGNATURE),
+    // S3-M1: takes the station's answer as its own, unless a test asks otherwise.
+    verifyAnswer: options.verify === false ? undefined : options.verify ?? (async () => null),
     watchSize: (_video, f) => { report = f; return () => { report = null } },
   }
   const link = new StreamLink((payload, leaseId) => signals.push({ payload, leaseId }), env)
@@ -188,7 +198,7 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
     async live(rtp = 1000) {
       await link.start(LEASE)
       link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } })
-      await Promise.resolve()
+      await answerChecked()
       this.peer.ontrack?.({ track: 'track', streams: ['media'] })
       for (const label of ['control', 'ptt', 'audio']) this.peer.channel(label).open()
       video.present(rtp)

@@ -20,10 +20,10 @@ import { STREAM_ENTITLEMENT_CHECK_MS, StreamRelay } from '../../ui/src/remote-we
 
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
-type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number }
+type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number }
 type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint; commandUntil?: number }
 type Attachment = StationAttachment | BrowserAttachment
-type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number }
+type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number }
 
 /** When this browser's account may no longer command the station, from the entitlement the Worker
  *  has just read out of D1. Admission and renewal both reach here, so it is never staler than one
@@ -56,6 +56,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   // must survive, and it rides the station's attachment.
   private stream = new StreamRelay()
   private streamVersions = new Map<WebSocket, number>()
+  // Whether the station takes the browser's proof on the operation and audio lanes (S1-M1). It rides the
+  // station's attachment, like the versions above: a station that never advertised it is never handed
+  // a proof, which its parser would refuse by closing its socket.
+  private laneVersions = new Map<WebSocket, number>()
   // Per browser session, the stream signal still on its way: an offer waits on a D1 read, and the
   // room takes the socket's next message meanwhile, so what the page sent after it waits behind it.
   // The station gets one session's signals in the order they were sent, never a candidate before
@@ -94,6 +98,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           if(attachment.role==='station')this.operationVersions.set(ws,parseOperationVersion(attachment.operationVersion)??0)
           if (attachment.role === 'station') this.audioVersions.set(ws, attachment.audioVersion === 1 ? 1 : 0)
           if (attachment.role === 'station') this.streamVersions.set(ws, attachment.streamVersion === 1 ? 1 : 0)
+          if (attachment.role === 'station') this.laneVersions.set(ws, attachment.laneVersion === 1 ? 1 : 0)
           if (attachment.role === 'station' && attachment.sample) this.samples.set(ws, attachment.sample)
           const peer = this.peer(ws, attachment.role)
           if (attachment.role === 'station') {
@@ -124,7 +129,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         this.application = new ApplicationRelay()
         this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear();this.accessOff.clear()
         this.audio = new AudioRelay(); this.audioVersions.clear()
-        this.stream = new StreamRelay(); this.streamVersions.clear()
+        this.stream = new StreamRelay(); this.streamVersions.clear(); this.laneVersions.clear()
         this.relay = new ObservationRelay(this.saved.access)
       }
     })
@@ -151,7 +156,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       }, close: (code, reason) => {
         if (!buffer?.pending) ws.close(code, reason)
         this.peers.delete(ws); this.samples.delete(ws)
-        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws);this.streamVersions.delete(ws)
+        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws);this.streamVersions.delete(ws);this.laneVersions.delete(ws)
       } }
       this.peers.set(ws, peer)
     }
@@ -207,6 +212,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       if(path==='/station')this.operationVersions.set(server,parseOperationVersion(input.operationVersion)??0)
       if (path === '/station') this.audioVersions.set(server, input.audioVersion === 1 ? 1 : 0)
       if (path === '/station') this.streamVersions.set(server, input.streamVersion === 1 ? 1 : 0)
+      if (path === '/station') this.laneVersions.set(server, input.laneVersion === 1 ? 1 : 0)
       if (path === '/station') this.applicationVersions.set(server, knownApplicationVersion(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
@@ -420,7 +426,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id); this.accessOff.delete(id) }
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
-      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0 }
+      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0, laneVersion: this.laneVersions.get(ws) ?? 0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
         if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId),operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0 } }
@@ -482,8 +488,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true }]
     })
     this.application.sync(station, observers, now)
-    this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0}:null,observers,now)
-    this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1 } : null, observers)
+    this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0,laneVersion:stationSocket?this.laneVersions.get(stationSocket):0}:null,observers,now)
+    this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1, laneVersion: this.laneVersions.get(stationSocket!) } : null, observers)
     this.stream.sync(station ? { peer: station.peer, supported: this.streamVersions.get(stationSocket!) === 1 } : null, observers)
   }
 }

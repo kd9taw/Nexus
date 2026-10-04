@@ -5,7 +5,7 @@ import {
   MIC_CONSTRAINTS, MIC_ENDED, STREAM_UPLINK_BUDGET_BYTES, STREAM_VIEW_MAX, STREAM_VIEW_SETTLE_MS, parseHeld, parseMicState,
   parseReceivedMessage, parseStreamInput, secureAnswer, viewMessage,
 } from './stream-protocol'
-import { ANSWER, CHANNEL, FINGERPRINT, FakeMicTrack, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { ANSWER, CHANNEL, FINGERPRINT, FakeMicTrack, LEASE, OFFER, OFFER_SIGNATURE, RELAY, SIGNAL, answerChecked, byName, harness, last } from './stream-link.testkit'
 import { MIC_LEVEL_DB, MIC_PEAK, micGain } from './mic-level'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
@@ -118,6 +118,7 @@ it('A4: refuses an answer without a DTLS fingerprint, or with a plain-RTP line, 
   const h = harness()
   await h.link.start(LEASE)
   h.link.receive(byName(SIGNAL.roomToBrowser, 'answer'))
+  await answerChecked()
   expect(h.peer.remote).toEqual({ type: 'answer', sdp: ANSWER })
   expect(h.link.getSnapshot().phase).toBe('connecting')
 })
@@ -136,7 +137,7 @@ it('trickles candidates in the contract\'s shape, and holds one that overtakes i
   h.link.receive(early)
   expect(h.peer.candidates).toHaveLength(0)
   h.link.receive(byName(SIGNAL.roomToBrowser, 'answer'))
-  await Promise.resolve(); await Promise.resolve()
+  await answerChecked()
   const payload = early.payload as { candidate: string; sdpMid: string }
   expect(h.peer.candidates).toEqual([{ candidate: payload.candidate, sdpMid: payload.sdpMid }])
 })
@@ -145,7 +146,7 @@ it('hands the browser the station\'s LAN address as it is, so a browser on the s
   const h = harness()
   await h.link.start(LEASE)
   h.link.receive(byName(SIGNAL.roomToBrowser, 'answer'))
-  await Promise.resolve(); await Promise.resolve()
+  await answerChecked()
   const lan = byName(SIGNAL.roomToBrowser, 'candidate (host: the shack\'s own LAN address, for a browser on its network)')
   const reflexive = byName(SIGNAL.roomToBrowser, 'candidate (reflexive)')
   const line = (c: typeof lan) => c.payload as { candidate: string; sdpMid: string }

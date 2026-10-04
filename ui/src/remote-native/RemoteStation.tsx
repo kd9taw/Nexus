@@ -95,6 +95,9 @@ export function RemoteStation() {
       // requestFailed would point an operator standing at the radio at their network.
       : issue === 'awaitingConfirmation' ? t('remote.nativeAwaitingConfirmation')
       : t('remote.requestFailed')}</p>}
+    {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
+        pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}
+    {status?.keyRefused && <p role="alert">{t('remote.nativeStationKeyPinned')}</p>}
     {/* Linking the station to the account IS the sign-in, so its steps stay in the card while it is
         not linked; the pairing's transmit option is under Advanced. */}
     {phase === 'unpaired' && <>

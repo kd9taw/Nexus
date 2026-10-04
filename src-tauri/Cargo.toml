@@ -90,7 +90,9 @@ tauri-plugin-autostart = "2"
 # plugin's own dependency, NOT registered as a plugin — the webview gets no filesystem ACL.
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value`: a relay lane's proof covers an operation request exactly as the relay wrote it
+# (remote_service/lanes.rs). Already compiled in through tauri; named here so nothing leans on that.
+serde_json = { version = "1", features = ["raw_value"] }
 # Remote's outbound task is isolated from CAT/audio. These packages are already
 # in the graph except the reviewed WebSocket adapter and its framing dependencies.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }

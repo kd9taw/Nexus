@@ -219,6 +219,8 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
           : (state?.phase === 'available' || state?.phase === 'controlling') && !audioOffered ? t('remote.listen.unavailable')
           : status}</p>
         {heard.phase === 'ended' && <p role="alert">{audioEnded(heard.reason)}</p>}
+        {browserKey && (keyRefusal(refused) || (heard.phase === 'ended' && keyRefusal(heard.reason))) &&
+          <p>{t('remote.thisBrowserKey', { key: shortFingerprint(browserKey) })}</p>}
         {!audioOn && heard.supported && audioOffered && (state?.phase === 'available' || state?.phase === 'controlling') &&
           <button type="button" className="remote-button remote-button--primary" disabled={wanted || (ops.busy && !ops.reading)} onClick={start}>{t('remote.listen.open')}</button>}
       </div>}
@@ -226,7 +228,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
         {!running && idled && <p role="note">{t('remote.stream.idle.ended')}</p>}
         <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
         {/* A5: the station asks for this browser to be approved there with its key; this is the key to compare. */}
-        {!running && browserKey && (stream.reason === 'deviceNotPinned' || stream.reason === 'deviceKeyMismatch') && stream.phase === 'ended' &&
+        {!running && browserKey && ((keyRefusal(stream.reason) && stream.phase === 'ended') || keyRefusal(refused)) &&
           <p>{t('remote.thisBrowserKey', { key: shortFingerprint(browserKey) })}</p>}
         {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
         {!running && (state?.phase === 'available' || state?.phase === 'controlling') && <>
@@ -411,6 +413,9 @@ function statusLine(connected: boolean, phase: string | null, stream: string, re
   if (refused && connected && phase !== 'localPermissionRequired' && phase !== 'occupied') {
     return refused === 'localPermissionRequired' ? t('remote.stream.permission')
       : refused === 'controllerBusy' ? t('remote.stream.occupied')
+      // S1-M1: the station holds no key for this browser, or another one: approved again there.
+      : refused === 'deviceNotPinned' ? listen ? t('remote.listen.notPinned') : t('remote.stream.ended.notPinned')
+      : refused === 'deviceKeyMismatch' ? listen ? t('remote.listen.keyChanged') : t('remote.stream.ended.keyChanged')
       : listen ? t('remote.listen.refused') : t('remote.stream.refused')
   }
   if (stream === 'ended') return ended(reason)
@@ -444,6 +449,8 @@ function pressStillCurrent(): boolean {
   const activation = (globalThis.navigator as (Navigator & { userActivation?: { isActive: boolean } }) | undefined)?.userActivation
   return activation ? activation.isActive : true
 }
+/** The station refused this browser's key (A5, S1-M1): its key is what the operator compares there. */
+const keyRefusal = (reason: string | null | undefined) => reason === 'deviceNotPinned' || reason === 'deviceKeyMismatch'
 function ended(reason: string | null): string {
   return reason === 'notController' ? t('remote.stream.ended.notController')
     : reason === 'streamUnavailable' ? t('remote.stream.ended.unavailable')
@@ -458,6 +465,9 @@ function ended(reason: string | null): string {
     : reason === 'deviceNotPinned' ? t('remote.stream.ended.notPinned')
     : reason === 'deviceKeyMismatch' ? t('remote.stream.ended.keyChanged')
     : reason === 'insecureAnswer' ? t('remote.stream.ended.insecure')
+    // S3-M1: the answer did not carry this station's own signature for this offer and session.
+    : reason === 'stationKeyMismatch' ? t('remote.stream.ended.stationKey')
+    : reason === 'stationNotSigned' ? t('remote.stream.ended.stationUnsigned')
     : reason === 'streamUnsupported' ? t('remote.stream.ended.unsupported')
     : reason === 'streamHidden' ? t('remote.stream.ended.hidden')
     : t('remote.stream.ended.failed')
