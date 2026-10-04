@@ -207,18 +207,19 @@ impl ClientCertVerifier for PinnedClients {
     }
 }
 
-/// The remote PC's half, for the tests: TLS 1.3, its own raw key, and the shack's key pinned. The
-/// window's own client is built from the same pieces when it gains the LAN road.
-#[cfg(test)]
-pub(super) mod client {
+/// The remote PC's half (`crate::lan_client`): TLS 1.3, its own raw key for this shack, and the
+/// shack's key pinned. No resumption and no early data, as on the shack's side, so every
+/// connection proves both keys again.
+pub(crate) mod client {
     use super::*;
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::client::{AlwaysResolvesClientRawPublicKeys, ClientConfig};
+    use rustls::client::{AlwaysResolvesClientRawPublicKeys, ClientConfig, Resumption};
     use rustls::pki_types::ServerName;
 
-    /// The shack's key, pinned: anything else is refused before the client says a word. `None`
-    /// only for a pairing connection, which takes whatever P-256 key the shack presents and has
-    /// the pairing's proofs bind it.
+    /// The shack's key, pinned: anything else is refused before the client says a word (TLS 1.3
+    /// proves the server's key before the client sends its own). `None` only for a pairing
+    /// connection, which takes whatever P-256 key the shack presents and has the pairing's proofs
+    /// bind it.
     #[derive(Debug)]
     struct PinnedShack {
         spki: Option<Vec<u8>>,
@@ -260,6 +261,9 @@ pub(super) mod client {
             key: &CertificateDer<'_>,
             dss: &DigitallySignedStruct,
         ) -> Result<HandshakeSignatureValid, Error> {
+            if dss.scheme != SCHEME {
+                return Err(PeerIncompatible::NoSignatureSchemesInCommon.into());
+            }
             verify_tls13_signature_with_raw_key(
                 message,
                 &SubjectPublicKeyInfoDer::from(key.as_ref()),
@@ -278,38 +282,40 @@ pub(super) mod client {
     }
 
     /// A remote PC holding `key` (PKCS#8, lowercase hex), with the shack's `shack` key (SPKI,
-    /// lowercase hex) pinned.
-    pub fn config(key: &str, shack: &str) -> Arc<ClientConfig> {
-        made(key, Some(protocol::hex_bytes(shack).unwrap()))
+    /// lowercase hex) pinned. `None` for a key or a pin that is not a P-256 one.
+    pub fn config(key: &str, shack: &str) -> Option<Arc<ClientConfig>> {
+        let pinned = protocol::hex_bytes(shack).filter(|spki| p256(spki))?;
+        made(key, Some(pinned))
     }
 
-    /// A remote PC holding `key`, pairing: no shack key pinned yet, so it takes the one presented.
-    pub fn pairing(key: &str) -> Arc<ClientConfig> {
+    /// A remote PC holding `key`, pairing: no shack key pinned yet, so it takes the one presented,
+    /// for this one connection only.
+    pub fn pairing(key: &str) -> Option<Arc<ClientConfig>> {
         made(key, None)
     }
 
-    fn made(key: &str, shack: Option<Vec<u8>>) -> Arc<ClientConfig> {
+    fn made(key: &str, shack: Option<Vec<u8>>) -> Option<Arc<ClientConfig>> {
         let provider = provider();
         let signing = provider
             .key_provider
-            .load_private_key(PrivateKeyDer::Pkcs8(
-                protocol::hex_bytes(key).unwrap().into(),
-            ))
-            .unwrap();
-        let spki = signing.public_key().unwrap().as_ref().to_vec();
+            .load_private_key(PrivateKeyDer::Pkcs8(protocol::hex_bytes(key)?.into()))
+            .ok()?;
+        let spki = signing.public_key()?.as_ref().to_vec();
+        if !p256(&spki) {
+            return None;
+        }
         let certified = Arc::new(CertifiedKey::new(vec![CertificateDer::from(spki)], signing));
-        Arc::new(
-            ClientConfig::builder_with_provider(provider.clone())
-                .with_protocol_versions(&[&rustls::version::TLS13])
-                .unwrap()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(PinnedShack {
-                    spki: shack,
-                    provider,
-                }))
-                .with_client_cert_resolver(Arc::new(AlwaysResolvesClientRawPublicKeys::new(
-                    certified,
-                ))),
-        )
+        let mut config = ClientConfig::builder_with_provider(provider.clone())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .ok()?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinnedShack {
+                spki: shack,
+                provider,
+            }))
+            .with_client_cert_resolver(Arc::new(AlwaysResolvesClientRawPublicKeys::new(certified)));
+        config.resumption = Resumption::disabled();
+        config.enable_early_data = false;
+        Some(Arc::new(config))
     }
 }

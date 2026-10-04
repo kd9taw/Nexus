@@ -22,7 +22,7 @@ pub(crate) mod stream;
 #[cfg(test)]
 mod tests;
 mod transport;
-mod vault;
+pub(crate) mod vault;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;

@@ -35,6 +35,14 @@
 //! the name it gave, which is no secret. It is bound to the LAN station id, so a list left behind by
 //! another key admits nobody, and eight records fit the smallest credential blob (Windows, 2560
 //! bytes of UTF-16) in one entry.
+//!
+//! The rest belong to the other end of Remote over this network, the computer an operator works
+//! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
+//! station (the design's second key, approved on 2026-10-04 and handled as the station key is:
+//! never logged, shown or sent), the station's key as it presented it while pairing, the two ids
+//! and the addresses it answered at. Each fits the smallest credential blob on its own; a last
+//! entry lists them, since a credential store cannot be asked what it holds. Neither is ever read
+//! by the shack's side, nor the shack's entries by these.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -45,6 +53,9 @@ const PINS: &str = "pins";
 const STATION_KEY: &str = "station-key";
 const LAN_KEY: &str = "lan-key";
 const LAN_DEVICES: &str = "lan-devices";
+const PAIRED_STATIONS: &str = "lan-stations";
+/// One paired station's entry: this, then its LAN station id.
+const PAIRED_STATION: &str = "lan-station-";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -143,6 +154,40 @@ pub struct LanDevice {
     pub pin: String,
     #[serde(rename = "n")]
     pub name: String,
+}
+
+/// A station this computer is paired with over its network (`crate::lan_client`). No `Debug` and
+/// no `Clone`, as [`StationKey`]: it holds this computer's own key for the station.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairedStation {
+    pub station_id: String,
+    /// The device id the station gave this computer: what it stamps on everything it sends.
+    pub device_id: String,
+    /// The station's LAN key, SPKI as lowercase hex, exactly as it presented it while pairing:
+    /// pinned from then on.
+    pub station_key: String,
+    /// This computer's own key for this station: PKCS#8, lowercase hex.
+    pub pkcs8: String,
+    /// Where the station answered, `address:port`, the last that worked first.
+    pub addresses: Vec<String>,
+}
+
+/// The stations this computer is paired with, by LAN station id, in the order they were paired.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairedStations {
+    pub stations: Vec<String>,
+}
+
+/// The computer's side of Remote over this network: its entries, kept apart from the shack's and
+/// from [`Vault`]'s, so no test of either reaches them, nor they it.
+pub trait StationVault: Send + Sync {
+    fn paired_stations(&self) -> Result<Option<PairedStations>, &'static str>;
+    fn save_paired_stations(&self, list: &PairedStations) -> Result<(), &'static str>;
+    fn paired_station(&self, id: &str) -> Result<Option<PairedStation>, &'static str>;
+    fn save_paired_station(&self, station: &PairedStation) -> Result<(), &'static str>;
+    fn remove_paired_station(&self, id: &str) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -325,6 +370,50 @@ impl LanVault for SystemVault {
     }
     fn remove_lan_devices(&self) -> Result<(), &'static str> {
         match entry(LAN_DEVICES)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+}
+/// One paired station's entry, by its LAN station id: only an id names an entry, so nothing else a
+/// station says can reach another account in the store.
+fn paired_entry(id: &str) -> Result<keyring::Entry, &'static str> {
+    if !tempo_stream::protocol::identifier(id) {
+        return Err("credentialStoreUnavailable");
+    }
+    entry(&format!("{PAIRED_STATION}{id}"))
+}
+impl StationVault for SystemVault {
+    fn paired_stations(&self) -> Result<Option<PairedStations>, &'static str> {
+        match entry(PAIRED_STATIONS)?.get_password() {
+            // An unreadable list names no station: each is paired again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_paired_stations(&self, list: &PairedStations) -> Result<(), &'static str> {
+        let value = serde_json::to_string(list).map_err(|_| "credentialStoreUnavailable")?;
+        entry(PAIRED_STATIONS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn paired_station(&self, id: &str) -> Result<Option<PairedStation>, &'static str> {
+        match paired_entry(id)?.get_password() {
+            // Unreadable is no pairing, as the station key's is: pair that station again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_paired_station(&self, station: &PairedStation) -> Result<(), &'static str> {
+        let value = serde_json::to_string(station).map_err(|_| "credentialStoreUnavailable")?;
+        paired_entry(&station.station_id)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_paired_station(&self, id: &str) -> Result<(), &'static str> {
+        match paired_entry(id)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }

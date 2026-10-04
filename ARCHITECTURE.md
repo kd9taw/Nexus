@@ -28,7 +28,10 @@ listen on its own network for a paired computer (`remote_service/lan`): TLS 1.3 
 both ends' raw keys pinned, on a private IPv4 address only, beside the relay's road. The
 two roads share one authority and one lease, bound to the connection that took it. A
 computer pairs with a one-time code made at the shack, proved over both keys and the TLS
-session; the shack's LAN key and its paired computers live in the OS keychain. Receiver
+session; the shack's LAN key and its paired computers live in the OS keychain. The computer's
+end (`lan_client`) keeps a key of its own for each station beside the station's pinned key,
+signs its offers and checks the station's answers in Rust, and serves its window's page from a
+loopback origin that Tauri treats as remote, behind a launch secret, `Host` and `Origin`. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh

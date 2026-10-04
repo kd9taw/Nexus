@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicUsize;
 use tokio_tungstenite::tungstenite::Message;
 
 mod ceremony;
+mod computer;
 
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
@@ -251,7 +252,7 @@ async fn pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
 
 /// TLS with `key`, pinning `station`, then the upgrade: the computer's side of a connection.
 async fn open(stream: tokio::net::TcpStream, key: &str, station: &str) -> Result<Client, String> {
-    let connector = tokio_rustls::TlsConnector::from(tls::client::config(key, station));
+    let connector = tokio_rustls::TlsConnector::from(tls::client::config(key, station).unwrap());
     let name = rustls::pki_types::ServerName::try_from("nexus-station").unwrap();
     let tls = connector
         .connect(name, stream)
