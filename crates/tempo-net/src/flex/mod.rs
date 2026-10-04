@@ -26,6 +26,7 @@
 //! | [`reconnect`] | the reconnect ladder |
 //! | [`session`] | one connection, from prologue to teardown, and the thread that runs it |
 //! | [`vita`] | the VITA-49 display streams: FFT frames and waterfall tiles, decoded and assembled |
+//! | [`streams`] | DAX audio: the refcounted DAX receive broker, the receive decoder, the transmit packet |
 //!
 //! # The transmit rule
 //!
@@ -43,6 +44,9 @@
 //!   `xmit 0` is not RF cessation. An unconfirmed unkey is sent again, the session closes and the
 //!   operator is told.
 //! - Only `xmit` has a readback today, so admission refuses tune, ATU and CWX starts.
+//! - Where the transmitter takes its audio from (`stream create type=dax_tx`, `transmit set dax`)
+//!   is its own typed kind ([`encode::TxAudio`]) with its own admission: never while anything is
+//!   keyed, never beside another program's DAX transmit stream.
 //! - No guard anywhere matches command text.
 //!
 //! # Provenance
@@ -65,6 +69,7 @@ pub mod ptt_evidence;
 pub mod reconnect;
 pub mod session;
 pub mod status;
+pub mod streams;
 pub mod vita;
 pub mod wire;
 
@@ -232,6 +237,19 @@ pub const PROVENANCE: &[Ported] = &[
         differences: "pure payload decoders split from the socket; rows kept, levels and dBm a \
                       separate step; three frames in flight; a completed frame takes nothing \
                       more; a misfit fragment displaces nothing; no dBm-range echo handshake",
+    },
+    Ported {
+        file: "streams.rs",
+        upstream: &[
+            "src/core/backends/flex/PanadapterStream.h",
+            "src/core/backends/flex/PanadapterStream.cpp",
+        ],
+        references: &["src/models/RadioModel.cpp", "src/core/AudioEngine.cpp"],
+        tests: &[],
+        differences: "a pure broker with time passed in, timers as due times voided by \
+                      generation; actions returned, not signalled; holders are bit indices; \
+                      release-all covers eight channels; a disconnect forgets stream ids too; \
+                      stream id 0 is never a stream; the TX packet from protocol facts only",
     },
 ];
 

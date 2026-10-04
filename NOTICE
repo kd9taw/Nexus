@@ -233,8 +233,8 @@ FlexRadio backend**, translated from C++/Qt to Rust:
   `RadioConnection`);
 - the status decoders and command encodings (`FlexBackend`, `FlexKvCarry`, and the delta types
   `SliceDelta`, `TransmitDelta`, `RadioDelta`, `MeterDef` and `ProfileDelta`);
-- the VITA-49 decoders and frame assembly (`PanadapterStream`, `VitaBinCoverage`,
-  `VitaTileFrequency`);
+- the VITA-49 decoders, frame assembly and the refcounted DAX stream broker
+  (`PanadapterStream`, `VitaBinCoverage`, `VitaTileFrequency`);
 - the interlock readback (`FlexPttStopTracker`, `FlexPttWireSession`);
 - the ownership and registration policies (`RadioStatusOwnership`, `StreamStatus`,
   `DisplayInventoryPolicy`, `SliceRecreatePolicy`, `GuiClientRegistrationState`,

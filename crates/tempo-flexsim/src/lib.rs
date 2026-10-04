@@ -22,6 +22,9 @@
 //! | [`Fault::StuckTransmit`] | `xmit 0` answered with success, but the interlock stays TRANSMITTING, also after a reconnect | The unkey readback: keyed clears only on the interlock sequence; past the deadline, unkey again, drop the session, tell the operator |
 //! | [`Fault::ForeignClient`] | another client's slice (the TX slice), pan and waterfall, optionally its transmission | Ownership by client handle: never retune, adopt or remove another client's objects; never key a transmitter that is not ours |
 //! | [`Fault::DisconnectMidOver`] | the TCP session closes while the interlock reports TRANSMITTING | A lost session while keyed unkeys locally first, stops DAX TX and reconnects without swapping under a keyed transmitter |
+//! | [`Fault::ForeignDaxTx`] | another program's `dax_tx` stream (SmartSDR's DAX) | Coexistence: Nexus never writes `transmit set dax`, never creates its own DAX transmit stream and never sends DAX TX beside it |
+//! | [`Fault::DaxTxRefused`] | `stream create type=dax_tx` refused | No route without a stream: no `transmit set dax=1`, no DAX TX packet, and a digital key refused rather than sent on the radio's mic |
+//! | [`Fault::DropDaxRx`] | the radio removes a DAX receive stream | The DAX broker creates a stream still held again after its recreate delay |
 //!
 //! # The recorder
 //!
@@ -50,7 +53,7 @@ pub mod server;
 pub mod session;
 pub mod vita;
 
-pub use fault::{Fault, Foreign};
+pub use fault::{Fault, Foreign, ForeignDax};
 pub use server::{Closer, Config, Event, Logged, Simulator};
 pub use session::Session;
 pub use vita::{Content, Start, Stream};

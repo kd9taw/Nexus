@@ -23,11 +23,20 @@
 //! command cannot be produced anywhere else. It is neither `Clone` nor `Copy`: one admission
 //! renders one start.
 //!
+//! **The transmitter's audio source** (`stream create type=dax_tx`, `transmit set dax`) has its
+//! own admission, [`admit_tx_audio`], and its own value, [`AdmittedTxAudio`]: it keys nothing,
+//! but `transmit set dax` is radio-wide and decides what an over carries. It is refused while
+//! anything of ours is keyed or the interlock is not idle (no transmitting client, no keying
+//! source, a receive-side state), and whenever another program feeds the radio's DAX transmit
+//! audio ([`another_dax_feeder`]; operator ruling, 2026-10-03: "when SmartSDR's DAX is also
+//! connected, never write the flag"). The DAX source is also refused unless the transmit slice is
+//! ours. When to write it is the caller's: the ruling keeps it out of the keying path.
+//!
 //! Nexus's own design, not a port.
 
 use std::fmt;
 
-use super::encode::{StartKind, TxStart};
+use super::encode::{StartKind, TxAudio, TxStart};
 use super::model::{owner_of, Owner, StatusModel};
 
 /// A start that passed admission. Constructed only by [`admit`].
@@ -48,6 +57,24 @@ impl Admitted {
     }
 }
 
+/// A change to the transmitter's audio source that passed admission. Constructed only by
+/// [`admit_tx_audio`]; neither `Clone` nor `Copy`.
+#[derive(Debug)]
+pub struct AdmittedTxAudio(TxAudio);
+
+impl AdmittedTxAudio {
+    /// The change, for the encoder. Consumes the admission.
+    pub(super) fn into_tx_audio(self) -> TxAudio {
+        self.0
+    }
+
+    /// Mint an admission without the checks, for unit tests of the encoder only.
+    #[cfg(test)]
+    pub(super) fn for_test(audio: TxAudio) -> AdmittedTxAudio {
+        AdmittedTxAudio(audio)
+    }
+}
+
 /// What the session knows about itself, for admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Facts {
@@ -61,6 +88,8 @@ pub struct Facts {
     pub keyed: bool,
     /// The readback has seen the radio idle and is ready to track a key.
     pub readback_idle: bool,
+    /// Our own DAX transmit stream, from the reply to our create.
+    pub dax_tx_stream: Option<u32>,
 }
 
 /// Why a start was refused.
@@ -106,6 +135,12 @@ pub enum Refusal {
     },
     /// The readback has not seen the radio idle on this connection.
     ReadbackNotIdle,
+    /// Another program feeds the radio's DAX transmit audio (SmartSDR's DAX, typically): Nexus
+    /// neither writes the DAX source nor opens a transmit stream beside it.
+    AnotherDaxFeeder {
+        stream: u32,
+        owner: Owner,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -138,6 +173,11 @@ impl fmt::Display for Refusal {
             Refusal::ReadbackNotIdle => {
                 f.write_str("the radio has not been seen idle on this connection")
             }
+            Refusal::AnotherDaxFeeder { stream, owner } => write!(
+                f,
+                "another program feeds the radio's DAX transmit audio (stream 0x{stream:08X}, \
+                 {owner:?})"
+            ),
         }
     }
 }
@@ -214,6 +254,99 @@ pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admit
     Ok(Admitted(start))
 }
 
+/// Another program's DAX transmit stream, if the radio reports one: a `dax_tx` stream that is not
+/// ours, by its owner or by our own create's reply, and is not a dead orphan (owner zero and
+/// endpoint `0.0.0.0`, the rule `super::ownership` applies to receive streams). An owner the
+/// radio did not report counts as another program's: when that cannot be told, nothing is
+/// written.
+pub fn another_dax_feeder(
+    model: &StatusModel,
+    ours: Option<u32>,
+    own_tx_stream: Option<u32>,
+) -> Option<(u32, Owner)> {
+    model.streams.iter().find_map(|(id, s)| {
+        if s.kind.as_deref() != Some("dax_tx") || Some(*id) == own_tx_stream {
+            return None;
+        }
+        let dead_orphan =
+            s.client_handle == Some(0) && s.ip.as_deref().map(str::trim) == Some("0.0.0.0");
+        match owner_of(s.client_handle, ours) {
+            Owner::Ours => None,
+            _ if dead_orphan => None,
+            owner => Some((*id, owner)),
+        }
+    })
+}
+
+/// Run the checks for a change to the transmitter's audio source. Pure, like [`admit`].
+pub fn admit_tx_audio(
+    model: &StatusModel,
+    facts: &Facts,
+    audio: TxAudio,
+) -> Result<AdmittedTxAudio, Refusal> {
+    if !facts.ready {
+        return Err(Refusal::NotReady);
+    }
+    if !facts.transmit_protocol {
+        return Err(Refusal::ProtocolUnsupported);
+    }
+    let ours = facts.handle.ok_or(Refusal::NoHandle)?;
+    if facts.keyed {
+        return Err(Refusal::AlreadyKeyed);
+    }
+    if let Some((stream, owner)) = another_dax_feeder(model, facts.handle, facts.dax_tx_stream) {
+        return Err(Refusal::AnotherDaxFeeder { stream, owner });
+    }
+    let sample = model
+        .interlock
+        .sample
+        .as_ref()
+        .ok_or(Refusal::InterlockUnknown)?;
+    if sample.tx_client_handle != 0 {
+        // Ours too: until the readback has seen the transmitter released, it is not idle.
+        return Err(Refusal::TransmitterHeld {
+            by: sample.tx_client_handle,
+        });
+    }
+    match sample.source.as_str() {
+        "" => {}
+        "MIC" | "ACC" | "RCA" => {
+            return Err(Refusal::HardwarePtt {
+                source: sample.source.clone(),
+            })
+        }
+        other => {
+            return Err(Refusal::SourceActive {
+                source: other.to_string(),
+            })
+        }
+    }
+    // Receive-side states only: anything else is a transmission starting, running or ending.
+    if !matches!(sample.state.as_str(), "READY" | "RECEIVE" | "NOT_READY") {
+        return Err(Refusal::InterlockNotReady {
+            state: sample.state.clone(),
+        });
+    }
+    if let TxAudio::DaxSource { .. } = audio {
+        // Radio-wide: written only while the transmit slice is ours.
+        match model.tx_slices().as_slice() {
+            [] => return Err(Refusal::NoTxSlice),
+            [slice] => {
+                let reported = model.slices.get(slice).and_then(|s| s.client_handle);
+                let owner = owner_of(reported, Some(ours));
+                if owner != Owner::Ours {
+                    return Err(Refusal::TxSliceNotOurs {
+                        slice: *slice,
+                        owner,
+                    });
+                }
+            }
+            several => return Err(Refusal::SeveralTxSlices(several.to_vec())),
+        }
+    }
+    Ok(AdmittedTxAudio(audio))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +377,7 @@ mod tests {
             handle: Some(OURS),
             keyed: false,
             readback_idle: true,
+            dax_tx_stream: None,
         }
     }
 
@@ -371,6 +505,183 @@ mod tests {
                 admit(&m, &facts(), start).expect_err("refused"),
                 Refusal::NoReadback(kind)
             );
+        }
+    }
+
+    // ── The transmitter's audio source ──
+
+    const SDR_DAX_TX: &str =
+        "S7A3C0001|stream 0x84000001 type=dax_tx client_handle=0x7A3C0001 ip=192.168.1.30";
+
+    fn audio_refused(m: &StatusModel, f: &Facts, audio: TxAudio) -> Refusal {
+        admit_tx_audio(m, f, audio).expect_err("refused")
+    }
+
+    #[test]
+    fn the_dax_source_is_admitted_on_our_tx_slice_with_an_idle_transmitter() {
+        let m = model(&[OUR_TX_SLICE, IDLE]);
+        for audio in [
+            TxAudio::CreateDaxTx,
+            TxAudio::DaxSource { dax: true },
+            TxAudio::DaxSource { dax: false },
+        ] {
+            let a = admit_tx_audio(&m, &facts(), audio).expect("admitted");
+            assert_eq!(a.into_tx_audio(), audio);
+        }
+        // Receive-side states other than READY are idle too: no transmit slice yet (RECEIVE), out
+        // of band (NOT_READY).
+        for state in ["RECEIVE", "NOT_READY"] {
+            let line = IDLE.replace("state=READY", &format!("state={state}"));
+            let m = model(&[OUR_TX_SLICE, &line]);
+            assert!(admit_tx_audio(&m, &facts(), TxAudio::DaxSource { dax: true }).is_ok());
+        }
+    }
+
+    #[test]
+    fn never_while_anything_is_keyed_or_keying() {
+        let m = model(&[OUR_TX_SLICE, IDLE]);
+        let keyed = Facts {
+            keyed: true,
+            ..facts()
+        };
+        assert_eq!(
+            audio_refused(&m, &keyed, TxAudio::DaxSource { dax: true }),
+            Refusal::AlreadyKeyed
+        );
+        // Our own transmission, another client's, and every state of a key or an unkey.
+        for (line, want) in [
+            (
+                "S0|interlock tx_client_handle=0x2B6E1F40 state=TRANSMITTING reason= source=SW tx_allowed=1",
+                Refusal::TransmitterHeld { by: OURS },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x7A3C0001 state=TRANSMITTING reason= source=SW tx_allowed=1",
+                Refusal::TransmitterHeld { by: 0x7A3C_0001 },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x00000000 state=PTT_REQUESTED reason= source= tx_allowed=1",
+                Refusal::InterlockNotReady {
+                    state: "PTT_REQUESTED".into(),
+                },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x00000000 state=UNKEY_REQUESTED reason= source= tx_allowed=1",
+                Refusal::InterlockNotReady {
+                    state: "UNKEY_REQUESTED".into(),
+                },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x00000000 state=READY reason= source=MIC tx_allowed=1",
+                Refusal::HardwarePtt {
+                    source: "MIC".into(),
+                },
+            ),
+        ] {
+            let m = model(&[OUR_TX_SLICE, line]);
+            for audio in [TxAudio::CreateDaxTx, TxAudio::DaxSource { dax: false }] {
+                assert_eq!(audio_refused(&m, &facts(), audio), want, "{line}");
+            }
+        }
+        // No whole interlock sample: not known to be idle.
+        let m = model(&[OUR_TX_SLICE, IDLE, "S0|interlock tx_allowed=1"]);
+        assert_eq!(
+            audio_refused(&m, &facts(), TxAudio::DaxSource { dax: true }),
+            Refusal::InterlockUnknown
+        );
+    }
+
+    #[test]
+    fn never_beside_another_programs_dax_transmit_stream() {
+        let m = model(&[OUR_TX_SLICE, IDLE, SDR_DAX_TX]);
+        for audio in [
+            TxAudio::CreateDaxTx,
+            TxAudio::DaxSource { dax: true },
+            TxAudio::DaxSource { dax: false },
+        ] {
+            assert_eq!(
+                audio_refused(&m, &facts(), audio),
+                Refusal::AnotherDaxFeeder {
+                    stream: 0x8400_0001,
+                    owner: Owner::Foreign(0x7A3C_0001)
+                }
+            );
+        }
+        // An owner the radio did not report is not known to be ours: refused too.
+        let m = model(&[
+            OUR_TX_SLICE,
+            IDLE,
+            "S0|stream 0x84000002 type=dax_tx ip=192.168.1.30",
+        ]);
+        assert!(matches!(
+            audio_refused(&m, &facts(), TxAudio::DaxSource { dax: true }),
+            Refusal::AnotherDaxFeeder {
+                stream: 0x8400_0002,
+                owner: Owner::Unknown
+            }
+        ));
+        // Controls: our own stream, by owner or by our create's reply; a dead orphan; another
+        // client's receive stream. None of them feeds the transmitter.
+        let mine = "S2B6E1F40|stream 0x84000000 type=dax_tx client_handle=0x2B6E1F40 ip=10.0.0.2";
+        let by_reply = "S0|stream 0x84000003 type=dax_tx ip=10.0.0.2";
+        let orphan = "S0|stream 0x84000004 type=dax_tx client_handle=0x00000000 ip=0.0.0.0";
+        let their_rx = "S7A3C0001|stream 0x04000009 type=dax_rx client_handle=0x7A3C0001";
+        let m = model(&[OUR_TX_SLICE, IDLE, mine, by_reply, orphan, their_rx]);
+        let f = Facts {
+            dax_tx_stream: Some(0x8400_0003),
+            ..facts()
+        };
+        assert_eq!(another_dax_feeder(&m, f.handle, f.dax_tx_stream), None);
+        assert!(admit_tx_audio(&m, &f, TxAudio::DaxSource { dax: true }).is_ok());
+        // Without the reply, the ownerless stream is not known to be ours.
+        assert!(another_dax_feeder(&m, Some(OURS), None).is_some());
+    }
+
+    #[test]
+    fn the_radio_wide_source_needs_our_tx_slice_and_the_stream_does_not() {
+        let foreign_tx = "S7A3C0001|slice 1 in_use=1 tx=1 client_handle=0x7A3C0001";
+        let m = model(&[foreign_tx, IDLE]);
+        assert_eq!(
+            audio_refused(&m, &facts(), TxAudio::DaxSource { dax: true }),
+            Refusal::TxSliceNotOurs {
+                slice: 1,
+                owner: Owner::Foreign(0x7A3C_0001)
+            }
+        );
+        assert!(admit_tx_audio(&m, &facts(), TxAudio::CreateDaxTx).is_ok());
+        let m = model(&[IDLE]);
+        assert_eq!(
+            audio_refused(&m, &facts(), TxAudio::DaxSource { dax: false }),
+            Refusal::NoTxSlice
+        );
+    }
+
+    #[test]
+    fn each_session_fact_refuses_the_audio_source_too() {
+        let m = model(&[OUR_TX_SLICE, IDLE]);
+        for (f, want) in [
+            (
+                Facts {
+                    ready: false,
+                    ..facts()
+                },
+                Refusal::NotReady,
+            ),
+            (
+                Facts {
+                    transmit_protocol: false,
+                    ..facts()
+                },
+                Refusal::ProtocolUnsupported,
+            ),
+            (
+                Facts {
+                    handle: None,
+                    ..facts()
+                },
+                Refusal::NoHandle,
+            ),
+        ] {
+            assert_eq!(audio_refused(&m, &f, TxAudio::CreateDaxTx), want);
         }
     }
 }

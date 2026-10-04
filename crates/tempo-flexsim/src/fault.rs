@@ -100,6 +100,73 @@ pub enum Fault {
         after: Duration,
         radio_stays_keyed: bool,
     },
+
+    /// **Another program feeds DAX transmit audio.** Another client (SmartSDR's DAX, typically)
+    /// is on the radio with its own `dax_tx` stream: its `client` line and its stream's status
+    /// follow the session's answer to `sub client all`. The handle, stream id, client id and
+    /// program name are invented: what a client can know from the wire is the stream and whose it
+    /// is.
+    ///
+    /// *Guard:* coexistence (operator ruling, 2026-10-03: "when SmartSDR's DAX is also
+    /// connected, never write the flag"). Nexus never writes `transmit set dax`, never creates
+    /// its own DAX transmit stream and never sends a DAX TX packet beside it; its transmit audio
+    /// stays on the sound card route (port plan §3.2, the DAX TX and `transmit set dax` rows).
+    ForeignDaxTx(ForeignDax),
+
+    /// **A refused DAX transmit stream.** `stream create type=dax_tx` is answered with an error
+    /// ([`REFUSED`]) and no stream.
+    ///
+    /// *Guard:* no route without a stream. Nexus does not point the transmitter at DAX and sends
+    /// no DAX TX packet, and with native audio on a digital over is refused at the key rather
+    /// than sent on the radio's mic. (The older native path re-routed the transmitter to a
+    /// stream whose create had failed, leaving the mic dead and nothing on the air: the
+    /// 2026-08-17 Flex audit.)
+    DaxTxRefused,
+
+    /// **A DAX receive stream the radio drops.** `after` the first `stream create type=dax_rx`
+    /// on a connection, the radio reports `stream_id` removed (a profile load or a slice teardown
+    /// does this on a real radio, as AetherSDR records).
+    ///
+    /// *Guard:* the refcounted DAX broker. A stream removed while a slice still holds its channel
+    /// is created again after the recreate delay (port plan §2.1, the broker row).
+    DropDaxRx { stream_id: u32, after: Duration },
+}
+
+/// The reply code [`Fault::DaxTxRefused`] answers with: an error. Which code a radio uses for a
+/// refused create is not established here.
+pub const REFUSED: &str = "5000002C";
+
+/// The other program of [`Fault::ForeignDaxTx`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignDax {
+    pub handle: u32,
+    /// Its `dax_tx` stream's id.
+    pub stream: u32,
+}
+
+impl Default for ForeignDax {
+    fn default() -> Self {
+        ForeignDax {
+            handle: 0x5C0F_0002,
+            stream: 0x8400_0001,
+        }
+    }
+}
+
+impl ForeignDax {
+    /// Its client line and its transmit stream's status, after `sub client all`.
+    pub(crate) fn lines(&self) -> Vec<String> {
+        let (h, id) = (self.handle, self.stream);
+        vec![
+            format!(
+                "S{h:08X}|client 0x{h:08X} connected local_ptt=0 \
+                 client_id=4B7E1A20-0000-4000-8000-00000000D001 program=DAX station=Shack-PC"
+            ),
+            format!(
+                "S{h:08X}|stream 0x{id:08X} type=dax_tx client_handle=0x{h:08X} ip=192.168.1.30"
+            ),
+        ]
+    }
 }
 
 /// The other GUI client of [`Fault::ForeignClient`].

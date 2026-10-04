@@ -149,6 +149,16 @@ reply 0
 on slice set *
 reply 0
 
+# D (TCPIP-slice): the slice's DAX channel, reported back on the slice's status (A: the decoder's
+# `dax` key).
+on slice set 0 dax=1
+reply 0
+send S{h}|slice 0 dax=1
+
+on slice set 0 dax=0
+reply 0
+send S{h}|slice 0 dax=0
+
 on slice remove *
 reply 0
 
@@ -172,6 +182,16 @@ reply 0
 
 on transmit set *
 reply 0
+
+# D (TCPIP-transmit): the transmitter's DAX source, reported back on the transmit status (A: the
+# decoder's `dax` key). It is radio-wide.
+on transmit set dax=1
+reply 0
+send S0|transmit dax=1
+
+on transmit set dax=0
+reply 0
+send S0|transmit dax=0
 
 # D (TCPIP-xmit, SmartSDR-Status-Responses): each interlock transition is reported, with the
 # client assigned the transmitter. A (the FLEX-6700 captures the plan cites, §3.4): PTT_REQUESTED
