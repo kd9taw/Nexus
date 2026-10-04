@@ -156,8 +156,7 @@ async fn an_unpinned_key_is_refused_in_the_handshake_and_reaches_nothing() {
         &r.s.public_key,
     )
     .await
-    .err()
-    .expect("an unpinned key got through the handshake");
+    .expect_err("an unpinned key got through the handshake");
     assert!(refused.contains("AccessDenied"), "{refused}");
     for n in 2..=FAILURES_BEFORE_IGNORED {
         assert_eq!(
@@ -703,8 +702,7 @@ async fn a_man_in_the_middle_with_his_own_key_is_refused_at_both_ends() {
         &r.s.public_key,
     )
     .await
-    .err()
-    .expect("the shack took the middle's key");
+    .expect_err("the shack took the middle's key");
     assert!(refused.contains("AccessDenied"), "{refused}");
 
     r.lan.pair().unwrap();
