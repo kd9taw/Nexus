@@ -2769,7 +2769,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if(['cw','phone','rtty','keyboard'].includes(mode)||workspace==='ft'){
           if(!tunedModes.has(mode)){
             tunedModes.add(mode)
-            const digit=root+' .readout-digit[data-decade="3"]',scope=root+(mode==='cw'?' .ph-scope-panel canvas':' .ph-scope-wrap canvas')
+            const digit=root+' .readout-digit[data-decade="3"]',scope=root+(mode==='cw'?' .ph-scope-panel canvas.ph-scope-canvas':' .ph-scope-wrap canvas.ph-scope-canvas')
             const targets=[digit,...(['cw','phone'].includes(mode)?[scope,...[1,2,3,4].map(n=>root+` .tuning-nudge:nth-of-type(${n})`)]:[])]
             for(const target of targets)for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
               await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
