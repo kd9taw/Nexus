@@ -2,34 +2,35 @@
 // screen. An operator's caption is their own words and is never translated, so a key captioned
 // "Stopp" reads as a stop to anyone at the station who reads German, in every UI language.
 //
-// The hand-kept lists below are examples. What keeps the word lists honest is derived:
-//   · every short English caption in the catalogs that says stop, halt, abort, cancel or Esc is a
-//     caption the app ITSELF uses for a stop, so its translation in each shipped catalog must be
-//     refused too (that is how "beenden" and 終了 are on the lists: the catalogs say
-//     "Mithören beenden" for Stop listening and 終了 for an activation's Stop);
-//   · every built-in macro caption, in every language, must still be allowed;
-//   · main.tsx is where a language ships, and each one it installs must have a word list and be
-//     checked here.
+// The stop words come from two places, and each is checked where it is all there is:
+//   · every installed catalog's own word for Stop and Cancel, so a language is covered as it
+//     ships with nothing to extend. This file FINDS every catalog in the tree rather than listing
+//     them, installs each as main.tsx does, and fails if any catalog's own captions for a stop
+//     (every short English caption that says stop, halt, abort, cancel or Esc, translated) get
+//     through. That is also how "beenden" and 終了 reached the reviewed lists: the catalogs say
+//     "Mithören beenden" for Stop listening and 終了 for an activation's Stop;
+//   · the reviewed lists in macroSets.ts, which are everything the Remote page has, because it
+//     installs no catalog. They are checked first, before anything is installed here.
+// Every built-in macro caption, in every language, must still be allowed.
 
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
-import { EN, type MessageKey, type PartialCatalog } from '../i18n'
-import { DE } from '../i18n/de'
-import { ES } from '../i18n/es'
-import { FR } from '../i18n/fr'
-import { JA } from '../i18n/ja'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { EN, availableLocales, installCatalog, type MessageKey, type PartialCatalog } from '../i18n'
 import { STOP_WORDS, isStopLikeLabel, type MacroSetId } from './macroSets'
 import { resolvePskSet } from './pskMacros'
 import { resolveRttySet } from './rttyMacros'
 
-/** Every shipped translation, by the locale main.tsx installs it under. */
-const CATALOGS: [string, PartialCatalog][] = [
-  ['de', DE],
-  ['es', ES],
-  ['fr', FR],
-  ['ja', JA],
-]
-const WITH_EN: [string, PartialCatalog][] = [['en', EN], ...CATALOGS]
+/** Every UI catalog in the tree, by locale — found, not listed, so a new one (Portuguese's pt.ts,
+ *  as its kit writes it) is checked the moment it exists. */
+const CATALOGS: [string, PartialCatalog][] = Object.entries(
+  import.meta.glob<Record<string, unknown>>(['../i18n/[a-z][a-z].ts', '../i18n/[a-z][a-z]-[A-Z][A-Z].ts'], {
+    eager: true,
+  }),
+).map(([path, module]) => {
+  const catalogs = Object.values(module).filter((value) => typeof value === 'object' && value !== null)
+  if (catalogs.length !== 1) throw new Error(`${path} should export one catalog, not ${catalogs.length}`)
+  return [path.replace(/^.*\/|\.ts$/g, ''), catalogs[0] as PartialCatalog]
+})
 
 /** A catalog's text for `key`, or the English it falls back to — what the screen would show. */
 const textIn = (catalog: PartialCatalog) => (key: MessageKey) => {
@@ -60,22 +61,62 @@ const ALLOWED: Record<string, string[]> = {
   ja: ['応答', 'ナンバー', '自局コール', '相手コール', '呼出', 'ありがとう', '再送', 'もう一度', '名前', '挨拶', 'コンテスト', '最後'],
 }
 
-describe('a macro caption that reads as a stop is refused in every shipped language', () => {
-  it.each(Object.entries(REFUSED))('%s', (_, captions) => {
+/** The catalogs' own captions for a stop. Chosen by English words, not by the function under
+ *  test, so a word dropped from the lists cannot also drop the obligation. 16 is the editor's
+ *  caption length: a caption it could hold. */
+const SAYS_STOP = /\b(stop|halt|abort|cancel|esc|escape)\b/i
+const STOP_CAPTIONS = (Object.keys(EN) as MessageKey[]).filter((k) => {
+  const text = EN[k]
+  return typeof text === 'string' && text.length <= 16 && SAYS_STOP.test(text)
+})
+/** Which of `catalog`'s own captions for a stop the check lets through, as `key: text`. */
+const missed = (catalog: PartialCatalog) =>
+  STOP_CAPTIONS.filter((k) => typeof catalog[k] === 'string' && !isStopLikeLabel(catalog[k] as string)).map(
+    (k) => `${k}: ${catalog[k]}`,
+  )
+
+describe('the reviewed words alone, as on the Remote page, which installs no catalog', () => {
+  it('runs with nothing but English installed (control: this block runs first)', () => {
+    expect(availableLocales()).toEqual(['en'])
+  })
+
+  it.each(Object.entries(REFUSED))('refuse a stop in %s', (_, captions) => {
     expect(captions.filter((c) => !isStopLikeLabel(c))).toEqual([])
+  })
+
+  it("refuse each listed language's own captions for a stop", () => {
+    const listed = CATALOGS.filter(([locale]) => locale in STOP_WORDS)
+    expect(listed.length, 'control: every list has its catalog').toBe(Object.keys(STOP_WORDS).length)
+    expect(listed.flatMap(([locale, catalog]) => missed(catalog).map((m) => `${locale} ${m}`))).toEqual([])
   })
 })
 
-describe('an ordinary macro caption is allowed in every shipped language', () => {
-  it('on-air shorthand', () => {
+describe('every catalog in the tree, installed as main.tsx installs one', () => {
+  beforeAll(() => {
+    for (const [locale, catalog] of CATALOGS) if (locale !== 'en') installCatalog(locale, catalog)
+  })
+
+  it('finds every catalog main.tsx installs (control: the search does not come back empty)', () => {
+    const main = readFileSync(new URL('../main.tsx', import.meta.url), 'utf8')
+    const installed = [...main.matchAll(/installCatalog\(\s*'([a-z-]+)'/g)].map((m) => m[1])
+    expect(installed.length, 'control: main.tsx really does install catalogs').toBeGreaterThan(0)
+    expect(CATALOGS.map(([locale]) => locale)).toEqual(expect.arrayContaining(['en', ...installed]))
+  })
+
+  it.each(CATALOGS)('refuses the %s catalog’s own captions for a stop', (_, catalog) => {
+    expect(STOP_CAPTIONS.some((k) => typeof catalog[k] === 'string'), 'control: it has some').toBe(true)
+    expect(missed(catalog)).toEqual([])
+  })
+
+  it('allows on-air shorthand', () => {
     expect(SHORTHAND.filter(isStopLikeLabel)).toEqual([])
   })
 
-  it.each(Object.entries(ALLOWED))('%s', (_, captions) => {
+  it.each(Object.entries(ALLOWED))('allows ordinary captions in %s', (_, captions) => {
     expect(captions.filter(isStopLikeLabel)).toEqual([])
   })
 
-  it.each(WITH_EN)('every built-in caption, in %s', (_, catalog) => {
+  it.each(CATALOGS)('allows every built-in caption in %s', (_, catalog) => {
     const sets: MacroSetId[] = ['everyday', 'contest']
     const captions = sets.flatMap((set) => [
       ...resolveRttySet(undefined, set, textIn(catalog)),
@@ -88,33 +129,13 @@ describe('an ordinary macro caption is allowed in every shipped language', () =>
   })
 })
 
-describe("each catalog's own captions for a stop are refused", () => {
-  // Chosen by English words, not by the function under test, so a word dropped from the lists
-  // cannot also drop the obligation. 16 is the editor's caption length: a caption it could hold.
-  const SAYS_STOP = /\b(stop|halt|abort|cancel|esc|escape)\b/i
-  const stopCaptions = (Object.keys(EN) as MessageKey[]).filter((k) => {
-    const text = EN[k]
-    return typeof text === 'string' && text.length <= 16 && SAYS_STOP.test(text)
-  })
-
-  it('finds them (control: the stops the catalogs are known to hold)', () => {
-    for (const k of ['quit.logbook.stopTx', 'ota.activation.stop.label', 'rotor.pane.stop.label', 'remote.audio.stop', 'logbook.purge.cancel'])
-      expect(stopCaptions, k).toContain(k)
-  })
-
-  it.each(WITH_EN)('%s', (_, catalog) => {
-    const translated = stopCaptions.filter((k) => typeof catalog[k] === 'string')
-    expect(translated.length, 'control: this catalog translates some of them').toBeGreaterThan(0)
-    expect(translated.filter((k) => !isStopLikeLabel(catalog[k] as string)).map((k) => `${k}: ${catalog[k]}`)).toEqual([])
-  })
-})
-
-describe('the word lists cover every language the app ships', () => {
-  it('one list per locale main.tsx installs, and every installed catalog is checked above', () => {
-    const main = readFileSync(new URL('../main.tsx', import.meta.url), 'utf8')
-    const installed = [...main.matchAll(/installCatalog\(\s*'([a-z-]+)'/g)].map((m) => m[1]).sort()
-    expect(installed.length, 'control: main.tsx really does install catalogs').toBeGreaterThan(0)
-    expect(CATALOGS.map(([l]) => l).sort()).toEqual(installed)
-    expect(Object.keys(STOP_WORDS).sort()).toEqual(['en', ...installed].sort())
+describe('a language no list names', () => {
+  // Made-up words in a made-up locale: what Portuguese would be if the Spanish list did not
+  // already hold its Parar, and no real catalog will ever contain them.
+  it('is covered the moment its catalog is installed, with nothing to extend', () => {
+    expect(['Zorp', 'Quux'].filter(isStopLikeLabel), 'control: nothing knows them yet').toEqual([])
+    installCatalog('zz', { 'ota.activation.stop.label': 'Zorp', 'logbook.purge.cancel': 'Quux' })
+    expect(['Zorp', 'ZORP TX', '■ Quux'].filter((c) => !isStopLikeLabel(c))).toEqual([])
+    expect(isStopLikeLabel('Zorpig'), 'a word that merely begins with one').toBe(false)
   })
 })
