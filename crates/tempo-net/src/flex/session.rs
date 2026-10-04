@@ -1116,6 +1116,30 @@ enum Request {
 struct Shared {
     snapshot: Mutex<Snapshot>,
     changed: Condvar,
+    /// Test only: where a test holds the driver (see [`Connection::hold_after`]).
+    #[cfg(test)]
+    hold: Mutex<Option<(Announcement, Receiver<()>)>>,
+}
+
+/// Something the driver tells a reader, which a test can hold the driver right after
+/// ([`Connection::hold_after`]).
+#[cfg(test)]
+#[derive(PartialEq)]
+pub(super) enum Announcement {
+    /// The answer to a start, a stop or a refused command.
+    Answer,
+    Event(Event),
+}
+
+#[cfg(test)]
+impl Shared {
+    /// If a test is holding the driver after `announcement`, wait here until it lets go.
+    fn pause_after(&self, announcement: &Announcement) {
+        let held = lock(&self.hold).take_if(|(after, _)| *after == *announcement);
+        if let Some((_, release)) = held {
+            let _ = release.recv();
+        }
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -1153,6 +1177,8 @@ impl Connection {
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(session.snapshot()),
             changed: Condvar::new(),
+            #[cfg(test)]
+            hold: Mutex::new(None),
         });
         let thread = {
             let shared = Arc::clone(&shared);
@@ -1204,7 +1230,9 @@ impl Connection {
         self.events.recv_timeout(timeout).ok()
     }
 
-    /// The session's state as of its last step.
+    /// The session's state as of its last step. Each step's state is published before its answers
+    /// and events go out, so whoever acts on an answer or an event reads the state it reports, or
+    /// a later one.
     pub fn snapshot(&self) -> Snapshot {
         lock(&self.shared.snapshot).clone()
     }
@@ -1228,6 +1256,16 @@ impl Connection {
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
+    }
+
+    /// Test only: the driver stops right after its next `announcement` and stays stopped until
+    /// the returned sender is dropped, so a test reads the state at the first moment a reader
+    /// woken by that announcement can.
+    #[cfg(test)]
+    pub(super) fn hold_after(&self, announcement: Announcement) -> Sender<()> {
+        let (release, held) = mpsc::channel();
+        *lock(&self.shared.hold) = Some((announcement, held));
+        release
     }
 
     /// Close on purpose, waiting for teardown to finish.
@@ -1275,15 +1313,15 @@ fn drive<S: Read + Write>(
                     Ok(seq) => {
                         waiters.insert(seq, reply);
                     }
-                    Err(e) => {
-                        let _ = reply.send(Err(ConnError::Refused(e)));
-                    }
+                    Err(e) => answer(&session, shared, reply, Err(ConnError::Refused(e))),
                 },
                 Ok(Request::Start(start, reply)) => {
-                    let _ = reply.send(session.start(&mut io, start, now()));
+                    let started = session.start(&mut io, start, now());
+                    answer(&session, shared, reply, started);
                 }
                 Ok(Request::Stop(stop, reply)) => {
-                    let _ = reply.send(session.stop(&mut io, stop, now()));
+                    let stopped = session.stop(&mut io, stop, now());
+                    answer(&session, shared, reply, stopped);
                 }
                 Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
                     session.close(&mut io, now());
@@ -1301,6 +1339,7 @@ fn drive<S: Read + Write>(
             }
             session.poll(&mut io, now());
         }
+        publish(&session, shared);
         for event in session.take_events() {
             if let Event::Reply { seq, code, message } = &event {
                 if let Some(waiter) = waiters.remove(seq) {
@@ -1311,10 +1350,12 @@ fn drive<S: Read + Write>(
                     }));
                 }
             }
+            #[cfg(test)]
+            let announced = Announcement::Event(event.clone());
             let _ = events.send(event);
+            #[cfg(test)]
+            shared.pause_after(&announced);
         }
-        *lock(&shared.snapshot) = session.snapshot();
-        shared.changed.notify_all();
         if session.is_closed() {
             break;
         }
@@ -1322,6 +1363,23 @@ fn drive<S: Read + Write>(
     // Waiters still pending see their channel close.
     drop(waiters);
     let _ = io.flush();
+}
+
+/// Store the session's state for [`Connection::snapshot`] and wake [`Connection::wait_until`].
+/// The driver does this before it announces anything a step did (an answer, a reply, an event),
+/// so a reader woken by an announcement reads the state it reports, or a later one, never the
+/// state from before it.
+fn publish(session: &Session, shared: &Shared) {
+    *lock(&shared.snapshot) = session.snapshot();
+    shared.changed.notify_all();
+}
+
+/// Answer a request, once the state it left is published.
+fn answer<T>(session: &Session, shared: &Shared, reply: Sender<T>, value: T) {
+    publish(session, shared);
+    let _ = reply.send(value);
+    #[cfg(test)]
+    shared.pause_after(&Announcement::Answer);
 }
 
 #[cfg(test)]
