@@ -1353,10 +1353,12 @@ export function PhoneScope({
         return
       }
       const hz = axisAt(e.clientX)
-      if (hz == null) return
+      // The RF pane has no filter to drag: it is display only (2026-10-04), so it has no limits either.
+      const limits = cockpitRef.current === 'rfpan' ? null : PASSBAND_LIMITS[cockpitRef.current]
+      if (hz == null || limits == null) return
       g.dragging = true
       if (canvasRef.current) canvasRef.current.style.cursor = 'ew-resize'
-      const w = clampPassband(widthForEdge(g.edge.axis, g.edge.p, g.edge.edge, hz), PASSBAND_LIMITS[cockpitRef.current])
+      const w = clampPassband(widthForEdge(g.edge.axis, g.edge.p, g.edge.edge, hz), limits)
       if (w !== g.edge.hz) {
         g.edge.hz = w
         onPassbandRef.current?.(w)
@@ -1550,9 +1552,10 @@ export function PhoneScope({
     // The character, not the key position: [ and ] sit behind AltGr on many layouts.
     if (e.key === '[' || e.key === ']') {
       const width = shownWidth()
-      if (!canEditPassband() || width == null) return
+      const limits = cockpitRef.current === 'rfpan' ? null : PASSBAND_LIMITS[cockpitRef.current]
+      if (!canEditPassband() || width == null || limits == null) return
       e.preventDefault()
-      const next = stepPassband(width, e.key === ']' ? 1 : -1, PASSBAND_LIMITS[cockpitRef.current])
+      const next = stepPassband(width, e.key === ']' ? 1 : -1, limits)
       if (next === width) return
       pendingWidthRef.current = { hz: next, until: performance.now() + PENDING_WIDTH_MS }
       onPassbandRef.current?.(next)
