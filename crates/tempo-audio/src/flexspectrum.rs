@@ -105,9 +105,8 @@ pub(crate) fn backoff_wait(stop: &AtomicBool, delay: Duration) -> bool {
 
 /// Stop-and-reap worker threads WITHOUT letting a network peer block the caller indefinitely.
 ///
-/// ⚠️ THE CALLER IS THE RADIO LOOP. `FlexSpectrum` and `FlexDax` are dropped from inside `step()` —
-/// a settings save, a radio switch, the DAX starvation fallback — and that loop is the only thing
-/// that can unkey the transmitter. A plain `join()` there hands a network peer the power to stall
+/// ⚠️ THE CALLER IS THE RADIO LOOP. `FlexSpectrum` is dropped from inside `step()` — a settings
+/// save, a radio switch — and that loop is the only thing that can unkey the transmitter. A plain `join()` there hands a network peer the power to stall
 /// it: before the connect was bounded, a black-holed Flex IP froze the loop for the OS SYN timeout,
 /// ~21 s on Windows and ~127 s on Linux (Flex audit 2026-08-17, finding #1003).
 ///
@@ -263,8 +262,8 @@ pub fn teardown_commands(pan_id: Option<u32>, waterfall_id: Option<u32>) -> Vec<
 /// The pan and waterfall a `display panafall create` REPLY grants us — or `None` (refused, or no
 /// pan id in the body), meaning we own no panadapter and must steer or remove none.
 ///
-/// ⚠️ THE REPLY IS THE ONLY THING THAT PROVES A PAN IS OURS. Same rule, same reason, as
-/// `flexdax::stream_from_create_reply`: `FlexCat::command`/`send` replies carry a code, and
+/// ⚠️ THE REPLY IS THE ONLY THING THAT PROVES A PAN IS OURS. Same rule, same reason, as a DAX
+/// stream's create reply on the client: `FlexCat::command`/`send` replies carry a code, and
 /// `R7|50000015|bad` parses as a perfectly good reply, so a refusal must not read as a grant.
 /// The body is `<pan>,<waterfall>` (D) or `pan=… waterfall=…`; a parser that expected one id read
 /// neither. The waterfall also rides our pan's own status ([`our_pan_status`]).

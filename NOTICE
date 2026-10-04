@@ -214,7 +214,7 @@ FlexRadio workstation) and reimplemented for Nexus's normalized history rows:
 These files carry header-level attribution to their AetherSDR origin. AetherSDR is
 GPLv3 and Nexus is GPLv3-only, so the ported code combines cleanly into the GPLv3
 whole. Additionally, Nexus's native FlexRadio DAX / VITA-49 code
-(`crates/tempo-net/src/flexvita.rs`, `crates/tempo-audio/src/flexdax.rs`) used
+(`crates/tempo-net/src/flexvita.rs`) used
 AetherSDR's `PanadapterStream` as a **reference for the public wire-format layout**
 (VITA-49 packet-class codes and DAX audio framing — protocol facts); the
 implementation itself is original (see the FlexRadio SmartSDR note below). AetherSDR
@@ -233,8 +233,8 @@ FlexRadio backend**, translated from C++/Qt to Rust:
   `RadioConnection`);
 - the status decoders and command encodings (`FlexBackend`, `FlexKvCarry`, and the delta types
   `SliceDelta`, `TransmitDelta`, `RadioDelta`, `MeterDef` and `ProfileDelta`);
-- the VITA-49 decoders and frame assembly (`PanadapterStream`, `VitaBinCoverage`,
-  `VitaTileFrequency`);
+- the VITA-49 decoders, frame assembly and the refcounted DAX stream broker
+  (`PanadapterStream`, `VitaBinCoverage`, `VitaTileFrequency`);
 - the interlock readback (`FlexPttStopTracker`, `FlexPttWireSession`);
 - the ownership and registration policies (`RadioStatusOwnership`, `StreamStatus`,
   `DisplayInventoryPolicy`, `SliceRecreatePolicy`, `GuiClientRegistrationState`,

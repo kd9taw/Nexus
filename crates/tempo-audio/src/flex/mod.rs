@@ -28,29 +28,46 @@
 //! none). At teardown it unkeys first, removes the slices and panadapters it owns, and closes the
 //! session, whose own teardown sends one more `xmit 0` if anything of ours may still be keyed.
 //!
+//! ## Audio (Beta, opt-in: `flex_native_audio` on a radio this client serves)
+//! The session registers a UDP port, so DAX rides the same session ([`audio`]): receive audio for
+//! each slice of ours in use through the refcounted DAX broker, and the over's transmit audio as
+//! DAX TX in the tested format, at the operator's TX level, only while a key of ours is held. Where
+//! the transmitter takes its audio from follows the operator's ruling of 2026-10-03 ([`routing`]):
+//! the TX slice's mode decides, the flag is written only at the radio loop's quiet point
+//! ([`FlexDaemon::sync_tx_routing`]) and never beside another program's DAX, and the operator's own
+//! setting is put back at disconnect and at the next connect. While native audio is on, a digital
+//! over is refused at `T 1` unless the radio takes its audio from Nexus's DAX
+//! ([`shim::FlexShim`]): the radio's mic must never carry a digital over.
+//!
 //! ## Not yet
-//! No audio (DAX), no panadapter stream (no UDP port is registered), no persisted client id
-//! (every connect registers as a new GUI client), and no tune carrier, ATU or CW keyer: the
-//! core's admission refuses those starts until its unkey readback covers them.
+//! No panadapter stream from this session (the older native pan still opens its own), no
+//! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
+//! CW keyer: the core's admission refuses those starts until its unkey readback covers them.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
 
+pub mod audio;
+pub mod routing;
 pub mod shim;
 #[cfg(test)]
 mod tests;
 
-use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
+use std::net::{SocketAddr, TcpListener, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tempo_app::engine::receivers::RxOwner;
 use tempo_app::engine::slices::{SliceIntent, SliceReport};
-use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxStop};
+use tempo_net::flex::admission::another_dax_feeder;
+use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxAudio, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
-use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase};
+use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot};
+use tempo_net::flex::streams::{UDP_REGISTRATION_PORT, VITA_PORT};
+
+use routing::{Memory, Restore, Routing, Step, View};
 
 use crate::rigctld_server::{serve_connection, RigBackend};
 
@@ -71,6 +88,83 @@ const PAN_Y: u16 = 480;
 
 /// How many of our recent session handles are kept per radio.
 const RECENT_HANDLES_KEPT: usize = 4;
+
+/// How long a mode the shim commanded stands for the slice's mode before the radio reports it.
+const COMMANDED_FOR: Duration = Duration::from_secs(2);
+
+/// How long before Nexus asks again for its DAX transmit stream.
+const CREATE_TX_RETRY: Duration = Duration::from_secs(2);
+
+/// How long teardown waits for the radio to prove an unkey before it puts the operator's DAX
+/// source back. Past it the source is left, and the next connect puts it back.
+const RESTORE_UNKEY_WAIT: Duration = Duration::from_millis(1_500);
+
+/// What the shim, the audio threads and the daemon share about this client.
+#[derive(Default)]
+pub(crate) struct ClientState {
+    /// The operator's native audio is on for this radio (the radio loop says so).
+    pub(crate) native_audio: AtomicBool,
+    /// The mode the shim last commanded for a slice, and when, until the radio reports it.
+    pub(crate) commanded: Mutex<Option<(u8, String, Instant)>>,
+}
+
+/// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
+/// reported it yet (for at most [`COMMANDED_FOR`]), else the radio's.
+pub(crate) fn effective_mode(
+    model: &StatusModel,
+    slice: u8,
+    state: &ClientState,
+) -> Option<String> {
+    let reported = model.slices.get(&slice).and_then(|s| s.mode.clone());
+    let mut commanded = state
+        .commanded
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    match commanded.as_ref() {
+        Some((s, word, at)) if *s == slice => {
+            if reported.as_deref() == Some(word.as_str()) || at.elapsed() >= COMMANDED_FOR {
+                *commanded = None;
+                reported
+            } else {
+                Some(word.clone())
+            }
+        }
+        _ => reported,
+    }
+}
+
+/// Where the daemon's UDP goes, and where the operator's DAX source is remembered.
+pub struct Options {
+    /// The radio's VITA-49 port: DAX TX.
+    pub vita: SocketAddr,
+    /// The radio's UDP registration port: the one-byte datagram.
+    pub registration: SocketAddr,
+    pub memory: Arc<dyn Memory>,
+}
+
+impl Options {
+    /// The radio's own ports, and the app's memory.
+    pub fn for_radio(radio: SocketAddr) -> Options {
+        Options {
+            vita: SocketAddr::new(radio.ip(), VITA_PORT),
+            registration: SocketAddr::new(radio.ip(), UDP_REGISTRATION_PORT),
+            memory: Arc::new(AppMemory),
+        }
+    }
+}
+
+/// [`routing::FileMemory::app`], as an owned handle.
+struct AppMemory;
+
+impl Memory for AppMemory {
+    fn recall(&self, radio: &str) -> Option<bool> {
+        routing::FileMemory::app().recall(radio)
+    }
+
+    fn keep(&self, radio: &str, operator: Option<bool>) {
+        routing::FileMemory::app().keep(radio, operator)
+    }
+}
 
 /// Our recent sessions' client handles on each radio, newest first. A daemon that replaces a lost
 /// one (the radio loop starts a fresh daemon when a session dies) hands them to its session, which
@@ -143,6 +237,16 @@ pub struct FlexDaemon {
     tx_intent: Arc<AtomicBool>,
     /// What the operator must be told about the transmitter, once it happens (sticky).
     alarm: Arc<Mutex<Option<String>>>,
+    state: Arc<ClientState>,
+    audio: Option<audio::Audio>,
+    routing: Mutex<Routing>,
+    memory: Arc<dyn Memory>,
+    /// This radio in the memory.
+    memory_key: String,
+    /// When Nexus last asked for its DAX transmit stream.
+    asked_tx_stream: Mutex<Option<Instant>>,
+    /// The last routing refusal logged, so one refusal is logged once.
+    routing_refusal: Mutex<Option<String>>,
 }
 
 impl FlexDaemon {
@@ -166,6 +270,20 @@ impl FlexDaemon {
         tcp_port: u16,
         config: session::Config,
     ) -> std::io::Result<FlexDaemon> {
+        Self::start_full(radio, tcp_port, config, Options::for_radio(radio))
+    }
+
+    /// Start with a given session configuration and UDP destinations (tests point them at the
+    /// simulator).
+    pub(crate) fn start_full(
+        radio: SocketAddr,
+        tcp_port: u16,
+        mut config: session::Config,
+        options: Options,
+    ) -> std::io::Result<FlexDaemon> {
+        // The session registers this port (`client udpport`), so DAX rides the one session.
+        let udp = UdpSocket::bind(("0.0.0.0", 0))?;
+        config.connect.udp_port = Some(udp.local_addr()?.port());
         let conn = Arc::new(Connection::connect(radio, config)?);
         let ready = conn.wait_until(READY_TIMEOUT, |s| {
             matches!(s.phase, Phase::Ready | Phase::Closed)
@@ -188,6 +306,13 @@ impl FlexDaemon {
             remove_ours(&conn);
             return Err(std::io::Error::other(why));
         }
+        // The one-byte registration datagram: the radio learns our UDP endpoint from its source
+        // (firmware that does not support `client udpport` needs it; port plan §4.2).
+        let _ = udp.send_to(&[0u8], options.registration);
+        let state = Arc::new(ClientState::default());
+        let audio = audio::Audio::start(Arc::downgrade(&conn), state.clone(), udp, options.vita)?;
+        let memory_key = radio.to_string();
+        let remembered = options.memory.recall(&memory_key);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -197,6 +322,7 @@ impl FlexDaemon {
         let shim: Arc<dyn RigBackend> = Arc::new(shim::FlexShim::new(
             Arc::downgrade(&conn),
             tx_intent.clone(),
+            state.clone(),
         ));
         let tcp_thread = {
             let stop = stop.clone();
@@ -238,6 +364,13 @@ impl FlexDaemon {
             watch_thread: Some(watch_thread),
             tx_intent,
             alarm,
+            state,
+            audio: Some(audio),
+            routing: Mutex::new(Routing::new(remembered)),
+            memory: options.memory,
+            memory_key,
+            asked_tx_stream: Mutex::new(None),
+            routing_refusal: Mutex::new(None),
         })
     }
 
@@ -291,6 +424,188 @@ impl FlexDaemon {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    // ── Audio (Beta, opt-in) ──────────────────────────────────────────────────────────────
+
+    /// Whether the operator's native audio is on for this radio. While it is, every slice of ours
+    /// in use streams its DAX receive audio and the transmit route can come up; while it is off,
+    /// the streams go after the broker's grace window and the transmit route is down.
+    pub fn set_native_audio(&self, on: bool) {
+        self.state.native_audio.store(on, Ordering::Relaxed);
+    }
+
+    /// The served slice's 12 kHz receive audio since the last call: the radio loop's receive
+    /// source while native audio is on.
+    pub fn take_audio(&self) -> Vec<f32> {
+        self.audio
+            .as_ref()
+            .map(|a| a.take_audio())
+            .unwrap_or_default()
+    }
+
+    /// The DAX transmit route, for the radio loop's sound card to hand overs to.
+    pub fn tx_tee(&self) -> Option<crate::backend::TxTeeHandle> {
+        let tx: crate::backend::TxTeeHandle = self.audio.as_ref()?.tx();
+        Some(tx)
+    }
+
+    /// Whether the DAX transmit route is up: native audio on, Nexus's own transmit stream exists,
+    /// and no other program feeds DAX.
+    pub fn tx_route_ready(&self) -> bool {
+        self.audio.as_ref().is_some_and(|a| a.tx().ready())
+    }
+
+    /// The radio's own DAX source flag (`transmit dax`): whether the transmitter takes its audio
+    /// from DAX rather than the radio's mic, as last read while native audio was on. Cheap.
+    pub fn radio_dax(&self) -> Option<bool> {
+        self.audio.as_ref().and_then(audio::Audio::radio_dax)
+    }
+
+    /// Whether another program feeds the radio's DAX transmit audio (SmartSDR's DAX).
+    pub fn other_dax_feeder(&self) -> bool {
+        let snap = self.conn().snapshot();
+        another_dax_feeder(&snap.model, snap.handle, snap.dax_tx_stream).is_some()
+    }
+
+    /// Whether the radio has the mic while native audio is on: Nexus is the only program feeding
+    /// DAX, and the radio takes its transmit audio from its own mic, as the routing has it for
+    /// Phone at the shack. Audio Nexus makes (a recorded voice message, an APRS packet, an SSTV
+    /// picture) would then go over DAX, which the radio ignores, and the mic would carry the
+    /// over; the voice keyer, APRS and SSTV refuse while this holds (operator rulings,
+    /// 2026-10-04). Beside another program's DAX the flag is not Nexus's to judge, as for the
+    /// digital refusal at `T 1`. Cheap: what the audio control thread last read.
+    pub fn radio_has_mic(&self) -> bool {
+        self.state.native_audio.load(Ordering::Relaxed)
+            && self
+                .audio
+                .as_ref()
+                .is_some_and(|a| a.radio_dax() == Some(false) && !a.other_feeder())
+    }
+
+    /// Our receive streams and their channels.
+    #[cfg(test)]
+    pub(crate) fn rx_streams(&self) -> std::collections::BTreeMap<u32, u8> {
+        self.audio
+            .as_ref()
+            .map(audio::Audio::rx_streams)
+            .unwrap_or_default()
+    }
+
+    fn routing_view(&self, snap: &Snapshot) -> View {
+        let tx_slice = match snap.model.tx_slices().as_slice() {
+            [slice]
+                if owner_of(
+                    snap.model.slices.get(slice).and_then(|s| s.client_handle),
+                    snap.handle,
+                ) == Owner::Ours =>
+            {
+                Some(*slice)
+            }
+            _ => None,
+        };
+        View {
+            radio: snap.model.transmit.dax,
+            tx_slice,
+            tx_mode: tx_slice.and_then(|s| effective_mode(&snap.model, s, &self.state)),
+            other_feeder: another_dax_feeder(&snap.model, snap.handle, snap.dax_tx_stream)
+                .is_some(),
+            dax_tx_stream: snap.dax_tx_stream.is_some(),
+        }
+    }
+
+    /// Carry out the next step of the transmit audio routing, if any (operator ruling,
+    /// 2026-10-03; [`routing`]). **Call it only at a quiet point**: the radio loop calls it at the
+    /// end of a tick in which nothing of ours is keyed or about to be, which is what keeps the
+    /// flag out of the keying path. `browser_voice`: the stream's browser voice is live. Returns
+    /// what it did, for the log.
+    pub fn sync_tx_routing(&self, browser_voice: bool) -> Option<String> {
+        let conn = self.conn();
+        let snap = conn.snapshot();
+        if snap.phase != Phase::Ready {
+            return None;
+        }
+        let view = self.routing_view(&snap);
+        let native = self.state.native_audio.load(Ordering::Relaxed);
+        let now = monotonic_ms();
+        let step = lock(&self.routing).step(&view, native, browser_voice, now)?;
+        let (audio, done) = match step {
+            Step::CreateDaxTx => {
+                let mut asked = lock(&self.asked_tx_stream);
+                if asked.is_some_and(|at| at.elapsed() < CREATE_TX_RETRY) {
+                    return None;
+                }
+                *asked = Some(Instant::now());
+                (
+                    TxAudio::CreateDaxTx,
+                    "asked the radio for Nexus's DAX transmit stream".to_string(),
+                )
+            }
+            Step::Write { dax, why } => (
+                TxAudio::DaxSource { dax },
+                format!(
+                    "transmit audio from {} ({why:?})",
+                    if dax { "DAX" } else { "the radio's mic" }
+                ),
+            ),
+        };
+        match conn.route(audio) {
+            Ok(_) => {
+                if let Step::Write { dax, why } = step {
+                    let keep = lock(&self.routing).written(dax, why, now);
+                    self.memory.keep(&self.memory_key, keep);
+                }
+                *lock(&self.routing_refusal) = None;
+                tempo_core::applog::info("cat", &format!("Flex client ({}): {done}", self.radio));
+                Some(done)
+            }
+            Err(Some(refusal)) => {
+                let why = refusal.to_string();
+                let mut last = lock(&self.routing_refusal);
+                if last.as_deref() != Some(why.as_str()) {
+                    tempo_core::applog::info(
+                        "cat",
+                        &format!("Flex client ({}): not now: {why}", self.radio),
+                    );
+                    *last = Some(why);
+                }
+                None
+            }
+            Err(None) => None,
+        }
+    }
+
+    /// Put the operator's DAX source back as this connection ends, if Nexus left it changed:
+    /// never while keyed (the unkey must be proven first), never beside another program's DAX.
+    /// What cannot be put back now stays in the memory for the next connect.
+    fn restore_routing(&self, conn: &Connection) {
+        // Nothing owed (the common case): no wait at all.
+        let owed =
+            |snap: &Snapshot| lock(&self.routing).restore_on_disconnect(&self.routing_view(snap));
+        if owed(&conn.snapshot()) == Restore::Nothing {
+            self.memory.keep(&self.memory_key, None);
+            return;
+        }
+        let unkeyed = conn.wait_until(RESTORE_UNKEY_WAIT, |s| !s.keyed || s.phase == Phase::Closed);
+        let snap = conn.snapshot();
+        match owed(&snap) {
+            Restore::Nothing => self.memory.keep(&self.memory_key, None),
+            Restore::Write(dax) if unkeyed && snap.phase == Phase::Ready => {
+                if conn.route(TxAudio::DaxSource { dax }).is_ok() {
+                    self.memory.keep(&self.memory_key, None);
+                    tempo_core::applog::info(
+                        "cat",
+                        &format!(
+                            "Flex client ({}): put the operator's transmit audio source back ({})",
+                            self.radio,
+                            if dax { "DAX" } else { "the radio's mic" }
+                        ),
+                    );
+                }
+            }
+            // Keyed, refused, unknown or beside another program's DAX: the next connect does it.
+            Restore::Write(_) | Restore::Later => {}
+        }
     }
 
     /// Every slice the radio reports, ours and other clients', in the radio's order, in the
@@ -375,7 +690,11 @@ impl Drop for FlexDaemon {
         // one more `xmit 0` if anything of ours may still be keyed.
         if let Some(conn) = &self.conn {
             let _ = conn.stop(TxStop::Unkey);
+            self.restore_routing(conn);
             remove_ours(conn);
+        }
+        if let Some(mut audio) = self.audio.take() {
+            audio.stop();
         }
         self.stop.store(true, Ordering::Relaxed);
         for thread in [self.tcp_thread.take(), self.watch_thread.take()]
@@ -387,6 +706,16 @@ impl Drop for FlexDaemon {
         // The last strong reference: the session's teardown runs here, before drop returns.
         self.conn.take();
     }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Milliseconds on a monotonic clock shared by every daemon in the process.
+fn monotonic_ms() -> u64 {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    u64::try_from(EPOCH.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Make the first slice of ours when the radio has none: a panadapter, then a slice on it, the

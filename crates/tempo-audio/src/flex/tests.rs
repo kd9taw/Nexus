@@ -139,6 +139,19 @@ fn count(sim: &Simulator, text: &str) -> usize {
     wire(sim).iter().filter(|c| *c == text).count()
 }
 
+/// [`count`], once the radio has logged `text` at least `n` times. The shim answers a key or a
+/// stop once the command is written to the session's socket, which can be before the radio has
+/// read it: a count taken straight after the answer can miss it.
+fn wait_count(sim: &Simulator, text: &str, n: usize) -> usize {
+    sim.wait_for(WAIT, |log| {
+        log.iter()
+            .filter(|l| matches!(&l.event, SimEvent::Command { text: t, .. } if t == text))
+            .count()
+            >= n
+    });
+    count(sim, text)
+}
+
 /// Wait for `done` on the daemon's session.
 fn wait_session(d: &FlexDaemon, what: &str, done: impl Fn(&session::Snapshot) -> bool) {
     assert!(
@@ -288,7 +301,7 @@ fn t_keys_through_admission_and_the_readback_ends_it() {
     let mut c = Client::connect(&d);
     wait_session(&d, "the readback idle", |s| s.transmit_ready);
     assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
-    assert_eq!(count(&sim, "xmit 1"), 1);
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
     ask_until_answer(&mut c, "t", "1\n");
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
     wait_session(&d, "the unkey confirmed", |s| !s.keyed);
@@ -723,7 +736,7 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
     let unkeys = count(&sim, "xmit 0");
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
     assert_eq!(
-        count(&sim, "xmit 0"),
+        wait_count(&sim, "xmit 0", unkeys + 1),
         unkeys + 1,
         "the stop reached the lost session's transmitter"
     );
@@ -732,4 +745,692 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
         1,
         "one key in all: the first session's"
     );
+}
+
+// ── Audio: DAX on the one session ────────────────────────────────────────────────────────────
+
+use std::sync::Arc as AudioArc;
+
+use tempo_flexsim::{vita as sim_vita, Content, ForeignDax, Start, Stream};
+
+/// The bundled session's DAX receive and transmit stream ids.
+const DAX_RX: u32 = 0x0400_0001;
+const DAX_TX: u32 = 0x8400_0000;
+
+/// In production the daemon's UDP goes to the radio's own ports: DAX TX to its VITA-49 port 4991
+/// (not 4993, where the older native path sent it), the registration datagram to 4992.
+#[test]
+fn a_radios_dax_goes_to_its_vita_port() {
+    let radio: std::net::SocketAddr = "192.0.2.20:4992".parse().unwrap();
+    let o = Options::for_radio(radio);
+    assert_eq!(o.vita, "192.0.2.20:4991".parse().unwrap());
+    assert_eq!(o.registration, "192.0.2.20:4992".parse().unwrap());
+}
+
+/// A daemon whose UDP goes to the simulator, with a memory of its own.
+fn audio_daemon(sim: &Simulator, memory: AudioArc<routing::FileMemory>) -> FlexDaemon {
+    FlexDaemon::start_full(
+        sim.tcp_addr(),
+        0,
+        config(Vec::new()),
+        Options {
+            vita: sim.udp_addr(),
+            registration: sim.udp_addr(),
+            memory,
+        },
+    )
+    .expect("the daemon starts")
+}
+
+fn memory() -> AudioArc<routing::FileMemory> {
+    AudioArc::new(routing::FileMemory::new(None))
+}
+
+/// A simulator that streams a DAX receive tone once a `dax_rx` stream is created.
+fn with_rx_tone(session: SimSession, faults: Vec<Fault>) -> Simulator {
+    Simulator::start(
+        session,
+        SimConfig {
+            faults,
+            streams: vec![Stream {
+                stream_id: DAX_RX,
+                content: Content::DaxAudio {
+                    class: sim_vita::class::AUDIO_F32_STEREO,
+                    tone_hz: 1000.0,
+                    amplitude: 0.5,
+                },
+                period: Stream::dax_period(),
+                ticks: None,
+                start: Start::After("stream create type=dax_rx".into()),
+                until: Some("stream remove 0x04000001".into()),
+            }],
+            keepalive_timeout: Duration::from_secs(120),
+        },
+    )
+    .expect("the simulator starts")
+}
+
+/// Poll `f` until it answers, or fail.
+fn eventually<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Run the routing at a quiet point, as the radio loop does at the end of a quiet tick, until
+/// the wire shows `want`.
+fn route_until(d: &FlexDaemon, sim: &Simulator, browser_voice: bool, want: &str, times: usize) {
+    eventually(&format!("{want} x{times}"), || {
+        d.sync_tx_routing(browser_voice);
+        (count(sim, want) >= times).then_some(())
+    });
+}
+
+/// Run the routing at quiet points for `ms`, writing whatever it wants to.
+fn route_for(d: &FlexDaemon, browser_voice: bool, ms: u64) {
+    let end = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < end {
+        d.sync_tx_routing(browser_voice);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The DAX TX datagrams the daemon sent the radio (the registration byte left out), with when
+/// they arrived.
+fn dax_tx_packets(sim: &Simulator) -> Vec<(Duration, Vec<u8>)> {
+    sim.log()
+        .into_iter()
+        .filter_map(|l| match l.event {
+            SimEvent::UdpIn { bytes, .. } if bytes.len() > 1 => Some((l.at, bytes)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The left channel of each DAX TX packet, in order, after checking the packet whole.
+fn left_samples(packets: &[(Duration, Vec<u8>)]) -> Vec<f32> {
+    let mut out = Vec::new();
+    for (_, bytes) in packets {
+        let v = tempo_net::flexvita::parse_vita(bytes).expect("a VITA-49 packet");
+        let stereo = tempo_net::flex::streams::decode_dax_audio(v.packet_class.unwrap(), v.payload)
+            .expect("whole float32 stereo frames");
+        for lr in stereo.chunks_exact(2) {
+            assert_eq!(lr[0], lr[1], "the same audio on both sides");
+            out.push(lr[0]);
+        }
+    }
+    out
+}
+
+fn peak(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+}
+
+/// A tone at the modem rate.
+fn tone(seconds: f32, amplitude: f32) -> Vec<f32> {
+    (0..(seconds * 12_000.0) as usize)
+        .map(|i| amplitude * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 12_000.0).sin())
+        .collect()
+}
+
+/// Native audio on, the DAX source written for the slice's digital mode, and the transmit route
+/// up: what a station on DAX transmit looks like before its first over.
+fn dax_tx_ready(sim: &Simulator, d: &FlexDaemon) {
+    d.set_native_audio(true);
+    route_until(d, sim, false, "transmit set dax=1", 1);
+    eventually("the transmit route", || d.tx_route_ready().then_some(()));
+}
+
+/// ⭐ Native audio rides the client's ONE session: it registers a UDP port, sends the one-byte
+/// registration datagram, gives our slice a DAX channel, creates that channel's receive stream,
+/// and the served slice's audio arrives at 12 kHz. Turned off, the stream goes after the broker's
+/// grace window, not before.
+#[test]
+fn native_audio_streams_the_served_slice_on_the_one_session() {
+    let sim = with_rx_tone(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    let port = eventually("client udpport", || {
+        wire(&sim)
+            .iter()
+            .find_map(|c| c.strip_prefix("client udpport ").map(str::to_string))
+    });
+    assert!(port.parse::<u16>().is_ok_and(|p| p != 0));
+    assert!(
+        sim.log().iter().any(
+            |l| matches!(&l.event, SimEvent::UdpIn { bytes, from } if *bytes == [0u8] && from.port().to_string() == port)
+        ),
+        "the registration datagram, from the registered port"
+    );
+    d.set_native_audio(true);
+    let mut audio = Vec::new();
+    eventually("half a second of receive audio", || {
+        audio.extend(d.take_audio());
+        (audio.len() >= 6_000).then_some(())
+    });
+    let sent = wire(&sim);
+    let at = |text: &str| {
+        sent.iter()
+            .position(|c| c == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {sent:?}"))
+    };
+    assert!(at("slice set 0 dax=1") < at("stream create type=dax_rx dax_channel=1"));
+    assert_eq!(d.rx_streams(), [(DAX_RX, 1u8)].into_iter().collect());
+    // The tone, at its level: 0.5 peak (allow the resampler's settling at the start).
+    let steady = &audio[1_000..];
+    assert!((peak(steady) - 0.5).abs() < 0.05, "peak {}", peak(steady));
+    let connections = sim
+        .events()
+        .iter()
+        .filter(|e| matches!(e, SimEvent::Connected { .. }))
+        .count();
+    assert_eq!(connections, 1, "one session per radio");
+    // Off: the stream goes, after the grace window.
+    let off = Instant::now();
+    d.set_native_audio(false);
+    eventually("stream remove", || {
+        (count(&sim, "stream remove 0x04000001") == 1).then_some(())
+    });
+    assert!(
+        off.elapsed() >= Duration::from_millis(tempo_net::flex::streams::REMOVAL_GRACE_MS - 100),
+        "removed after {:?}, inside the grace window",
+        off.elapsed()
+    );
+}
+
+/// The control for the test above: with native audio off, nothing about DAX reaches the wire.
+#[test]
+fn without_native_audio_no_dax_command_is_sent() {
+    let sim = with_rx_tone(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    route_for(&d, false, 800);
+    assert!(d.take_audio().is_empty());
+    let sent = wire(&sim);
+    assert!(
+        !sent.iter().any(|c| c.starts_with("stream create")
+            || c.starts_with("transmit set dax")
+            || (c.starts_with("slice set") && c.contains(" dax="))),
+        "a DAX command with native audio off: {sent:?}"
+    );
+    assert!(!d.tx_route_ready());
+}
+
+/// No idle streams: each slice of OURS in use gets a channel no other slice uses, and a stream for
+/// that channel; another client's slice is never touched.
+#[test]
+fn each_slice_of_ours_in_use_gets_its_own_channel_and_no_other_does() {
+    let session = with(
+        three_slices(),
+        vec![
+            rule("slice set 1 dax=2", "0", &["S{h}|slice 1 dax=2"]),
+            (
+                Pattern::Exact("stream create type=dax_rx dax_channel=2".into()),
+                vec![Rule {
+                    code: "0".into(),
+                    message: "0x04000002".into(),
+                    items: vec![Item::Send(
+                        "S{h}|stream 0x04000002 type=dax_rx dax_channel=2 slice=1 \
+                         client_handle=0x{h} ip={peer}"
+                            .into(),
+                    )],
+                }],
+            ),
+        ],
+    );
+    let sim = simulator(session, vec![]);
+    let d = audio_daemon(&sim, memory());
+    d.set_native_audio(true);
+    eventually("two receive streams", || {
+        (d.rx_streams().len() == 2).then_some(())
+    });
+    assert_eq!(
+        d.rx_streams(),
+        [(0x0400_0001, 1u8), (0x0400_0002, 2u8)]
+            .into_iter()
+            .collect()
+    );
+    let sent = wire(&sim);
+    assert_eq!(count(&sim, "slice set 0 dax=1"), 1, "{sent:?}");
+    assert_eq!(count(&sim, "slice set 1 dax=2"), 1, "{sent:?}");
+    assert_eq!(
+        count(&sim, "slice set 1 dax=1"),
+        0,
+        "two slices offered one channel: {sent:?}"
+    );
+    assert!(
+        !sent.iter().any(|c| c.starts_with("slice set 2")),
+        "another client's slice was touched: {sent:?}"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|c| c.starts_with("stream create type=dax_rx dax_channel=")
+                && !c.ends_with('1')
+                && !c.ends_with('2')),
+        "a stream for a channel no slice uses: {sent:?}"
+    );
+}
+
+/// The broker's recreate: a receive stream the radio drops while our slice still holds its
+/// channel comes back, after the recreate delay and not before.
+#[test]
+fn a_receive_stream_the_radio_drops_comes_back() {
+    let sim = with_rx_tone(
+        SimSession::v4_gui_client(),
+        vec![Fault::DropDaxRx {
+            stream_id: DAX_RX,
+            after: Duration::from_millis(300),
+        }],
+    );
+    let d = audio_daemon(&sim, memory());
+    d.set_native_audio(true);
+    eventually("a second create", || {
+        (count(&sim, "stream create type=dax_rx dax_channel=1") == 2).then_some(())
+    });
+    let log = sim.log();
+    let removed = log
+        .iter()
+        .find(|l| matches!(&l.event, SimEvent::Sent { line, .. } if line == "S0|stream 0x04000001 removed"))
+        .expect("the radio's removal")
+        .at;
+    let again = log
+        .iter()
+        .filter(|l| matches!(&l.event, SimEvent::Command { text, .. } if text == "stream create type=dax_rx dax_channel=1"))
+        .nth(1)
+        .expect("the recreate")
+        .at;
+    assert!(
+        again >= removed + Duration::from_millis(tempo_net::flex::streams::RECREATE_DELAY_MS - 50),
+        "recreated {:?} after the removal",
+        again - removed
+    );
+    // And the audio comes back on it.
+    let _ = d.take_audio();
+    eventually("audio again", || (!d.take_audio().is_empty()).then_some(()));
+}
+
+/// ⭐ DAX TX in the TESTED format, to the configured VITA-49 destination (the radio's 4991 in
+/// production: `Options::for_radio`), at the operator's TX level, paced in real time, and only
+/// while our key is held.
+#[test]
+fn dax_tx_is_the_tested_format_at_the_operators_level_and_paced() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().expect("the route");
+    tee.set_level(0.25);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    tee.feed(&tone(0.5, 0.8));
+    let packets = eventually("half a second of DAX TX", || {
+        let p = dax_tx_packets(&sim);
+        (p.len() >= 90).then_some(p)
+    });
+    for (i, (_, bytes)) in packets.iter().enumerate() {
+        assert_eq!(bytes.len(), (7 + 256) * 4, "128 stereo float32 frames");
+        let w0 = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        assert_eq!(w0 >> 28, 1, "IF data with a stream id");
+        assert_eq!((w0 >> 22) & 3, 3, "TSI 3");
+        assert_eq!((w0 >> 20) & 3, 1, "TSF 1");
+        assert_eq!(
+            (w0 >> 16) & 0xF,
+            (i % 16) as u32,
+            "the 4-bit count, in order"
+        );
+        let v = tempo_net::flexvita::parse_vita(bytes).unwrap();
+        assert_eq!(v.stream_id, Some(DAX_TX), "our own transmit stream");
+        assert_eq!(
+            v.packet_class,
+            Some(0x03E3),
+            "float32 stereo, not int16 mono"
+        );
+    }
+    let left = left_samples(&packets);
+    let steady = &left[2_000..left.len() - 2_000];
+    assert!(
+        (peak(steady) - 0.8 * 0.25).abs() < 0.01,
+        "the TX level applied as the audio leaves: peak {}",
+        peak(steady)
+    );
+    // Paced: ninety packets are 0.48 s of audio, and they took about that long to arrive.
+    let spread = packets[89].0 - packets[0].0;
+    assert!(
+        spread >= Duration::from_millis(400),
+        "a burst, not a stream: {spread:?}"
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// The level is applied as each packet leaves, so the Pwr slider reaches audio already queued.
+#[test]
+fn the_tx_level_reaches_audio_already_queued() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().unwrap();
+    tee.set_level(1.0);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    tee.feed(&tone(1.5, 0.5));
+    eventually("the first packets", || {
+        (dax_tx_packets(&sim).len() >= 20).then_some(())
+    });
+    tee.set_level(0.5);
+    let start = dax_tx_packets(&sim).len() + 5;
+    let packets = eventually("the rest", || {
+        let p = dax_tx_packets(&sim);
+        (p.len() >= start + 60).then_some(p)
+    });
+    assert!((peak(&left_samples(&packets[2..15])) - 0.5).abs() < 0.02);
+    assert!((peak(&left_samples(&packets[start..start + 60])) - 0.25).abs() < 0.01);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// ⭐ No key, no packets: audio handed to the route while nothing of ours is keyed never leaves,
+/// and is dropped rather than kept for a later key.
+#[test]
+fn nothing_leaves_without_our_key() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().unwrap();
+    tee.feed(&tone(0.3, 0.5));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(dax_tx_packets(&sim).is_empty(), "DAX TX without a key");
+    let tx = d.audio.as_ref().unwrap().tx();
+    assert_eq!(audio::queued(&tx), 0, "dropped, not kept for the next key");
+    // Control: keyed, the same audio leaves.
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    tee.feed(&tone(0.3, 0.5));
+    eventually("packets once keyed", || {
+        (!dax_tx_packets(&sim).is_empty()).then_some(())
+    });
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// The bundled session, with the slice's mode reported back for the modes these tests set.
+fn with_mode_echo() -> SimSession {
+    with(
+        SimSession::v4_gui_client(),
+        ["USB", "DIGU", "CW"]
+            .iter()
+            .map(|m| {
+                let echo = format!("S{{h}}|slice 0 mode={m}");
+                rule(&format!("slice set 0 mode={m}"), "0", &[echo.as_str()])
+            })
+            .collect(),
+    )
+}
+
+/// ⭐ The operator's ruling of 2026-10-03, "follow the slice's mode": DAX for a digital TX slice (after Nexus's own transmit
+/// stream exists), the mic for Phone at the shack, DAX for the stream's browser voice, and CW
+/// left alone. Each write once per change.
+#[test]
+fn the_dax_source_follows_the_tx_slices_mode() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let mem = memory();
+    let d = audio_daemon(&sim, mem.clone());
+    d.set_native_audio(true);
+    route_until(&d, &sim, false, "transmit set dax=1", 1);
+    let sent = wire(&sim);
+    let at = |text: &str| sent.iter().position(|c| c == text).unwrap();
+    assert!(
+        at("stream create type=dax_tx") < at("transmit set dax=1"),
+        "{sent:?}"
+    );
+    assert_eq!(
+        mem.recall(&sim.tcp_addr().to_string()),
+        Some(false),
+        "the operator's own setting is kept while Nexus has it changed"
+    );
+    let mut c = Client::connect(&d);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    assert_eq!(
+        mem.recall(&sim.tcp_addr().to_string()),
+        None,
+        "back on the operator's"
+    );
+    // The stream's browser voice.
+    route_until(&d, &sim, true, "transmit set dax=1", 2);
+    route_until(&d, &sim, false, "transmit set dax=0", 2);
+    // Once per change: quiet points with nothing changed write nothing.
+    route_for(&d, false, 400);
+    assert_eq!(count(&sim, "transmit set dax=0"), 2);
+    assert_eq!(count(&sim, "transmit set dax=1"), 2);
+    // CW: left alone.
+    assert_eq!(c.ask("M CW 0", 1), "RPRT 0\n");
+    route_for(&d, true, 500);
+    assert_eq!(count(&sim, "transmit set dax=0"), 2);
+    assert_eq!(count(&sim, "transmit set dax=1"), 2);
+}
+
+/// ⭐ The same ruling, "when SmartSDR's DAX is also connected, never write the flag": beside another
+/// program's DAX transmit stream Nexus writes no DAX source, creates no transmit stream of its
+/// own and sends no DAX TX, and a key is not refused for the audio route (SmartSDR's DAX carries
+/// Nexus's audio from the sound card, as before).
+#[test]
+fn never_beside_smartsdrs_dax() {
+    let sim = simulator(
+        SimSession::v4_gui_client(),
+        vec![Fault::ForeignDaxTx(ForeignDax::default())],
+    );
+    let d = audio_daemon(&sim, memory());
+    d.set_native_audio(true);
+    eventually("the other program seen", || {
+        d.other_dax_feeder().then_some(())
+    });
+    route_for(&d, false, 600);
+    route_for(&d, true, 300);
+    let sent = wire(&sim);
+    assert!(
+        !sent
+            .iter()
+            .any(|c| c.starts_with("transmit set dax") || c == "stream create type=dax_tx"),
+        "beside SmartSDR's DAX: {sent:?}"
+    );
+    assert!(!d.tx_route_ready());
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(
+        c.ask("T 1", 1),
+        "RPRT 0\n",
+        "the sound card route keys as before"
+    );
+    if let Some(tee) = d.tx_tee() {
+        tee.feed(&tone(0.2, 0.5));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        dax_tx_packets(&sim).is_empty(),
+        "DAX TX beside another program's"
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// ⭐ Never while keyed: a mode change while our transmitter is keyed is written only after the
+/// radio has proved the unkey (its READY naming no transmitter).
+#[test]
+fn the_dax_source_is_never_written_while_keyed() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "t", "1\n");
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_for(&d, false, 400);
+    assert_eq!(count(&sim, "transmit set dax=0"), 0, "written while keyed");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    let log = sim.events();
+    let unkey = log
+        .iter()
+        .position(|e| matches!(e, SimEvent::Command { text, .. } if text == "xmit 0"))
+        .unwrap();
+    let released = unkey
+        + log[unkey..]
+            .iter()
+            .position(|e| matches!(e, SimEvent::Sent { line, .. } if line.contains("tx_client_handle=0x00000000 state=READY")))
+            .unwrap();
+    let written = log
+        .iter()
+        .position(|e| matches!(e, SimEvent::Command { text, .. } if text == "transmit set dax=0"))
+        .unwrap();
+    assert!(
+        written > released,
+        "the flag went before the unkey was proven"
+    );
+}
+
+/// ⭐ Restore on disconnect: the operator's own setting goes back as the client ends, after the
+/// unkey and before Nexus's slices go, and the memory is cleared.
+#[test]
+fn the_operators_setting_goes_back_at_disconnect() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let mem = memory();
+    let d = audio_daemon(&sim, mem.clone());
+    dax_tx_ready(&sim, &d);
+    drop(d);
+    let sent = wire(&sim);
+    let at = |text: &str| sent.iter().rposition(|c| c == text);
+    let restored = at("transmit set dax=0").expect("the operator's mic back");
+    assert!(restored > at("transmit set dax=1").unwrap());
+    assert!(restored < at("slice remove 0").expect("our slice removed"));
+    assert_eq!(mem.recall(&sim.tcp_addr().to_string()), None);
+}
+
+/// ⭐ Restore at the next connect: a session lost mid-over cannot put the setting back, so the
+/// next connect to the same radio does, first.
+#[test]
+fn a_session_lost_mid_over_is_put_back_at_the_next_connect() {
+    let sim = simulator(
+        SimSession::v4_gui_client(),
+        vec![Fault::DisconnectMidOver {
+            after: Duration::from_millis(200),
+            radio_stays_keyed: false,
+        }],
+    );
+    let mem = memory();
+    let a = audio_daemon(&sim, mem.clone());
+    dax_tx_ready(&sim, &a);
+    let mut c = Client::connect(&a);
+    wait_session(&a, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    eventually("the lost session", || (!a.is_alive()).then_some(()));
+    drop(c);
+    drop(a);
+    assert_eq!(
+        count(&sim, "transmit set dax=0"),
+        0,
+        "nothing could be put back"
+    );
+    let key = sim.tcp_addr().to_string();
+    assert_eq!(mem.recall(&key), Some(false), "kept for the next connect");
+    // The next connect: the radio still takes DAX, and the operator's mic comes back first.
+    let b = audio_daemon(&sim, mem.clone());
+    route_until(&b, &sim, false, "transmit set dax=0", 1);
+    assert_eq!(mem.recall(&key), None);
+    let log = sim.events();
+    assert!(log.iter().any(
+        |e| matches!(e, SimEvent::Command { conn: 1, text, .. } if text == "transmit set dax=0")
+    ));
+}
+
+/// ⭐ A digital over never goes out on the radio's mic: with native audio on, `T 1` is refused
+/// until the radio takes its audio from Nexus's DAX. The controls: once it does, the same verb
+/// keys; with native audio off, it keys as before.
+#[test]
+fn a_digital_over_is_refused_on_the_mic() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    d.set_native_audio(true);
+    assert_ne!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(count(&sim, "xmit 1"), 0, "keyed on the mic");
+    route_until(&d, &sim, false, "transmit set dax=1", 1);
+    eventually("the echo", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    // Native audio off: the radio's routing is the operator's business, as before.
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
+/// with the radio still reporting USB and the mic as the source, `T 1` is refused.
+#[test]
+fn a_mode_just_commanded_counts_before_the_radio_reports_it() {
+    // USB and its mic are reported back; the switch back to DIGU is not.
+    let session = with(
+        SimSession::v4_gui_client(),
+        vec![rule(
+            "slice set 0 mode=USB",
+            "0",
+            &["S{h}|slice 0 mode=USB"],
+        )],
+    );
+    let sim = simulator(session, vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    eventually("the mic", || {
+        (d.session().snapshot().model.transmit.dax == Some(false)).then_some(())
+    });
+    // Control: Phone on the mic keys.
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    let keys = count(&sim, "xmit 1");
+    assert_eq!(c.ask("M PKTUSB 0", 1), "RPRT 0\n");
+    assert_eq!(
+        d.session().snapshot().model.slices[&0].mode.as_deref(),
+        Some("USB"),
+        "premise: the radio has not reported the digital mode"
+    );
+    assert_ne!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(
+        count(&sim, "xmit 1"),
+        keys,
+        "keyed a digital over on the mic"
+    );
+}
+
+/// A refused DAX transmit stream routes nothing: no `transmit set dax=1`, no route, and a digital
+/// key refused rather than sent on the mic. The create is asked again, not in a storm.
+#[test]
+fn a_refused_dax_transmit_stream_routes_nothing() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![Fault::DaxTxRefused]);
+    let d = audio_daemon(&sim, memory());
+    d.set_native_audio(true);
+    route_for(&d, false, 2_600);
+    let creates = count(&sim, "stream create type=dax_tx");
+    assert!((1..=2).contains(&creates), "{creates} creates in 2.6 s");
+    assert_eq!(count(&sim, "transmit set dax=1"), 0);
+    assert!(!d.tx_route_ready());
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_ne!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(count(&sim, "xmit 1"), 0);
 }

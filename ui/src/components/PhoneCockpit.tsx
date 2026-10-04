@@ -1735,6 +1735,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         keyed={keyed}
         transmitting={snap.radio.transmitting}
         fdExchange={fdExchange}
+        radioHasMic={snap.radio.flexRadioHasMic === true}
       /> : <p className="dim" role="status">{t('remote.voiceKeyerUnavailable')}</p>}
     </CockpitPaneFrame>
   ) : null

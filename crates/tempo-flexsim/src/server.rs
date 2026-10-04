@@ -14,9 +14,11 @@
 //! `client udpport <port>`, whichever is latest. Synthetic [`Stream`]s and a session's `vita`
 //! items are sent there; every datagram a client sends (DAX TX audio included) is logged.
 //!
-//! **What the radio remembers.** Only who holds the transmitter: a successful `xmit 1` keys it
-//! under the connection's handle and a successful `xmit 0` releases it, unless a fault says
-//! otherwise. That is what lets a reconnect see a transmitter still keyed by a dropped handle.
+//! **What the radio remembers.** Who holds the transmitter: a successful `xmit 1` keys it under
+//! the connection's handle and a successful `xmit 0` releases it, unless a fault says otherwise.
+//! That is what lets a reconnect see a transmitter still keyed by a dropped handle. And the
+//! transmitter's DAX source, which is radio-wide: after a successful `transmit set dax=<0|1>`,
+//! every later `sub tx all` reports it, so a reconnect sees what an earlier session left.
 //! Everything else a client hears comes from the session's rules: the simulator models no slices
 //! or pans of its own.
 //!
@@ -34,7 +36,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::fault::{interlock_line, Fault};
+use crate::fault::{interlock_line, Fault, REFUSED};
 use crate::line::{self, LineBuf};
 use crate::session::{Item, Session};
 use crate::vita::{self, Start, Stream};
@@ -184,6 +186,8 @@ struct Radio {
     keyed_by: Option<u32>,
     /// [`Fault::DisconnectMidOver`] fires once per simulator.
     disconnect_fired: bool,
+    /// The transmitter's DAX source, once a client has set it.
+    dax: Option<bool>,
     live: Vec<Arc<Conn>>,
 }
 
@@ -281,6 +285,12 @@ impl Simulator {
     /// Where clients send UDP: the registration datagram and DAX TX (the radio's 4992 and 4991).
     pub fn udp_addr(&self) -> SocketAddr {
         self.udp_addr
+    }
+
+    /// When the simulator started: the zero of every [`Logged::at`], so a test can place the log
+    /// on its own clock.
+    pub fn started(&self) -> Instant {
+        self.shared.started
     }
 
     /// The log so far, with times.
@@ -550,6 +560,7 @@ fn serve(shared: &Arc<Shared>, tcp: TcpStream, peer: SocketAddr) {
         keepalive: false,
         last_ping: Instant::now(),
         held_reply: None,
+        dax_rx_creates: 0,
     };
     let mut tcp = tcp;
     let mut lines = LineBuf::default();
@@ -594,6 +605,8 @@ struct Reader<'a> {
     keepalive: bool,
     last_ping: Instant,
     held_reply: Option<String>,
+    /// `stream create type=dax_rx` commands so far on this connection.
+    dax_rx_creates: usize,
 }
 
 impl Reader<'_> {
@@ -656,6 +669,18 @@ impl Reader<'_> {
             }
             None => (session.default_code.clone(), String::new(), Vec::new()),
         };
+        let refused = text == "stream create type=dax_tx"
+            && shared
+                .config
+                .faults
+                .iter()
+                .any(|f| matches!(f, Fault::DaxTxRefused));
+        let (code, message) = if refused {
+            items.clear();
+            (REFUSED.to_string(), String::new())
+        } else {
+            (code, message)
+        };
         let ok = line::is_success(&code);
         let reply = format!("R{}|{}|{}", cmd.seq, code, conn.expand(&message));
         self.reply(text, cmd.seq, reply, now);
@@ -693,6 +718,13 @@ impl Reader<'_> {
             };
             if let Some(after) = after {
                 conn.push(end + after, What::Disconnect);
+            }
+        }
+        if ok {
+            match text {
+                "transmit set dax=1" => lock(&shared.radio).dax = Some(true),
+                "transmit set dax=0" => lock(&shared.radio).dax = Some(false),
+                _ => {}
             }
         }
         if ok && text == "xmit 0" && !stuck {
@@ -735,8 +767,26 @@ impl Reader<'_> {
     }
 
     /// What the faults and the radio's memory add to a rule's items.
-    fn augment(&self, text: &str, items: &mut Vec<Item>) {
+    fn augment(&mut self, text: &str, items: &mut Vec<Item>) {
+        if text.starts_with("stream create type=dax_rx") {
+            self.dax_rx_creates += 1;
+        }
         for fault in &self.shared.config.faults {
+            match fault {
+                Fault::ForeignDaxTx(dax) if text == "sub client all" => {
+                    items.extend(dax.lines().into_iter().map(Item::Send));
+                }
+                Fault::DropDaxRx { stream_id, after }
+                    if self.dax_rx_creates == 1
+                        && text.starts_with("stream create type=dax_rx") =>
+                {
+                    items.push(Item::Wait(
+                        u64::try_from(after.as_millis()).unwrap_or(u64::MAX),
+                    ));
+                    items.push(Item::Send(format!("S0|stream 0x{stream_id:08X} removed")));
+                }
+                _ => {}
+            }
             let Fault::ForeignClient(foreign) = fault else {
                 continue;
             };
@@ -758,11 +808,15 @@ impl Reader<'_> {
             }
         }
         if text == "sub tx all" {
-            let other = lock(&self.shared.radio)
-                .keyed_by
-                .filter(|h| *h != self.conn.handle);
+            let (other, dax) = {
+                let radio = lock(&self.shared.radio);
+                (radio.keyed_by.filter(|h| *h != self.conn.handle), radio.dax)
+            };
             if let Some(owner) = other {
                 items.push(Item::Send(interlock_line(owner, "TRANSMITTING", "SW")));
+            }
+            if let Some(dax) = dax {
+                items.push(Item::Send(format!("S0|transmit dax={}", u8::from(dax))));
             }
         }
     }

@@ -5683,7 +5683,7 @@ export const EN = {
     "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
   'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
   'settings.rigControl.flexAudio.hint':
-    'Carry this FlexRadio\'s audio straight over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices — which are <b>invisible under Remote Desktop</b>. <b>Both directions:</b> the decoders read the rig\'s receive audio directly, and transmit audio goes out over DAX too, which disconnects the rig\'s microphone while this is on. Turning it off, switching radio or quitting Nexus puts the mic back. <b>Unverified on hardware</b>, opt-in: needs the Flex IP set and SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to apply.',
+    'Carry this FlexRadio\'s audio over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices, which are <b>invisible under Remote Desktop</b>. <b>Needs Flex native client (Beta) on.</b> With SmartSDR CAT this does nothing: audio stays on the sound devices, and the setting is kept for the client. On the client, the decoders read receive audio straight from the radio, and <b>digital modes</b> and the Remote stream\'s voice transmit over DAX. Phone at the shack keeps the radio\'s own mic, so the voice keyer can\'t play there. Turning this off or disconnecting puts your own DAX setting back, and Nexus never changes it while SmartSDR\'s DAX is connected. <b>Beta, unverified on hardware:</b> if decodes or transmit stop, turn it back off. Save to apply.',
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
   'settings.rigControl.flexClient.hint':
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
@@ -8044,6 +8044,8 @@ export const EN = {
   'aprs.status.msg.missing': 'Enter a callsign and a message first.',
   'aprs.status.msg.sending': 'Sending message…',
   'aprs.status.msg.queued': 'Message to {{call}} queued — keying now.',
+  'aprs.status.radioHasMic':
+    'APRS can\'t send while the radio has the mic: with Flex native DAX audio on, a voice mode such as FM uses the radio\'s own mic, so the packet would not go out. Nothing was keyed.',
   'aprs.status.tune.deferred':
     'Transmitting right now — the radio will move to {{freq}} when this over ends.',
   'aprs.status.tune.now': 'Tuning to {{freq}} FM…',
@@ -9091,6 +9093,8 @@ export const EN = {
     'Transmit this image with {{call}} burned in — switches to Phone (USB/LSB) and keys the rig',
   'sstv.tx.send.noCallsign': 'Set your callsign — SSTV identifies by burning it into the picture',
   'sstv.tx.send.noCallsign.action': 'Set callsign',
+  'sstv.tx.send.radioHasMic':
+    'SSTV can\'t send while the radio has the mic: with Flex native DAX audio on, Phone at the shack uses the radio\'s own mic, so the picture would not go out. Nothing was keyed.',
   'sstv.tx.iss.confirm':
     '{{freq}} MHz is the ISS SSTV downlink. Transmit only during a sanctioned ARISS uplink event. Send anyway?',
   'sstv.tx.send.failed': 'SSTV send refused',
@@ -9712,6 +9716,8 @@ export const EN = {
   // NAME THE CONTROL THAT IS ON THIS SCREEN: Phone shows no Enable-Tx button, so PTT is the
   // switch when TX is off.
   'phone.keyer.txOff': 'TX is off — click PTT once to turn it back on, then play the message',
+  'phone.keyer.radioHasMic':
+    'The voice keyer can\'t play while the radio has the mic: with Flex native DAX audio on, Phone at the shack uses the radio\'s own mic, so a recorded message would not go out. Nothing was keyed.',
   'phone.keyer.playFailed': 'Could not play F{{slot}}',
   'phone.keyer.recordFailed': 'Could not start recording',
   'phone.keyer.saveFailed': 'Could not save recording',

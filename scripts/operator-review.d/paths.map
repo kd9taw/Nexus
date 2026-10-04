@@ -99,7 +99,7 @@ cat-rig | crates/tempo-audio/src/amppoll.rs | amplifier polling — re-read the 
 cat-rig | crates/tempo-audio/src/amppoll/** | as above
 cat-rig | crates/tempo-audio/src/rotator.rs | rotator control: per-model baud, flip and park geometry
 cat-rig | crates/tempo-core/src/rotator.rs | rotator geometry and headings
-cat-rig | crates/tempo-audio/src/flexdax.rs | FlexRadio's native path — the danger zone of the 2026-08 Flex audit
+cat-rig | crates/tempo-audio/src/flex/** | Nexus's own FlexRadio client: CAT, PTT and native DAX audio both ways on one session — the native path the 2026-08 Flex audit called the danger zone
 cat-rig | crates/tempo-audio/src/usbtopo.rs | USB topology: which sound card belongs to which radio
 cat-rig | crates/tempo-app/src/engine/radio_selection.rs | which radio is the operating radio — a handoff mid-over is a teardown in disguise
 cat-rig | crates/tempo-app/src/engine/mode_entry.rs | what mode is commanded and believed. CW vs CW-R was collapsed here and hid an inverted sideband

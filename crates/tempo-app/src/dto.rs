@@ -1527,6 +1527,15 @@ pub struct RadioStatus {
     /// slice, every client. The Phone cockpit says so; see `Engine::observe_flex_dax_tx`.
     #[serde(default)]
     pub flex_dax_tx: bool,
+    /// The radio has the mic while Nexus's native Flex audio is on (Phone at the shack, or APRS
+    /// in FM): a recorded message, a packet or a picture sent over DAX would not reach the air,
+    /// so the voice keyer, APRS and SSTV refuse with a message and key nothing. See
+    /// `Engine::observe_flex_radio_has_mic`.
+    ///
+    /// Skipped when false, which is every station without Nexus's own Flex client, so the
+    /// snapshot every other radio sends is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flex_radio_has_mic: bool,
     /// The Flex VITA **meter** worker is running, which on a Flex is the only producer of a
     /// FlexLib-scaled SWR. OBSERVED from the worker, never read from `flex_native_pan` — see
     /// `Engine::observe_flex_meter_stream`. Read it with [`Self::swr_scale_verified`]: that

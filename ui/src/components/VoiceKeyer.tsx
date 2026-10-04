@@ -41,6 +41,9 @@ interface Props {
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
   fdExchange?: string | null
+  /** The radio has the mic while Nexus's native Flex audio is on (Phone at the shack), so a
+   * recorded message would not go out: playback is refused and says why. */
+  radioHasMic?: boolean
 }
 
 // THE INPUT-DEVICE WARNING, and it is not chrome. It had a `.vk-note` paragraph of its own —
@@ -73,7 +76,7 @@ interface Props {
  * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
  * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
-export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHasMic }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
   const [recording, setRecording] = useState<number | null>(null)
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({})
@@ -165,6 +168,14 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       pushToast(t('phone.keyer.releasePtt'), 'info', 3000)
       return
     }
+    // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse with a message"). With Nexus's
+    // own Flex client and native audio on, Phone at the shack takes the radio's own mic while a
+    // recorded message goes out over DAX, so the radio would ignore the message and the mic
+    // would carry the over. Nothing is sent, so nothing keys; the engine refuses the same send.
+    if (radioHasMic) {
+      pushToast(t('phone.keyer.radioHasMic'), 'info', 6000)
+      return
+    }
     if (!txEnabled) {
       // NAME THE CONTROL THAT IS ON THIS SCREEN (#81). "enable transmit" was honest and
       // useless: the Phone cockpit shows no Enable-Tx button — App hides the TopBar's TX
@@ -251,7 +262,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, txEnabled, keyed, recording])
+  }, [msgs, txEnabled, keyed, recording, radioHasMic])
 
   return (
     <div className="vk">

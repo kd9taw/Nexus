@@ -65,9 +65,6 @@ pub use tempo_app::dualrx;
 /// so it rides the `device` feature like the other Flex code.
 #[cfg(feature = "device")]
 pub mod flex;
-/// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
-#[cfg(feature = "device")]
-pub mod flexdax;
 /// FlexRadio native panadapter orchestrator — needs tempo-net (SmartSDR/VITA parsers), so it
 /// rides the `device` feature like the rest of the station-side transport code.
 #[cfg(feature = "device")]

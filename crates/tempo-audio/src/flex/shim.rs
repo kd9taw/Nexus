@@ -12,7 +12,7 @@
 //!
 //! | rigctld | Typed command or intent | Gate |
 //! |---|---|---|
-//! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran |
+//! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX |
 //! | `T 0` | `TxStop::Unkey` → `xmit 0` | never gated; sent only while something of ours may be keyed |
 //! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback) |
 //! | `b <text>` | `TxStart::CwxSend` → `cwx send` | admission (refuses today: no readback) |
@@ -29,12 +29,23 @@
 //! byte for byte. `T 1` is a key whatever its number (rigctld's `T 3` is a data-port key), as in
 //! every other backend.
 //!
+//! ## A digital over never goes out on the radio's mic
+//! While the operator's native audio is on and no other program feeds DAX, Nexus's over reaches
+//! the radio only as DAX. The DAX source flag follows the TX slice's mode at quiet moments
+//! (`super::routing`), so right after a mode change, or after the operator flips the flag by
+//! hand, the radio can still be taking its audio from its mic input. Keying then would put
+//! whatever that input hears on a digital frequency. So `T 1` is refused while the transmit
+//! slice's mode is digital (the mode this shim just commanded counts, before the radio reports
+//! it) and the radio does not report `transmit dax=1` on Nexus's own transmit stream. It only
+//! refuses, sends nothing, and the loop reports a refused PTT.
+//!
 //! Nexus's own design, not a port.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::sync::{Arc, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
+use tempo_net::flex::admission::another_dax_feeder;
 use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, TxStart, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
 use tempo_net::flex::session::{Connection, Snapshot, StopOutcome};
@@ -42,6 +53,9 @@ use tempo_net::flex::status::SliceDelta;
 
 use crate::baud_ladder::{RigCaps, SplitDetect};
 use crate::rigctld_server::RigBackend;
+
+use super::routing::{mode_class, ModeClass};
+use super::{effective_mode, ClientState};
 
 /// How long a write waits for the radio's reply: well inside the radio loop's own CAT deadline,
 /// so a radio that does not answer is a refused write, not a dropped CAT connection.
@@ -174,11 +188,55 @@ pub struct FlexShim {
     /// True while Nexus itself intends to transmit: the broker's disconnect fail-safe stands
     /// down then. The same contract as the CI-V and OmniRig daemons'.
     tx_intent: Arc<AtomicBool>,
+    state: Arc<ClientState>,
 }
 
 impl FlexShim {
-    pub fn new(conn: Weak<Connection>, tx_intent: Arc<AtomicBool>) -> FlexShim {
-        FlexShim { conn, tx_intent }
+    pub(crate) fn new(
+        conn: Weak<Connection>,
+        tx_intent: Arc<AtomicBool>,
+        state: Arc<ClientState>,
+    ) -> FlexShim {
+        FlexShim {
+            conn,
+            tx_intent,
+            state,
+        }
+    }
+
+    /// Why a key must not go out on the audio route as it stands, if it must not: a digital
+    /// over while the radio would take its audio from its mic input (see the module header).
+    pub(crate) fn audio_refuses_key(&self) -> Option<String> {
+        if !self.state.native_audio.load(Ordering::Relaxed) {
+            return None;
+        }
+        let conn = self.conn.upgrade()?;
+        let snap = conn.snapshot();
+        if another_dax_feeder(&snap.model, snap.handle, snap.dax_tx_stream).is_some() {
+            // Another program's DAX carries Nexus's audio from the sound card: not ours to judge.
+            return None;
+        }
+        // No single transmit slice: admission refuses the key itself.
+        let [slice] = snap.model.tx_slices()[..] else {
+            return None;
+        };
+        let mode = effective_mode(&snap.model, slice, &self.state)?;
+        if mode_class(&mode) != ModeClass::Digital {
+            return None;
+        }
+        let from_dax = snap.model.transmit.dax == Some(true);
+        if from_dax && snap.dax_tx_stream.is_some() {
+            return None;
+        }
+        Some(format!(
+            "not keying a {mode} over: the radio takes its transmit audio from {}{}",
+            if from_dax { "DAX" } else { "its mic input" },
+            if snap.dax_tx_stream.is_some() {
+                ""
+            } else {
+                " and Nexus's DAX transmit stream does not exist yet"
+            }
+        ))
     }
 
     /// The session, its state, and the slice served now.
@@ -332,7 +390,16 @@ impl RigBackend for FlexShim {
             return false;
         };
         let took = |command| matches!(conn.request(command, REQUEST_TIMEOUT), Ok(r) if r.code == 0);
-        took(Command::SliceMode { slice, mode })
+        let moved = took(Command::SliceMode { slice, mode });
+        if moved {
+            // The over goes out in this mode from now, whether or not the radio has said so yet.
+            *self
+                .state
+                .commanded
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some((slice, word, Instant::now()));
+        }
+        moved
             && filter.is_none_or(|(low_hz, high_hz)| {
                 took(Command::SliceFilter {
                     slice,
@@ -344,6 +411,10 @@ impl RigBackend for FlexShim {
 
     fn set_ptt(&self, on: bool) -> bool {
         if on {
+            if let Some(why) = self.audio_refuses_key() {
+                tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
+                return false;
+            }
             self.start(TxStart::Key)
         } else {
             self.stop(TxStop::Unkey)

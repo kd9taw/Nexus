@@ -1960,16 +1960,17 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             if let Some((_, _, k)) = state.rtty_keyer.as_ref() {
                 k.clear();
             }
-            // Give the RADIO its own audio routing back before we tell the app it may die.
-            // `FlexDax`'s teardown is what sends `transmit set dax=0` — the operator's MICROPHONE —
-            // and puts the slice's DAX channel back, and it runs from that value's Drop. Dropping
-            // `state` happens after this function returns, i.e. after `quit_cleanup` has already
-            // been released to exit the process, so the restore was racing process death: exactly
-            // the "mic still dead after Nexus exits" harm the unconditional restore exists to
-            // prevent. Doing it HERE makes it part of the shutdown the exit path waits for, and it
-            // is bounded (`flexspectrum::reap_workers`, ~600 ms worst case) well inside that 3 s
-            // budget. No-op when native Flex audio was never on.
-            state.dax_src = None;
+            // Give the RADIO its own audio routing back before we tell the app it may die. Nexus's
+            // own Flex client puts the operator's DAX source back in its teardown (after the unkey
+            // is proven), and it runs from the daemon's Drop. Dropping `state` happens after this
+            // function returns, i.e. after `quit_cleanup` has already been released to exit the
+            // process, so the restore would race process death: the "mic still dead after Nexus
+            // exits" harm the restore exists to prevent. Doing it HERE makes it part of the
+            // shutdown the exit path waits for. Only the client: every other CAT daemon ends as it
+            // always has.
+            if matches!(state.rigctld_proc, Some(CatDaemon::Flex(_))) {
+                state.rigctld_proc = None;
+            }
             cfg.rx_tap.retire_receive_audio();
             // The contacts WSJT-X logged a moment ago, imported before the app is told it may
             // exit, so they are in the log the quit flushes: dropping the worker waits for every
@@ -2905,7 +2906,7 @@ enum ErrOwner {
 /// How long native DAX RX may deliver NOTHING before we call it broken, fall back to the
 /// sound card and say so.
 ///
-/// Why a fallback and not just an error: when `dax_src` is `Some`, the loop takes DAX audio
+/// Why a fallback and not just an error: while native audio is on, the loop takes DAX audio
 /// INSTEAD of the sound card. If the Flex never streams — wrong IP, firewall, the slice never
 /// bound, DAX disabled on the radio — `take_audio()` returns empty forever and the operator
 /// hears NOTHING, with no error anywhere. Deafness is a worse failure than losing the native
@@ -2916,6 +2917,10 @@ enum ErrOwner {
 /// thread does in well under a second) but short enough that the operator is not left guessing
 /// through a whole QSO.
 const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
+
+/// How far from a slot boundary the Flex client's transmit audio source may be written, on
+/// either side (see `RadioLoop::tx_routing_quiet`): longer than any tick plus the write.
+const ROUTING_GUARD_MS: f64 = 1_000.0;
 
 /// What a decode worker runs: the ordinary per-slot job, or one JS8 multi-speed job.
 enum WorkerJob {
@@ -3408,27 +3413,39 @@ struct RadioLoop {
     yaesu_wf_mode_seen: Option<(u8, u8, i64)>,
     /// The span code last REQUESTED in FIX, and when — see `YAESU_WF_SPAN_ASK_MS`.
     yaesu_wf_span_asked: Option<(u8, f64)>,
-    /// Native FlexRadio DAX audio worker (Phase 2). `Some` only while `flex_native_audio` is on
-    /// and a network Flex is active; its 12 kHz audio then replaces the soundcard as the RX source,
-    /// and its `tx_tee` replaces the soundcard as the TX route (BOTH directions — see the
-    /// `flexdax` module header). Opt-in + unverified-on-hardware, exactly like `spectrum_src`.
-    dax_src: Option<crate::flexdax::FlexDax>,
-    /// The key the current `dax_src` was started for (same tear-down/no-op discipline as spectrum,
-    /// address included).
-    dax_src_key: Option<(u32, bool, String)>,
-    /// Whether the DAX TX-audio tee is currently installed in the backend — installed when `dax_src`
-    /// starts, cleared when it stops, so TX audio routes over DAX exactly while native audio is on.
+    /// Whether the DAX TX-audio tee is currently installed in the backend — installed when the Flex
+    /// client's transmit route comes up, cleared when it goes, so TX audio routes over DAX exactly
+    /// while that route is up.
     dax_tee_set: bool,
-    /// When the current `dax_src` started, for the starvation check. `None` once starvation has
-    /// been reported (the check is one-shot per source — it must not re-fire every tick).
+    /// Which tee is installed (its address): a replaced Flex client's tee is a different one, and
+    /// a dead client's must not stay the route.
+    dax_tee_id: Option<usize>,
+    /// Native audio through Nexus's own Flex client (Beta): on while the operator's
+    /// `flex_native_audio` is on for a radio the client serves. Its DAX audio, from the client's
+    /// one session, replaces the sound card's as the receive source. The only native audio path:
+    /// on SmartSDR CAT the setting is kept and does nothing (the older worker was retired,
+    /// operator ruling 2026-10-04, "Retire it").
+    flex_client_audio: bool,
+    /// The client's native audio starved (the receive floor fired): off until the toggle is
+    /// turned off or the client goes.
+    flex_client_audio_failed: bool,
+    /// The radio's DAX source as last pushed to the engine (the Phone cockpit's "mic
+    /// disconnected").
+    flex_mic_off_pushed: Option<bool>,
+    /// Whether the radio has the mic while native audio is on, as last pushed to the engine (the
+    /// voice keyer's refusal).
+    flex_radio_has_mic_pushed: Option<bool>,
+    /// When the current native audio source started, for the starvation check. `None` once
+    /// starvation has been reported (the check is one-shot per source — it must not re-fire every
+    /// tick).
     dax_started: Option<Instant>,
-    /// When the current `dax_src` last delivered a sample — the RX floor's rolling clock.
+    /// When the current native audio source last delivered a sample — the RX floor's rolling clock.
     ///
     /// ⚠️ THIS WAS A ONE-WAY LATCH (`dax_saw_audio: bool`) AND THAT LEFT A MID-SESSION DEATH
     /// UNCOVERED (Flex audit 2026-08-17, #1001/#1043). `dax_starved`'s first arm was
     /// `Some(_) if saw_audio => false`, so the first delivered sample disarmed the floor for the
     /// rest of the session: a stream that worked and then STOPPED — a WAN drop, a radio reboot,
-    /// SmartSDR restarted, the DAX client evicted — left `dax_src` selected over the sound card
+    /// SmartSDR restarted, the DAX client evicted — left native audio selected over the sound card
     /// forever, with the operator deaf, no banner, and silence indistinguishable from a dead band.
     /// A live DAX stream delivers packets continuously whatever the band is doing, so a rolling
     /// check is safe where a "quiet band" objection would apply to real capture.
@@ -3909,11 +3926,14 @@ impl RadioLoop {
             audio_rebuild_floor: 0.0,
             spectrum_src: None,
             spectrum_src_key: None,
-            dax_src: None,
-            dax_src_key: None,
             dax_started: None,
             dax_last_audio: None,
             dax_tee_set: false,
+            dax_tee_id: None,
+            flex_client_audio: false,
+            flex_client_audio_failed: false,
+            flex_mic_off_pushed: None,
+            flex_radio_has_mic_pushed: None,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
             silent_capture_since: None,
@@ -4688,19 +4708,15 @@ impl RadioLoop {
         // short-circuits before any lock). Folding it into the key makes toggling take effect
         // on the next tick (key flips Some↔None → the worker starts/stops).
         let is_flex = matches!(kind, Some(SpectrumKind::FlexVita));
-        // Read the Flex API IP with the toggles, in ONE lock, because it is part of the key now —
+        // Read the Flex API IP with the toggle, in ONE lock, because it is part of the key now —
         // see the key comment below. `is_flex` short-circuits first, so a non-Flex station still
         // takes no lock at all on the fast path.
-        let (flex_enabled, dax_enabled, ip) = if is_flex {
+        let (flex_enabled, ip) = if is_flex {
             let e = engine_lock(engine);
             let s = e.settings();
-            (
-                s.flex_native_pan,
-                s.flex_native_audio,
-                s.flex_radio_ip.trim().to_string(),
-            )
+            (s.flex_native_pan, s.flex_radio_ip.trim().to_string())
         } else {
-            (false, false, String::new())
+            (false, String::new())
         };
         // ⚠️ THE IP IS PART OF THE KEY (2026-08-17 Flex audit, wave-1 #53 / wave-2 #33). It was
         // not, and the consequence was worse than the comment that stood here admitted: with the
@@ -4716,15 +4732,12 @@ impl RadioLoop {
             Some(SpectrumKind::FlexVita) if !flex_enabled => None, // opt-in off → no worker
             Some(_) => Some((rig_model, is_network, ip.clone())),
         };
-        // Native DAX RX audio is its OWN opt-in (`flex_native_audio`), independent of the pan — a
-        // Flex user can want native audio without the native pan, or vice versa.
-        let dax_key = if dax_enabled {
-            Some((rig_model, is_network, ip.clone()))
-        } else {
-            None
-        };
-        if key == self.spectrum_src_key && dax_key == self.dax_src_key {
-            return; // both unchanged — no-op (the common case, every tick)
+        // Native audio (`flex_native_audio`) is not this worker's: it rides Nexus's own Flex
+        // client's one session (`reconcile_flex_client_audio`), and on SmartSDR CAT it does
+        // nothing (operator ruling, 2026-10-04, "Retire it": the older native audio worker that
+        // served it here sent DAX TX to a port the radio does not take it on).
+        if key == self.spectrum_src_key {
+            return; // unchanged — no-op (the common case, every tick)
         }
         let dial_hz = {
             let e = engine_lock(engine);
@@ -4735,6 +4748,11 @@ impl RadioLoop {
         if key != self.spectrum_src_key {
             self.spectrum_src = None;
             self.spectrum_src_key = key;
+            // …and a Dax-owned banner with it: a line nothing clears masks every later warning,
+            // since the other writers are gated on owning it. This transition resolves the
+            // no-address warning below (the operator switched the toggle, filled in the address
+            // or moved to another radio); still true, it is raised again on this same tick.
+            self.clear_audio_error_if_owned(engine, ErrOwner::Dax);
             if flex_enabled && !ip.is_empty() {
                 self.spectrum_src = crate::flexspectrum::FlexSpectrum::start(
                     engine.clone(),
@@ -4762,59 +4780,18 @@ impl RadioLoop {
             // untouched (it is already fail-safe on a missing reading).
             engine_lock(engine).observe_flex_meter_stream(self.spectrum_src.is_some());
         }
-        // DAX RX audio worker: same tear-down/restart (Drop removes the DAX stream).
-        if dax_key != self.dax_src_key {
-            self.dax_src = None;
-            self.dax_src_key = dax_key;
-            // Reset the starvation bookkeeping with the source it belongs to.
-            self.dax_started = None;
-            self.dax_last_audio = None;
-            // …and the BANNER with it. `ErrOwner::Dax` was the one owner with no clear arm (every
-            // sibling has one: Ptt, Device, SilentCapture, Monitor, VoiceMic), so a native-audio
-            // failure left "RADIO STOPPED" on screen for the rest of the session — over a working
-            // sound card, describing a fallback that had already happened — and, because the Ptt,
-            // SilentCapture, Monitor and VoiceMic writers are all gated on owning the line, it
-            // MASKED every later warning too (2026-08-17 Flex audit, wave-1 #49). This transition
-            // is the resolution: the operator turned the toggle off, fixed the address, or moved
-            // to another radio. A start that fails again re-raises it three lines below.
-            self.clear_audio_error_if_owned(engine, ErrOwner::Dax);
-            if dax_enabled && !ip.is_empty() {
-                match crate::flexdax::FlexDax::start(engine.clone(), ip.clone()) {
-                    Ok(d) => {
-                        self.dax_src = Some(d);
-                        self.dax_started = Some(Instant::now());
-                    }
-                    // Was `.ok()`, which threw the reason away: native audio silently did
-                    // nothing and the operator had a toggle that appeared to be on. The sound
-                    // card still works (dax_src stays None), so this is a warning, not a fault.
-                    Err(e) => {
-                        {
-                            let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!(
-                                "Native Flex audio couldn't start ({e}). Using the sound card \
-                                 instead — check the Flex API address in Settings."
-                            )));
-                        }
-                        self.err_owner = ErrOwner::Dax;
-                    }
-                }
-            }
-        }
-        // ⚠️ AND SAY SO WHEN THERE IS NO ADDRESS (Flex audit wave-1 #52 / wave-2 #33). Both
-        // worker starts above are guarded on a non-empty IP with no `else`, so a toggle switched
+        // ⚠️ AND SAY SO WHEN THERE IS NO ADDRESS (Flex audit wave-1 #52 / wave-2 #33). The
+        // worker start above is guarded on a non-empty IP with no `else`, so a toggle switched
         // on before the address was filled in produced no worker, no error and no status: a
         // switch that reads as ON and does nothing. The Settings page orders the toggles ABOVE
-        // the address field, so filling it in top to bottom lands here every time.
-        //
-        // LAST, deliberately: the DAX branch above clears an `ErrOwner::Dax` banner on its own
-        // transition, and this runs on that same tick — stated before it, the message would be
-        // wiped by the very transition that produced it. Cleared the same way every other Dax
-        // message is, on the next transition, which an address edit now IS (the key carries it).
-        if (flex_enabled || dax_enabled) && ip.is_empty() {
+        // the address field, so filling it in top to bottom lands here every time. LAST, so the
+        // transition above, which clears it, cannot wipe it on the tick that raises it; an
+        // address edit is such a transition (the key carries the address).
+        if flex_enabled && ip.is_empty() {
             {
                 let mut eng = engine_lock(engine);
                 eng.set_audio_error(Some(
-                    "Flex native panadapter/audio is switched on but no Flex radio IP is set — \
+                    "Flex native panadapter is switched on but no Flex radio IP is set — \
                      nothing will start. Put the radio's LAN address in Settings ▸ Radio ▸ \
                      \"Flex radio IP\" (Find Radios fills it in), then Save."
                         .to_string(),
@@ -4824,8 +4801,102 @@ impl RadioLoop {
         }
     }
 
+    /// Native audio through Nexus's own Flex client (Beta): tell the client, every tick (an atomic
+    /// store), whether the operator's `flex_native_audio` is on for the radio it serves, and keep
+    /// the receive floor's clock with the source. No client, no lock.
+    fn reconcile_flex_client_audio(&mut self, engine: &Arc<Mutex<Engine>>) {
+        let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
+            if self.flex_client_audio {
+                self.flex_client_audio = false;
+                self.dax_started = None;
+                self.dax_last_audio = None;
+            }
+            self.flex_client_audio_failed = false;
+            return;
+        };
+        let wanted = engine_lock(engine).settings().flex_native_audio;
+        if !wanted {
+            // Turned off: the next time it is turned on is a fresh try.
+            self.flex_client_audio_failed = false;
+        }
+        let on = wanted && !self.flex_client_audio_failed;
+        d.set_native_audio(on);
+        if on != self.flex_client_audio {
+            self.flex_client_audio = on;
+            self.dax_started = on.then(Instant::now);
+            self.dax_last_audio = None;
+            if on {
+                self.clear_audio_error_if_owned(engine, ErrOwner::Dax);
+            }
+        }
+    }
+
+    /// Whether this moment is a QUIET POINT for the Flex client's transmit audio source: nothing
+    /// of ours on the air, ending or about to key, and no slot transmission due. The operator's
+    /// ruling of 2026-10-03 writes the DAX source flag when the mode or the TX slice changes and
+    /// NEVER between the slot boundary and `xmit 1`; asked only at the end of a tick, after every
+    /// keying site in it, so the write can never sit inside a keying sequence:
+    ///
+    /// - nothing keyed or held: no over, tune, manual PTT, microphone over or rig PTT, and no
+    ///   immediate over or armed microphone over waiting for its key;
+    /// - with slot transmission armed (the Digital section, TX enabled): the current slot's TX
+    ///   decision has been made (`boundary_keyed` names this slot, so neither the boundary nor the
+    ///   deferred decode path can still key in it), and the nearest boundary, either side, is
+    ///   more than [`ROUTING_GUARD_MS`] away (measured at `now_end`, the tick's end, not its
+    ///   start). The after-side keeps the write off a late start just after a boundary too.
+    fn tx_routing_quiet(&self, eng: &Engine, rig: &Rig, now_end: f64) -> bool {
+        if rig.keyed
+            || self.tx_until_ms.is_some()
+            || self.tuning_keyed
+            || self.manual_ptt_applied
+            || self.mic_keyed
+            || eng.peek_immediate_tx()
+            || eng.mic_armed()
+        {
+            return false;
+        }
+        if eng.tx_enabled()
+            && eng.settings().operating_mode == tempo_app::settings::OperatingMode::Digital
+        {
+            let slot = self.clock.slot_index(now_end);
+            if self.boundary_keyed.as_ref().map(|k| k.slot) != Some(slot)
+                || self.clock.phase_ms(now_end) <= ROUTING_GUARD_MS
+                || self.clock.ms_to_next_slot(now_end) <= ROUTING_GUARD_MS
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The Flex client's transmit audio source, carried out at a quiet point only (see
+    /// [`Self::tx_routing_quiet`] and `crate::flex::routing`). No client: nothing.
+    fn sync_flex_tx_routing(&mut self, engine: &Arc<Mutex<Engine>>, rig: &Rig, now_end: f64) {
+        if self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_none()
+        {
+            return;
+        }
+        let browser_voice = {
+            let eng = engine_lock(engine);
+            if !self.tx_routing_quiet(&eng, rig, now_end) {
+                return;
+            }
+            eng.remote_presence_live(self.mono_now(now_end))
+        };
+        let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
+            return;
+        };
+        if let Some(done) = d.sync_tx_routing(browser_voice) {
+            crate::civ::diag::note(&format!("Flex client: {done}"));
+        }
+    }
+
     /// Native DAX RX is selected but nothing is arriving — drop back to the sound card and SAY
-    /// so. Returns true when it fired (the caller clears `dax_src`).
+    /// so. Returns true when it fired (the caller turns native audio off).
     ///
     /// Pure decision, split out so it is testable without a Flex on the bench: the whole feature
     /// is unverifiable locally, so at minimum its FAILURE handling must not be.
@@ -5546,6 +5617,9 @@ impl RadioLoop {
         // radio chain, so they live outside this per-radio loop state.
         station: &mut StationSinks,
     ) -> Result<(), String> {
+        // When this tick began, so its END can be placed on the slot clock (the Flex client's
+        // transmit audio source is written only at a quiet point at the end of a tick).
+        let tick_started = Instant::now();
         // ── DID THE OS STEP THE CLOCK UNDER US? ──────────────────────────────
         //
         // Windows restores the system clock from the RTC on resume from sleep or
@@ -5615,9 +5689,15 @@ impl RadioLoop {
         // the macOS-only silence watch further down (`SILENT_CAPTURE_CONFIRM_MS`). Gated here so
         // the per-sample scan costs the other platforms nothing.
         let card_all_zero = cfg!(target_os = "macos") && Self::capture_all_zero(&soundcard);
-        let captured = match self.dax_src.as_ref() {
-            Some(dax) => {
-                let mut dax_audio = dax.take_audio();
+        // Native audio: Nexus's own Flex client's, from its one session.
+        let native_audio = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .filter(|_| self.flex_client_audio)
+            .map(crate::flex::FlexDaemon::take_audio);
+        let captured = match native_audio {
+            Some(mut dax_audio) => {
                 if !dax_audio.is_empty() {
                     // The RX floor's rolling clock — a stream that stops is a stream that failed,
                     // however long it worked first (audit #1001/#1043).
@@ -5638,15 +5718,25 @@ impl RadioLoop {
         // operator completely deaf, and silence is indistinguishable from a dead band, so there
         // is nothing to notice. Give up on it, fall back, and say why. Same principle as the TX
         // floor in `open_serial_ptt`: a feature that fails must never cost the operator the radio.
-        // The worker gets ~6 s to re-establish on its own first (`flexdax`'s reconnect backoff),
-        // which covers a brief blip; past that, hearing the radio wins over keeping the feature.
+        // The source gets ~6 s to re-establish on its own first, which covers a brief blip; past
+        // that, hearing the radio wins over keeping the feature.
         if Self::dax_starved(self.dax_started, self.dax_last_audio, Instant::now()) {
-            self.dax_src = None;
             self.dax_started = None;
             self.dax_last_audio = None;
+            // Nexus's own client: its native audio stops for this radio (the session stays: it is
+            // the radio's CAT) until the operator turns the toggle off and on, or the client goes.
+            if self.flex_client_audio {
+                self.flex_client_audio = false;
+                self.flex_client_audio_failed = true;
+                if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
+                    d.set_native_audio(false);
+                }
+            }
             if self.dax_tee_set {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
+                self.dax_tee_id = None;
+                self.flex_mic_off_pushed = Some(false);
                 self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
                 // The mic is the operator's again — see the tee-sync block below for why this
                 // transition has to reach the engine from BOTH places that clear the tee.
@@ -5668,34 +5758,48 @@ impl RadioLoop {
         if !captured.is_empty() {
             self.rx.push(&captured);
         }
-        // Keep the DAX TX tee in sync with the DAX source: install it when native audio starts (so
-        // backend.play sends TX over DAX INSTEAD of the sound card — one route, never both), clear
-        // it when it stops. The TX schedule is unchanged either way.
+        // Keep the DAX TX tee in sync with Nexus's own Flex client (Beta): install it once the
+        // client's transmit route is up (its own DAX transmit stream, no other program's DAX), so
+        // backend.play sends TX over DAX INSTEAD of the sound card — one route, never both — and
+        // clear it when the route goes. The TX schedule is unchanged either way.
         //
-        // ⚠️ AND TELL THE ENGINE, because this transition is also the operator's MICROPHONE
-        // (2026-08-17 Flex audit, critic gap #6). The tee goes in exactly when the DAX worker
-        // sent `transmit set dax=1`, which is a RADIO-WIDE setting: while it stands, the Flex's
-        // modulator takes its audio from DAX and ignores the mic on every slice, in every client,
-        // SmartSDR's own MOX included. A phone operator who turned native audio on for FT8 then
-        // keys the mic into silence with nothing saying why. Pushed on the TRANSITION only (no
-        // per-tick engine lock), and from the tee rather than the `flex_native_audio` setting —
-        // the setting can be on with no worker at all (no radio address, failed start), and the
-        // worker can be dropped by the RX starvation guard above, and in both cases the mic is
-        // fine. The Phone cockpit renders it; nothing gates on it.
-        match (self.dax_src.as_ref(), self.dax_tee_set) {
-            (Some(dax), false) => {
-                backend.set_tx_tee(Some(dax.tx_tee()));
-                self.dax_tee_set = true;
-                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
-                engine_lock(engine).observe_flex_dax_tx(true);
-            }
-            (None, true) => {
-                backend.set_tx_tee(None);
-                self.dax_tee_set = false;
-                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
-                engine_lock(engine).observe_flex_dax_tx(false);
-            }
-            _ => {}
+        // ⚠️ AND TELL THE ENGINE ABOUT THE OPERATOR'S MICROPHONE (2026-08-17 Flex audit, critic
+        // gap #6). The radio's DAX source flag is RADIO-WIDE: while it says DAX, the Flex's
+        // modulator ignores the mic on every slice, in every client, SmartSDR's own MOX included.
+        // The flag follows the TX slice's mode (operator ruling, 2026-10-03), so Phone at the
+        // shack keeps the mic and the stream's browser voice takes DAX. Pushed on the TRANSITION
+        // only (no per-tick engine lock), and from the radio's own report rather than the
+        // `flex_native_audio` setting. The Phone cockpit renders it; nothing gates on it.
+        let client = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .filter(|_| self.flex_client_audio);
+        let want_tee: Option<crate::backend::TxTeeHandle> = client
+            .filter(|d| d.tx_route_ready())
+            .and_then(crate::flex::FlexDaemon::tx_tee);
+        let mic_off = client.is_some_and(|d| d.radio_dax() == Some(true));
+        let want_id = want_tee
+            .as_ref()
+            .map(|t| Arc::as_ptr(t) as *const () as usize);
+        if want_id != self.dax_tee_id {
+            self.dax_tee_set = want_tee.is_some();
+            self.dax_tee_id = want_id;
+            backend.set_tx_tee(want_tee);
+            self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
+        }
+        if self.flex_mic_off_pushed != Some(mic_off) {
+            self.flex_mic_off_pushed = Some(mic_off);
+            engine_lock(engine).observe_flex_dax_tx(mic_off);
+        }
+        // …and whether the radio has the mic while native audio is on (Phone at the shack): a
+        // recorded message would leave over DAX, which the radio then ignores, so the voice keyer
+        // refuses (operator ruling, 2026-10-04). Pushed on the transition, and before the voice
+        // keyer below takes a message this tick.
+        let radio_has_mic = client.is_some_and(crate::flex::FlexDaemon::radio_has_mic);
+        if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
+            self.flex_radio_has_mic_pushed = Some(radio_has_mic);
+            engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
         }
 
         self.apply_remote_radio(engine, rig, now);
@@ -6451,6 +6555,7 @@ impl RadioLoop {
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
+            self.reconcile_flex_client_audio(engine);
             // FORK-LOCAL: the FT-710's own spectrum over its internal FT4222 bridge. No-op on every
             // other radio, and on this one too until the operator opts in. Not on a switch the
             // handoff has not seen (W0): `rig` is the radio being left, and the span and scope-mode
@@ -11470,6 +11575,11 @@ impl RadioLoop {
             }
         }
 
+        // The Flex client's transmit audio source (operator ruling, 2026-10-03): written here, at
+        // the end of the tick, after every keying site in it, and only at a quiet point, never
+        // between a slot boundary and the key that follows it.
+        let now_end = now + tick_started.elapsed().as_secs_f64() * 1000.0;
+        self.sync_flex_tx_routing(engine, rig, now_end);
         Ok(())
     }
 
@@ -13898,6 +14008,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod flex_audio;
     mod receive_source;
     mod remote_radio;
     use super::should_command_rf_power;
@@ -29158,8 +29269,8 @@ mod tests {
     ///
     /// The old check latched on the first delivered sample (`Some(_) if saw_audio => false`), so
     /// the RX floor covered only sources that NEVER worked. A WAN drop, a radio reboot or an
-    /// evicted DAX client mid-session left `dax_src` selected over the sound card for the rest of
-    /// the session: the operator deaf, no banner, and nothing anywhere watching the stream's
+    /// evicted DAX client mid-session left native audio selected over the sound card for the rest
+    /// of the session: the operator deaf, no banner, and nothing anywhere watching the stream's
     /// liveness. The window now runs from the LAST sample, not from the first.
     #[test]
     fn dax_that_dies_mid_session_falls_back_too() {
@@ -29252,7 +29363,8 @@ mod tests {
     /// audio failure left "RADIO STOPPED" on screen for the rest of the session, over a working
     /// sound card, describing a fallback that had already happened. Worse, it MASKED everything
     /// after it: the PTT, silent-capture, monitor and voice-mic writers are all gated on owning
-    /// the line, so a real problem could not be reported while it was stuck.
+    /// the line, so a real problem could not be reported while it was stuck. The native pan's
+    /// transition carries the clear since the older native audio worker went (2026-10-04).
     #[test]
     fn a_dax_banner_clears_on_its_own_transition_and_leaves_another_owners_line_alone() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
@@ -29260,22 +29372,21 @@ mod tests {
         let banner =
             |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error.clone();
 
-        // The state a failed / starved native-audio start leaves behind: a Dax-owned banner with
-        // the worker's key still recorded.
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Native Flex audio couldn't start (…)".to_string()));
+        // The state the no-address warning leaves behind: a Dax-owned banner with the native
+        // pan's key, which carries no address, still recorded.
+        engine.lock().unwrap().set_audio_error(Some(
+            "Flex native panadapter is switched on but no Flex radio IP is set (…)".to_string(),
+        ));
         state.err_owner = ErrOwner::Dax;
-        state.dax_src_key = Some((0, true, String::new()));
+        state.spectrum_src_key = Some((2036, true, String::new()));
 
         // The operator does what fixes it — turns the toggle off, or moves to another radio — and
-        // the DAX key goes to None. THAT is the resolution, and it must take the banner with it.
+        // the key goes to None. THAT is the resolution, and it must take the banner with it.
         state.reconcile_spectrum_source(&engine, 0, false);
-        assert_eq!(state.dax_src_key, None, "the transition happened");
+        assert_eq!(state.spectrum_src_key, None, "the transition happened");
         assert!(
             banner(&engine).is_none(),
-            "turning native audio off must take its banner down"
+            "turning the native pan off must take its banner down"
         );
         assert_eq!(state.err_owner, ErrOwner::None, "the line is handed back");
 
@@ -29285,7 +29396,7 @@ mod tests {
             .unwrap()
             .set_audio_error(Some("Audio device failed to open".to_string()));
         state.err_owner = ErrOwner::Device;
-        state.dax_src_key = Some((0, true, String::new()));
+        state.spectrum_src_key = Some((2036, true, String::new()));
         state.reconcile_spectrum_source(&engine, 0, false);
         assert!(
             banner(&engine).is_some(),

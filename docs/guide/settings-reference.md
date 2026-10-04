@@ -421,9 +421,13 @@ Baud continue across to the right.*
   works, the panadapter just stays off).
 - **Flex native panadapter (early access)** and **Flex native DAX audio (early
   access)** — appear on a network Flex. Stream the real SmartSDR panadapter
-  (VITA-49 FFT) into the cockpit scope, and take RX audio straight off the
-  network instead of the "DAX Audio RX" sound device, **which is invisible under
-  Remote Desktop**. Both are **unverified on hardware**, so both are opt-in; if
+  (VITA-49 FFT) into the cockpit scope, and carry the radio's audio over the
+  network instead of the "DAX Audio RX" / "DAX TX" sound devices, **which are
+  invisible under Remote Desktop**. Native DAX audio works only through the
+  **Flex native client (Beta)**: with SmartSDR CAT it does nothing, and the
+  setting is kept for the client. On the client the digital modes transmit over
+  DAX, while Phone at the shack keeps the radio's own mic (so the voice keyer
+  can't play there). Both are **unverified on hardware**, so both are opt-in; if
   the scope stays blank or decodes stop, turn them back off.
 - **CI-V bus diagnostic log** — appears once native CI-V is on. Records every
   byte to and from the radio to a file in your Downloads, for hardware-only

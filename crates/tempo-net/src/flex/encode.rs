@@ -1,17 +1,22 @@
 //! The typed command encoder: every command Nexus can send to the radio, as a value, rendered to
 //! the wire text the radio expects.
 //!
-//! There are three kinds, and the type says which:
+//! There are four kinds, and the type says which:
 //!
 //! - [`Command`]: everything that cannot key the transmitter: registration, keepalive,
-//!   subscriptions, queries, slices, display objects, stream removal, ATU bypass. [`render`]
-//!   turns it into text.
+//!   subscriptions, queries, slices and their DAX channels, display objects, DAX receive streams,
+//!   stream removal, ATU bypass. [`render`] turns it into text.
 //! - [`TxStart`]: what can key the transmitter (`xmit 1`, `transmit tune 1`, `atu start`,
 //!   `cwx send`). It reaches the wire only through [`render_start`], which takes an
 //!   [`Admitted`], and only `super::admission::admit` constructs one. Nothing else in Nexus can
 //!   produce the text of a keying command.
 //! - [`TxStop`]: what ends a transmission (`xmit 0`, `transmit tune 0`, `cwx clear`). Never
 //!   gated: [`render_stop`] takes the stop alone.
+//! - [`TxAudio`]: what decides where the transmitter's audio comes from (`stream create
+//!   type=dax_tx`, `transmit set dax=<0|1>`). It keys nothing, but `transmit set dax` is radio-wide
+//!   and changes what an over carries, so it reaches the wire only through [`render_tx_audio`],
+//!   which takes an [`AdmittedTxAudio`], and only `super::admission::admit_tx_audio` constructs
+//!   one: never while anything is keyed, never beside another program's DAX transmit stream.
 //!
 //! Each [`Rendered`] command carries its [`Kind`] and the object it is aimed at
 //! ([`Rendered::target`]). The session uses the kind to tell the readback which write was the
@@ -19,7 +24,7 @@
 //! ours. Nothing anywhere classifies a command by matching its text.
 //!
 //! Not representable here, so nothing in Nexus can send them: `slice set <n> tx=1` (moving the
-//! transmit slice), every `transmit set` write but RF power, DAX streams and `transmit set dax`,
+//! transmit slice), every `transmit set` write but RF power and the DAX source, `dax audio set`,
 //! `cw key`/`cw ptt`, `dvk`, slice `play`, amplifier and tuner relays, waveform commands,
 //! `interlock` writes, TNF commands, and any raw text. Later changes add what they need as typed
 //! variants.
@@ -40,11 +45,13 @@
 //! Added for Nexus, with no upstream code taken: the slice's audio level, mute, noise blanker,
 //! noise reduction and automatic notch, and the transmitter's RF power. Their wire text is
 //! FlexRadio's public API documentation (`TCPIP-slice`, `TCPIP-transmit`), with the key names and
-//! the `0`/`1` flags the slice and transmit decoders read back.
+//! the `0`/`1` flags the slice and transmit decoders read back. So are the DAX commands
+//! (`TCPIP-stream`, `TCPIP-slice`, `TCPIP-transmit`): a slice's DAX channel, the DAX receive and
+//! transmit streams, and the transmitter's DAX source.
 
 use std::fmt;
 
-use super::admission::Admitted;
+use super::admission::{Admitted, AdmittedTxAudio};
 use super::handshake::protocol_safe_station;
 
 /// A subscription topic (`sub <topic> all`).
@@ -302,7 +309,18 @@ pub enum Command {
     WaterfallRemove {
         waterfall: u32,
     },
+    /// `slice set <n> dax=<channel>`: the DAX channel the slice's receive audio goes to, 1–8, or 0
+    /// for none.
+    SliceDax {
+        slice: u8,
+        channel: u8,
+    },
     // ── Streams ──
+    /// `stream create type=dax_rx dax_channel=<channel>`: a DAX receive stream, channel 1–8. It
+    /// carries the receive audio of the slices bound to that channel.
+    StreamCreateDaxRx {
+        channel: u8,
+    },
     /// `stream remove 0x<id>`.
     StreamRemove {
         stream: u32,
@@ -342,6 +360,17 @@ pub enum TxStop {
     CwxClear,
 }
 
+/// What decides where the transmitter's audio comes from. Keys nothing. Rendered only through
+/// [`render_tx_audio`], from an admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxAudio {
+    /// `stream create type=dax_tx`: this client's DAX transmit stream.
+    CreateDaxTx,
+    /// `transmit set dax=<0|1>`: the transmitter takes its audio from DAX (`true`) or from the
+    /// radio's own mic input (`false`). Radio-wide: it applies to every client's transmission.
+    DaxSource { dax: bool },
+}
+
 /// Which start a [`TxStart`] is, without its data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartKind {
@@ -371,6 +400,8 @@ pub enum Kind {
     Start(StartKind),
     /// It ends a transmission.
     Stop(TxStop),
+    /// It decides where the transmitter's audio comes from.
+    TxAudio(TxAudio),
 }
 
 /// The object a command acts on.
@@ -428,6 +459,8 @@ pub enum EncodeError {
     Port,
     /// A pan dimension of zero.
     Pixels,
+    /// A DAX channel outside 1–8 (0 is "none" only for a slice's channel).
+    Channel(u8),
 }
 
 impl fmt::Display for EncodeError {
@@ -474,7 +507,8 @@ impl Command {
             | Command::SliceAgcOffLevel { slice, .. }
             | Command::SliceAudioLevel { slice, .. }
             | Command::SliceAudioMute { slice, .. }
-            | Command::SliceDsp { slice, .. } => Some(Target::Slice(*slice)),
+            | Command::SliceDsp { slice, .. }
+            | Command::SliceDax { slice, .. } => Some(Target::Slice(*slice)),
             Command::SliceCreate { pan: Some(pan), .. }
             | Command::PanCenter { pan, .. }
             | Command::PanRemove { pan } => Some(Target::Pan(*pan)),
@@ -497,9 +531,19 @@ impl Command {
             | Command::MeterList
             | Command::SliceCreate { pan: None, .. }
             | Command::PanafallCreate { .. }
+            | Command::StreamCreateDaxRx { .. }
             | Command::AtuBypass
             | Command::TransmitRfPower { .. } => None,
         }
+    }
+}
+
+/// A DAX channel, 1–8.
+fn dax_channel(channel: u8) -> Result<u8, EncodeError> {
+    if (1..=8).contains(&channel) {
+        Ok(channel)
+    } else {
+        Err(EncodeError::Channel(channel))
     }
 }
 
@@ -592,6 +636,14 @@ pub fn render(command: &Command) -> Result<Rendered, EncodeError> {
             function,
             on,
         } => format!("slice set {slice} {}={}", function.word(), u8::from(*on)),
+        Command::SliceDax { slice, channel } => {
+            let channel = if *channel == 0 {
+                0
+            } else {
+                dax_channel(*channel)?
+            };
+            format!("slice set {slice} dax={channel}")
+        }
         Command::PanafallCreate { x, y } => {
             if *x == 0 || *y == 0 {
                 return Err(EncodeError::Pixels);
@@ -605,6 +657,10 @@ pub fn render(command: &Command) -> Result<Rendered, EncodeError> {
         Command::WaterfallRemove { waterfall } => {
             format!("display panafall remove {}", id(*waterfall))
         }
+        Command::StreamCreateDaxRx { channel } => format!(
+            "stream create type=dax_rx dax_channel={}",
+            dax_channel(*channel)?
+        ),
         Command::StreamRemove { stream } => format!("stream remove {}", id(*stream)),
         Command::AtuBypass => "atu bypass".to_string(),
         Command::TransmitRfPower { level: l } => format!("transmit set rfpower={}", level(*l)?),
@@ -643,6 +699,21 @@ pub fn render_stop(stop: TxStop) -> Rendered {
     Rendered {
         text: text.to_string(),
         kind: Kind::Stop(stop),
+        target: None,
+    }
+}
+
+/// Render an admitted change to the transmitter's audio source. The only way its text comes to
+/// exist.
+pub fn render_tx_audio(admitted: AdmittedTxAudio) -> Rendered {
+    let audio = admitted.into_tx_audio();
+    let text = match audio {
+        TxAudio::CreateDaxTx => "stream create type=dax_tx".to_string(),
+        TxAudio::DaxSource { dax } => format!("transmit set dax={}", u8::from(dax)),
+    };
+    Rendered {
+        text,
+        kind: Kind::TxAudio(audio),
         target: None,
     }
 }
@@ -748,6 +819,15 @@ pub(super) mod tests {
             Command::WaterfallRemove {
                 waterfall: 0x4200_0000,
             },
+            Command::SliceDax {
+                slice: 0,
+                channel: 1,
+            },
+            Command::SliceDax {
+                slice: 1,
+                channel: 0,
+            },
+            Command::StreamCreateDaxRx { channel: 2 },
             Command::StreamRemove {
                 stream: 0x0400_000A,
             },
@@ -787,6 +867,8 @@ pub(super) mod tests {
                 | Command::PanCenter { .. }
                 | Command::PanRemove { .. }
                 | Command::WaterfallRemove { .. }
+                | Command::SliceDax { .. }
+                | Command::StreamCreateDaxRx { .. }
                 | Command::StreamRemove { .. }
                 | Command::AtuBypass
                 | Command::TransmitRfPower { .. } => {}
@@ -998,6 +1080,19 @@ pub(super) mod tests {
         assert!(render(&Command::ClientSetNetworkMtu(100)).is_err());
         assert!(render(&Command::ClientUdpPort(0)).is_err());
         assert!(render(&Command::PanafallCreate { x: 0, y: 10 }).is_err());
+        for channel in [0, 9, 255] {
+            assert_eq!(
+                render(&Command::StreamCreateDaxRx { channel }),
+                Err(EncodeError::Channel(channel))
+            );
+        }
+        assert_eq!(
+            render(&Command::SliceDax {
+                slice: 0,
+                channel: 9
+            }),
+            Err(EncodeError::Channel(9))
+        );
         for level in [-1, 101] {
             assert_eq!(
                 render(&Command::SliceAudioLevel { slice: 0, level }),
@@ -1064,6 +1159,59 @@ pub(super) mod tests {
                 is_keying_text(r.text()),
                 "the oracle knows every start: {text}"
             );
+        }
+    }
+
+    #[test]
+    fn the_dax_commands_wire_text() {
+        let text = |c: Command| render(&c).unwrap().text().to_string();
+        assert_eq!(
+            text(Command::StreamCreateDaxRx { channel: 3 }),
+            "stream create type=dax_rx dax_channel=3"
+        );
+        assert_eq!(
+            text(Command::SliceDax {
+                slice: 1,
+                channel: 3
+            }),
+            "slice set 1 dax=3"
+        );
+        assert_eq!(
+            text(Command::SliceDax {
+                slice: 1,
+                channel: 0
+            }),
+            "slice set 1 dax=0"
+        );
+        assert_eq!(
+            Command::SliceDax {
+                slice: 1,
+                channel: 3
+            }
+            .target(),
+            Some(Target::Slice(1))
+        );
+        assert_eq!(Command::StreamCreateDaxRx { channel: 3 }.target(), None);
+    }
+
+    #[test]
+    fn the_transmit_audio_source_renders_only_from_an_admission() {
+        // The test-only door mints the value; production has one door, `admit_tx_audio`.
+        for (audio, text) in [
+            (TxAudio::CreateDaxTx, "stream create type=dax_tx"),
+            (TxAudio::DaxSource { dax: true }, "transmit set dax=1"),
+            (TxAudio::DaxSource { dax: false }, "transmit set dax=0"),
+        ] {
+            let r = render_tx_audio(AdmittedTxAudio::for_test(audio));
+            assert_eq!(r.text(), text);
+            assert_eq!(r.kind(), Kind::TxAudio(audio));
+            assert_eq!(r.target(), None);
+        }
+        // No ordinary command can say either: `render` has no variant for them.
+        for c in every_command() {
+            let r = render(&c).unwrap();
+            assert!(!r.text().starts_with("transmit set dax"), "{c:?}");
+            assert!(!r.text().starts_with("stream create type=dax_tx"), "{c:?}");
         }
     }
 }

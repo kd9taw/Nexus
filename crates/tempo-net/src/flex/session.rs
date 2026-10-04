@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -62,7 +62,7 @@ use std::time::{Duration, Instant};
 
 use super::admission::{self, Facts, Refusal};
 use super::encode::{
-    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxStart, TxStop,
+    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxAudio, TxStart, TxStop,
 };
 use super::handshake::{self, ConnectConfig, Registration, NOT_SUPPORTED};
 use super::keepalive::{Keepalive, Tick};
@@ -284,6 +284,8 @@ pub struct Snapshot {
     pub keyed: bool,
     /// The readback has seen the radio idle and nothing of ours is keyed.
     pub transmit_ready: bool,
+    /// Our DAX transmit stream, from the reply to our create, until the radio removes it.
+    pub dax_tx_stream: Option<u32>,
     pub model: StatusModel,
 }
 
@@ -298,6 +300,7 @@ enum Pending {
     Caller,
     Key,
     Stop,
+    TxAudio(TxAudio),
     Teardown(u32),
 }
 
@@ -338,6 +341,7 @@ pub struct Session {
     phase_deadline_ms: Option<u64>,
     closing: Option<(End, BTreeSet<u32>, u64)>,
     warned_previous: BTreeSet<u32>,
+    dax_tx_stream: Option<u32>,
     events: VecDeque<Event>,
     /// Every command written, with its kind, for the tests' independent checks.
     #[cfg(test)]
@@ -368,6 +372,7 @@ impl Session {
             phase_deadline_ms: Some(deadline),
             closing: None,
             warned_previous: BTreeSet::new(),
+            dax_tx_stream: None,
             events: VecDeque::new(),
             #[cfg(test)]
             wrote: Vec::new(),
@@ -409,6 +414,7 @@ impl Session {
             handle: self.handle,
             keyed: self.keyed.is_some(),
             transmit_ready: self.transmit_ready(),
+            dax_tx_stream: self.dax_tx_stream,
             model: self.model.clone(),
         }
     }
@@ -425,6 +431,7 @@ impl Session {
             handle: self.handle,
             keyed: self.keyed.is_some(),
             readback_idle: self.tracker.phase() == super::ptt_evidence::Phase::Idle,
+            dax_tx_stream: self.dax_tx_stream,
         }
     }
 
@@ -474,7 +481,9 @@ impl Session {
         let Some(keyed) = self.keyed else { return };
         let tracked_key = keyed.kind == StartKind::Key;
         match kind {
-            Kind::Ordinary => {}
+            // Admission refuses an audio-source change while anything is keyed, so it cannot
+            // reach here; if it did, it is not a keying write.
+            Kind::Ordinary | Kind::TxAudio(_) => {}
             Kind::Start(StartKind::Key) if tracked_key && keyed.stop.is_none() => {
                 let stamp = self.stamp();
                 self.tracker.command_written(stamp, seq, true, ok, now);
@@ -622,6 +631,17 @@ impl Session {
         self.pending.insert(seq, Pending::Stop);
         self.write(out, seq, &encode::render_stop(stop), now);
         StopOutcome::Sent { seq }
+    }
+
+    /// Change where the transmitter's audio comes from, if its admission allows it (never while
+    /// anything is keyed, never beside another program's DAX transmit stream). Answered once
+    /// written; the radio's reply follows as an [`Event::Reply`].
+    pub fn route(&mut self, out: &mut dyn Write, audio: TxAudio, now: u64) -> Result<u32, Refusal> {
+        let admitted = admission::admit_tx_audio(&self.model, &self.facts(), audio)?;
+        let seq = self.take_seq();
+        self.pending.insert(seq, Pending::TxAudio(audio));
+        self.write(out, seq, &encode::render_tx_audio(admitted), now);
+        Ok(seq)
     }
 
     /// Take the readback's proof, if it has completed: keyed clears.
@@ -842,6 +862,22 @@ impl Session {
                 }
                 self.events.push_back(Event::Ready { slices });
             }
+            Pending::TxAudio(audio) => {
+                // Our transmit stream's id is the create's answer: the one way to know a stream
+                // whose status may not name its owner is ours.
+                if ok && audio == TxAudio::CreateDaxTx {
+                    if let Some(id) =
+                        super::ownership::parse_create_response_stream_id(&reply.message)
+                    {
+                        self.dax_tx_stream = Some(id);
+                    }
+                }
+                self.events.push_back(Event::Reply {
+                    seq: reply.seq,
+                    code: reply.code,
+                    message: reply.message,
+                });
+            }
             Pending::Caller | Pending::Key | Pending::Stop => {
                 self.events.push_back(Event::Reply {
                     seq: reply.seq,
@@ -919,6 +955,14 @@ impl Session {
             }
         }
         self.model.apply(&decoded);
+        if let Decoded::Stream {
+            id, removed: true, ..
+        } = &decoded
+        {
+            if self.dax_tx_stream == Some(*id) {
+                self.dax_tx_stream = None;
+            }
+        }
         if let Decoded::Interlock(d) = &decoded {
             if let Some(h) = d.tx_client_handle {
                 let previous =
@@ -1110,12 +1154,17 @@ enum Request {
     Send(Command, Sender<Result<Reply, ConnError>>),
     Start(TxStart, Sender<Result<u32, Refusal>>),
     Stop(TxStop, Sender<StopOutcome>),
+    Route(TxAudio, Sender<Result<u32, Refusal>>),
     Close,
 }
 
 struct Shared {
     snapshot: Mutex<Snapshot>,
     changed: Condvar,
+    /// The snapshot's `keyed` and open phase, readable without copying the model: the DAX
+    /// transmit pacer asks before every packet.
+    keyed: AtomicBool,
+    open: AtomicBool,
     /// Test only: where a test holds the driver (see [`Connection::hold_after`]).
     #[cfg(test)]
     hold: Mutex<Option<(Announcement, Receiver<()>)>>,
@@ -1180,6 +1229,8 @@ impl Connection {
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(session.snapshot()),
             changed: Condvar::new(),
+            keyed: AtomicBool::new(false),
+            open: AtomicBool::new(true),
             #[cfg(test)]
             hold: Mutex::new(None),
         });
@@ -1217,6 +1268,22 @@ impl Connection {
             .send(Request::Start(start, tx))
             .map_err(|_| None)?;
         rx.recv().map_err(|_| None)?.map_err(Some)
+    }
+
+    /// Change the transmitter's audio source (its admission decides). `Err(None)` when the
+    /// session is gone.
+    pub fn route(&self, audio: TxAudio) -> Result<u32, Option<Refusal>> {
+        let (tx, rx) = mpsc::channel();
+        self.requests
+            .send(Request::Route(audio, tx))
+            .map_err(|_| None)?;
+        rx.recv().map_err(|_| None)?.map_err(Some)
+    }
+
+    /// Whether a start of ours is unconfirmed, on a session that has not closed: what the last
+    /// published snapshot says, without copying it.
+    pub fn keyed(&self) -> bool {
+        self.shared.open.load(Ordering::Acquire) && self.shared.keyed.load(Ordering::Acquire)
     }
 
     /// End a transmission. Never gated.
@@ -1326,6 +1393,10 @@ fn drive<S: Read + Write>(
                     let stopped = session.stop(&mut io, stop, now());
                     answer(&session, shared, reply, stopped);
                 }
+                Ok(Request::Route(audio, reply)) => {
+                    let routed = session.route(&mut io, audio, now());
+                    answer(&session, shared, reply, routed);
+                }
                 Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
                     session.close(&mut io, now());
                     break;
@@ -1374,6 +1445,8 @@ fn drive<S: Read + Write>(
 /// state from before it.
 fn publish(session: &Session, shared: &Shared) {
     *lock(&shared.snapshot) = session.snapshot();
+    shared.keyed.store(session.keyed(), Ordering::Release);
+    shared.open.store(!session.is_closed(), Ordering::Release);
     shared.changed.notify_all();
 }
 
