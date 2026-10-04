@@ -65,9 +65,13 @@ export function useViewport(scale?: number, visibleArea = false): void {
       const zoom = currentZoom()
       // Standalone phone observers opt into the area above an on-screen keyboard.
       // Existing desktop cockpits retain their layout-viewport behavior.
+      // A pinch shrinks the visual viewport too, by its scale, and the page must not
+      // follow that: it shrank the stream page into a corner of the zoomed view. Times
+      // its scale the area is the one at the page's own scale, so the keyboard still
+      // counts and a pinch does not (at scale 1 this is the area exactly as before).
       const viewport = visibleArea ? window.visualViewport : null
-      const width = viewport?.width ?? window.innerWidth
-      const height = viewport?.height ?? window.innerHeight
+      const width = viewport ? viewport.width * viewport.scale : window.innerWidth
+      const height = viewport ? viewport.height * viewport.scale : window.innerHeight
       const effW = width / zoom
       const effH = height / zoom
       const d = document.documentElement
