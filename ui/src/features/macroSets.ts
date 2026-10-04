@@ -108,11 +108,46 @@ export function unknownTokens(text: string, known: RegExp): string[] {
 /** Why a macro cannot be sent as it stands. */
 export type MacroRefusal = { missing: 'mycall' | 'call' | 'exch' } | { unknown: string }
 
-/** A caption that reads as a STOP. The macros are senders, and a sender captioned Stop, Esc or
- *  Abort is the one control an operator reaching for a stop would press — so the editor refuses
- *  it. A dock's real Esc/Stop is fixed and outside the editable set. */
+/** The words that read as a STOP — stop, halt, abort, cancel, Esc — in each language the app
+ *  ships, by the locale `main.tsx` installs it under; `macroSets.test.ts` fails until a newly
+ *  installed language has its list. Reviewed 2026-10-04 against each catalog's own captions for
+ *  a stop, which that test holds them to: German says "beenden" as often as "stoppen"
+ *  ("Mithören beenden" is Stop listening), and Japanese uses 終了 for a Stop. */
+export const STOP_WORDS: Record<string, readonly string[]> = {
+  en: ['stop', 'halt', 'abort', 'cancel', 'esc', 'escape'],
+  de: ['stopp', 'stoppen', 'halt', 'anhalten', 'abbrechen', 'abbruch', 'beenden'],
+  es: ['parar', 'pare', 'parada', 'detener', 'detén', 'abortar', 'anular', 'cancelar', 'dejar de'],
+  fr: ['arrêter', 'arrête', 'arrêt', 'interrompre', 'abandonner', 'annuler', 'échap', 'échappement'],
+  ja: ['停止', '停波', '中止', '中断', '止め', '止まれ', 'ストップ', 'キャンセル', '取消', '取り消', '終了', 'エスケープ'],
+}
+
+/** For matching only: compatibility forms folded (full-width ＳＴＯＰ is STOP, half-width ｽﾄｯﾌﾟ is
+ *  ストップ) and Latin accents dropped, because French capitals often go without (ARRET). */
+const fold = (text: string) => text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+
+const LATIN = /\p{Script=Latin}/u
+const FOLDED = [...new Set(Object.values(STOP_WORDS).flat().map(fold))]
+const LATIN_WORDS = FOLDED.filter((w) => LATIN.test(w)).map((w) => w.replace(/ /g, '\\s+'))
+/** A Latin word matches whole, so Stopwatch and Descent are not stops, and only a Latin letter
+ *  extends one: "Stopボタン" is still Stop. The edge before it is a consumed character, never a
+ *  lookbehind — WebKit before Safari 16.4 cannot parse one (a supported macOS 12 may still run
+ *  it, and so may a phone on the Remote page), and this module would fail to load. */
+const SPACED = new RegExp(
+  `(?:^|[^\\p{Script=Latin}\\p{M}])(?:${LATIN_WORDS.join('|')})(?![\\p{Script=Latin}\\p{M}])`,
+  'iu',
+)
+/** Japanese has no spaces, so no word edge to find: its words match anywhere in the caption. That
+ *  refuses ストップウォッチ where Stopwatch passes — the price of finding 送信停止. */
+const UNSPACED = FOLDED.filter((w) => !LATIN.test(w))
+
+/** A caption that reads as a STOP, in any shipped language, whichever is on screen. The macros
+ *  are senders, and a sender captioned Stop, Esc or Abort is the one control an operator reaching
+ *  for a stop would press — so the editor refuses it. A caption is the operator's own words and
+ *  is never translated, so "Stopp" reads as a stop to anyone at the station who reads German. A
+ *  dock's real Esc/Stop is fixed and outside the editable set. */
 export function isStopLikeLabel(label: string): boolean {
-  return /\b(stop|esc|escape|abort)\b/i.test(label)
+  const text = fold(label)
+  return SPACED.test(text) || UNSPACED.some((w) => text.includes(w))
 }
 
 /** A slot with neither caption nor message: clicking it opens the editor instead of sending. */

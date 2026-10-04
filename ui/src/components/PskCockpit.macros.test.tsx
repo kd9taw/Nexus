@@ -396,11 +396,11 @@ describe('the macro editor', () => {
     expect(editor()?.getAttribute('aria-label')).toMatch(/F6/)
   })
 
-  it('will not caption a transmit key Stop or Esc', async () => {
+  it('will not caption a transmit key as a stop, in any shipped language', async () => {
     await renderCockpit()
     fireEvent.click(editOf('F4')!)
     const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement
-    for (const caption of ['Stop', 'esc']) {
+    for (const caption of ['Stop', 'esc', 'Stopp', 'Parar', 'Arrêter', '停止']) {
       fireEvent.change(field(/^title$/i), { target: { value: caption } })
       expect(screen.getByRole('alert'), caption).toBeTruthy()
       expect(save.disabled, caption).toBe(true)
