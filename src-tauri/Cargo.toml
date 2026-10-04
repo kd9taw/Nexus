@@ -156,6 +156,24 @@ tempo-audio = { path = "../crates/tempo-audio", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 gdk = "0.18"
 
+# The Remote stations window's keys (`src/remote_window.rs`): WebView2's own browser accelerators
+# switched off (`ICoreWebView2Settings3::SetAreBrowserAcceleratorKeysEnabled`), and F11 kept for
+# the window's full screen (`AcceleratorKeyPressed`). Tauri 2.11 does not pass wry's switch for
+# the first through; it hands out the raw WebView2 controller, and the types to call it with live
+# in these two crates. WINDOWS ONLY and NOT NEW PACKAGES: both are already in this tree at these
+# versions as wry's own dependencies, so the Cargo.lock diff is two names against `tempo`; nothing
+# new is fetched, built or linked. The controller Tauri returns IS webview2-com 0.38's type, so the
+# two must move together: a Tauri upgrade that moves wry's copy fails to compile here, loudly.
+#
+# Licence: webview2-com MIT (its Cargo.toml; the crate ships no licence text), windows-core
+# MIT OR Apache-2.0 (its own license-mit / license-apache-2.0) — compatible with our GPL-3.0-only.
+#
+# ⚠️ NOTICE ENTRY IS OUTSTANDING — the two belong in NOTICE's Rust dependencies list (as gdk's
+# "not a new crate" line does), and adding it is approval-gated.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
+
 [dev-dependencies]
 # The same crate as above with one more feature, for this crate's tests only: `test_util`, the log
 # as a test reads it (SPEC-2 C19 Part D), which tempo-app's own tests read it through too. A

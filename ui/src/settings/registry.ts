@@ -110,7 +110,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'remote-access', label: 'Remote access', tab: 'station',
     keywords: ['browser', 'shack', 'pairing', 'account', 'device approval', 'observation', 'internet',
       // Remote as a stream: the words for sending this window to a browser.
-      'stream', 'streaming', 'screen sharing', 'video'],
+      'stream', 'streaming', 'screen sharing', 'video',
+      // The other end: this PC opening the Remote page in a Nexus window of its own.
+      'remote stations', 'operate remotely', 'remote window', 'full screen'],
   },
 
   // ---- Radio -------------------------------------------------------------------

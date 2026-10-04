@@ -935,6 +935,12 @@ export async function openPanelWindow(panel: string): Promise<void> {
   await invoke('open_panel_window', { panel })
 }
 
+/** Open (or bring forward) the Remote stations window: the hosted Remote page in a Nexus window
+ *  of its own. Windows only; rejects elsewhere, and when the Remote service cannot be reached. */
+export async function openRemoteStationsWindow(): Promise<void> {
+  await invoke('open_remote_stations_window')
+}
+
 /** Close a panel's torn-off window if it is open (#263 — re-dock must not leave a second copy
  *  up). A no-op when that window is not open. */
 export async function closePanelWindow(panel: string): Promise<void> {

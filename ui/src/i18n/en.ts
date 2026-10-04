@@ -6183,6 +6183,18 @@ export const EN = {
   'settings.remoteStream.display':
     'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.',
   'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
+  // The Remote stations window: this PC opens the Remote page in a Nexus window of its own. The
+  // window is a new browser to the station (signed in and approved there once); F11 is the
+  // WINDOW's full screen, which never takes Esc, so Esc over the picture is still Stop TX.
+  // `Nexus`, `Remote`, `F11`, `Esc` and `Windows` are tokens.
+  'settings.remoteStations.label': 'Operate a paired station from this computer',
+  'settings.remoteStations.open': 'Remote stations…',
+  'settings.remoteStations.hint':
+    'Opens the Remote page in a Nexus window of its own. You sign in there and approve it at the station once, as you would a new browser. F11 switches the window to full screen and back, and Esc over the picture still stops transmitting. Links to other sites open in your browser.',
+  'settings.remoteStations.failed':
+    'Nexus could not open the Remote stations window. Check this computer’s internet connection, then try again.',
+  'settings.remoteStations.unavailable':
+    'Available on Windows only, for now. Elsewhere, open Remote in your browser.',
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.

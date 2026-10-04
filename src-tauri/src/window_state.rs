@@ -344,6 +344,80 @@ pub(crate) fn arm_panel_capture(window: &tauri::WebviewWindow) {
     });
 }
 
+// ---- The Remote stations window ------------------------------------------------------------
+
+// The fourth window, and the fourth record: the hosted Remote page in a window of its own
+// (`crate::remote_window`). It takes the main window's policy, as the Connect dashboard does, with
+// its own minimum, plus one rule of its own: a window closed in FULL SCREEN writes nothing. Full
+// screen is the monitor's box, not one the operator chose; stored, it would reopen as a borderless
+// monitor-sized window that is no longer full screen. The last windowed box stays, as it does for
+// a minimised close.
+
+/// `<config_dir>/window-remote-stations.json`, beside the other records and so per profile.
+fn remote_path() -> std::path::PathBuf {
+    crate::settings_path().with_file_name("window-remote-stations.json")
+}
+
+/// The open decision, pure: the record at `path` clamped against the monitors attached now.
+/// `None` on a first open or for a record with no believable box: the caller opens at its
+/// default size, fitted to the work area and centred.
+fn restore_remote_from(
+    path: &std::path::Path,
+    monitors: &[WorkArea],
+    primary: Option<WorkArea>,
+    min: (f64, f64),
+) -> Option<geom::Restored> {
+    geom::restore(geom::load(path), monitors, primary, min)
+}
+
+/// What to write on close, pure: the main window's rule, and nothing at all from full screen.
+fn capture_remote_from(
+    prev: Option<WindowGeometry>,
+    cur: WindowGeometry,
+    minimized: bool,
+    fullscreen: bool,
+) -> Option<WindowGeometry> {
+    if fullscreen {
+        return None;
+    }
+    geom::capture(prev, cur, minimized)
+}
+
+/// What opening the Remote stations window should do, against the monitors attached now.
+pub(crate) fn restore_remote(app: &tauri::AppHandle, min: (f64, f64)) -> Option<geom::Restored> {
+    let (all, primary) = monitors(app);
+    restore_remote_from(&remote_path(), &all, primary, min)
+}
+
+/// Snapshot the Remote stations window's box. A no-op for any other window, so the quit path
+/// can sweep every window with it.
+pub(crate) fn capture_remote(window: &tauri::WebviewWindow) {
+    if window.label() != crate::remote_window::LABEL {
+        return;
+    }
+    let Some(cur) = live_geometry(window) else {
+        return;
+    };
+    let path = remote_path();
+    let minimized = window.is_minimized().unwrap_or(false);
+    let fullscreen = window.is_fullscreen().unwrap_or(false);
+    if let Some(g) = capture_remote_from(geom::load(&path), cur, minimized, fullscreen) {
+        let _ = geom::save(&path, &g);
+    }
+}
+
+/// Arm the save-on-close on the Remote stations window, on the window itself
+/// ([`arm_panel_capture`]'s shape). Closing the main window closes this one with `close()`, which
+/// sends `CloseRequested` first, so that close is caught too.
+pub(crate) fn arm_remote_capture(window: &tauri::WebviewWindow) {
+    let w = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::CloseRequested { .. }) {
+            capture_remote(&w);
+        }
+    });
+}
+
 /// Whether "stay behind other windows" is offered on this platform: Windows only, for now.
 ///
 /// tao's Windows implementation holds the window at the bottom of the z-order on every
@@ -644,5 +718,122 @@ mod tests {
         std::fs::write(&path, "{\"w\": 1200,").unwrap();
         assert_eq!(load_panel(&path), None, "a torn file is nothing saved");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- the Remote stations window ----------------------------------------------------------
+
+    const REMOTE_MIN: (f64, f64) = crate::remote_window::MIN_INNER;
+
+    fn windowed(w: f64, h: f64, x: f64, y: f64) -> WindowGeometry {
+        WindowGeometry {
+            w,
+            h,
+            x,
+            y,
+            maximized: false,
+        }
+    }
+
+    /// A scratch record file of its own per test, written with `g` (or absent for `None`).
+    fn remote_record(tag: u32, g: Option<WindowGeometry>) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("nexus_remoterec_{}_{tag}.json", std::process::id()));
+        match g {
+            Some(g) => geom::save(&path, &g).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        path
+    }
+
+    #[test]
+    fn the_remote_record_is_a_per_profile_sibling_of_settings_and_nobody_elses() {
+        let p = remote_path();
+        assert_eq!(p.file_name().unwrap(), "window-remote-stations.json");
+        assert_eq!(p.parent(), crate::settings_path().parent());
+        assert_ne!(p, geometry_path());
+        assert_ne!(Some(p), panel_path("connect", Instance::Main));
+    }
+
+    /// Remembered, and clamped ON LOAD to the monitors attached at that moment — the rule this
+    /// module exists for. Read through the window's own record file, as an open reads it.
+    #[test]
+    fn the_remote_window_reopens_where_it_was_clamped_to_the_monitors_attached_now() {
+        let second = area(1920.0, 0.0, 2560.0, 1400.0, 1.0);
+        let path = remote_record(1, Some(windowed(2400.0, 1300.0, 2000.0, 40.0)));
+        // Its monitor still attached: the same place and the same box.
+        let r = restore_remote_from(&path, &[primary(), second], Some(primary()), REMOTE_MIN)
+            .expect("a believable box restores");
+        assert_eq!(r.position, Some((2000.0, 40.0)));
+        assert_eq!((r.w, r.h), (2400.0, 1300.0));
+        // That monitor unplugged since: centred on the primary and fitted to it, never replayed
+        // off-screen.
+        let r = restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN).unwrap();
+        assert_eq!(r.position, None, "centred");
+        assert_eq!((r.w, r.h), (1920.0, 1040.0), "fitted to the work area");
+        // A box too small to be believed opens at the default; a small believable one is held
+        // up to the window's own minimum.
+        let path = remote_record(2, Some(windowed(300.0, 250.0, 40.0, 40.0)));
+        let r = restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN).unwrap();
+        assert_eq!((r.w, r.h), REMOTE_MIN);
+        let path = remote_record(3, Some(windowed(120.0, 90.0, 40.0, 40.0)));
+        assert_eq!(
+            restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN),
+            None
+        );
+        // Nothing saved, or a torn file: the caller's default.
+        let path = remote_record(4, None);
+        assert_eq!(
+            restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN),
+            None
+        );
+        std::fs::write(&path, "{\"w\": 1280,").unwrap();
+        assert_eq!(
+            restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN),
+            None
+        );
+        for tag in 1..=4 {
+            let _ = std::fs::remove_file(remote_record(tag, None));
+        }
+    }
+
+    #[test]
+    fn a_remote_window_closed_full_screen_reopens_at_its_last_windowed_box() {
+        let before = windowed(1280.0, 800.0, 100.0, 80.0);
+        let full = windowed(1920.0, 1080.0, 0.0, 0.0);
+        assert_eq!(
+            capture_remote_from(Some(before), full, false, true),
+            None,
+            "full screen writes nothing"
+        );
+        // So the record still holds the windowed box, and the next open restores it.
+        let path = remote_record(5, Some(before));
+        if let Some(g) = capture_remote_from(geom::load(&path), full, false, true) {
+            geom::save(&path, &g).unwrap();
+        }
+        let r = restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN).unwrap();
+        assert_eq!((r.w, r.h, r.position), (1280.0, 800.0, Some((100.0, 80.0))));
+        let _ = std::fs::remove_file(&path);
+        // A windowed close is recorded as the main window's is: the box, never a minimised park
+        // rect, and a maximised close keeps the box under it.
+        let moved = windowed(1400.0, 900.0, 300.0, 120.0);
+        assert_eq!(
+            capture_remote_from(Some(before), moved, false, false),
+            Some(moved)
+        );
+        let parked = windowed(1400.0, 900.0, -32000.0, -32000.0);
+        assert_eq!(capture_remote_from(Some(before), parked, true, false), None);
+        let maxed = WindowGeometry {
+            maximized: true,
+            ..windowed(1920.0, 1040.0, 0.0, 0.0)
+        };
+        assert_eq!(
+            capture_remote_from(Some(before), maxed, false, false),
+            Some(WindowGeometry {
+                maximized: true,
+                ..before
+            })
+        );
     }
 }
