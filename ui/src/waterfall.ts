@@ -467,6 +467,23 @@ export function parkFloor(
 }
 
 /**
+ * Which rule sets the range the digital waterfall (FT, JS8, RTTY, PSK, SSTV and the torn-off
+ * window) draws each row in, before the operator's G and Z:
+ *
+ * - `parked`: the visual AGC over the visible window, smoothed across rows, with the black point
+ *   parked `WF_PARK_DB` over the noise median (`parkFloor`). What it has drawn since 2026-08-05.
+ * - `auto`: the rig scope's automatic range (`spectrum/scaleRange.ts`, deskHPSDR's waterfall rule:
+ *   the black point 5 dB under the mean of the visible values, the top 55 dB over it), row by row.
+ *
+ * ⚠️ NOT YET RULED ON (2026-10-04): `parked` until the operator rules. Measured on the harness's FT8
+ * period, the quiet rows are 78 % black under the parked floor and 2.4 % black under the auto
+ * range (ui/spectrum-harness/scaleRange.test.ts): the auto range lights the noise this waterfall
+ * keeps dark. Either way this constant is the whole change, and both rules hold still through our
+ * own transmission.
+ */
+export const DIGITAL_WATERFALL_RANGE: 'parked' | 'auto' = 'parked'
+
+/**
  * Segments `flattenRow` splits the row into to estimate the baseline. 16 over a 512-bin
  * 0–4000 Hz row is 32 bins / 250 Hz each: short enough to track a filter's curvature, long
  * enough that the 10th percentile of a segment is a noise statistic (WSJT-X uses 10 over its

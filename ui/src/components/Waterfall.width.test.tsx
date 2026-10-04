@@ -75,24 +75,15 @@ let realCaf: typeof cancelAnimationFrame
 beforeEach(() => {
   localStorage.clear()
   overlay = recordingCtx()
-  const spectrum = recordingCtx()
+  // The overlay only. The picture is the spectrum renderer's, on canvases of its own, and they get
+  // what jsdom gives every canvas (no context), so the renderer stands inert, as it does in jsdom.
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
-    return (this.classList.contains('waterfall-overlay') ? overlay.ctx : spectrum.ctx) as unknown as CanvasRenderingContext2D
+    return (this.classList.contains('waterfall-overlay') ? overlay.ctx : null) as unknown as CanvasRenderingContext2D
   } as unknown as typeof HTMLCanvasElement.prototype.getContext)
-  // The one box the component measures (`resize` reads the spectrum canvas).
+  // The one box the component measures (`resize` reads the waterfall canvas).
   vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockImplementation(
     () => ({ left: 0, top: 0, right: W, bottom: H, width: W, height: H, x: 0, y: 0, toJSON() {} }) as DOMRect,
   )
-  globalThis.ImageData = class {
-    data: Uint8ClampedArray
-    width: number
-    height: number
-    constructor(d: Uint8ClampedArray, w: number, h: number) {
-      this.data = d
-      this.width = w
-      this.height = h
-    }
-  } as unknown as typeof ImageData
   window.matchMedia = ((q: string) =>
     ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList) as typeof window.matchMedia
   globalThis.ResizeObserver = class {

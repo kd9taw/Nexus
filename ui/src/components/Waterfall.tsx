@@ -15,15 +15,15 @@ import {
   agcRange,
   applyGainZero,
   bakeLut,
+  DIGITAL_WATERFALL_RANGE,
   flattenRow,
   isRfScopeSource,
-  normalize,
   parkFloor,
-  resampleRow,
   resolveColormap,
   RowFetchLatch,
   WATERFALL_ZOOMS,
   overlayTextScale,
+  WF_DB_SPAN,
   WF_FLOOR_PCT,
   coerceZoomSpan,
   zoomWindow,
@@ -32,8 +32,9 @@ import {
   tuneTarget,
 } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
-import { WaterfallHistory, ageLabel } from '../waterfallHistory'
-import { drawDss } from '../dss'
+import { ageLabel } from '../waterfallHistory'
+import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../spectrum'
+import { autoRange } from '../spectrum/scaleRange'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
@@ -347,16 +348,16 @@ export function Waterfall({
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
   // live legend readout (updated directly, no React re-render at 8 Hz)
   const dbLabelRef = useRef<HTMLSpanElement>(null)
-  // Retained waterfall DATA (not pixels): every row survives with its own frequency frame,
-  // so the cold paths re-render FROM DATA — instant palette recolor of history, smear-free
-  // zoom/resize, pause + scrollback. The hot path appends + scrolls a retained RGBA buffer
-  // (no canvas readback; the spectrum canvas is now write-only).
-  // Columns = the audio feed's own bin count (`rxdsp::compute_row` BINS), so a row is stored
-  // EXACTLY — no resample on the way in. Storing 1024 forced an upsampling push that
-  // interpolated a one-bin FT8 tone down to 0.8× peak before the renderer ever saw it, and
-  // invented nothing to show for it (the resample to device pixels happens on the way out).
-  // PhoneScope keeps 1024 because it pushes device-width rows, i.e. it decimates.
-  const historyRef = useRef(new WaterfallHistory(512))
+  // The picture is the spectrum renderer's (ui/src/spectrum). It keeps every row as DATA, the
+  // flattened values at the feed's own resolution, each with its own frequency span and the range it
+  // was drawn in, and draws through WebGL2 or canvas-2D from that history: a palette, zoom, resize,
+  // flow, pause or 3D change is a redraw from data, never a resample of pixels. It draws into its own
+  // layer (`.waterfall-render`), over `.waterfall-canvas` and under the overlay. `.waterfall-canvas` is
+  // no longer painted, and stays exactly where it was as the box every gesture lands on and the
+  // click→offset mapping measures: the layers above it take no pointer events, so where a click
+  // tunes did not move (Waterfall.offsets.test.tsx, and the harness's `offsets` probe, pin it).
+  const renderHostRef = useRef<HTMLDivElement>(null)
+  const rendererRef = useRef<SpectrumRenderer | null>(null)
   const [paused, setPaused] = useState(false)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
@@ -374,7 +375,8 @@ export function Waterfall({
   const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(FLOW_KEY) !== 'up')
   const newestAtTopRef = useRef(newestAtTop)
   newestAtTopRef.current = newestAtTop
-  /** Scrollback offset in rows while paused (0 = live tail). */
+  /** Scrollback while paused: the age of the newest row on screen (0 = the live tail). A row
+   *  committed while paused adds one, so the paused picture holds still. */
   const offsetRef = useRef(0)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
   const rebuildRef = useRef<(() => void) | null>(null)
@@ -434,19 +436,23 @@ export function Waterfall({
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
-    // The canvas is WRITE-ONLY now: the scroll happens in a retained CPU-side RGBA
-    // buffer (copyWithin) + one putImageData per row, and every cold path re-renders
-    // from the history ring. The old getImageData-per-row scroll — which forced a
-    // CPU-backed canvas (willReadFrequently) because each GPU readback STALLED the
-    // main thread ("clicking a button takes forever" on laptop GPUs) — is gone, so
-    // the canvas may be GPU-backed again.
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    // Marker/axis overlay context (transparent, cleared each frame). Optional — if it can't be
+    const host = renderHostRef.current
+    if (!canvas || !host) return
+    // `canvas` is the gesture box and is measured, never painted; the renderer puts its own canvas
+    // in `host` (see `renderHostRef`) and draws the picture there.
+    const renderer = createSpectrumRenderer(host)
+    rendererRef.current = renderer
+    // Marker/axis overlay context (transparent, cleared when it redraws). Optional — if it can't be
     // acquired, drawOverlay simply no-ops on the markers rather than crashing the spectrum loop.
     const overlay = overlayRef.current
     const octx = overlay?.getContext('2d') ?? null
+    const release = () => {
+      renderer.destroy()
+      if (rendererRef.current === renderer) rendererRef.current = null
+    }
+    // Nothing to draw on at all (no canvas context of either kind, as under jsdom): no loop, as the
+    // waterfall has always done where it could not paint.
+    if (renderer.backend === 'none' && !octx) return release
 
     let running = true
     // Single-flight guard WITH a watchdog: never overlap async drawRow calls, and never let
@@ -477,70 +483,30 @@ export function Waterfall({
     let dispCeil = 1
     let agcInit = false
     const AGC_ALPHA = 0.1
+    /** The last auto range (`DIGITAL_WATERFALL_RANGE` 'auto'), held through our own transmission. */
+    let autoBase = { floor: 0, ceil: 1 }
 
-    // Retained RGBA viewport buffer (the waterfall area, devW × wfHd): the hot path
-    // scrolls it with copyWithin + writes the one new row at the leading edge (bottom, or top
-    // when the operator has flipped the scroll direction) + blits it once — the canvas
-    // is WRITE-ONLY (the old getImageData readback scroll is gone). Cold paths rebuild it
-    // from the history ring. Realloc only on a real size change.
-    let retBuf: Uint8ClampedArray<ArrayBuffer> | null = null
-    let retImg: ImageData | null = null
-    let retW = 0
-    let retH = 0
-    // Reused per-column resample scratch (device width) — no per-row garbage.
-    let magBuf: Float32Array | null = null
-    let magBufW = 0
-    // Reused FLATTENED-row scratch (bin count) — same reason. `flattenRow` writes here and
-    // every downstream read in drawRow is of this buffer, never of the raw DTO row.
+    // Reused FLATTENED-row scratch (bin count) — no per-row garbage. `flattenRow` writes here and
+    // every downstream read in drawRow is of this buffer, never of the raw DTO row; the renderer
+    // copies it into its history when the row is committed.
     let flatBuf: Float32Array | null = null
-    const retained = (Wd: number, wfHd: number): ImageData => {
-      if (!retBuf || !retImg || retW !== Wd || retH !== wfHd) {
-        retBuf = new Uint8ClampedArray(Wd * wfHd * 4)
-        retImg = new ImageData(retBuf, Wd, wfHd)
-        retW = Wd
-        retH = wfHd
-        // A fresh buffer starts as re-rendered history (or palette floor when empty).
-        historyRef.current.renderInto(
-          retBuf,
-          Wd,
-          wfHd,
-          viewLoRef.current,
-          viewHiRef.current,
-          lutRef.current,
-          offsetRef.current,
-          newestAtTopRef.current,
-        )
-      }
-      return retImg
+    /** The number the next committed row carries (the audio row command numbers nothing itself). */
+    let seq = 0
+    /** The picture needs drawing: a committed row, a resize, or a cold change (palette, view, flow,
+     *  3D, pause, scrollback). It is drawn at most once a frame, and not at all while nothing moved. */
+    let dirty = true
+    /** Everything the overlay drew from last time (see `overlayKeyOf`); '' = draw it again. */
+    let overlayKey = ''
+    const drawPicture = () => {
+      dirty = false
+      renderer.draw(scene())
     }
-    // Cold-path re-render: palette/theme switch, zoom change, scrollback, resize, 2D↔3D.
+    // Cold-path re-render: palette/theme switch, zoom change, scrollback, resize, 2D↔3D, flow. Drawn
+    // at once while the waterfall shows (the layout effects call this before paint, so the picture
+    // and the legend change together); a hidden one draws when it shows again.
     const rebuildFromHistory = () => {
-      if (!(retW > 0 && retH > 0)) return
-      const lut = lutRef.current
-      if (dssRef.current) {
-        // 3D stacked-spectrum: redraw the whole surface directly on the canvas.
-        drawDss(ctx, retW, retH, historyRef.current, lut, [lut[0], lut[1], lut[2]], {
-          loHz: viewLoRef.current,
-          hiHz: viewHiRef.current,
-        })
-        return
-      }
-      if (!retBuf) return
-      historyRef.current.renderInto(
-        retBuf,
-        retW,
-        retH,
-        viewLoRef.current,
-        viewHiRef.current,
-        lut,
-        offsetRef.current,
-        newestAtTopRef.current,
-      )
-      try {
-        ctx.putImageData(retImg!, 0, 0)
-      } catch {
-        /* zero-size mid-layout */
-      }
+      dirty = true
+      if (activeRef.current) drawPicture()
     }
     rebuildRef.current = rebuildFromHistory
 
@@ -576,6 +542,19 @@ export function Waterfall({
     // transform alone does not carry the zoom on Chromium.
     let textScale = 1
     const axisHFor = (h: number) => Math.round((h < 160 ? 14 : 18) * textScale)
+    /** What the renderer draws, read off the refs. No trace: the waterfall fills the canvas above the
+     *  frequency-axis strip, which stays the palette floor under the overlay's axis. */
+    const scene = (): SpectrumScene => ({
+      view: { loHz: viewLoRef.current, hiHz: viewHiRef.current },
+      lut: lutRef.current,
+      layout: { traceH: 0, stripH: Math.round(axisHFor(cssH) * scaleY), lineWidth: 1 },
+      // A pixel over several bins shows their maximum, as `resampleRow` always drew it.
+      detector: 'peak',
+      mode: dssRef.current ? 'dss' : '2d',
+      offsetRows: offsetRef.current,
+      newestAtTop: newestAtTopRef.current,
+      trace: null,
+    })
 
     const resize = (entry?: ResizeObserverEntry) => {
       const rect = canvas.getBoundingClientRect()
@@ -594,25 +573,19 @@ export function Waterfall({
       scaleX = dW / cssW
       scaleY = dH / cssH
       if (dW === devW && dH === devH) return // exact-integer size stable → no reclear
-      // canvas.width/height assignment CLEARS the backing store — but history now lives
-      // as DATA, so a (rare, real) size change simply re-renders the viewport from the
-      // ring: smear-free at the new geometry, no pixel snapshot/re-blit dance. Paint the
-      // colormap floor first so an empty history still reads as a quiet band.
-      canvas.width = dW
-      canvas.height = dH
-      const lut = lutRef.current
-      ctx.fillStyle = `rgb(${lut[0]},${lut[1]},${lut[2]})`
-      ctx.fillRect(0, 0, dW, dH)
+      // The renderer's canvas takes the same device-pixel size. Sizing it CLEARS it — but history
+      // lives as DATA, so a (rare, real) size change simply redraws the picture from it: smear-free
+      // at the new geometry, and an empty history still reads as a quiet band (the palette floor).
       devW = dW
       devH = dH
-      const axisDp = Math.round(axisHFor(cssH) * scaleY)
-      retained(dW, Math.max(1, dH - axisDp)) // realloc + render history at the new size
+      renderer.resize(dW, dH)
       rebuildFromHistory()
-      // Keep the overlay backing store the same device size as the spectrum canvas (it's cleared
-      // each frame, so no history to preserve — a plain resize is fine).
+      // Keep the overlay backing store the same device size (it holds no history, so a plain resize
+      // is fine — and it clears it, so it is drawn again).
       if (overlay && (overlay.width !== dW || overlay.height !== dH)) {
         overlay.width = dW
         overlay.height = dH
+        overlayKey = ''
       }
     }
     resize()
@@ -636,9 +609,8 @@ export function Waterfall({
         return
       }
       // Superseded while we were awaiting: the watchdog gave this call up for lost and the
-      // waterfall has moved on. Resolving late must not append a row out of order — the
-      // history ring and the leading-edge blit are the same picture, and a stale row would
-      // put a wrong scanline into both.
+      // waterfall has moved on. Resolving late must not append a row out of order — a stale
+      // row would put a wrong scanline into the history every picture is drawn from.
       if (!latch.owns(myGen)) return
       const row = spec.row
       if (!row || row.length === 0) return
@@ -648,16 +620,6 @@ export function Waterfall({
       // DATA mode, but skip one here too as defense in depth: keep the last audio frame rather than
       // blanking. (PhoneScope, the CW/Phone scope, IS source-aware and renders RF rows correctly.)
       if (spec.source && isRfScopeSource(spec.source)) return
-
-      // Read dimensions AFTER the await (from the resize-maintained device-pixel
-      // backing store, which is exact under CSS zoom — NOT recomputed from
-      // gBCR × dpr, which zoom would desync). The spectrum scrolls in device px.
-      const axisDp = Math.round(axisHFor(cssH) * scaleY)
-      const Wd = devW
-      const wfHd = Math.max(1, devH - axisDp)
-      if (Wd <= 0 || wfHd <= 0) return
-      // Guard against a stale buffer if a resize is mid-flight.
-      if (Wd > canvas.width || wfHd > canvas.height) return
 
       const nBins = row.length
       const rowLo = spec.loHz ?? F_MIN
@@ -671,10 +633,9 @@ export function Waterfall({
       // end — a bright field and deleted signals at once, and which signal survives decided by
       // where it sits in the passband instead of by its SNR.
       //
-      // Every downstream read is of `frow`, deliberately: the AGC, the history ring (which is
-      // what every cold path re-renders from) and the live blit must all describe the same
-      // picture, or a zoom/palette/resize would repaint the accumulated waterfall differently
-      // from the way it was drawn.
+      // Every downstream read is of `frow`, deliberately: the AGC and the history the renderer
+      // draws every picture from (live, and on every zoom/palette/resize) must describe the same
+      // row, or the accumulated waterfall would not be the one the legend measured.
       //
       // NOT in the producer. `tuneSnap.ts::detectSignal` thresholds a click against a
       // percentile of the row it is handed and then MOVES THE RADIO; PhoneScope/MiniSpectrum
@@ -687,8 +648,8 @@ export function Waterfall({
       // dark-band fix darkened only the HISTORY copy, and the live hot path below paints
       // `frow` independently — so the drawn waterfall still replayed the held row bright,
       // and live and rebuild disagreed, the exact divergence the shared-mapping discipline
-      // in this file exists to prevent). Zeroing `frow` itself puts the floor into BOTH
-      // consumers by construction: the leading-edge write and the retained history. The
+      // in this file exists to prevent). Zeroing `frow` itself puts the floor into the history
+      // by construction, so the live picture and every rebuild show it alike. The
       // AGC is frozen on the same flag, so the darkness cannot re-create the key-up clamp.
       //
       // ⚠️ ONLY WHERE THE OVER IS SHORT — see the `txBlanks` prop. The dark band is honest
@@ -740,15 +701,18 @@ export function Waterfall({
           agcFloor += (floor - agcFloor) * AGC_ALPHA
           agcCeil += (ceil - agcCeil) * AGC_ALPHA
         }
+        if (DIGITAL_WATERFALL_RANGE === 'auto') autoBase = autoRange(frow, WF_DB_SPAN, vLo, vHi)
       }
       // Park the black point WF_PARK_DB above the measured noise median and hold a minimum
       // window (see parkFloor) — the default that makes an empty band read black instead of a
       // bright dancing field. Then the operator's manual gain (contrast) / zero (baseline) on
       // top: both 0 → exactly this default, and Zero still slides ±½ window either side of it.
-      const parked = parkFloor(agcFloor, agcCeil)
+      // (`DIGITAL_WATERFALL_RANGE` in waterfall.ts is where the rig scope's auto range would
+      // replace the park; it is the park until the operator rules.)
+      const base = DIGITAL_WATERFALL_RANGE === 'auto' ? autoBase : parkFloor(agcFloor, agcCeil)
       ;({ floor: dispFloor, ceil: dispCeil } = applyGainZero(
-        parked.floor,
-        parked.ceil,
+        base.floor,
+        base.ceil,
         gainRef.current,
         zeroRef.current,
       ))
@@ -766,95 +730,32 @@ export function Waterfall({
         dbLabelRef.current.textContent = String(range).replace('-', '−')
       }
 
-      // Append the row to the RETAINED HISTORY as normalized intensities over the ROW's
-      // OWN frequency span (carried in the DTO) — the ring is what every cold path
-      // (palette recolor, zoom, resize, scrollback) re-renders from.
-      const tRow = new Float32Array(nBins)
-      // TX rows arrive already zeroed at the source above — the same floor lands here and
-      // on the leading-edge write, so an over reads as the quiet gap it actually was
-      // (WSJT-X's own picture) in the live scroll AND in every cold rebuild.
-      for (let b = 0; b < nBins; b++) tRow[b] = normalize(frow[b], dispFloor, dispCeil)
-      historyRef.current.push(tRow, rowLo, rowHi, Date.now())
+      // Commit the row to the renderer's history: the flattened values themselves, over the ROW's
+      // OWN frequency span (carried in the DTO), with the range they are drawn in. Every picture —
+      // the live one and every cold rebuild (palette, zoom, resize, flow, 3D, scrollback) — is drawn
+      // from it through the same per-pixel mapping, so a rebuild repaints history exactly as it was
+      // drawn live. TX rows arrive already zeroed at the source above, so an over reads as the quiet
+      // gap it actually was (WSJT-X's own picture), live and in every rebuild.
+      renderer.commitRow(
+        { seq: ++seq, tMs: Date.now(), loHz: rowLo, hiHz: rowHi, bins: frow, dbPerUnit: WF_DB_SPAN },
+        { floor: dispFloor, ceil: dispCeil },
+      )
 
-      // PAUSED: history keeps accumulating (nothing is lost) but the VIEW is frozen —
-      // the scroll/blit below is skipped. drawOverlay renders the pause chip + time tape.
-      if (pausedRef.current) return
-
-      // 3DSS: redraw the whole stacked-spectrum surface from history each new row (it's a
-      // rebuild by nature — cheap at the 8 Hz row cadence). The retained-buffer 2D scroll
-      // below is skipped.
-      if (dssRef.current) {
-        const lut = lutRef.current
-        // (retBuf stays allocated from resize() for a clean switch back to 2D.)
-        drawDss(ctx, Wd, wfHd, historyRef.current, lut, [lut[0], lut[1], lut[2]], {
-          loHz: viewLoRef.current,
-          hiHz: viewHiRef.current,
-        })
-        return
-      }
-
-      // Scroll the retained RGBA buffer one row with copyWithin (pure CPU — the old
-      // getImageData readback stall is gone; the canvas is write-only now), write the new
-      // row through the LUT at the leading edge, and blit the buffer once.
-      //
-      // The direction is the operator's (FLOW_KEY), read ONCE here so the shift and the
-      // row it makes room for can never disagree: default = shift every row UP and write
-      // the new row at the BOTTOM; flipped = shift DOWN and write at the TOP. `renderInto`
-      // below/above takes the same flag, which is what keeps a palette switch, zoom, resize
-      // or pause from repainting the accumulated history the other way round.
-      const topDown = newestAtTopRef.current
-      const img = retained(Wd, wfHd)
-      const out = retBuf!
-      const rowBytes = Wd * 4
-      if (topDown) out.copyWithin(rowBytes, 0)
-      else out.copyWithin(0, rowBytes)
-      const lut = lutRef.current
-      // device-x → view frequency → bin, through the SAME mapping the history rebuild
-      // uses (resampleRow: max-pool where a pixel covers several bins, interpolate where
-      // a bin covers several pixels). Before this they disagreed twice over — the live
-      // row interpolated off bin EDGES while the rebuild point-sampled bin cells — so a
-      // palette switch / zoom / resize / pause turned the accumulated waterfall blocky
-      // and nudged it sideways half a bin.
-      const vlo = viewLoRef.current
-      const vhi = viewHiRef.current
-      if (!magBuf || magBufW !== Wd) {
-        magBuf = new Float32Array(Wd)
-        magBufW = Wd
-      }
-      const mag = magBuf
-      resampleRow(frow, rowLo, rowHi, vlo, vhi, mag)
-      const base = topDown ? 0 : (wfHd - 1) * rowBytes
-      for (let x = 0; x < Wd; x++) {
-        const v = mag[x]
-        const o = base + x * 4
-        // NaN = this column's frequency is outside the row's span (a view wider than the
-        // feed) — palette floor, exactly as the rebuild paints it. The old clamp smeared
-        // the row's edge bin across that band instead.
-        if (Number.isNaN(v)) {
-          out[o] = lut[0]
-          out[o + 1] = lut[1]
-          out[o + 2] = lut[2]
-          out[o + 3] = 255
-          continue
-        }
-        const t = normalize(v, dispFloor, dispCeil)
-        const li = (t >= 1 ? 255 : Math.round(t * 255)) * 4
-        out[o] = lut[li]
-        out[o + 1] = lut[li + 1]
-        out[o + 2] = lut[li + 2]
-        out[o + 3] = 255
-      }
-      try {
-        ctx.putImageData(img, 0, 0)
-      } catch {
-        // ignore (e.g. zero-size during layout)
+      // PAUSED: history keeps accumulating (nothing is lost) but the VIEW is frozen — the newest
+      // row on screen ages by one, so the picture holds still and a scrollback stays where it was.
+      // drawOverlay renders the pause chip + time tape. Live, the row scrolls in on the next frame
+      // (and the 3D stack redraws), in the direction the operator chose (FLOW_KEY).
+      if (pausedRef.current) {
+        offsetRef.current = Math.min(offsetRef.current + 1, Math.max(0, renderer.rows - 1))
+      } else {
+        dirty = true
       }
     }
 
     const drawOverlay = () => {
       // The axis + Rx/Tx markers render on the SEPARATE overlay canvas (transparent, fully
-      // cleared each frame). This is what keeps a moved marker from freezing into the scrolling
-      // spectrum image. The spectrum canvas (ctx) is only ever touched by drawRow.
+      // cleared each time it is drawn). This is what keeps a moved marker from freezing into the
+      // scrolling picture, which only the renderer touches.
       if (!octx) return
       // Draw in CSS px; map to the device-pixel store via the measured scale
       // (= zoom × dpr), so the axis + markers stay aligned with the spectrum at
@@ -862,7 +763,7 @@ export function Waterfall({
       octx.setTransform(scaleX, 0, 0, scaleY, 0, 0)
       const W = cssW
       const H = cssH
-      // Clear the entire overlay every frame — no marker/axis pixel survives to the next frame.
+      // Clear the entire overlay — no marker/axis pixel survives into the next drawing.
       octx.clearRect(0, 0, W, H)
       const AXIS_H = axisHFor(H)
       const wfH = H - AXIS_H
@@ -899,21 +800,20 @@ export function Waterfall({
       // Paused: a chip + a right-edge time tape so scrollback has a scale. The tape maps
       // viewport rows → their stored timestamps (device rows ÷ scaleY = CSS rows).
       if (pausedRef.current) {
-        const h = historyRef.current
         const off = offsetRef.current
         octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
         octx.fillStyle = 'rgba(255,200,80,0.95)'
         // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
         // time tape below, and the axis) are measurements drawn as tick labels.
-        const newest = h.frameAt(off)
-        const backLabel = newest ? ageLabel(Date.now() - newest.tsMs) : t('waterfall.paused.now')
+        const newest = renderer.rowAt(off)
+        const backLabel = newest ? ageLabel(Date.now() - newest.tMs) : t('waterfall.paused.now')
         octx.fillText(
           off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused'),
           6 * textScale,
           20 * textScale,
         )
         // Time tape: 4 evenly spaced age labels down the right edge. Each label's age is
-        // read off the SAME mapping renderInto paints with — newest end at the bottom by
+        // read off the SAME mapping the renderer paints with — newest end at the bottom by
         // default, at the top when the operator has flipped the scroll direction.
         // ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD,
         // which was upside down against the picture in the only direction that existed: it
@@ -926,9 +826,9 @@ export function Waterfall({
           const yCss = (wfH * i) / 5
           const yDev = Math.round(((devRows - 1) * i) / 5)
           const age = off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
-          const fr = h.frameAt(age)
+          const fr = renderer.rowAt(age)
           if (!fr) continue
-          octx.fillText(`−${ageLabel(Date.now() - fr.tsMs)}`, W - 34 * textScale, yCss)
+          octx.fillText(`−${ageLabel(Date.now() - fr.tMs)}`, W - 34 * textScale, yCss)
         }
         octx.globalAlpha = 1
       }
@@ -1005,15 +905,25 @@ export function Waterfall({
       }
     }
 
+    /** Everything the overlay draws from, as one string: it is drawn again only when this moves
+     *  (or its inks were dropped, or while paused, when the time tape's ages move every frame). */
+    const overlayKeyOf = () => {
+      const c = cursorsRef.current
+      const named = c ? c.map((k) => `${k.hz}/${k.color}/${k.label}`).join(',') : '-'
+      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}`
+    }
+
     const loop = (now: number) => {
       if (!running) return
       // Paused while the cockpit is navigated away (kept mounted but hidden): skip
       // the spectrum fetch + scroll + overlay entirely so no CPU is spent and the
       // backing store is left untouched. Keep `last` current and `acc` at 0 so the
-      // scroll resumes cleanly (no time-debt burst) the moment we return.
+      // scroll resumes cleanly (no time-debt burst) the moment we return, and draw
+      // the picture once then, whatever the canvas kept while it was away.
       if (!activeRef.current) {
         last = now
         acc = 0
+        dirty = true
         rafRef.current = requestAnimationFrame(loop)
         return
       }
@@ -1035,10 +945,19 @@ export function Waterfall({
             .finally(() => latch.end(myGen))
         }
       }
-      // Overlay is decoupled from the data fetch: repaint every frame so the
-      // markers, click-to-tune feedback, and decode chips stay live and never
-      // freeze — even if a fetch rejects or the cadence is slow (reduced motion).
-      drawOverlay()
+      // The picture, at most once a frame and only when something moved: a committed row, a
+      // resize or a cold change. A frame with no new row draws nothing at all.
+      if (dirty) drawPicture()
+      // Overlay is decoupled from the data fetch: checked every frame, so the markers,
+      // click-to-tune feedback, and decode chips stay live and never freeze — even if a
+      // fetch rejects or the cadence is slow (reduced motion). It is DRAWN only when what it
+      // shows moved: clearing and redrawing a full-window overlay 60 times a second was most
+      // of the waterfall's cost on a large screen.
+      const key = overlayKeyOf()
+      if (key !== overlayKey || pausedRef.current || !inksRef.current) {
+        overlayKey = key
+        drawOverlay()
+      }
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
@@ -1047,6 +966,7 @@ export function Waterfall({
       running = false
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       ro.disconnect()
+      release()
     }
     // intentionally run once; live props read via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1264,13 +1184,13 @@ export function Waterfall({
             // has flipped it. Keeping the sign fixed would send the wheel the wrong way
             // against half the operators' own displays.
             if (!pausedRef.current) return
-            const h = historyRef.current
             const back = newestAtTopRef.current ? e.deltaY > 0 : e.deltaY < 0
             const step = back ? 3 : -3
-            // Viewport height in HISTORY rows ≈ the retained buffer height; a generous
-            // clamp via maxOffset keeps a full screen of rows at max scrollback.
+            // Back at most to the oldest row still held, so the newest row on screen is always a
+            // real one.
             const cur = offsetRef.current
-            const next = Math.max(0, Math.min(h.maxOffset(1), cur + step))
+            const held = rendererRef.current?.rows ?? 0
+            const next = Math.max(0, Math.min(Math.max(0, held - 1), cur + step))
             if (next !== cur) {
               offsetRef.current = next
               rebuildRef.current?.()
@@ -1278,7 +1198,10 @@ export function Waterfall({
           }}
           title={t('waterfall.canvas.title', { mod: MOD_LABEL })}
         />
-        {/* Axis + Rx/Tx markers layer — transparent, cleared each frame, never scrolled. */}
+        {/* The picture: the spectrum renderer's layer, over the gesture canvas and taking no
+            pointer events (see `renderHostRef`). */}
+        <div ref={renderHostRef} className="waterfall-render" aria-hidden="true" />
+        {/* Axis + Rx/Tx markers layer — transparent, cleared when redrawn, never scrolled. */}
         <canvas ref={overlayRef} className="waterfall-overlay" aria-hidden="true" />
         {/* #230: the held picture says it is held. Only where no dark band is painted — an FT
             surface already reads as "that was us transmitting". A live region, so a screen
