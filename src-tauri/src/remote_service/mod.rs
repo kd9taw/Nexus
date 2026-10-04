@@ -6,6 +6,8 @@ mod aprs;
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
 mod audio;
+/// Remote over this network: the shack's own listener, for a paired computer on the same network.
+pub(crate) mod lan;
 /// The relay's older lanes, held to the browser's own key (security review S1-M1).
 mod lanes;
 pub(crate) mod operations;
@@ -56,6 +58,9 @@ pub struct Status {
     /// S3-M1: the service holds another signing key for this station, so browsers refuse its stream
     /// until it is paired again. Its own field, because it lasts past any one request's error.
     key_refused: bool,
+    /// Remote over this network, while it is on or has something to say (`lan`). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lan: Option<lan::LanStatus>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -183,6 +188,16 @@ pub enum Action {
         #[serde(default)]
         key: Option<String>,
     },
+    /// Remote over this network on, at the shack (`lan`): on `address`, this computer's private
+    /// IPv4 address the operator picked, or with none as `lan` chooses; on `port`, or as it was.
+    LanOn {
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        port: Option<u16>,
+    },
+    /// Remote over this network off, at the shack: the port closes and every LAN session ends.
+    LanOff {},
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -418,6 +433,9 @@ struct Control {
     /// The service holds another key for this station (`stationKeyPinned`): pages will refuse its
     /// answers until it is paired again. Said at the shack.
     key_refused: bool,
+    /// Remote over this network (`lan`), beside the relay's road and sharing its authority.
+    /// Taken out of the lock to be used. `None` in a test build of the service.
+    lan: Option<Arc<lan::Lan>>,
 }
 impl Control {
     fn stop(&mut self) {
@@ -505,21 +523,41 @@ impl Service {
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
-        Self::start(
+        let feeds = transport::Feeds {
+            monitor: publisher,
+            spectrum: Some(spectrum),
+            meters,
+            sources,
+            // One encoder for the station, whoever listens: the Listen lane and every stream.
+            #[cfg(feature = "radio")]
+            audio: audio.map(audio::ReceiveFanout::new),
+            stream,
+        };
+        let service = Self::start(
             REMOTE_ORIGIN.to_string(),
             Box::new(SystemVault),
-            engine,
-            transport::Feeds {
-                monitor: publisher,
-                spectrum: Some(spectrum),
-                meters,
-                sources,
-                // One encoder for the station, whoever listens: the Listen lane and every stream.
-                #[cfg(feature = "radio")]
-                audio: audio.map(audio::ReceiveFanout::new),
-                stream,
-            },
-        )
+            engine.clone(),
+            feeds.clone(),
+        );
+        // Remote over this network, beside the relay's road and sharing its one authority.
+        // There is no LAN key until pairing makes one, so it does not listen yet.
+        let authority = service.control.lock().ok().map(|c| c.operations.clone());
+        if let Some(authority) = authority {
+            let lan = Arc::new(lan::Lan::start(
+                crate::settings_path().with_file_name("remote-lan.json"),
+                lan::Deps {
+                    authority,
+                    engine,
+                    feeds,
+                    keys: lan::Keys::none(),
+                    resolve: Arc::new(tempo_stream::lan::network),
+                },
+            ));
+            if let Ok(mut control) = service.control.lock() {
+                control.lan = Some(lan);
+            }
+        }
+        service
     }
     #[cfg(test)]
     fn configured(
@@ -655,11 +693,25 @@ impl Service {
             .collect();
         status.observation_generation = enabled.then(|| control.generation.to_string());
         status.key_refused = control.key_refused;
+        status.lan = control
+            .lan
+            .as_deref()
+            .map(lan::Lan::status)
+            .filter(|lan| lan.on || lan.reason.is_some());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
             status.phase = "disabled".into();
         }
         Ok(status)
+    }
+    /// Remote over this network, out of the lock.
+    fn lan(&self) -> Result<Option<Arc<lan::Lan>>, &'static str> {
+        Ok(self
+            .control
+            .lock()
+            .map_err(|_| "serviceUnavailable")?
+            .lan
+            .clone())
     }
     fn publish_memories(&self, generation: &str, bank: Option<&str>) -> bool {
         // Parse outside the control lock. Recheck the local enable generation at
@@ -734,7 +786,24 @@ impl Service {
                 let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
                 control.operations.invalidate();
                 control.remember(Persist::ClearGrants);
+                let lan = control.lan.clone();
                 drop(control);
+                // "End remote control" ends Remote over this network too: its port closes and every
+                // LAN session ends, and the shack says why until it is turned on again.
+                if let Some(lan) = lan {
+                    lan.end_at_shack();
+                }
+                return self.status();
+            }
+            Action::LanOn { address, port } => {
+                let lan = self.lan()?.ok_or("serviceUnavailable")?;
+                lan.turn_on(address.as_deref(), *port)?;
+                return self.status();
+            }
+            Action::LanOff {} => {
+                if let Some(lan) = self.lan()? {
+                    lan.turn_off();
+                }
                 return self.status();
             }
             _ => {}
@@ -1203,7 +1272,9 @@ impl Controller {
             Action::LoggingPermission { .. }
             | Action::StationPermission { .. }
             | Action::TransmitPermission { .. }
-            | Action::TakeOverLogging {} => return Err("invalidRequest"),
+            | Action::TakeOverLogging {}
+            | Action::LanOn { .. }
+            | Action::LanOff {} => return Err("invalidRequest"),
             Action::Begin { name } => {
                 if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
                     return Err("invalidRequest");

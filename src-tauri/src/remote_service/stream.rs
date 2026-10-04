@@ -42,6 +42,13 @@
 //! - **Input into Nexus only (S11).** Admitted input goes to the station's own main window as the
 //!   `remote-stream-input` event, through [`Host::input`]. There is no OS input call anywhere on
 //!   this path.
+//! - **Two roads, one chain (the operator's ruling of 2026-10-04, "both at once").** A session
+//!   comes by the relay's road or, from a paired computer on the shack's own network, by the LAN
+//!   road (`super::lan`). Everything above and below is the same for both; what differs is the
+//!   socket ([`Road`]): on the LAN road it is on the shack's own address and port, it asks no STUN
+//!   server, and nothing off that network's subnet is heard or tried. One stream at a time for the
+//!   whole station, whichever road (`Authority::claim_stream`), because a stream's end is the
+//!   station's.
 //! - **Receive audio (S5)** is the relay's own audio lane, unaddressed, on the `audio` channel:
 //!   the same encoder, the same bounds, the same "drop, never queue".
 //! - **The page's microphone (S6)** arrives as the session's Opus track. Each packet is decoded
@@ -238,8 +245,43 @@ struct Live {
     thread: std::thread::JoinHandle<()>,
 }
 
-/// The `streamSignal` lane of one relay connection. One stream at a time: the thread it starts
-/// owns the session, and this only routes signals to it.
+/// The road a session came by (the operator's ruling of 2026-10-04, "both at once").
+#[derive(Clone, Copy)]
+enum Road {
+    /// The relay's: a socket on the address the route to the STUN server leaves by, and the
+    /// reflexive candidate that server reports.
+    Relay,
+    /// Remote over this network: a socket on the shack's own address and port, no STUN, and
+    /// nothing tried, sent or heard off that network's subnet (`tempo_stream::lan::Network`).
+    Lan {
+        network: tempo_stream::lan::Network,
+        port: u16,
+    },
+}
+
+impl Road {
+    /// May a datagram from `source` reach the session? On the LAN road, only one from the shack's
+    /// own subnet.
+    fn hears(&self, source: SocketAddr) -> bool {
+        match self {
+            Road::Relay => true,
+            Road::Lan { network, .. } => network.contains(source.ip()),
+        }
+    }
+
+    /// May the session try a candidate the page trickled? On the LAN road, only one on the shack's
+    /// own subnet.
+    fn tries(&self, candidate: &str) -> bool {
+        match self {
+            Road::Relay => true,
+            Road::Lan { network, .. } => network.candidate(candidate).is_some(),
+        }
+    }
+}
+
+/// The `streamSignal` lane of one relay connection, or of one computer's connection on the LAN
+/// road. One stream at a time for the whole station: the thread it starts owns the session, and
+/// this only routes signals to it.
 #[derive(Default)]
 pub(super) struct StreamLane {
     live: Option<Live>,
@@ -252,8 +294,33 @@ impl StreamLane {
         &mut self,
         station: &Station,
         to_relay: &tokio::sync::mpsc::UnboundedSender<String>,
+        ids: (String, String, String),
+        payload: BrowserSignal,
+    ) -> Option<String> {
+        self.signal_on(station, to_relay, ids, payload, Road::Relay)
+    }
+
+    /// The same for a session on the LAN road, which the LAN channel stamped from the key its
+    /// connection was opened with: the session's socket is on `network`'s address at `port`.
+    pub fn signal_lan(
+        &mut self,
+        station: &Station,
+        to_peer: &tokio::sync::mpsc::UnboundedSender<String>,
+        ids: (String, String, String),
+        payload: BrowserSignal,
+        network: tempo_stream::lan::Network,
+        port: u16,
+    ) -> Option<String> {
+        self.signal_on(station, to_peer, ids, payload, Road::Lan { network, port })
+    }
+
+    fn signal_on(
+        &mut self,
+        station: &Station,
+        to_relay: &tokio::sync::mpsc::UnboundedSender<String>,
         (session, device, lease): (String, String, String),
         payload: BrowserSignal,
+        road: Road,
     ) -> Option<String> {
         use tempo_stream::protocol::Validate;
         if self.live.as_ref().is_some_and(|l| l.thread.is_finished()) {
@@ -272,6 +339,11 @@ impl StreamLane {
                 if self.live.is_some() {
                     return state(&session, false, Some(StreamReason::StreamInUse));
                 }
+                // One stream for the whole station, whichever road: another lane's stream
+                // must have finished ending, its presence and the held PTT with it.
+                let Some(claim) = station.authority.claim_stream() else {
+                    return state(&session, false, Some(StreamReason::StreamInUse));
+                };
                 let (signals, inbox) = mpsc::channel();
                 let offer = Offer {
                     session: session.clone(),
@@ -285,7 +357,11 @@ impl StreamLane {
                 let to_relay = to_relay.clone();
                 let thread = std::thread::Builder::new()
                     .name("nexus-remote-stream".into())
-                    .spawn(move || run(station, offer, to_relay, inbox));
+                    .spawn(move || {
+                        // Held until the session has finished ending, however it ends.
+                        let _claim = claim;
+                        run(station, offer, to_relay, inbox, road)
+                    });
                 match thread {
                     Ok(thread) => {
                         self.live = Some(Live {
@@ -820,12 +896,22 @@ fn open_socket() -> Option<(UdpSocket, Reflexive)> {
     ))
 }
 
+/// The session socket on the LAN road: the shack's own address and the port the operator set, so
+/// the shack is reachable on two known ports and no other. Its host candidate is that address.
+fn lan_socket(network: tempo_stream::lan::Network, port: u16) -> Option<UdpSocket> {
+    if !tempo_stream::lan::listenable(network.address()) {
+        return None;
+    }
+    UdpSocket::bind(SocketAddr::new(network.address().into(), port)).ok()
+}
+
 /// One streamed session, from an offer to its end, on its own thread.
 fn run(
     station: Station,
     offer: Offer,
     to_relay: tokio::sync::mpsc::UnboundedSender<String>,
     inbox: mpsc::Receiver<Signal>,
+    road: Road,
 ) {
     let send = |text: Option<String>| {
         if let Some(text) = text {
@@ -852,7 +938,12 @@ fn run(
         ));
         return;
     };
-    let Some((socket, mut reflexive)) = open_socket() else {
+    let opened = match road {
+        Road::Relay => open_socket().map(|(socket, reflexive)| (socket, Some(reflexive))),
+        // No STUN on the shack's own network: its own address is the one candidate.
+        Road::Lan { network, port } => lan_socket(network, port).map(|socket| (socket, None)),
+    };
+    let Some((socket, mut reflexive)) = opened else {
         send(state(
             &session_id,
             false,
@@ -868,7 +959,12 @@ fn run(
         ));
         return;
     };
-    let (mut session, answer) = match Session::accept(&offer.sdp, base, Instant::now()) {
+    // On the LAN road the offer goes in without any candidate off the shack's subnet.
+    let sdp = match road {
+        Road::Relay => std::borrow::Cow::Borrowed(offer.sdp.as_str()),
+        Road::Lan { network, .. } => std::borrow::Cow::Owned(network.offer(&offer.sdp)),
+    };
+    let (mut session, answer) = match Session::accept(&sdp, base, Instant::now()) {
         Ok(accepted) => accepted,
         Err(refusal) => {
             send(state(&session_id, false, Some(refusal.reason())));
@@ -919,8 +1015,10 @@ fn run(
     let mut buf = vec![0u8; 2048];
     loop {
         let now = Instant::now();
-        if let Some(request) = reflexive.due(now) {
-            let _ = socket.send_to(&request, reflexive.server);
+        if let Some(reflexive) = reflexive.as_mut() {
+            if let Some(request) = reflexive.due(now) {
+                let _ = socket.send_to(&request, reflexive.server);
+            }
         }
         let wait = session
             .next_timeout()
@@ -931,8 +1029,13 @@ fn run(
             Ok((n, source)) => {
                 let packet = &buf[..n];
                 let now = Instant::now();
-                match tempo_stream::stun::mapped(packet, &reflexive.transaction) {
-                    Some(public) if source == reflexive.server => {
+                let mapped = reflexive.as_mut().and_then(|reflexive| {
+                    tempo_stream::stun::mapped(packet, &reflexive.transaction)
+                        .filter(|_| source == reflexive.server)
+                        .map(|public| (reflexive, public))
+                });
+                match mapped {
+                    Some((reflexive, public)) => {
                         reflexive.found = true;
                         if let Some(candidate) = session.add_reflexive(public, now) {
                             send(
@@ -947,7 +1050,9 @@ fn run(
                             );
                         }
                     }
-                    _ => {
+                    // On the LAN road nothing from off the shack's subnet reaches the session.
+                    None if !road.hears(source) => {}
+                    None => {
                         session.receive(now, source, packet);
                     }
                 }
@@ -961,7 +1066,10 @@ fn run(
         loop {
             match inbox.try_recv() {
                 Ok(Signal::Candidate(line)) => {
-                    session.add_remote_candidate(&line, now);
+                    // …and no candidate off it is ever tried.
+                    if road.tries(&line) {
+                        session.add_remote_candidate(&line, now);
+                    }
                 }
                 Ok(Signal::Close(reason)) => {
                     session.close(reason, now);
@@ -1091,5 +1199,7 @@ fn run(
     tempo_core::applog::info("remote", &format!("stream: ended ({ended:?})"));
 }
 
+#[cfg(test)]
+mod lan_tests;
 #[cfg(test)]
 pub(super) mod tests;

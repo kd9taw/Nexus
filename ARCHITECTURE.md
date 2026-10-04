@@ -23,7 +23,10 @@ The hosted Remote pilot reuses `App.tsx` through `applicationTransport.ts` benea
 native session in `src-tauri/src/remote_service/` owns closed, versioned reads and
 a separate versioned operation contract. Nexus at the shack owns distinct local
 logging and station-control grants, the shared controller lease, expiring
-context-bound commands, deduplication and durable append receipts. Receiver
+context-bound commands, deduplication and durable append receipts. The shack can also
+listen on its own network for a paired computer (`remote_service/lan`): TLS 1.3 with
+both ends' raw keys pinned, on a private IPv4 address only, beside the relay's road. The
+two roads share one authority and one lease, bound to the connection that took it. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh

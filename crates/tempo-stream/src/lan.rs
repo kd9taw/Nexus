@@ -40,7 +40,14 @@
 //! that refused private or host candidates (one way to stop a relay that forges the station's
 //! answer from pointing the browser at the operator's network) would end same-network streaming.
 //! That threat is for a station-signed answer to settle, not for a candidate filter.
-use std::net::{IpAddr, SocketAddr};
+//!
+//! **Remote over this network** (the shack's own listener, for a paired computer on the same
+//! network, with no relay) asks the other question: where may the shack listen, and whom may it
+//! hear? [`listenable`] says exactly which addresses, private IPv4 only (the operator's ruling of
+//! 2026-10-04, "any private network"); [`Network`] is the one it listens on, with its subnet, and
+//! nothing from outside that subnet is heard or tried, on the listener or on a stream's socket;
+//! [`network`] finds it on this computer.
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::video::picture::Path;
 
@@ -143,6 +150,250 @@ pub fn leaks(text: &str, own: Option<SocketAddr>) -> bool {
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------------------------
+// Remote over this network: where the shack's own listener may be, and who it may hear.
+// ---------------------------------------------------------------------------------------------
+
+/// May Remote over this network listen on `ip`? A private IPv4 address, and exactly the RFC 1918
+/// ranges: 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16 (`Ipv4Addr::is_private`). Never the
+/// unspecified address, loopback (127/8), link-local (169.254/16), the shared carrier-NAT space
+/// 100.64/10 (where Tailscale and other overlay networks number their machines), multicast,
+/// broadcast, the documentation ranges, any public address, and in this version never IPv6. The
+/// operator's ruling of 2026-10-04 is "any private network the shack joins": that much, no more.
+pub fn listenable(ip: Ipv4Addr) -> bool {
+    ip.is_private()
+}
+
+/// The shack's own network for Remote over this network: one private IPv4 address of this
+/// computer's, and its subnet. Only a peer inside that subnet is heard, by the listener and by a
+/// stream's socket alike, and only candidates inside it are tried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Network {
+    address: Ipv4Addr,
+    prefix: u8,
+}
+
+impl Network {
+    /// `address` and the length of its subnet's prefix, or `None` when the address is not one to
+    /// listen on ([`listenable`]). A prefix shorter than the address's own private range is taken
+    /// as the range's, so a misconfigured adapter cannot widen the subnet past it to the internet.
+    pub fn new(address: Ipv4Addr, prefix: u8) -> Option<Self> {
+        if !listenable(address) {
+            return None;
+        }
+        let range = match address.octets() {
+            [10, ..] => 8,
+            [172, ..] => 12,
+            _ => 16,
+        };
+        Some(Self {
+            address,
+            prefix: prefix.clamp(range, 32),
+        })
+    }
+
+    pub fn address(&self) -> Ipv4Addr {
+        self.address
+    }
+
+    pub fn prefix(&self) -> u8 {
+        self.prefix
+    }
+
+    /// Is `ip` on this subnet? An IPv4-mapped IPv6 address is its IPv4 one; any other IPv6 address
+    /// is not.
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let v4 = match ip {
+            IpAddr::V4(v4) => v4,
+            IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+                Some(v4) => v4,
+                None => return false,
+            },
+        };
+        let mask = u32::MAX << (32 - u32::from(self.prefix));
+        u32::from(v4) & mask == u32::from(self.address) & mask
+    }
+
+    /// The address a candidate line names, when it is on this subnet. An mDNS name, a line that
+    /// does not parse, and an address anywhere else (a reflexive or relay candidate, loopback): no.
+    pub fn candidate(&self, line: &str) -> Option<SocketAddr> {
+        let line = line.trim();
+        let words: Vec<&str> = line
+            .strip_prefix("a=")
+            .unwrap_or(line)
+            .strip_prefix("candidate:")?
+            .split_whitespace()
+            .collect();
+        let address: SocketAddr = format!("{}:{}", words.get(4)?, words.get(5)?)
+            .parse()
+            .ok()?;
+        self.contains(address.ip()).then_some(address)
+    }
+
+    /// `sdp` without any candidate line that names an address off this subnet, so the station never
+    /// tries one: a page's offer, before the session answers it.
+    pub fn offer(&self, sdp: &str) -> String {
+        sdp.split_inclusive('\n')
+            .filter(|line| {
+                let line = line.trim();
+                !line.starts_with("a=candidate:") || self.candidate(line).is_some()
+            })
+            .collect()
+    }
+}
+
+/// Why there is no network to listen on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoNetwork {
+    /// Not on this platform: what the listener serves, the stream, is Windows only.
+    Unavailable,
+    /// The address the operator picked is not one of this computer's right now, or not private.
+    Gone,
+    /// The route to the internet does not leave by a private address of this computer's, and it
+    /// has no private address, or more than one: the operator picks.
+    Choose,
+}
+
+/// Where Remote over this network listens: `chosen`, the operator's pick, when it is a private
+/// address this computer has; with none, the address the route to the internet leaves by
+/// (`route`), when that is a private address this computer has; else this computer's one private
+/// address. `addresses` are this computer's IPv4 addresses on adapters that are up, each with the
+/// length of its subnet's prefix.
+pub fn choose(
+    chosen: Option<Ipv4Addr>,
+    route: Option<Ipv4Addr>,
+    addresses: &[(Ipv4Addr, u8)],
+) -> Result<Network, NoNetwork> {
+    let find = |ip: Ipv4Addr| {
+        addresses
+            .iter()
+            .find(|(address, _)| *address == ip)
+            .and_then(|&(address, prefix)| Network::new(address, prefix))
+    };
+    if let Some(ip) = chosen {
+        return find(ip).ok_or(NoNetwork::Gone);
+    }
+    if let Some(network) = route.and_then(find) {
+        return Ok(network);
+    }
+    let mut private = addresses
+        .iter()
+        .filter_map(|&(address, prefix)| Network::new(address, prefix));
+    match (private.next(), private.next()) {
+        (Some(only), None) => Ok(only),
+        _ => Err(NoNetwork::Choose),
+    }
+}
+
+/// [`choose`], from this computer's own adapters and route.
+pub fn network(chosen: Option<Ipv4Addr>) -> Result<Network, NoNetwork> {
+    #[cfg(windows)]
+    {
+        choose(chosen, adapters::route(), &adapters::up())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = chosen;
+        Err(NoNetwork::Unavailable)
+    }
+}
+
+#[cfg(windows)]
+mod adapters {
+    use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+
+    use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+
+    /// The address the route to the internet leaves by: a UDP socket "connected" to a documentation
+    /// address (RFC 5737) learns the interface it would leave by. Nothing is sent, and no name is
+    /// looked up.
+    pub fn route() -> Option<Ipv4Addr> {
+        let probe = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+        probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+        match probe.local_addr().ok()?.ip() {
+            IpAddr::V4(v4) => Some(v4),
+            IpAddr::V6(_) => None,
+        }
+    }
+
+    /// This computer's IPv4 addresses on adapters that are up, each with its prefix length.
+    pub fn up() -> Vec<(Ipv4Addr, u8)> {
+        let mut size: u32 = 16 * 1024;
+        for _ in 0..4 {
+            // In u64s: the records the call writes there need 8-byte alignment.
+            let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+            let first = buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+            let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+            // SAFETY: `first` points at `size` writable bytes, aligned for the records; the call
+            // writes no more than `size` and says so when it needs more.
+            let result = unsafe {
+                GetAdaptersAddresses(u32::from(AF_INET.0), flags, None, Some(first), &mut size)
+            };
+            if result == ERROR_BUFFER_OVERFLOW.0 {
+                continue;
+            }
+            if result != ERROR_SUCCESS.0 {
+                return Vec::new();
+            }
+            let mut found = Vec::new();
+            let mut adapter = first.cast_const();
+            // SAFETY: on success the call wrote a list of records inside `buffer`, each `Next`
+            // null or pointing at another record there, and `buffer` outlives this walk.
+            while let Some(record) = unsafe { adapter.as_ref() } {
+                if record.OperStatus == IfOperStatusUp {
+                    let mut unicast = record.FirstUnicastAddress.cast_const();
+                    // SAFETY: as above, the unicast list lives inside `buffer`.
+                    while let Some(entry) = unsafe { unicast.as_ref() } {
+                        let socket = entry.Address.lpSockaddr;
+                        // SAFETY: a non-null address points at a SOCKADDR the call wrote, and one
+                        // whose family is AF_INET is a SOCKADDR_IN.
+                        if let Some(address) = unsafe { socket.as_ref() } {
+                            if address.sa_family == AF_INET {
+                                let ip =
+                                    unsafe { (*socket.cast::<SOCKADDR_IN>()).sin_addr.S_un.S_addr };
+                                found.push((
+                                    Ipv4Addr::from(u32::from_be(ip)),
+                                    entry.OnLinkPrefixLength,
+                                ));
+                            }
+                        }
+                        unicast = entry.Next.cast_const();
+                    }
+                }
+                adapter = record.Next.cast_const();
+            }
+            return found;
+        }
+        Vec::new()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// On a real Windows network stack: this computer's own route and addresses read back, each
+        /// a plausible prefix, and the route's address among them.
+        #[test]
+        fn this_computers_addresses_and_route_are_read() {
+            let up = up();
+            assert!(!up.is_empty(), "no IPv4 address on an adapter that is up");
+            assert!(up.iter().all(|&(_, prefix)| prefix <= 32), "{up:?}");
+            if let Some(route) = route() {
+                assert!(
+                    up.iter().any(|&(ip, _)| ip == route),
+                    "route {route} not among {up:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -344,5 +595,173 @@ mod tests {
         ] {
             assert!(leaks(leak, own), "missed: {leak}");
         }
+    }
+
+    // ----- Remote over this network -----
+
+    fn v4(text: &str) -> Ipv4Addr {
+        text.parse().unwrap()
+    }
+
+    /// ★ As ruled on 2026-10-04 ("any private network"): the listener may be on a private IPv4
+    /// address and nothing else. Each RFC 1918 range's first and last host are taken; the addresses
+    /// just outside each, and every other kind (loopback, link-local, carrier NAT, multicast,
+    /// broadcast, documentation, public) is not.
+    #[test]
+    fn only_an_rfc_1918_address_is_listenable() {
+        for ok in [
+            "10.0.0.1",
+            "10.255.255.254",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.0.1",
+            "192.168.255.254",
+        ] {
+            assert!(listenable(v4(ok)), "refused {ok}");
+        }
+        for refused in [
+            "0.0.0.0",
+            "127.0.0.1",
+            "169.254.1.1",
+            "100.64.0.1",
+            "100.127.255.254",
+            "9.255.255.255",
+            "11.0.0.0",
+            "172.15.255.255",
+            "172.32.0.0",
+            "192.167.255.255",
+            "192.169.0.0",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "198.18.0.1",
+            "224.0.0.251",
+            "255.255.255.255",
+            "8.8.8.8",
+        ] {
+            assert!(!listenable(v4(refused)), "listenable: {refused}");
+        }
+    }
+
+    /// ★ The subnet check: a peer on the shack's subnet is heard and one anywhere else is not,
+    /// loopback included. A prefix shorter than the private range cannot widen it past the range,
+    /// and an address that is not private makes no network at all.
+    #[test]
+    fn a_network_holds_its_subnet_and_never_past_its_private_range() {
+        let home = Network::new(v4("192.168.1.20"), 24).unwrap();
+        for on in [
+            "192.168.1.1",
+            "192.168.1.20",
+            "192.168.1.254",
+            "::ffff:192.168.1.7",
+        ] {
+            assert!(home.contains(on.parse().unwrap()), "{on} refused");
+        }
+        for off in [
+            "192.168.2.1",
+            "127.0.0.1",
+            "8.8.8.8",
+            "10.0.0.1",
+            "::1",
+            "fe80::1",
+        ] {
+            assert!(!home.contains(off.parse().unwrap()), "{off} heard");
+        }
+        let wide = Network::new(v4("10.1.2.3"), 4).unwrap();
+        assert_eq!(wide.prefix(), 8, "a /4 widened past 10/8");
+        assert!(wide.contains("10.200.0.1".parse().unwrap()));
+        assert!(
+            !wide.contains("11.0.0.1".parse().unwrap()),
+            "a /4 reached 11/8"
+        );
+        let zero = Network::new(v4("172.20.5.5"), 0).unwrap();
+        assert!(zero.contains("172.31.0.1".parse().unwrap()));
+        assert!(
+            !zero.contains("172.32.0.1".parse().unwrap()),
+            "a /0 reached past 172.16/12"
+        );
+        let single = Network::new(v4("192.168.1.20"), 32).unwrap();
+        assert!(single.contains("192.168.1.20".parse().unwrap()));
+        assert!(!single.contains("192.168.1.21".parse().unwrap()));
+        for not_private in ["8.8.8.8", "100.64.0.1", "127.0.0.1", "169.254.0.1"] {
+            assert_eq!(Network::new(v4(not_private), 24), None, "{not_private}");
+        }
+    }
+
+    /// ★ Only a candidate on the shack's subnet is tried: a page's host candidate there is taken; a
+    /// reflexive or relay candidate, an mDNS name, loopback and a malformed line are not. An offer
+    /// keeps every other line exactly as it was.
+    #[test]
+    fn only_candidates_on_the_subnet_are_tried() {
+        let home = Network::new(v4("192.168.1.20"), 24).unwrap();
+        let host = "candidate:1 1 udp 2122260223 192.168.1.33 50000 typ host generation 0";
+        assert_eq!(
+            home.candidate(host),
+            Some("192.168.1.33:50000".parse().unwrap())
+        );
+        assert!(
+            home.candidate(&format!("a={host}")).is_some(),
+            "the a= form refused"
+        );
+        for refused in [
+            "candidate:2 1 udp 1686052607 203.0.113.9 50001 typ srflx raddr 192.168.1.33 rport 50000",
+            "candidate:3 1 udp 41885439 198.51.100.4 3478 typ relay raddr 203.0.113.9 rport 50001",
+            "candidate:4 1 udp 2122260223 4f3c-9a.local 50002 typ host",
+            "candidate:5 1 udp 2122260223 127.0.0.1 50003 typ host",
+            "candidate:6 1 udp 2122260223 192.168.2.33 50004 typ host",
+            "candidate:7 1 udp",
+            "not a candidate",
+        ] {
+            assert_eq!(home.candidate(refused), None, "tried: {refused}");
+        }
+        let offer = "v=0\r\na=group:BUNDLE 0\r\n\
+            a=candidate:1 1 udp 2122260223 192.168.1.33 50000 typ host\r\n\
+            a=candidate:2 1 udp 1686052607 203.0.113.9 50001 typ srflx raddr 0.0.0.0 rport 0\r\n\
+            a=candidate:4 1 udp 2122260223 4f3c-9a.local 50002 typ host\r\n\
+            a=fingerprint:sha-256 AB:CD\r\n";
+        assert_eq!(
+            home.offer(offer),
+            "v=0\r\na=group:BUNDLE 0\r\n\
+            a=candidate:1 1 udp 2122260223 192.168.1.33 50000 typ host\r\n\
+            a=fingerprint:sha-256 AB:CD\r\n"
+        );
+    }
+
+    /// ★ Where the listener goes: the operator's pick when this computer has it; with none, the
+    /// route's address when it is private; else this computer's one private address. CONTROLS, in
+    /// the same table: a pick that is gone or public, and a choice that is not one.
+    #[test]
+    fn the_listener_goes_on_the_pick_the_route_or_the_only_private_address() {
+        let wifi = (v4("192.168.1.20"), 24);
+        let wsl = (v4("172.25.48.1"), 20);
+        let public = (v4("203.0.113.5"), 24);
+        let cgnat = (v4("100.70.1.2"), 10);
+        let at = |n: (Ipv4Addr, u8)| Ok(Network::new(n.0, n.1).unwrap());
+        // The operator's pick.
+        assert_eq!(choose(Some(wsl.0), Some(wifi.0), &[wifi, wsl]), at(wsl));
+        assert_eq!(
+            choose(Some(v4("192.168.9.9")), Some(wifi.0), &[wifi]),
+            Err(NoNetwork::Gone)
+        );
+        assert_eq!(
+            choose(Some(public.0), None, &[public, wifi]),
+            Err(NoNetwork::Gone)
+        );
+        // No pick: the route, when private.
+        assert_eq!(choose(None, Some(wifi.0), &[wsl, wifi]), at(wifi));
+        // A route that is not private: the one private address there is, or the operator picks.
+        assert_eq!(choose(None, Some(public.0), &[public, wifi]), at(wifi));
+        assert_eq!(choose(None, Some(cgnat.0), &[cgnat, wifi]), at(wifi));
+        assert_eq!(
+            choose(None, Some(public.0), &[public, wifi, wsl]),
+            Err(NoNetwork::Choose)
+        );
+        assert_eq!(
+            choose(None, Some(public.0), &[public, cgnat]),
+            Err(NoNetwork::Choose)
+        );
+        // A LAN with no internet at all: no route.
+        assert_eq!(choose(None, None, &[wifi]), at(wifi));
+        assert_eq!(choose(None, None, &[]), Err(NoNetwork::Choose));
     }
 }

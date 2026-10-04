@@ -21,6 +21,8 @@ pub(super) struct Owner {
     epoch: u64,
     connection: u64,
     lease_epoch: u64,
+    /// The LAN connection the lease was taken on, or `None` for the relay's.
+    lan: Option<u64>,
 }
 
 impl Owner {
@@ -31,14 +33,17 @@ impl Owner {
     /// A lease that was RELEASED, replaced by another browser, revoked or invalidated has not run
     /// out — `now` is still inside it, or one of the identities above has moved — so the owner is
     /// dropped exactly as before and the refusals for those cases are unchanged.
-    fn outlived_its_lease(&self, c: &Core, now: Instant) -> bool {
+    fn outlived_its_lease(&self, c: &Core, now: Instant, lan_open: bool) -> bool {
         c.lease.is_none()
             && now >= self.until
             && c.boot.as_deref() == Some(self.boot.as_str())
             && c.control_grants.contains(&self.device)
             && self.epoch == c.epoch
-            && self.connection == c.connection
-            && self.lease_epoch == c.lease_epoch
+            && match self.lan {
+                None => self.connection == c.connection && self.lease_epoch == c.lease_epoch,
+                // A LAN controller's connection is all of its road there is.
+                Some(_) => lan_open,
+            }
     }
 }
 
@@ -103,6 +108,11 @@ impl Authority {
     /// that is a smaller harm than a keyed rig with a Stop button that reported a refusal. It
     /// keeps nothing else alive: every arming path checks the LIVE lease and the transmit grant.
     pub(super) fn sync_stop_owner(&self, c: &Core, now: Instant) {
+        // The lease's road, for the relay's departures, which cannot wait for Core.
+        self.lan_lease.store(
+            c.lease.as_ref().and_then(|l| l.lan).unwrap_or(0),
+            Ordering::SeqCst,
+        );
         let owner = c
             .lease
             .as_ref()
@@ -118,14 +128,16 @@ impl Authority {
                     epoch: c.epoch,
                     connection: c.connection,
                     lease_epoch: c.lease_epoch,
+                    lan: l.lan,
                 })
             });
         // No path holding this mutex waits for Core, Engine or an external resource.
         if let Ok(mut current) = self.stop_owner.lock() {
             if owner.is_none()
-                && current
-                    .as_ref()
-                    .is_some_and(|o| o.outlived_its_lease(c, now))
+                && current.as_ref().is_some_and(|o| {
+                    let open = o.lan.is_some_and(|id| self.lan_open(id));
+                    o.outlived_its_lease(c, now, open)
+                })
             {
                 return;
             }
@@ -181,11 +193,17 @@ impl Authority {
         }
         let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
         let owner = owner.as_ref().ok_or("localPermissionRequired")?;
-        if owner.connection != connection
-            || connection != self.connection.load(Ordering::SeqCst)
-            || owner.epoch != self.epoch.load(Ordering::SeqCst)
-            || owner.lease_epoch != self.lease_epoch.load(Ordering::SeqCst)
-        {
+        let current = match owner.lan {
+            None => {
+                owner.connection == connection
+                    && connection == self.connection.load(Ordering::SeqCst)
+                    && owner.lease_epoch == self.lease_epoch.load(Ordering::SeqCst)
+            }
+            // A LAN controller stops on its own connection, by either of its roads, while that
+            // connection is open; nothing on the relay's road moves it.
+            Some(lan) => lan == connection && self.lan_open(lan),
+        };
+        if !current || owner.epoch != self.epoch.load(Ordering::SeqCst) {
             return Err("staleConnection");
         }
         if owner.boot != *station_boot_id {

@@ -871,9 +871,10 @@ fn the_guard_constructors_answer_as_the_mutex_does_and_count_while_held() {
 }
 
 /// Every `.save(` call outside test code, as `path:line: receiver.save(`, but the Remote vault's
-/// (`vault.save(`, a credential store, not a settings file) and, unless `launch_too`, launch's in
-/// `run()`, made before the Engine or any writer thread exists. Every other `.save(` in these
-/// crates writes a settings file, and each one belongs to the file's writer
+/// (`vault.save(`, a credential store, not a settings file), Remote over this network's switch
+/// (`switch.save(` in `remote_service/lan.rs`, a one-writer file of its own) and, unless
+/// `launch_too`, launch's in `run()`, made before the Engine or any writer thread exists. Every
+/// other `.save(` in these crates writes a settings file, and each one belongs to the file's writer
 /// (`tempo_app::settings::writer::SettingsWriter`): a snapshot queued under the Engine lock, a
 /// synchronous `save_now` where the save's result decides the change, a `rewrite` for a
 /// read-modify-write. A bare save holds the radio loop on the disk when it runs under the Engine
@@ -889,6 +890,12 @@ fn bare_settings_saves(files: &[(String, String)], launch_too: bool) -> Vec<Stri
             let (start, recv) = receiver(&code, dot);
             let recv: String = recv.split_whitespace().collect();
             if recv == "vault" || recv.ends_with(".vault") {
+                continue;
+            }
+            // Remote over this network's switch (`remote-lan.json`): a file of its own with one
+            // writer, saved under the switch's own lock with its own temporary file, never under the
+            // Engine's lock and never `settings.json`. Not a settings file.
+            if path == "src-tauri/src/remote_service/lan.rs" && recv == "switch" {
                 continue;
             }
             let in_run = items
