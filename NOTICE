@@ -233,6 +233,8 @@ FlexRadio backend**, translated from C++/Qt to Rust:
   `RadioConnection`);
 - the status decoders and command encodings (`FlexBackend`, `FlexKvCarry`, and the delta types
   `SliceDelta`, `TransmitDelta`, `RadioDelta`, `MeterDef` and `ProfileDelta`);
+- the VITA-49 decoders and frame assembly (`PanadapterStream`, `VitaBinCoverage`,
+  `VitaTileFrequency`);
 - the interlock readback (`FlexPttStopTracker`, `FlexPttWireSession`);
 - the ownership and registration policies (`RadioStatusOwnership`, `StreamStatus`,
   `DisplayInventoryPolicy`, `SliceRecreatePolicy`, `GuiClientRegistrationState`,
@@ -820,7 +822,7 @@ Transport standard** (VITA), and validated against synthetic frames. The FFT-pac
 field layout is cross-checked against the open-source **FlexLib** reference as a wire-
 format fact, not a code copy. The native client's protocol core (`crates/tempo-net/src/flex/`)
 is ported from AetherSDR (see *Upstream lineage*); its protocol facts come from FlexRadio's
-public API documentation. **FlexRadio's proprietary FlexLib .NET library is NOT
+public API documentation and the VITA-49 standard. **FlexRadio's proprietary FlexLib .NET library is NOT
 included or redistributed** — it is redistributable with third-party apps and requires
 a license only for *commercial* products, and Nexus neither bundles it nor is a
 commercial product. FlexRadio publishes this API expressly for third-party developers,

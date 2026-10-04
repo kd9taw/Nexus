@@ -14,14 +14,16 @@
 //! | `StuckTransmit` | the unkey readback; escalation; the next session will not key under the old handle | [`a_stuck_transmitter_escalates_and_the_next_session_will_not_key`] |
 //! | `ForeignClient` | ownership by client handle; never key a transmitter that is not ours | [`another_clients_objects_are_shown_never_touched`], [`another_clients_transmitter_is_never_taken`] |
 //! | `DisconnectMidOver` | unkey locally first; never swap under a keyed transmitter | [`a_session_lost_mid_over_unkeys_first_and_reconnects_without_a_swap`] |
-//! | `Vita` | receive continuity | not here: nothing in this module reads VITA-49 yet; the simulator's own tests trip the shipped `flexvita` guards |
+//! | `Vita` | frame assembly by per-bin coverage: a lost fragment costs its own frame, a reordered one costs nothing | [`a_lost_or_reordered_display_packet_trips_the_coverage_guard`] |
 
+use std::io::{ErrorKind, Read};
+use std::net::{TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
 use tempo_flexsim::session::{Item, Pattern};
 use tempo_flexsim::{
-    Closer, Config as SimConfig, Event as SimEvent, Fault, Foreign, Session as SimSession,
-    Simulator,
+    Closer, Config as SimConfig, Content, Event as SimEvent, Fault, Foreign, Session as SimSession,
+    Simulator, Start, Stream,
 };
 
 use super::admission::Refusal;
@@ -29,7 +31,12 @@ use super::encode::{Command, Station, TxStart, TxStop};
 use super::model::{ObjectRef, Owner};
 use super::reconnect::{End, Ladder, Step};
 use super::session::{Config, ConnError, Connection, Event, SendError, StopOutcome};
+use super::vita::{
+    decode_fft, decode_tile, row_level, FftAssembler, FftFrame, TileAssembler, TileRow, FFT_CLASS,
+    WATERFALL_CLASS,
+};
 use super::wire::split_status;
+use crate::flexvita::parse_vita;
 
 /// The longest any single wait may take before a test fails.
 const WAIT: Duration = Duration::from_secs(10);
@@ -960,4 +967,176 @@ fn teardown_removes_our_stream_and_waits_for_its_reply() {
         !commands(&sim, 0).contains(&"stream remove 0x04000002".to_string()),
         "another client's stream is not ours to remove"
     );
+}
+
+// ── VITA-49 display streams ──────────────────────────────────────────────────────────────────
+
+/// Our pan, whose id is its FFT stream id, and its waterfall, whose id is its tile stream id.
+const OUR_PAN: u32 = 0x4000_0000;
+const OUR_WATERFALL: u32 = 0x4200_0000;
+
+/// Connect, read the prologue so the simulator holds the connection live, then register a UDP
+/// socket with the one-byte datagram: the simulator's synthetic streams come to that socket.
+fn vita_client(sim: &Simulator) -> (TcpStream, UdpSocket) {
+    let mut tcp = TcpStream::connect(sim.tcp_addr()).expect("the simulator accepts");
+    tcp.set_read_timeout(Some(WAIT)).unwrap();
+    let deadline = Instant::now() + WAIT;
+    let mut prologue = Vec::new();
+    let mut buf = [0u8; 256];
+    while prologue.iter().filter(|&&b| b == b'\n').count() < 2 {
+        match tcp.read(&mut buf) {
+            Ok(0) => panic!("closed before the prologue"),
+            Ok(n) => prologue.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < deadline => {}
+            Err(e) => panic!("no prologue: {e}"),
+        }
+    }
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.set_read_timeout(Some(WAIT)).unwrap();
+    udp.send_to(&[0], sim.udp_addr()).unwrap();
+    (tcp, udp)
+}
+
+/// `n` datagrams, in their order of arrival. A read that a stop and continue of the test process
+/// interrupts is retried; one that times out fails the test.
+fn datagrams(udp: &UdpSocket, n: usize) -> Vec<Vec<u8>> {
+    let mut buf = [0u8; 2048];
+    (0..n)
+        .map(|i| {
+            let deadline = Instant::now() + WAIT;
+            loop {
+                match udp.recv_from(&mut buf) {
+                    Ok((len, _)) => break buf[..len].to_vec(),
+                    Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < deadline => {}
+                    Err(e) => panic!("datagram {i} of {n} never came: {e}"),
+                }
+            }
+        })
+        .collect()
+}
+
+/// What the display streams delivered: each FFT fragment as `(frame, start bin)` in its order of
+/// arrival, and the frames and waterfall rows the assemblers completed.
+#[derive(Debug, Default)]
+struct Display {
+    fragments: Vec<(u32, u16)>,
+    frames: Vec<FftFrame>,
+    rows: Vec<TileRow>,
+}
+
+/// One pan's FFT stream (four frames of eight bins, two packets each, the floor at row 300 and a
+/// carrier at row 10 on bin 2) and its waterfall (three one-packet rows), through `faults`.
+fn display(faults: Vec<Fault>, arriving: usize) -> Display {
+    let stream = |stream_id, content, ticks| Stream {
+        stream_id,
+        content,
+        period: Duration::from_millis(2),
+        ticks: Some(ticks),
+        start: Start::Registered,
+        until: None,
+    };
+    let sim = Simulator::start(
+        SimSession::v4_gui_client(),
+        SimConfig {
+            faults,
+            streams: vec![
+                stream(
+                    OUR_PAN,
+                    Content::Fft {
+                        total_bins: 8,
+                        per_packet: 4,
+                        floor_row: 300,
+                        peak: Some((2, 10)),
+                    },
+                    4,
+                ),
+                stream(
+                    OUR_WATERFALL,
+                    Content::Waterfall {
+                        width: 4,
+                        low_hz: 14_000_000.0,
+                        bin_hz: 195.3125,
+                        level: 100 * 128,
+                    },
+                    3,
+                ),
+            ],
+            keepalive_timeout: Duration::from_secs(120),
+        },
+    )
+    .expect("the simulator starts");
+    let (_tcp, udp) = vita_client(&sim);
+    let (mut fft, mut tiles) = (FftAssembler::new(), TileAssembler::new());
+    let mut seen = Display::default();
+    for dg in datagrams(&udp, arriving) {
+        let packet = parse_vita(&dg).expect("a VITA packet");
+        match (packet.packet_class, packet.stream_id) {
+            (Some(FFT_CLASS), Some(OUR_PAN)) => {
+                let fragment = decode_fft(packet.payload, packet.has_trailer).expect("FFT");
+                seen.fragments
+                    .push((fragment.frame_index, fragment.start_bin));
+                seen.frames.extend(fft.push(&fragment));
+            }
+            (Some(WATERFALL_CLASS), Some(OUR_WATERFALL)) => {
+                let tile = decode_tile(packet.payload, packet.has_trailer).expect("a tile");
+                seen.rows.extend(tiles.push(&tile));
+            }
+            other => panic!("a packet of no stream under test: {other:?}"),
+        }
+    }
+    seen
+}
+
+/// THE SIMULATOR'S VITA FAULT AGAINST THE PORTED FRAME ASSEMBLY. Frame 1's first packet is lost
+/// and frame 2's two packets arrive in reverse order. Frame 1's second half still arrives, so an
+/// assembler that completed a frame on its last fragment (or on a packet count) would publish
+/// frame 1 with its first half zero, and a zero row is the TOP of the display: a wall at
+/// `max_dbm`. Coverage per bin publishes frames 0, 2 and 3 whole, and frame 1 not at all. A lost
+/// waterfall tile costs its own row and no other.
+#[test]
+fn a_lost_or_reordered_display_packet_trips_the_coverage_guard() {
+    let row = vec![300u16, 300, 10, 300, 300, 300, 300, 300];
+    let indices = |frames: &[FftFrame]| frames.iter().map(|f| f.frame_index).collect::<Vec<_>>();
+    let timecodes = |rows: &[TileRow]| rows.iter().map(|r| r.timecode).collect::<Vec<_>>();
+
+    // Control: the same streams with no fault.
+    let clean = display(Vec::new(), 8 + 3);
+    assert_eq!(indices(&clean.frames), vec![0, 1, 2, 3]);
+    assert_eq!(timecodes(&clean.rows), vec![0, 1, 2]);
+
+    let faulted = display(
+        vec![
+            Fault::Vita {
+                stream_id: OUR_PAN,
+                drop: vec![2],
+                swap: vec![4],
+            },
+            Fault::Vita {
+                stream_id: OUR_WATERFALL,
+                drop: vec![1],
+                swap: Vec::new(),
+            },
+        ],
+        7 + 2,
+    );
+    // The fault acted: frame 1's head never came, and frame 2's tail came before its head.
+    assert_eq!(
+        faulted.fragments,
+        vec![(0, 0), (0, 4), (1, 4), (2, 4), (2, 0), (3, 0), (3, 4)]
+    );
+    assert_eq!(indices(&faulted.frames), vec![0, 2, 3]);
+    for frame in &faulted.frames {
+        assert_eq!(frame.rows, row, "frame {} is whole", frame.frame_index);
+        assert_eq!(frame.floor_from, None);
+        // The carrier is the strongest bin: row 10 is near the top of the window.
+        let levels = frame.levels(480);
+        assert_eq!(levels[2], row_level(10, 480));
+        assert!(levels[2] > levels[0]);
+    }
+    assert_eq!(timecodes(&faulted.rows), vec![0, 2]);
+    for r in &faulted.rows {
+        assert_eq!(r.values, vec![100.0; 4], "i16 / 128");
+        assert!((r.low_mhz - 14.0).abs() < 1e-9);
+        assert!((r.high_mhz - (14.0 + 4.0 * 195.3125e-6)).abs() < 1e-9);
+    }
 }

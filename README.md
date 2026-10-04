@@ -438,8 +438,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the native FlexRadio
-  client's protocol core (the SmartSDR session, status decoding and the transmit-state readback;
-  `crates/tempo-net/src/flex/`) is ported from AetherSDR's FlexRadio backend, and the waterfall's
+  client's protocol core (the SmartSDR session, status decoding, VITA-49 streams and the
+  transmit-state readback; `crates/tempo-net/src/flex/`) is ported from AetherSDR's FlexRadio backend, and the waterfall's
   3D stacked-spectrum view and retained-history model (`ui/src/dss.ts`, `ui/src/spectrum/dss.ts`,
   `ui/src/waterfallHistory.ts`, `ui/src/spectrum/ring.ts`) from its `DssRenderer` /
   `WaterfallHistoryBuffer`; its `PanadapterStream` was a wire-format reference for the native Flex
