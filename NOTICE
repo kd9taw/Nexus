@@ -795,8 +795,10 @@ Apache-2.0 section 4 does require a copy of the License to accompany the redistr
 ## Rig-control protocol interoperability (no vendor code bundled)
 
 Nexus controls transceivers over their manufacturers' **published** control
-protocols. Each implementation is **independent, original code** written from the
-public protocol documentation to interoperate with hardware the operator owns — a
+protocols. Each implementation is **independent of the manufacturers' code**: original
+Nexus code written from the public protocol documentation, except the FlexRadio client core,
+which is ported from the open-source AetherSDR (see *Upstream lineage*), to interoperate with
+hardware the operator owns — a
 long-standing, widely-practiced form of interoperability (Hamlib, WSJT-X, N1MM, and
 many others control the same radios the same way). **No manufacturer SDK, library,
 or source code is copied or bundled.**
