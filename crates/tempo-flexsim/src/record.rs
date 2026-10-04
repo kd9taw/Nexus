@@ -682,11 +682,41 @@ mod tests {
     ];
 
     #[test]
+    fn the_recorders_own_handle_becomes_the_template() {
+        let mut w = Recording {
+            out: Vec::new(),
+            scrub: Scrubber::new(),
+            handle: String::new(),
+            lines: 0,
+            packets: 0,
+            skipped: 0,
+        };
+        w.header("V1.4.0.0", 0x2B6E_1F40).unwrap();
+        assert_eq!(
+            w.clean("S2B6E1F40|client 0x2B6E1F40 connected program=x"),
+            "S{h}|client 0x{h} connected program=x"
+        );
+        assert_eq!(
+            w.clean("S0|interlock tx_client_handle=0x2b6e1f40 state=READY"),
+            "S0|interlock tx_client_handle=0x{h} state=READY"
+        );
+        // Another client's handle is not ours and stays as it was.
+        let other = "S7A3C0001|slice 1 client_handle=0x7A3C0001";
+        assert_eq!(w.clean(other), other);
+        let text = String::from_utf8(w.out).unwrap();
+        assert!(
+            text.contains("\nprologue V1.4.0.0\nhandle 2B6E1F40\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn the_allow_list_is_pinned() {
         // Changing this list is a transmit-safety review: every entry must be unable to transmit
-        // or change the radio's state. Do not edit it to make a test pass.
+        // or change the radio's state. Do not edit it to make a test pass. Compared as slices so
+        // that a longer list fails here with both lists printed, not as a type error.
         assert_eq!(
-            ALLOWED_VERBS,
+            ALLOWED_VERBS.as_slice(),
             [
                 "sub",
                 "ping",
@@ -695,6 +725,7 @@ mod tests {
                 "meter list",
                 "client udpport"
             ]
+            .as_slice()
         );
     }
 
@@ -797,7 +828,9 @@ mod tests {
         let options = Options {
             duration: Duration::from_millis(300),
             ping_every: Duration::from_millis(100),
-            quiet: Duration::from_millis(30),
+            // The simulator writes a reply and its statuses back to back; the quiet window only
+            // has to outlast a scheduling delay between them.
+            quiet: Duration::from_millis(100),
             reply_timeout: Duration::from_secs(5),
         };
         let mut file = Vec::new();

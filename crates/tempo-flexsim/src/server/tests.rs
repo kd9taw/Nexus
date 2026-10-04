@@ -269,8 +269,23 @@ fn a_split_line_arrives_in_pieces_and_the_rest_waits_for_the_next_command() {
         rest.extend(assembler.push(&buf[..n]).unwrap());
     }
     assert_eq!(rest, vec![SLICE, "R2|0|"]);
+    let events = sim.events();
     let pieces = vec![SLICE[..cut].to_string(), format!("{}\n", &SLICE[cut..])];
-    assert!(sim.events().contains(&Event::Split { conn: 0, pieces }));
+    assert!(events.contains(&Event::Split { conn: 0, pieces }));
+    // The rest was released by the client's command, not by luck of timing: the line counts as
+    // sent only after the ping arrived. Read boundaries alone could not show this.
+    let ping = events
+        .iter()
+        .position(|e| matches!(e, Event::Command { seq: 2, .. }))
+        .unwrap();
+    let sent = events
+        .iter()
+        .position(|e| matches!(e, Event::Sent { line, .. } if line == SLICE))
+        .unwrap();
+    assert!(
+        ping < sent,
+        "the rest of the line went out before the client spoke"
+    );
 }
 
 #[test]
@@ -353,17 +368,19 @@ fn dropped_pings_get_no_reply() {
 
 #[test]
 fn the_radio_keepalive_closes_a_session_whose_pings_stop_arriving() {
-    let timeout = Duration::from_millis(400);
+    // A ping goes out every 40 ms or so, twenty times inside the timeout, so a stalled test
+    // thread cannot pass for silence.
+    let timeout = Duration::from_millis(800);
     let config = |faults| Config {
         faults,
         keepalive_timeout: timeout,
         ..Config::default()
     };
-    // Control: pings that arrive hold the session open across several timeouts.
+    // Control: pings that arrive hold the session open past the timeout.
     let sim = Simulator::start(Session::v4_gui_client(), config(Vec::new())).unwrap();
     let (mut c, _) = Client::greeted(&sim);
     c.ask("keepalive enable");
-    let until = Instant::now() + timeout * 3;
+    let until = Instant::now() + timeout * 2;
     while Instant::now() < until {
         c.ask("ping");
         thread::sleep(Duration::from_millis(40));
@@ -764,17 +781,24 @@ fn a_stream_starts_after_its_command_is_answered_and_stops_on_its_until() {
         "audio flowed before the stream was created"
     );
 
-    c.ask("stream remove 0x04000001");
-    let sent = || {
-        sim.events()
-            .iter()
-            .filter(|e| matches!(e, Event::VitaOut { stream_id: DAX, .. }))
-            .count()
+    let remove = c.send("stream remove 0x04000001");
+    c.through_reply(remove);
+    let ended = Event::StreamEnded {
+        conn: 0,
+        stream_id: DAX,
     };
-    let at_stop = sent();
-    thread::sleep(Duration::from_millis(200));
+    assert!(sim.wait_for(WAIT, |log| log.iter().any(|l| l.event == ended)));
+    let events = sim.events();
+    let removed = events
+        .iter()
+        .position(|e| matches!(e, Event::Command { seq, .. } if *seq == remove))
+        .unwrap();
+    let end = events.iter().position(|e| *e == ended).unwrap();
+    assert!(removed < end, "the stream ended before it was removed");
     assert!(
-        sent() <= at_stop + 2,
-        "the stream kept flowing after its removal"
+        !events[end..]
+            .iter()
+            .any(|e| matches!(e, Event::VitaOut { stream_id: DAX, .. })),
+        "audio flowed after the stream ended"
     );
 }

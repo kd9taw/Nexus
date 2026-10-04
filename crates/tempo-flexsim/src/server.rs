@@ -141,6 +141,12 @@ pub enum Event {
     VitaUndelivered {
         conn: usize,
     },
+    /// A synthetic stream that had started sent its last packet: its ticks ran out, its `until`
+    /// command was answered, or the connection ended. Nothing more of it follows.
+    StreamEnded {
+        conn: usize,
+        stream_id: u32,
+    },
 }
 
 /// A logged event and when it happened, measured from the simulator's start.
@@ -1015,6 +1021,10 @@ fn stream_loop(shared: &Shared, conn: &Conn, index: usize) {
     if let Some((late, i, c)) = held.take() {
         send(&late, i, c);
     }
+    shared.record(Event::StreamEnded {
+        conn: conn.id,
+        stream_id: spec.stream_id,
+    });
 }
 
 /// Sleep until `deadline` in short steps; `false` if the connection ends first.
