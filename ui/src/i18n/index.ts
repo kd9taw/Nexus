@@ -111,6 +111,13 @@ export function availableLocales(): string[] {
   return [SOURCE_LOCALE, ...[...catalogs.keys()].filter((l) => l !== SOURCE_LOCALE).sort()]
 }
 
+/** `key` in every installed catalog, English included: each language's own text, for the one
+ *  check that must hold in all of them at once, whichever is showing (a macro caption that
+ *  reads as a stop). A catalog with nothing usable for the key adds nothing. */
+export function textInEveryLocale(key: MessageKey): string[] {
+  return [...catalogs].flatMap(([locale, catalog]) => lookIn(catalog, key, locale, undefined) ?? [])
+}
+
 /** Fired on a real locale CHANGE, same-window. A `storage` event only reaches OTHER windows,
  *  and Nexus's pop-outs are other windows — both are listened for (see `useLocale`). */
 export const LOCALE_EVENT = 'nexus-locale-changed'
