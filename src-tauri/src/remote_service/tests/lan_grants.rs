@@ -4,7 +4,7 @@
 //! `restore` gives approved browsers theirs, and loses it with "End remote control", which turns
 //! LAN off.
 use super::*;
-use crate::remote_service::lan::tests::{LanStore, Scratch};
+use crate::remote_service::lan::tests::{only, LanStore, Scratch};
 
 const LAN_STATION: &str = "60000000-0000-4000-8000-0000000000aa";
 
@@ -41,7 +41,7 @@ fn with_lan(
             stream: stream::Host::default(),
         },
         Arc::new(lan::Book::new(Arc::new(store.clone()))),
-        Arc::new(|_| Err(tempo_stream::lan::NoNetwork::Choose)),
+        Arc::new(|_| only(Err(tempo_stream::lan::NoNetwork::Choose))),
     )
 }
 

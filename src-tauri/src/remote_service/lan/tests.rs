@@ -1049,8 +1049,21 @@ fn locked_book() -> Arc<Book> {
 }
 
 /// The switch, kept in `scratch`, serving `s`'s station from `book` (read on the listener's own
-/// thread, as Nexus reads it).
+/// thread, as Nexus reads it), advertising and reading the firewall as Nexus does (off Windows,
+/// neither does anything).
 fn switch_for(s: &Shack, scratch: &Scratch, resolve: Resolve, book: Arc<Book>) -> Lan {
+    switch_with(s, scratch, resolve, book, advertise(), firewall_says())
+}
+
+/// The same, with the advert and the firewall a test's own.
+fn switch_with(
+    s: &Shack,
+    scratch: &Scratch,
+    resolve: Resolve,
+    book: Arc<Book>,
+    advertise: Advertise,
+    firewall: FirewallSays,
+) -> Lan {
     Lan::start(
         scratch.path(),
         Deps {
@@ -1059,8 +1072,26 @@ fn switch_for(s: &Shack, scratch: &Scratch, resolve: Resolve, book: Arc<Book>) -
             feeds: s.shared.feeds.clone(),
             book,
             resolve,
+            advertise,
+            firewall,
         },
     )
+}
+
+/// A look at a computer whose one network, if it has one, is `network`.
+pub(crate) fn only(network: Result<Network, NoNetwork>) -> Look {
+    Look {
+        choices: network
+            .iter()
+            .map(|&network| Choice {
+                network,
+                name: "Wi-Fi".into(),
+                index: 9,
+                id: "{00000000-0000-0000-0000-000000000009}".into(),
+            })
+            .collect(),
+        network,
+    }
 }
 
 /// The port at `at` refuses a connection, within a moment of the listener being told to stop.
@@ -1099,7 +1130,12 @@ async fn listening_and_keyed() -> Option<(Running, Client)> {
     let network = Network::new(address, 32).unwrap();
     let s = shack(network);
     let scratch = Scratch::new();
-    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), book_of(&s));
+    let lan = switch_for(
+        &s,
+        &scratch,
+        Arc::new(move |_| only(Ok(network))),
+        book_of(&s),
+    );
     lan.turn_on(None, Some(port)).unwrap();
     let at = SocketAddr::new(address.into(), port);
     eventually(&lan, "never listened", |st| {
@@ -1175,14 +1211,20 @@ async fn end_remote_control_turns_it_off_and_says_why() {
 
 /// ★ With no LAN key there is no listener: turned on with a credential store that will not
 /// answer (so no key is read, and none is made), it goes off by itself and says why. With no
-/// private network to listen on it waits, on, and says why. A picked address that has gone turns
-/// it off. CONTROL: the switch was on each time it was asked.
+/// private network to listen on it waits, on, and says why, and so it does for a picked address
+/// this computer does not have right now: only the shack can turn it on again, so going off would
+/// lock a computer away from the shack out. CONTROL: the switch was on each time it was asked.
 #[tokio::test]
-async fn it_turns_itself_off_without_a_key_or_its_address_and_waits_for_a_network() {
+async fn it_turns_itself_off_without_a_key_and_waits_for_a_network_or_its_address() {
     let network = home();
     let s = shack(network);
     let scratch = Scratch::new();
-    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), locked_book());
+    let lan = switch_for(
+        &s,
+        &scratch,
+        Arc::new(move |_| only(Ok(network))),
+        locked_book(),
+    );
     lan.turn_on(None, None).unwrap();
     let status = eventually(&lan, "listened without a key", |st| {
         !st.on && st.reason.is_some()
@@ -1195,7 +1237,7 @@ async fn it_turns_itself_off_without_a_key_or_its_address_and_waits_for_a_networ
     let lan = switch_for(
         &s,
         &scratch,
-        Arc::new(|_| Err(NoNetwork::Choose)),
+        Arc::new(|_| only(Err(NoNetwork::Choose))),
         book_of(&s),
     );
     lan.turn_on(None, None).unwrap();
@@ -1208,16 +1250,19 @@ async fn it_turns_itself_off_without_a_key_or_its_address_and_waits_for_a_networ
     let lan = switch_for(
         &s,
         &scratch,
-        Arc::new(|_| Err(NoNetwork::Gone)),
+        Arc::new(|_| only(Err(NoNetwork::Gone))),
         book_of(&s),
     );
     lan.turn_on(Some("192.168.1.20"), None).unwrap();
-    let status = eventually(&lan, "kept on without its address", |st| {
-        !st.on && st.reason.is_some()
-    })
-    .await;
+    let status = eventually(&lan, "no reason given", |st| st.reason.is_some()).await;
+    assert!(status.on, "went off without its address");
     assert_eq!(status.reason, Some("addressGone"));
-    assert_eq!(Switch::load(&scratch.path()).off, Some(Off::AddressGone));
+    assert_eq!(status.listening, None);
+    assert_eq!(status.picked.as_deref(), Some("192.168.1.20"));
+    let kept = Switch::load(&scratch.path());
+    assert!(kept.on, "kept off on disk");
+    assert_eq!(kept.off, None);
+    assert_eq!(kept.address, Some("192.168.1.20".parse().unwrap()));
 }
 
 /// ★ As ruled on 2026-10-04 ("any private network"): only a private IPv4 address can be picked, and
@@ -1227,7 +1272,12 @@ fn only_a_private_address_can_be_picked() {
     let network = home();
     let s = shack(network);
     let scratch = Scratch::new();
-    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), locked_book());
+    let lan = switch_for(
+        &s,
+        &scratch,
+        Arc::new(move |_| only(Ok(network))),
+        locked_book(),
+    );
     for refused in [
         "127.0.0.1",
         "0.0.0.0",
@@ -1247,4 +1297,254 @@ fn only_a_private_address_can_be_picked() {
     }
     assert_eq!(lan.turn_on(None, Some(80)), Err("invalidRequest"));
     assert_eq!(lan.turn_on(Some("192.168.1.20"), Some(42080)), Ok(()));
+}
+
+// ----- The network picked, the advert by name, and the firewall -----
+
+/// ★ The pick is the operator's to keep: turning off and on again keeps it, and so does a restart
+/// (it is in the switch's file); only a private address can be picked, as for turning on; no pick
+/// lets the shack choose again. CONTROL: each refusal leaves the pick as it was.
+#[test]
+fn a_pick_is_kept_through_off_and_on() {
+    let s = shack(home());
+    let scratch = Scratch::new();
+    let lan = switch_for(
+        &s,
+        &scratch,
+        Arc::new(|_| only(Err(NoNetwork::Choose))),
+        book_of(&s),
+    );
+    let picked: Option<Ipv4Addr> = Some("10.0.0.5".parse().unwrap());
+    lan.pick(Some("10.0.0.5")).unwrap();
+    assert_eq!(lan.status().picked.as_deref(), Some("10.0.0.5"));
+    lan.turn_on(None, None).unwrap();
+    lan.turn_off();
+    lan.turn_on(None, None).unwrap();
+    assert_eq!(Switch::load(&scratch.path()).address, picked);
+    for refused in [
+        "127.0.0.1",
+        "8.8.8.8",
+        "100.64.0.1",
+        "::1",
+        "nexus.local",
+        "",
+    ] {
+        assert_eq!(lan.pick(Some(refused)), Err("invalidRequest"), "{refused}");
+        assert_eq!(Switch::load(&scratch.path()).address, picked, "{refused}");
+    }
+    lan.pick(None).unwrap();
+    assert_eq!(Switch::load(&scratch.path()).address, None);
+    assert_eq!(lan.status().picked, None);
+}
+
+/// ★ A switch's file is read back only if presses here could have written it: a pick that is a
+/// private address, and a port that is not a system one. Anything else reads as off, as a file
+/// this version does not understand does, and so does a reason an older build kept that this one
+/// no longer gives. CONTROL: a private pick and a high port come back as they were.
+#[test]
+fn a_pick_reads_back_only_if_a_press_could_have_made_it() {
+    let scratch = Scratch::new();
+    let path = scratch.path();
+    for written in [
+        r#"{"on":true,"address":"8.8.8.8"}"#,
+        r#"{"on":true,"address":"100.64.0.1"}"#,
+        r#"{"on":true,"address":"127.0.0.1"}"#,
+        r#"{"on":true,"address":"169.254.1.1"}"#,
+        r#"{"on":true,"port":80}"#,
+        r#"{"on":false,"off":"addressGone"}"#,
+    ] {
+        std::fs::write(&path, written).unwrap();
+        assert_eq!(Switch::load(&path), Switch::default(), "{written}");
+    }
+    std::fs::write(&path, r#"{"on":true,"address":"10.0.0.5","port":42080}"#).unwrap();
+    assert_eq!(
+        Switch::load(&path),
+        Switch {
+            on: true,
+            address: Some("10.0.0.5".parse().unwrap()),
+            port: 42080,
+            off: None,
+        }
+    );
+}
+
+fn choice(address: &str, name: &str) -> Choice {
+    Choice {
+        network: Network::new(address.parse().unwrap(), 24).unwrap(),
+        name: name.into(),
+        index: 9,
+        id: String::new(),
+    }
+}
+
+/// ★ While on, the shack lists the networks it may listen on, with their adapters' names, for the
+/// operator to pick from; with two and no route through either, it says to choose. Off, it lists
+/// none. CONTROL: before it was turned on, none were listed.
+#[tokio::test]
+async fn the_networks_to_pick_from_are_listed_while_on() {
+    let s = shack(home());
+    let scratch = Scratch::new();
+    let two = Look {
+        choices: vec![
+            choice("192.168.1.20", "Wi-Fi"),
+            choice("10.0.0.5", "Ethernet"),
+        ],
+        network: Err(NoNetwork::Choose),
+    };
+    // Each look takes a moment, as reading a computer's adapters does, so what a press answers
+    // with is the switch's own word and not the next look's.
+    let slow = move |_: Option<Ipv4Addr>| {
+        std::thread::sleep(Duration::from_millis(100));
+        two.clone()
+    };
+    let lan = switch_for(&s, &scratch, Arc::new(slow), book_of(&s));
+    assert!(lan.status().networks.is_empty(), "listed while off");
+    lan.turn_on(None, None).unwrap();
+    let status = eventually(&lan, "no networks listed", |st| !st.networks.is_empty()).await;
+    assert_eq!(status.reason, Some("chooseAddress"));
+    assert_eq!(
+        status.networks,
+        vec![
+            NetworkView {
+                address: "192.168.1.20".into(),
+                name: "Wi-Fi".into()
+            },
+            NetworkView {
+                address: "10.0.0.5".into(),
+                name: "Ethernet".into()
+            },
+        ]
+    );
+    // A pick answers with the list still there, so the picker does not vanish under the press.
+    lan.pick(Some("10.0.0.5")).unwrap();
+    assert_eq!(lan.status().networks, status.networks);
+    lan.turn_off();
+    eventually(&lan, "still listed when off", |st| {
+        !st.on && st.networks.is_empty()
+    })
+    .await;
+}
+
+/// A port nothing listens on at `address` right now.
+fn free_port(address: Ipv4Addr) -> u16 {
+    std::net::TcpListener::bind((address, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// An advert a test holds: in `live` until it is withdrawn (dropped).
+struct Advertised(Arc<Mutex<Vec<Record>>>, Record);
+impl Advertised {
+    fn standing(&self) -> Option<bool> {
+        Some(true)
+    }
+}
+impl Drop for Advertised {
+    fn drop(&mut self) {
+        let mut live = self.0.lock().unwrap();
+        if let Some(at) = live.iter().position(|record| *record == self.1) {
+            live.remove(at);
+        }
+    }
+}
+
+/// ★ While it listens, the station is advertised by name, from its own key and where it listens,
+/// on that network's adapter, and the shack says what Windows' firewall says of that network;
+/// when it stops, the advert is withdrawn and neither is said. CONTROL: nothing was advertised
+/// before it was turned on.
+#[tokio::test]
+async fn the_station_is_named_while_it_listens_and_withdrawn_when_it_stops() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let live: Arc<Mutex<Vec<Record>>> = Arc::default();
+    let held = live.clone();
+    let advertise: Advertise = Arc::new(move |record| {
+        held.lock().unwrap().push(record.clone());
+        let advert = Advertised(held.clone(), record.clone());
+        Some(Box::new(move || advert.standing()) as Advert)
+    });
+    let lan = switch_with(
+        &s,
+        &scratch,
+        Arc::new(move |_| only(Ok(network))),
+        book_of(&s),
+        advertise,
+        Arc::new(|_| Some("public")),
+    );
+    assert!(live.lock().unwrap().is_empty(), "advertised while off");
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port).to_string();
+    let status = eventually(&lan, "never listened, named and read", |st| {
+        st.listening.as_deref() == Some(at.as_str()) && st.named.is_some() && st.firewall.is_some()
+    })
+    .await;
+    assert_eq!(status.named, Some(true));
+    assert_eq!(status.firewall, Some("public"));
+    let key = status.key.expect("no key while listening");
+    assert_eq!(
+        *live.lock().unwrap(),
+        vec![Record::new(
+            &key,
+            channel::PROTOCOL_VERSION,
+            SocketAddrV4::new(address, port),
+            9
+        )
+        .unwrap()]
+    );
+    lan.turn_off();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !live.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "still advertised once off");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let status = eventually(&lan, "still said once off", |st| !st.on).await;
+    assert_eq!((status.named, status.firewall), (None, None));
+}
+
+/// ★ A picked address that goes (sleep, a DHCP renewal, a cable out) is waited for, on, and
+/// listened at again when it is back, with no press at the shack. CONTROL: while it was gone the
+/// port was shut.
+#[tokio::test]
+async fn a_picked_address_that_goes_and_comes_back_is_listened_at_again() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let present = Arc::new(AtomicBool::new(true));
+    let here = present.clone();
+    let resolve: Resolve = Arc::new(move |_| {
+        if here.load(Ordering::SeqCst) {
+            only(Ok(network))
+        } else {
+            only(Err(NoNetwork::Gone))
+        }
+    });
+    let lan = switch_for(&s, &scratch, resolve, book_of(&s));
+    lan.turn_on(Some(&address.to_string()), Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    present.store(false, Ordering::SeqCst);
+    let status = eventually(&lan, "still listening without its address", |st| {
+        st.listening.is_none()
+    })
+    .await;
+    assert!(status.on, "went off without its address");
+    assert_eq!(status.reason, Some("addressGone"));
+    closed(at).await;
+    present.store(true, Ordering::SeqCst);
+    eventually(&lan, "not listening again", listening).await;
+    assert!(tokio::net::TcpStream::connect(at).await.is_ok());
 }

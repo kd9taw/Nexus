@@ -14,6 +14,24 @@
 //! computer's only private address; on whatever private network the shack is on, as ruled. The
 //! listener follows that address while it is on, and looks again every second.
 //!
+//! Only adapters that are not tunnels or virtual ones count (`tempo_stream::lan::left_out`), so a
+//! full-tunnel VPN's private address is never where it listens, even with the route to the
+//! internet leaving by it, and neither is WSL's or Hyper-V's switch. With more than one network
+//! left the shack offers the operator a pick, a press at the shack only, kept in the switch's file
+//! and read back only if it is a private address with a port that is not a system one. A picked
+//! address that is gone for a while (sleep, a DHCP renewal, a cable out) is waited for, on, and
+//! listened at again when it is back: since only the shack can turn this on, going off then would
+//! leave a computer away from the shack locked out until someone walked back to it.
+//!
+//! ## Found by name, and Windows' firewall
+//!
+//! While it listens, the station advertises itself by name on that adapter only (DNS-SD through
+//! Windows' own responder, `tempo_stream::lan::dnssd`), and withdraws the advert when it stops;
+//! the shack says when Windows will not advertise it, so the address is typed. As ruled on
+//! 2026-10-04 ("Windows' own prompt"), Nexus adds no firewall rule: Windows asks the first time it
+//! listens, and every few seconds the station reads what the firewall says of the network it
+//! listens on (`tempo_stream::lan::firewall`), so the shack can say what stands in the way.
+//!
 //! ## The ladder, each step reached only through the one before
 //!
 //! 1. TCP accept: the source is on the bound address's own subnet and under the caps ([`gate`]).
@@ -63,20 +81,20 @@
 //! The switch ([`Switch`]) is off until the operator turns it on, and off means no socket at all.
 //! Turning it off closes the port and ends every session, each stream's presence with it, so
 //! anything it kept on the air halts on the radio loop's next tick. It also goes off by itself, and
-//! keeps the reason for the shack to show, when "End remote control" is pressed, when there is no
-//! LAN key, and when the address the operator picked is gone. After a restart it comes back as it
-//! was left. The switch lives in its own file, written only here: no Settings save, restore, import
-//! or Remote projection can turn it on, and a form saved from an old copy cannot turn back on what
-//! went off by itself.
+//! keeps the reason for the shack to show, when "End remote control" is pressed and when there is
+//! no LAN key. After a restart it comes back as it was left. The switch lives in its own file,
+//! written only here: no Settings save, restore, import or Remote projection can turn it on, and a
+//! form saved from an old copy cannot turn back on what went off by itself.
 //!
 //! ## Pairing, and only at the shack (the operator's rulings of 2026-10-04)
 //!
 //! The LAN key and the paired computers are the [`Book`]'s, in the OS credential store. A press
 //! at the shack opens a ten-minute pairing window, and that press is the approval ("One press"):
 //! a computer that proves its code is paired at once ([`pairing`]), and stays paired until it is
-//! removed here ("Until revoked"). Turning this on or off, making a code, removing a computer and
-//! resetting the key are the shack's alone ("Only at the shack"): the panel refuses each while
-//! its press comes through a stream, and nothing reaches them from a remote road.
+//! removed here ("Until revoked"). Turning this on or off, picking the network, making a code,
+//! removing a computer and resetting the key are the shack's alone ("Only at the shack"): the
+//! panel refuses each while its press comes through a stream, and nothing reaches them from a
+//! remote road.
 //!
 //! **The grant.** A paired computer holds station control in the operations authority while LAN
 //! is on, and only then: the authority reads who they are each time it reconciles, so a local
@@ -85,11 +103,10 @@
 //! itself, removing a computer and resetting the key each revoke it, after the authority has
 //! stopped reading it, so the revoke stands.
 //!
-//! ## The other end, and what comes later
+//! ## The other end
 //!
 //! The paired computer's side, its key, its pairing and its road, is `crate::lan_client`, which
-//! speaks this wire with this module's own functions and versions. Discovery and the firewall come
-//! later.
+//! speaks this wire with this module's own functions and versions.
 mod book;
 mod channel;
 mod gate;
@@ -109,14 +126,15 @@ pub(crate) const VERSIONS: (u8, u8, u8) = (
     channel::OPERATION_VERSION,
 );
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tempo_stream::lan::{Network, NoNetwork};
+use tempo_stream::lan::dnssd::Record;
+use tempo_stream::lan::{Choice, Look, Network, NoNetwork};
 use tokio::sync::{watch, Notify};
 
 use super::operations::Authority;
@@ -124,9 +142,12 @@ use super::transport::Feeds;
 
 /// The TCP port the shack listens on, and the UDP port of its stream, unless the operator sets
 /// another: beside Field Day sync's 42073 and 42074.
-pub const DEFAULT_PORT: u16 = 42075;
+pub const DEFAULT_PORT: u16 = tempo_stream::lan::PORT;
 /// While on, how often the network is looked at again.
 const LOOK_AGAIN: Duration = Duration::from_secs(1);
+/// While listening, every how many looks the firewall is read again: a question answered at the
+/// shack shows within seconds.
+const FIREWALL_EVERY: u32 = 5;
 /// How long a stopping listener waits for its connections to end before it aborts them.
 const WIND_DOWN: Duration = Duration::from_secs(2);
 
@@ -142,8 +163,6 @@ pub enum Off {
     EndedAtShack,
     /// This station has no LAN key to prove itself with.
     NoKey,
-    /// The address the operator picked is no longer this computer's.
-    AddressGone,
 }
 
 impl Off {
@@ -151,7 +170,6 @@ impl Off {
         match self {
             Off::EndedAtShack => "endedAtShack",
             Off::NoKey => "noKey",
-            Off::AddressGone => "addressGone",
         }
     }
 }
@@ -184,12 +202,16 @@ impl Default for Switch {
 }
 
 impl Switch {
-    /// As it was left, or off: no file, a file that will not read, or one this version does not
-    /// understand all read as off.
+    /// As it was left, or off: no file, a file that will not read, one this version does not
+    /// understand, and one holding a pick that is not a private address or a system port (which no
+    /// press here could have written) all read as off.
     pub fn load(path: &Path) -> Self {
         std::fs::read(path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
+            .filter(|switch| {
+                switch.address.is_none_or(tempo_stream::lan::listenable) && switch.port >= 1024
+            })
             .unwrap_or_default()
     }
 
@@ -209,10 +231,26 @@ pub struct LanStatus {
     /// Where it listens now, `address:port`, the stream's UDP port the same number.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listening: Option<String>,
-    /// While on and not listening, why (`noNetwork`, `chooseAddress`, `portInUse`, `unavailable`);
-    /// while off by itself, why (`endedAtShack`, `noKey`, `addressGone`).
+    /// While on and not listening, why (`noNetwork`, `chooseAddress`, `addressGone` for a pick
+    /// this computer does not have right now, `portInUse`, `unavailable`); while off by itself,
+    /// why (`endedAtShack`, `noKey`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
+    /// While on, the networks the operator may pick from: this computer's private addresses on
+    /// adapters that are not tunnels or virtual ones.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<NetworkView>,
+    /// The address the operator picked, if any, on or off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picked: Option<String>,
+    /// While listening: Windows advertises the station by name (`true`), or will not (`false`), and
+    /// the address is typed. Absent until Windows says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub named: Option<bool>,
+    /// While listening, what stands in the way in Windows' firewall on that network, when anything
+    /// does (`tempo_stream::lan::firewall::says`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall: Option<&'static str>,
     /// The LAN key's fingerprint (SHA-256 of its SPKI, lowercase hex), once there is a key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -223,8 +261,46 @@ pub struct LanStatus {
     pub devices: Vec<book::ComputerView>,
 }
 
-/// Where the listener goes for a pick: `tempo_stream::lan::network`, or a test's own network.
-pub type Resolve = Arc<dyn Fn(Option<Ipv4Addr>) -> Result<Network, NoNetwork> + Send + Sync>;
+/// A network the operator may pick, as the shack shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NetworkView {
+    /// This computer's address on it.
+    pub address: String,
+    /// Its adapter's name: "Wi-Fi", "Ethernet".
+    pub name: String,
+}
+
+/// This computer's networks and where the listener goes for a pick: `tempo_stream::lan::look`, or
+/// a test's own.
+pub type Resolve = Arc<dyn Fn(Option<Ipv4Addr>) -> Look + Send + Sync>;
+
+/// The station's advert by name while it listens: asked whether Windows says it stands, and
+/// withdrawn when dropped, which may wait for Windows.
+pub type Advert = Box<dyn Fn() -> Option<bool> + Send>;
+
+/// Advertise the station by name (`tempo_stream::lan::dnssd::advertise`, or a test's own): `None`
+/// where it cannot be.
+pub type Advertise = Arc<dyn Fn(&Record) -> Option<Advert> + Send + Sync>;
+
+/// What Windows' firewall says of the network a choice is on (`tempo_stream::lan::firewall`, or a
+/// test's own). It may block for a moment.
+pub type FirewallSays = Arc<dyn Fn(&Choice) -> Option<&'static str> + Send + Sync>;
+
+/// The real ones, from Windows.
+pub(super) fn advertise() -> Advertise {
+    Arc::new(|record| {
+        let advert = tempo_stream::lan::dnssd::advertise(record)?;
+        Some(Box::new(move || advert.standing()) as Advert)
+    })
+}
+
+pub(super) fn firewall_says() -> FirewallSays {
+    Arc::new(|choice| {
+        tempo_stream::lan::firewall::read(&choice.id)
+            .as_ref()
+            .and_then(tempo_stream::lan::firewall::says)
+    })
+}
 
 /// What the listener serves from.
 #[derive(Clone)]
@@ -235,6 +311,8 @@ pub(super) struct Deps {
     /// The LAN key and the paired computers.
     pub book: Arc<Book>,
     pub resolve: Resolve,
+    pub advertise: Advertise,
+    pub firewall: FirewallSays,
 }
 
 struct State {
@@ -268,10 +346,16 @@ impl State {
                 tempo_core::applog::warn("remote", "on this network: the switch was not saved");
             }
             self.on.store(switch.on, Ordering::SeqCst);
+            // The networks stay listed while it is on, so a pick does not take the picker away.
+            let networks = match (switch.on, self.status.lock()) {
+                (true, Ok(status)) => status.networks.clone(),
+                _ => Vec::new(),
+            };
             self.report(LanStatus {
                 on: switch.on,
                 listening: None,
                 reason: switch.off.map(Off::code),
+                networks,
                 ..LanStatus::default()
             });
         }
@@ -340,27 +424,27 @@ impl Lan {
         Self { state }
     }
 
-    /// The operator turned it on at the shack, on `address` (`None`: as the module header says) and
-    /// `port` (`None`: as it was).
+    /// The operator turned it on at the shack, on `address` and `port` (`None`: each as it was,
+    /// the picked address kept).
     pub fn turn_on(&self, address: Option<&str>, port: Option<u16>) -> Result<(), &'static str> {
-        let address = match address {
-            None => None,
-            Some(text) => Some(
-                text.parse::<Ipv4Addr>()
-                    .ok()
-                    .filter(|ip| tempo_stream::lan::listenable(*ip))
-                    .ok_or("invalidRequest")?,
-            ),
-        };
+        let address = address.map(private).transpose()?;
         if port.is_some_and(|p| p < 1024) {
             return Err("invalidRequest");
         }
         self.state.decide(|switch| {
             switch.on = true;
-            switch.address = address;
+            switch.address = address.or(switch.address);
             switch.port = port.unwrap_or(switch.port);
             switch.off = None;
         });
+        Ok(())
+    }
+
+    /// The operator picked where it listens, at the shack: one of this computer's private
+    /// addresses, or `None` to let the shack choose (as the module header says). Kept on or off.
+    pub fn pick(&self, address: Option<&str>) -> Result<(), &'static str> {
+        let address = address.map(private).transpose()?;
+        self.state.decide(|switch| switch.address = address);
         Ok(())
     }
 
@@ -427,8 +511,17 @@ impl Lan {
         status.key = view.key;
         status.pairing = view.pairing;
         status.devices = view.devices;
+        status.picked = self.state.switch().address.map(|ip| ip.to_string());
         status
     }
+}
+
+/// An address the operator gave: a private IPv4 address, or refused.
+fn private(text: &str) -> Result<Ipv4Addr, &'static str> {
+    text.parse::<Ipv4Addr>()
+        .ok()
+        .filter(|ip| tempo_stream::lan::listenable(*ip))
+        .ok_or("invalidRequest")
 }
 
 /// These paired computers keep no station control: each is revoked as the shack revokes a
@@ -462,6 +555,7 @@ async fn supervise(state: Arc<State>, deps: Deps) {
     // The LAN key and the paired computers, from the credential store, before anything listens.
     deps.book.load();
     let mut running: Option<Listener> = None;
+    let mut looks: u32 = 0;
     while !state.closed.load(Ordering::SeqCst) {
         let want = state.switch();
         if !want.on {
@@ -476,21 +570,18 @@ async fn supervise(state: Arc<State>, deps: Deps) {
             state.wake.notified().await;
             continue;
         }
-        let reason = match (deps.resolve)(want.address) {
-            Err(NoNetwork::Gone) => {
-                if let Some(listener) = running.take() {
-                    listener.stop().await;
-                }
-                off_by_itself(&state, Off::AddressGone);
-                continue;
-            }
+        let look = (deps.resolve)(want.address);
+        let reason = match look.network {
             Err(missing) => {
                 if let Some(listener) = running.take() {
                     listener.stop().await;
                 }
+                // A pick this computer does not have right now is waited for, on: see the module
+                // header.
                 Some(match missing {
                     NoNetwork::Unavailable => "unavailable",
-                    _ => "chooseAddress",
+                    NoNetwork::Gone => "addressGone",
+                    NoNetwork::Choose => "chooseAddress",
                 })
             }
             // On the same network and port, with the same key: as it was.
@@ -510,11 +601,13 @@ async fn supervise(state: Arc<State>, deps: Deps) {
                     continue;
                 };
                 match Listener::start(network, want.port, &deps, identity, generation).await {
-                    Ok(listener) => {
+                    Ok(mut listener) => {
                         tempo_core::applog::info(
                             "remote",
                             &format!("on this network: listening on {}", listener.at()),
                         );
+                        listener.advert = advert(&deps, look.chosen(), network, want.port);
+                        looks = 0;
                         running = Some(listener);
                         None
                     }
@@ -522,10 +615,29 @@ async fn supervise(state: Arc<State>, deps: Deps) {
                 }
             }
         };
+        if let (Some(listener), Some(choice)) = (running.as_mut(), look.chosen()) {
+            if looks.is_multiple_of(FIREWALL_EVERY) {
+                let (says, choice) = (deps.firewall.clone(), choice.clone());
+                listener.firewall = tokio::task::spawn_blocking(move || says(&choice))
+                    .await
+                    .unwrap_or(None);
+            }
+        }
+        looks = looks.wrapping_add(1);
         state.report(LanStatus {
             on: true,
             listening: running.as_ref().map(Listener::at),
             reason,
+            networks: look
+                .choices
+                .iter()
+                .map(|choice| NetworkView {
+                    address: choice.network.address().to_string(),
+                    name: choice.name.clone(),
+                })
+                .collect(),
+            named: running.as_ref().and_then(Listener::named),
+            firewall: running.as_ref().and_then(|listener| listener.firewall),
             ..LanStatus::default()
         });
         tokio::select! {
@@ -538,6 +650,20 @@ async fn supervise(state: Arc<State>, deps: Deps) {
     }
 }
 
+/// The station's advert by name for a listener at `network` and `port`, on the adapter of
+/// `choice`: "Nexus" and its key's tag, never the computer's name (`tempo_stream::lan::dnssd`).
+/// `None` when Windows will not advertise it, or there is no key to name it by.
+fn advert(deps: &Deps, choice: Option<&Choice>, network: Network, port: u16) -> Option<Advert> {
+    let key = deps.book.view(Instant::now()).key?;
+    let record = Record::new(
+        &key,
+        channel::PROTOCOL_VERSION,
+        SocketAddrV4::new(network.address(), port),
+        choice.map_or(0, |choice| choice.index),
+    )?;
+    (deps.advertise)(&record)
+}
+
 /// The listening socket and the connections it has accepted.
 struct Listener {
     network: Network,
@@ -546,6 +672,10 @@ struct Listener {
     generation: u64,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
+    /// Its advert by name, withdrawn when it stops.
+    advert: Option<Advert>,
+    /// What Windows' firewall says of its network, as last read.
+    firewall: Option<&'static str>,
 }
 
 impl Listener {
@@ -591,6 +721,8 @@ impl Listener {
             generation,
             stop,
             task,
+            advert: None,
+            firewall: None,
         })
     }
 
@@ -602,11 +734,20 @@ impl Listener {
         format!("{}:{}", self.network.address(), self.port)
     }
 
+    /// Is it advertised by name? With no advert, it is not.
+    fn named(&self) -> Option<bool> {
+        self.advert.as_ref().map_or(Some(false), |advert| advert())
+    }
+
     /// Close the port and end every connection: each ends its stream, the stream's presence at
-    /// once, and its lease, before this returns.
+    /// once, and its lease, before this returns. Then the advert is withdrawn, off this thread,
+    /// since that waits for Windows.
     async fn stop(self) {
         let _ = self.stop.send(true);
         let _ = self.task.await;
+        if let Some(advert) = self.advert {
+            let _ = tokio::task::spawn_blocking(move || drop(advert)).await;
+        }
     }
 }
 

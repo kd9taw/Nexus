@@ -6,10 +6,15 @@
 // the approval. Whoever types the code within ten minutes is paired at once, and stays paired until
 // removed here (the ruling "Until revoked"), so the card says so beside the code.
 //
-// ONLY AT THE SHACK (the same day's ruling): turning this on or off, making a code, removing a
-// computer and resetting the key are refused while the press comes through a stream
-// (`isStreamInput`, the mark Lock and the Phone PTT already use). A streamed operator sees the card
-// and can press nothing on it; the refusal says why.
+// ONLY AT THE SHACK (the same day's ruling): turning this on or off, picking the network, making a
+// code, removing a computer and resetting the key are refused while the press comes through a
+// stream (`isStreamInput`, the mark Lock and the Phone PTT already use). A streamed operator sees
+// the card and can press nothing on it; the refusal says why.
+//
+// THE NETWORK: with more than one left (virtual adapters and VPNs are not offered), the operator
+// picks. WINDOWS' OWN PROMPT (the same day's ruling): Nexus adds no firewall rule. The card says
+// beforehand to allow Private networks only, says what in the firewall stands in the way once it
+// listens, and says plainly what it cannot see from here: a network that keeps its devices apart.
 import { useEffect, useRef, useState } from 'react'
 import { getRemoteStationStatus, remoteStationAction } from '../api'
 import { t } from '../i18n'
@@ -30,13 +35,26 @@ function statusLine(lan: LanStatus | null): string {
   switch (lan?.reason) {
     case 'noKey': return t('remote.lan.reason.noKey')
     case 'endedAtShack': return t('remote.lan.reason.endedAtShack')
-    case 'addressGone': return t('remote.lan.reason.addressGone')
+    case 'addressGone': return t('remote.lan.reason.addressGone', { address: lan.picked ?? '' })
     case 'chooseAddress': return t('remote.lan.reason.chooseAddress')
     case 'portInUse': return t('remote.lan.reason.portInUse')
     case 'noNetwork': return t('remote.lan.reason.noNetwork')
     case 'unavailable': return t('remote.lan.reason.unavailable')
   }
   return lan?.on ? t('remote.lan.starting') : t('remote.lan.off')
+}
+
+/** What stands in the way in Windows' firewall, on the network it listens on. */
+function firewallLine(firewall: LanStatus['firewall']): string | null {
+  switch (firewall) {
+    case 'blocksAll': return t('remote.lan.firewall.blocksAll')
+    case 'blocked': return t('remote.lan.firewall.blocked')
+    case 'managed': return t('remote.lan.firewall.managed')
+    case 'public': return t('remote.lan.firewall.public')
+    case 'silent': return t('remote.lan.firewall.silent')
+    case 'ask': return t('remote.lan.firewall.ask')
+  }
+  return null
 }
 
 function errorLine(error: string): string {
@@ -75,6 +93,10 @@ export function LanStation() {
   }
   const on = lan?.on === true
   const devices = lan?.devices ?? []
+  const networks = lan?.networks ?? []
+  // A pick this computer does not have right now stays in the list, so it is seen and can be undone.
+  const pickedGone = lan?.picked && !networks.some(network => network.address === lan.picked) ? lan.picked : null
+  const firewall = lan?.listening ? firewallLine(lan.firewall) : null
   return <>
     <div className="settings-field">
       <label className="settings-toggle">
@@ -85,11 +107,26 @@ export function LanStation() {
         </button>
       </label>
       <span className="settings-hint">{t('remote.lan.intro')}</span>
+      {!on && <span className="settings-hint">{t('remote.lan.firewallFirst')}</span>}
     </div>
     <div className="remote-section remote-native">
       <p role="status">{statusLine(lan)}</p>
       {refused && <p role="alert">{t('remote.lan.atShackOnly')}</p>}
       {error && <p role="alert">{errorLine(error)}</p>}
+      {on && (networks.length > 1 || pickedGone) && <label className="settings-field">
+        <span className="settings-label">{t('remote.lan.network')}</span>
+        <select className="settings-input" value={lan?.picked ?? ''} disabled={busy}
+          onChange={event => void act(event.target.value ? { type: 'lanAddress', address: event.target.value } : { type: 'lanAddress' })}>
+          <option value="">{t('remote.lan.networkAuto')}</option>
+          {networks.map(network => <option key={network.address} value={network.address}>
+            {t('remote.lan.networkChoice', { name: network.name, address: network.address })}</option>)}
+          {pickedGone && <option value={pickedGone}>{t('remote.lan.networkGone', { address: pickedGone })}</option>}
+        </select>
+        <span className="settings-hint">{t('remote.lan.networkHint')}</span>
+      </label>}
+      {firewall && <p className="remote-warning">{firewall}</p>}
+      {lan?.listening && lan.named === false && <p>{t('remote.lan.notNamed')}</p>}
+      {lan?.listening && <p>{t('remote.lan.guest')}</p>}
       {on && !lan?.pairing && <div className="remote-actions">
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'lanPair' })}>{t('remote.lan.pair')}</button>
       </div>}

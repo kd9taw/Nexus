@@ -7,7 +7,7 @@
 // The presses here come from the REAL stream dispatcher, so the mark under test is the one the
 // stream makes; each refusal is paired with the same press made at the shack, which goes through.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { LanStation } from './LanStation'
 import { StreamInputDispatcher } from './stream-input'
 import type { LanStatus, RemoteStationStatus } from './types'
@@ -31,6 +31,8 @@ const listening: LanStatus = {
   devices: [{ id: COMPUTER, name: 'Den PC', key: DEVICE_KEY }],
 }
 const pairing: LanStatus = { ...listening, pairing: { code: '0123456789abcdef', closesAt: 0 } }
+const NETWORKS = [{ address: '192.168.1.20', name: 'Wi-Fi' }, { address: '10.0.0.5', name: 'Ethernet' }]
+const choosing: LanStatus = { on: true, reason: 'chooseAddress', networks: NETWORKS, devices: [] }
 
 // jsdom never lays out: `elementFromPoint` does not exist. Each press says what is under the pointer.
 let under: Element | null = null
@@ -106,14 +108,14 @@ describe('what the card says', () => {
     const said: [LanStatus['reason'], boolean, string][] = [
       ['noKey', false, 'Off: this station has no network key. Unlock your operating system’s credential store, then turn this on again.'],
       ['endedAtShack', false, 'Off: remote control was ended here. Turn this on again when you want it.'],
-      ['addressGone', false, 'Off: the address it listened at is no longer this computer’s. Turn this on again to listen where this computer is now.'],
-      ['chooseAddress', true, 'Not listening: Nexus can’t tell which of this computer’s networks to use.'],
+      ['addressGone', true, 'Not listening: 10.0.0.9 is not this computer’s address right now. Nexus listens there again when it is back, or choose another network.'],
+      ['chooseAddress', true, 'Not listening: choose which of this computer’s networks to listen on.'],
       ['portInUse', true, 'Not listening: another program is using its port.'],
       ['noNetwork', true, 'Not listening: this computer is not on a private network.'],
       ['unavailable', true, 'Not listening: it could not start on this computer.'],
     ]
     for (const [reason, on, sentence] of said) {
-      await showing({ on, reason, devices: [] })
+      await showing({ on, reason, picked: '10.0.0.9', devices: [] })
       expect(screen.getByRole('status').textContent, reason).toBe(sentence)
       cleanup()
     }
@@ -141,5 +143,106 @@ describe('what the card says', () => {
     remoteStationAction.mockRejectedValueOnce('credentialStoreUnavailable')
     await pressedAtShack(screen.getByRole('button', { name: 'Pair a computer' }))
     expect(screen.getByRole('alert').textContent).toMatch(/^Unlock your operating system’s credential store/)
+  })
+})
+
+describe('the network it listens on: picked at the shack', () => {
+  // Labelled the way Settings labels its other pickers: the label, then the hint, inside one <label>.
+  const picker = () => screen.getByRole('combobox', { name: /^Network/ }) as HTMLSelectElement
+
+  it('offers each network by its adapter’s name, and Automatic, only when there is more than one', async () => {
+    await showing(choosing)
+    expect(within(picker()).getAllByRole('option').map(option => option.textContent))
+      .toEqual(['Automatic', 'Wi-Fi, 192.168.1.20', 'Ethernet, 10.0.0.5'])
+    expect(picker().value).toBe('')
+    expect(screen.getByText(/^Virtual adapters and VPNs are not offered/)).toBeTruthy()
+    cleanup()
+    // CONTROL: one network, or LAN off, leaves nothing to pick.
+    await showing({ ...listening, networks: [NETWORKS[0]] })
+    expect(screen.queryByRole('combobox')).toBeNull()
+    cleanup()
+    await showing({ on: false, networks: NETWORKS, devices: [] })
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
+  it('sends the pick, and Automatic as no pick, from the shack', async () => {
+    await showing(choosing)
+    fireEvent.change(picker(), { target: { value: '10.0.0.5' } })
+    await act(async () => { await Promise.resolve() })
+    expect(remoteStationAction).toHaveBeenLastCalledWith({ type: 'lanAddress', address: '10.0.0.5' })
+    cleanup()
+    await showing({ ...listening, networks: NETWORKS, picked: '10.0.0.5' })
+    expect(picker().value).toBe('10.0.0.5')
+    fireEvent.change(picker(), { target: { value: '' } })
+    await act(async () => { await Promise.resolve() })
+    expect(remoteStationAction).toHaveBeenLastCalledWith({ type: 'lanAddress' })
+  })
+
+  it('refuses a pick made through the stream, says why, and still shows the pick it had', async () => {
+    await showing(choosing)
+    await pressedThroughStream(picker())
+    const list = document.querySelector('[data-stream-picker]')
+    expect(list, 'premise: the stream opened its list').not.toBeNull()
+    await pressedThroughStream(within(list as HTMLElement).getAllByRole('option')[2])
+    expect(remoteStationAction, 'a pick went to the station through the stream').not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe('Only at the station itself: this can’t be done through a stream.')
+    expect(picker().value).toBe('')
+  })
+
+  it('keeps a pick this computer does not have right now in the list, so it can be seen and undone', async () => {
+    await showing({ on: true, reason: 'addressGone', picked: '10.0.0.9', networks: [NETWORKS[0]], devices: [] })
+    expect(within(picker()).getAllByRole('option').map(option => option.textContent))
+      .toEqual(['Automatic', 'Wi-Fi, 192.168.1.20', '10.0.0.9 (not on this computer now)'])
+    expect(picker().value).toBe('10.0.0.9')
+  })
+})
+
+describe('Windows\' own prompt, the firewall and the name', () => {
+  it('says beforehand to allow Private networks only, and only while off', async () => {
+    const first = /^The first time this is turned on, Windows asks whether Nexus may use networks\. Allow Private networks only\.$/
+    await showing({ on: false, devices: [] })
+    expect(screen.getByText(first)).toBeTruthy()
+    cleanup()
+    await showing(listening)
+    expect(screen.queryByText(first)).toBeNull()
+  })
+
+  it('says what the firewall stands in the way with, one sentence for each, only while listening', async () => {
+    const said: [NonNullable<LanStatus['firewall']>, RegExp][] = [
+      ['ask', /^When Windows asks whether Nexus may use this network, allow Private networks only\.$/],
+      ['public', /^Windows calls this network Public, so its firewall keeps other computers out\./],
+      ['blocked', /^Windows Firewall blocks Nexus on this network, as it does after its question is cancelled\./],
+      ['blocksAll', /^Windows Firewall blocks every incoming connection on this network/],
+      ['managed', /set by an administrator’s policy/],
+      ['silent', /^Windows Firewall blocks new programs on this network without asking\./],
+    ]
+    for (const [firewall, sentence] of said) {
+      await showing({ ...listening, firewall })
+      expect(screen.getByText(sentence), firewall).toBeTruthy()
+      cleanup()
+    }
+    // CONTROL: nothing in the way, and not listening, say nothing of the firewall.
+    await showing(listening)
+    expect(screen.queryByText(/Windows Firewall|firewall/)).toBeNull()
+    cleanup()
+    await showing({ ...choosing, firewall: 'public' })
+    expect(screen.queryByText(/Windows calls this network Public/)).toBeNull()
+  })
+
+  it('says when Windows will not name it, so the address is typed, and plainly what it cannot see', async () => {
+    const unnamed = /^Windows won’t let other computers find this station by name here, so type its address on the other computer\.$/
+    const guest = /^A guest network, or one that keeps its devices apart, stops other computers reaching this one, and Nexus can’t tell that from here\.$/
+    await showing({ ...listening, named: false })
+    expect(screen.getByText(unnamed)).toBeTruthy()
+    expect(screen.getByText(guest)).toBeTruthy()
+    cleanup()
+    // CONTROL: named, or not yet said, it says nothing of the name; not listening, nothing of guests.
+    for (const named of [true, undefined]) {
+      await showing({ ...listening, named })
+      expect(screen.queryByText(unnamed)).toBeNull()
+      cleanup()
+    }
+    await showing(choosing)
+    expect(screen.queryByText(guest)).toBeNull()
   })
 })

@@ -171,7 +171,7 @@ fn lan_on(s: &Shack, scratch: &Scratch) -> Lan {
     let lan = switch_for(
         s,
         scratch,
-        Arc::new(|_| Err(NoNetwork::Choose)),
+        Arc::new(|_| only(Err(NoNetwork::Choose))),
         s.shared.desk.book.clone(),
     );
     lan.turn_on(None, None).unwrap();
@@ -835,7 +835,7 @@ async fn paired_computers_come_back_after_a_restart() {
     let lan = switch_for(
         &s,
         &scratch,
-        Arc::new(|_| Err(NoNetwork::Choose)),
+        Arc::new(|_| only(Err(NoNetwork::Choose))),
         s.shared.desk.book.clone(),
     );
     eventually(&lan, "LAN came back off", |st| st.on).await;
@@ -859,7 +859,7 @@ async fn paired_computers_come_back_after_a_restart() {
     let lan = switch_for(
         &off,
         &scratch,
-        Arc::new(|_| Err(NoNetwork::Choose)),
+        Arc::new(|_| only(Err(NoNetwork::Choose))),
         off.shared.desk.book.clone(),
     );
     eventually(&lan, "LAN came back on", |st| !st.on).await;
@@ -896,7 +896,7 @@ async fn pairing_over_the_listener_and_a_reset_restarting_it_on_a_new_key() {
     let lan = switch_for(
         &s,
         &scratch,
-        Arc::new(move |_| Ok(network)),
+        Arc::new(move |_| only(Ok(network))),
         s.shared.desk.book.clone(),
     );
     assert_eq!(lan.pair(), Err("invalidRequest"), "a code with LAN off");

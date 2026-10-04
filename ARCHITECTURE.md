@@ -25,7 +25,9 @@ a separate versioned operation contract. Nexus at the shack owns distinct local
 logging and station-control grants, the shared controller lease, expiring
 context-bound commands, deduplication and durable append receipts. The shack can also
 listen on its own network for a paired computer (`remote_service/lan`): TLS 1.3 with
-both ends' raw keys pinned, on a private IPv4 address only, beside the relay's road. The
+both ends' raw keys pinned, on a private IPv4 address only, never on a virtual or VPN
+adapter, beside the relay's road, and is found by name through Windows' own DNS-SD calls,
+looked up at run time (`tempo_stream::lan::dnssd`). The
 two roads share one authority and one lease, bound to the connection that took it. A
 computer pairs with a one-time code made at the shack, proved over both keys and the TLS
 session; the shack's LAN key and its paired computers live in the OS keychain. The computer's

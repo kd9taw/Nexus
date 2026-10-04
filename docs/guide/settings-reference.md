@@ -171,6 +171,24 @@ Windows only for now. Turned on, the station listens on one private address of t
 home or club network: 10.x, 172.16–31.x or 192.168.x), and the card says where, or why it is not
 listening. Only computers paired here can connect, and only from that network.
 
+Virtual adapters and VPNs are never used: not WSL's or Hyper-V's virtual switch, not VirtualBox's
+or VMware's, and not a VPN's tunnel, even one that carries all of this computer's traffic. When
+more than one network is left, choose which one under **Network**; **Automatic** takes the one
+this computer reaches the internet by. A picked address that goes away for a while (sleep, a new
+address from the router, a cable out) is waited for, and the station listens there again when it
+is back.
+
+While it listens, other computers on that network can find the station by name ("Nexus" and the
+first characters of its key, never this computer's name) through Windows' own name service.
+Where Windows will not do that, the card says so: type the address the card shows on the other
+computer instead, which always works. The first time it listens, Windows asks whether Nexus may
+use networks: allow **Private networks** only. Nexus adds no firewall rule of its own. It reads
+what the firewall says of the network it listens on, and the card says what stands in the way: a
+network Windows calls Public, a question that was cancelled (which leaves Nexus blocked there), a
+firewall set to block every incoming connection, or one an administrator's policy sets. What it
+cannot see from here is a network that keeps its devices apart, as guest Wi-Fi often does: on
+one of those, other computers cannot reach this one at all.
+
 To pair one, choose **Pair a computer**. The card shows a code, which the other computer's Nexus
 asks for when you pair it with this station. Choosing **Pair a computer** is the approval:
 whoever types the code within ten minutes is paired at once, with no second step here, so keep it

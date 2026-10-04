@@ -199,6 +199,12 @@ pub enum Action {
     },
     /// Remote over this network off, at the shack: the port closes and every LAN session ends.
     LanOff {},
+    /// Where Remote over this network listens, picked at the shack: one of this computer's private
+    /// IPv4 addresses, or with none as `lan` chooses. Kept, on or off.
+    LanAddress {
+        #[serde(default)]
+        address: Option<String>,
+    },
     /// Pair a computer over this network, at the shack: the pairing window opens with a new code,
     /// and this press is the approval (as ruled on 2026-10-04, "One press").
     LanPair {},
@@ -560,7 +566,7 @@ impl Service {
             engine,
             feeds,
             Arc::new(lan::Book::new(Arc::new(SystemVault))),
-            Arc::new(tempo_stream::lan::network),
+            Arc::new(tempo_stream::lan::look),
         )
     }
     /// Remote over this network, beside the relay's road and sharing its one authority: its switch
@@ -583,6 +589,8 @@ impl Service {
                     feeds,
                     book,
                     resolve,
+                    advertise: lan::advertise(),
+                    firewall: lan::firewall_says(),
                 },
             ));
             if let Ok(mut control) = self.control.lock() {
@@ -832,6 +840,12 @@ impl Service {
                 if let Some(lan) = self.lan()? {
                     lan.turn_off();
                 }
+                return self.status();
+            }
+            Action::LanAddress { address } => {
+                self.lan()?
+                    .ok_or("serviceUnavailable")?
+                    .pick(address.as_deref())?;
                 return self.status();
             }
             Action::LanPair {} => {
@@ -1332,6 +1346,7 @@ impl Controller {
             | Action::TakeOverLogging {}
             | Action::LanOn { .. }
             | Action::LanOff {}
+            | Action::LanAddress { .. }
             | Action::LanPair {}
             | Action::LanCancel {}
             | Action::LanRevoke { .. }
