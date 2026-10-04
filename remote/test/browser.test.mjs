@@ -58,6 +58,11 @@ const APPLICATION_VERSIONS = (await readFile(new URL('../../ui/src/remote-web/ap
   .match(/export const APPLICATION_VERSIONS = \[([^\]]*)\]/)[1].split(',').map(v => Number(v.trim()))
 if (!APPLICATION_VERSIONS.length || APPLICATION_VERSIONS.some(Number.isNaN)) throw new Error('could not read APPLICATION_VERSIONS')
 const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
+// What a held PTT may go without: the station ends the over once no hold has arrived for GAP. Read
+// from the station's own source, so the stream scenario judges a held press by the real number.
+const PTT_GAP_MS = Number((await readFile(new URL('../../crates/tempo-app/src/remote_control/ptt_hold.rs', import.meta.url), 'utf8'))
+  .match(/pub const GAP: Duration = Duration::from_millis\((\d+)\);/)?.[1])
+if (!(PTT_GAP_MS > 0)) throw new Error('could not read the station\'s PTT hold GAP')
 // Every scenario this suite runs. Extracted from the `for` head on 2026-09-20 so CI can
 // shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
@@ -1146,13 +1151,27 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX').focus();true`)
         await typeKey('b','KeyB','b')
         assert.equal(await atShack('__shack.received.control.filter(m=>m.type==="key").length'),before,'a key on Stop TX never reaches the station')
-        // S7: a held PTT is re-asserted under one hold id until let go, then released at once.
+        // S7: a held PTT is re-asserted under one hold id until let go, then released at once. Judged on the
+        // page's own clock, from what it sent and when the button was pressed and let go, so the count follows
+        // how long the page held it, whatever this runner slept: the station ends an over that goes PTT_GAP_MS
+        // without a hold, so no gap may pass that (the press to the first hold, hold to hold, the last to the
+        // let-go), and the release goes when the button is let go, not before. The button's own disabled and
+        // focus changes are logged beside them: a press the page ends early names what ended it.
+        await evaluate(`(()=>{const log=window.__ptt=[],at=()=>performance.now(),b=document.querySelector('.remote-stream-ptt'),send=RTCDataChannel.prototype.send
+          RTCDataChannel.prototype.send=function(data){if(this.label==='ptt')log.push({...JSON.parse(data),at:at()});return send.call(this,data)}
+          for(const type of ['pointerdown','pointerup','focusout'])b.addEventListener(type,()=>log.push({type,at:at()}),true)
+          new MutationObserver(()=>log.push({type:b.disabled?'disabled':'enabled',at:at()})).observe(b,{attributeFilter:['disabled']});return true})()`)
         await press(await center('.remote-stream-ptt'),450)
         await untilShack(`__shack.received.ptt.some(m=>m.type==='pttRelease')`)
-        const ptt=await atShack('__shack.received.ptt')
-        const holds=ptt.filter(m=>m.type==='pttHold')
-        assert.ok(holds.length>=3,'held for 450 ms: re-asserted about every 100 ms ('+holds.length+')')
-        assert.equal(new Set(ptt.filter(m=>m.type!=='held').map(m=>m.holdId)).size,1,'one press, one hold id')
+        const sent=(await evaluate('window.__ptt')).filter(m=>m.type!=='held'),ptt=(await atShack('__shack.received.ptt')).filter(m=>m.type!=='held')
+        const pressed=sent.find(m=>m.type==='pointerdown')?.at,letGo=sent.find(m=>m.type==='pointerup')?.at
+        const holds=sent.filter(m=>m.type==='pttHold'),pttReleases=sent.filter(m=>m.type==='pttRelease')
+        const told=` (ms after the press: ${sent.map(m=>`${m.type}${m.seq===undefined?'':' '+m.seq} ${Math.round(m.at-pressed)}`).join(', ')}; the station got ${ptt.map(m=>m.type+' '+m.seq).join(', ')})`
+        assert.ok(pressed!==undefined&&letGo!==undefined&&pttReleases.length===1,'the page saw one press and one let-go, and sent one release'+told)
+        const gaps=[pressed,...holds.map(m=>m.at),letGo].map((at,i,all)=>at-all[i-1]).slice(1)
+        assert.ok(Math.max(...gaps)<=PTT_GAP_MS&&holds.length>=Math.ceil((letGo-pressed)/PTT_GAP_MS),`held ${Math.round(letGo-pressed)} ms: ${holds.length} holds, never ${PTT_GAP_MS} ms without one`+told)
+        assert.ok(pttReleases[0].at>=letGo&&pttReleases[0].at-letGo<50,'released when let go, not before and not after'+told)
+        assert.equal(new Set([...holds,...pttReleases,...ptt].map(m=>m.holdId)).size,1,'one press, one hold id')
         assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
         // THE DEAD-MAN, the page's half: a key held on the picture goes as itself and is re-asserted on
         // ptt at once and every 100 ms while held, and not after; a button held on the picture likewise.
