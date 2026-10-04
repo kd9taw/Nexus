@@ -1,0 +1,227 @@
+flexsession 1
+# A synthetic SmartSDR v4 session: one radio on TCP API 1.4, and Nexus connecting as a GUI client.
+#
+# Written for Nexus from the protocol authority in the Flex client port plan
+# (docs/specs/flex-client-port-plan.md §4). D is FlexRadio's public API documentation (the
+# smartsdr-api-docs wiki at c114d35); A is AetherSDR's tested 4.x behaviour (aethersdr/AetherSDR at
+# 32fa50e4) as that plan cites it. Nothing here is copied from a recording or from another
+# project's fixtures: the values are invented, and the key names and line shapes are the protocol's.
+#
+# The info reply below carries an invented serial number, MAC and addresses on purpose: the
+# recorder's tests record this session and check that none of them survives.
+
+# A: 4.x firmware sends V1.4.0.0 on 6000 and 8000 radios alike. D: the handle is 32-bit hex.
+prologue V1.4.0.0
+handle 2B6E1F40
+# D (Known-API-Responses): SL_UNKNOWN_COMMAND.
+default 50000015
+
+# --- Registration, in the order the plan gives (§4.5) ----------------------------------------
+
+# D: "not yet implemented"; FlexLib sends it first (F, as A cites it).
+on client program *
+reply 0
+
+on client low_bw_connect
+reply 0
+
+# D (TCPIP-client): with no id, v3+ returns one, which the client stores and presents later.
+on client gui
+reply 0 6F1C2A3B-0000-4000-8000-00000000B001
+
+on client gui *
+reply 0
+
+on client station *
+reply 0
+
+# A: send_reduced_bw_dax, enforce_network_mtu and local_ptt.
+on client set *
+reply 0
+
+# D (TCPIP-client): the client's UDP port for VITA-49.
+on client udpport *
+reply 0
+
+# D (TCPIP-keepalive, TCPIP-ping).
+on keepalive enable
+reply 0
+
+on keepalive disable
+reply 0
+
+on ping
+reply 0
+
+# --- Subscriptions (D TCPIP-sub; A's 4.x list) -------------------------------------------------
+
+# A (decodeRadioStatus) key names.
+on sub radio all
+reply 0
+send S0|radio slices=4 model=FLEX-6400 callsign=N0CALL nickname=Shack tnf_enabled=1 full_duplex_enabled=0 freq_error_ppb=0 cal_freq=15.000000 lineout_gain=60 lineout_mute=0 headphone_gain=50 headphone_mute=0 daxiq_capacity=16 daxiq_available=16
+
+# A: client 0x<h> with connected, client_id, program, station, local_ptt.
+on sub client all
+reply 0
+send S{h}|client 0x{h} connected local_ptt=0 client_id=6F1C2A3B-0000-4000-8000-00000000B001 program=Nexus station=Nexus
+
+# Nothing restored on a first connect: no slices, no pans (plan §4.5 step 8).
+on sub slice all
+reply 0
+
+on sub pan all
+reply 0
+
+# A (decodeTransmitStatus) key names; the radio never sends mox=, the keyed state is the
+# interlock's. D (SmartSDR-Status-Responses): RECEIVE while no slice is the transmitter. Interlock
+# updates are deltas: the timing line below is configuration, not a state sample.
+on sub tx all
+reply 0
+send S0|transmit rfpower=50 tunepower=10 tune=0 mic_selection=MIC mic_level=50 dax=0 vox_enable=0 lo=100 hi=2900 max_power_level=100 synccwx=1
+send S0|interlock timeout=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0
+send S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason= source= tx_allowed=0 amplifier=
+
+# A: atu status names (NONE, TUNE_IN_PROGRESS, TUNE_SUCCESSFUL, TUNE_BYPASS, ...).
+on sub atu all
+reply 0
+send S0|atu status=NONE atu_enabled=1 memories_enabled=0 using_mem=0
+
+# D (Metering-Protocol): '#'-separated <id>.<key>=<value> definitions.
+on sub meter all
+reply 0
+send S0|meter 1.src=TX-#1.num=1#1.nam=FWDPWR#1.unit=dBm#1.low=-150.0#1.hi=60.0#1.fps=10#2.src=TX-#2.num=1#2.nam=REFPWR#2.unit=dBm#2.low=-150.0#2.hi=60.0#2.fps=10#3.src=TX-#3.num=1#3.nam=SWR#3.unit=SWR#3.low=1.0#3.hi=999.0#3.fps=10#
+
+on sub audio all
+reply 0
+
+on sub gps all
+reply 0
+
+on sub xvtr all
+reply 0
+
+# --- Queries -------------------------------------------------------------------------------
+
+# D (TCPIP-info): comma-separated pairs, some quoted. The serial, MAC and addresses are invented.
+on info
+reply 0 model="FLEX-6400",chassis_serial="0000-1111-6400-0001",name="Shack",callsign="N0CALL",gps="Not Present",scu=1,slice=2,software_ver=4.2.18.41174,mac=00:1C:2D:00:00:01,ip=192.168.1.20,netmask=255.255.255.0,gateway=192.168.1.1,location=""
+
+# D (TCPIP-slice): a space-separated list; empty on a first connect.
+on slice list
+reply 0
+
+# A: the radio's mic inputs.
+on mic list
+reply 0 MIC,BAL,LINE,ACC
+
+# --- Display and slice ---------------------------------------------------------------------
+
+# D (TCPIP-display-panafall): the reply is <pan>,<waterfall>. A: the status keys, and the FFT
+# stream id is the pan id, the tile stream id the waterfall id.
+on display panafall create *
+reply 0 0x40000000,0x42000000
+send S{h}|display pan 0x40000000 client_handle=0x{h} waterfall=0x42000000 center=14.100000 bandwidth=0.200000 x_pixels=1024 y_pixels=480 fps=25 min_dbm=-135.00 max_dbm=-40.00 rxant=ANT1 wide=0 band=20
+send S{h}|display waterfall 0x42000000 client_handle=0x{h} panadapter=0x40000000 line_duration=80 auto_black=1 black_level=15 color_gain=50
+
+on display pan set *
+reply 0
+
+on display panafall set *
+reply 0
+
+on display pan remove *
+reply 0
+
+on display panafall remove *
+reply 0
+
+# D (TCPIP-slice): the reply carries the new slice's index. A: the status keys (filter edges in
+# Hz). The new TX slice makes the interlock READY (D: READY means ready to transmit).
+on slice create *
+reply 0 0
+send S{h}|slice 0 in_use=1 RF_frequency=14.074000 mode=DIGU filter_lo=0 filter_hi=3000 active=1 tx=1 client_handle=0x{h} pan=0x40000000 index_letter=A dax=0 rxant=ANT1 txant=ANT1 audio_level=50 audio_pan=50 audio_mute=0
+send S0|meter 4.src=SLC#4.num=0#4.nam=LEVEL#4.unit=dBm#4.low=-150.0#4.hi=20.0#4.fps=10#
+send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
+
+on slice tune *
+reply 0
+
+on slice set *
+reply 0
+
+on slice remove *
+reply 0
+
+on filt *
+reply 0
+
+# --- Streams (D TCPIP-stream; A: the reply carries the stream id, and the stream status keys) --
+
+on stream create type=dax_rx *
+reply 0 0x04000001
+send S{h}|stream 0x04000001 type=dax_rx dax_channel=1 slice=0 client_handle=0x{h} ip={peer}
+
+on stream create type=dax_tx
+reply 0 0x84000000
+send S{h}|stream 0x84000000 type=dax_tx client_handle=0x{h} ip={peer}
+
+on stream remove *
+reply 0
+
+# --- Transmit ------------------------------------------------------------------------------
+
+on transmit set *
+reply 0
+
+# D (TCPIP-xmit, SmartSDR-Status-Responses): each interlock transition is reported, with the
+# client assigned the transmitter. A (the FLEX-6700 captures the plan cites, §3.4): PTT_REQUESTED
+# then TRANSMITTING with our handle; after xmit 0, UNKEY_REQUESTED then READY still naming us, and
+# a later READY with tx_client_handle=0x00000000, about 430 ms after the first READY (an
+# observation, not a timer).
+on xmit 1
+reply 0
+send S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=
+wait 30
+send S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=
+
+on xmit 0
+reply 0
+send S0|interlock tx_client_handle=0x{h} state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=
+send S0|interlock tx_client_handle=0x{h} state=READY reason= source= tx_allowed=1 amplifier=
+wait 430
+send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
+
+# A: the transmit status carries tune. The interlock transitions mirror xmit's; that a tune
+# carrier reports source=SW is not established on hardware.
+on transmit tune 1
+reply 0
+send S0|transmit tune=1
+send S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=
+wait 30
+send S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=
+
+on transmit tune 0
+reply 0
+send S0|transmit tune=0
+send S0|interlock tx_client_handle=0x{h} state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=
+send S0|interlock tx_client_handle=0x{h} state=READY reason= source= tx_allowed=1 amplifier=
+wait 430
+send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
+
+# D (TCPIP-atu): start needs a TX slice and READY. A: the status names.
+on atu start
+reply 0
+send S0|atu status=TUNE_IN_PROGRESS
+wait 500
+send S0|atu status=TUNE_SUCCESSFUL
+
+on atu bypass
+reply 0
+send S0|atu status=TUNE_BYPASS
+
+# D (TCPIP-cwx).
+on cwx send *
+reply 0
+
+on cwx clear
+reply 0

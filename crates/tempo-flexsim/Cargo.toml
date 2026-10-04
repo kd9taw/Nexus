@@ -1,0 +1,17 @@
+[package]
+publish = false
+name = "tempo-flexsim"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Test support for Nexus's native FlexRadio client: a SmartSDR-protocol simulator that replays recorded or synthetic sessions over TCP and VITA-49 UDP and injects faults, plus the observe-only recorder testers run to capture a session. Pure std."
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# The shipped VITA-49 decoders (`flexvita`). The tests use them as an independent reader of the
+# simulator's packets, and to show that its loss and reorder faults trip the continuity guards
+# that exist in the tree today. A dev-dependency only: nothing in the library depends on them.
+tempo-net = { path = "../tempo-net" }
