@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays where it was (2560×1600's worth of pixels, 4 Mbit/s). A very large picture gets fewer frames
   a second rather than more of the shack's processor. It needs the new Nexus at the shack, and the
   Remote page's update for the picture to follow the browser's size.
+- **Remote streaming: a slow connection keeps a live picture.** Over the internet or the relay,
+  Nexus sent the picture at a fixed rate, up to 4 Mbit/s, whatever the connection could carry. On a
+  slower one (a shack's upload, a phone on cellular) most of it was lost: the browser showed no
+  picture at all, or one frozen for half a minute, and the stream's permission to transmit lapsed
+  with it. Nexus at the shack now measures what the connection carries, all the time, and sends the
+  picture to fit: softer and at fewer frames a second on a slow connection, and sharp again once it
+  widens. On a very slow one it also sends a smaller picture, so a fresh full frame still arrives
+  within about a second. The receive audio's share is kept first, so the picture never crowds out
+  the sound. On the shack's own network the picture follows the connection too, so a weak Wi-Fi
+  link no longer breaks it up. It needs the new Nexus at the shack; the Remote page is unchanged.
 - **Remote streaming: a shack with a public internet address of its own streams.** When the
   shack's computer holds a public address itself, with no router in front of it, Nexus offered the
   browser no address to connect to, and a browser behind a router never got the picture. Nexus at

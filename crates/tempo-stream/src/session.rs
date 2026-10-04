@@ -49,11 +49,20 @@
 //! - **Control must be reliable and ordered.** A `control` channel opened any other way is not used:
 //!   a Stop that the channel is allowed to drop is not a Stop.
 //! - **Where the picture goes** ([`Session::path`]): the selected pair's remote address, from
-//!   str0m's own statistics every [`PATH_EVERY`], read by [`crate::lan::path`]. The picture's size
+//!   str0m's own statistics every [`STATS_EVERY`], read by [`crate::lan::path`]. The picture's size
 //!   and bit rate follow it (`video::picture::Bound`); nothing else does.
+//! - **What the link carries** ([`Session::estimate`], 2026-10-03): str0m's own bandwidth
+//!   estimation (Google congestion control on the page's transport-wide feedback), read from the
+//!   same statistics, so the picture's bit rate follows the link (`video::rate`) instead of a fixed
+//!   budget it may not carry. [`Session::want`] tells it how far to probe: the link the whole
+//!   picture would use. It is on only for an offer that carries transport-wide feedback
+//!   (`transport_feedback`); every current browser's does, and one that does not keeps the
+//!   fixed budget. With it on, str0m paces the picture's packets at about the estimate, and the
+//!   data channels (receive audio, `control`) go out ahead of them unpaced.
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use str0m::bwe::Bitrate;
 use str0m::change::SdpOffer;
 use str0m::channel::{ChannelId, Reliability};
 use str0m::format::Codec;
@@ -68,8 +77,42 @@ use crate::video::picture::Path;
 
 /// How long ICE and DTLS may take before the session is given up on.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-/// How often the session reads where the picture goes ([`Session::path`]).
-pub const PATH_EVERY: Duration = Duration::from_millis(500);
+/// How often the session reads str0m's statistics: where the picture goes ([`Session::path`]) and
+/// what the link carries ([`Session::estimate`]). Five times a second, so a link that narrows is
+/// followed within a fifth of a second of str0m seeing it.
+pub const STATS_EVERY: Duration = Duration::from_millis(200);
+/// Where str0m's estimate of the link starts, in kbit/s, before the page's first feedback. Its first
+/// probes go to three and six times this straight away, so a wide link is found within about a
+/// second, while the first keyframe is not sized for a link nobody has measured.
+pub const START_KBPS: u32 = 1000;
+/// The transport-wide congestion control header extension (draft-holmer-rmcat-transport-wide-cc).
+const TRANSPORT_WIDE_CC: &str = "transport-wide-cc-extensions-01";
+/// The most timeouts one drain serves: str0m's pacer sends up to 40 ms of the link's rate at once
+/// (about 40 packets at 10 Mbit/s), so this is room to spare.
+const DUE_ROUNDS: usize = 256;
+/// How far ahead of the caller's clock a timeout may be and still be served in the same drain: the
+/// pacer's microsecond steps, a few hundred of them at most, with room to spare.
+const DUE_SLACK: Duration = Duration::from_millis(1);
+
+/// Does the page's offer let str0m estimate the link? Its bandwidth estimation runs on the page's
+/// transport-wide feedback, so the video line must carry the transport-wide sequence number and
+/// `transport-cc` feedback. Without them no feedback would ever move the estimate, and str0m's
+/// pacer would hold the picture to where it started.
+fn transport_feedback(sdp: &str) -> bool {
+    let (mut video, mut sequence, mut feedback) = (false, false, false);
+    for line in sdp.lines().map(str::trim) {
+        if let Some(media) = line.strip_prefix("m=") {
+            if video && sequence && feedback {
+                return true;
+            }
+            (video, sequence, feedback) = (media.starts_with("video "), false, false);
+        } else if video {
+            sequence |= line.starts_with("a=extmap:") && line.contains(TRANSPORT_WIDE_CC);
+            feedback |= line.starts_with("a=rtcp-fb:") && line.ends_with(" transport-cc");
+        }
+    }
+    video && sequence && feedback
+}
 
 /// Windows' WSAEMSGSIZE on a receive: the datagram was longer than the buffer it was read into.
 const WSAEMSGSIZE: i32 = 10040;
@@ -185,6 +228,11 @@ pub struct Session {
     clock: VideoClock,
     /// Where the picture goes, once ICE has selected a pair.
     path: Option<Path>,
+    /// What the link carries, in kbit/s, as str0m last estimated it; `None` for a session with no
+    /// estimation (an offer without transport-wide feedback).
+    estimate: Option<u32>,
+    /// The link last asked of the estimation ([`Session::want`]).
+    wanted: Option<u32>,
     started: Instant,
     connected: bool,
     closed: bool,
@@ -223,14 +271,16 @@ impl Session {
     ) -> Result<(Session, String), Refusal> {
         let parsed = SdpOffer::from_sdp_string(sdp)
             .map_err(|_| Refusal::Offer(OfferRefusal::Unparseable))?;
+        let estimated = transport_feedback(sdp);
         let config = Rtc::builder()
             .clear_codecs()
             .enable_vp8(true)
             // The page's microphone (S6). No RED: the page sends plain Opus.
             .enable_opus(true, false)
             .set_ice_lite(false)
-            // The selected pair arrives with the statistics, and it is all they are read for.
-            .set_stats_interval(Some(PATH_EVERY));
+            // The selected pair and the link's estimate arrive with the statistics.
+            .set_stats_interval(Some(STATS_EVERY))
+            .enable_bwe(estimated.then(|| Bitrate::kbps(u64::from(START_KBPS))));
         // The peer's certificate is checked against its offer's fingerprint. str0m's default, and
         // the lock A4 and A5 stand on, so it is asserted rather than assumed.
         if !config.fingerprint_verification() {
@@ -273,6 +323,8 @@ impl Session {
             audio: None,
             clock: VideoClock::new(now),
             path: None,
+            estimate: estimated.then_some(START_KBPS),
+            wanted: None,
             started: now,
             connected: false,
             closed: false,
@@ -414,9 +466,29 @@ impl Session {
     }
 
     /// Where the picture goes: the page's network as seen from the selected ICE pair, `None` until
-    /// there is one. Read every [`PATH_EVERY`], so it follows a pair ICE selects later.
+    /// there is one. Read every [`STATS_EVERY`], so it follows a pair ICE selects later.
     pub fn path(&self) -> Option<Path> {
         self.path
+    }
+
+    /// What the link to the page carries, in kbit/s, as str0m estimates it: [`START_KBPS`] until
+    /// the page's feedback moves it, read every [`STATS_EVERY`]. `None` for a session with no
+    /// estimation, whose picture keeps the path's fixed budget.
+    pub fn estimate(&self) -> Option<u32> {
+        self.estimate
+    }
+
+    /// Ask str0m's estimation to look for a link of `kbps`: it probes up to that (and up to twice
+    /// it, as WebRTC does, to find room), and no further. A session with no estimation ignores it.
+    pub fn want(&mut self, kbps: u32, now: Instant) {
+        if self.closed || self.estimate.is_none() || self.wanted == Some(kbps) {
+            return;
+        }
+        self.wanted = Some(kbps);
+        self.rtc
+            .bwe()
+            .set_desired_bitrate(Bitrate::kbps(u64::from(kbps)));
+        self.pump(now);
     }
 
     /// S9: is the picture the page says it last showed fresh enough to renew transmit presence?
@@ -474,24 +546,44 @@ impl Session {
         }
     }
 
-    /// Drain str0m to its next timeout: the one rule its API has.
+    /// Drain str0m to its next timeout: the one rule its API has. A timeout due now, or within
+    /// [`DUE_SLACK`] of now, is served here too, at its own instant, round after round, rather than
+    /// left to the caller's next turn. With the link's estimate on, str0m's pacer releases one
+    /// packet per timeout and asks for the next a microsecond on (each packet leaves at its own
+    /// instant, which the page's feedback reports back), while a caller comes back once a turn:
+    /// on Windows a socket wait is a scheduler tick, about 15.6 ms. Measured 2026-10-03, a packet
+    /// a turn held an 8 Mbit/s link to about 1.2 Mbit/s and the frames queued behind it for
+    /// seconds. [`DUE_ROUNDS`] bounds a str0m that keeps answering "now".
     fn pump(&mut self, now: Instant) {
-        loop {
-            match self.rtc.poll_output() {
-                Ok(Output::Timeout(at)) => {
-                    self.timeout = at;
-                    return;
+        for _ in 0..DUE_ROUNDS {
+            loop {
+                match self.rtc.poll_output() {
+                    Ok(Output::Timeout(at)) => {
+                        self.timeout = at;
+                        break;
+                    }
+                    Ok(Output::Transmit(t)) => self.transmits.push(Transmit {
+                        destination: t.destination,
+                        contents: t.contents.to_vec(),
+                    }),
+                    Ok(Output::Event(event)) => self.event(event),
+                    Err(_) => {
+                        self.fail(StreamReason::ConnectionFailed);
+                        self.timeout = now + Duration::from_millis(100);
+                        return;
+                    }
                 }
-                Ok(Output::Transmit(t)) => self.transmits.push(Transmit {
-                    destination: t.destination,
-                    contents: t.contents.to_vec(),
-                }),
-                Ok(Output::Event(event)) => self.event(event),
-                Err(_) => {
-                    self.fail(StreamReason::ConnectionFailed);
-                    self.timeout = now + Duration::from_millis(100);
-                    return;
-                }
+            }
+            if self.closed || self.timeout > now + DUE_SLACK {
+                return;
+            }
+            if self
+                .rtc
+                .handle_input(Input::Timeout(self.timeout.max(now)))
+                .is_err()
+            {
+                self.fail(StreamReason::ConnectionFailed);
+                return;
             }
         }
     }
@@ -562,6 +654,11 @@ impl Session {
             Event::PeerStats(stats) => {
                 if let Some(pair) = stats.selected_candidate_pair {
                     self.path = Some(crate::lan::path(pair.remote.addr));
+                }
+                // The estimate as str0m holds it now. Its `EgressBitrateEstimate` event is a
+                // three-second average, which would follow a link that narrows seconds late.
+                if let (Some(estimate), Some(link)) = (self.estimate.as_mut(), stats.bwe_tx) {
+                    *estimate = u32::try_from(link.as_u64() / 1000).unwrap_or(u32::MAX);
                 }
             }
             _ => {}
@@ -1147,7 +1244,7 @@ mod tests {
                 &mut page,
                 &mut station,
                 &mut now,
-                PATH_EVERY * 2,
+                STATS_EVERY * 2,
                 BASE,
                 NEIGHBOUR,
             );
@@ -1170,7 +1267,7 @@ mod tests {
             assert!(station.is_connected(), "the session never connected");
             assert!(page.rtc.is_connected());
             // The picture goes to the page's public address: the internet's budget.
-            run(&mut page, &mut station, &mut now, PATH_EVERY * 2);
+            run(&mut page, &mut station, &mut now, STATS_EVERY * 2);
             assert_eq!(station.path(), Some(Path::Internet));
         }
 
@@ -1329,6 +1426,88 @@ mod tests {
                     }
                 }
             }
+        }
+
+        /// Send the page a frame every 33 ms for `span`, as the picture does, running both peers.
+        fn stream_for(page: &mut Page, station: &mut Session, now: &mut Instant, span: Duration) {
+            let end = *now + span;
+            while *now < end {
+                assert!(station.send_video(*now, *now, &[0x10; 1100]));
+                run(page, station, now, Duration::from_millis(33));
+            }
+        }
+
+        /// ★ The link's estimate (2026-10-03): a page whose offer carries transport-wide feedback
+        /// gets str0m's bandwidth estimation, which starts from [`START_KBPS`] and moves only with
+        /// the page's own feedback on the frames it receives. Which way it moves is the bench's to
+        /// show: this network hands packets over in 5 ms steps, which models no link's capacity.
+        /// CONTROL: connected but sent nothing, so with no feedback yet, it is still at its start.
+        #[test]
+        fn the_estimate_follows_the_pages_feedback() {
+            let mut now = Instant::now();
+            let (mut page, mut station, _, _) = connect(&mut now);
+            assert!(station.is_connected(), "the session never connected");
+            run(&mut page, &mut station, &mut now, STATS_EVERY * 2);
+            assert_eq!(station.estimate(), Some(START_KBPS));
+            station.want(8000, now);
+            stream_for(&mut page, &mut station, &mut now, Duration::from_secs(4));
+            let moved = station.estimate().expect("the estimate went away");
+            assert_ne!(moved, START_KBPS, "no feedback reached the estimate");
+        }
+
+        /// ★ What the pacer may send now goes now (2026-10-03). With the estimate on, str0m paces
+        /// the picture and releases one packet per timeout, and a caller comes back once a turn:
+        /// on Windows a socket wait is a scheduler tick, about 15.6 ms. One packet a turn held an
+        /// 8 Mbit/s link to about 1.2 Mbit/s and queued the frames for seconds. A 60 kB frame on a
+        /// link estimated at 8 Mbit/s now leaves in about the time the link takes to carry it.
+        #[test]
+        fn a_paced_frame_leaves_at_the_links_rate_not_a_packet_a_turn() {
+            let mut now = Instant::now();
+            let (mut page, mut station, _, _) = connect(&mut now);
+            run(&mut page, &mut station, &mut now, STATS_EVERY * 2);
+            station.rtc.bwe().reset(Bitrate::kbps(8000));
+            station.want(9000, now);
+            assert!(station.send_video(now, now, &vec![0x10; 60_000]));
+            let (public, page_at): (SocketAddr, SocketAddr) =
+                (PUBLIC.parse().unwrap(), PAGE.parse().unwrap());
+            let (start, mut bytes) = (now, 0usize);
+            while bytes < 60_000 && now < start + Duration::from_secs(2) {
+                for (destination, packet) in std::mem::take(&mut page.outbox) {
+                    if destination == public {
+                        station.receive(now, page_at, &packet);
+                    }
+                }
+                for t in station.take_transmits() {
+                    bytes += t.contents.len();
+                    let receive =
+                        Receive::new(Protocol::Udp, public, page_at, &t.contents).unwrap();
+                    page.input(Input::Receive(now, receive));
+                }
+                now += Duration::from_micros(15_600);
+                page.input(Input::Timeout(now));
+                station.timeout(now);
+            }
+            assert!(
+                now - start <= Duration::from_millis(150),
+                "{bytes} bytes took {:?}",
+                now - start
+            );
+        }
+
+        /// A page whose offer carries no transport-wide feedback gives str0m nothing to estimate
+        /// with: the session has no estimate, and the picture keeps its fixed budget. CONTROL: the
+        /// same page's offer as written has the feedback (the test above).
+        #[test]
+        fn an_offer_without_transport_feedback_has_no_estimate() {
+            let now = Instant::now();
+            let (_page, offer, _pending) = page(now);
+            assert!(offer.contains("transport-cc") && offer.contains("transport-wide-cc"));
+            let bare: String = offer
+                .split_inclusive("\r\n")
+                .filter(|l| !l.contains("transport-cc") && !l.contains("transport-wide-cc"))
+                .collect();
+            let (station, _) = Session::accept(&bare, BASE.parse().unwrap(), now).unwrap();
+            assert_eq!(station.estimate(), None);
         }
 
         /// The data channels carry what the contract says: the page's control message arrives as

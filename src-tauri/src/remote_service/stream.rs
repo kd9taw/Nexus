@@ -47,8 +47,10 @@
 //!   resolves its `main` window's handle through [`Host::window`]; the station checks it can be
 //!   captured before it opens a socket, starts capturing when the session connects, and stops when
 //!   the session ends. `tempo_stream::video` does the capture and the encoding, no larger than the
-//!   page says it shows the picture (`view` on `control`, [`Streaming::view`]) and within the
-//!   budget of the path the picture takes (`Session::path`): only its size and bit rate change.
+//!   page says it shows the picture (`view` on `control`, [`Streaming::view`]), within the
+//!   budget of the path the picture takes (`Session::path`), and at what the link to the page
+//!   carries (`Session::estimate`, 2026-10-03), which the session is told to look for up to what
+//!   the whole picture needs (`Session::want`): only its size, frame rate and bit rate change.
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
@@ -1020,7 +1022,10 @@ fn run(
             session.send(Lane::Audio, &audio, now);
         }
         if let Some(picture) = &video {
-            picture.fit(session.path(), streaming.view());
+            picture.fit(session.path(), streaming.view(), session.estimate());
+            if let Some(link) = picture.wanted() {
+                session.want(link, now);
+            }
             for frame in picture.take() {
                 // A frame the transport could not take leaves the page's decoder without its
                 // reference: the next frame is a keyframe, as when the page asks for one.

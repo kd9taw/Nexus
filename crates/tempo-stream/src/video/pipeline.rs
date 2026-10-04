@@ -6,7 +6,8 @@
 //! - **At most 30 frames a second** ([`FRAME_INTERVAL`]), however often the window changes, and
 //!   fewer for a picture so large that 30 would pass [`PIXEL_RATE`] ([`frame_interval`]): the most
 //!   the encoder took before the picture followed the page's size, so a larger picture costs the
-//!   station's CPU frames a second, not more of the CPU.
+//!   station's CPU frames a second, not more of the CPU. Fewer again on a link too weak for them
+//!   (`rate::PACES`).
 //! - **A still window is sent at least twice a second** ([`STILL_FRAME_MS`]). The capture delivers
 //!   a picture only when the window changes, and the page's freshness rule (S9) needs frames to
 //!   echo, so the last picture is encoded again, stamped now. That is honest because nothing
@@ -22,17 +23,20 @@
 //! - **At the size the page shows** ([`Pipeline::set_bound`], `picture::Bound`). Each picture is
 //!   converted at the window's size, then scaled once to what the page's view and the path allow;
 //!   the scaled copy is kept for a still window's resends. A new bound takes effect on the next
-//!   frame, a still window's resend included, and a new size or bit rate opens a new encoder, whose
-//!   first frame is a keyframe. Nothing about the bound can stop the frames: the still-window floor
+//!   frame, a still window's resend included. A new size opens a new encoder, whose first frame is
+//!   a keyframe; a new bit rate retargets the running one ([`Encode::set_kbps`]), so a link that
+//!   moves costs no keyframe (`rate`, which plans each frame from the bound and the session's
+//!   estimate of the link). Nothing about the bound can stop the frames: the still-window floor
 //!   holds through every change.
 //! - **Below the radio.** The thread lowers its own priority on Windows (the caller's `lower`).
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::picture::{self, Bgra, Bound, I420};
+use super::rate::Rate;
 use crate::protocol::STILL_FRAME_MS;
 
 /// The shortest time between two encoded frames: 30 a second.
@@ -63,6 +67,13 @@ pub trait Encode: Send {
     /// Encode `picture`, shown `at` after the encoder was opened. Returns the packets it made,
     /// which is none when the encoder chose to skip, or `None` if it failed.
     fn encode(&mut self, picture: &I420, at: Duration, keyframe: bool) -> Option<Vec<Packet>>;
+
+    /// Give the running encoder a new bit rate, in kbit/s, from its next frame on and with no
+    /// keyframe. False when it cannot, and then a new encoder is opened at that rate instead.
+    fn set_kbps(&mut self, kbps: u32) -> bool {
+        let _ = kbps;
+        false
+    }
 }
 
 /// Makes an encoder for a picture's width and height and a bit rate in kbit/s. Called again
@@ -160,6 +171,8 @@ struct Shared {
     stop: AtomicBool,
     keyframe: AtomicBool,
     bound: Mutex<Bound>,
+    /// The last plan's `wanted`, in kbit/s; 0 before the first.
+    wanted: AtomicU32,
 }
 
 /// The running encoder thread. Dropping it stops the thread and waits for it.
@@ -183,6 +196,7 @@ impl Pipeline {
             stop: AtomicBool::new(false),
             keyframe: AtomicBool::new(false),
             bound: Mutex::new(Bound::default()),
+            wanted: AtomicU32::new(0),
         });
         let (out, frames) = mpsc::sync_channel(OUTPUT_DEPTH);
         let thread = {
@@ -207,6 +221,15 @@ impl Pipeline {
     /// budget. Until the first call, the bound of a page whose view and path are not known yet.
     pub fn set_bound(&self, bound: Bound) {
         *self.shared.bound.lock().unwrap_or_else(|p| p.into_inner()) = bound;
+    }
+
+    /// The link the whole picture would need to be sent at its own budget, once a picture has
+    /// been planned: what the session asks str0m's estimation to look for.
+    pub fn wanted(&self) -> Option<u32> {
+        match self.shared.wanted.load(Ordering::Relaxed) {
+            0 => None,
+            kbps => Some(kbps),
+        }
     }
 
     /// The page lost a frame and asked for a keyframe (PLI/FIR).
@@ -249,6 +272,10 @@ struct Encoder {
     last_sent: Option<Instant>,
     last_captured: Option<Instant>,
     keyframe: bool,
+    /// What each frame is sent at, from the bound and the link.
+    rate: Rate,
+    /// The shortest time from the last frame sent to the next, as its plan said.
+    interval: Duration,
 }
 
 impl Encoder {
@@ -261,6 +288,8 @@ impl Encoder {
             last_sent: None,
             last_captured: None,
             keyframe: true,
+            rate: Rate::default(),
+            interval: FRAME_INTERVAL,
         }
     }
 
@@ -273,13 +302,9 @@ impl Encoder {
     ) {
         while !shared.stop.load(Ordering::Relaxed) {
             let now = Instant::now();
-            // Pace: nothing sooner than a frame interval after the last one, at the size it was.
+            // Pace: nothing sooner than the last frame's interval after it.
             if let Some(sent) = self.last_sent {
-                let ready = sent
-                    + self
-                        .current
-                        .as_ref()
-                        .map_or(FRAME_INTERVAL, |(_, (w, h, _), _)| frame_interval(*w, *h));
+                let ready = sent + self.interval;
                 if now < ready {
                     std::thread::sleep(ready - now);
                     continue;
@@ -323,10 +348,12 @@ impl Encoder {
             return;
         };
         let bound = *shared.bound.lock().unwrap_or_else(|p| p.into_inner());
-        let Some((width, height)) = picture::encoded_size(source.width(), source.height(), &bound)
-        else {
+        let window = (source.width(), source.height());
+        let Some(plan) = self.rate.plan(window, &bound, Instant::now()) else {
             return;
         };
+        shared.wanted.store(plan.wanted, Ordering::Relaxed);
+        let (width, height) = (plan.width, plan.height);
         let whole = (width, height) == (source.width(), source.height());
         if !whole
             && self
@@ -346,12 +373,26 @@ impl Encoder {
             Some(previous) if captured_at <= previous => previous + Duration::from_millis(1),
             _ => captured_at,
         };
-        let opening = (width, height, bound.kbps(width, height));
-        if !matches!(&self.current, Some((_, opened, _)) if *opened == opening) {
+        // The same size goes on from the same encoder, given the new bit rate if there is one;
+        // only a new size, or an encoder that cannot change its rate, opens another.
+        let opening = (width, height, plan.kbps);
+        let reuse = match self.current.as_mut() {
+            Some((_, opened, _)) if *opened == opening => true,
+            Some((encoder, opened, _)) if (opened.0, opened.1) == (width, height) => {
+                let retargeted = encoder.set_kbps(plan.kbps);
+                if retargeted {
+                    opened.2 = plan.kbps;
+                }
+                retargeted
+            }
+            _ => false,
+        };
+        if !reuse {
             self.current =
                 (self.make)(opening.0, opening.1, opening.2).map(|e| (e, opening, captured_at));
             self.keyframe = true;
         }
+        self.interval = plan.interval;
         let Some((encoder, _, opened)) = self.current.as_mut() else {
             return;
         };
@@ -387,6 +428,7 @@ impl Encoder {
 mod tests {
     use super::*;
     use crate::video::picture::{Path, MIN_KBPS};
+    use crate::video::rate;
 
     /// An encoder that encodes nothing: one packet per picture, naming the picture's size, its
     /// first luma byte and whether it was asked for a keyframe.
@@ -579,6 +621,115 @@ mod tests {
         for pair in got.windows(2) {
             let gap = pair[1].captured_at - pair[0].captured_at;
             assert!(gap <= STILL_FRAME + Duration::from_millis(250), "{gap:?}");
+        }
+    }
+
+    /// An encoder that records every bit rate it is given after it was opened.
+    struct Retargetable(Arc<Mutex<Vec<u32>>>);
+
+    impl Encode for Retargetable {
+        fn encode(&mut self, picture: &I420, at: Duration, keyframe: bool) -> Option<Vec<Packet>> {
+            Fake.encode(picture, at, keyframe)
+        }
+
+        fn set_kbps(&mut self, kbps: u32) -> bool {
+            self.0.lock().unwrap().push(kbps);
+            true
+        }
+    }
+
+    /// A maker of [`Retargetable`] encoders: what each was opened for, and the rates given after.
+    fn retargetable() -> (MakeEncoder, Opened, Arc<Mutex<Vec<u32>>>) {
+        let (opened, retargets) = (
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let (log, given) = (opened.clone(), retargets.clone());
+        let make: MakeEncoder = Box::new(move |w, h, kbps| {
+            log.lock().unwrap().push((w, h, kbps));
+            Some(Box::new(Retargetable(given.clone())) as Box<dyn Encode>)
+        });
+        (make, opened, retargets)
+    }
+
+    /// On the shack's network, with the session's estimate of the link.
+    fn linked(estimate: u32) -> Bound {
+        Bound::new(Some(Path::Lan), None).within(Some(estimate))
+    }
+
+    /// ★ The link narrows (2026-10-03): the next frame, a still window's resend, goes at the new
+    /// bit rate from the same encoder, as an ordinary frame, so a weak link pays for no keyframe.
+    /// CONTROL: a link so weak that the size steps down opens a new encoder at the new size, at the
+    /// floor's bit rate, and its first frame is a keyframe.
+    #[test]
+    fn a_new_bit_rate_retargets_the_running_encoder_without_a_keyframe() {
+        let mailbox = Arc::new(Mailbox::default());
+        let (make, opened, retargets) = retargetable();
+        let pipeline =
+            Pipeline::start(mailbox.clone(), Box::new(|| true), make, no_priority).unwrap();
+        pipeline.set_bound(linked(8000));
+        mailbox.put(sized(0, 960, 540, Instant::now()));
+        assert!(wait_for(&pipeline, 1, Duration::from_secs(2))[0].keyframe);
+        pipeline.set_bound(linked(500));
+        let next = wait_for(&pipeline, 1, STILL_FRAME * 3);
+        assert!(!next[0].keyframe, "a new bit rate cost a keyframe");
+        assert_eq!(*opened.lock().unwrap(), vec![(960, 540, 518)]);
+        assert_eq!(*retargets.lock().unwrap(), vec![rate::share(500)]);
+        // Once the link has been measured (the still window's resends taken meanwhile), a link
+        // too weak for the whole picture's keyframes.
+        wait_for(&pipeline, usize::MAX, rate::MEASURE);
+        pipeline.set_bound(linked(100));
+        // The first frame at the new size is a keyframe.
+        let frames = wait_for(&pipeline, usize::MAX, STILL_FRAME * 3);
+        let stepped = frames
+            .iter()
+            .find(|f| f.data[..2] == [(480u32 & 0xff) as u8, (270u32 & 0xff) as u8])
+            .expect("the size never stepped down");
+        assert!(
+            stepped.keyframe,
+            "the first frame at a new size is not a keyframe"
+        );
+        assert_eq!(
+            opened.lock().unwrap().last(),
+            Some(&(480, 270, rate::FLOOR_KBPS))
+        );
+        // What the session asks str0m to look for: the link the whole window would need.
+        assert_eq!(pipeline.wanted(), Some(rate::link_for(518)));
+    }
+
+    /// A weak link lowers the frame rate: a window that changes all the time is encoded at most 15
+    /// times a second when the share is under half the picture's budget (a small picture's budget
+    /// is the 300 kbit/s floor, and a 200 kbit/s link's share is 116). CONTROL: on a wide link the
+    /// same window goes faster.
+    #[test]
+    fn a_weak_link_lowers_the_frame_rate() {
+        for (estimate, slow) in [(200, true), (8000, false)] {
+            let mailbox = Arc::new(Mailbox::default());
+            let pipeline =
+                Pipeline::start(mailbox.clone(), Box::new(|| true), fake(), no_priority).unwrap();
+            pipeline.set_bound(linked(estimate));
+            let mut got = Vec::new();
+            let until = Instant::now() + Duration::from_millis(1500);
+            let mut v = 0u8;
+            while Instant::now() < until {
+                v = v.wrapping_add(1);
+                mailbox.put(grey(v, 32, Instant::now()));
+                std::thread::sleep(Duration::from_millis(5));
+                got.extend(pipeline.take());
+            }
+            let gaps: Vec<Duration> = got
+                .windows(2)
+                .map(|p| p[1].captured_at - p[0].captured_at)
+                .collect();
+            let shortest = gaps.iter().min().copied().unwrap();
+            if slow {
+                assert!(
+                    shortest >= rate::PACES[1] - Duration::from_millis(6),
+                    "{estimate}: {gaps:?}"
+                );
+            } else {
+                assert!(shortest < rate::PACES[1], "{estimate}: {gaps:?}");
+            }
         }
     }
 

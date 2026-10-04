@@ -2,10 +2,11 @@
  *
  * Nexus-owned. It exists so that no libvpx struct layout is ever copied into Rust by hand: this
  * file is compiled against the headers of the libvpx it links (build.rs; the pinned source build
- * in scripts/build-windows-cross.sh), and Rust sees only the five functions below.
+ * in scripts/build-windows-cross.sh), and Rust sees only the six functions below.
  *
  * The encoder is configured for a live picture of an application window:
- *   - realtime, one pass, no lookahead (g_lag_in_frames 0), one thread, constant bit rate;
+ *   - realtime, one pass, no lookahead (g_lag_in_frames 0), one thread, constant bit rate, whose
+ *     target can be moved while the encoder runs (nexus_vp8_set_kbps) with no keyframe;
  *   - screen content mode, and a static threshold, so a still window costs almost nothing;
  *   - never drops a frame on its own (rc_dropframe_thresh 0): the station decides what is sent;
  *   - keyframes when asked (the first frame, a size change, a lost frame, the page's PLI/FIR),
@@ -20,6 +21,7 @@
 
 typedef struct nexus_vp8 {
   vpx_codec_ctx_t codec;
+  vpx_codec_enc_cfg_t cfg;
   vpx_codec_iter_t iter;
   unsigned width, height;
 } nexus_vp8;
@@ -60,6 +62,7 @@ nexus_vp8 *nexus_vp8_open(unsigned width, unsigned height, unsigned kbps) {
   if (enc == NULL) return NULL;
   enc->width = width;
   enc->height = height;
+  enc->cfg = cfg;
   if (vpx_codec_enc_init(&enc->codec, vpx_codec_vp8_cx(), &cfg, 0) != VPX_CODEC_OK) {
     free(enc);
     return NULL;
@@ -76,6 +79,19 @@ nexus_vp8 *nexus_vp8_open(unsigned width, unsigned height, unsigned kbps) {
     return NULL;
   }
   return enc;
+}
+
+/* A new bit rate for the running encoder, in kbit/s: 0 on success. The rate control moves to it
+ * from the next frame; nothing else in the configuration changes, and no keyframe is forced. */
+int nexus_vp8_set_kbps(nexus_vp8 *enc, unsigned kbps) {
+  vpx_codec_enc_cfg_t cfg;
+
+  if (enc == NULL || kbps == 0) return -1;
+  cfg = enc->cfg;
+  cfg.rc_target_bitrate = kbps;
+  if (vpx_codec_enc_config_set(&enc->codec, &cfg) != VPX_CODEC_OK) return -1;
+  enc->cfg = cfg;
+  return 0;
 }
 
 /* Encode one I420 picture shown at pts_ms. 0 on success; the packets are then read with
