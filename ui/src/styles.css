@@ -7458,6 +7458,11 @@ select optgroup {
   --need-dxped: #38bdf8; /* sky — active DXpedition */
   --need-pota: #4ade80; /* green — live POTA activator */
   --need-sota: #a78bfa; /* purple — live SOTA activator */
+  /* dim green — a POTA activator no need colours, on a Band activity tick and its band map
+     (operator, 2026-10-03: "Dim POTA color for all"). A MARK on the strip's and the map's track,
+     never text, so it is not a --need-* ink: 3.6 to 4.4:1 there in every dark theme, under half
+     of the new-park green's 9.4 to 11.5:1, at 56 % of its chroma. BandMap.potaDim.contrast.test.tsx. */
+  --pota-dim: #34845a;
   /* lime — on your watch list (Settings ▸ Spots & Alerts): the WATCH tile on the Call Roster,
      the Stations list and Spots, and the same mark on the Needed board and in the band-activity
      feed (one look for one list). The one hue on those rows nothing else uses — the nearest
@@ -7491,6 +7496,9 @@ select optgroup {
   --need-dxped: #0369a1;
   --need-pota: #15803d;
   --need-sota: #6d28d9;
+  /* The dim POTA mark: the new-park green reads only 3.6 to 3.9:1 on the light tracks, so this
+     one gives up its colour more than its light — 48 % of the chroma, 3.15 to 3.35:1. */
+  --pota-dim: #52836a;
   --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
   --need-mode-rtty: #8a5200;
   --need-mode-ft4: #0f7038;
@@ -7557,6 +7565,13 @@ select optgroup {
 }
 .need-watch {
   --need-color: var(--need-watch);
+}
+/* The dim POTA colour (`--pota-dim`, above) on a Band activity tick and on its band map's tick and
+   label edge. It feeds the `--need-color` those marks paint, but it is NOT a need class: BandStrip
+   and BandMap give it only to a POTA activator no need colours, so a need's own colour (the full
+   POTA one, for a park still to be worked) always comes first. */
+.pota-dim {
+  --need-color: var(--pota-dim);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
@@ -13997,7 +14012,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   height: 64%;
   width: 2px;
   transform: translateX(-50%);
-  /* Colour by need tier (the `need-*` class sets --need-color); plain spots stay accent. */
+  /* Colour by need tier (the `need-*` class sets --need-color, as `pota-dim` does for a POTA
+     activator no need colours); plain spots stay accent. */
   background: var(--need-color, var(--accent));
   border-radius: 1px;
 }
