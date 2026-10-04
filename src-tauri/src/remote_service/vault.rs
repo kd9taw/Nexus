@@ -27,6 +27,14 @@
 //! and nothing it reads changes. Bound to its pairing like the others, so a key left behind by
 //! another pairing signs nothing for this one. This entry and this process are the only places the
 //! private key exists: it is never logged, shown or sent.
+//!
+//! A fifth entry and a sixth belong to Remote over this network (`lan::book`), and to no pairing
+//! with the service: the two are paired and revoked separately. The fifth is the shack's LAN key,
+//! handled as the station key is (never logged, shown or sent), with the LAN station id beside it.
+//! The sixth lists the computers paired with that key: for each, only the SHA-256 of its key and
+//! the name it gave, which is no secret. It is bound to the LAN station id, so a list left behind by
+//! another key admits nobody, and eight records fit the smallest credential blob (Windows, 2560
+//! bytes of UTF-16) in one entry.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -35,6 +43,8 @@ const ACCOUNT: &str = "pairing";
 const STATE: &str = "state";
 const PINS: &str = "pins";
 const STATION_KEY: &str = "station-key";
+const LAN_KEY: &str = "lan-key";
+const LAN_DEVICES: &str = "lan-devices";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -104,6 +114,45 @@ pub struct Pins {
 pub struct StationKey {
     pub binding: Binding,
     pub pkcs8: String,
+}
+
+/// The shack's LAN key (Remote over this network): its PKCS#8 document, lowercase hex, and the LAN
+/// station id that goes with it. No `Debug` and no `Clone`, as [`StationKey`].
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LanKey {
+    pub station_id: String,
+    pub pkcs8: String,
+}
+
+/// The computers paired over this network with the LAN key whose station id this is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LanDevices {
+    pub station_id: String,
+    pub devices: Vec<LanDevice>,
+}
+
+/// One paired computer: the SHA-256 of its key's SPKI as lowercase hex, which is all that admits
+/// it, and the name it gave. Its device id is worked out from the pin, so the record does not
+/// carry one. One-letter keys, so eight records fit one entry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LanDevice {
+    #[serde(rename = "p")]
+    pub pin: String,
+    #[serde(rename = "n")]
+    pub name: String,
+}
+
+/// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
+/// pairing never reaches them, nor they it.
+pub trait LanVault: Send + Sync {
+    fn lan_key(&self) -> Result<Option<LanKey>, &'static str>;
+    fn save_lan_key(&self, key: &LanKey) -> Result<(), &'static str>;
+    fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str>;
+    fn save_lan_devices(&self, devices: &LanDevices) -> Result<(), &'static str>;
+    fn remove_lan_devices(&self) -> Result<(), &'static str>;
 }
 
 pub trait Vault: Send + Sync {
@@ -239,6 +288,43 @@ impl Vault for SystemVault {
     }
     fn remove_station_key(&self) -> Result<(), &'static str> {
         match entry(STATION_KEY)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+}
+impl LanVault for SystemVault {
+    fn lan_key(&self) -> Result<Option<LanKey>, &'static str> {
+        match entry(LAN_KEY)?.get_password() {
+            // Unreadable is no key, as the station key's is: a new one is made, which every paired
+            // computer refuses until it is paired again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_lan_key(&self, key: &LanKey) -> Result<(), &'static str> {
+        let value = serde_json::to_string(key).map_err(|_| "credentialStoreUnavailable")?;
+        entry(LAN_KEY)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str> {
+        match entry(LAN_DEVICES)?.get_password() {
+            // An unreadable list admits nobody: every computer is paired again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_lan_devices(&self, devices: &LanDevices) -> Result<(), &'static str> {
+        let value = serde_json::to_string(devices).map_err(|_| "credentialStoreUnavailable")?;
+        entry(LAN_DEVICES)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_lan_devices(&self) -> Result<(), &'static str> {
+        match entry(LAN_DEVICES)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }

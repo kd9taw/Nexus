@@ -165,6 +165,28 @@ Each browser has a key too, which you compare when you approve it. Taking contro
 only from the key you approved; **Stop TX** never needs it. A browser approved before browser
 keys existed is asked for again, here, before it can take control.
 
+**Remote over this network** lets Nexus on another computer on the same network operate this
+station with no internet at all: no Remote service and no sign-in. It is off by default, and on
+Windows only for now. Turned on, the station listens on one private address of this computer (a
+home or club network: 10.x, 172.16–31.x or 192.168.x), and the card says where, or why it is not
+listening. Only computers paired here can connect, and only from that network.
+
+To pair one, choose **Pair a computer**. The card shows a code, which the other computer's Nexus
+asks for when you pair it with this station. Choosing **Pair a computer** is the approval:
+whoever types the code within ten minutes is paired at once, with no second step here, so keep it
+to yourself. A code pairs one computer, three wrong tries end it, and **Cancel pairing** ends it
+sooner. Up to eight computers can be paired. Each keeps access until you **Remove** it here,
+which disconnects it at once and stops anything it was keeping on the air. A paired computer
+holding control uses this station as you would, transmit included, under the same rules as a
+streaming browser: one controller at a time, and every transmission stops if its connection drops.
+
+The station's network key and its paired computers are kept in this computer's password store,
+apart from the Remote pairing, so **Revoke station access** leaves them alone. **Reset network
+identity** (under **Network identity**) makes a new key and removes every paired computer; pair
+them again afterwards. **End remote control and clear permissions** turns this off too. Turning
+it on or off, pairing, removing and resetting work only at the station itself, never through a
+stream.
+
 **Remote stations…** is the other end of the stream. On a Windows computer you operate from,
 it opens the Remote page in a Nexus window of its own, for a station you have paired. You sign
 in there, and approve the window at the station once, as you would a new browser. **F11** puts

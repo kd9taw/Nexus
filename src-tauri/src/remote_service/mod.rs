@@ -58,7 +58,8 @@ pub struct Status {
     /// S3-M1: the service holds another signing key for this station, so browsers refuse its stream
     /// until it is paired again. Its own field, because it lasts past any one request's error.
     key_refused: bool,
-    /// Remote over this network, while it is on or has something to say (`lan`). Absent otherwise.
+    /// Remote over this network (`lan`): its switch, its paired computers and its pairing window.
+    /// Absent only from a build of the service without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     lan: Option<lan::LanStatus>,
 }
@@ -198,6 +199,20 @@ pub enum Action {
     },
     /// Remote over this network off, at the shack: the port closes and every LAN session ends.
     LanOff {},
+    /// Pair a computer over this network, at the shack: the pairing window opens with a new code,
+    /// and this press is the approval (as ruled on 2026-10-04, "One press").
+    LanPair {},
+    /// Close the pairing window early.
+    LanCancel {},
+    /// Remove a paired computer, at the shack: out at once, its station control and its session
+    /// with it.
+    LanRevoke {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
+    /// Reset this station's network identity, at the shack: a new LAN key, and every paired
+    /// computer removed.
+    LanReset {},
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -539,25 +554,42 @@ impl Service {
             engine.clone(),
             feeds.clone(),
         );
-        // Remote over this network, beside the relay's road and sharing its one authority.
-        // There is no LAN key until pairing makes one, so it does not listen yet.
-        let authority = service.control.lock().ok().map(|c| c.operations.clone());
+        // Its LAN key and paired computers are in the OS credential store, read on its own thread.
+        service.with_lan(
+            crate::settings_path().with_file_name("remote-lan.json"),
+            engine,
+            feeds,
+            Arc::new(lan::Book::new(Arc::new(SystemVault))),
+            Arc::new(tempo_stream::lan::network),
+        )
+    }
+    /// Remote over this network, beside the relay's road and sharing its one authority: its switch
+    /// kept at `path`, its key and paired computers in `book`.
+    fn with_lan(
+        self,
+        path: std::path::PathBuf,
+        engine: crate::SharedEngine,
+        feeds: transport::Feeds,
+        book: Arc<lan::Book>,
+        resolve: lan::Resolve,
+    ) -> Self {
+        let authority = self.control.lock().ok().map(|c| c.operations.clone());
         if let Some(authority) = authority {
             let lan = Arc::new(lan::Lan::start(
-                crate::settings_path().with_file_name("remote-lan.json"),
+                path,
                 lan::Deps {
                     authority,
                     engine,
                     feeds,
-                    keys: lan::Keys::none(),
-                    resolve: Arc::new(tempo_stream::lan::network),
+                    book,
+                    resolve,
                 },
             ));
-            if let Ok(mut control) = service.control.lock() {
+            if let Ok(mut control) = self.control.lock() {
                 control.lan = Some(lan);
             }
         }
-        service
+        self
     }
     #[cfg(test)]
     fn configured(
@@ -693,11 +725,7 @@ impl Service {
             .collect();
         status.observation_generation = enabled.then(|| control.generation.to_string());
         status.key_refused = control.key_refused;
-        status.lan = control
-            .lan
-            .as_deref()
-            .map(lan::Lan::status)
-            .filter(|lan| lan.on || lan.reason.is_some());
+        status.lan = control.lan.as_deref().map(lan::Lan::status);
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
             status.phase = "disabled".into();
@@ -804,6 +832,35 @@ impl Service {
                 if let Some(lan) = self.lan()? {
                     lan.turn_off();
                 }
+                return self.status();
+            }
+            Action::LanPair {} => {
+                self.lan()?.ok_or("serviceUnavailable")?.pair()?;
+                return self.status();
+            }
+            Action::LanCancel {} => {
+                if let Some(lan) = self.lan()? {
+                    lan.cancel_pairing();
+                }
+                return self.status();
+            }
+            Action::LanRevoke { device_id } => {
+                if !identifier(device_id) {
+                    return Err("invalidRequest");
+                }
+                let (lan, device) = (self.lan()?.ok_or("serviceUnavailable")?, device_id.clone());
+                // Off this thread, since the credential store can block. Inside, the computer is
+                // out and its control revoked before the store is written.
+                tokio::task::spawn_blocking(move || lan.revoke(&device))
+                    .await
+                    .map_err(|_| "serviceUnavailable")??;
+                return self.status();
+            }
+            Action::LanReset {} => {
+                let lan = self.lan()?.ok_or("serviceUnavailable")?;
+                tokio::task::spawn_blocking(move || lan.reset())
+                    .await
+                    .map_err(|_| "serviceUnavailable")??;
                 return self.status();
             }
             _ => {}
@@ -1274,7 +1331,11 @@ impl Controller {
             | Action::TransmitPermission { .. }
             | Action::TakeOverLogging {}
             | Action::LanOn { .. }
-            | Action::LanOff {} => return Err("invalidRequest"),
+            | Action::LanOff {}
+            | Action::LanPair {}
+            | Action::LanCancel {}
+            | Action::LanRevoke { .. }
+            | Action::LanReset {} => return Err("invalidRequest"),
             Action::Begin { name } => {
                 if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
                     return Err("invalidRequest");

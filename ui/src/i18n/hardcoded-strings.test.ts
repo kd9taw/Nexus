@@ -87,6 +87,9 @@ const MIGRATED = [
   // The Remote stations window's entry in Settings (2026-10-04) — born migrated: its label, button,
   // hint and failure line.
   'remote-native/RemoteStationsWindow.tsx',
+  // Remote over this network's card (2026-10-04) — born migrated: the switch, the status line, the
+  // pairing window, the paired computers and the reset.
+  'remote-native/LanStation.tsx',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',

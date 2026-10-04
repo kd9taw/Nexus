@@ -1,5 +1,6 @@
 //! Remote over this network at the shack: the switch, the gate, and the ladder end to end over
 //! real TCP with key pairs made for each run and never written down.
+use super::super::vault::{LanDevice, LanDevices, LanKey, LanVault};
 use super::channel::{self, Shared};
 use super::gate::{Gate, Refused, ARRIVALS_PER_MINUTE, FAILURES_BEFORE_IGNORED, SOURCES};
 use super::*;
@@ -8,10 +9,11 @@ use ring::rand::SystemRandom;
 use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use serde_json::{json, Value};
 use std::net::IpAddr;
-use std::time::Instant;
+use std::sync::atomic::AtomicUsize;
 use tokio_tungstenite::tungstenite::Message;
 
-const DEVICE: &str = "40000000-0000-4000-8000-000000000001";
+mod ceremony;
+
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
 const VERSIONS: (u8, u8, u8) = (
@@ -44,10 +46,14 @@ fn fixture_key() -> String {
     pkcs8.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A computer with a key of its own: the key, and its public half as the shack would pin it.
+/// A computer with a key of its own: the key, its public half as the shack would pin it, and the
+/// device id that pin gives.
+#[derive(Clone)]
 struct Computer {
     key: String,
     pin: [u8; 32],
+    spki: Vec<u8>,
+    device: String,
 }
 
 impl Computer {
@@ -57,9 +63,107 @@ impl Computer {
             .unwrap()
             .public_key()
             .to_string();
-        let pin = tls::pin(&tempo_stream::protocol::hex_bytes(&spki).unwrap());
-        Self { key, pin }
+        let spki = tempo_stream::protocol::hex_bytes(&spki).unwrap();
+        let pin = tls::pin(&spki);
+        Self {
+            key,
+            pin,
+            spki,
+            device: book::device_id(&pin),
+        }
     }
+}
+
+/// The OS credential store, in memory: Remote over this network's two entries as the system's
+/// would hold them (JSON, and Windows' size limit), a lock, and a count of the writes.
+#[derive(Clone, Default)]
+pub(crate) struct LanStore {
+    pub(crate) key: Arc<Mutex<Option<String>>>,
+    pub(crate) devices: Arc<Mutex<Option<String>>>,
+    pub(crate) locked: Arc<AtomicBool>,
+    pub(crate) writes: Arc<AtomicUsize>,
+}
+
+impl LanStore {
+    /// A store holding the station key `pkcs8` for `station`, with these computers paired.
+    pub(crate) fn holding(pkcs8: &str, station: &str, paired: &[(&[u8; 32], &str)]) -> Self {
+        let store = Self::default();
+        store
+            .save_lan_key(&LanKey {
+                station_id: station.into(),
+                pkcs8: pkcs8.into(),
+            })
+            .unwrap();
+        if !paired.is_empty() {
+            store
+                .save_lan_devices(&LanDevices {
+                    station_id: station.into(),
+                    devices: paired
+                        .iter()
+                        .map(|(pin, name)| LanDevice {
+                            pin: pin.iter().map(|b| format!("{b:02x}")).collect(),
+                            name: (*name).into(),
+                        })
+                        .collect(),
+                })
+                .unwrap();
+        }
+        store.writes.store(0, Ordering::SeqCst);
+        store
+    }
+
+    fn put(&self, slot: &Mutex<Option<String>>, value: String) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) || value.encode_utf16().count() * 2 > 2560 {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        *slot.lock().unwrap() = Some(value);
+        Ok(())
+    }
+
+    fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        slot: &Mutex<Option<String>>,
+    ) -> Result<Option<T>, &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        Ok(slot
+            .lock()
+            .unwrap()
+            .as_deref()
+            .and_then(|v| serde_json::from_str(v).ok()))
+    }
+}
+
+impl LanVault for LanStore {
+    fn lan_key(&self) -> Result<Option<LanKey>, &'static str> {
+        self.get(&self.key)
+    }
+    fn save_lan_key(&self, key: &LanKey) -> Result<(), &'static str> {
+        self.put(&self.key, serde_json::to_string(key).unwrap())
+    }
+    fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str> {
+        self.get(&self.devices)
+    }
+    fn save_lan_devices(&self, devices: &LanDevices) -> Result<(), &'static str> {
+        self.put(&self.devices, serde_json::to_string(devices).unwrap())
+    }
+    fn remove_lan_devices(&self) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        *self.devices.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
+/// A book on `store`, read.
+fn book_on(store: &LanStore) -> Arc<Book> {
+    let book = Arc::new(Book::new(Arc::new(store.clone())));
+    book.load();
+    book
 }
 
 fn home() -> Network {
@@ -70,12 +174,25 @@ fn home() -> Network {
 struct Shack {
     shared: Shared,
     computer: Computer,
+    /// The paired computer's device id, as the station's book gives it.
+    device: String,
     /// The station's LAN key (PKCS#8, hex) and its public half, as the computer pinned it.
     station_key: String,
     public_key: String,
+    /// The credential store the station's book is kept in.
+    store: LanStore,
 }
 
 fn shack(network: Network) -> Shack {
+    let station_key = fixture_key();
+    let computer = Computer::new();
+    let store = LanStore::holding(&station_key, STATION, &[(&computer.pin, "Shack laptop")]);
+    shack_with(network, station_key, computer, store)
+}
+
+/// The same, on a station whose LAN key, paired computer and credential store already exist: a
+/// fresh authority and engine, and the book read from `store`, as Nexus starting again reads it.
+fn shack_with(network: Network, station_key: String, computer: Computer, store: LanStore) -> Shack {
     let authority = Arc::new(Authority::default());
     let mut engine = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     engine.set_remote_transmit_revocation(authority.transmit_revocation());
@@ -83,12 +200,10 @@ fn shack(network: Network) -> Shack {
     settings.remote_stream = true;
     engine.apply_settings(settings);
     let engine: crate::SharedEngine = Arc::new(Mutex::new(engine));
-    let station_key = fixture_key();
     let identity = tls::Identity::new(&station_key, STATION.into()).unwrap();
     let public_key = identity.public_key().to_string();
-    let computer = Computer::new();
-    let pin = computer.pin;
-    let paired: tls::Paired = Arc::new(move |p: &[u8; 32]| (*p == pin).then(|| DEVICE.to_string()));
+    let book = book_on(&store);
+    let (paired, pairing) = book.verifier();
     let shared = Shared {
         authority,
         engine,
@@ -101,9 +216,9 @@ fn shack(network: Network) -> Shack {
             audio: None,
             stream: super::super::stream::Host::default(),
         },
-        tls: tls::server(&identity, paired.clone()).unwrap(),
+        tls: tls::server(&identity, paired, pairing).unwrap(),
+        desk: super::pairing::Desk::new(book, &identity).unwrap(),
         identity: Arc::new(identity),
-        paired,
         network,
         port: DEFAULT_PORT,
         gate: Arc::new(Gate::default()),
@@ -112,9 +227,11 @@ fn shack(network: Network) -> Shack {
     };
     Shack {
         shared,
+        device: computer.device.clone(),
         computer,
         station_key,
         public_key,
+        store,
     }
 }
 
@@ -218,7 +335,7 @@ async fn ask(socket: &mut Client, request: Value) -> Value {
 
 /// Welcomed, then in control: the session it was given and the state the acquire answered.
 async fn in_control(s: &Shack, socket: &mut Client) -> (String, Value) {
-    s.shared.authority.permit_station(DEVICE, true).unwrap();
+    s.shared.authority.permit_station(&s.device, true).unwrap();
     let welcome = hello(socket, VERSIONS).await;
     assert_eq!(welcome["type"], "welcome", "{welcome}");
     let state = ask(socket, json!({"type":"state","requestId":id()})).await;
@@ -241,7 +358,7 @@ fn keyed_under_presence(s: &Shack, session: &str, state: &Value) {
     let permit = s
         .shared
         .authority
-        .stream_presence(session, DEVICE, state["leaseId"].as_str().unwrap(), now)
+        .stream_presence(session, &s.device, state["leaseId"].as_str().unwrap(), now)
         .unwrap();
     let mut e = s.shared.engine.lock().unwrap();
     e.hold_remote_presence(permit, now);
@@ -258,14 +375,14 @@ fn halted(s: &Shack) -> bool {
 // ----- The switch -----
 
 /// A folder of its own for one test, removed when it is dropped.
-struct Scratch(std::path::PathBuf);
+pub(crate) struct Scratch(std::path::PathBuf);
 impl Scratch {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("nexus-lan-{}-{}", std::process::id(), id()));
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
     }
-    fn path(&self) -> std::path::PathBuf {
+    pub(crate) fn path(&self) -> std::path::PathBuf {
         self.0.join("remote-lan.json")
     }
 }
@@ -504,7 +621,7 @@ async fn a_paired_computer_is_welcomed_and_stamped_by_its_key() {
         other => panic!("no welcome: {other:?}"),
     };
     assert_eq!(welcome["type"], "welcome", "{welcome}");
-    assert_eq!(welcome["deviceId"], DEVICE);
+    assert_eq!(welcome["deviceId"], s.device);
     assert_eq!(welcome["stationId"], STATION);
     let session = welcome["sessionId"].as_str().unwrap().to_string();
     assert!(super::super::transport::identifier(&session), "{session}");
@@ -914,24 +1031,32 @@ struct Running {
     scratch: Scratch,
 }
 
-/// The station's own keys: its LAN key and its one paired computer.
-fn keys_of(s: &Shack) -> Keys {
-    let station_key = s.station_key.clone();
-    Keys {
-        identity: Arc::new(move || tls::Identity::new(&station_key, STATION.into())),
-        paired: s.shared.paired.clone(),
-    }
+/// The station's own book: its LAN key and its one paired computer, in a store of its own.
+fn book_of(s: &Shack) -> Arc<Book> {
+    Arc::new(Book::new(Arc::new(LanStore::holding(
+        &s.station_key,
+        STATION,
+        &[(&s.computer.pin, "Shack laptop")],
+    ))))
 }
 
-/// The switch, kept in `scratch`, serving `s`'s station.
-fn switch_for(s: &Shack, scratch: &Scratch, resolve: Resolve, keys: Keys) -> Lan {
+/// A book whose credential store will not answer: no key is read, and none is made.
+fn locked_book() -> Arc<Book> {
+    let store = LanStore::default();
+    store.locked.store(true, Ordering::SeqCst);
+    Arc::new(Book::new(Arc::new(store)))
+}
+
+/// The switch, kept in `scratch`, serving `s`'s station from `book` (read on the listener's own
+/// thread, as Nexus reads it).
+fn switch_for(s: &Shack, scratch: &Scratch, resolve: Resolve, book: Arc<Book>) -> Lan {
     Lan::start(
         scratch.path(),
         Deps {
             authority: s.shared.authority.clone(),
             engine: s.shared.engine.clone(),
             feeds: s.shared.feeds.clone(),
-            keys,
+            book,
             resolve,
         },
     )
@@ -973,7 +1098,7 @@ async fn listening_and_keyed() -> Option<(Running, Client)> {
     let network = Network::new(address, 32).unwrap();
     let s = shack(network);
     let scratch = Scratch::new();
-    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), keys_of(&s));
+    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), book_of(&s));
     lan.turn_on(None, Some(port)).unwrap();
     let at = SocketAddr::new(address.into(), port);
     eventually(&lan, "never listened", |st| {
@@ -1047,15 +1172,16 @@ async fn end_remote_control_turns_it_off_and_says_why() {
     assert_eq!(kept.off, Some(Off::EndedAtShack));
 }
 
-/// ★ With no LAN key there is no listener: turned on, it goes off by itself and says why.
-/// With no private network to listen on it waits, on, and says why. A picked address that has gone
-/// turns it off. CONTROL: the switch was on each time it was asked.
+/// ★ With no LAN key there is no listener: turned on with a credential store that will not
+/// answer (so no key is read, and none is made), it goes off by itself and says why. With no
+/// private network to listen on it waits, on, and says why. A picked address that has gone turns
+/// it off. CONTROL: the switch was on each time it was asked.
 #[tokio::test]
 async fn it_turns_itself_off_without_a_key_or_its_address_and_waits_for_a_network() {
     let network = home();
     let s = shack(network);
     let scratch = Scratch::new();
-    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), Keys::none());
+    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), locked_book());
     lan.turn_on(None, None).unwrap();
     let status = eventually(&lan, "listened without a key", |st| {
         !st.on && st.reason.is_some()
@@ -1069,7 +1195,7 @@ async fn it_turns_itself_off_without_a_key_or_its_address_and_waits_for_a_networ
         &s,
         &scratch,
         Arc::new(|_| Err(NoNetwork::Choose)),
-        keys_of(&s),
+        book_of(&s),
     );
     lan.turn_on(None, None).unwrap();
     let status = eventually(&lan, "no reason given", |st| st.on && st.reason.is_some()).await;
@@ -1082,7 +1208,7 @@ async fn it_turns_itself_off_without_a_key_or_its_address_and_waits_for_a_networ
         &s,
         &scratch,
         Arc::new(|_| Err(NoNetwork::Gone)),
-        keys_of(&s),
+        book_of(&s),
     );
     lan.turn_on(Some("192.168.1.20"), None).unwrap();
     let status = eventually(&lan, "kept on without its address", |st| {
@@ -1100,7 +1226,7 @@ fn only_a_private_address_can_be_picked() {
     let network = home();
     let s = shack(network);
     let scratch = Scratch::new();
-    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), Keys::none());
+    let lan = switch_for(&s, &scratch, Arc::new(move |_| Ok(network)), locked_book());
     for refused in [
         "127.0.0.1",
         "0.0.0.0",

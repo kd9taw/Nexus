@@ -17,8 +17,9 @@
 //! ## The ladder, each step reached only through the one before
 //!
 //! 1. TCP accept: the source is on the bound address's own subnet and under the caps ([`gate`]).
-//! 2. TLS 1.3, raw public keys both ways ([`tls`]): the computer's key must be a paired one. No
-//!    application data is read before this completes.
+//! 2. TLS 1.3, raw public keys both ways ([`tls`]): the computer's key must be a paired one, or,
+//!    while the pairing window is open, any key, for a pairing-only connection ([`pairing`]) that
+//!    reaches nothing on the steps below. No application data is read before this completes.
 //! 3. The hello ([`channel`]): the versions must be the shack's own, or the computer is told which
 //!    side to update (as ruled on 2026-10-04). The shack stamps the session itself, and the device
 //!    from the key.
@@ -68,22 +69,40 @@
 //! or Remote projection can turn it on, and a form saved from an old copy cannot turn back on what
 //! went off by itself.
 //!
+//! ## Pairing, and only at the shack (the operator's rulings of 2026-10-04)
+//!
+//! The LAN key and the paired computers are the [`Book`]'s, in the OS credential store. A press
+//! at the shack opens a ten-minute pairing window, and that press is the approval ("One press"):
+//! a computer that proves its code is paired at once ([`pairing`]), and stays paired until it is
+//! removed here ("Until revoked"). Turning this on or off, making a code, removing a computer and
+//! resetting the key are the shack's alone ("Only at the shack"): the panel refuses each while
+//! its press comes through a stream, and nothing reaches them from a remote road.
+//!
+//! **The grant.** A paired computer holds station control in the operations authority while LAN
+//! is on, and only then: the authority reads who they are each time it reconciles, so a local
+//! decision that clears every grant (Turn Remote on or off, take over, revoking a browser) leaves
+//! them theirs, as `restore` does for hosted browsers. Turning LAN off, by the operator or by
+//! itself, removing a computer and resetting the key each revoke it, after the authority has
+//! stopped reading it, so the revoke stands.
+//!
 //! ## What comes later
 //!
-//! The LAN key and the paired computers' keys, in the OS keychain, arrive with pairing: until then
-//! [`Keys::none`] holds no key, so the listener does not start. The window's own client, discovery
-//! and the firewall come after that.
+//! The window's own client, discovery and the firewall.
+mod book;
 mod channel;
 mod gate;
+mod pairing;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 pub mod tls;
+
+pub use book::Book;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tempo_stream::lan::{Network, NoNetwork};
@@ -183,25 +202,14 @@ pub struct LanStatus {
     /// while off by itself, why (`endedAtShack`, `noKey`, `addressGone`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
-}
-
-/// What the LAN road needs from the station's identity, which pairing keeps.
-#[derive(Clone)]
-pub struct Keys {
-    /// The station's LAN identity, read when the listener starts. `None`: no key, no listener.
-    pub identity: Arc<dyn Fn() -> Option<tls::Identity> + Send + Sync>,
-    /// Which paired computer holds a key.
-    pub paired: tls::Paired,
-}
-
-impl Keys {
-    /// No LAN key and no paired computer: the state until pairing exists.
-    pub fn none() -> Self {
-        Self {
-            identity: Arc::new(|| None),
-            paired: Arc::new(|_| None),
-        }
-    }
+    /// The LAN key's fingerprint (SHA-256 of its SPKI, lowercase hex), once there is a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The pairing window, while it is open: its code and when it closes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairing: Option<book::PairingView>,
+    /// The paired computers.
+    pub devices: Vec<book::ComputerView>,
 }
 
 /// Where the listener goes for a pick: `tempo_stream::lan::network`, or a test's own network.
@@ -213,16 +221,22 @@ pub(super) struct Deps {
     pub authority: Arc<Authority>,
     pub engine: crate::SharedEngine,
     pub feeds: Feeds,
-    pub keys: Keys,
+    /// The LAN key and the paired computers.
+    pub book: Arc<Book>,
     pub resolve: Resolve,
 }
 
 struct State {
     switch: Mutex<Switch>,
+    /// The switch's `on`, for the operations authority, which reads it under its own lock and so
+    /// must never wait on this one's file write.
+    on: AtomicBool,
     status: Mutex<LanStatus>,
     path: PathBuf,
     wake: Notify,
     closed: AtomicBool,
+    authority: Arc<Authority>,
+    book: Arc<Book>,
 }
 
 impl State {
@@ -232,17 +246,27 @@ impl State {
 
     /// Change the switch, keep it, and wake the listener's thread. Said at once, so a status read
     /// straight after a press shows it; the listener then says where it listens.
+    ///
+    /// Off, however it went off: the pairing window closes, and no paired computer keeps station
+    /// control. The authority stops reading them (`on`) before they are revoked, so the revoke
+    /// stands.
     fn decide(&self, change: impl FnOnce(&mut Switch)) {
         if let Ok(mut switch) = self.switch.lock() {
             change(&mut switch);
             if switch.save(&self.path).is_err() {
                 tempo_core::applog::warn("remote", "on this network: the switch was not saved");
             }
+            self.on.store(switch.on, Ordering::SeqCst);
             self.report(LanStatus {
                 on: switch.on,
                 listening: None,
                 reason: switch.off.map(Off::code),
+                ..LanStatus::default()
             });
+        }
+        if !self.on.load(Ordering::SeqCst) {
+            self.book.close();
+            release(&self.authority, &self.book.ids());
         }
         self.wake.notify_one();
     }
@@ -260,15 +284,30 @@ pub struct Lan {
 }
 
 impl Lan {
-    /// The switch kept at `path`, and the thread that keeps the listener in step with it.
+    /// The switch kept at `path`, and the thread that keeps the listener in step with it. The
+    /// book is read there, on the listener's own thread, before anything listens.
+    ///
+    /// From here the operations authority reads the paired computers as holding station control
+    /// whenever LAN is on (see the module header).
     pub(super) fn start(path: PathBuf, deps: Deps) -> Self {
+        let switch = Switch::load(&path);
         let state = Arc::new(State {
-            switch: Mutex::new(Switch::load(&path)),
+            on: AtomicBool::new(switch.on),
+            switch: Mutex::new(switch),
             status: Mutex::new(LanStatus::default()),
             path,
             wake: Notify::new(),
             closed: AtomicBool::new(false),
+            authority: deps.authority.clone(),
+            book: deps.book.clone(),
         });
+        // Weak: the state holds the authority, which holds this.
+        let held = Arc::downgrade(&state);
+        deps.authority.hold_lan_devices(Box::new(move || {
+            held.upgrade()
+                .filter(|state| state.on.load(Ordering::SeqCst))
+                .map_or_else(Vec::new, |state| state.book.ids())
+        }));
         let running = state.clone();
         let spawned = std::thread::Builder::new()
             .name("nexus-remote-lan".into())
@@ -283,8 +322,8 @@ impl Lan {
         if spawned.is_err() {
             state.report(LanStatus {
                 on: state.switch().on,
-                listening: None,
                 reason: Some("unavailable"),
+                ..LanStatus::default()
             });
         }
         Self { state }
@@ -330,12 +369,62 @@ impl Lan {
         }
     }
 
+    /// Pair a computer, at the shack: the pairing window opens with a new code, and this press is
+    /// the approval (as ruled on 2026-10-04, "One press"). Only while LAN is on.
+    pub fn pair(&self) -> Result<(), &'static str> {
+        if !self.state.on.load(Ordering::SeqCst) {
+            return Err("invalidRequest");
+        }
+        self.state.book.open(Instant::now(), super::now_ms())
+    }
+
+    /// Close the pairing window before its ten minutes are up.
+    pub fn cancel_pairing(&self) {
+        self.state.book.close();
+    }
+
+    /// Remove a paired computer, at the shack: refused from now on, its session and anything it
+    /// keeps on the air ended at once, its station control revoked, and then the store told. The
+    /// store can block, so a caller off the radio's path makes this call.
+    pub fn revoke(&self, device: &str) -> Result<(), &'static str> {
+        if !self.state.book.forget(device) {
+            return Err("invalidRequest");
+        }
+        release(&self.state.authority, &[device.to_string()]);
+        self.state.book.keep()
+    }
+
+    /// Reset this station's network identity, at the shack: every paired computer out at once as a
+    /// removal is, then a new LAN key with nobody paired to it, and the listener on the new key.
+    /// The store can block, as for [`Lan::revoke`].
+    pub fn reset(&self) -> Result<(), &'static str> {
+        let gone = self.state.book.forget_all();
+        release(&self.state.authority, &gone);
+        let renewed = self.state.book.renew();
+        self.state.wake.notify_one();
+        renewed
+    }
+
     pub fn status(&self) -> LanStatus {
-        self.state
+        let mut status = self
+            .state
             .status
             .lock()
             .map(|s| s.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let view = self.state.book.view(Instant::now());
+        status.key = view.key;
+        status.pairing = view.pairing;
+        status.devices = view.devices;
+        status
+    }
+}
+
+/// These paired computers keep no station control: each is revoked as the shack revokes a
+/// browser's, which ends what its lease keeps on the air at once (`permit_station`).
+fn release(authority: &Authority, devices: &[String]) {
+    for device in devices {
+        let _ = authority.permit_station(device, false);
     }
 }
 
@@ -359,6 +448,8 @@ fn off_by_itself(state: &State, why: Off) {
 
 /// Keep the listener in step with the switch and the network, until the service goes.
 async fn supervise(state: Arc<State>, deps: Deps) {
+    // The LAN key and the paired computers, from the credential store, before anything listens.
+    deps.book.load();
     let mut running: Option<Listener> = None;
     while !state.closed.load(Ordering::SeqCst) {
         let want = state.switch();
@@ -368,8 +459,8 @@ async fn supervise(state: Arc<State>, deps: Deps) {
             }
             state.report(LanStatus {
                 on: false,
-                listening: None,
                 reason: want.off.map(Off::code),
+                ..LanStatus::default()
             });
             state.wake.notified().await;
             continue;
@@ -391,16 +482,23 @@ async fn supervise(state: Arc<State>, deps: Deps) {
                     _ => "chooseAddress",
                 })
             }
-            Ok(network) if running.as_ref().is_some_and(|l| l.is(network, want.port)) => None,
+            // On the same network and port, with the same key: as it was.
+            Ok(network)
+                if running
+                    .as_ref()
+                    .is_some_and(|l| l.is(network, want.port, deps.book.generation())) =>
+            {
+                None
+            }
             Ok(network) => {
                 if let Some(listener) = running.take() {
                     listener.stop().await;
                 }
-                let Some(identity) = (deps.keys.identity)() else {
+                let Some((identity, generation)) = deps.book.identity() else {
                     off_by_itself(&state, Off::NoKey);
                     continue;
                 };
-                match Listener::start(network, want.port, &deps, identity).await {
+                match Listener::start(network, want.port, &deps, identity, generation).await {
                     Ok(listener) => {
                         tempo_core::applog::info(
                             "remote",
@@ -417,6 +515,7 @@ async fn supervise(state: Arc<State>, deps: Deps) {
             on: true,
             listening: running.as_ref().map(Listener::at),
             reason,
+            ..LanStatus::default()
         });
         tokio::select! {
             _ = state.wake.notified() => {}
@@ -432,6 +531,8 @@ async fn supervise(state: Arc<State>, deps: Deps) {
 struct Listener {
     network: Network,
     port: u16,
+    /// The generation of the LAN key it presents: a reset moves it, and the listener restarts.
+    generation: u64,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -444,11 +545,14 @@ impl Listener {
         port: u16,
         deps: &Deps,
         identity: tls::Identity,
+        generation: u64,
     ) -> Result<Self, &'static str> {
         if !tempo_stream::lan::listenable(network.address()) {
             return Err("noNetwork");
         }
-        let tls = tls::server(&identity, deps.keys.paired.clone()).map_err(|_| "unavailable")?;
+        let (paired, pairing) = deps.book.verifier();
+        let tls = tls::server(&identity, paired, pairing).map_err(|_| "unavailable")?;
+        let desk = pairing::Desk::new(deps.book.clone(), &identity).ok_or("unavailable")?;
         let socket = tokio::net::TcpListener::bind(SocketAddr::new(network.address().into(), port))
             .await
             .map_err(|e| match e.kind() {
@@ -461,7 +565,7 @@ impl Listener {
             feeds: deps.feeds.clone(),
             tls,
             identity: Arc::new(identity),
-            paired: deps.keys.paired.clone(),
+            desk,
             network,
             port,
             gate: Arc::new(gate::Gate::default()),
@@ -473,13 +577,14 @@ impl Listener {
         Ok(Self {
             network,
             port,
+            generation,
             stop,
             task,
         })
     }
 
-    fn is(&self, network: Network, port: u16) -> bool {
-        self.network == network && self.port == port
+    fn is(&self, network: Network, port: u16, generation: u64) -> bool {
+        self.network == network && self.port == port && self.generation == generation
     }
 
     fn at(&self) -> String {

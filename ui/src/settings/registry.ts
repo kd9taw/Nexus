@@ -112,7 +112,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // Remote as a stream: the words for sending this window to a browser.
       'stream', 'streaming', 'screen sharing', 'video',
       // The other end: this PC opening the Remote page in a Nexus window of its own.
-      'remote stations', 'operate remotely', 'remote window', 'full screen'],
+      'remote stations', 'operate remotely', 'remote window', 'full screen',
+      // Remote over this network: another computer on the same network, no internet.
+      'this network', 'local network', 'lan', 'pair a computer', 'no internet'],
   },
 
   // ---- Radio -------------------------------------------------------------------

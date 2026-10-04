@@ -9,6 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tempo_app::{dto::AmpStatusDto, engine::Engine, settings::Settings};
 
+/// Remote over this network beside the hosted mode: a paired computer's grant through hosted
+/// decisions.
+mod lan_grants;
+
 #[derive(Clone, Default)]
 struct MemoryVault {
     values: Arc<Mutex<HashMap<String, String>>>,

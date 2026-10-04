@@ -12,6 +12,11 @@
 //! - resumption and early data: no tickets and no session cache, so every connection is a full
 //!   handshake that proves both keys again.
 //!
+//! **The second branch: an open pairing window ([`Pairing`]).** While it is open, a P-256 key no
+//! paired computer holds is taken too, read at each handshake. Such a connection can only become a
+//! pairing-only one (`super::pairing`): its first message must ask to pair, the session it gets
+//! reaches nothing but the pairing, and a hello from it is refused as from any unpaired key.
+//!
 //! In TLS 1.3 the shack's key is proved before the client sends its own, so a machine posing as the
 //! shack learns nothing about which key a computer holds.
 use std::sync::Arc;
@@ -37,6 +42,10 @@ const SCHEME: SignatureScheme = SignatureScheme::ECDSA_NISTP256_SHA256;
 /// The paired computer that holds a key, by the SHA-256 of the key's SPKI: its device id. `None`
 /// for a key no paired computer holds. Pairing keeps these; until it does, nothing is paired.
 pub type Paired = Arc<dyn Fn(&[u8; 32]) -> Option<String> + Send + Sync>;
+
+/// Whether the pairing window is open now: while it is, a key no paired computer holds is taken
+/// into a pairing-only connection.
+pub type Pairing = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// SHA-256 of a key's SPKI: its pin, as the device records keep it.
 pub(super) fn pin(spki: &[u8]) -> [u8; 32] {
@@ -66,8 +75,6 @@ pub struct Identity {
     pub(super) station_id: String,
 }
 
-// Until pairing keeps a LAN key, only the tests make an identity (`Keys::none` makes none).
-#[cfg_attr(not(test), allow(dead_code))]
 impl Identity {
     /// The identity a LAN key's PKCS#8 document (lowercase hex) makes, or `None` for anything that
     /// is not a P-256 key: one key, both for TLS and for signing answers, so the key a computer
@@ -96,13 +103,21 @@ impl Identity {
     }
 }
 
-/// The server half: TLS 1.3, the shack's raw key, a client key required and held to `paired`, and
-/// no way to resume or replay.
-pub(super) fn server(identity: &Identity, paired: Paired) -> Result<Arc<ServerConfig>, Error> {
+/// The server half: TLS 1.3, the shack's raw key, a client key required and held to `paired` (or,
+/// while `pairing` says the window is open, any P-256 key), and no way to resume or replay.
+pub(super) fn server(
+    identity: &Identity,
+    paired: Paired,
+    pairing: Pairing,
+) -> Result<Arc<ServerConfig>, Error> {
     let provider = provider();
     let mut config = ServerConfig::builder_with_provider(provider.clone())
         .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_client_cert_verifier(Arc::new(PinnedClients { paired, provider }))
+        .with_client_cert_verifier(Arc::new(PinnedClients {
+            paired,
+            pairing,
+            provider,
+        }))
         .with_cert_resolver(Arc::new(AlwaysResolvesServerRawPublicKeys::new(
             identity.certified.clone(),
         )));
@@ -112,9 +127,11 @@ pub(super) fn server(identity: &Identity, paired: Paired) -> Result<Arc<ServerCo
     Ok(Arc::new(config))
 }
 
-/// A client key is taken only when it is a P-256 key a paired computer holds.
+/// A client key is taken only when it is a P-256 key a paired computer holds, or, while the
+/// pairing window is open, any P-256 key.
 struct PinnedClients {
     paired: Paired,
+    pairing: Pairing,
     provider: Arc<CryptoProvider>,
 }
 
@@ -146,7 +163,9 @@ impl ClientCertVerifier for PinnedClients {
         if !intermediates.is_empty() || !p256(key.as_ref()) {
             return Err(CertificateError::BadEncoding.into());
         }
-        if (self.paired)(&pin(key.as_ref())).is_none() {
+        // The second branch: an unknown key gets as far as a pairing-only connection, and only
+        // while the window is open.
+        if (self.paired)(&pin(key.as_ref())).is_none() && !(self.pairing)() {
             return Err(CertificateError::ApplicationVerificationFailure.into());
         }
         Ok(ClientCertVerified::assertion())
@@ -197,10 +216,12 @@ pub(super) mod client {
     use rustls::client::{AlwaysResolvesClientRawPublicKeys, ClientConfig};
     use rustls::pki_types::ServerName;
 
-    /// The shack's key, pinned: anything else is refused before the client says a word.
+    /// The shack's key, pinned: anything else is refused before the client says a word. `None`
+    /// only for a pairing connection, which takes whatever P-256 key the shack presents and has
+    /// the pairing's proofs bind it.
     #[derive(Debug)]
     struct PinnedShack {
-        spki: Vec<u8>,
+        spki: Option<Vec<u8>>,
         provider: Arc<CryptoProvider>,
     }
 
@@ -213,7 +234,11 @@ pub(super) mod client {
             _ocsp: &[u8],
             _now: UnixTime,
         ) -> Result<ServerCertVerified, Error> {
-            if intermediates.is_empty() && key.as_ref() == self.spki.as_slice() {
+            let pinned = match &self.spki {
+                Some(spki) => key.as_ref() == spki.as_slice(),
+                None => p256(key.as_ref()),
+            };
+            if intermediates.is_empty() && pinned {
                 Ok(ServerCertVerified::assertion())
             } else {
                 Err(CertificateError::ApplicationVerificationFailure.into())
@@ -255,6 +280,15 @@ pub(super) mod client {
     /// A remote PC holding `key` (PKCS#8, lowercase hex), with the shack's `shack` key (SPKI,
     /// lowercase hex) pinned.
     pub fn config(key: &str, shack: &str) -> Arc<ClientConfig> {
+        made(key, Some(protocol::hex_bytes(shack).unwrap()))
+    }
+
+    /// A remote PC holding `key`, pairing: no shack key pinned yet, so it takes the one presented.
+    pub fn pairing(key: &str) -> Arc<ClientConfig> {
+        made(key, None)
+    }
+
+    fn made(key: &str, shack: Option<Vec<u8>>) -> Arc<ClientConfig> {
         let provider = provider();
         let signing = provider
             .key_provider
@@ -270,7 +304,7 @@ pub(super) mod client {
                 .unwrap()
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(PinnedShack {
-                    spki: protocol::hex_bytes(shack).unwrap(),
+                    spki: shack,
                     provider,
                 }))
                 .with_client_cert_resolver(Arc::new(AlwaysResolvesClientRawPublicKeys::new(

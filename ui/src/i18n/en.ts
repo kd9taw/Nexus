@@ -566,6 +566,37 @@ export const EN = {
   "remote.approval.body": "A browser signed in to your Remote account asks to stream this station and operate it as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
   "remote.approval.bodyAgain": "This browser was approved before, but it can’t stream until you approve it again here. When it streams, it can operate this station as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
   "remote.approval.deny": "Deny",
+  // Remote over this network (Settings ▸ Station ▸ Remote access): this station's own listener, for
+  // Nexus on another computer on the same network, with no internet. Pairing is one press at the shack
+  // (the operator's ruling, 2026-10-04): making the code is the approval, it works once within ten
+  // minutes, and a paired computer keeps access until removed there. The address and the key's
+  // fingerprint arrive as values. `Nexus` and `Remote` are tokens.
+  "remote.lan.switch": "Remote over this network",
+  "remote.lan.intro": "Lets Nexus on another computer on this network operate this station, with no internet needed. Pair each computer here once; it keeps access until you remove it.",
+  "remote.lan.off": "Off.",
+  "remote.lan.starting": "Starting…",
+  "remote.lan.listening": "Listening at {{address}}. Only computers paired here can connect.",
+  "remote.lan.reason.noKey": "Off: this station has no network key. Unlock your operating system’s credential store, then turn this on again.",
+  "remote.lan.reason.endedAtShack": "Off: remote control was ended here. Turn this on again when you want it.",
+  "remote.lan.reason.addressGone": "Off: the address it listened at is no longer this computer’s. Turn this on again to listen where this computer is now.",
+  "remote.lan.reason.chooseAddress": "Not listening: Nexus can’t tell which of this computer’s networks to use.",
+  "remote.lan.reason.portInUse": "Not listening: another program is using its port.",
+  "remote.lan.reason.noNetwork": "Not listening: this computer is not on a private network.",
+  "remote.lan.reason.unavailable": "Not listening: it could not start on this computer.",
+  "remote.lan.pair": "Pair a computer",
+  "remote.lan.codeHint": "Type this code in Nexus on the other computer. It works once, within ten minutes.",
+  "remote.lan.codeWarning": "Whoever types it in time can operate this station, transmit included, so keep it to yourself.",
+  "remote.lan.thisStation": "This station: {{address}}, key {{key}}",
+  "remote.lan.computers": "Paired computers",
+  "remote.lan.noComputers": "No computer is paired yet.",
+  "remote.lan.atShackOnly": "Only at the station itself: this can’t be done through a stream.",
+  "remote.lan.full": "Eight computers are paired already. Remove one to pair another.",
+  "remote.lan.vaultFailed": "Unlock your operating system’s credential store and try again. This station’s network key and its paired computers are kept there.",
+  "remote.lan.failed": "Nexus could not do that. Try again.",
+  "remote.lan.resetTitle": "Network identity",
+  "remote.lan.resetHint": "Resetting makes a new network key and removes every paired computer. Use it if this computer’s key may have been copied, then pair your computers again.",
+  "remote.lan.reset": "Reset network identity",
+  "remote.lan.unavailable": "This station and the other computer both need Windows, for now.",
 
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',

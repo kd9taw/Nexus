@@ -410,6 +410,9 @@ pub struct Authority {
     /// is the station's (its presence, the held PTT, the window's reset), so a second may not start
     /// while the first is still ending. See `claim_stream`.
     streaming: std::sync::atomic::AtomicBool,
+    /// The LAN road's paired computers, who hold station control while LAN is on (see
+    /// `hold_lan_devices`). Unset in a build of the service without a LAN road.
+    lan_devices: std::sync::OnceLock<LanDevices>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
     /// Tests post self-spots here, one poster per target. A test build has no path to pota.app or
@@ -435,6 +438,9 @@ type PotaPoster = Box<
 >;
 #[cfg(test)]
 type ClusterPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + Sync>;
+/// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
+/// Called under Core: it may take no lock that is ever held while Core is taken.
+pub type LanDevices = Box<dyn Fn() -> Vec<String> + Send + Sync>;
 impl Authority {
     /// Self-spot posts publicly from the station's own call, to pota.app and its cluster login, so
     /// it has its own switch (`logging::SELF_SPOT`).
@@ -512,6 +518,17 @@ impl Authority {
             spots,
             ..Self::default()
         }
+    }
+    /// The LAN road's paired computers hold station control while LAN is on, whatever clears
+    /// grants: `reconcile` reads `devices` each time and gives each one it names its grant back,
+    /// so a local decision that clears every grant (`invalidate`: Turn Remote on or off, take over,
+    /// revoking a browser) leaves them theirs before any next request is answered, as `restore`
+    /// does for hosted browsers once the service lists them. It only ever gives: a computer
+    /// removed at the shack, or LAN going off, is first dropped from `devices` and then revoked
+    /// (`permit_station`), and the revoke stands. Set once, by the LAN road at its start; with no
+    /// LAN road, or nobody paired, or LAN off, `reconcile` is as it was.
+    pub fn hold_lan_devices(&self, devices: LanDevices) {
+        let _ = self.lan_devices.set(devices);
     }
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
@@ -625,6 +642,12 @@ impl Authority {
             c.windows.clear();
             c.context = None;
             self.advance(c)?;
+        }
+        // The LAN road's paired computers keep station control while LAN is on (see
+        // `hold_lan_devices`). Before the queued revocations below, so a revoke wins.
+        if let Some(devices) = self.lan_devices.get() {
+            c.control_grants
+                .extend(devices().into_iter().filter(|d| identifier(d)));
         }
         // A local revoke cannot wait behind a durable append. Retire its grant
         // before any later heartbeat, state or command can consume Core again.

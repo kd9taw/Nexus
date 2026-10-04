@@ -11,15 +11,17 @@
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
 //!    stamps the session: a session id of its own making, and the device the key belongs to.
 //!    Nothing the computer says names either; that stamp is what the relay supplies on the hosted
-//!    road.
+//!    road. A first message that asks to pair instead goes, under the same version rule, to a
+//!    pairing-only connection (`super::pairing`), which holds the pairing desk and nothing of
+//!    this lane's: none of the steps below happen on it.
 //! 4. **The lane.** Every operation request goes to the operations authority under this
 //!    connection's own id, so the lease it takes is bound to this connection. Stop is answered
 //!    on the reading task itself, before anything else it could queue behind, as on the relay's
 //!    socket. Stream signals go to the same session thread the relay's do, on this road's socket.
 //! 5. **The close.** However the connection ends (the computer closes it, it falls silent for
-//!    [`SILENCE`], LAN is switched off), its stream ends with it, the stream's presence at once,
-//!    and the lease it holds goes with the connection, so the radio loop halts anything it was
-//!    keeping on the air on its next tick.
+//!    [`SILENCE`], LAN is switched off, the computer is removed at the shack), its stream ends with
+//!    it, the stream's presence at once, and the lease it holds goes with the connection, so the
+//!    radio loop halts anything it was keeping on the air on its next tick.
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -36,7 +38,8 @@ use super::super::operations::{Authority, LanConnection, Request};
 use super::super::stream::{Station, StreamLane};
 use super::super::transport::{identifier, random_secret, Feeds, Outbound};
 use super::gate::Gate;
-use super::tls::{pin, Identity, Paired};
+use super::pairing::{self, Asked, Desk, Outcome};
+use super::tls::{pin, Identity};
 
 /// The LAN protocol this shack speaks: the hello and everything after it on this channel.
 pub const PROTOCOL_VERSION: u8 = 1;
@@ -64,7 +67,8 @@ pub(super) struct Shared {
     pub feeds: Feeds,
     pub tls: Arc<rustls::ServerConfig>,
     pub identity: Arc<Identity>,
-    pub paired: Paired,
+    /// Who is paired, and the pairing window: all a pairing-only connection keeps of this.
+    pub desk: Desk,
     pub network: tempo_stream::lan::Network,
     pub port: u16,
     pub gate: Arc<Gate>,
@@ -81,6 +85,15 @@ enum FromComputer {
         protocol: u8,
         stream: u8,
         operation: u8,
+    },
+    /// A computer asking to pair, inside an open window (`super::pairing`): the first message
+    /// only, and it never reaches the lane.
+    Pair {
+        protocol: u8,
+        stream: u8,
+        operation: u8,
+        name: String,
+        nonce: String,
     },
     OperationRequest {
         request: Box<Request>,
@@ -115,8 +128,9 @@ fn socket_config() -> WebSocketConfig {
         .max_frame_size(Some(MESSAGE_BYTES))
 }
 
-/// A fresh session id, shaped as every id the authority takes is.
-fn session_id() -> Option<String> {
+/// A fresh session id, shaped as every id the authority takes is (the LAN station id is made the
+/// same way).
+pub(super) fn session_id() -> Option<String> {
     let hex = random_secret().ok()?;
     Some(format!(
         "{}-{}-{}-{}-{}",
@@ -174,26 +188,41 @@ pub(super) async fn connection<S>(
     };
     // 2 and 3. The handshake, inside one deadline.
     let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
-    let (socket, pin, device) = match handshake {
-        Ok(Ok(Some(done))) => done,
-        // A paired computer on another version: told which side to update, and not counted.
-        Ok(Ok(None)) => return,
-        Ok(Err(())) | Err(_) => {
-            shared.gate.failed(peer.ip(), Instant::now());
-            return;
+    match handshake {
+        Ok(Ok(Opened::Session(socket, pin, device))) => {
+            session(socket, pin, device, shared, stop, peer.ip()).await;
         }
-    };
-    session(socket, pin, device, shared, stop, peer.ip()).await;
+        Ok(Ok(Opened::Pairing(socket, asked))) => {
+            // From here on this connection holds the pairing desk and nothing else: no operations
+            // authority, no engine, no stream.
+            let (gate, desk, deadline) =
+                (shared.gate.clone(), shared.desk.clone(), shared.handshake);
+            drop(shared);
+            if pairing::session(socket, asked, desk, deadline, stop).await == Outcome::Failed {
+                gate.failed(peer.ip(), Instant::now());
+            }
+        }
+        // Refused for its version, and told which side to update: not counted.
+        Ok(Ok(Opened::Told)) => {}
+        Ok(Err(())) | Err(_) => shared.gate.failed(peer.ip(), Instant::now()),
+    }
 }
 
-type Socket<S> = tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<S>>;
+pub(super) type Socket<S> = tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<S>>;
 
-/// TLS, the upgrade and the hello. `Ok(None)`: a paired computer refused for its version, already
-/// told why. `Err`: a failed handshake.
-async fn handshake<S>(
-    stream: S,
-    shared: &Shared,
-) -> Result<Option<(Socket<S>, [u8; 32], String)>, ()>
+/// What a handshake opened.
+enum Opened<S> {
+    /// A paired computer, welcomed next: its key's pin and its device.
+    Session(Socket<S>, [u8; 32], String),
+    /// A computer asking to pair, for a pairing-only connection.
+    Pairing(Socket<S>, Asked),
+    /// Refused for its version, and already told which side to update.
+    Told,
+}
+
+/// TLS, the upgrade and the first message: a hello from a paired computer, or a request to pair.
+/// `Err`: a failed handshake.
+async fn handshake<S>(stream: S, shared: &Shared) -> Result<Opened<S>, ()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -206,32 +235,68 @@ where
         .1
         .peer_certificates()
         .and_then(|keys| keys.first())
-        .ok_or(())?;
-    let pin = pin(key.as_ref());
-    // Asked again here, after the verifier: a computer revoked during its own handshake is out.
-    let device = (shared.paired)(&pin).filter(|d| identifier(d)).ok_or(())?;
+        .ok_or(())?
+        .as_ref()
+        .to_vec();
+    // What a pairing's proofs are bound to: this one session.
+    let exporter = tls
+        .get_ref()
+        .1
+        .export_keying_material([0; 32], pairing::EXPORTER, None)
+        .map_err(|_| ())?;
+    let pin = pin(&key);
     let mut socket = tokio_tungstenite::accept_async_with_config(tls, Some(socket_config()))
         .await
         .map_err(|_| ())?;
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err(());
     };
-    let Ok(FromComputer::Hello {
-        protocol,
-        stream,
-        operation,
-    }) = serde_json::from_str(&text)
-    else {
-        return Err(());
-    };
-    if let Some(reason) = refusal((protocol, stream, operation)) {
-        use futures_util::SinkExt;
-        let refused = json!({"type":"refused","reason":reason}).to_string();
-        let _ = socket.send(Message::Text(refused.into())).await;
-        let _ = socket.close(None).await;
-        return Ok(None);
+    match serde_json::from_str(&text) {
+        Ok(FromComputer::Hello {
+            protocol,
+            stream,
+            operation,
+        }) => {
+            // Asked again here, after the verifier: a computer revoked during its own handshake
+            // is out, and a key the verifier took only for the pairing window is no paired one.
+            let device = shared
+                .desk
+                .book
+                .paired(&pin)
+                .filter(|d| identifier(d))
+                .ok_or(())?;
+            match refusal((protocol, stream, operation)) {
+                Some(reason) => told(socket, reason).await,
+                None => Ok(Opened::Session(socket, pin, device)),
+            }
+        }
+        Ok(FromComputer::Pair {
+            protocol,
+            stream,
+            operation,
+            name,
+            nonce,
+        }) => match refusal((protocol, stream, operation)) {
+            Some(reason) => told(socket, reason).await,
+            None => Ok(Opened::Pairing(
+                socket,
+                Asked::new(&name, &nonce, key, exporter).ok_or(())?,
+            )),
+        },
+        _ => Err(()),
     }
-    Ok(Some((socket, pin, device)))
+}
+
+/// Refused for its versions, saying which side to update (as ruled on 2026-10-04), and closed.
+async fn told<S>(mut socket: Socket<S>, reason: &str) -> Result<Opened<S>, ()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use futures_util::SinkExt;
+    let refused = json!({"type":"refused","reason":reason}).to_string();
+    let _ = socket.send(Message::Text(refused.into())).await;
+    let _ = socket.close(None).await;
+    Ok(Opened::Told)
 }
 
 /// The session, from the welcome to the close.
@@ -245,12 +310,18 @@ async fn session<S>(
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let Some(session) = session_id() else {
+    let book = shared.desk.book.clone();
+    // Told when who is paired changes: removed at the shack, this computer is out at once. Asked
+    // once more now, for a removal since the handshake asked.
+    let mut revised = book.subscribe();
+    let Some(session) =
+        session_id().filter(|_| book.paired(&pin).as_deref() == Some(device.as_str()))
+    else {
         return;
     };
     // The lease this computer takes is bound to this connection, and goes with it.
     let connection = LanConnection::new(shared.authority.clone());
-    let paired = shared.paired.clone();
+    let paired = book.clone();
     let signed_by = device.clone();
     let station = Station {
         authority: shared.authority.clone(),
@@ -263,7 +334,7 @@ async fn session<S>(
         // A5 on this road: the offer is signed by the key this connection was opened with, and
         // only while that key is still paired to this computer, read at each admission.
         pinned: Arc::new(move |offered: &str| {
-            (offered == signed_by && paired(&pin).as_deref() == Some(offered)).then_some(pin)
+            (offered == signed_by && paired.paired(&pin).as_deref() == Some(offered)).then_some(pin)
         }),
         signer: Some(shared.identity.signer.clone()),
     };
@@ -287,6 +358,13 @@ async fn session<S>(
         tokio::select! {
             biased;
             _ = stop.changed() => break StreamReason::RemoteOff,
+            // Removed at the shack, or the station's network identity reset: out at once, before
+            // anything else it sent is answered.
+            Ok(()) = revised.changed() => {
+                if book.paired(&pin).as_deref() != Some(device.as_str()) {
+                    break StreamReason::NotController;
+                }
+            }
             _ = &mut writer => break StreamReason::ConnectionFailed,
             done = async { operation.as_mut().expect("guarded operation task").await }, if operation.is_some() => {
                 operation = None;
@@ -306,7 +384,7 @@ async fn session<S>(
                     break StreamReason::StreamClosed;
                 };
                 match message {
-                    FromComputer::Hello { .. } => break StreamReason::StreamClosed,
+                    FromComputer::Hello { .. } | FromComputer::Pair { .. } => break StreamReason::StreamClosed,
                     FromComputer::OperationRequest { request } => {
                         let id = request.id().to_string();
                         if !identifier(&id) { break StreamReason::StreamClosed }
