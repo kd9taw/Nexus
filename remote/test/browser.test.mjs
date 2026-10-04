@@ -183,8 +183,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       actual.addEventListener('resize',()=>area.dispatchEvent(new Event('resize')));
       actual.addEventListener('scroll',()=>area.dispatchEvent(new Event('scroll')));
       Object.defineProperty(window,'visualViewport',{value:area});
-      window.__waterfallDraws=0;const draw=CanvasRenderingContext2D.prototype.putImageData;
-      CanvasRenderingContext2D.prototype.putImageData=function(...args){if(this.canvas.classList.contains('waterfall-canvas'))window.__waterfallDraws++;return draw.apply(this,args)};
+      // The waterfall's picture is the spectrum renderer's canvas in .waterfall-render: a draw is a WebGL2 drawArrays, or a canvas-2D putImageData without WebGL2.
+      // Its WebGL2 drawing buffer is kept after it is shown, so the picture can be read back after the frame that drew it (it changes no pixel).
+      const getContext=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(id,attrs,...rest){return getContext.call(this,id,id==='webgl2'&&this.classList.contains('spectrum-canvas')?{...attrs,preserveDrawingBuffer:true}:attrs,...rest)};
+      window.__waterfallDraws=0;const inWaterfall=c=>!!c?.closest?.('.waterfall-render');const draw=CanvasRenderingContext2D.prototype.putImageData;
+      CanvasRenderingContext2D.prototype.putImageData=function(...args){if(inWaterfall(this.canvas))window.__waterfallDraws++;return draw.apply(this,args)};
+      if(typeof WebGL2RenderingContext!=='undefined'){const drawGl=WebGL2RenderingContext.prototype.drawArrays;
+      WebGL2RenderingContext.prototype.drawArrays=function(...args){if(inWaterfall(this.canvas))window.__waterfallDraws++;return drawGl.apply(this,args)}}
     }`},session)
     const runEvaluate=async expression=>{
       const value=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session)
@@ -3185,9 +3190,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     }
     applicationTraffic.sample = { seconds: (performance.now()-started)/1000, reads: applicationTraffic.reads-startReads, bytes: applicationTraffic.bytes-startBytes }
     assert.ok(applicationTraffic.sample.reads/applicationTraffic.sample.seconds < 24,'real panel demand must remain below the session rate bound')
-    // A resize/rebuild can also call putImageData. Confirm that actual station
-    // spectrum values have produced a visible signal in the spectrum canvas.
-    await until(`(()=>{const c=document.querySelector('.waterfall-canvas'),a=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let colored=0;for(let i=0;i<a.length;i+=4)if(a[i]>30||a[i+1]>30||a[i+2]>30)colored++;return colored>50})()`)
+    // A resize/rebuild also draws. Confirm that actual station spectrum values have produced a
+    // visible signal in the waterfall's picture: the renderer's canvas, copied through 2-D whichever backend drew it.
+    await until(`(()=>{const c=[...document.querySelectorAll('.waterfall-render canvas')].find(e=>e.style.visibility!=='hidden');if(!c||!c.width||!c.height)return false;const k=document.createElement('canvas');k.width=c.width;k.height=c.height;const x=k.getContext('2d');x.drawImage(c,0,0);const a=x.getImageData(0,0,k.width,k.height).data;let colored=0;for(let i=0;i<a.length;i+=4)if(a[i]>30||a[i+1]>30||a[i+2]>30)colored++;return colored>50})()`)
     if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-workspace.png'),Buffer.from(shot.data,'base64'))}
     if (applicationVersion >= 2) {
       for (const [label, mode] of [['CW','cw'], ['Phone','phone']]) {

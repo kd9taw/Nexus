@@ -99,6 +99,9 @@ const golden = JSON.parse(
   readFileSync(resolve(process.cwd(), 'src/components/__fixtures__/waterfallOffsets.json'), 'utf8'),
 ) as Golden
 
+let realRaf: typeof requestAnimationFrame
+let realCaf: typeof cancelAnimationFrame
+let realMatchMedia: typeof window.matchMedia
 beforeEach(() => {
   localStorage.clear()
   vi.mocked(setRxOffset).mockClear()
@@ -108,11 +111,24 @@ beforeEach(() => {
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver
+  // With a renderer that draws, the waterfall's draw loop runs (it stands idle where nothing can
+  // draw): give it the browser's frame clock and media query, as Waterfall.markers.test.tsx does.
+  realRaf = globalThis.requestAnimationFrame
+  realCaf = globalThis.cancelAnimationFrame
+  realMatchMedia = window.matchMedia
+  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) =>
+    setTimeout(() => cb(performance.now()), 16) as unknown as number) as typeof requestAnimationFrame
+  globalThis.cancelAnimationFrame = ((id: number) => clearTimeout(id as unknown as NodeJS.Timeout)) as typeof cancelAnimationFrame
+  window.matchMedia = ((q: string) =>
+    ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList) as typeof window.matchMedia
 })
 afterEach(() => {
   cleanup()
   localStorage.clear()
   backend = 'real'
+  globalThis.requestAnimationFrame = realRaf
+  globalThis.cancelAnimationFrame = realCaf
+  window.matchMedia = realMatchMedia
 })
 
 /** The canvas the click handler measures, with a known box (jsdom lays nothing out). */
