@@ -4,14 +4,21 @@
 // under `scope.*`. This is an INSTRUMENT, not a transmit surface: it draws, and its one
 // gesture tunes the RX dial.
 //
-// The units rule lands on the PASSBAND: the three window widths in Hz, every S-unit and dB
-// reading, the audio and RF spans, and the two feed names below are measurements and product
-// names, so they stay in the code — as does the DIAL plate drawn into the bitmap, which is an
-// instrument mark placed by canvas arithmetic rather than a sentence.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { getScopeRow, type ScopeWindow } from '../api'
+// The units rule lands on the PASSBAND: every S-unit and dB reading, the audio and RF spans, and
+// the two feed names below are measurements and product names, so they stay in the code — as
+// does the DIAL plate drawn on the overlay, which is an instrument mark placed by canvas
+// arithmetic rather than a sentence. (The window widths moved to the ⚙ strip, ScaleStrip.tsx.)
+//
+// TWO LAYERS. The picture — the trace, the waterfall and the 3D stack — is the spectrum
+// renderer's (`spectrum/`, WebGL2 or canvas-2D behind one contract), on its own canvas in
+// `.ph-scope-render`. Everything the operator reads or aims with — the dial and carrier lines,
+// their plates, the frequency scale and the pitch marker — is drawn on `.ph-scope-canvas` above
+// it, which is also the element every pointer gesture lands on. The renderer swaps its canvas
+// while a lost WebGL2 context is away, so nothing here ever holds or listens on that one.
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { getScopeFrame } from '../api'
+import type { SpectrumFrameWire } from '../types'
 import { useStationControl } from '../stationAccess'
-import { sampleLut } from '../colormaps'
 import {
   applyGainZero,
   bakeLut,
@@ -28,10 +35,6 @@ import {
   sidebandSign,
   TRACE_HOLD_MS,
   traceHoldDecay,
-  // Aliased: this component already has a `spanDb` STATE variable (the Δ readout it renders),
-  // which shadows a bare import everywhere inside the component — including the one call site
-  // below, where it resolved to a number and failed to compile.
-  spanDb as rowSpanDb,
   axisAbsoluteHz,
   axisTicks,
   overlayTextScale,
@@ -41,11 +44,13 @@ import type { ScopeTuneRequest } from '../useScopeTune'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { useNightActive } from '../useNight'
 import { useSkinActive } from '../useSkin'
-import { WaterfallHistory } from '../waterfallHistory'
-import { drawDss } from '../dss'
+import { createSpectrumRenderer, type DisplayRange, type SpectrumFrame, type SpectrumRenderer } from '../spectrum'
+import { axisOf, rendererFrame } from '../spectrum/scale'
+import { LogRecursiveAverager } from '../spectrum/scaleAverage'
+import { useScaleSettings } from '../spectrum/scaleSettings'
+import { ScaleStrip } from '../spectrum/ScaleStrip'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
-import type { MessageKey } from '../i18n'
 import { WheelRange } from './WheelRange'
 
 /** The scope's own vocabulary: the unit on the Δ readout, the two native-panadapter feed
@@ -61,10 +66,6 @@ const DIAL_PLATE = 'DIAL'
  * classifies surfaceGet/Set keys by matching this declaration. */
 const PHSCOPE_DSS_KEY = 'nexus.phonescope.dss'
 
-/** Persisted analysis-window choice for the rig scope. Static literal for the same reason as
- * PHSCOPE_DSS_KEY — the storage-scope test matches this declaration. */
-const PHSCOPE_WIN_KEY = 'nexus.phonescope.win'
-
 /** Persisted scroll direction for the rig scope's waterfall band — same contract as the FT8
  * waterfall's FLOW_KEY (operator ask, 2026-08-16: the toggle everywhere a waterfall scrolls,
  * default DOWN to match). Only the exact string 'up' opts out; anything else is the default,
@@ -73,30 +74,35 @@ const PHSCOPE_WIN_KEY = 'nexus.phonescope.win'
 const PHSCOPE_FLOW_KEY = 'nexus.phonescope.flow'
 
 /**
- * The window-length control, in the order it cycles.
+ * Persisted look of a SLOW scope: how the waterfall moves when the radio sweeps slower than this
+ * scope polls (20 times a second). The operator asked for both, to compare on the air (2026-10-04,
+ * "Build both, I'll compare"):
  *
- * THE OPERATOR'S TRADE, not ours, which is why this is a control and the trace hold is not: the
- * trace hold follows from the signal, but time-versus-frequency has no right answer. A CW op
- * chasing a weak carrier in a crowded passband wants `sharp`; one reading somebody's fist at
- * 25 WPM wants `fast`, because at the default a 48 ms dit is inside a 171 ms window and keying
- * simply is not there to see.
+ *  - `smooth` (the default) commits a row on every poll. Between two sweeps the newest one is
+ *    committed again as a REPEAT, and each repeat is marked as one: it carries the number of the
+ *    sweep it repeats and its own time, so the history says which rows are new data and which are
+ *    copies, and the cadence probe (ui/spectrum-harness) can tell a repeat from a defect.
+ *  - `sweep` commits one row per sweep and nothing else. The waterfall moves only when a new sweep
+ *    arrives, so a 3-sweep-a-second scope scrolls slowly and in steps, and no row is ever a copy.
  *
- * The LABEL is the Hann main-lobe width, because that is the thing the operator is buying and it
- * is legible at a glance on a rig display. The title carries the cost.
- *
- * The label is a MEASUREMENT and stays written here; the title is prose and resolves through
- * the catalog when the button renders (a resolved constant would freeze the first locale).
+ * The analysis window, averaging, detector, G and Z are the cockpit's scale record
+ * (`spectrum/scaleSettings.ts`); this, like 3D and flow, is a look of THIS window's scope. Only the
+ * exact string 'sweep' opts out of the default, so a stale or foreign value can never pick a look
+ * nobody chose. Static literal — the storage-scope test classifies keys off this declaration.
  */
-const SCOPE_WINDOWS: ReadonlyArray<{ id: ScopeWindow; label: string; titleKey: MessageKey }> = [
-  { id: 'balanced', label: '23 Hz', titleKey: 'scope.window.balanced.title' },
-  { id: 'sharp', label: '12 Hz', titleKey: 'scope.window.sharp.title' },
-  { id: 'fast', label: '47 Hz', titleKey: 'scope.window.fast.title' },
-]
+const PHSCOPE_ROWS_KEY = 'nexus.phonescope.rows'
+type RowCadence = 'smooth' | 'sweep'
 
-/** A stored value is only honoured if it is one we still ship — anything else is the default,
- *  so a stale or foreign key can never leave the scope on a window this build does not have. */
-function resolveScopeWindow(stored: string | null): ScopeWindow {
-  return SCOPE_WINDOWS.some((w) => w.id === stored) ? (stored as ScopeWindow) : 'balanced'
+/** Rows of history kept for pause and scrollback: 51 s at 20 rows a second, as before. */
+const HISTORY_ROWS = 1024
+
+/** A frame drawn on an axis that runs against its row (LSB on the carrier-centred axis): bins
+ *  reversed, span negated, so the frame says what it means on the axis it is drawn on. */
+function mirrorFrame(f: SpectrumFrame): SpectrumFrame {
+  const n = f.bins.length
+  const bins = new Float64Array(n)
+  for (let i = 0; i < n; i++) bins[i] = f.bins[n - 1 - i]
+  return { ...f, loHz: -f.hiHz, hiHz: -f.loHz, bins }
 }
 
 interface Props {
@@ -172,6 +178,10 @@ interface Props {
   /** The mouse wheel moves the G and Z sliders, one of their steps a notch (#384), rather than
    *  tuning the rig through them. Phone passes it; CW keeps its scope's wheel as it was. */
   wheelSliders?: boolean
+  /** Whose scale record this scope draws with — its analysis window, averaging, detector, G and Z
+   *  (`spectrum/scaleSettings.ts`). CW passes 'cw', whose averaging defaults to off; Phone takes
+   *  the default. */
+  cockpit?: 'phone' | 'cw'
 }
 
 /**
@@ -222,6 +232,7 @@ export function PhoneScope({
   interactive = false,
   traceHoldMs = TRACE_HOLD_MS.normal,
   wheelSliders = false,
+  cockpit = 'phone',
 }: Props) {
   const control = useStationControl()
   const [scopeAvailable, setScopeAvailable] = useState(control)
@@ -247,11 +258,11 @@ export function PhoneScope({
   const dialRef = useRef(dialHz)
   const onFeedRef = useRef(onFeed)
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
-  // Retained waterfall-band history (bottom region only). Same model as the FT waterfall:
-  // the hot path scrolls a retained RGBA buffer (no getImageData readback), and a palette/
-  // resize change re-renders the accumulated history instead of losing it. No pause UI here
-  // — this is a live rig scope, and the trace/waterfall share one canvas with inline markers.
-  const historyRef = useRef(new WaterfallHistory(1024))
+  // The picture's host: the renderer puts its canvas here, under the overlay canvas. Retained
+  // history lives in the renderer's ring (the DATA at each row's native resolution, with its own
+  // span and range), so a palette, view, flow or size change redraws history rather than losing it.
+  const renderHostRef = useRef<HTMLDivElement>(null)
+  const rendererRef = useRef<SpectrumRenderer | null>(null)
   const rebuildRef = useRef<(() => void) | null>(null)
 
   // Pause + scrollback (review a moment you just missed) and the 3D stacked-spectrum view.
@@ -262,29 +273,30 @@ export function PhoneScope({
   const dssRef = useRef(dss)
   dssRef.current = dss
 
-  const [scopeWin, setScopeWin] = useState<ScopeWindow>(() =>
-    resolveScopeWindow(surfaceGet(PHSCOPE_WIN_KEY)),
+  // The cockpit's scale record: the analysis window the row is computed with, the trace's
+  // averaging, the detector, and the operator's G and Z (persisted per cockpit, clamped on load).
+  const [scale, setScale] = useScaleSettings(cockpit)
+  const scaleRef = useRef(scale)
+  scaleRef.current = scale
+  /** The ⚙ strip (window, averaging, detector, slow-scope look): shown on demand. */
+  const [gear, setGear] = useState(false)
+  const gearId = useId()
+  const [rowCadence, setRowCadence] = useState<RowCadence>(() =>
+    surfaceGet(PHSCOPE_ROWS_KEY) === 'sweep' ? 'sweep' : 'smooth',
   )
+  const rowCadenceRef = useRef(rowCadence)
+  rowCadenceRef.current = rowCadence
   /** Newest row at the TOP (scrolls down) — the default, matching the FT8 waterfall. */
   const [newestAtTop, setNewestAtTop] = useState<boolean>(() => surfaceGet(PHSCOPE_FLOW_KEY) !== 'up')
   const newestAtTopRef = useRef(newestAtTop)
   newestAtTopRef.current = newestAtTop
-  const scopeWinRef = useRef(scopeWin)
-  scopeWinRef.current = scopeWin
   /** Scrollback offset in history rows while paused (0 = live tail). */
   const offsetRef = useRef(0)
   // Which scope feed is live: '' / 'audio' = soundcard FFT, 'flex'/'civ' = a native RF panadapter.
   // Lifted out of the draw loop (updated only when it changes) so the badge can render it.
   const [source, setSource] = useState('')
   const sourceRef = useRef('')
-  // Operator visual Gain/Zero (the FT8 waterfall's controls, ported) + the live
-  // Δ-span readout. Session-only; defaults leave the smoothed AGC untouched.
-  const [gain, setGain] = useState(0)
-  const [zero, setZero] = useState(0)
-  const gainRef = useRef(0)
-  const zeroRef = useRef(0)
-  gainRef.current = gain
-  zeroRef.current = zero
+  // The live Δ readout: the strongest signal's height above the noise floor.
   const [spanDb, setSpanDb] = useState<number | null>(null)
   const spanDbRef = useRef<number | null>(null)
   // Click/drag tuning state — the latest row + drawn view (captured each drawRow so the
@@ -355,6 +367,11 @@ export function PhoneScope({
     rebuildRef.current?.() // recolor the accumulated waterfall history in the new palette
   }, [palette, theme, night, skin])
 
+  // A new detector redraws the history through it, paused or not.
+  useEffect(() => {
+    rebuildRef.current?.()
+  }, [scale.detector])
+
   // Unmount safety: a mid-drag nav away must not leave the edge-scan rAF running.
   useEffect(
     () => () => {
@@ -365,13 +382,14 @@ export function PhoneScope({
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
-    // Write-only now: the waterfall band scrolls in a retained CPU-side RGBA buffer
-    // (copyWithin) + one putImageData, and the trace region is redrawn each frame — so the
-    // getImageData-per-row readback that forced this canvas CPU-backed (willReadFrequently,
-    // the 20 Hz laptop stall) is gone and it may be GPU-backed again.
+    const host = renderHostRef.current
+    if (!canvas || !host) return
+    // The OVERLAY: write-only, cleared and redrawn on every draw over the renderer's picture. The
+    // picture itself is the renderer's (see the file header), on its own canvas in `host`.
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const renderer = createSpectrumRenderer(host, { depth: HISTORY_ROWS })
+    rendererRef.current = renderer
 
     let running = true
     // Single-flight WITH a watchdog — see `RowFetchLatch`. The scope needs it at least as much
@@ -402,75 +420,42 @@ export function PhoneScope({
       mq.matches || document.documentElement.getAttribute('data-motion') === 'reduce'
 
     let agcFloor = 0
-    let agcCeil = 1
     let agcInit = false
     let lastFeed = '' // last onFeed-reported "source:lo:hi" (fire only on change)
-
-    let magBuf: Float32Array | null = null // reused per-column magnitudes (no per-tick garbage)
-    let holdBuf: Float32Array | null = null // per-column trace peak-hold (decays, see traceHoldMs)
-    let lastHoldTs = 0
     // The AGC window, reused. `row.slice(vLo, vHi)` allocated a fresh array 20x/second for a
     // read-only percentile scan. Float64Array, not Float32Array: `row` arrives from JSON as
     // doubles and narrowing it would nudge the AGC floor for no benefit (see agcScratch).
     let visBuf: Float64Array | null = null
-    // Normalized row bins for the history ring, reused (see the push below).
-    let binBuf: Float32Array | null = null
-    let binBufN = 0
-    // The trace's fill gradient, rebuilt only when the palette or the trace height changes —
-    // it was a `createLinearGradient` + 3 `sampleLut` + 3 colour-stop parses PER ROW for a
-    // value that changes on a theme switch or a splitter drag. The cache is effect-local on
-    // purpose: `ctx` is captured by this effect, and a CanvasGradient belongs to the context
-    // that made it, so a new canvas re-runs the effect and resets the cache with it.
-    let gradCache: CanvasGradient | null = null
-    let gradKey = ''
-    let traceStroke = '' // the bright line on top of the fill — same palette, same cache key
-    let magBufW = 0
-    // Retained RGBA buffer for the WATERFALL BAND only (Wd × wfHd, drawn at y=traceHd). The
-    // trace region above it is redrawn each frame and is not part of this buffer.
-    let retBuf: Uint8ClampedArray<ArrayBuffer> | null = null
-    let retImg: ImageData | null = null
-    let retW = 0
-    let retH = 0
-    let lastViewLo = 0 // the view the retained buffer's newest rows were rendered at
-    let lastViewHi = 0
-    const retained = (Wd: number, wfHd: number, vLo: number, vHi: number): ImageData => {
-      if (!retBuf || !retImg || retW !== Wd || retH !== wfHd) {
-        retBuf = new Uint8ClampedArray(Wd * wfHd * 4)
-        retImg = new ImageData(retBuf, Wd, wfHd)
-        retW = Wd
-        retH = wfHd
-        historyRef.current.renderInto(retBuf, Wd, wfHd, vLo, vHi, lutRef.current, 0, newestAtTopRef.current)
-      }
-      return retImg
-    }
-    // Cold-path re-render (palette/theme switch, resize): re-render the accumulated history
-    // at the buffer's last view into the waterfall band and blit it.
-    const rebuildFromHistory = () => {
-      if (!(devW > 0 && devH > 0)) return
-      const lut = lutRef.current
-      if (dssRef.current) {
-        // 3D maximize: redraw the whole canvas (trace hidden) from history.
-        drawDss(ctx, devW, devH, historyRef.current, lut, [lut[0], lut[1], lut[2]], {
-          loHz: lastViewLo || 200,
-          hiHz: lastViewHi || 2900,
-        })
-        return
-      }
-      if (retBuf && retW > 0 && retH > 0) {
-        const traceHd = Math.max(1, Math.round(devH * TRACE_FRAC))
-        historyRef.current.renderInto(retBuf, retW, retH, lastViewLo, lastViewHi, lut, offsetRef.current, newestAtTopRef.current)
-        try {
-          // Clear the trace band to floor first — while paused/scrolled (or just back from 3D)
-          // the live trace isn't being repainted, so wipe stale pixels before the band blit.
-          ctx.fillStyle = `rgb(${lut[0]}, ${lut[1]}, ${lut[2]})`
-          ctx.fillRect(0, 0, retW, traceHd)
-          ctx.putImageData(retImg!, 0, traceHd)
-        } catch {
-          /* zero-size mid-layout */
-        }
-      }
-    }
-    rebuildRef.current = rebuildFromHistory
+
+    // ---- Which rows are committed: the source's frame number decides ----------------------
+    //
+    // ⚠️ THE REPEATED-ROW DEFECT, and why this is a frame number and not a timer. The scope used to
+    // commit a waterfall row on every 50 ms poll whether or not the source had swept again, so a
+    // source slower than 20 sweeps a second scrolled copies of its last sweep that looked exactly
+    // like new data: on an IC-9700 at 3 sweeps a second, five rows in six. The backend now numbers
+    // every frame it publishes (`seq`), each poll names the newest number this scope has drawn, and
+    // the answer is null when the source has not advanced past it. What a null does is the
+    // operator's slow-scope look (PHSCOPE_ROWS_KEY): a marked repeat, or nothing.
+    /** The number of the newest frame drawn: what the next poll asks the source to be past. 0 =
+     *  none yet, or a source nobody numbers (each of its answers is then a new row). */
+    let lastSeq = 0
+    /** The newest sweep as it arrived (never mirrored: a repeat or a redraw orients it to the axis
+     *  in force then), the range it was committed in, and where it came from. */
+    let newest: { frame: SpectrumFrame; range: DisplayRange; src: string; rowLo: number; rowHi: number } | null = null
+    /** The drawn window, projected from the newest sweep: audio Hz or absolute RF Hz per the feed
+     *  source, or RF offset from the dial on the carrier-centred axis. */
+    let view = { loHz: 200, hiHz: 2900, markerAtHz: null as number | null, mirrored: false }
+    // The trace's own frame: the newest sweep through the cockpit's averaging (the waterfall rows
+    // stay raw, so averaging never smears history), then the peak hold. The hold is kept PER BIN,
+    // as a strength in the trace's range — the same 0..1 the hold always decayed in — so it stays
+    // on its frequencies when the view pans, and starts again when the bins mean other ones.
+    const averager = new LogRecursiveAverager(scaleRef.current.averageMs)
+    let averaged: SpectrumFrame | null = null
+    let hold: Float32Array | null = null
+    let heldBins: Float64Array | null = null
+    let holdKey = ''
+    let traceFrame: SpectrumFrame | null = null
+    let lastHoldTs = 0
 
     // Device-pixel backing store (correct under the app's CSS zoom), mirroring Waterfall.
     let devW = 0
@@ -485,84 +470,28 @@ export function PhoneScope({
     // while the scope around it grows. `overlayTextScale` recovers the zoom from rect ÷ layout
     // width, and reads 1 on an engine that already carries it (see its own doc comment).
     let textScale = 1
-    const measure = (entry?: ResizeObserverEntry): { dW: number; dH: number } => {
-      const dpcb = entry?.devicePixelContentBoxSize?.[0]
-      if (dpcb) return { dW: Math.max(1, dpcb.inlineSize), dH: Math.max(1, dpcb.blockSize) }
-      const dpr = window.devicePixelRatio || 1
-      return { dW: Math.max(1, Math.round(cssW * dpr)), dH: Math.max(1, Math.round(cssH * dpr)) }
-    }
-    const resize = (entry?: ResizeObserverEntry) => {
-      const rect = canvas.getBoundingClientRect()
-      if ((canvas.offsetParent === null || rect.width < 2 || rect.height < 2) && devW > 0) return
-      cssW = Math.max(1, rect.width)
-      cssH = Math.max(1, rect.height)
-      textScale = overlayTextScale(rect.width, canvas.offsetWidth)
-      const { dW, dH } = measure(entry)
-      scaleY = dH / cssH
-      if (dW === devW && dH === devH) return
-      canvas.width = dW
-      canvas.height = dH
-      const lut = lutRef.current
-      ctx.fillStyle = `rgb(${lut[0]},${lut[1]},${lut[2]})` // floor color → quiet band, no flash
-      ctx.fillRect(0, 0, dW, dH)
-      devW = dW
-      devH = dH
-      // Re-render the waterfall history at the new geometry (smear-free), then blit it.
-      const traceHd = Math.max(1, Math.round(dH * TRACE_FRAC))
-      retained(dW, Math.max(1, dH - traceHd), lastViewLo || 200, lastViewHi || 2900)
-      rebuildFromHistory()
-    }
-    resize()
-    const ro = new ResizeObserver((entries) => resize(entries[0]))
-    try {
-      ro.observe(canvas, { box: 'device-pixel-content-box' })
-    } catch {
-      ro.observe(canvas)
+
+    /** A frame as the drawn axis wants it: a MIRRORED axis (LSB on the carrier-centred one) reads
+     *  the row backwards, so the frame is stored and drawn mirrored — bins reversed, span negated —
+     *  rather than flagged for the renderer to flip later. A stored row then says what it means ON
+     *  THE AXIS IT WAS DRAWN ON, so the 2D band, the 3D stack and scrollback all reproduce the live
+     *  picture through the mapping they already have, and rows received on the other sideband keep
+     *  their own honest frame. */
+    const oriented = (f: SpectrumFrame): SpectrumFrame => (view.mirrored ? mirrorFrame(f) : f)
+
+    /** Append a row to the history. While paused the picture is held still: the scrollback offset
+     *  advances with every row that arrives (history keeps filling; nothing is lost). */
+    const commit = (f: SpectrumFrame, range: DisplayRange) => {
+      renderer.commitRow(oriented(f), range)
+      if (pausedRef.current) offsetRef.current = Math.min(offsetRef.current + 1, Math.max(0, renderer.rows - 1))
     }
 
-    const drawRow = async (myGen: number) => {
-      let spec
-      try {
-        // Ask for the row over the window this scope is DRAWING, not the whole 0-4000 Hz
-        // capture. Same 512 bins, same bytes — 1.5625 Hz per bin on the CW cockpit's 300-1100
-        // view instead of 7.8125.
-        //
-        // The view props are passed RAW even though they carry ABSOLUTE RF Hz when a native
-        // panadapter is the source (the cockpit passes `rfSpan`). That is deliberate: the
-        // backend already has to reject an insane span, so letting it own the one rule beats
-        // duplicating the RF test here against a source we only learn from the PREVIOUS row.
-        // An unhonourable request returns exactly what `getSpectrumRow` would have, and the
-        // row's own loHz/hiHz below is what everything downstream reads anyway.
-        spec = await getScopeRow(txRef.current, viewLoRef.current, viewHiRef.current, scopeWinRef.current)
-      } catch {
-        if (!control && latch.owns(myGen)) setScopeAvailable(false)
-        return
-      }
-      // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
-      // stale trace and a stale waterfall row on screen out of order.
-      if (!latch.owns(myGen)) return
-      const row = spec.row
-      if (!row || row.length === 0) {
-        if (!control) setScopeAvailable(false)
-        return
-      }
-      if (!control) setScopeAvailable(true)
-      // Surface which feed is live (only re-render on a change, not every 30 Hz frame).
-      const src = spec.source ?? ''
-      if (src !== sourceRef.current) {
-        sourceRef.current = src
-        setSource(src)
-      }
-      // Data-driven capture extent (DTO); fall back to the legacy constants for
-      // older backends that don't report it.
-      const rowLo = spec.loHz ?? 200
-      const rowHi = spec.hiHz ?? 2900
-      const span = Math.max(1, rowHi - rowLo)
-
-      // Project the audio view window onto this row — audio rows directly, native RF
-      // panadapter rows anchored on the live dial (row-center fallback when the dial is
-      // unknown or outside the row). See scopeView.
-      const view = scopeView(
+    /** Project the audio view window onto the newest row — audio rows directly, native RF
+     *  panadapter rows anchored on the live dial (row-center fallback when the dial is unknown or
+     *  outside the row). See scopeView. Done on every poll, so the view and the pointer's mapping
+     *  follow the dial and the props between two sweeps of a slow source. */
+    const project = (src: string, rowLo: number, rowHi: number) => {
+      view = scopeView(
         rowLo,
         rowHi,
         src,
@@ -579,19 +508,35 @@ export function PhoneScope({
       if (feed !== lastFeed) {
         lastFeed = feed
         onFeedRef.current?.(src, view.loHz, view.hiHz)
-        // The window moved (QSY/zoom/feed swap) — held trace peaks would sit at the
-        // wrong frequencies now, so drop them rather than painting ghosts.
-        holdBuf?.fill(0)
       }
-      // Capture the row + drawn window for the pointer handlers (click hit-testing and
-      // drag-box Hz↔px mapping happen against exactly what's on screen).
-      lastRowRef.current = { row, rowLo, rowHi }
+      // The drawn window for the pointer handlers (click hit-testing and drag-box Hz↔px mapping
+      // happen against exactly what's on screen).
       lastViewRef.current = {
         lo: view.loHz,
         hi: view.hiHz,
         rf: isRfScopeSource(src),
         mirrored: view.mirrored,
       }
+    }
+
+    /** A new sweep: the AGC, the readout, the row, and the trace's averaging. */
+    const accept = (wire: SpectrumFrameWire) => {
+      const row = wire.bins
+      // Surface which feed is live (only re-render on a change, not every 30 Hz frame).
+      const src = wire.source ?? ''
+      if (src !== sourceRef.current) {
+        sourceRef.current = src
+        setSource(src)
+      }
+      if (wire.seq > 0) lastSeq = wire.seq
+      // Data-driven capture extent (DTO); fall back to the legacy constants for
+      // older backends that don't report it.
+      const rowLo = wire.loHz ?? 200
+      const rowHi = wire.hiHz ?? 2900
+      const span = Math.max(1, rowHi - rowLo)
+      project(src, rowLo, rowHi)
+      // The row as it arrived, for the click's signal snap (clickTuneTarget reads ROW Hz).
+      lastRowRef.current = { row, rowLo, rowHi }
 
       // AGC over the VISIBLE window only — a loud signal outside the view (e.g.
       // the FT8 cluster above a narrow CW window) must not compress what's shown.
@@ -631,6 +576,11 @@ export function PhoneScope({
       // one would bounce the whole picture vertically); the ceiling no longer needs smoothing at
       // all, because it is now the floor plus a constant and moves only when the floor does.
       // WF_FLOOR_PCT (the MEDIAN), not agcRange's 5% default — see SCOPE_WINDOW_DB.
+      //
+      // ⚠️ NOT the spectrum module's auto range (`scaleRange.ts`, the row MEAN − 5 dB): on an audio
+      // row the rig's SSB stopband is a 40 dB cliff across a sixth of the row and more, which drags
+      // a mean far below the passband noise and lights the whole passband — the bright slab above,
+      // by another road. The median is what that header measures as barely moved by it.
       const floor = agcRange(visible, WF_FLOOR_PCT).floor
       // Frozen while keyed, same reason as the FT waterfall: the muted receiver drags the
       // noise estimate to digital silence and key-up clamps the panel until the EMA recovers.
@@ -642,7 +592,6 @@ export function PhoneScope({
           agcFloor += (floor - agcFloor) * AGC_ALPHA
         }
       }
-      agcCeil = agcFloor + dbToSpan(SCOPE_WINDOW_DB)
       // Operator Gain/Zero on top, same semantics as the FT8 waterfall's controls: G widens
       // the window (2x at G-1) or tightens it (0.4x at G+1), Z trims the black point.
       //
@@ -654,11 +603,11 @@ export function PhoneScope({
       // SCOPE_WINDOW_DB above the noise and can never shrink, so that failure is
       // unrepresentable rather than clamped. A quiet band sits dark at the palette bottom
       // because there is genuinely nothing above the noise, which is the honest picture.
-      const { floor: dispFloor, ceil: dispCeil } = applyGainZero(
+      const range = applyGainZero(
         agcFloor,
-        agcCeil,
-        gainRef.current,
-        zeroRef.current,
+        agcFloor + dbToSpan(SCOPE_WINDOW_DB),
+        scaleRef.current.gain,
+        scaleRef.current.zero,
       )
       // Live readout: the strongest signal's height ABOVE THE NOISE FLOOR, in dB.
       //
@@ -666,181 +615,92 @@ export function PhoneScope({
       // window was fitted to the row — and is now a constant, so it would have read "Δ50 dB"
       // forever. Peak-over-noise is the number that actually changes, and on a rig scope it is
       // the more useful one anyway: it is what the operator is looking at the spikes FOR.
+      //
+      // In the dB of the frame's own axis (`spectrum/scale.ts`): a CI-V scope's 0..1 spans the
+      // 80 dB Icom gives its display, where the 120 every reading used to assume read 1.5x high.
       let peakDisp = 0
       for (let i = 0; i < visible.length; i++) if (visible[i] > peakDisp) peakDisp = visible[i]
-      const db = Math.round(rowSpanDb(agcFloor, peakDisp))
+      const db = Math.round((peakDisp - agcFloor) * axisOf(wire.scale, src).dbPerUnit)
       if (Number.isFinite(db) && db !== spanDbRef.current) {
         spanDbRef.current = db
         setSpanDb(db)
       }
 
-      const Wd = devW
-      // #215: device px per unit of OVERLAY TEXT — the pixel ratio `scaleY` carries, times the
-      // UI scale it does not. Only the plates and the frequency scale use it; the rules, ticks
-      // and the trace stay on `scaleY`, because they are graphics the operator does not read.
-      const textPx = scaleY * textScale
-      // 3D maximize hides the trace so the stacked-spectrum hill fills the whole panel.
-      const dssOn = dssRef.current
-      const traceHd = dssOn ? 0 : Math.max(1, Math.round(devH * TRACE_FRAC))
-      const wfHd = Math.max(1, devH - traceHd)
-      if (Wd <= 0 || devH <= 0) return
-      if (Wd > canvas.width || devH > canvas.height) return
+      // The ROW's own bins over the row's own span, at the source's resolution — the renderer
+      // maps each stored row from its own frame onto whatever view is asked for, so storing the
+      // row is strictly more information for strictly less work than storing screen columns (the
+      // clipped-history defect: a row interpolated to the view kept nothing outside it, and
+      // scrollback could never widen). A frame with no producer time gets its arrival time.
+      const frame: SpectrumFrame = { ...rendererFrame(wire), tMs: wire.tMs > 0 ? wire.tMs : Date.now() }
+      newest = { frame, range, src, rowLo, rowHi }
+      commit(frame, range)
+      averager.tauMs = scaleRef.current.averageMs
+      averaged = averager.push(frame, performance.now())
+    }
 
-      const lut = lutRef.current
-      const nBins = row.length
-      // normalized magnitude per device column (shared by waterfall + trace), reused buffer
-      // over the projected view window (audio Hz or absolute RF Hz per the feed source).
-      const lo = view.loHz
-      const hi = view.hiHz
-      lastViewLo = lo
-      lastViewHi = hi
-      if (magBufW !== Wd || !magBuf || !holdBuf) {
-        magBuf = new Float32Array(Wd)
-        holdBuf = new Float32Array(Wd)
-        magBufW = Wd
-      }
-      const mag = magBuf
-      // `mirrored` (LSB on the carrier-centered axis) reads the row backwards: the audio at
-      // f Hz is at dial−f, so it belongs LEFT of the dial. scopeView already reflected the
-      // axis BOUNDS for LSB, so negating the per-column Hz is all that is left to do here.
-      const mirrored = view.mirrored
-      for (let x = 0; x < Wd; x++) {
-        const axisHz = lo + (x / Wd) * (hi - lo)
-        const hz = mirrored ? -axisHz : axisHz
-        // Outside the captured row there is nothing to draw — the floor, explicitly. The
-        // carrier-centered axis puts its guard band here by design, and unguarded this
-        // indexed row[<0] → undefined → NaN, which paints black columns and breaks the
-        // trace path without throwing.
-        if (hz < rowLo || hz > rowHi) {
-          mag[x] = 0
-          continue
-        }
-        const bin = ((hz - rowLo) / span) * (nBins - 1)
-        const b0 = Math.floor(bin)
-        const b1 = Math.min(nBins - 1, b0 + 1)
-        const frac = bin - b0
-        const v = row[b0] * (1 - frac) + row[b1] * frac
-        const t = normalize(v, dispFloor, dispCeil)
-        mag[x] = t
-      }
-
-      // Append this row to the retained history as normalized intensities over the ROW's OWN
-      // span — the same contract the FT waterfall uses (Waterfall.tsx), and not what this
-      // scope used to do.
-      //
-      // ⚠️ IT USED TO PUSH `mag`: the row already interpolated to DEVICE COLUMNS, stamped with
-      // the VIEW's span. Three things followed, and the first is the bad one:
-      //   1. history was CLIPPED TO THE VIEW, permanently. Everything outside the drawn window
-      //      was not hidden, it was never stored — so the pause + wheel-scrollback below could
-      //      never widen, and no zoom-out could recover a band that had already gone past.
-      //   2. `push` then resampled device columns back onto its own grid, so every row was
-      //      resampled TWICE on the way in, neither pass reversible.
-      //   3. a resize re-rendered accumulated history at the OLD geometry's interpolation.
-      // `renderInto` maps each stored row from its own frame onto whatever view is asked for
-      // (and floors the pixels outside it), so storing the row is strictly more information
-      // for strictly less work.
-      if (binBufN !== nBins || !binBuf) {
-        binBuf = new Float32Array(nBins)
-        binBufN = nBins
-      }
-      // A MIRRORED row is stored mirrored — bins reversed, frame negated — rather than
-      // flagged for the renderers to flip later. The stored frame then says what the row
-      // means ON THE AXIS IT WAS DRAWN ON, so the 2D rebuild, the 3D stack and scrollback
-      // all reproduce the live picture through the mapping they already have, and rows
-      // received on the other sideband keep their own honest frame instead of being
-      // re-mirrored by a flag that only describes the present.
-      for (let b = 0; b < nBins; b++) {
-        binBuf[mirrored ? nBins - 1 - b : b] = normalize(row[b], dispFloor, dispCeil)
-      }
-      historyRef.current.push(
-        binBuf,
-        mirrored ? -rowHi : rowLo,
-        mirrored ? -rowLo : rowHi,
-        Date.now(),
-      )
-
-      // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
-      // the mouse wheel scrolls the band back via rebuildFromHistory. Skip the live draw.
-      if (pausedRef.current) return
-
-      // 3D maximize: redraw the whole stacked-spectrum surface from history each row (the trace
-      // is hidden so the hill uses the full panel). Skips the 2D band + trace below.
-      if (dssOn) {
-        drawDss(ctx, Wd, devH, historyRef.current, lut, [lut[0], lut[1], lut[2]], { loHz: lo, hiHz: hi })
-        return
-      }
-
-      // ---- Waterfall (bottom region): scroll the RETAINED buffer one row and write the
-      // new row at the leading edge, then blit at y=traceHd. Direction is the operator's
-      // (PHSCOPE_FLOW_KEY), read ONCE so the shift and the row it makes room for can never
-      // disagree — the same discipline as Waterfall.tsx. ----
-      const img = retained(Wd, wfHd, lo, hi)
-      const out = retBuf!
-      const rowBytes = Wd * 4
-      const topDown = newestAtTopRef.current
-      if (topDown) out.copyWithin(rowBytes, 0)
-      else out.copyWithin(0, rowBytes)
-      const base = topDown ? 0 : (wfHd - 1) * rowBytes
-      for (let x = 0; x < Wd; x++) {
-        const li = (mag[x] >= 1 ? 255 : Math.round(mag[x] * 255)) * 4
-        const o = base + x * 4
-        out[o] = lut[li]
-        out[o + 1] = lut[li + 1]
-        out[o + 2] = lut[li + 2]
-        out[o + 3] = 255
-      }
-      try {
-        ctx.putImageData(img, 0, traceHd)
-      } catch {
-        /* mid-resize */
-      }
-
-      // Fast-attack / slow-decay hold for the trace: a new signal jumps up instantly,
-      // a pause fades down over ~traceHoldMs instead of strobing per frame.
+    /** The trace: the newest averaged sweep through the peak hold, in the newest row's range. A
+     *  new signal jumps up instantly; a pause fades down over ~traceHoldMs instead of strobing. */
+    const holdTrace = () => {
+      const a = averaged
+      if (!a || !newest) return
       const nowTs = performance.now()
       const dt = lastHoldTs > 0 ? nowTs - lastHoldTs : ROW_MS
       lastHoldTs = nowTs
       const decay = traceHoldDecay(dt, traceHoldRef.current)
-      const hold = holdBuf
-      for (let x = 0; x < Wd; x++) {
-        const h = hold[x] * decay
-        hold[x] = mag[x] > h ? mag[x] : h
+      const n = a.bins.length
+      const key = `${n}:${a.loHz}:${a.hiHz}`
+      if (!hold || !heldBins || key !== holdKey) {
+        // Other bins, other frequencies (a retune, a zoom, a feed swap): held peaks would sit at
+        // the wrong frequencies now, so drop them rather than painting ghosts.
+        hold = new Float32Array(n)
+        heldBins = new Float64Array(n)
+        holdKey = key
       }
+      const { floor, ceil } = newest.range
+      for (let b = 0; b < n; b++) {
+        const s = normalize(a.bins[b], floor, ceil)
+        const h = hold[b] * decay
+        hold[b] = s > h ? s : h
+        heldBins[b] = floor + hold[b] * (ceil - floor)
+      }
+      traceFrame = { ...a, bins: heldBins }
+    }
 
-      // ---- Panadapter trace (top region): held spectrum (see hold above), colored ----
-      ctx.fillStyle = `rgb(${lut[0]},${lut[1]},${lut[2]})` // clear trace region to floor color
-      ctx.fillRect(0, 0, Wd, traceHd)
-      const name = resolveColormap(paletteRef.current, themeRef.current, nightRef.current, skinRef.current)
-      const gk = `${name}:${traceHd}`
-      if (!gradCache || gk !== gradKey) {
-        const c0 = sampleLut(name, 0.3)
-        const c1 = sampleLut(name, 0.7)
-        const c2 = sampleLut(name, 1.0)
-        const g = ctx.createLinearGradient(0, traceHd, 0, 0)
-        g.addColorStop(0, `rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`)
-        g.addColorStop(0.6, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`)
-        g.addColorStop(1, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`)
-        traceStroke = `rgb(${c2[0]},${c2[1]},${c2[2]})`
-        gradCache = g
-        gradKey = gk
-      }
-      const grad = gradCache
-      const yFor = (t: number) => traceHd - t * (traceHd - 1)
-      // filled area under the curve
-      ctx.beginPath()
-      ctx.moveTo(0, traceHd)
-      for (let x = 0; x < Wd; x++) ctx.lineTo(x, yFor(hold[x]))
-      ctx.lineTo(Wd, traceHd)
-      ctx.closePath()
-      ctx.fillStyle = grad
-      ctx.fill()
-      // bright trace line on top of the fill
-      ctx.beginPath()
-      ctx.moveTo(0, yFor(hold[0]))
-      for (let x = 1; x < Wd; x++) ctx.lineTo(x, yFor(hold[x]))
-      ctx.strokeStyle = traceStroke
-      ctx.lineWidth = Math.max(1, scaleY)
-      ctx.stroke()
+    /** The picture, then the overlay over it. */
+    const draw = () => {
+      if (!(devW > 0 && devH > 0)) return
+      const dssOn = dssRef.current
+      const pausedNow = pausedRef.current
+      renderer.draw({
+        view: { loHz: view.loHz, hiHz: view.hiHz },
+        lut: lutRef.current,
+        // 3D maximize hides the trace so the stacked-spectrum hill uses the full panel.
+        layout: { traceH: dssOn ? 0 : Math.max(1, Math.round(devH * TRACE_FRAC)), stripH: 0, lineWidth: Math.max(1, scaleY) },
+        detector: scaleRef.current.detector,
+        mode: dssOn ? 'dss' : '2d',
+        offsetRows: pausedNow ? offsetRef.current : 0,
+        // Direction is the operator's (PHSCOPE_FLOW_KEY).
+        newestAtTop: newestAtTopRef.current,
+        // Paused = review: the trace band is the floor, as it always was while scrolled back.
+        trace: !pausedNow && traceFrame && newest ? { frame: oriented(traceFrame), range: newest.range } : null,
+      })
+      drawOverlay()
+    }
+    rebuildRef.current = draw
+
+    /** The marks over the picture: what the operator reads and aims with. Cleared every draw. */
+    const drawOverlay = () => {
+      ctx.clearRect(0, 0, devW, devH)
+      // 3D maximize: the stack fills the panel and carries no marks, as it never has.
+      if (dssRef.current || !newest) return
+      const src = newest.src
+      const Wd = devW
+      const lo = view.loHz
+      const hi = view.hiHz
+      // #215: device px per unit of OVERLAY TEXT — the pixel ratio `scaleY` carries, times the
+      // UI scale it does not. Only the plates and the frequency scale use it; the rules, ticks
+      // and the trace stay on `scaleY`, because they are graphics the operator does not read.
+      const textPx = scaleY * textScale
 
       // ---- Carrier line (Phone): the DIAL, at the 1/9 mark (USB) or the 8/9 mark (LSB) ----
       //
@@ -978,7 +838,85 @@ export function PhoneScope({
         ctx.stroke()
         ctx.setLineDash([])
       }
+    }
 
+    const measure =(entry?: ResizeObserverEntry): { dW: number; dH: number } => {
+      const dpcb = entry?.devicePixelContentBoxSize?.[0]
+      if (dpcb) return { dW: Math.max(1, dpcb.inlineSize), dH: Math.max(1, dpcb.blockSize) }
+      const dpr = window.devicePixelRatio || 1
+      return { dW: Math.max(1, Math.round(cssW * dpr)), dH: Math.max(1, Math.round(cssH * dpr)) }
+    }
+    // The overlay canvas and the renderer's host fill the same box (the canvas in flow, the host
+    // absolutely over it), so one measurement sizes both.
+    const resize = (entry?: ResizeObserverEntry) => {
+      const rect = canvas.getBoundingClientRect()
+      if ((canvas.offsetParent === null || rect.width < 2 || rect.height < 2) && devW > 0) return
+      cssW = Math.max(1, rect.width)
+      cssH = Math.max(1, rect.height)
+      textScale = overlayTextScale(rect.width, canvas.offsetWidth)
+      const { dW, dH } = measure(entry)
+      scaleY = dH / cssH
+      if (dW === devW && dH === devH) return
+      canvas.width = dW
+      canvas.height = dH
+      devW = dW
+      devH = dH
+      // Redraw the history at the new geometry (smear-free), not a stretched old bitmap.
+      renderer.resize(dW, dH)
+      draw()
+    }
+    resize()
+    const ro = new ResizeObserver((entries) => resize(entries[0]))
+    try {
+      ro.observe(canvas, { box: 'device-pixel-content-box' })
+    } catch {
+      ro.observe(canvas)
+    }
+
+    const poll = async (myGen: number) => {
+      let wire: SpectrumFrameWire | null
+      try {
+        // Ask for the frame over the window this scope is DRAWING, not the whole 0-4000 Hz
+        // capture. Same 512 bins, same bytes — 1.5625 Hz per bin on the CW cockpit's 300-1100
+        // view instead of 7.8125.
+        //
+        // The view props are passed RAW even though they carry ABSOLUTE RF Hz when a native
+        // panadapter is the source (the cockpit passes `rfSpan`). That is deliberate: the
+        // backend already has to reject an insane span, so letting it own the one rule beats
+        // duplicating the RF test here against a source we only learn from the PREVIOUS row.
+        // An unhonourable request returns exactly what `getSpectrumRow` would have, and the
+        // frame's own loHz/hiHz below is what everything downstream reads anyway.
+        wire = await getScopeFrame(viewLoRef.current, viewHiRef.current, scaleRef.current.window, lastSeq)
+      } catch {
+        if (!control && latch.owns(myGen)) setScopeAvailable(false)
+        return
+      }
+      // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
+      // stale trace and a stale waterfall row on screen out of order.
+      if (!latch.owns(myGen)) return
+      if (wire) {
+        if (!wire.bins || wire.bins.length === 0) {
+          if (!control) setScopeAvailable(false)
+          return
+        }
+        if (!control) setScopeAvailable(true)
+        accept(wire)
+      } else if (newest) {
+        // The source has not swept since the last row. The view still follows the dial and the
+        // props, so the pointer maps against what is on screen between two sweeps.
+        project(newest.src, newest.rowLo, newest.rowHi)
+        // SMOOTH SCROLL: the newest sweep again, as a REPEAT — its own number, which is what marks
+        // it (a row carrying the number of the row before it), and its own time. ONE ROW PER SWEEP:
+        // nothing; the waterfall moves when the source does.
+        if (rowCadenceRef.current === 'smooth') commit({ ...newest.frame, tMs: Date.now() }, newest.range)
+      } else {
+        return
+      }
+      // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
+      // the mouse wheel scrolls the band back through `rebuildRef`.
+      if (pausedRef.current) return
+      holdTrace()
+      draw()
     }
 
     const loop = (now: number) => {
@@ -999,7 +937,7 @@ export function PhoneScope({
         const myGen = latch.begin(now)
         if (myGen !== null) {
           acc = 0
-          drawRow(myGen)
+          poll(myGen)
             .catch(() => {})
             .finally(() => latch.end(myGen))
         }
@@ -1012,6 +950,10 @@ export function PhoneScope({
       running = false
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       ro.disconnect()
+      rebuildRef.current = null
+      rendererRef.current = null
+      // Hands a WebGL2 context back at once (browsers cap live contexts) and takes the canvas out.
+      renderer.destroy()
     }
     // run once; live props read via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1301,8 +1243,6 @@ export function PhoneScope({
     else onTuneRef.current?.({ dialHz: Math.round(r.dialHz), kind: 'click' })
   }
 
-  /** The analysis window in force — its width plate and its tooltip key. */
-  const win = SCOPE_WINDOWS.find((w) => w.id === scopeWin)
   // Real CAT S-meter (dB rel S9). Absent when the rig doesn't report STRENGTH, or during
   // TX (STRENGTH is RX-only) → the meter reads "—" rather than faking a level.
   const sm = smeterDb != null && !transmitting ? sMeterDisplay(smeterDb) : null
@@ -1373,8 +1313,8 @@ export function PhoneScope({
             min={-1}
             max={1}
             step={0.05}
-            value={gain}
-            onChange={(e) => setGain(Number(e.target.value))}
+            value={scale.gain}
+            onChange={(e) => setScale({ gain: Number(e.target.value) })}
             aria-label={t('scope.gain.aria')}
           />
         </label>
@@ -1386,27 +1326,23 @@ export function PhoneScope({
             min={-1}
             max={1}
             step={0.05}
-            value={zero}
-            onChange={(e) => setZero(Number(e.target.value))}
+            value={scale.zero}
+            onChange={(e) => setScale({ zero: Number(e.target.value) })}
             aria-label={t('scope.zero.aria')}
           />
         </label>
+        {/* The ⚙ strip's toggle: the analysis window, averaging, detector and slow-scope look are
+            set once and left, so they sit one click away instead of crowding this row. */}
         <button
           type="button"
-          className={`ph-scope-btn${scopeWin !== 'balanced' ? ' on' : ''}`}
-          disabled={!control}
-          aria-label={control ? t('scope.resolution.aria', { width: win?.label ?? '' }) : t('remote.scopeFollowsStation')}
-          title={!control ? t('remote.scopeFollowsStation') : win ? t(win.titleKey) : undefined}
-          onClick={() => {
-            if (!control) return
-            const i = SCOPE_WINDOWS.findIndex((w) => w.id === scopeWin)
-            const next = SCOPE_WINDOWS[(i + 1) % SCOPE_WINDOWS.length].id
-            setScopeWin(next)
-            scopeWinRef.current = next
-            surfaceSet(PHSCOPE_WIN_KEY, next)
-          }}
+          className={`ph-scope-btn${gear ? ' on' : ''}`}
+          aria-expanded={gear}
+          aria-controls={gearId}
+          aria-label={t('scope.gear.aria')}
+          title={t('scope.gear.title')}
+          onClick={() => setGear(!gear)}
         >
-          {control ? win?.label : t('remote.stationScope')}
+          ⚙
         </button>
         <button
           type="button"
@@ -1454,7 +1390,33 @@ export function PhoneScope({
           {newestAtTop ? t('scope.flow.down.label') : t('scope.flow.up.label')}
         </button>
       </div>
+      {gear && (
+        <div className="ph-scope-gear" id={gearId}>
+          <ScaleStrip settings={scale} onChange={setScale} windowControl control={control} />
+          <button
+            type="button"
+            className={`ph-scope-btn${rowCadence === 'sweep' ? ' on' : ''}`}
+            aria-pressed={rowCadence === 'sweep'}
+            title={rowCadence === 'sweep' ? t('scope.rows.sweep.title') : t('scope.rows.smooth.title')}
+            onClick={() => {
+              const next: RowCadence = rowCadence === 'sweep' ? 'smooth' : 'sweep'
+              setRowCadence(next)
+              rowCadenceRef.current = next
+              surfaceSet(PHSCOPE_ROWS_KEY, next)
+            }}
+          >
+            {rowCadence === 'sweep' ? t('scope.rows.sweep.label') : t('scope.rows.smooth.label')}
+          </button>
+        </div>
+      )}
       <div className="ph-scope-canvas-wrap">
+        {/* The renderer's canvas goes here, under the overlay; it never takes a pointer event. */}
+        <div
+          ref={renderHostRef}
+          className="ph-scope-render"
+          style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
+          aria-hidden="true"
+        />
         <canvas
           ref={canvasRef}
           className={`ph-scope-canvas${tunable ? ' tunable' : ''}`}
@@ -1468,12 +1430,11 @@ export function PhoneScope({
           onWheel={(e) => {
             // Only in pause/review mode: wheel up = back in time, down = toward live.
             if (!pausedRef.current) return
-            const h = historyRef.current
             // Wheel-back follows the scroll direction, exactly as the FT8 waterfall's does.
             const back = newestAtTopRef.current ? e.deltaY > 0 : e.deltaY < 0
             const step = back ? 3 : -3
             const cur = offsetRef.current
-            const next = Math.max(0, Math.min(h.maxOffset(1), cur + step))
+            const next = Math.max(0, Math.min(Math.max(0, (rendererRef.current?.rows ?? 0) - 1), cur + step))
             if (next !== cur) {
               offsetRef.current = next
               rebuildRef.current?.()

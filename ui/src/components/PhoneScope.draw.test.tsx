@@ -9,10 +9,11 @@
 //
 // WHY THIS TEST CAN EXIST AT ALL. jsdom has no 2D canvas, so every other PhoneScope test stops
 // at `getContext('2d') === null` before the draw path runs (see Waterfall.flow.test.tsx, which
-// says so). But PhoneScope's context surface is thirteen methods wide and it reads none of them
-// back, so a hand-written recording fake is a faithful stand-in — not a mock of the thing under
-// test, just of the paint target. What is measured here is real: the component's own effect,
-// its own rAF loop, its own drawRow.
+// says so). But the scope's context surface — its overlay's and the renderer's canvas-2D path's,
+// which is the one a 2D context gets (`webgl2` answers null here) — is a few methods wide and
+// reads none of them back, so a hand-written recording fake is a faithful stand-in — not a mock of
+// the thing under test, just of the paint target. What is measured here is real: the component's
+// own effect, its own rAF loop, its own poll, and the renderer's own draw.
 //
 // Geometry in jsdom is 1x1 (getBoundingClientRect is all zeros, clamped to 1), which is exactly
 // why this asserts a RATIO and never a duration or a pixel. The carrier-axis block at the bottom
@@ -22,9 +23,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 import { TRACE_HOLD_MS } from '../waterfall'
-import { sampleLut, type ColormapName } from '../colormaps'
+import { type ColormapName } from '../colormaps'
 import { PALETTE_EVENT } from '../usePaletteRoles'
-import { WaterfallHistory } from '../waterfallHistory'
+import { bakeLut } from '../waterfall'
+import { TRACE_STOPS } from '../spectrum/canvas2d'
+import { SpectrumRing } from '../spectrum/ring'
 
 /** A 512-bin row with one carrier, shaped like what the engine publishes. */
 const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
@@ -35,18 +38,26 @@ let spanAsked: [number, number] | null = null
  *  test here assumes; the native-panadapter tests swap in a real RF extent. */
 let rowShape: { loHz: number; hiHz: number; source: string } = { loHz: 0, hiHz: 4000, source: 'rx' }
 vi.mock('../api', () => ({
-  getScopeRow: (_tx: boolean, loHz: number, hiHz: number) => {
+  getScopeFrame: (loHz: number, hiHz: number) => {
     rowsServed++
     spanAsked = [loHz, hiHz]
     // Answer WIDER than asked — the real backend's refusal path (native RF live, span not a
     // sane audio window, narrow row not produced yet). The row states its own extent, and
-    // that extent is what everything downstream must read.
-    return Promise.resolve({ row: ROW, ...rowShape })
+    // that extent is what everything downstream must read. Every answer is a new frame.
+    const rf = rowShape.source === 'civ'
+    return Promise.resolve({
+      seq: rowsServed,
+      tMs: Date.now(),
+      bins: ROW,
+      scale: rf ? { kind: 'relative' } : { kind: 'dbfs', loDb: -120, hiDb: 0 },
+      ...rowShape,
+    })
   },
 }))
 
-/** One recorded path op — the method and the coordinates it was handed. */
-type Op = { op: string; args: number[] }
+/** One recorded path op — the method and the coordinates it was handed (and, for text, what it
+ *  wrote). */
+type Op = { op: string; args: number[]; text?: string }
 
 /** Records the calls PhoneScope makes; every method it uses is listed explicitly.
  *  The path methods record their ARGUMENTS too: they used to be no-ops, which made every
@@ -75,15 +86,25 @@ function recordingCtx() {
       return g
     },
     fillRect: () => bump('fillRect'),
+    clearRect: () => bump('clearRect'),
     putImageData: () => bump('putImageData'),
     beginPath: () => bump('beginPath'),
     closePath: () => bump('closePath'),
     moveTo: (x: number, y: number) => rec('moveTo', x, y),
     lineTo: (x: number, y: number) => rec('lineTo', x, y),
-    fillText: (_t: string, x: number, y: number) => rec('fillText', x, y),
+    fillText: (text: string, x: number, y: number) => {
+      bump('fillText')
+      ops.push({ op: 'fillText', args: [x, y], text })
+    },
+    measureText: (t: string) => ({ width: t.length * 6 }),
     fill: () => bump('fill'),
     stroke: () => bump('stroke'),
     setLineDash: () => {},
+    // The renderer's trace is clipped to its band.
+    save: () => {},
+    restore: () => {},
+    rect: () => {},
+    clip: () => {},
   }
   return { ctx, calls, ops }
 }
@@ -102,18 +123,25 @@ beforeEach(() => {
   const rec = recordingCtx()
   calls = rec.calls
   ops = rec.ops
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
-    rec.ctx as unknown as CanvasRenderingContext2D,
-  )
-  // jsdom ships no ImageData constructor; the retained waterfall buffer needs one.
+  // A 2D paint target only: `webgl2` answers null, so the renderer draws on its canvas-2D path.
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((kind: string) =>
+    kind === '2d' ? rec.ctx : null) as unknown as HTMLCanvasElement['getContext'])
+  // jsdom ships no ImageData constructor; the renderer's retained waterfall band needs one, in
+  // both of its forms: (width, height) and (data, width, height).
   globalThis.ImageData = class {
     data: Uint8ClampedArray
     width: number
     height: number
-    constructor(d: Uint8ClampedArray, w: number, h: number) {
-      this.data = d
-      this.width = w
-      this.height = h
+    constructor(a: Uint8ClampedArray | number, b: number, c?: number) {
+      if (typeof a === 'number') {
+        this.width = a
+        this.height = b
+        this.data = new Uint8ClampedArray(a * b * 4)
+      } else {
+        this.data = a
+        this.width = b
+        this.height = c ?? a.length / 4 / b
+      }
     }
   } as unknown as typeof ImageData
   // jsdom implements neither of these; the component reads both on mount.
@@ -174,8 +202,9 @@ describe('rig scope per-row work', () => {
     // scope has pause + wheel-scrollback, and scrollback could therefore never widen: the data
     // outside the view was not merely hidden, it was never stored.
     const pushes: Array<{ n: number; lo: number; hi: number }> = []
-    vi.spyOn(WaterfallHistory.prototype, 'push').mockImplementation(function (row, loHz, hiHz) {
-      pushes.push({ n: row.length, lo: loHz, hi: hiHz })
+    vi.spyOn(SpectrumRing.prototype, 'push').mockImplementation(function (frame) {
+      pushes.push({ n: frame.bins.length, lo: frame.loHz, hi: frame.hiHz })
+      return 0
     })
     render(<PhoneScope transmitting={false} theme="dark" viewLoHz={300} viewHiHz={1100} />)
     await runFrames(300)
@@ -273,7 +302,7 @@ describe('carrier-centered Phone axis', () => {
     // The line is drawn from axis coordinate 0, not from a second placement constant — so
     // it CANNOT disagree with the axis the row is painted on, whichever mark that puts it at.
     expect(verticalRules(), 'the carrier line lands on the 1/9 mark').toContain(DIAL_X_USB)
-    const label = ops.filter((o) => o.op === 'fillText')
+    const label = ops.filter((o) => o.text === 'DIAL')
     expect(label.length, 'the line is labelled, like a rig marks its dial').toBeGreaterThan(0)
     expect(Math.abs(label[0].args[0] - DIAL_X_USB), 'the label sits at the line').toBeLessThan(12)
     // The guard band is DISPLAY-ONLY. Widening the REQUEST to cover it would mean asking for
@@ -407,7 +436,7 @@ describe('the dial mark on a native RF panadapter', () => {
     // mark lands mid-canvas. What is asserted is that it lands ON THE DIAL, whatever the
     // window arithmetic decides — the x is derived from the same lo/hi the row was painted
     // with, so it cannot disagree with the picture.
-    const label = ops.filter((o) => o.op === 'fillText')
+    const label = ops.filter((o) => o.text === 'DIAL')
     expect(label.length, 'the line is labelled, like a rig marks its dial').toBeGreaterThan(0)
     const labelX = label[0].args[0]
     expect(
@@ -426,7 +455,9 @@ describe('the dial mark on a native RF panadapter', () => {
     await runFrames(300)
 
     expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
-    expect(ops.filter((o) => o.op === 'fillText'), 'nothing may be labelled DIAL').toHaveLength(0)
+    expect(ops.filter((o) => o.op === 'fillText' && o.text !== 'DIAL').length, 'control: the scale was labelled')
+      .toBeGreaterThan(0)
+    expect(ops.filter((o) => o.text === 'DIAL'), 'nothing may be labelled DIAL').toHaveLength(0)
   })
 
   it('does not mark a dial that is outside the window', async () => {
@@ -448,7 +479,9 @@ describe('the dial mark on a native RF panadapter', () => {
     await runFrames(300)
 
     expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
-    expect(ops.filter((o) => o.op === 'fillText'), 'a dial off the row must not be drawn').toHaveLength(0)
+    expect(ops.filter((o) => o.op === 'fillText' && o.text !== 'DIAL').length, 'control: the scale was labelled')
+      .toBeGreaterThan(0)
+    expect(ops.filter((o) => o.text === 'DIAL'), 'a dial off the row must not be drawn').toHaveLength(0)
   })
 })
 
@@ -457,7 +490,8 @@ describe('Night (Settings ▸ Appearance ▸ Workspace ▸ Night)', () => {
   // that is Amber CRT; a palette picked by name is a choice Night never overrides. Observed on
   // the trace gradient, whose stops are sampled from whichever colormap the scope resolved.
   const stopsOf = (name: ColormapName) => {
-    const [c0, c1, c2] = [0.3, 0.7, 1.0].map((t) => sampleLut(name, t))
+    const lut = bakeLut(name)
+    const [c0, c1, c2] = TRACE_STOPS.map((i) => [lut[i * 4], lut[i * 4 + 1], lut[i * 4 + 2]])
     return [`rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`]
   }
   const night = () =>
@@ -497,7 +531,8 @@ describe('a built-in theme (Settings ▸ Appearance ▸ Theme)', () => {
   // Operator pick of 2026-09-27, "Yes, on Auto": an Auto scope paints the theme's own palette
   // (features/skins.ts); a palette picked by name stays put. Observed on the trace gradient.
   const stopsOf = (name: ColormapName) => {
-    const [c0, c1, c2] = [0.3, 0.7, 1.0].map((t) => sampleLut(name, t))
+    const lut = bakeLut(name)
+    const [c0, c1, c2] = TRACE_STOPS.map((i) => [lut[i * 4], lut[i * 4 + 1], lut[i * 4 + 2]])
     return [`rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`]
   }
   const skin = (id: string) =>

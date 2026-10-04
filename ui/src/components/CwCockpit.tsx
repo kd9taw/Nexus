@@ -1977,6 +1977,7 @@ export function CwCockpit({
             scope is streaming, in which case we show the real RF spectrum around the dial. The
             dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. */}
         <PhoneScope
+          cockpit="cw"
           active={active && details}
           transmitting={snap.radio.transmitting}
           theme={theme}

@@ -10,10 +10,15 @@
 //
 // The page reads its job from the URL and reports through `window.__harness`, which run.mjs polls
 // over the DevTools protocol. Modes: `backend`, `pixel`, `cadence`, `perf`, `ipc` (see run.mjs).
+//
+// PhoneScope draws through the spectrum renderer, on a canvas of the renderer's own under its overlay,
+// so its picture is read from THAT canvas (WebGL2 or canvas-2D, whichever is drawing) by copying it
+// into a 2D one; the Waterfall's rows are read from its own canvas the same way.
 import '../src/styles.css'
 import { createRoot } from 'react-dom/client'
 import { PhoneScope } from '../src/components/PhoneScope'
 import { Waterfall } from '../src/components/Waterfall'
+import { SpectrumRing } from '../src/spectrum/ring'
 import { bakeLut, resolveColormap } from '../src/waterfall'
 import { WF_PALETTE_KEY } from '../src/waterfallPalette'
 import { axis, capability, loss, render, rperf } from './renderer'
@@ -64,6 +69,19 @@ const THEME = 'dark'
 
 // The palette is pinned, not left to the default, so a change of default is not a fixture failure.
 localStorage.setItem(WF_PALETTE_KEY, palette)
+// PhoneScope's slow-scope look (`smooth`, the default, or `sweep`), when the probe names one.
+const rowsLook = q.get('rows')
+if (rowsLook) localStorage.setItem('nexus.phonescope.rows', rowsLook)
+
+// The renderer draws WebGL2 without preserving its drawing buffer, so a picture read in a later task
+// than the one that drew it could come back blank. The probes that read PhoneScope's picture ask for
+// a preserved buffer instead: the same pixels, kept until the next draw.
+if (mode === 'pixel' || mode === 'cadence') {
+  const getContext = HTMLCanvasElement.prototype.getContext as (this: HTMLCanvasElement, kind: string, attrs?: object) => unknown
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, attrs?: object) {
+    return getContext.call(this, kind, kind === 'webgl2' ? { ...attrs, preserveDrawingBuffer: true } : attrs)
+  } as typeof HTMLCanvasElement.prototype.getContext
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const frame = () => new Promise<number>((r) => requestAnimationFrame(r))
@@ -165,15 +183,19 @@ function installIpc(answer: (drawn: Drawn) => Answer): void {
  *  height follows fonts), so a stored picture has the same size on every machine. */
 type Shape = 'fixed' | 'cadence' | 'viewport'
 
-function mount(shape: Shape, opts: { fixedWindow?: boolean; rowMs?: number } = {}): void {
+function mount(shape: Shape, opts: { fixedWindow?: boolean; rowMs?: number; stillTrace?: boolean } = {}): void {
   const host = document.getElementById('root')!
   host.className = `hx-${shape}`
+  // A still trace: no peak hold and no averaging, so the trace is the last row's own shape. Both
+  // run on the REAL clock between rows, and a residue of e^-8 of an earlier row, timed by the clock,
+  // still moves a WebGL2 trace's anti-aliased edge by a level on a pixel or two from run to run.
+  if (opts.stillTrace) localStorage.setItem('nexus.scope.phone', JSON.stringify({ averageMs: 0 }))
   const el =
     comp === 'phonescope' ? (
       // The native-RF props the Phone cockpit passes with its "Full" span (the whole sweep);
       // on an audio row they are the plain 0–4 kHz window. No dial, marker or carrier line, so
       // nothing is drawn as text over the picture.
-      <PhoneScope transmitting={false} theme={THEME} viewLoHz={-1e9} viewHiHz={1e9} />
+      <PhoneScope transmitting={false} theme={THEME} viewLoHz={-1e9} viewHiHz={1e9} traceHoldMs={opts.stillTrace ? 0 : undefined} />
     ) : (
       <Waterfall
         transmitting={false}
@@ -187,16 +209,31 @@ function mount(shape: Shape, opts: { fixedWindow?: boolean; rowMs?: number } = {
   createRoot(host).render(el)
 }
 
-/** The canvas the waterfall rows land on (the Waterfall's overlay canvas is a separate layer). */
+/** The canvas the waterfall rows land on: PhoneScope's renderer canvas (the one drawing now, under
+ *  the overlay), or the Waterfall's own (its overlay canvas is a separate layer). */
 function rowCanvas(): HTMLCanvasElement {
-  const sel = comp === 'phonescope' ? '.ph-scope-canvas' : '.waterfall-canvas'
-  const cv = document.querySelector<HTMLCanvasElement>(sel)
-  if (!cv) throw new Error(`no ${sel} mounted`)
+  if (comp === 'phonescope') {
+    const cv = [...document.querySelectorAll<HTMLCanvasElement>('.ph-scope-render canvas')].find((c) => c.style.visibility !== 'hidden')
+    if (!cv) throw new Error('no renderer canvas in .ph-scope-render')
+    return cv
+  }
+  const cv = document.querySelector<HTMLCanvasElement>('.waterfall-canvas')
+  if (!cv) throw new Error('no .waterfall-canvas mounted')
   return cv
 }
 
+/** A canvas's pixels, whatever its context: copied into a 2D canvas and read there. */
+function pixelsOf(cv: HTMLCanvasElement): Uint8ClampedArray {
+  const c = document.createElement('canvas')
+  c.width = cv.width
+  c.height = cv.height
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(cv, 0, 0)
+  return ctx.getImageData(0, 0, c.width, c.height).data
+}
+
 function capture(cv: HTMLCanvasElement): { w: number; h: number; b64: string } {
-  const px = cv.getContext('2d')!.getImageData(0, 0, cv.width, cv.height).data
+  const px = pixelsOf(cv)
   let s = ''
   for (let i = 0; i < px.length; i += 0x8000) s += String.fromCharCode(...px.subarray(i, i + 0x8000))
   return { w: cv.width, h: cv.height, b64: btoa(s) }
@@ -240,7 +277,7 @@ async function pixel() {
   })
   // Rows land on the canvas 1:1 with answers whatever the cadence, so the FT waterfall is run at
   // the 50 ms its live-instrument hosts use rather than its 120 ms default: same picture, sooner.
-  mount('fixed', { rowMs: 50 })
+  mount('fixed', { rowMs: 50, stillTrace: true })
   // The ask after the last row starts only once that row's draw has finished.
   await until(() => refused, 60_000, `${total} rows`)
   await frame()
@@ -272,7 +309,7 @@ function lutIndexer() {
 /** Read every pixel row of the canvas as a barcode: a sweep number, the terminator, or nothing. */
 function decodeRows(cv: HTMLCanvasElement): (number | 'end' | null)[] {
   const W = cv.width
-  const px = cv.getContext('2d')!.getImageData(0, 0, W, cv.height).data
+  const px = pixelsOf(cv)
   const index = lutIndexer()
   // The drawn view is the whole row for every mount here (PhoneScope's Full span, the Waterfall's
   // pinned 0–4 kHz window), so a slot's x is its fraction of the row.
@@ -306,7 +343,16 @@ function decodeRows(cv: HTMLCanvasElement): (number | 'end' | null)[] {
  *
  * Reported: rows committed, the distinct sweeps they show, and REPEATS — a committed row showing
  * the same sweep as the row before it, i.e. the waterfall advancing with no new data. The stand-in's
- * own log is the cross-check: today every answered ask is one committed row.
+ * own log is the cross-check: every answered ask is one committed row, and under PhoneScope's smooth
+ * scroll so is every ask the source had nothing new for.
+ *
+ * MARKED or not. Where the component draws through the spectrum renderer, every row it commits is
+ * logged as it enters the renderer's ring, with the frame number it carries; the band's rows are
+ * matched to that log newest first. A repeat is MARKED when its ring row carries the number of the
+ * row before it (smooth scroll's repeat: the sweep again, under its own number), and UNMARKED when
+ * the number differs — a row that claims to be new data and shows an old sweep, which is the defect.
+ * A row whose number is not the sweep its pixels show is MISALIGNED: the history would be lying
+ * about what is on screen.
  */
 async function cadence() {
   const set = TIMED_SETS[q.get('set') ?? '']
@@ -323,6 +369,15 @@ async function cadence() {
   const terminatorTail = frameTail(end)
   // The log holds the asks that were answered with a sweep: a frame ask answered null is no row.
   const log: { tMs: number; seq: number }[] = []
+  /** Frame asks inside the window the source had nothing new for (answered null). */
+  let unchanged = 0
+  // Every row entering a renderer's ring, in commit order, with the number it carries.
+  const ring: number[] = []
+  const push = SpectrumRing.prototype.push
+  SpectrumRing.prototype.push = function (this: SpectrumRing, frame, range) {
+    ring.push(frame.seq)
+    return push.call(this, frame, range)
+  }
   let t0 = -1
   let lastSeq = -1
   let endServed = false
@@ -332,7 +387,10 @@ async function cadence() {
     if (t0 < 0) t0 = now
     if (now - t0 < windowMs) {
       const due = Math.min(published - 1, Math.floor(((now - t0) * set.rate) / 1000))
-      if (drawn !== undefined && due + 1 <= drawn) return 'unchanged'
+      if (drawn !== undefined && due + 1 <= drawn) {
+        unchanged++
+        return 'unchanged'
+      }
       // The positive control: the ask numbered `plant` gets the sweep before it AGAIN — one extra
       // row with no new data, which the probe must find. A frame ask gets it under the new sweep's
       // number, the one way such a row could reach a scope that commits only new frames.
@@ -368,6 +426,23 @@ async function cadence() {
     if (seqs[i] === seqs[i + 1]) repeats.push({ row: i + 1, seq: seqs[i] })
     if (seqs[i] < seqs[i + 1]) outOfOrder++
   }
+  // The band against the ring, newest first: the ring's last row is the terminator (its number is
+  // `published + 1`), and band row i is the ring row i + 1 before it. A sweep's number is its index
+  // + 1 here, so a row whose pixels show sweep k must carry k + 1.
+  let marks: { rows: number; terminator: boolean; misaligned: number; marked: number; unmarked: number; unmarkedRows: number[] } | null = null
+  if (ring.length > 0) {
+    const t = ring.length - 1
+    const at = (i: number) => ring[t - 1 - i]
+    let misaligned = 0
+    let marked = 0
+    const unmarkedRows: number[] = []
+    for (let i = 0; i < seqs.length; i++) if (at(i) !== seqs[i] + 1) misaligned++
+    for (const r of repeats) {
+      if (at(r.row - 1) === at(r.row)) marked++
+      else unmarkedRows.push(r.row)
+    }
+    marks = { rows: ring.length, terminator: ring[t] === published + 1, misaligned, marked, unmarked: unmarkedRows.length, unmarkedRows: unmarkedRows.slice(0, 5) }
+  }
   // How often the component asks: the row cadence it actually runs at, which is not its constant.
   const askGaps = log.slice(1).map((e, i) => e.tMs - log[i].tMs)
   const apiDistinct = new Set(log.map((e) => e.seq)).size
@@ -385,7 +460,8 @@ async function cadence() {
     repeatRows: repeats.slice(0, 5),
     outOfOrder,
     askGapMs: dist(askGaps),
-    api: { answered: log.length, distinct: apiDistinct, repeats: apiRepeats },
+    api: { answered: log.length, distinct: apiDistinct, repeats: apiRepeats, unchanged },
+    marks,
     unexpected,
   }
 }
@@ -543,7 +619,7 @@ const MODES: Record<string, () => Promise<unknown>> = {
   cadence,
   perf,
   ipc,
-  // The renderer core (ui/src/spectrum), which no component mounts yet: renderer.ts.
+  // The renderer core (ui/src/spectrum), mounted bare: renderer.ts.
   render: () => render(q, palette),
   capability: () => capability(q),
   loss: () => loss(q, palette),

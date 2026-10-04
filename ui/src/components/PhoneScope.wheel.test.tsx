@@ -11,9 +11,11 @@ import { PhoneScope } from './PhoneScope'
 import { t } from '../i18n'
 
 // The scope never draws here: no rows, and no 2D context, so its loop returns before it starts.
-vi.mock('../api', () => ({ getScopeRow: () => new Promise(() => {}) }))
+vi.mock('../api', () => ({ getScopeFrame: () => new Promise(() => {}) }))
 
 beforeEach(() => {
+  // G and Z are the cockpit's persisted scale record now, so one test's notch must not start the next.
+  localStorage.clear()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 })

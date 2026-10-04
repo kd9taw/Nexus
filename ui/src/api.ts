@@ -54,6 +54,7 @@ import type {
   Settings,
   SourceKind,
   Spectrum,
+  SpectrumFrameWire,
   Tier,
   VoiceMessage,
   OtaMapSpot,
@@ -3386,6 +3387,43 @@ export async function getScopeRow(
 ): Promise<Spectrum> {
   if (remoteApplicationTransport()) return invoke<Spectrum>('get_scope_snapshot')
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
+}
+
+/**
+ * The rig scope's newest FRAME over the window it is drawing, or null when the source has not
+ * advanced past `lastSeq`, the number of the frame the scope drew last (0 = none yet).
+ *
+ * `get_scope_row`'s twin: the same span request, window and fallback, plus the frame's number, time
+ * and scale. A scope that commits a waterfall row only when the number advances no longer scrolls
+ * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
+ * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
+ * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
+ *
+ * The Remote application transport has no frame command (its wire carries the row), so there the
+ * row comes back as an unsequenced frame, and every answer is a new row, as before. Its scale is
+ * what each source's producer states: the audio feed's dBFS axis, a radio's own relative scale.
+ */
+export async function getScopeFrame(
+  loHz: number,
+  hiHz: number,
+  window: ScopeWindow | undefined,
+  lastSeq: number,
+): Promise<SpectrumFrameWire | null> {
+  if (remoteApplicationTransport()) {
+    const s = await invoke<Spectrum>('get_scope_snapshot')
+    const source = s.source ?? ''
+    return {
+      seq: 0,
+      tMs: Date.now(),
+      source,
+      // The legacy extent, for a backend too old to report one (PhoneScope's own fallback).
+      loHz: s.loHz ?? 200,
+      hiHz: s.hiHz ?? 2900,
+      scale: source === 'flex' || source === 'civ' || source === 'yaesu' ? { kind: 'relative' } : { kind: 'dbfs', loDb: -120, hiDb: 0 },
+      bins: s.row ?? [],
+    }
+  }
+  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
 }
 
 /**

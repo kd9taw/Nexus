@@ -103,6 +103,9 @@ export const PER_SURFACE = [
   'nexus.ota.sortKey',
   'nexus.phonescope.dss',
   'nexus.phonescope.flow',
+  // The rig scope's slow-scope look (smooth scroll or a row per sweep): like 3D and flow, a look of
+  // THIS window's scope, so a torn-off cockpit can show the other one beside it.
+  'nexus.phonescope.rows',
   'nexus.phonescope.win',
   'nexus.roster.filters',
   'nexus.sats.columns',

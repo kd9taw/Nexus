@@ -499,7 +499,6 @@ export const EN = {
   "remote.memoriesUnavailable": "Remote memories are not connected yet.",
   "remote.rotatorUnavailable": "Remote rotator status and control are not connected yet.",
   "remote.scopeFollowsStation": "Scope analysis follows Nexus at the shack. Adjust resolution there.",
-  "remote.stationScope": "Station",
   "remote.scopeUnavailable": "Scope data unavailable.",
   "remote.scopeClick": "Click a signal to tune it",
   "remote.cwUnavailable": "CW decoder data unavailable.",
@@ -10267,15 +10266,8 @@ export const EN = {
 
   // ── The rig scope (`PhoneScope.tsx`, shared by the Phone and CW cockpits) ────────────
   // ⚠️ The three window WIDTHS (23/12/47 Hz), every S-unit and dB reading, the audio and RF
-  // spans, the `FLEX RF` / `CI-V RF` feed names and the `DIAL` plate drawn into the bitmap are
+  // spans, the `FLEX RF` / `CI-V RF` feed names and the `DIAL` plate drawn over the scope are
   // measurements and product names, and stay in the component.
-  'scope.window.balanced.title':
-    'Resolution: Balanced — 2048-point window, 171 ms. The default. A 25 WPM dit is shorter than this window, so CW keying reads as a solid bar. Click for sharper.',
-  'scope.window.sharp.title':
-    'Resolution: Sharp — 4096-point window, 341 ms. Half the carrier width, at double the time smear. Best for picking a weak carrier out of a crowded passband. Click for faster.',
-  'scope.window.fast.title':
-    'Resolution: Fast — 1024-point window, 85 ms. Carriers read twice as wide, but keying and speech onsets actually resolve. Click to return to the default.',
-  'scope.resolution.aria': 'Scope resolution {{width}} — click to change',
   // `{{reading}}` is the S-unit plate (S7, S9+20) and `{{db}}` the CAT reading it came from.
   'settings.rigControl.ratedWatts.label': 'Rated power (W)',
   'settings.rigControl.ratedWatts.hint':
@@ -10329,6 +10321,15 @@ export const EN = {
   'scope.strip.detector.average': 'Avg',
   'scope.strip.detector.average.title':
     'Average — where one pixel covers several frequency bins, draw their mean power. A smoother noise floor; a narrow carrier in a wide view reads lower.',
+  // The ⚙ toggle in the scope's header row, and the slow-scope look in the strip (`PhoneScope.tsx`).
+  'scope.gear.aria': 'Display settings',
+  'scope.gear.title': 'Display settings — resolution, smoothing, the detector, and how a slow scope scrolls',
+  'scope.rows.smooth.label': 'Smooth scroll',
+  'scope.rows.sweep.label': 'Row per sweep',
+  'scope.rows.smooth.title':
+    "Smooth scroll — the waterfall moves at a steady rate. When the radio's scope sweeps slower than that, the newest sweep is repeated until the next one arrives, and each repeat is recorded as one. Click for one row per sweep.",
+  'scope.rows.sweep.title':
+    'One row per sweep — the waterfall moves only when the radio sends a new sweep, so a slow scope scrolls slowly, in steps, and every row is new. Click for smooth scroll.',
 
   // ── The MSK144 Fast Graph ───────────────────────────────────────────────────────────
   // The callsigns and the second ticks drawn on it are data and a scale.

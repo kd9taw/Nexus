@@ -5,8 +5,10 @@ import { PhoneScope } from './PhoneScope'
 
 // A paint target and a sampled radio row, not a replacement scope. The actual
 // draw loop, pointer handling, signal detector and sideband math all execute.
-vi.mock('../api', () => ({ getScopeRow: vi.fn(async () => ({ source: 'rx', loHz: 0, hiHz: 4000,
-  row: Array.from({ length: 512 }, (_, i) => Math.abs(i - 200) <= 2 ? 0.9 : 0.1) })) }))
+let seq = 0
+vi.mock('../api', () => ({ getScopeFrame: vi.fn(async () => ({ seq: ++seq, tMs: Date.now(), source: 'rx', loHz: 0, hiHz: 4000,
+  scale: { kind: 'dbfs', loDb: -120, hiDb: 0 },
+  bins: Array.from({ length: 512 }, (_, i) => Math.abs(i - 200) <= 2 ? 0.9 : 0.1) })) }))
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
@@ -18,13 +20,22 @@ beforeEach(() => {
   })
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('ImageData', class {
-    constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    data: Uint8ClampedArray; width: number; height: number
+    // Both forms: (width, height), which the renderer's band takes, and (data, width, height).
+    constructor(a: Uint8ClampedArray | number, b: number, c?: number) {
+      if (typeof a === 'number') { this.width = a; this.height = b; this.data = new Uint8ClampedArray(a * b * 4) }
+      else { this.data = a; this.width = b; this.height = c ?? a.length / 4 / b }
+    }
   })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
-    fillRect() {}, putImageData() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, fillText() {}, fill() {}, stroke() {}, setLineDash() {},
+  // A 2D paint target only: `webgl2` answers null, so the renderer draws on its canvas-2D path.
+  const paint = {
+    fillRect() {}, clearRect() {}, putImageData() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, fillText() {}, fill() {}, stroke() {}, setLineDash() {},
+    save() {}, restore() {}, rect() {}, clip() {}, measureText: (t: string) => ({ width: t.length * 6 }),
     createLinearGradient: () => ({ addColorStop() {} }),
-  } as unknown as CanvasRenderingContext2D)
+  }
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((kind: string) =>
+    kind === '2d' ? paint : null) as unknown as HTMLCanvasElement['getContext'])
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0,
     width: 800, height: 200, right: 800, bottom: 200, toJSON() { return {} } })
   HTMLCanvasElement.prototype.setPointerCapture = vi.fn()
@@ -37,7 +48,7 @@ it.each(['USB', 'LSB', 'CW', 'CW-L'])('keeps the actual %s native signal target 
   const native = vi.fn(), first = vi.fn(), later = vi.fn(), begin = vi.fn(() => first)
   const base = { sideband, dialHz: 14_074_000, transmitting: false, active: true, interactive: true, theme: 'dark' as const, onTune: native }
   const ui = render(<PhoneScope {...base}/>); await draw()
-  const canvas = () => ui.container.querySelector('canvas')!
+  const canvas = () => ui.container.querySelector<HTMLCanvasElement>('canvas.ph-scope-canvas')!
   const press = () => fireEvent.pointerDown(canvas(), { button: 0, clientX: 400, clientY: 100 })
   const release = () => fireEvent.pointerUp(canvas(), { button: 0, clientX: 400, clientY: 100 })
   press(); release()
@@ -58,7 +69,7 @@ it.each(['move', 'edge', 'cancel', 'capture lost', 'blur', 'escape', 'disabled',
   const native = vi.fn(), click = vi.fn(), begin = () => click
   const base = { sideband: 'USB', dialHz: 14_074_000, transmitting: false, active: true, interactive: true, theme: 'dark' as const, onTune: native, onBeginClick: begin }
   const ui = render(<PhoneScope {...base}/>); await draw()
-  const canvas = ui.container.querySelector('canvas')!
+  const canvas = ui.container.querySelector<HTMLCanvasElement>('canvas.ph-scope-canvas')!
   fireEvent.pointerDown(canvas, { button: 0, clientX: 400, clientY: 100 })
   if (event === 'move' || event === 'edge') fireEvent.pointerMove(canvas, { button: 0, clientX: event === 'edge' ? 799 : 450, clientY: 100 })
   if (event === 'cancel') fireEvent.pointerCancel(canvas)
@@ -81,7 +92,7 @@ it('a refused press creates no capture and cannot use the later callback', async
   const native = vi.fn(), later = vi.fn()
   const base = { sideband: 'USB', dialHz: 14_074_000, transmitting: false, active: true, interactive: true, theme: 'dark' as const, onTune: native }
   const ui = render(<PhoneScope {...base} onBeginClick={() => null}/>); await draw()
-  const canvas = ui.container.querySelector('canvas')!
+  const canvas = ui.container.querySelector<HTMLCanvasElement>('canvas.ph-scope-canvas')!
   fireEvent.pointerDown(canvas, { button: 0, clientX: 400, clientY: 100 })
   expect(canvas.setPointerCapture).not.toHaveBeenCalled()
   ui.rerender(<PhoneScope {...base} onBeginClick={() => later}/>); await draw(16)
@@ -97,7 +108,7 @@ it.each([
   const base = { sideband: 'USB', dialHz: 14_074_000, transmitting: false, active: true, interactive: true,
     theme: 'dark', onTune: native, onBeginClick: () => click }
   const ui = render(<PhoneScope {...base}/>); await draw()
-  const canvas = ui.container.querySelector('canvas')!
+  const canvas = ui.container.querySelector<HTMLCanvasElement>('canvas.ph-scope-canvas')!
   const press = () => fireEvent.pointerDown(canvas, { button: 0, clientX: 400, clientY: 100 })
   const release = () => fireEvent.pointerUp(canvas, { button: 0, clientX: 400, clientY: 100 })
   press(); ui.rerender(<PhoneScope {...base} {...change}/>); await draw()
@@ -109,7 +120,7 @@ it('another pointer cannot replace or release the original signal press', async 
   const native = vi.fn(), click = vi.fn(), begin = vi.fn(() => click)
   const ui = render(<PhoneScope sideband="USB" dialHz={14_074_000} transmitting={false} active interactive
     theme="dark" onTune={native} onBeginClick={begin}/>); await draw()
-  const canvas = ui.container.querySelector('canvas')!
+  const canvas = ui.container.querySelector<HTMLCanvasElement>('canvas.ph-scope-canvas')!
   fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 400, clientY: 100 })
   fireEvent.pointerDown(canvas, { button: 0, pointerId: 2, clientX: 600, clientY: 100 })
   fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 799, clientY: 100 })
