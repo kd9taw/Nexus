@@ -300,7 +300,8 @@ fn t_keys_through_admission_and_the_readback_ends_it() {
 /// `t` follows the radio's interlock, not the session's proof of the unkey: once the radio reports
 /// READY after our `xmit 0`, `t` reads 0 although the readback has not finished. The radio loop
 /// reads `t` only while Nexus is idle, to see SOMEONE ELSE keying, and the tail of our own over
-/// is not that. The window is widened to three seconds here so the read lands inside it.
+/// is not that. The window is widened to three seconds here so the read lands inside it, and the
+/// session's unkey deadline to eight, so the widened window is still a confirmed unkey.
 #[test]
 fn t_reads_the_interlock_not_the_tail_of_our_own_readback() {
     let mut session = SimSession::v4_gui_client();
@@ -314,7 +315,9 @@ fn t_reads_the_interlock_not_the_tail_of_our_own_readback() {
         }
     }
     let sim = simulator(session, vec![]);
-    let d = daemon(&sim);
+    let mut slow = config(Vec::new());
+    slow.unkey_deadline_ms = 8000;
+    let d = FlexDaemon::start_with(sim.tcp_addr(), 0, slow).expect("the daemon starts");
     let mut c = Client::connect(&d);
     wait_session(&d, "the readback idle", |s| s.transmit_ready);
     assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
