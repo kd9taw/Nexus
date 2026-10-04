@@ -59,7 +59,7 @@ fn lan_on(s: &Shack, scratch: &Scratch) -> Lan {
     let lan = switch_for(
         s,
         scratch,
-        Arc::new(|_| Err(NoNetwork::Choose)),
+        Arc::new(|_| only(Err(NoNetwork::Choose))),
         s.shared.desk.book.clone(),
     );
     lan.turn_on(None, None).unwrap();
@@ -949,7 +949,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
         let lan = switch_for(
             &s,
             &scratch,
-            Arc::new(move |_| Ok(network)),
+            Arc::new(move |_| only(Ok(network))),
             s.shared.desk.book.clone(),
         );
         lan.turn_on(None, Some(port)).unwrap();
