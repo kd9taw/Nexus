@@ -72,6 +72,14 @@ localStorage.setItem(WF_PALETTE_KEY, palette)
 // PhoneScope's slow-scope look (`smooth`, the default, or `sweep`), when the probe names one.
 const rowsLook = q.get('rows')
 if (rowsLook) localStorage.setItem('nexus.phonescope.rows', rowsLook)
+// The spectrum renderer's hidden backend setting (src/spectrum/choose.ts). WebGL2 on this browser is
+// SwiftShader, a software rasteriser, so the renderer's own choice here is canvas-2D; PhoneScope's
+// pictures and cadence were recorded on WebGL2 and keep being checked there, by this setting. `perf`
+// is left to the renderer's choice, so it measures what an operator on this machine gets. Storage
+// outlives the page in this profile, so every page sets the key or clears it.
+const backendSetting = q.get('setting') ?? (mode === 'pixel' || mode === 'cadence' ? 'webgl2' : null)
+if (backendSetting) localStorage.setItem('nexus.spectrum.backend', backendSetting)
+else localStorage.removeItem('nexus.spectrum.backend')
 
 // The renderer draws WebGL2 without preserving its drawing buffer, so a picture read in a later task
 // than the one that drew it could come back blank. The probes that read PhoneScope's picture ask for
@@ -536,6 +544,8 @@ async function perf() {
       set: set.id,
       secs: r3(secs),
       canvas: { w: cv.width, h: cv.height },
+      // The context the picture is drawn with: the renderer's choice, for PhoneScope.
+      drawnOn: cv.getContext('webgl2') ? 'webgl2' : '2d',
       frames: stamps.length,
       fps: r3(stamps.length / secs),
       frameGapMs: dist(gaps),

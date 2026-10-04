@@ -21,7 +21,9 @@
 //   render   the renderer core (ui/src/spectrum) on BOTH backends, WebGL2 and canvas-2D: the same
 //            fixtures against stored pictures per backend, the two backends against each other,
 //            and the 3-D stack's rejection of a one-row burst.
-//   capability  which backend the renderer picks on a healthy context and on two broken ones.
+//   capability  which backend the renderer picks: canvas-2D on this software-rendered WebGL2, by the
+//            renderer string or by the timed probe; WebGL2 on a GPU's string or when asked for; and
+//            canvas-2D on two broken contexts.
 //   loss     a forced WebGL2 context loss: canvas-2D must stand in, and WebGL2 must come back with
 //            the same picture, without a reload.
 //   rperf    the renderer at 2048 bins x 2048 rows filling a 1024x768 window, beside its budget.
@@ -526,7 +528,7 @@ async function perfChecks(cdp, base) {
         const ok = s.frames > 0 && s.rows > 0
         record({ kind: 'perf', id: name, outcome: ok ? 'measured' : 'fail', ...r })
         const lf = s.longFrames ? `${s.longFrames.n} long frames (max ${s.longFrames.maxMs} ms)` : 'long frames n/a'
-        line('PERF', name, `${s.fps} fps, gap p95 ${s.frameGapMs.p95} ms, ${lf}, main ${r.mainThreadMsPerFrame} ms/frame (${r.mainThreadBusyPct}%), row ${s.rowMs.p50}/${s.rowMs.p95} ms p50/p95, canvas ${s.canvas.w}x${s.canvas.h}`, ok ? '' : 'FAIL (measured nothing)')
+        line('PERF', name, `${s.drawnOn}, ${s.fps} fps, gap p95 ${s.frameGapMs.p95} ms, ${lf}, main ${r.mainThreadMsPerFrame} ms/frame (${r.mainThreadBusyPct}%), row ${s.rowMs.p50}/${s.rowMs.p95} ms p50/p95, canvas ${s.canvas.w}x${s.canvas.h}`, ok ? '' : 'FAIL (measured nothing)')
       } finally {
         await page.close()
       }
@@ -702,26 +704,42 @@ async function renderChecks(cdp, base, backend) {
   }
 }
 
-/** The capability gate, both directions: a healthy context must get WebGL2, and each broken one
- *  must end on canvas-2D with the reason. */
+/** The probe's whole run, ms: it must stay well under 100 ms, whatever this runner's load. */
+const PROBE_BUDGET_MS = 100
+
+/** The capability gate. WebGL2 on this pinned browser is SwiftShader, a software rasteriser: the
+ *  automatic choice must be canvas-2D, by the renderer string, or by the timed probe where the
+ *  string is masked; a GPU's name must get WebGL2; asked for, by the option or the hidden setting,
+ *  WebGL2 must still be built (every WebGL2 check here depends on it); and each broken context must
+ *  end on canvas-2D with the reason, even when WebGL2 is asked for. */
 async function capabilityChecks(cdp, base) {
   const cases = [
-    { broken: 'none', want: 'webgl2', why: '' },
-    { broken: 'upload', want: 'canvas2d', why: 'self-test:' },
-    { broken: 'context', want: 'canvas2d', why: 'no WebGL2 context' },
+    { q: '', id: 'auto, software WebGL2', want: 'canvas2d', why: 'WebGL2 is software-rendered here (' },
+    { q: 'name=masked', id: 'auto, renderer string masked', want: 'canvas2d', why: 'the probe timed WebGL2 at ' },
+    { q: 'name=gpu', id: "auto, a GPU's renderer string", want: 'webgl2', why: '' },
+    { q: 'backend=webgl2', id: 'WebGL2 asked for', want: 'webgl2', why: '' },
+    { q: 'setting=webgl2', id: 'WebGL2 asked for by the hidden setting', want: 'webgl2', why: '' },
+    { q: 'name=masked&slow=canvas2d', id: 'the probe, canvas-2D made slow', want: 'webgl2', why: '', control: 'kept WebGL2: the probe measures' },
+    { q: 'backend=webgl2&break=upload', id: 'a broken upload, WebGL2 asked for', want: 'canvas2d', why: 'self-test:', control: 'refused, as it must be' },
+    { q: 'break=context', id: 'a broken context', want: 'canvas2d', why: 'no WebGL2 context', control: 'refused, as it must be' },
   ]
   for (const c of cases) {
-    const page = await openPage(cdp, `${base}/index.html?mode=capability&break=${c.broken}`)
+    const page = await openPage(cdp, `${base}/index.html?mode=capability&${c.q}`)
     let r
     try {
       r = await waitFor(page, 'done', 30_000)
     } finally {
       await page.close()
     }
-    const ok = r.backend === c.want && (c.why ? r.reason.startsWith(c.why) : r.reason === '')
-    const control = c.broken !== 'none'
-    record({ kind: control ? 'control' : 'capability', id: `capability, ${c.broken === 'none' ? 'healthy' : `broken ${c.broken}`}`, outcome: ok ? (control ? 'control-fired' : 'pass') : 'fail', detail: `${r.backend}: ${r.reason || 'no reason'}` })
-    line(control ? 'CONTROL' : 'CAPABLE', `${c.broken === 'none' ? 'a healthy context' : `a broken ${c.broken}`}`, `${r.backend}${r.reason ? ` (${r.reason})` : ''}`, ok ? (control ? 'refused, as it must be' : 'ok') : `FAIL (expected ${c.want}${c.why ? `, "${c.why}…"` : ''})`)
+    // The probe runs only where the renderer string is masked, and must be quick there (bar the
+    // control, whose canvas-2D is slow on purpose); anywhere else the string or the ask decides, with
+    // no probe.
+    const masked = c.q.includes('name=masked')
+    const probed = masked ? r.probe !== null && (c.control || r.probe.tookMs < PROBE_BUDGET_MS) : r.probe === null
+    const ok = r.backend === c.want && (c.why ? r.reason.startsWith(c.why) : r.reason === '') && probed
+    const timed = r.probe ? `; probe ${r.probe.tookMs.toFixed(1)} ms, WebGL2 ${r.probe.glMs.toFixed(2)} / canvas-2D ${r.probe.cpuMs.toFixed(2)} ms a frame` : ''
+    record({ kind: c.control ? 'control' : 'capability', id: `capability, ${c.id}`, outcome: ok ? (c.control ? 'control-fired' : 'pass') : 'fail', detail: `${r.backend}: ${r.reason || 'no reason'}${timed}`, probe: r.probe })
+    line(c.control ? 'CONTROL' : 'CAPABLE', c.id, `${r.backend}${r.reason ? ` (${r.reason})` : ''}${timed}`, ok ? (c.control ?? 'ok') : `FAIL (expected ${c.want}${c.why ? `, "${c.why}…"` : ''}${probed ? '' : masked ? `, a probe under ${PROBE_BUDGET_MS} ms` : ', no probe'})`)
   }
 }
 

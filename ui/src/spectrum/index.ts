@@ -1,8 +1,12 @@
 // The spectrum renderer, chosen and kept alive. `createSpectrumRenderer(host)` puts a canvas in the
 // host element and draws through WebGL2 or canvas-2D behind one contract (types.ts).
 //
-// CHOOSING. WebGL2 is used when a context is actually created on the canvas AND a picture drawn
-// through the real waterfall program reads back as expected (webgl2.ts `selfTest`). Never
+// CHOOSING (choose.ts). WebGL2 is used when it is the faster backend here, AND a context is actually
+// created on the canvas, AND a picture drawn through the real waterfall program reads back as
+// expected (webgl2.ts `selfTest`). Faster: a renderer string naming a software rasteriser sends
+// `auto` to canvas-2D before anything is built; where the string is masked, WebGL2 draws while a
+// timed probe runs after the first paint, and hands over to canvas-2D if the probe finds it slower.
+// An explicit `backend`, or the hidden setting, skips that question but never the self-test. Never
 // `gpu.ts`: its probe fails closed when WEBGL_debug_renderer_info is masked, which WebKitGTK does by
 // default, so it would send every Linux operator to canvas-2D whatever their GPU can do. Anything
 // else gets canvas-2D, which is a first-class path, and `reason` says why.
@@ -19,6 +23,7 @@
 // because the canvas is swapped while a context is away.
 
 import { Canvas2dBackend } from './canvas2d'
+import { askedFor, probeOnce, settled, type Verdict } from './choose'
 import { SpectrumRing } from './ring'
 import type {
   Backend,
@@ -74,8 +79,12 @@ class Renderer implements SpectrumRenderer {
   constructor(host: HTMLElement, opts: SpectrumRendererOptions) {
     this.host = host
     this.ring = new SpectrumRing(opts.depth)
-    if (opts.backend === 'canvas2d') {
+    const asked = opts.backend === 'webgl2' || opts.backend === 'canvas2d' ? opts.backend : askedFor()
+    const known = asked ? null : settled()
+    if (asked === 'canvas2d') {
       this.reason = 'canvas-2D was asked for'
+    } else if (known?.pick === 'canvas2d') {
+      this.reason = known.why
     } else {
       const canvas = newCanvas()
       const made = WebGl2Backend.create(canvas, this.ring)
@@ -87,6 +96,8 @@ class Renderer implements SpectrumRenderer {
         canvas.addEventListener('webglcontextrestored', this.onRestored)
         host.appendChild(canvas)
         this.active = made
+        // Neither asked for nor named: WebGL2 draws until the probe has had its say.
+        if (!asked && !known) void probeOnce(made).then(this.onVerdict)
       }
     }
     if (!this.gl) this.standIn()
@@ -137,6 +148,14 @@ class Renderer implements SpectrumRenderer {
     this.dropGl()
     this.dropCpu()
     this.active = null
+  }
+
+  /** The probe found canvas-2D faster: it takes over for good, drawing the same history. */
+  private readonly onVerdict = (v: Verdict | null) => {
+    if (!this.gl || v?.pick !== 'canvas2d') return
+    this.reason = v.why
+    this.dropGl()
+    this.standIn()
   }
 
   private readonly onLost = (e: Event) => {
