@@ -82,7 +82,8 @@ if (rowsLook) localStorage.setItem('nexus.phonescope.rows', rowsLook)
 // pictures and cadence were recorded on WebGL2 and keep being checked there, by this setting. `perf`
 // is left to the renderer's choice, so it measures what an operator on this machine gets. Storage
 // outlives the page in this profile, so every page sets the key or clears it.
-const backendSetting = q.get('setting') ?? (mode === 'pixel' || mode === 'cadence' ? 'webgl2' : null)
+// The offsets probe's WebGL2 arm (`backend=webgl2`) asks for WebGL2 the same way: its clicks are checked on both backends.
+const backendSetting = q.get('setting') ?? (mode === 'pixel' || mode === 'cadence' || (mode === 'offsets' && q.get('backend') === 'webgl2') ? 'webgl2' : null)
 if (backendSetting) localStorage.setItem('nexus.spectrum.backend', backendSetting)
 else localStorage.removeItem('nexus.spectrum.backend')
 
