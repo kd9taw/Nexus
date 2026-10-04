@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Spectrum harness</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #000;
+      }
+      /* Pixel fixtures: the CANVAS is pinned, not the header strip above it (its height follows
+         the fonts a machine has), so a stored picture is the same size everywhere. */
+      .hx-fixed {
+        width: 640px;
+        display: flex;
+        flex-direction: column;
+      }
+      .hx-fixed .ph-scope-canvas-wrap {
+        flex: none;
+        height: 320px;
+      }
+      .hx-fixed .wf-stage {
+        flex: none;
+        height: 240px;
+      }
+      .hx-cadence {
+        width: 1000px;
+        height: 700px;
+        display: flex;
+        flex-direction: column;
+      }
+      .hx-viewport {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
