@@ -147,6 +147,10 @@ test('every D1 migration is additive, including the approval-lifetime column', a
   assert.ok(names.includes('0008_device_key.sql'))
   assert.deepEqual(await statements('0008_device_key.sql'),
     ['ALTER TABLE devices ADD COLUMN public_key TEXT', 'ALTER TABLE enrollments ADD COLUMN public_key TEXT'])
+  // The station's own key (S3-M1) adds one nullable column and nothing else: a station from before it
+  // has none until it is updated and connects.
+  assert.ok(names.includes('0009_station_key.sql'))
+  assert.deepEqual(await statements('0009_station_key.sql'), ['ALTER TABLE stations ADD COLUMN public_key TEXT'])
 })
 
 test('staging configuration requires exact service/database scope and public Auth0 tenant values', () => {

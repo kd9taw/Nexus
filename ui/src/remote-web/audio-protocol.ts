@@ -8,6 +8,7 @@
 // monotonic mark and is used for RELATIVE spacing inside one stream only. Freshness is
 // measured by the receiver against its own arrival clock. Get that wrong and swapping
 // this envelope for a data channel later changes what "late" means.
+import { laneProof, type LaneProof } from './lane-proof'
 
 /** One Opus frame. Also the station's RX DSP tick. */
 export const AUDIO_FRAME_MS = 20
@@ -39,8 +40,9 @@ export type AudioBundle = {
 /** Station -> browser: whether the station is feeding this session, and why not. */
 export type AudioState = { type: 'audioState'; listening: boolean; reason?: string }
 /** Browser -> station. The lease is the browser's claim to station control; the
- *  station re-checks it against its own authority and refuses a logging-only lease. */
-export type AudioListen = { type: 'audioListen'; listening: boolean; leaseId: string }
+ *  station re-checks it against its own authority and refuses a logging-only lease.
+ *  `proof` is the browser's own (S1-M1, `lane-proof.ts`), which the station requires. */
+export type AudioListen = { type: 'audioListen'; listening: boolean; leaseId: string; proof?: LaneProof }
 /** What the relay actually hands the station: the browser's identity is stamped by the
  *  relay, never asserted by the browser. */
 export type AudioListenRouted = AudioListen & { sessionId: string; deviceId: string }
@@ -56,6 +58,10 @@ export const AUDIO_STATE_REASONS = [
   // The capture device changed under the stream. A real end, never a gap.
   'sourceChanged',
   'audioStopped',
+  // S1-M1: this browser's proof on its Listen failed: no key pinned for it at the radio, or not that
+  // key. Only a page that signs is ever told these.
+  'deviceNotPinned',
+  'deviceKeyMismatch',
 ] as const
 export type AudioStateReason = (typeof AUDIO_STATE_REASONS)[number]
 
@@ -101,10 +107,13 @@ export function parseAudioState(raw: unknown): AudioState {
   return { type: 'audioState', listening: value.listening, ...('reason' in value ? { reason: value.reason as string } : {}) }
 }
 export function parseAudioListen(raw: unknown): AudioListen {
-  const value = fields(raw, ['type', 'listening', 'leaseId'])
+  const signed = !!raw && typeof raw === 'object' && 'proof' in raw
+  const value = fields(raw, ['type', 'listening', 'leaseId', ...(signed ? ['proof'] : [])])
   if (value.type !== 'audioListen' || typeof value.listening !== 'boolean') throw Error('invalidAudio')
   if (typeof value.leaseId !== 'string' || !/^[0-9a-f-]{36}$/.test(value.leaseId)) throw Error('invalidAudio')
-  return { type: 'audioListen', listening: value.listening, leaseId: value.leaseId }
+  let proof: LaneProof | undefined
+  try { proof = signed ? laneProof(value.proof) : undefined } catch { throw Error('invalidAudio') }
+  return { type: 'audioListen', listening: value.listening, leaseId: value.leaseId, ...(proof ? { proof } : {}) }
 }
 
 /** Split a decoded bundle payload into its packets. Length-prefixed rather than

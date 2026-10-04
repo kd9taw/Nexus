@@ -142,10 +142,12 @@ export function RemoteApp() {
   function open(stationId: string, application: boolean, stream: string | null = null, listen: string | null = null) {
     // The stream rides the application socket: its signalling and the lease it is offered under
     // travel there.
-    // A5: the stream's offer is signed with this browser's key for the station.
-    const device = session?.stations.find(station => station.id === stationId)?.device
+    // A5: the stream's offer is signed with this browser's key for the station, and so is what the
+    // older lanes carry (S1-M1). S3-M1: the station's answer must be signed with the key the service
+    // lists for it.
+    const station = session?.stations.find(station => station.id === stationId), device = station?.device
     const next = new HostedConnection(client!, stationId, application || stream !== null || listen !== null, undefined,
-      device ? { id: device.id, key: () => deviceKey(stationId) } : undefined)
+      device ? { id: device.id, key: () => deviceKey(stationId) } : undefined, station?.stationKey ?? null)
     // A refused ticket is final: the trial ended mid-session, the station or this browser was
     // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
     // unavailable… check that Nexus is running", which blamed the shack. Go back to the account

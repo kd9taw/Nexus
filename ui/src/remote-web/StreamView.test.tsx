@@ -7,7 +7,7 @@ import type { OperationState } from './operation-protocol'
 import type { OperationView } from './operation-client'
 import type { MonitorSource } from '../remote-monitor/session'
 import { fixtureSource } from '../remote-monitor/fixtureSource'
-import { ANSWER, CHANNEL, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { ANSWER, CHANNEL, LEASE, SIGNAL, answerChecked, byName, harness, last } from './stream-link.testkit'
 import { MIC_PEAK, micGain } from './mic-level'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -64,7 +64,7 @@ function view(initial: Partial<OperationView>, options: Parameters<typeof harnes
     /** Answer, open the channels and present a frame: the stream is live. */
     async live() {
       await act(async () => { await Promise.resolve() })
-      await act(async () => { h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await Promise.resolve() })
+      await act(async () => { h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await answerChecked() })
       act(() => {
         h.peer.ontrack?.({ track: 'track', streams: ['media'] })
         for (const label of ['control', 'ptt', 'audio']) h.peer.channel(label).open()

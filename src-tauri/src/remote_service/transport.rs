@@ -127,6 +127,9 @@ impl Client {
                 // standing at the radio that the service is down, when the fix is one click in
                 // their browser.
                 Some("awaitingConfirmation") => "awaitingConfirmation",
+                // The service holds another signing key for this station (S3-M1): said at the
+                // shack, because the way back is pairing again.
+                Some("stationKeyPinned") => "stationKeyPinned",
                 _ => match status {
                     401 | 403 => "accessDenied",
                     410 => "pairingExpired",
@@ -161,6 +164,10 @@ enum ServerMessage {
         #[serde(rename = "operationVersion")]
         operation_version: Option<u8>,
         request: Box<super::operations::Request>,
+        /// The browser's proof (S1-M1, `lanes`). A relay sends one only to a station that advertised
+        /// `x-nexus-lane-signature-version`.
+        #[serde(default)]
+        proof: Option<super::lanes::Proof>,
     },
     ApplicationQuery {
         #[serde(flatten)]
@@ -202,6 +209,9 @@ enum ServerMessage {
         listening: bool,
         #[serde(rename = "leaseId")]
         lease_id: String,
+        /// The browser's proof (S1-M1, `lanes`), on the same terms as an operation request's.
+        #[serde(default)]
+        proof: Option<super::lanes::Proof>,
     },
     /// A browser's WebRTC signalling for a streamed session. The session and device are stamped
     /// by the relay from its own admission record, never asserted by the browser, and the relay
@@ -223,6 +233,12 @@ enum ServerMessage {
         session_id: String,
         reason: tempo_stream::protocol::StreamReason,
     },
+}
+/// An operation request's `request`, exactly as the relay wrote it: the bytes a proof covers.
+#[derive(Deserialize)]
+struct RawRequest<'a> {
+    #[serde(borrow)]
+    request: &'a serde_json::value::RawValue,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +404,13 @@ pub async fn connected(
             "1".parse().map_err(|_| "invalidResponse")?,
         );
     }
+    // The relay's older lanes carry the browser's proof (`lanes`, S1-M1), and this station takes
+    // them only with it. A relay that never sees this header never hands this station a proof, and
+    // an older station, which refuses a field it does not know, never advertises it.
+    request.headers_mut().insert(
+        "x-nexus-lane-signature-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     // Remote as a stream, advertised only by a build that can stream (Windows today), so a relay
     // never hands another station a `streamSignal` it would refuse by closing this socket. It is
     // advertised whether or not the operator has switched streaming on: an offer to a station
@@ -522,6 +545,19 @@ where
         .as_ref()
         .map(|binding| binding.station_id.clone())
         .unwrap_or_default();
+    // S1-M1: the older lanes, held to the same pins.
+    let lane_pins = status.control.clone();
+    let mut lanes = super::lanes::Lanes::new(
+        station_id.clone(),
+        std::sync::Arc::new(move |device: &str| lane_pins.lock().ok()?.remembered.pinned(device)),
+    );
+    // S3-M1: what the station signs its answers with, if this pairing has a key.
+    let signer = status
+        .control
+        .lock()
+        .map_err(|_| "serviceUnavailable")?
+        .station_key
+        .clone();
     let pins = status.control.clone();
     let stream_station = super::stream::Station {
         authority: operation_connection.authority.clone(),
@@ -534,6 +570,7 @@ where
         pinned: std::sync::Arc::new(move |device: &str| {
             pins.lock().ok()?.remembered.pinned(device)
         }),
+        signer,
     };
     let result: Result<(), &'static str> = async { loop {
         tokio::select! {
@@ -572,7 +609,7 @@ where
                             if !identifier(&session_id){return Err("invalidResponse")}
                             stream_lane.end(&stream_station, &session_id, reason);
                         },
-                        ServerMessage::AudioListen{session_id,device_id,listening,lease_id}=>{
+                        ServerMessage::AudioListen{session_id,device_id,listening,lease_id,proof}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
                             // A build without the audio lane never advertises it, so the
                             // service never routes one here. If one arrives anyway it is
@@ -583,28 +620,52 @@ where
                             #[cfg(feature = "radio")]
                             {
                                 let now = Instant::now();
-                                let result = if listening {
-                                    match feeds.audio.as_ref() {
-                                        None => Err("audioUnavailable"),
-                                        Some(feed) => operation_connection.authority
-                                            .audio_admitted(&session_id, &device_id, &lease_id, now)
-                                            .and_then(|()| audio_lane.start(feed, &session_id, &device_id, &lease_id, now)),
-                                    }
-                                } else {
-                                    audio_lane.stop(Some(&session_id));
-                                    Ok(())
+                                // S1-M1: Listen, to start or to stop, only on this browser's own proof.
+                                let body = super::lanes::listen_body(listening, &lease_id);
+                                let result = match lanes.check(super::lanes::LISTEN, (&session_id, &device_id), body.as_bytes(), proof.as_ref()) {
+                                    Err(refused) => Err(refused.listen_reason()),
+                                    Ok(()) => if listening {
+                                        match feeds.audio.as_ref() {
+                                            None => Err("audioUnavailable"),
+                                            Some(feed) => operation_connection.authority
+                                                .audio_admitted(&session_id, &device_id, &lease_id, now)
+                                                .and_then(|()| audio_lane.start(feed, &session_id, &device_id, &lease_id, now)),
+                                        }
+                                    } else {
+                                        audio_lane.stop(Some(&session_id));
+                                        Ok(())
+                                    }.map_err(|reason| Some(super::audio::shared_reason(reason))),
                                 };
                                 let data = match result {
-                                    Ok(()) => super::audio::audio_state(&session_id, listening, None),
-                                    Err(reason) => super::audio::audio_state(&session_id, false, Some(super::audio::shared_reason(reason))),
+                                    Ok(()) => Some(super::audio::audio_state(&session_id, listening, None)),
+                                    Err(Some(reason)) => Some(super::audio::audio_state(&session_id, false, Some(reason))),
+                                    // A replay is not answered.
+                                    Err(None) => None,
                                 };
                                 audio_listening = audio_lane.listening();
-                                outbound.send(Message::Text(data.into()))?;
+                                if let Some(data) = data {
+                                    outbound.send(Message::Text(data.into()))?;
+                                }
                             }
                         },
-                        ServerMessage::OperationRequest{session_id,device_id,operation_version,request}=>{
+                        ServerMessage::OperationRequest{session_id,device_id,operation_version,request,proof}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
-                            if matches!(request.as_ref(), super::operations::Request::StopTransmit { .. }) {
+                            // S1-M1: everything but Stop and `state` is taken only on this browser's own
+                            // proof, over the request exactly as the relay handed it on (`lanes`).
+                            let refused = match request.as_ref() {
+                                super::operations::Request::StopTransmit { .. } | super::operations::Request::State { .. } => None,
+                                _ => {
+                                    let raw: RawRequest = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
+                                    lanes.check(super::lanes::OPERATION, (&session_id, &device_id), raw.request.get().as_bytes(), proof.as_ref()).err()
+                                }
+                            };
+                            if let Some(refused) = refused {
+                                // A replay is not answered.
+                                if let Some(error) = refused.operation_error() {
+                                    let data = json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":error}).to_string();
+                                    outbound.send(Message::Text(data.into()))?;
+                                }
+                            } else if matches!(request.as_ref(), super::operations::Request::StopTransmit { .. }) {
                                 // Stop must not queue behind a disk append, another Engine
                                 // operation or a send in flight. Its authority path uses neither
                                 // of those locks, and it is admitted here, on the reading task,
@@ -849,6 +910,12 @@ pub async fn supervise(
     let mut attempts = 0_u32;
     while !*stop.borrow() {
         let started = Instant::now();
+        // S3-M1: the station's key, recorded once in its pairing record at the service. Sent before
+        // every connection, so a pairing from before the key gets it recorded the first time, and a
+        // service holding another key for this station is said at the shack. It never holds the
+        // connection back: a service out of reach, or one without the route, is asked again next
+        // time, and until the service holds the key, pages refuse this station's streams.
+        register_key(&client, &binding, &token, &status).await;
         let result = connected(
             &client,
             &binding.station_id,
@@ -890,6 +957,38 @@ pub async fn supervise(
     }
 }
 
+/// Send the service this pairing's public key (`supervise`). What it says back decides only whether
+/// the shack shows `stationKeyPinned`; the key itself never changes here.
+async fn register_key(
+    client: &Client,
+    binding: &super::vault::Binding,
+    token: &str,
+    status: &super::SessionStatus,
+) {
+    let key = status
+        .control
+        .lock()
+        .ok()
+        .and_then(|control| control.station_key.clone());
+    let Some(key) = key else {
+        return;
+    };
+    let answer = client
+        .post(
+            &station_path(binding, "key"),
+            Some(token),
+            json!({ "publicKey": key.public_key() }),
+        )
+        .await;
+    if let Ok(mut control) = status.control.lock() {
+        match answer {
+            Ok(_) => control.key_refused = false,
+            Err("stationKeyPinned") => control.key_refused = true,
+            Err(_) => {}
+        }
+    }
+}
+
 pub fn station_path(binding: &super::vault::Binding, action: &str) -> String {
     format!("stations/{}/native/{action}", binding.station_id)
 }
@@ -911,19 +1010,25 @@ mod server_message_schema {
 
     const ID: &str = "10000000-0000-4000-8000-000000000001";
 
+    /// A browser's proof as the relay hands it on (S1-M1): its shape only, no key material.
+    fn proof() -> Value {
+        json!({"publicKey":format!("{}04{}", tempo_stream::protocol::P256_SPKI_PREFIX_HEX, "1".repeat(128)),
+            "seq":1,"signature":"2".repeat(128)})
+    }
+
     /// One message of every kind the relay sends a station.
     fn seeds() -> Vec<Value> {
         vec![
             json!({"type":"operationDisconnect","sessionId":ID}),
             json!({"type":"operationRequest","sessionId":ID,"deviceId":ID,"operationVersion":null,
-                "request":{"type":"state","requestId":ID}}),
+                "request":{"type":"state","requestId":ID},"proof":proof()}),
             json!({"type":"applicationQuery","requestId":ID,"collection":"log","cursor":null,
                 "search":"","unconfirmed":false,"after":null}),
             json!({"type":"applicationWatch","watchId":ID,"topics":["get_snapshot"],"requestId":null}),
             json!({"type":"applicationCredit","watchId":ID,"previousRequestId":ID,"requestId":ID}),
             json!({"type":"applicationRead","requestId":ID,"command":"get_snapshot","revision":null}),
             json!({"type":"watch","enabled":true,"requestId":ID}),
-            json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID}),
+            json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID,"proof":proof()}),
             json!({"type":"streamSignal","sessionId":ID,"deviceId":ID,"leaseId":ID,"payload":{"kind":"close"}}),
             json!({"type":"streamEnd","sessionId":ID,"reason":"remoteOff"}),
         ]
@@ -1027,6 +1132,8 @@ mod server_message_schema {
         "#[serde(rename = \"operationVersion\")]",
         "operation_version: Option<u8>,",
         "request: Box<super::operations::Request>,",
+        "#[serde(default)]",
+        "proof: Option<super::lanes::Proof>,",
         "},",
         "ApplicationQuery {",
         "#[serde(flatten)]",
@@ -1066,6 +1173,8 @@ mod server_message_schema {
         "listening: bool,",
         "#[serde(rename = \"leaseId\")]",
         "lease_id: String,",
+        "#[serde(default)]",
+        "proof: Option<super::lanes::Proof>,",
         "},",
         "StreamSignal {",
         "#[serde(rename = \"sessionId\")]",
@@ -1177,12 +1286,14 @@ mod server_message_schema {
         "audioListen.deviceId: required",
         "audioListen.leaseId: required",
         "audioListen.listening: required",
+        "audioListen.proof: optional",
         "audioListen.sessionId: required",
         "operationDisconnect.<unknown key>: refused",
         "operationDisconnect.sessionId: required",
         "operationRequest.<unknown key>: refused",
         "operationRequest.deviceId: required",
         "operationRequest.operationVersion: optional",
+        "operationRequest.proof: optional",
         "operationRequest.request: required",
         "operationRequest.sessionId: required",
         "streamEnd.<unknown key>: refused",
@@ -1265,6 +1376,9 @@ mod server_message_schema {
         }
     }
 
+    /// `proof` on `operationRequest` and `audioListen` joined the snapshot on purpose (2026-10-03,
+    /// security review S1-M1): a relay sends one only to a station that advertised
+    /// `x-nexus-lane-signature-version`, which no older station does, so none of them meets it.
     #[test]
     fn what_a_station_accepts_from_the_relay_is_the_snapshot() {
         let shape = shape();

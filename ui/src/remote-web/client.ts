@@ -13,7 +13,9 @@ import { APPLICATION_MAX_BYTES } from './application-protocol'
 import { AudioLink, browserAudio } from './audio-listen'
 import { StreamLink, browserStream, type StreamEnvironment } from './stream-link'
 import { STREAM_SIGNAL_BYTES } from './stream-protocol'
-import { signOffer, type DeviceKey } from './device-key'
+import { signLane, signOffer, type DeviceKey } from './device-key'
+import { LANE_PROOF_BYTES, LISTEN_LANE, OPERATION_LANE, listenBody } from './lane-proof'
+import { checkAnswer } from './station-key'
 
 export type AccountSession = {
   accountId: string
@@ -24,7 +26,9 @@ export type AccountSession = {
   serverNow: number
   /** `expires_at` is when this browser's approval ends unless it is used again; `renewsUntil` is the end
    *  that use cannot move, or null for an approval that never renews. */
-  stations: { id: string; name: string; device: { id: string; name: string; approved: number
+  /** `stationKey` is the station's own signing key (S3-M1, SPKI hex) as its pairing record at the
+   *  service holds it, or null for a station that has not sent one: its answers are refused. */
+  stations: { id: string; name: string; stationKey?: string | null; device: { id: string; name: string; approved: number
     generation?: number; expires_at?: number; renewsUntil?: number | null
     /** A5: the device key the service holds for this browser (SPKI hex), or null. */
     publicKey?: string | null } | null }[]
@@ -220,6 +224,10 @@ export class HostedConnection {
   private abort = new AbortController()
   private renewing = false
   private sessionId: string | null = null
+  /** S1-M1: the last number this session's proofs used, and the signatures still on their way, in
+   *  the order their messages were given. */
+  private laneSeq = 0
+  private lanes: Promise<void> = Promise.resolve()
   private lastClockRenewal = -Infinity
   private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
@@ -238,26 +246,33 @@ export class HostedConnection {
   onRefused: ((error: RemoteError) => void) | null = null
 
   /** `device` is this browser's device for the station, and its key (A5): the stream's offer is
-   *  signed with it for this session. Without one the offer goes unsigned and the station refuses it
-   *  by name. */
+   *  signed with it for this session, and so is every message on the older lanes but Stop and `state`
+   *  (S1-M1). Without one they go unsigned and the station refuses them by name. `stationKey` is the
+   *  station's own key as the service lists it (S3-M1): the stream takes only an answer it signed. */
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false,
-    streamEnvironment: StreamEnvironment = browserStream(), device?: { id: string; key: () => Promise<DeviceKey | null> }) {
+    streamEnvironment: StreamEnvironment = browserStream(), private readonly device?: { id: string; key: () => Promise<DeviceKey | null> },
+    stationKey: string | null = null) {
     this.application = new ApplicationClient(message => {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
     }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
     this.operations = new OperationClient(message=>{
-      if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
-      this.socket.send(message)
+      // With room for this browser's proof (S1-M1) where one goes: never on Stop or `state`, so the room
+      // Stop has is what it always was.
+      const value = JSON.parse(message) as { request?: { type?: unknown } }
+      const lane = this.device && !(value.request?.type === 'stopTransmit' || value.request?.type === 'state') ? OPERATION_LANE : null
+      if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length+(lane?LANE_PROOF_BYTES:0)>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
+      this.lane(this.socket, message, value, lane)
     },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1,pendingControlStorage(()=>localStorage,stationId))
     this.audio = new AudioLink(message => {
       const text = JSON.stringify(message)
       // Its own budget, deliberately small: a listen request is ~130 bytes and this is
-      // room for it and nothing more. Audio must never be able to spend the queue an
-      // acknowledgement needs, because that queue is what carries Stop.
+      // room for it and nothing more, with this browser's proof (S1-M1, a fixed few hundred
+      // bytes) on top. Audio must never be able to spend the queue an acknowledgement needs,
+      // because that queue is what carries Stop.
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN
         || this.socket.bufferedAmount + new TextEncoder().encode(text).length > AUDIO_BUDGET_BYTES) throw new RemoteError(503)
-      this.socket.send(text)
+      this.lane(this.socket, text, message as Record<string, unknown>, LISTEN_LANE)
     }, browserAudio())
     this.stream = new StreamLink((payload, leaseId) => {
       const text = JSON.stringify({ type: 'streamSignal', leaseId, payload })
@@ -275,7 +290,13 @@ export class HostedConnection {
       // checks the signature against it.
       const key = await device.key(), sessionId = this.sessionId
       return key && sessionId ? signOffer(key, sdp, stationId, device.id, sessionId) : null
-    })) })
+    })),
+      // S3-M1: the answer must be the station's own, signed with the key the service lists for it, for
+      // this offer from this browser's device in this session.
+      verifyAnswer: streamEnvironment.verifyAnswer ?? (async (answer, offer) => {
+        const sessionId = this.sessionId
+        return device && sessionId ? checkAnswer(stationKey, answer, offer, { stationId, deviceId: device.id, sessionId }) : 'stationNotSigned'
+      }) })
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)
@@ -287,6 +308,23 @@ export class HostedConnection {
       getSnapshot: () => this.sleepState,
       keepWatching: value => this.setKeepWatching(value),
     }
+  }
+  /** S1-M1: a message for the relay's older lanes (`message`, parsed as `value`), with this browser's
+   *  proof on `lane` (`lane-proof.ts`). With no lane - Stop and `state` - it goes at once and unsigned: a
+   *  forged Stop only stops, and Stop never waits on a key. The rest wait for their signatures in the
+   *  order they were given, and go only on the socket and in the session they were meant for. A
+   *  browser with no device sends them as they are, and the station refuses them. */
+  private lane(socket: WebSocket, message: string, value: { request?: unknown; listening?: unknown; leaseId?: unknown }, lane: string | null): void {
+    const device = this.device, sessionId = this.sessionId
+    if (!lane || !device || !sessionId) { socket.send(message); return }
+    const seq = ++this.laneSeq
+    const body = lane === OPERATION_LANE ? JSON.stringify(value.request) : listenBody(value.listening === true, String(value.leaseId))
+    this.lanes = this.lanes.then(async () => {
+      const key = await device.key().catch(() => null)
+      const proof = key ? await signLane(key, lane, body, this.stationId, device.id, sessionId, seq).catch(() => null) : null
+      if (this.socket !== socket || this.sessionId !== sessionId || socket.readyState !== WebSocket.OPEN) return
+      socket.send(proof ? JSON.stringify({ ...value, proof }) : message)
+    }).catch(() => {})
   }
   start(): void {
     // A backgrounded tab is the one thing that keeps a room fully awake with nobody looking at
@@ -466,6 +504,7 @@ export class HostedConnection {
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
             if (this.applicationMode) { this.application.open(); this.operations.open() }
             this.sessionId = message.sessionId
+            this.laneSeq = 0
             // A session proves the SERVICE is reachable, so this connection starts counting
             // towards its reconnect credit here rather than only when a data frame lands. Those
             // are different failures and deserve different patience: a station that is up but

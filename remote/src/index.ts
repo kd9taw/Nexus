@@ -80,6 +80,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // The stream's signalling lane, on the same terms: a station that does not send this header
         // is never handed a `streamSignal`.
         streamVersion: request.headers.get('x-nexus-stream-version') === '1' ? 1 : 0,
+        // The browser's proof on the operation and audio lanes (S1-M1): handed on only to a station that
+        // takes it, because any other refuses a field it does not know by closing its socket.
+        laneVersion: request.headers.get('x-nexus-lane-signature-version') === '1' ? 1 : 0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + STATION_ADMISSION_MS } })
     }
     browserOrigin(request, env)
@@ -276,6 +279,17 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       await revokeStation(env, row.id, now)
       return json({ ok: true })
     }
+    if (verb === 'key') {
+      // The station's own signing key (security review S3-M1), recorded once in its pairing record.
+      // The first key a station sends is kept, the same one again is answered as kept, and any other is
+      // refused by name: a key changes only by pairing again, which makes a new station. Its pages
+      // check the station's stream answers against this key, read from here, never through the relay.
+      const input = await body(request, ['publicKey']), key = await publicKey(input.publicKey)
+      await env.DB.prepare('UPDATE stations SET public_key=? WHERE id=? AND public_key IS NULL').bind(key, row.id).run()
+      const kept = await env.DB.prepare('SELECT public_key FROM stations WHERE id=?').bind(row.id).first<{ public_key: string | null }>()
+      requireValue(kept?.public_key === key, 'stationKeyPinned', 409)
+      return json({ ok: true })
+    }
     throw new Refusal('notFound', 404)
   }
 
@@ -321,13 +335,15 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   }
   if (path === 'session') {
     await body(request, [])
-    const rows = await env.DB.prepare('SELECT id,name,enabled FROM stations WHERE account_id=? AND enabled=1 ORDER BY id LIMIT 2')
-      .bind(identity.accountId).all<{ id: string; name: string; enabled: number }>()
+    const rows = await env.DB.prepare('SELECT id,name,enabled,public_key FROM stations WHERE account_id=? AND enabled=1 ORDER BY id LIMIT 2')
+      .bind(identity.accountId).all<{ id: string; name: string; enabled: number; public_key: string | null }>()
     // The browser's own fields as they have always been, plus the end that use cannot move so the page
     // can warn before it. The approval time itself stays in the Worker.
     const stations = await Promise.all(rows.results.map(async row => {
       const current = await device(request, env, row.id, identity.accountId, now)
-      return { id: row.id, name: row.name, device: current && { id: current.id, name: current.name, generation: current.generation,
+      // `stationKey` (S3-M1): the station's own signing key, which its stream answers must carry a
+      // signature from; null for a station that has not sent one, whose streams the page refuses.
+      return { id: row.id, name: row.name, stationKey: row.public_key, device: current && { id: current.id, name: current.name, generation: current.generation,
         approved: current.approved, expires_at: current.expires_at, renewsUntil: renewsUntil(current), publicKey: current.public_key } }
     }))
     // A claim is durable on the enrollment row, but nothing put it on the wire, so the browser

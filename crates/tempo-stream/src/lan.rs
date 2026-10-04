@@ -180,7 +180,11 @@ mod tests {
     #[test]
     fn the_contract_station_messages_leak_nothing() {
         let sent = fixture_station_messages();
-        assert_eq!(sent.len(), 3, "premise: the answer and two candidates");
+        assert_eq!(
+            sent.len(),
+            4,
+            "premise: the answer, signed and not (S3-M1), and two candidates"
+        );
         let host: Vec<&String> = sent.iter().filter(|t| t.contains(" typ host")).collect();
         assert_eq!(host.len(), 1, "premise: one host candidate");
         for text in &sent {

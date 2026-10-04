@@ -22,6 +22,13 @@
 //! README's A5 section). This file holds the shapes and the bytes that are signed; the station's
 //! admission does the cryptography.
 //!
+//! ## The answer is signed by the station (S3-M1)
+//!
+//! The other way round: the station signs its answer with its own key, the one its pairing record
+//! at the service holds, over [`answer_binding`], on one SDP line ([`signed_answer`]). The page
+//! checks it before the browser is handed the answer, so a relay that answers the offer itself
+//! cannot stand in for the station.
+//!
 //! ## No wall clock crosses the boundary
 //!
 //! `decodedFrameAt` is the station's own video RTP timestamp, echoed back, never the page's clock.
@@ -224,6 +231,46 @@ pub fn offer_binding(
         bytes.extend_from_slice(id.as_bytes());
     }
     bytes
+}
+
+/// What the station's signature over its answer begins with (security review S3-M1).
+pub const ANSWER_BINDING_LABEL: &[u8] = b"nexus-stream-answer/1";
+/// The session-level SDP line that carries the station's signature over its answer: this, then
+/// [`SIGNATURE_HEX_CHARS`] lowercase hex. An attribute a browser does not know is one it ignores, so
+/// the line asks nothing of a relay (which never reads an SDP) or of a page from before it.
+pub const ANSWER_SIGNATURE_ATTRIBUTE: &str = "a=nexus-station-signature:";
+
+/// The bytes the station's answer signature covers (the README's "Binding the answer to the
+/// station"): the label, `SHA-256(answer fp)`, `SHA-256(offer fp)` (the caller hashes), and the
+/// station, device and session ids. The offer's fingerprint and the session make a signature good
+/// for one negotiation only; the station id and the key make it this station's.
+pub fn answer_binding(
+    answer_digest: &[u8; 32],
+    offer_digest: &[u8; 32],
+    station_id: &str,
+    device_id: &str,
+    session_id: &str,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(ANSWER_BINDING_LABEL.len() + 2 * 32 + 3 * 36);
+    bytes.extend_from_slice(ANSWER_BINDING_LABEL);
+    bytes.extend_from_slice(answer_digest);
+    bytes.extend_from_slice(offer_digest);
+    for id in [station_id, device_id, session_id] {
+        bytes.extend_from_slice(id.as_bytes());
+    }
+    bytes
+}
+
+/// `answer` with the station's `signature` (lowercase hex) on a line of its own, the last of the
+/// session section, before the first media section. `None` for an answer with no media section,
+/// which no page would take anyway.
+pub fn signed_answer(answer: &str, signature: &str) -> Option<String> {
+    let media = answer.find("\r\nm=")? + 2;
+    Some(format!(
+        "{}{ANSWER_SIGNATURE_ATTRIBUTE}{signature}\r\n{}",
+        &answer[..media],
+        &answer[media..]
+    ))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -932,8 +979,8 @@ mod tests {
     fn every_signalling_case_round_trips_on_its_hop() {
         assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 5);
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 5);
-        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 14);
-        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 14);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 15);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 15);
         // The relay's own: it ends a station's stream, and it answers a page by itself.
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStationEnd"), 2);
         assert_eq!(
@@ -986,6 +1033,55 @@ mod tests {
         assert_eq!(&bytes[124..], session.as_bytes());
         // Control: another session is other bytes, so a signature for one is not one for another.
         assert_ne!(bytes, offer_binding(&digest, station, device, station));
+    }
+
+    /// S3-M1: the answer's binding is the label, both fingerprints' digests and the three ids, each
+    /// at a fixed width, so no two negotiations share one.
+    #[test]
+    fn the_answer_binding_is_the_label_both_digests_and_the_three_ids() {
+        let (answer, offer) = ([7u8; 32], [9u8; 32]);
+        let station = "10000000-0000-4000-8000-00000000000a";
+        let device = "10000000-0000-4000-8000-000000000002";
+        let session = "10000000-0000-4000-8000-000000000001";
+        let bytes = answer_binding(&answer, &offer, station, device, session);
+        assert_eq!(bytes.len(), 21 + 64 + 108);
+        assert_eq!(&bytes[..21], b"nexus-stream-answer/1");
+        assert_eq!(&bytes[21..53], &answer);
+        assert_eq!(&bytes[53..85], &offer);
+        assert_eq!(&bytes[85..121], station.as_bytes());
+        assert_eq!(&bytes[121..157], device.as_bytes());
+        assert_eq!(&bytes[157..], session.as_bytes());
+        // Controls: another offer, or the two digests swapped, is other bytes.
+        assert_ne!(
+            bytes,
+            answer_binding(&answer, &answer, station, device, session)
+        );
+        assert_ne!(
+            bytes,
+            answer_binding(&offer, &answer, station, device, session)
+        );
+    }
+
+    /// S3-M1: the signature rides as the last line of the session section. The answer is otherwise
+    /// the one str0m wrote, byte for byte, and still fits the bound every SDP is held to.
+    #[test]
+    fn a_signed_answer_carries_its_signature_on_one_session_line() {
+        let file: Value = serde_json::from_str(include_str!(
+            "../../../remote/test/fixtures/stream/station-answer.json"
+        ))
+        .unwrap();
+        let answer = file["answer"].as_str().unwrap();
+        let signature = "ab".repeat(64);
+        let signed = signed_answer(answer, &signature).unwrap();
+        let line = format!("{ANSWER_SIGNATURE_ATTRIBUTE}{signature}\r\n");
+        assert_eq!(signed.replacen(&line, "", 1), answer);
+        let (session, media) = signed.split_at(signed.find("\r\nm=").unwrap() + 2);
+        assert!(session.ends_with(&line), "the session section's last line");
+        assert!(!media.contains(ANSWER_SIGNATURE_ATTRIBUTE));
+        assert!(sdp(&signed), "within the SDP bound: {} bytes", signed.len());
+        assert_eq!(offer_fingerprint(&signed), offer_fingerprint(answer));
+        // Control: an SDP with no media section is no answer, and gets no signature.
+        assert_eq!(signed_answer("v=0\r\ns=-\r\n", &signature), None);
     }
 
     /// The offer's fingerprint: one value, however many sections carry it.

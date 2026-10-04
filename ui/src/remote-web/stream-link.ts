@@ -11,6 +11,11 @@
 // certificate fingerprint, or a plain-RTP or SDES media line - is refused by name before the browser
 // is handed it (`secureAnswer`), and the negotiation ends.
 //
+// AND AN ANSWER THE STATION DID NOT SIGN (S3-M1). The station signs its answer with its own key over
+// both DTLS fingerprints and the three ids (`station-key.ts`). Until that signature has held for this
+// offer and session, the browser is handed neither the answer nor any candidate behind it, so a
+// relay answering in the station's place gets no picture input, no microphone and no ICE checks.
+//
 // BLIND MEANS NO AUTHORITY (S9). Every heartbeat carries the RTP timestamp of the last frame the
 // video element actually presented, in the station's own media clock, so the station can tell how
 // old the picture this operator is looking at is without trusting this browser's clock. It answers
@@ -174,6 +179,10 @@ export type StreamEnvironment = {
    *  this station, or null when it cannot sign. Absent, the offer goes unsigned; the station then
    *  refuses it by name, and never at its parser. */
   signOffer?: (sdp: string) => Promise<OfferSignature | null>
+  /** S3-M1: whether `answer` is the station's own, signed with its key for `offer` and this session
+   *  (`station-key.ts`): null when it is, or the refusal. Absent, every answer is refused as unsigned:
+   *  an answer this page cannot check is never handed to the browser. */
+  verifyAnswer?: (answer: string, offer: string) => Promise<string | null>
   /** Where "this tab is hidden" and "this window lost focus" come from. Optional so a test can
    *  leave them out; the real browser always has both. */
   document?: { readonly visibilityState: string; addEventListener: (type: string, f: () => void) => void; removeEventListener: (type: string, f: () => void) => void }
@@ -249,6 +258,10 @@ export class StreamLink {
   private channels: { control: ChannelLike; ptt: ChannelLike; audio: ChannelLike } | null = null
   private lease: string | null = null
   private answered = false
+  /** The offer this stream sent, which the station's answer must be signed for (S3-M1). */
+  private offered: string | null = null
+  /** The answer passed its check and the browser has it: from here candidates go straight to it. */
+  private accepted = false
   /** This browser's own candidates, held until its offer has gone: signing it (A5) is a wait, and the
    *  station can only use a candidate for an offer it already has. Null once the offer is sent. */
   private unsent: { kind: 'candidate'; candidate: string; sdpMid: string }[] | null = []
@@ -412,6 +425,7 @@ export class StreamLink {
       // An offer the socket would not take is an end, never a stream left waiting for an answer
       // that cannot come.
       if (!this.tell(signed ? { kind: 'offer', sdp, ...signed } : { kind: 'offer', sdp })) { this.end('streamUnsupported', false); return }
+      this.offered = sdp
       const held = this.unsent ?? []
       this.unsent = null
       for (const candidate of held) this.tell(candidate)
@@ -437,17 +451,26 @@ export class StreamLink {
       // A4: refused by name, before the browser is handed it.
       if (!secureAnswer(payload.sdp)) { this.end('insecureAnswer'); return }
       this.answered = true
-      void peer.setRemoteDescription({ type: 'answer', sdp: payload.sdp }).then(() => {
+      // S3-M1: the station's own, signed for this offer and session, or refused by name before the
+      // browser is handed it or any candidate behind it.
+      const verify = this.env.verifyAnswer ?? (async () => 'stationNotSigned')
+      void verify(payload.sdp, this.offered ?? '').catch(() => 'stationKeyMismatch').then(refusal => {
         if (this.peer !== peer) return
-        const queued = this.pendingCandidates
-        this.pendingCandidates = []
-        for (const candidate of queued) void peer.addIceCandidate(candidate).catch(() => {})
-      }, () => { if (this.peer === peer) this.end('streamFailed') })
+        if (refusal) { this.end(refusal); return }
+        this.accepted = true
+        void peer.setRemoteDescription({ type: 'answer', sdp: payload.sdp }).then(() => {
+          if (this.peer !== peer) return
+          const queued = this.pendingCandidates
+          this.pendingCandidates = []
+          for (const candidate of queued) void peer.addIceCandidate(candidate).catch(() => {})
+        }, () => { if (this.peer === peer) this.end('streamFailed') })
+      })
       return
     }
     const candidate = { candidate: payload.candidate, sdpMid: payload.sdpMid }
-    // A candidate can overtake the answer it belongs to; it waits for it rather than being lost.
-    if (!this.answered) { if (this.pendingCandidates.length < 64) this.pendingCandidates.push(candidate); return }
+    // A candidate can overtake the answer it belongs to, or arrive while that answer is checked; it
+    // waits for it rather than being lost, and goes nowhere if the answer is refused.
+    if (!this.accepted) { if (this.pendingCandidates.length < 64) this.pendingCandidates.push(candidate); return }
     void peer.addIceCandidate(candidate).catch(() => {})
   }
 
@@ -881,7 +904,7 @@ export class StreamLink {
     this.audio.disconnected()
     const peer = this.peer, channels = this.channels
     this.peer = null; this.channels = null; this.media = null; this.receiver = null; this.frame = null
-    this.answered = false; this.pendingCandidates = []; this.unsent = []
+    this.answered = false; this.accepted = false; this.offered = null; this.pendingCandidates = []; this.unsent = []
     if (this.video) { if (this.frameHandle !== null) this.video.cancelVideoFrameCallback?.(this.frameHandle); this.frameHandle = null; this.video.srcObject = null }
     if (channels) for (const channel of [channels.control, channels.ptt, channels.audio]) {
       channel.onopen = null; channel.onclose = null; channel.onmessage = null

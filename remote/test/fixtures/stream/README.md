@@ -45,7 +45,8 @@ Payloads carry `kind`:
   `signature` come together or not at all: an offer without them parses (a page from before the
   device key), and the station refuses it at admission, by name, rather than at its parser, which
   would close the whole control socket.
-- station → page: `answer { sdp }`, `candidate { candidate, sdpMid }`.
+- station → page: `answer { sdp }`, its SDP signed by the station's own key (S3-M1, below),
+  `candidate { candidate, sdpMid }`.
 
 `leaseId` is the page's claim to station control. The station admits an offer only for a
 browser holding the operator's station-control grant and this live lease, and it checks that
@@ -124,6 +125,84 @@ the station pinned when the operator approved that browser at the radio.
 
 The fixtures carry the shape only: their `publicKey` has the right prefix and length but is not a
 point on the curve, and their `signature` is not a signature. No key material is in these files.
+
+### Binding the answer to the station (S3-M1)
+
+A5 binds the browser to the station. This binds the station to the browser: without it, a party
+that controls the relay's messages could answer the page's offer itself and be "the station" for
+that browser, and be sent every key typed on the picture, every paste and the microphone, and point
+the browser's ICE checks at any address it names.
+
+- **The key.** The station makes one ECDSA P-256 key per pairing, when the operator approves the
+  pairing (or, for a pairing made before, the first time a Nexus with the key starts), and keeps the
+  private half in the OS credential store beside the pairing. Before every relay connection it sends
+  the public half, SPKI in lowercase hex (the device key's 182-character shape), to the service:
+  `POST stations/:id/native/key { publicKey }`, on the station's credential. The service keeps the
+  first key a station sends; the same key again is `{ ok: true }`, and any other is refused
+  `stationKeyPinned` (409), which the shack shows. A key changes only by pairing again, which is a
+  new station. The service lists the key to the account's pages as `stationKey` on each station in
+  `session`, or `null` for a station that has sent none. The page reads it there, never through the
+  relay.
+- **The signature.** The answer carries it on one line of its own, the last of the SDP's session
+  section, before the first media section: `a=nexus-station-signature:` and 128 lowercase hex
+  characters, ECDSA P-256 with SHA-256 (IEEE P1363 `r‖s`) over these 193 bytes:
+
+      "nexus-stream-answer/1" (21 bytes of ASCII)
+      ‖ SHA-256(answer fp)  (32 bytes)
+      ‖ SHA-256(offer fp)   (32 bytes)
+      ‖ stationId ‖ deviceId ‖ sessionId   (each the 36-character lowercase UUID)
+
+  `answer fp` is the answer's own DTLS certificate fingerprint and `offer fp` the offer's, each the
+  32 bytes of its `a=fingerprint:sha-256` value. The offer's fingerprint and the session make a
+  signature good for one negotiation only; the key and the station id make it this station's.
+- **Why a line in the SDP.** The relay never reads an SDP, and a browser ignores an attribute it does
+  not know, so the signature needs nothing from the relay and changes no message's shape.
+- **What the page checks**, before the browser is handed the answer or any candidate behind it: that
+  the answer has exactly one such line, in its session section; that the service lists a key for the
+  station; and that the signature holds under that key for the page's own offer and session. If not,
+  the stream ends with one of two reasons the page gives itself, never sent on the wire:
+  `stationKeyMismatch` (signed, but not with that key for this negotiation: forged, replayed from
+  another session or offer, or another station's) and `stationNotSigned` (no signature, or no key
+  listed: a station from before the key, which an update at the shack fixes). The DTLS handshake
+  then holds the browser to the certificate the signed answer names.
+- **Not the fix**: a page-side filter on private candidates. It would end streaming on the shack's
+  own network (the station advertises its LAN address, above).
+
+The contract's signed answer (`answer (signed with the station's key; …)`) carries a placeholder of
+the right shape, not a signature.
+
+### The relay's older lanes, bound to the browser (S1-M1)
+
+The relay stamps `sessionId` and `deviceId` on its other lanes too. On those, the station used to take
+its word, so a party controlling the relay could act as any approved browser there. Now the page
+proves each message with the same device key:
+
+- **What carries a proof**: every `operationRequest` but two, and every `audioListen`, start or stop.
+  `stopTransmit` needs none: a forged Stop only stops, and Stop never waits on a key. `state` needs
+  none: it grants nothing, and it is how a page learns what Stop is composed from. A stream's own
+  data channel needs none: DTLS bound it to the browser's key at admission.
+- **The proof**, a field of the message beside `request` (or `listening`): `proof { publicKey, seq,
+  signature }`. `publicKey` is the device key's SPKI (182 characters); `seq` a number the page counts
+  up from 1 within its session and never uses twice; `signature` ECDSA P-256 with SHA-256 (`r‖s`, 128
+  lowercase hex) over:
+
+      label ‖ SHA-256(body) ‖ stationId ‖ deviceId ‖ sessionId ‖ seq (8 bytes, big-endian)
+
+  `label` is `nexus-operation/1` for an operation request and `nexus-listen/1` for Listen. `body` is
+  the operation request exactly as the page sent it (the bytes of `request`; the relay hands them on
+  unchanged), or, for Listen, `{"listening":true,"leaseId":"…"}` spelt exactly so.
+- **The relay** checks a proof's shape (`lane-proof.ts`) and hands it on only to a station that
+  sends `x-nexus-lane-signature-version: 1` on its relay connect: an older station refuses a field it
+  does not know by closing its control socket. It strips it for any other station.
+- **The station** requires a proof on every message above, whatever the relay says, and checks it
+  against the key the operator pinned for that browser: no proof is refused in words every page
+  already reads (`stationUnsupported`, or Listen's `audioUnavailable`); a browser with no pin
+  `deviceNotPinned`; any other failure `deviceKeyMismatch`; and a number that session has already
+  spent is not answered at all. It remembers the last 64 numbers of each session, so a message the
+  relay delivered late is still taken once.
+- **The application lane** (`application*` reads) carries no proof: the relay merges every browser's
+  watch into one station watch and renumbers every read, so no read that reaches the station belongs
+  to one browser, and the relay already sees every answer it carries.
 
 ### Bounds
 

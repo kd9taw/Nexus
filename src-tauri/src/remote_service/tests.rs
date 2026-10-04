@@ -109,6 +109,31 @@ impl Vault for MemoryVault {
         self.values.lock().unwrap().remove("pins");
         Ok(())
     }
+    fn station_key(&self) -> Result<Option<vault::StationKey>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get("stationKey")
+            .and_then(|v| serde_json::from_str(v).ok()))
+    }
+    fn save_station_key(&self, key: &vault::StationKey) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert("stationKey".into(), serde_json::to_string(key).unwrap());
+        Ok(())
+    }
+    fn remove_station_key(&self) -> Result<(), &'static str> {
+        self.values.lock().unwrap().remove("stationKey");
+        Ok(())
+    }
 }
 
 #[test]
@@ -1092,8 +1117,9 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
     runtime.block_on(async {
         let (station_io, relay_io) = tokio::io::duplex(PIPE);
         let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
-        let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())),
-            control: Arc::new(Mutex::new(Control { enabled: true, ..Default::default() })), generation: 0 };
+        // The browser's key, pinned at the radio: its acquire carries a proof (S1-M1). Stop never does.
+        let key = LaneKey::new();
+        let status = pinned_station(&key, DEVICE);
         let authority = status.control.lock().unwrap().operations.clone();
         authority.permit_station(DEVICE, true).unwrap();
         let (cancel, cancellation) = watch::channel(false);
@@ -1101,12 +1127,16 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
         let relay = tokio::spawn(async move {
             let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
             let operation = |request: serde_json::Value| Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":4,"request":request}).to_string().into());
+            let signed = |request: serde_json::Value, seq: u64| {
+                let proof = key.proof(LANE_OPERATION, &request.to_string(), [LANE_STATION, DEVICE, SESSION], seq);
+                Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":4,"request":request,"proof":proof}).to_string().into())
+            };
             let id = |n: u32| format!("00000000-0000-4000-8000-0000000000{n:02x}");
             // A controlling v4 browser with the stop token, and the FT latch armed at the shack.
             socket.send(operation(json!({"type":"state","requestId":id(1)}))).await.unwrap();
             let state = text(&mut socket).await;
             let boot = state["value"]["stationBootId"].as_str().unwrap().to_owned();
-            socket.send(operation(json!({"type":"acquire","requestId":id(2),"stationBootId":boot}))).await.unwrap();
+            socket.send(signed(json!({"type":"acquire","requestId":id(2),"stationBootId":boot}), 1)).await.unwrap();
             let lease = text(&mut socket).await["value"]["leaseId"].as_str().unwrap().to_owned();
             socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
             let epoch = text(&mut socket).await["value"]["transmitEpoch"].as_str().expect("the controller holds the stop token").to_owned();
@@ -1204,15 +1234,21 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
                 e.remote_open_radio().unwrap()
             };
             sample(&engine, &radio, 14_074_000);
-            let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())),
-                control: Arc::new(Mutex::new(Control { enabled: true, ..Default::default() })), generation: 0 };
+            // The browser's key, pinned at the radio: what it sends carries a proof (S1-M1).
+            let key = LaneKey::new();
+            let status = pinned_station(&key, DEVICE);
             let authority = status.control.lock().unwrap().operations.clone();
             authority.permit_station(DEVICE, true).unwrap();
             let (cancel, cancellation) = watch::channel(false);
             let relay_engine = engine.clone();
             let relay = tokio::spawn(async move {
                 let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
-                let operation = |request: serde_json::Value| Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":version,"request":request}).to_string().into());
+                let mut seq = 0;
+                let mut operation = |request: serde_json::Value| {
+                    seq += 1;
+                    let proof = key.proof(LANE_OPERATION, &request.to_string(), [LANE_STATION, DEVICE, SESSION], seq);
+                    Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":version,"request":request,"proof":proof}).to_string().into())
+                };
                 let id = |n: u32| format!("00000000-0000-4000-8000-0000000000{n:02x}");
                 let reply = Duration::from_secs(3);
                 socket.send(operation(json!({"type":"state","requestId":id(1)}))).await.unwrap();
@@ -1280,6 +1316,282 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
     }
 }
 
+// ---- The relay's older lanes, bound to the browser's own key (security review S1-M1) -----------
+//
+// The relay stamps `sessionId` and `deviceId` on everything it forwards, so on its word alone a
+// relay that is not the one the operator trusts could act as any approved browser: take control,
+// keep a lease alive, transmit FT where it is granted, write the log, listen. The stream's offer
+// has carried the browser's signature since A5; these hold the older lanes to the same key. Every
+// message here is written byte for byte, and each proof is made the way the page makes one, so
+// the station is held to the bytes the relay hands it.
+
+const LANE_STATION: &str = "30000000-0000-4000-8000-0000000000a1";
+const LANE_DEVICE: &str = "10000000-0000-4000-8000-0000000000a1";
+const LANE_SESSION: &str = "20000000-0000-4000-8000-0000000000a1";
+
+/// A browser's device key for these tests, played by ring: the page's non-extractable WebCrypto
+/// key. Made for the run and never written down.
+struct LaneKey {
+    pair: ring::signature::EcdsaKeyPair,
+    spki: String,
+}
+impl LaneKey {
+    fn new() -> Self {
+        use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+            .unwrap();
+        let spki = format!(
+            "{}{}",
+            tempo_stream::protocol::P256_SPKI_PREFIX_HEX,
+            hex(pair.public_key().as_ref())
+        );
+        Self { pair, spki }
+    }
+    /// What the operator pins at the radio: SHA-256 of the SPKI, lowercase hex.
+    fn pin(&self) -> String {
+        let spki = tempo_stream::protocol::hex_bytes(&self.spki).unwrap();
+        hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref())
+    }
+    /// The proof the page attaches to one lane message: its signature over the lane's label,
+    /// SHA-256 of the message's own bytes, the station, browser and session ids, and `seq`.
+    fn proof(&self, label: &str, body: &str, ids: [&str; 3], seq: u64) -> serde_json::Value {
+        let mut signed = label.as_bytes().to_vec();
+        signed.extend_from_slice(
+            ring::digest::digest(&ring::digest::SHA256, body.as_bytes()).as_ref(),
+        );
+        for id in ids {
+            signed.extend_from_slice(id.as_bytes());
+        }
+        signed.extend_from_slice(&seq.to_be_bytes());
+        let signature = self
+            .pair
+            .sign(&ring::rand::SystemRandom::new(), &signed)
+            .unwrap();
+        json!({"publicKey": self.spki, "seq": seq, "signature": hex(signature.as_ref())})
+    }
+}
+
+/// What an operation request's proof begins with.
+const LANE_OPERATION: &str = "nexus-operation/1";
+
+/// A station paired as `LANE_STATION`, Remote on, and `device`'s key pinned at the radio.
+fn pinned_station(key: &LaneKey, device: &str) -> SessionStatus {
+    let status = SessionStatus {
+        status: Arc::new(Mutex::new(Status::default())),
+        control: Arc::new(Mutex::new(Control {
+            enabled: true,
+            ..Default::default()
+        })),
+        generation: 0,
+    };
+    {
+        let mut control = status.control.lock().unwrap();
+        control.remembered.binding = Some(Binding {
+            origin: "http://127.0.0.1:9/".into(),
+            station_id: LANE_STATION.into(),
+            account_id: ACCOUNT.into(),
+        });
+        control.remembered.pins.insert(device.into(), key.pin());
+    }
+    status
+}
+
+/// [`pinned_station`] for `LANE_DEVICE`, granted logging and station control at the radio.
+fn lane_station(key: &LaneKey) -> SessionStatus {
+    let status = pinned_station(key, LANE_DEVICE);
+    {
+        let control = status.control.lock().unwrap();
+        control.operations.permit(LANE_DEVICE, true).unwrap();
+        control
+            .operations
+            .permit_station(LANE_DEVICE, true)
+            .unwrap();
+    }
+    status
+}
+
+async fn lane_text(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    within: Duration,
+) -> Option<serde_json::Value> {
+    use futures_util::StreamExt;
+    loop {
+        let next = tokio::time::timeout(within, socket.next()).await.ok()??;
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = next.unwrap() {
+            return Some(serde_json::from_str(&text).unwrap());
+        }
+    }
+}
+
+/// Send one message as the relay and read the station's answer to it.
+async fn lane_exchange(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    text: String,
+) -> serde_json::Value {
+    use futures_util::SinkExt;
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+        .await
+        .unwrap();
+    lane_text(socket, Duration::from_secs(3))
+        .await
+        .expect("the station answered")
+}
+
+/// An operation request as the relay hands it on: `request` exactly as the page wrote it.
+fn lane_operation(
+    request: &serde_json::Value,
+    device: &str,
+    proof: Option<serde_json::Value>,
+) -> String {
+    let proof = proof
+        .map(|p| format!(r#","proof":{p}"#))
+        .unwrap_or_default();
+    format!(
+        r#"{{"type":"operationRequest","sessionId":"{LANE_SESSION}","deviceId":"{device}","operationVersion":4,"request":{request}{proof}}}"#
+    )
+}
+
+#[test]
+fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
+    // A stopTransmit reaches the satellite track badge (see the slow-link Stop test above).
+    let _alone = alone();
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    const LABEL: &str = "nexus-operation/1";
+    const OTHER: &str = "40000000-0000-4000-8000-0000000000a1";
+    const UNPINNED: &str = "10000000-0000-4000-8000-0000000000a2";
+    let key = LaneKey::new();
+    let forger = LaneKey::new();
+    let ids = [LANE_STATION, LANE_DEVICE, LANE_SESSION];
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let (station_io, relay_io) = tokio::io::duplex(65536);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let status = lane_station(&key);
+        status.control.lock().unwrap().operations.permit_station(UNPINNED, true).unwrap();
+        let (cancel, cancellation) = watch::channel(false);
+        let relay = tokio::spawn(async move {
+            let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+            let id = |n: u32| format!("00000000-0000-4000-8000-0000000001{n:02x}");
+            // `state` needs no proof: it grants nothing, and Stop is composed from it.
+            let state = lane_exchange(&mut socket, lane_operation(&json!({"type":"state","requestId":id(1)}), LANE_DEVICE, None)).await;
+            let boot = state["value"]["stationBootId"].as_str().expect("an unsigned state is answered").to_owned();
+            let acquire = |n| json!({"type":"acquire","requestId":id(n),"stationBootId":boot});
+
+            // THE FINDING: an acquire with no proof. The station took it on the relay's word.
+            let unsigned = lane_exchange(&mut socket, lane_operation(&acquire(2), LANE_DEVICE, None)).await;
+            assert_eq!(unsigned["error"], "stationUnsupported", "an unsigned acquire is refused: {unsigned}");
+            // Signed, but by a key the operator never pinned for this browser.
+            let forged = lane_exchange(&mut socket, lane_operation(&acquire(3), LANE_DEVICE, Some(forger.proof(LABEL, &acquire(3).to_string(), ids, 1)))).await;
+            assert_eq!(forged["error"], "deviceKeyMismatch", "{forged}");
+            // The browser's own key, but made for another station, another session, or another request.
+            let other_station = key.proof(LABEL, &acquire(4).to_string(), [OTHER, LANE_DEVICE, LANE_SESSION], 2);
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&acquire(4), LANE_DEVICE, Some(other_station))).await["error"], "deviceKeyMismatch");
+            let other_session = key.proof(LABEL, &acquire(5).to_string(), [LANE_STATION, LANE_DEVICE, OTHER], 3);
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&acquire(5), LANE_DEVICE, Some(other_session))).await["error"], "deviceKeyMismatch");
+            let other_request = key.proof(LABEL, &json!({"type":"state","requestId":id(6)}).to_string(), ids, 4);
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&acquire(6), LANE_DEVICE, Some(other_request))).await["error"], "deviceKeyMismatch");
+            // A browser the station holds no pin for (approved before keys existed) is told so by name.
+            let unpinned = LaneKey::new().proof(LABEL, &acquire(7).to_string(), [LANE_STATION, UNPINNED, LANE_SESSION], 1);
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&acquire(7), UNPINNED, Some(unpinned))).await["error"], "deviceNotPinned");
+
+            // POSITIVE CONTROL: the same acquire, signed as the page signs it, takes control.
+            let signed = lane_operation(&acquire(8), LANE_DEVICE, Some(key.proof(LABEL, &acquire(8).to_string(), ids, 5)));
+            let owner = lane_exchange(&mut socket, signed.clone()).await;
+            assert_eq!(owner["value"]["phase"], "controlling", "{owner}");
+            let lease = owner["value"]["leaseId"].as_str().unwrap().to_owned();
+            // A replay, byte for byte, and a fresh request under a sequence already spent: both dropped.
+            socket.send(Message::Text(signed.into())).await.unwrap();
+            let heartbeat = |n| json!({"type":"heartbeat","requestId":id(n),"leaseId":lease});
+            socket.send(Message::Text(lane_operation(&heartbeat(9), LANE_DEVICE, Some(key.proof(LABEL, &heartbeat(9).to_string(), ids, 5))).into())).await.unwrap();
+            assert_eq!(lane_text(&mut socket, Duration::from_millis(500)).await, None, "a replayed proof is never answered");
+
+            // Heartbeats keep a lease, and FT transmit with it: unsigned, refused; signed, renewed.
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&heartbeat(10), LANE_DEVICE, None)).await["error"], "stationUnsupported");
+            let renewed = lane_exchange(&mut socket, lane_operation(&heartbeat(11), LANE_DEVICE, Some(key.proof(LABEL, &heartbeat(11).to_string(), ids, 6)))).await;
+            assert_eq!(renewed["value"]["phase"], "controlling", "{renewed}");
+            let epoch = renewed["value"]["transmitEpoch"].as_str().expect("the controller holds the stop token").to_owned();
+            // A release the browser did not sign releases nothing.
+            let release = |n| json!({"type":"release","requestId":id(n),"leaseId":lease});
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&release(12), LANE_DEVICE, None)).await["error"], "stationUnsupported");
+            let forged = forger.proof(LABEL, &release(13).to_string(), ids, 7);
+            assert_eq!(lane_exchange(&mut socket, lane_operation(&release(13), LANE_DEVICE, Some(forged))).await["error"], "deviceKeyMismatch");
+            let still = lane_exchange(&mut socket, lane_operation(&heartbeat(14), LANE_DEVICE, Some(key.proof(LABEL, &heartbeat(14).to_string(), ids, 8)))).await;
+            assert_eq!(still["value"]["phase"], "controlling", "the refused releases released nothing: {still}");
+            // Stop never needs a proof: a forged one only stops.
+            let stop = lane_exchange(&mut socket, lane_operation(&json!({"type":"stopTransmit","requestId":id(15),"stationBootId":boot,"leaseId":lease,"transmitEpoch":epoch}), LANE_DEVICE, None)).await;
+            assert_eq!(stop["value"], json!({"stop":"accepted"}), "{stop}");
+            // The signed release does release.
+            let released = lane_exchange(&mut socket, lane_operation(&release(16), LANE_DEVICE, Some(key.proof(LABEL, &release(16).to_string(), ids, 9)))).await;
+            assert_eq!(released["value"]["phase"], "available", "{released}");
+            cancel.send(true).unwrap();
+        });
+        let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+        let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        relay.await.unwrap();
+        assert_eq!(served, Ok(()), "the session ended because Remote stopped");
+    });
+}
+
+#[test]
+#[cfg(feature = "radio")]
+fn s1m1_listen_takes_only_what_the_pinned_device_key_signed() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    const OPERATION: &str = "nexus-operation/1";
+    const LISTEN: &str = "nexus-listen/1";
+    let key = LaneKey::new();
+    let forger = LaneKey::new();
+    let ids = [LANE_STATION, LANE_DEVICE, LANE_SESSION];
+    let feed = tempo_audio::receive_encode::DetachedFeed::new(48_000);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let (station_io, relay_io) = tokio::io::duplex(65536);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let status = lane_station(&key);
+        let (cancel, cancellation) = watch::channel(false);
+        let relay = tokio::spawn(async move {
+            let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+            let id = |n: u32| format!("00000000-0000-4000-8000-0000000002{n:02x}");
+            let state = lane_exchange(&mut socket, lane_operation(&json!({"type":"state","requestId":id(1)}), LANE_DEVICE, None)).await;
+            let acquire = json!({"type":"acquire","requestId":id(2),"stationBootId":state["value"]["stationBootId"]});
+            let owner = lane_exchange(&mut socket, lane_operation(&acquire, LANE_DEVICE, Some(key.proof(OPERATION, &acquire.to_string(), ids, 1)))).await;
+            let lease = owner["value"]["leaseId"].as_str().expect("a signed acquire takes control").to_owned();
+            // The canonical body a Listen proof covers: what it asks, and under which lease.
+            let body = |listening: bool, lease: &str| format!(r#"{{"listening":{listening},"leaseId":"{lease}"}}"#);
+            let listen = |lease: &str, proof: Option<serde_json::Value>| {
+                let proof = proof.map(|p| format!(r#","proof":{p}"#)).unwrap_or_default();
+                format!(r#"{{"type":"audioListen","sessionId":"{LANE_SESSION}","deviceId":"{LANE_DEVICE}","listening":true,"leaseId":"{lease}"{proof}}}"#)
+            };
+            // THE FINDING: Listen on the relay's word alone.
+            let unsigned = lane_exchange(&mut socket, listen(&lease, None)).await;
+            assert_eq!(unsigned["type"], "audioState");
+            assert_eq!(unsigned["listening"], false, "an unsigned Listen is refused: {unsigned}");
+            let forged = lane_exchange(&mut socket, listen(&lease, Some(forger.proof(LISTEN, &body(true, &lease), ids, 2)))).await;
+            assert_eq!((forged["listening"].clone(), forged["reason"].clone()), (json!(false), json!("deviceKeyMismatch")), "{forged}");
+            // A proof for an operation is not a proof for Listen, and the lease it names is covered.
+            let operation_label = key.proof(OPERATION, &body(true, &lease), ids, 3);
+            assert_eq!(lane_exchange(&mut socket, listen(&lease, Some(operation_label))).await["reason"], "deviceKeyMismatch");
+            let other_lease = key.proof(LISTEN, &body(true, LANE_STATION), ids, 4);
+            assert_eq!(lane_exchange(&mut socket, listen(&lease, Some(other_lease))).await["reason"], "deviceKeyMismatch");
+            // POSITIVE CONTROL: signed as the page signs it, the station listens.
+            let heard = lane_exchange(&mut socket, listen(&lease, Some(key.proof(LISTEN, &body(true, &lease), ids, 5)))).await;
+            assert_eq!((heard["listening"].clone(), heard.get("reason").cloned()), (json!(true), None), "{heard}");
+            cancel.send(true).unwrap();
+        });
+        let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+        let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: Some(audio::ReceiveFanout::new(feed.feed.clone())), stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        relay.await.unwrap();
+        assert_eq!(served, Ok(()), "the session ended because Remote stopped");
+    });
+}
+
 // ---- Remote across a Nexus restart (operator decision 2026-09-13) --------------------------------
 //
 // A restart is simulated the way the probe's `restart` does it: drop the Service and start a new
@@ -1296,6 +1608,8 @@ const APPROVED_UNTIL: u64 = 4_102_444_800_000; // 2100-01-01, far past any test 
 struct FakeCloud {
     origin: String,
     devices: Arc<Mutex<String>>,
+    /// The signing key the service holds for the station (S3-M1): the first one sent to it.
+    station_key: Arc<Mutex<Option<String>>>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
@@ -1316,9 +1630,12 @@ async fn fake_cloud() -> FakeCloud {
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let devices = Arc::new(Mutex::new(device_list(1, APPROVED_UNTIL)));
     let served = devices.clone();
+    let station_key = Arc::new(Mutex::new(None::<String>));
+    let held = station_key.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let served = served.clone();
+            let held = held.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -1422,6 +1739,30 @@ async fn fake_cloud() -> FakeCloud {
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke ") {
                     ("200 OK", r#"{"ok":true}"#.to_string())
+                } else if head.contains("/native/key ") {
+                    // S3-M1: the first key a station sends is kept; the same one again is fine; any
+                    // other is refused by name.
+                    let sent = serde_json::from_slice::<serde_json::Value>(&request[head_end..])
+                        .ok()
+                        .and_then(|v| v["publicKey"].as_str().map(str::to_string));
+                    let mut held = held.lock().unwrap();
+                    match (sent, held.clone()) {
+                        (Some(sent), None) => {
+                            *held = Some(sent);
+                            ("200 OK", r#"{"ok":true}"#.to_string())
+                        }
+                        (Some(sent), Some(kept)) if sent == kept => {
+                            ("200 OK", r#"{"ok":true}"#.to_string())
+                        }
+                        (Some(_), Some(_)) => (
+                            "409 Conflict",
+                            r#"{"error":"stationKeyPinned"}"#.to_string(),
+                        ),
+                        (None, _) => (
+                            "400 Bad Request",
+                            r#"{"error":"invalidRequest"}"#.to_string(),
+                        ),
+                    }
                 } else {
                     ("503 Service Unavailable", "{}".to_string())
                 };
@@ -1434,7 +1775,11 @@ async fn fake_cloud() -> FakeCloud {
             });
         }
     });
-    FakeCloud { origin, devices }
+    FakeCloud {
+        origin,
+        devices,
+        station_key,
+    }
 }
 fn paired_vault(origin: &str) -> MemoryVault {
     let vault = MemoryVault::default();
@@ -2470,6 +2815,7 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
     let refused = FakeCloud {
         origin: refusing_cloud("403 Forbidden", r#"{"error":"serviceMoved"}"#).await,
         devices: Arc::new(Mutex::new(String::new())),
+        station_key: Default::default(),
     };
     let vault = paired_vault(&refused.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -2893,4 +3239,179 @@ async fn a5_approving_the_pairing_pins_the_key_the_confirming_browser_brought() 
             "keyed={keyed}: the pins entry"
         );
     }
+}
+
+// ---- The station's own signing key (security review S3-M1) ---------------------------------------
+//
+// The key that signs the station's stream answers is made once for each pairing, kept in its own
+// vault entry bound to that pairing, sent to the service before every connection, and goes with the
+// pairing. The fake cloud keeps the first key it is sent and refuses any other, as the service does.
+
+/// The public half of the station key the vault holds, or `None`.
+fn kept_station_key(vault: &MemoryVault) -> Option<String> {
+    let kept = vault.values.lock().unwrap().get("stationKey").cloned()?;
+    let kept: vault::StationKey = serde_json::from_str(&kept).ok()?;
+    Some(
+        station_key::Signer::restore(&kept.pkcs8)?
+            .public_key()
+            .to_string(),
+    )
+}
+async fn sent_station_key(cloud: &FakeCloud) -> Option<String> {
+    for _ in 0..250 {
+        let sent = cloud.station_key.lock().unwrap().clone();
+        if sent.is_some() {
+            return sent;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    None
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3m1_approving_a_pairing_makes_its_key_which_a_restart_keeps_and_revoking_removes() {
+    let cloud = fake_cloud().await;
+    let vault = MemoryVault::default();
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    service
+        .action(Action::Begin {
+            name: "Test station".into(),
+        })
+        .await
+        .unwrap();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(kept_station_key(&vault), None, "no key before the pairing");
+    service
+        .action(Action::Approve {
+            enrollment_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+            transmit: false,
+        })
+        .await
+        .unwrap();
+    let made = kept_station_key(&vault).expect("approving the pairing makes the station's key");
+    assert!(tempo_stream::protocol::device_key(&made), "a P-256 SPKI");
+    let kept: vault::StationKey =
+        serde_json::from_str(&vault.values.lock().unwrap()["stationKey"]).unwrap();
+    assert_eq!(kept.binding.station_id, STATION, "bound to this pairing");
+    // Approving turned Remote on, and the service is sent the public half before the station connects.
+    assert_eq!(
+        sent_station_key(&cloud).await.as_deref(),
+        Some(made.as_str())
+    );
+    let status = service.status().unwrap();
+    assert!(!status.key_refused, "the service took it");
+    assert!(
+        !serde_json::to_string(&status)
+            .unwrap()
+            .contains(&kept.pkcs8),
+        "the private key is in no status"
+    );
+
+    service.action(Action::Disable {}).await.unwrap();
+    settle().await;
+    drop(service);
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert_eq!(
+        kept_station_key(&vault).as_deref(),
+        Some(made.as_str()),
+        "a restart signs with the key it made, never a new one"
+    );
+    service.action(Action::Forget {}).await.unwrap();
+    assert_eq!(
+        kept_station_key(&vault),
+        None,
+        "the key goes with the pairing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3m1_a_pairing_from_before_the_key_gets_one_once_and_sends_it() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    assert_eq!(
+        kept_station_key(&vault),
+        None,
+        "premise: paired before the key"
+    );
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let made = kept_station_key(&vault).expect("made at the first start with the pairing");
+    settle().await;
+    drop(service);
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert_eq!(kept_station_key(&vault), Some(made.clone()), "made once");
+    assert!(on(&service.action(Action::Enable {}).await.unwrap()));
+    assert_eq!(sent_station_key(&cloud).await, Some(made));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3m1_a_locked_credential_store_makes_no_key() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    vault.fail.store(true, Ordering::Relaxed);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    settle().await;
+    assert_eq!(
+        kept_station_key(&vault),
+        None,
+        "a store that will not answer may hold the key: nothing is made in its place"
+    );
+    drop(service);
+    // Control: the same pairing, with the store answering, gets its key.
+    vault.fail.store(false, Ordering::Relaxed);
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert!(kept_station_key(&vault).is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3m1_a_service_holding_another_key_for_the_station_is_said_at_the_shack() {
+    let cloud = fake_cloud().await;
+    let held = station_key::Signer::generate()
+        .unwrap()
+        .0
+        .public_key()
+        .to_string();
+    *cloud.station_key.lock().unwrap() = Some(held.clone());
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert!(
+        !service.status().unwrap().key_refused,
+        "positive control: nothing said before the service is asked"
+    );
+    assert!(on(&service.action(Action::Enable {}).await.unwrap()));
+    eventually(&service, "the refusal said at the shack", |s| s.key_refused).await;
+    assert_eq!(
+        cloud.station_key.lock().unwrap().as_deref(),
+        Some(held.as_str()),
+        "the service's key is never replaced"
+    );
+}
+
+#[test]
+fn s3m1_a_station_key_record_fits_the_windows_credential_blob() {
+    let (_, pkcs8) = station_key::Signer::generate().unwrap();
+    let record = vault::StationKey {
+        binding: Binding {
+            origin: REMOTE_ORIGIN.into(),
+            station_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+        },
+        pkcs8,
+    };
+    let bytes = serde_json::to_string(&record)
+        .unwrap()
+        .encode_utf16()
+        .count()
+        * 2;
+    assert!(bytes <= 2560, "{bytes} bytes");
 }

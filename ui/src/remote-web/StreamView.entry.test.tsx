@@ -12,7 +12,7 @@ import type { HostedConnection } from './client'
 import type { OperationState } from './operation-protocol'
 import type { OperationView } from './operation-client'
 import type { AudioView } from './audio-listen'
-import { ANSWER, LEASE, SIGNAL, byName, harness } from './stream-link.testkit'
+import { ANSWER, LEASE, SIGNAL, answerChecked, byName, harness } from './stream-link.testkit'
 
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
@@ -93,7 +93,7 @@ it('opened from the station card, the stream starts on its own, once: one acquir
   await v.settle()
   expect(v.h.signals.filter(s => s.payload.kind === 'offer'), 'the offer goes under the lease this session holds').toEqual([
     expect.objectContaining({ leaseId: LEASE })])
-  await act(async () => { v.h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await Promise.resolve() })
+  await act(async () => { v.h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await answerChecked() })
   act(() => { v.h.link.receive(byName(SIGNAL.roomToBrowser, 'refused: streamClosed')) })
   await v.settle()
   // The ask was consumed by the start: re-reads, a fresh state, time passing - none of them re-offer.
@@ -182,7 +182,7 @@ it('the beta line is on the stream page the whole time: before the stream, and w
   const line = () => document.querySelector('.remote-stream-header .remote-beta')
   expect(line()?.textContent).toBe(`Beta ${BETA}`)
   await v.settle()
-  await act(async () => { v.h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await Promise.resolve() })
+  await act(async () => { v.h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await answerChecked() })
   act(() => {
     v.h.peer.ontrack?.({ track: 'track', streams: ['media'] })
     for (const label of ['control', 'ptt', 'audio']) v.h.peer.channel(label).open()

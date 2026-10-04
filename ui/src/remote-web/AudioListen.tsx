@@ -79,6 +79,9 @@ export function audioEnded(reason: string | null): string {
     : reason === 'audioInUse' ? t('remote.audio.inUse')
     : reason === 'notController' ? t('remote.audio.notController')
     : reason === 'audioStopped' ? t('remote.audio.stopped')
+    // S1-M1: the station holds no key for this browser, or another one: approved again there.
+    : reason === 'deviceNotPinned' ? t('remote.listen.notPinned')
+    : reason === 'deviceKeyMismatch' ? t('remote.listen.keyChanged')
     : t('remote.audio.unavailable')
 }
 

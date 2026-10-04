@@ -3,6 +3,7 @@
 import type { Peer } from '../remote-monitor/relay'
 import { object } from './display-validation'
 import { operationEvent, operationId, operationRequest, operationResponse } from './operation-protocol'
+import { laneProof } from './lane-proof'
 import { controlVersion, parseOperationVersion, type OperationVersion } from './operation-version'
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 // `commandUntil` is how long this browser's account may still command the station: the adapter
@@ -42,13 +43,17 @@ function deliver(peer: Peer, message: string): boolean {
     return false
   }
 }
+/** `laneVersion` 1: the station takes the browser's proof on a request (S1-M1, `lane-proof.ts`), and
+ *  requires it. Any other station refuses a field it does not know by closing its socket, so it is
+ *  never handed one. */
+type Station = { peer: Peer; supported: boolean; operationVersion?: number; laneVersion?: number }
 export class OperationRelay {
-  private station: { peer: Peer; supported: boolean; operationVersion?: number } | null = null
+  private station: Station | null = null
   private browsers = new Map<string, Browser>()
   private pending = new Map<string, Pending>()
   private rates = new Map<string, number[]>()
   private stopRates = new Map<string, number[]>()
-  sync(station: { peer: Peer; supported: boolean; operationVersion?: number } | null, browsers: Browser[], now: number): void {
+  sync(station: Station | null, browsers: Browser[], now: number): void {
     const next = new Map(browsers.map((b) => [b.sessionId, b]))
     for (const [id] of this.browsers)
       if (!next.has(id)) {
@@ -77,7 +82,11 @@ export class OperationRelay {
     if (!browser) return
     try {
       const versioned = !!raw && typeof raw === 'object' && 'operationVersion' in raw
-      const wire = object(raw, ['type', 'request', ...(versioned ? ['operationVersion'] : [])])
+      const signed = !!raw && typeof raw === 'object' && 'proof' in raw
+      const wire = object(raw, ['type', 'request', ...(versioned ? ['operationVersion'] : []), ...(signed ? ['proof'] : [])])
+      // S1-M1: the browser's own proof on this request, its shape checked here; whether it holds is
+      // the station's alone to say.
+      const proof = signed ? laneProof(wire.proof) : null
       if (wire.type !== 'operationRequest') throw Error()
       const browserVersion = versioned ? parseOperationVersion(wire.operationVersion) : 1
       if (!browserVersion || versioned && browserVersion === 1) throw Error()
@@ -161,7 +170,9 @@ export class OperationRelay {
             sessionId,
             deviceId: browser.deviceId,
             ...(version >= 2 ? { operationVersion: version } : {}),
-            request
+            // `request` exactly as the page sent it: the bytes its proof covers.
+            request,
+            ...(proof && this.station.laneVersion === 1 ? { proof } : {})
           })
         )
       ) {

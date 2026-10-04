@@ -194,6 +194,35 @@ export function offerBinding(fingerprintDigest: Uint8Array, stationId: string, d
   return new Uint8Array([...text.encode(OFFER_BINDING_LABEL), ...fingerprintDigest, ...text.encode(stationId), ...text.encode(deviceId), ...text.encode(sessionId)])
 }
 
+// ── The answer, signed by the station (security review S3-M1) ────────────────────────────────────
+// The other way round: the station signs its answer with its own key, the one its pairing record at
+// the service holds, over both DTLS fingerprints and the three ids, on one session-level SDP line.
+// The page checks it before the browser is handed the answer (`station-key.ts`), so a relay that
+// answers the page's offer itself cannot stand in for the station.
+
+/** What the station's signature over its answer begins with. */
+export const ANSWER_BINDING_LABEL = 'nexus-stream-answer/1'
+/** The session-level line that carries it: this, then the signature as lowercase hex. A browser
+ *  ignores an attribute it does not know, so the line asks nothing of the browser. */
+export const ANSWER_SIGNATURE_ATTRIBUTE = 'a=nexus-station-signature:'
+/** The bytes the station's answer signature covers: the label, SHA-256 of the answer's fingerprint,
+ *  SHA-256 of the offer's (the caller hashes), and the station, device and session ids - 193 bytes. */
+export function answerBinding(answerDigest: Uint8Array, offerDigest: Uint8Array, stationId: string, deviceId: string, sessionId: string): Uint8Array {
+  const text = new TextEncoder()
+  return new Uint8Array([...text.encode(ANSWER_BINDING_LABEL), ...answerDigest, ...offerDigest,
+    ...text.encode(stationId), ...text.encode(deviceId), ...text.encode(sessionId)])
+}
+/** The station's signature an answer carries: exactly one such line, in its session section, of the
+ *  right length. Null for none, two, one inside a media section, or one of the wrong shape. */
+export function answerSignature(description: string): string | null {
+  const lines = description.split(/\r\n|\n/)
+  const media = lines.findIndex(line => line.startsWith('m='))
+  const signed = lines.flatMap((line, at) => line.startsWith(ANSWER_SIGNATURE_ATTRIBUTE) ? [{ line, at }] : [])
+  if (signed.length !== 1 || (media >= 0 && signed[0].at > media)) return null
+  const signature = signed[0].line.slice(ANSWER_SIGNATURE_ATTRIBUTE.length)
+  return lowerHex(signature, STREAM_SIGNATURE_HEX_CHARS) ? signature : null
+}
+
 /** Every media section's transport a stream may use, per the contract: SRTP keyed by DTLS for the
  *  picture, SCTP over DTLS for the data channels. Plain RTP (`RTP/AVP`, `RTP/AVPF`) and SDES-keyed
  *  SRTP (`RTP/SAVP`, `RTP/SAVPF`) are refused, whatever else the answer says. */

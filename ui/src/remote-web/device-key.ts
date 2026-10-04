@@ -10,6 +10,7 @@
 //
 // A browser without IndexedDB (a locked-down profile) has no key: it can still do everything it
 // could before, and the station refuses its stream by name.
+import { laneBinding, type LaneProof } from './lane-proof'
 import { offerBinding, offerFingerprint, toHex, type OfferSignature } from './stream-protocol'
 
 export type DeviceKey = {
@@ -109,4 +110,12 @@ export async function signOffer(key: DeviceKey, sdp: string, stationId: string, 
   if (!fingerprint) return null
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(fingerprint)))
   return { publicKey: key.publicKey, signature: toHex(await key.sign(offerBinding(digest, stationId, deviceId, sessionId))) }
+}
+
+/** This browser's proof on one message of the relay's older lanes (security review S1-M1,
+ *  `lane-proof.ts`): this station's key over the lane, the message's own bytes, the three ids and the
+ *  session's next number. */
+export async function signLane(key: DeviceKey, lane: string, body: string, stationId: string, deviceId: string, sessionId: string, seq: number): Promise<LaneProof> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body)))
+  return { publicKey: key.publicKey, seq, signature: toHex(await key.sign(laneBinding(lane, digest, stationId, deviceId, sessionId, seq))) }
 }

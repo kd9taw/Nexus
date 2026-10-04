@@ -616,7 +616,11 @@ export const OPERATION_ERRORS = [
   'staleConnection',
   'stationUnsupported',
   'stationUnavailable',
-  'operationUnknown'
+  'operationUnknown',
+  // S1-M1: this browser's proof on a request failed. Only a page that signs is ever told these: a
+  // request with no proof is refused `stationUnsupported`, which every page reads.
+  'deviceNotPinned',
+  'deviceKeyMismatch'
 ] as const
 /** Operation v5. The station's unprompted word that a control settled: the outcome a `result`
  * read would return, and the state a `state` read would return now - one object, computed
