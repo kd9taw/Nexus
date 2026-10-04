@@ -1,7 +1,8 @@
 //! Nexus's own Flex client in the radio loop: native audio on the client's one session, the
-//! transmit audio source written only at a quiet point, and the FT-timing measurement of DAX TX
+//! transmit audio source written only at a quiet point, the FT-timing measurement of DAX TX
 //! against the sound card route (the operator signs off on the numbers before native audio can
-//! become anything but opt-in).
+//! become anything but opt-in), and what the client must tell the operator about the transmitter:
+//! its alarms on the CAT status, and an APRS key it refuses.
 //!
 //! The radio is the SmartSDR simulator (`tempo-flexsim`) on loopback; the loop is the real
 //! `RadioLoop::step`, driving the real `Rig` into the client's rigctld shim, as `run_radio` does.
@@ -50,6 +51,9 @@ struct FlexScene {
     backend: TeeBackend,
     sim: Simulator,
     rebuilt: Arc<std::sync::atomic::AtomicBool>,
+    /// A rebuild of the CAT link starts a fresh client on the same radio, as `open_cat` does, in
+    /// place of failing the test.
+    replace_on_rebuild: bool,
 }
 
 impl FlexScene {
@@ -61,6 +65,21 @@ impl FlexScene {
 
     /// The same scene on a simulated radio that follows `session`.
     fn with_session(native: bool, session: SimSession) -> FlexScene {
+        FlexScene::with_faults(
+            native,
+            session,
+            Vec::new(),
+            tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+        )
+    }
+
+    /// The same scene on a simulated radio with `faults`, its client on `config`.
+    fn with_faults(
+        native: bool,
+        session: SimSession,
+        faults: Vec<tempo_flexsim::Fault>,
+        config: tempo_net::flex::session::Config,
+    ) -> FlexScene {
         let sim = Simulator::start(
             session,
             SimConfig {
@@ -77,7 +96,7 @@ impl FlexScene {
                     until: Some("stream remove 0x04000001".into()),
                 }],
                 keepalive_timeout: Duration::from_secs(600),
-                ..SimConfig::default()
+                faults,
             },
         )
         .expect("the simulator starts");
@@ -102,7 +121,7 @@ impl FlexScene {
         let daemon = FlexDaemon::start_full(
             sim.tcp_addr(),
             0,
-            tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+            config,
             Options {
                 vita: sim.udp_addr(),
                 registration: sim.udp_addr(),
@@ -129,6 +148,7 @@ impl FlexScene {
             backend: TeeBackend::default(),
             sim,
             rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            replace_on_rebuild: false,
         }
     }
 
@@ -138,9 +158,26 @@ impl FlexScene {
         let backend = self.backend.clone();
         let mut reopen_audio = move |_t: &Transport| Ok::<_, String>(backend.clone());
         let rebuilt = self.rebuilt.clone();
-        let mut reopen_rig = move |_t: &Transport, _coexist: bool| {
+        let (replace, radio) = (self.replace_on_rebuild, self.sim.tcp_addr());
+        let mut reopen_rig = move |t: &Transport, _coexist: bool| {
             rebuilt.store(true, std::sync::atomic::Ordering::Relaxed);
-            (Rig::vox(), None, CatProbe::status(None, ""))
+            if !replace {
+                return (Rig::vox(), None, CatProbe::status(None, ""));
+            }
+            // What `open_cat` does for a radio Nexus's own client serves: a fresh client, which
+            // remembers the handles of the sessions it replaces, probed as every open is.
+            match FlexDaemon::start(radio, 0) {
+                Ok(d) => {
+                    let mut rig = Rig::rigctld(&format!("127.0.0.1:{}", d.local_addr().port()));
+                    let probe = finish_cat_open(&mut rig, t);
+                    (rig, Some(CatDaemon::Flex(d)), probe)
+                }
+                Err(e) => (
+                    Rig::vox(),
+                    None,
+                    CatProbe::status(Some(false), e.to_string()),
+                ),
+            }
         };
         self.state
             .step(
@@ -155,7 +192,7 @@ impl FlexScene {
             )
             .unwrap();
         assert!(
-            !self.rebuilt.load(std::sync::atomic::Ordering::Relaxed),
+            self.replace_on_rebuild || !self.rebuilt.load(std::sync::atomic::Ordering::Relaxed),
             "the loop rebuilt its transport: the client under test is gone"
         );
     }
@@ -589,6 +626,269 @@ fn aprs_and_sstv_key_while_the_radio_takes_dax() {
         .sstv_send(picture(), "Scottie 1".to_string())
         .unwrap();
     run_until(&mut s, "the picture never keyed", |s| keys(s) == 3);
+}
+
+// ── What the client must tell the operator about the transmitter ─────────────────────────────
+
+/// The CAT status the operator reads (the cockpit's CAT chip): its verdict and its line.
+fn cat_status(s: &FlexScene) -> (Option<bool>, String) {
+    let radio = s.engine.lock().unwrap().snapshot().radio;
+    (radio.cat_ok, radio.cat_detail)
+}
+
+/// Whether a CAT status line carries one of the client's alarms about the transmitter.
+fn names_an_alarm(detail: &str) -> bool {
+    [
+        "may still be transmitting",
+        "still holds the transmitter",
+        "stopped answering",
+    ]
+    .iter()
+    .any(|words| detail.contains(words))
+}
+
+/// Queue a position beacon, as the APRS cockpit's Beacon button does.
+fn beacon(s: &FlexScene) {
+    s.engine
+        .lock()
+        .unwrap()
+        .aprs_beacon(41.88, -87.63, '/', '>', "", &[])
+        .expect("the beacon is queued");
+}
+
+/// How many `xmit 0` the simulated radio has been sent.
+fn unkeys(s: &FlexScene) -> usize {
+    s.log().iter().filter(|(_, e)| command(e, "xmit 0")).count()
+}
+
+/// Run the loop a tick at a time until the tick that rebuilds the CAT link, and read the CAT
+/// status that tick left: what the operator reads once the client has been restarted.
+fn status_after_the_rebuild(s: &mut FlexScene) -> String {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        s.step(now_unix_ms());
+        if s.rebuilt.load(std::sync::atomic::Ordering::Relaxed) {
+            return cat_status(s).1;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the loop never rebuilt the CAT link"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The client's session, its unkey deadline shortened as the client's own tests shorten it.
+fn short_deadline() -> tempo_net::flex::session::Config {
+    let mut config = tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap());
+    config.unkey_deadline_ms = 1_500;
+    config
+}
+
+/// The scene with the beacon's over lost: the radio drops the client's connection 100 ms into the
+/// over and stays keyed under the lost session's handle. A rebuild starts a fresh client.
+fn lost_mid_over() -> FlexScene {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::DisconnectMidOver {
+            after: Duration::from_millis(100),
+            radio_stays_keyed: true,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    s.replace_on_rebuild = true;
+    s
+}
+
+/// ⭐ THE ALARM LEADS THE RESTART THAT FOLLOWS IT. The radio never confirms the unkey after a
+/// beacon's over: the client says the radio may still be transmitting and its session closes, and
+/// the loop, in one tick, reads that alarm and restarts the client. The restart's report goes on
+/// the same status line, so after that tick the operator must read the alarm first, then the
+/// restart.
+#[test]
+fn a_flex_alarm_leads_the_restart_that_follows_it() {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::StuckTransmit],
+        short_deadline(),
+    );
+    s.replace_on_rebuild = true;
+    beacon(&s);
+    let detail = status_after_the_rebuild(&mut s);
+    assert_eq!(keys(&s), 1, "the beacon's over was keyed");
+    assert!(
+        detail.starts_with(
+            "the radio did not confirm the unkey — it may still be transmitting. Check the radio \
+             now. The CAT helper (rigctld) stopped and was restarted."
+        ),
+        "{detail}"
+    );
+}
+
+/// ⭐ …and a session LOST during the over: nothing confirmed the unkey, so the alarm is the same,
+/// the radio may still be transmitting, and it leads the restart's report as well.
+#[test]
+fn a_session_lost_mid_over_is_the_alarm_that_leads_the_restart() {
+    let mut s = lost_mid_over();
+    beacon(&s);
+    let detail = status_after_the_rebuild(&mut s);
+    assert_eq!(keys(&s), 1, "the beacon's over was keyed");
+    assert!(
+        detail.starts_with(
+            "the connection to the radio was lost during a transmission — it may still be \
+             transmitting. Check the radio now."
+        ),
+        "{detail}"
+    );
+}
+
+/// ⭐ A LIVE CLIENT'S ALARM REACHES THE CAT STATUS. The client that replaces the lost one finds the
+/// lost session still holding the transmitter: it will not key under it, and says so while it
+/// runs. The loop read a client's alarm only once the client was dead, so this reached only the
+/// app log. It is shown once, in the lane the loop's transmit notices use, with the link's verdict
+/// as it was: a transmit fault, not a CAT fault.
+#[test]
+fn a_live_clients_alarm_reaches_the_cat_status_once() {
+    let mut s = lost_mid_over();
+    beacon(&s);
+    status_after_the_rebuild(&mut s);
+    run_until(&mut s, "the operator was never told", |s| {
+        cat_status(s).1.contains("still holds the transmitter")
+    });
+    let (ok, detail) = cat_status(&s);
+    assert!(
+        detail.starts_with("an earlier Nexus session (0x"),
+        "{detail}"
+    );
+    assert_eq!(ok, Some(true), "the link's verdict, kept");
+    let shown = s.engine.lock().unwrap().cat_probe_gen();
+    s.run(500);
+    assert_eq!(
+        s.engine.lock().unwrap().cat_probe_gen(),
+        shown,
+        "shown once, not written again every tick"
+    );
+}
+
+/// The control: an over whose unkey the radio confirms puts no alarm on the CAT status.
+#[test]
+fn a_confirmed_unkey_puts_no_alarm_on_the_cat_status() {
+    let mut s = FlexScene::new(false);
+    beacon(&s);
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+    run_until(&mut s, "the beacon's over never ended", idle);
+    s.run(1_000);
+    let (_, detail) = cat_status(&s);
+    assert!(!names_an_alarm(&detail), "{detail}");
+}
+
+/// The control: a session lost while NOTHING is keyed (the radio stops answering pings while the
+/// station is idle, and the client's keepalive ends the session) raises no alarm: the restart is
+/// all the status says.
+#[test]
+fn a_session_lost_while_idle_raises_no_alarm() {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::DropPings {
+            first: 1,
+            count: 1_000,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    s.replace_on_rebuild = true;
+    let detail = status_after_the_rebuild(&mut s);
+    assert_eq!(keys(&s), 0, "nothing was keyed");
+    assert!(
+        detail.starts_with("the CAT helper (rigctld) stopped and was restarted."),
+        "{detail}"
+    );
+    assert!(!names_an_alarm(&detail), "{detail}");
+}
+
+/// Whether the client would admit a key: nothing of ours keyed, and its readback has seen the
+/// radio idle.
+fn client_ready(s: &FlexScene) -> bool {
+    s.state
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::flex)
+        .is_some_and(|d| {
+            let session = d.session().snapshot();
+            !session.keyed && session.transmit_ready
+        })
+}
+
+/// The bundled radio letting go of the transmitter `ms` after an unkey (the interlock's last
+/// READY, naming no client) instead of 430 ms.
+fn slow_release(ms: u64) -> SimSession {
+    let mut s = SimSession::v4_gui_client();
+    for (pattern, rules) in &mut s.rules {
+        if *pattern == Pattern::Exact("xmit 0".to_string()) {
+            for item in rules.iter_mut().flat_map(|r| r.items.iter_mut()) {
+                if let Item::Wait(wait) = item {
+                    *wait = ms;
+                }
+            }
+        }
+    }
+    s
+}
+
+/// ⭐ A REFUSED APRS KEY IS REPORTED, NOT SILENT. A beacon queued the moment the last one's over
+/// has unkeyed meets a radio still letting go of the transmitter (three seconds here, so the
+/// window is certain): the client refuses the key, so the packet never goes out. The loop played
+/// it into the receiving radio and said nothing. The APRS status line says the radio did not
+/// accept the key, and nothing sends the packet later. The control, in the same scene: once the
+/// radio has let go, the next beacon keys.
+#[test]
+fn a_refused_aprs_key_is_reported_not_silent() {
+    let mut s = FlexScene::with_session(false, slow_release(3_000));
+    beacon(&s);
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+    run_until(&mut s, "the beacon's over never unkeyed", |s| {
+        unkeys(s) == 1 && s.state.tx_until_ms.is_none()
+    });
+    beacon(&s);
+    run_until(&mut s, "the second beacon never reached the key", |s| {
+        s.backend.played.lock().unwrap().len() == 2
+    });
+    s.run(300);
+    assert_eq!(
+        keys(&s),
+        1,
+        "the radio was never keyed for the second beacon"
+    );
+    let notice = s
+        .engine
+        .lock()
+        .unwrap()
+        .aprs_tx_notice()
+        .map(str::to_string);
+    assert!(
+        notice
+            .as_deref()
+            .is_some_and(|n| n.starts_with("APRS not sent: the radio did not accept the key")),
+        "{notice:?}"
+    );
+
+    // The refused over still ends with the loop's unkey, which here lands while the client waits
+    // for the first one's proof, so the radio starts its three-second release again. Wait for the
+    // client itself to read the radio idle.
+    run_until(&mut s, "the client never read the radio idle", |s| {
+        idle(s) && client_ready(s)
+    });
+    s.run(300);
+    assert_eq!(keys(&s), 1, "the refused packet was not sent later");
+    beacon(&s);
+    run_until(&mut s, "the next beacon never keyed", |s| keys(s) == 2);
+    assert_eq!(
+        s.engine.lock().unwrap().aprs_tx_notice(),
+        None,
+        "a beacon that keys clears the notice"
+    );
 }
 
 /// The percentiles of a sample, in ms.

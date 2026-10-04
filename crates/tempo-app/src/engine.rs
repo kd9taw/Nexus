@@ -1345,7 +1345,8 @@ const SSTV_STOPPED_CUT: &str = "SSTV stopped: the transmission was ended elsewhe
      radio switch or another stop) while the picture was going out, so the rest of it was not \
      sent. Send it again when you are ready.";
 /// …and the APRS cockpit's status line, when what was queued (beacons, messages, automatic acks)
-/// is dropped: by TX Off ([`Engine::set_tx_enabled`]), or refused at [`Engine::poll_aprs_tx`].
+/// is dropped: by TX Off ([`Engine::set_tx_enabled`]), refused at [`Engine::poll_aprs_tx`], or its
+/// key refused by the radio ([`Engine::aprs_key_refused`]).
 const APRS_REFUSED_TX_OFF: &str = "APRS stopped: transmit was turned off, so what was still \
      queued was dropped, not held for later. Send it again when you are ready.";
 const APRS_REFUSED_PRIVILEGES: &str = "APRS not sent: this frequency is outside your license \
@@ -1354,6 +1355,8 @@ const APRS_REFUSED_PRIVILEGES: &str = "APRS not sent: this frequency is outside 
 const APRS_REFUSED_RADIO_HAS_MIC: &str = "APRS not sent: the radio has the mic (Flex native DAX \
      audio, in a voice mode such as FM), so what was queued was dropped, not held for later. \
      Nothing was keyed.";
+const APRS_REFUSED_KEY: &str = "APRS not sent: the radio did not accept the key, so the packet \
+     did not go out. Send it again when you are ready.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -3484,13 +3487,17 @@ pub struct Engine {
     /// Decoder health — see [`AprsHealth`]. Written by the decode thread on every drain (not only
     /// when something decodes: "nothing arrived" is the reading that matters most). Reset on arm.
     aprs_health: AprsHealth,
-    /// Pre-rendered APRS TX audio (12 kHz) — beacons, messages, acks. The radio loop keys ONE at a
+    /// Pre-rendered APRS TX audio (12 kHz) — beacons, messages, acks — each with the station an
+    /// automatic ack answers (`None` for the operator's own sends). The radio loop keys ONE at a
     /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it, and TX Off or a refusal at the
     /// poll drops it with a notice ([`Self::aprs_tx_notice`]).
-    aprs_tx_queue: VecDeque<Vec<f32>>,
-    /// Why what was queued above was last DROPPED instead of sent (TX Off, or a refusal at
-    /// [`Engine::poll_aprs_tx`]): the APRS cockpit's status line. Cleared when the next frame
-    /// keys. `None` = nothing dropped since.
+    aprs_tx_queue: VecDeque<(Vec<f32>, Option<String>)>,
+    /// The station the frame [`Engine::poll_aprs_tx`] last handed the radio loop acks, when it is
+    /// an automatic ack: what [`Engine::aprs_key_refused`] names.
+    aprs_keying_ack: Option<String>,
+    /// Why what was queued above was last DROPPED instead of sent (TX Off, a refusal at
+    /// [`Engine::poll_aprs_tx`], or a key the radio refused): the APRS cockpit's status line.
+    /// Cleared when the next frame keys. `None` = nothing dropped since.
     aprs_tx_notice: Option<String>,
     /// Rolling APRS message line-number (001..999) for outgoing messages, so the recipient can ack.
     aprs_msg_seq: u16,
@@ -5279,6 +5286,7 @@ impl Engine {
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
+            aprs_keying_ack: None,
             aprs_tx_notice: None,
             aprs_msg_seq: 0,
             aprs_fm: false,
@@ -16875,7 +16883,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("Beacon rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
-        self.aprs_tx_queue.push_back(audio);
+        self.aprs_tx_queue.push_back((audio, None));
         Ok(())
     }
 
@@ -17073,7 +17081,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("Message rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
-        self.aprs_tx_queue.push_back(audio);
+        self.aprs_tx_queue.push_back((audio, None));
         Ok(())
     }
 
@@ -17137,7 +17145,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let audio = render_aprs_frame(&frame);
         if !audio.is_empty() {
             self.reset_tx_watchdog();
-            self.aprs_tx_queue.push_back(audio);
+            self.aprs_tx_queue
+                .push_back((audio, Some(from.to_string())));
         }
     }
 
@@ -17187,7 +17196,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return None;
         }
         self.aprs_tx_notice = None;
-        self.aprs_tx_queue.pop_front()
+        let (audio, ack) = self.aprs_tx_queue.pop_front()?;
+        self.aprs_keying_ack = ack;
+        Some(audio)
+    }
+
+    /// The radio did not accept the radio loop's key for the frame [`Self::poll_aprs_tx`] last
+    /// handed it (`why`: the rig's answer), so the frame did not go out. Like a refusal at the
+    /// poll, it is dropped, never sent later: a retry would meet the same refusal (Nexus's Flex
+    /// client refuses a key while the radio is still letting go of the last over). An automatic
+    /// ack is logged as skipped, as when the radio has the mic; the operator's own beacon or
+    /// message is logged, and the APRS cockpit's status line says so.
+    pub fn aprs_key_refused(&mut self, why: &str) {
+        match self.aprs_keying_ack.take() {
+            Some(to) => tempo_core::applog::info(
+                "tx",
+                &format!("APRS auto-ack to {to} skipped: the radio did not accept the key ({why})"),
+            ),
+            None => {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("APRS not keyed: the radio did not accept the key ({why}) (dropped)"),
+                );
+                self.aprs_tx_notice = Some(APRS_REFUSED_KEY.to_string());
+            }
+        }
     }
 
     /// Why what was queued for APRS was last dropped instead of sent, for the APRS cockpit's status

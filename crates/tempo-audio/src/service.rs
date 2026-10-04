@@ -5967,25 +5967,34 @@ impl RadioLoop {
             // Two independent triggers reopen the port: the configured port coming BACK, and
             // sustained silence past a few failed re-probes (with backoff between rebuilds).
             let suspect_rebuild = self.cat_rebuild_due(&want, now, rig.has_control());
+            // Nexus's Flex client says what the operator must know about the transmitter. Once its
+            // session has ended, why, when the transmitter is the reason (the radio did not confirm
+            // an unkey, or the session ended during a transmission): that is what the operator
+            // must read, not that a helper stopped. While it lives, each alarm once, as it is
+            // raised (an earlier session of ours still holds the transmitter, a ping went
+            // unanswered during an over): read only after a death, these reached only the log.
+            let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+            let flex_alarm = if daemon_died {
+                flex.and_then(crate::flex::FlexDaemon::alarm)
+            } else {
+                flex.and_then(crate::flex::FlexDaemon::take_new_alarm)
+            };
             if daemon_died {
                 crate::civ::diag::note("rigctld died: respawning the active radio's CAT daemon");
-                // Nexus's Flex client says why its session ended when the transmitter is the
-                // reason (the radio did not confirm an unkey): that is what the operator must
-                // read, not that a helper stopped.
-                let flex_alarm = self
-                    .rigctld_proc
-                    .as_ref()
-                    .and_then(CatDaemon::flex)
-                    .and_then(crate::flex::FlexDaemon::alarm);
                 let mut eng = engine_lock(engine);
                 eng.set_cat_status(
                     Some(false),
-                    flex_alarm.unwrap_or_else(|| {
+                    flex_alarm.clone().unwrap_or_else(|| {
                         "the CAT helper (rigctld) stopped — restarting it. If this keeps \
                          happening, check the radio's cable/port and Test CAT."
                             .to_string()
                     }),
                 );
+            } else if let Some(alarm) = &flex_alarm {
+                // A transmit fault, not a CAT fault: the lane the loop's transmit notices use,
+                // with the CAT verdict kept as it was.
+                let ok = self.cat_ok;
+                engine_lock(engine).set_cat_status(ok, alarm.clone());
             }
             if self.handoff_deferred {
                 // A radio switch is mid-flight but the handoff couldn't take the pool
@@ -6097,6 +6106,18 @@ impl RadioLoop {
                         .to_string()
                 } else {
                     detail
+                };
+                // …and so must the Flex client's alarm, ahead of it: the operator reads that the
+                // radio may still be transmitting before anything about the restart.
+                let detail = match &flex_alarm {
+                    Some(alarm) => {
+                        let (first, rest) =
+                            detail.split_at(detail.chars().next().map_or(0, char::len_utf8));
+                        format!("{alarm} {}{rest}", first.to_uppercase())
+                            .trim_end()
+                            .to_string()
+                    }
+                    None => detail,
                 };
                 self.rig_asserted = false; // fresh rig: unclaimed caches make the retune re-assert this tick
                 *rig = new_rig;
@@ -9505,10 +9526,17 @@ impl RadioLoop {
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now();
-                let _ = rig.ptt(true);
+                let key = rig.ptt(true);
                 backend.play(&buf);
                 let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
                 self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
+                // A key the radio refused sent nothing (Nexus's Flex client refuses one while the
+                // radio is still letting go of the last over): say so, and never send the frame
+                // again into the same refusal. Everything else runs as it always has:
+                // `tx_until_ms` still drops PTT.
+                if let Err(e) = key {
+                    engine_lock(engine).aprs_key_refused(&e.to_string());
+                }
             }
         }
 
