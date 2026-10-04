@@ -46,6 +46,11 @@ import { allFeatureIds, featureById, type View } from '../features/registry'
 import { dismissToast, subscribeToasts, withErrorToast } from '../toast'
 import { EN } from '../i18n'
 
+// THE BUDGET (2026-10-04). The App the hosted-page tests here mount is real work, and it scales with the CPU a test
+// gets: the slowest test takes 0.52 s on a quiet box, 3.8–4.6 s with a fifth of a CPU and 9.9–13.3 s with a tenth,
+// against vitest's 5 s default. 30 s is over twice the tenth; a test that hangs still fails, after 30 s.
+vi.setConfig({ testTimeout: 30_000 })
+
 vi.mock('../components/PhoneScope', () => ({ PhoneScope: () => <div/> }))
 vi.mock('../components/BandStrip', () => ({ BandStrip: () => <div/> }))
 vi.mock('../components/LogEntry', () => ({ LogEntry: () => <div/> }))

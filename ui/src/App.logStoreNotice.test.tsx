@@ -80,6 +80,11 @@ vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="wa
 
 import App from './App'
 
+// THE BUDGET (2026-10-04). The App this file mounts is real work, and it scales with the CPU a test gets: the
+// slowest test takes 0.56 s on a quiet box, 2.3–2.5 s with a fifth of a CPU and 4.6–4.8 s with a tenth, against
+// vitest's 5 s default. 15 s is over twice the tenth; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 let toasts: Toast[] = []
 let unsubscribe: () => void = () => {}
 

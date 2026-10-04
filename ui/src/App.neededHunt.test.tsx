@@ -113,6 +113,11 @@ vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="wa
 import App from './App'
 import { setHuntTarget, workSpot } from './api'
 
+// THE BUDGET (2026-10-04). The App this file mounts is real work, and it scales with the CPU a test gets: the
+// slowest test takes 0.55 s on a quiet box, 2.5–4.0 s with a fifth of a CPU and 5.0–6.3 s with a tenth, against
+// vitest's 5 s default. 15 s is over twice the tenth; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const row = (call: string) =>
   screen.getAllByRole('row').find((r) => r.getAttribute('aria-label')?.includes(call)) as HTMLElement
 
