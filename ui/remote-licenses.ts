@@ -29,9 +29,12 @@ export function bundledLicenses(moduleIds: Iterable<string>): string {
         if (pkg.name && pkg.version) {
           const key = `${pkg.name} ${pkg.version}`
           if (!packages.has(key)) {
-            const names = readdirSync(directory, { withFileTypes: true })
-              .filter(entry => entry.isFile() && /^(licen[cs]e|copying)([._-].*)?$/i.test(entry.name))
-              .map(entry => entry.name).sort()
+            const files = readdirSync(directory, { withFileTypes: true })
+              .filter(entry => entry.isFile()).map(entry => entry.name).sort()
+            const names = files.filter(name => /^(licen[cs]e|copying)([._-].*)?$/i.test(name))
+            // Apache-2.0 §4(d): the attribution in a package's NOTICE file travels with its
+            // license (h3-js has one). It never stands in for a missing license file.
+            const notices = files.filter(name => /^notice([._-].*)?$/i.test(name))
             // Radix's published leaf packages omit the monorepo license file.
             // Their package metadata declares MIT and this repository; the
             // retained text comes from its last LICENSE change (see NOTICE).
@@ -41,8 +44,8 @@ export function bundledLicenses(moduleIds: Iterable<string>): string {
             const scroll = !names.length && pkg.name === scrollReview.name && pkg.version === scrollReview.version
               && pkg.license === scrollReview.license && pkg.repository === scrollReview.repository
             if (!names.length && !radix && !scroll) { missing.add(key); break }
-            packages.set(key, radix ? radixLicense : scroll ? scrollLicense
-              : names.map(name => readFileSync(join(directory, name), 'utf8')).join('\n\n'))
+            const read = (name: string) => readFileSync(join(directory, name), 'utf8')
+            packages.set(key, [...(radix ? [radixLicense] : scroll ? [scrollLicense] : names.map(read)), ...notices.map(read)].join('\n\n'))
           }
           break
         }
