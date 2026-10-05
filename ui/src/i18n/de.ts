@@ -6182,6 +6182,8 @@ export const DE: PartialCatalog = {
   "shell.lane.parsecStop.what.rtty": "RTTY-Dauersenden",
   "shell.lane.parsecStop.what.psk": "PSK-Dauersenden",
   "shell.lane.parsecStop.what.tune": "Tune",
+  "shell.lane.slotKeyRefused.message": "PTT ABGELEHNT — TX GESTOPPT",
+  "shell.lane.slotKeyRefused.detail": "Das Funkgerät hat die PTT um {{time}} UTC nicht angenommen ({{why}}), daher wurde diese Sendung nicht gesendet und TX ausgeschaltet. Prüfen Sie Ihre PTT-Methode und CAT/Port und schalten Sie TX dann wieder ein.",
   "shell.lane.prop.offline.message": "Ausbreitung: keine Livedaten",
   "shell.lane.prop.offline.detail": "Noch keine Live-Ausbreitungsdaten — Rufzeichen in den Einstellungen setzen und die Internetverbindung prüfen.",
   "shell.lane.prop.cached.message": "Ausbreitung: Cache {{minutes}}m",

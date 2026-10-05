@@ -174,6 +174,7 @@ import { tickSatPassAlert } from './features/satPassAlert'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
+import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -700,6 +701,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('parsecStop', remote ? null : parsecStopLane(snap?.parsecPresence))
   }, [snap?.parsecPresence?.stoppedAt, snap?.parsecPresence?.stopped.join(','), remote])
+
+  // A slot over (FT8, FT4, JS8 …) the radio did not accept PTT for: the station dropped it and
+  // halted TX, as WSJT-X halts on a rig failure. The lane says so until TX is turned on again. Not
+  // on the Remote page, like the Parsec stop above: that page is frozen.
+  useEffect(() => {
+    setStatus('slotKeyRefused', remote ? null : slotKeyRefusedLane(snap?.radio.slotKeyRefused))
+  }, [snap?.radio.slotKeyRefused?.at, snap?.radio.slotKeyRefused?.why, remote])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —

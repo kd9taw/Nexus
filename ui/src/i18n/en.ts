@@ -9936,6 +9936,12 @@ export const EN = {
   'shell.lane.parsecStop.what.rtty': 'continuous RTTY',
   'shell.lane.parsecStop.what.psk': 'continuous PSK',
   'shell.lane.parsecStop.what.tune': 'Tune',
+  // The radio did not accept PTT for a slot over (FT8, FT4, JS8 and the other timed-slot modes):
+  // the station dropped the over and halted TX, as WSJT-X halts on a rig failure, and the lane
+  // keeps it until TX is turned on again. `{{why}}` is the radio's own answer, as data.
+  'shell.lane.slotKeyRefused.message': 'PTT REFUSED — TX STOPPED',
+  'shell.lane.slotKeyRefused.detail':
+    'The radio did not accept PTT at {{time}} UTC ({{why}}), so that over was not sent and TX was turned off. Check your PTT method and CAT/port, then turn TX on again.',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':
     'No live propagation data yet — set your callsign in Settings and check your internet connection.',

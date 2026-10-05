@@ -6131,6 +6131,8 @@ export const JA: PartialCatalog = {
   "shell.lane.parsecStop.what.rtty": "RTTY の連続送信",
   "shell.lane.parsecStop.what.psk": "PSK の連続送信",
   "shell.lane.parsecStop.what.tune": "Tune",
+  "shell.lane.slotKeyRefused.message": "PTT 拒否 — 送信停止",
+  "shell.lane.slotKeyRefused.detail": "{{time}} UTC に無線機が PTT を受け付けませんでした（{{why}}）。そのためこの送信は出ず、TX はオフになりました。PTT方式と CAT／ポートを確認してから、TX をもう一度オンにしてください。",
   "shell.lane.prop.offline.message": "伝搬: ライブデータなし",
   "shell.lane.prop.offline.detail": "ライブ伝搬データがまだありません — 設定でコールサインを設定し、インターネット接続を確認してください。",
   "shell.lane.prop.cached.message": "伝搬: {{minutes}}分前のキャッシュ",

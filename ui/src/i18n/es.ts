@@ -6188,6 +6188,8 @@ export const ES: PartialCatalog = {
   "shell.lane.parsecStop.what.rtty": "TX continuo de RTTY",
   "shell.lane.parsecStop.what.psk": "TX continuo de PSK",
   "shell.lane.parsecStop.what.tune": "Tune",
+  "shell.lane.slotKeyRefused.message": "PTT RECHAZADO — TX DETENIDO",
+  "shell.lane.slotKeyRefused.detail": "La radio no aceptó el PTT a las {{time}} UTC ({{why}}), así que ese turno no se envió y TX se apagó. Revisa tu método de PTT y el CAT/puerto, y luego vuelve a activar TX.",
   "shell.lane.txPowerZero.detail": "El equipo indica 0% de potencia y la transmisión está armada — activará el PTT y no saldrá nada al aire. Revisa el deslizador Pwr y la potencia del propio equipo para ESTE modo: los Yaesu guardan un nivel distinto para SSB, DATA, CW y AM.",
   "shell.lane.txPowerZero.message": "SIN POTENCIA RF",
   "shell.loading": "Conectando con Nexus…",

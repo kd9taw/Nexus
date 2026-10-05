@@ -549,6 +549,9 @@ const MIGRATED = [
   // The transmitter alarm's banner — migrated from birth. The alarm's own words are the
   // station's and pass through as the CAT status's do; everything around them is catalogued.
   'components/TxAlarmBanner.tsx',
+  // The status-lane report of a slot over the radio would not key — migrated from birth. The
+  // radio's own answer passes through as data; the sentence around it is from the catalog.
+  'features/slotKeyRefused.ts',
 ]
 
 /**

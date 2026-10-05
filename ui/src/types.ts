@@ -1520,6 +1520,10 @@ export interface RadioStatus {
   streamMic?: 'armed' | 'keyed' | null
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean
+  /** The radio did not accept the key for a slot over (FT8, FT4, JS8 …), so it was not sent and
+   *  transmit halted, as WSJT-X halts on a rig failure. Kept until TX is turned on again; absent
+   *  otherwise, and from a station older than it. */
+  slotKeyRefused?: SlotKeyRefused | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -4522,6 +4526,15 @@ export interface AppSnapshot {
   /** The transmitter alarms the operator has not dismissed, oldest first (dismiss_tx_alarm).
    *  Absent while there are none, and from a station older than the alarm. */
   txAlarms?: TxAlarm[]
+}
+
+/** A slot over's key the radio did not accept (mirror of the Rust SlotKeyRefused). The words are
+ *  the UI's, in features/slotKeyRefused.ts. */
+export interface SlotKeyRefused {
+  /** When it happened (unix seconds). */
+  at: number
+  /** What came back for the key, in the rig link's own words: data, never translated. */
+  why: string
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the
