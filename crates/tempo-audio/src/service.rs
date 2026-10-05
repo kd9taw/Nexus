@@ -5094,6 +5094,13 @@ impl RadioLoop {
         }
     }
 
+    /// Whether this loop already holds the transmitter: an over's PTT hold, or the operator's own
+    /// PTT. A key that fails then is not a new key refused ([`KeyUp::Held`]); the slot overs ask
+    /// the same question ([`crate::slot::key_slot_transmitter`]).
+    fn holds_tx(&self) -> bool {
+        self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
     /// Key the transmitter for an over whose audio (or, `plain`, FSK keyline) this loop sends,
     /// and say what came of it: keyed, refused, or no answer in time.
     ///
@@ -5114,14 +5121,16 @@ impl RadioLoop {
     /// always went out, with its warning, and still does: dropping it cut those radios' voice,
     /// data, CW and Tune overs. Only the deadline and Hamlib's own "did not answer" codes
     /// ([`crate::rig::rprt_is_link_fault`]) are this; every other failure of the key is a refusal,
-    /// a rejection (`RPRT -9`) included.
+    /// a rejection (`RPRT -9`) included. The slot overs (FT8, FT4, JS8 and the rest) key elsewhere
+    /// and follow WSJT-X instead, which halts on Hamlib's codes too
+    /// ([`crate::slot::slot_key_failure`]).
     ///
     /// It only ever ADDS a refusal: the key itself, the hold, the unkey and every gate before
     /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
     /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
     /// all, and an over that goes out unkeys at its end as any over does.
     fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
-        let held = self.tx_until_ms.is_some() || self.manual_ptt_applied;
+        let held = self.holds_tx();
         let key = if plain {
             rig.ptt_plain(true)
         } else {
@@ -11467,7 +11476,10 @@ impl RadioLoop {
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
-                        if crate::slot::key_slot_transmitter(&mut eng, rig, backend) {
+                        let held = self.holds_tx();
+                        // A key the radio refuses plays nothing here and halts TX, as at the
+                        // boundary (`slot::slot_key_failure`).
+                        if crate::slot::key_slot_transmitter(&mut eng, rig, backend, held) {
                             let mut secs = 0.0f32;
                             let last = waves.len() - 1;
                             for (i, w) in waves.iter().enumerate() {
@@ -12063,6 +12075,10 @@ impl RadioLoop {
         } else {
             Some(Vec::new())
         };
+        // A key the radio refuses plays nothing and halts TX, as WSJT-X halts on a rig failure;
+        // a failed key while this loop already holds the transmitter is not one
+        // (`slot::slot_key_failure`).
+        let held = self.holds_tx();
         let action = crate::slot::slot_tx_phase(
             eng,
             rig,
@@ -12073,6 +12089,7 @@ impl RadioLoop {
             did_rx,
             rx_frame,
             prebuilt,
+            held,
         );
         if let Some(t) = action.tx_until_ms {
             self.tx_until_ms = Some(t);

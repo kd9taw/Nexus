@@ -16,6 +16,10 @@
 //! "the rig did not answer" (`RPRT -5`, and its I/O and bus kin): rigctld sent the key on and heard
 //! nothing back, so the radio may be keying (`hamlibs_no_answer_*`). A rig that rejects the key
 //! (`RPRT -9`) is refusing it.
+//!
+//! The slot overs (FT8, FT4, JS8 and the other timed-slot modes) key in `crate::slot` and follow
+//! WSJT-X instead: a refusal, and Hamlib's own "the rig did not answer" with it, plays nothing and
+//! halts TX, and only Nexus's own deadline passing still plays (the `*_ft8_*` tests at the end).
 
 use super::*;
 
@@ -47,6 +51,11 @@ const LATE: Duration = Duration::from_millis(1_500);
 /// A rigctld answering the key as `key`, `f` with a 20 m dial and everything else `RPRT 0`,
 /// logging every line it was sent.
 fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
+    rigctld_on(key, 14_250_000)
+}
+
+/// [`rigctld`], its dial at `dial_hz`.
+fn rigctld_on(key: Key, dial_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -92,7 +101,7 @@ fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
                     _ => 0,
                 };
                 let reply = if l == "f" {
-                    "14250000\n".to_string()
+                    format!("{dial_hz}\n")
                 } else {
                     format!("RPRT {code}\n")
                 };
@@ -117,7 +126,12 @@ struct Scene {
 
 impl Scene {
     fn new(key: Key, setup: impl FnOnce(&mut Engine)) -> Scene {
-        let (addr, log) = rigctld(key);
+        Scene::on(key, 14_250_000, setup)
+    }
+
+    /// [`Scene::new`], the rigctld's dial at `dial_hz`.
+    fn on(key: Key, dial_hz: u64, setup: impl FnOnce(&mut Engine)) -> Scene {
+        let (addr, log) = rigctld_on(key, dial_hz);
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
         {
             let mut e = engine.lock().unwrap();
@@ -691,4 +705,182 @@ fn hamlibs_no_answer_to_the_rtty_key_still_plays_and_echoes_the_over() {
         "",
         "RPRT -9: an over that never keyed was echoed"
     );
+}
+
+// ── The slot overs: FT8, FT4, JS8 and the other timed-slot modes follow WSJT-X ──────────────
+// WSJT-X 3.0.2 plays an over's audio only once the rig reports PTT on (mainwindow.cpp:12440-12448)
+// and halts on a PTT Hamlib answers with any error code, its own timeouts included
+// (HamlibTransceiver.cpp:277-284, mainwindow.cpp:12556-12564). It sets no deadline of its own, so
+// a slow rig keys late and plays. `crate::slot::slot_key_failure` is that rule here.
+
+/// The 20 m FT8 dial, the rigctld's as well as the engine's: a radio reading elsewhere is followed
+/// there, and FT8 is not keyed in the phone segment.
+const FT8_DIAL: u64 = 14_074_000;
+
+/// An FT8 CQ, armed in the Digital section the way Call CQ arms it.
+fn ft8_cq(e: &mut Engine) {
+    e.set_tier(Tier::Ft8);
+    e.set_frequency(14.074, "20m", "USB");
+    e.broadcast("CQ KD9TAW EN52");
+}
+
+/// [`ft8_cq`], for the slot boundary to key: the snappy first over is drained, so the loop's
+/// first tick, on slot 0 (this station's parity), keys it at the boundary.
+fn ft8_cq_at_the_boundary(e: &mut Engine) {
+    ft8_cq(e);
+    let _ = e.take_immediate_tx();
+}
+
+impl Scene {
+    /// Whether transmit is armed (the FT cockpit's TX On).
+    fn armed(&self) -> bool {
+        self.engine.lock().unwrap().tx_enabled()
+    }
+
+    /// What the operator is told about a refused slot key.
+    fn slot_key_refused(&self) -> Option<tempo_app::dto::SlotKeyRefused> {
+        self.engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .slot_key_refused
+    }
+
+    /// Whether an unkey followed the first key on the wire.
+    fn unkeyed_after_the_key(&self) -> bool {
+        let log = self.log.lock().unwrap();
+        log.iter()
+            .position(|l| l == "T 1")
+            .is_some_and(|key| log[key..].iter().any(|l| l == "T 0"))
+    }
+}
+
+/// ⭐ AN FT8 OVER THE RADIO REFUSES TO KEY IS NOT PLAYED, AND TX HALTS, AS WSJT-X HALTS. The over
+/// was played into the receiving radio, TX stayed armed, and the next cycle tried again. Now
+/// nothing is played, the radio is unkeyed, TX is off, and the operator is told why.
+#[test]
+fn an_ft8_over_the_radio_refuses_to_key_is_not_played_and_halts_tx() {
+    for key in [Key::Refuses, Key::Answers(-9)] {
+        let mut s = Scene::on(key, FT8_DIAL, ft8_cq_at_the_boundary);
+        assert!(s.armed(), "premise: Call CQ armed TX");
+        s.run_to(300.0);
+        assert!(s.keys() >= 1, "premise: the boundary tried the key");
+        assert!(
+            s.backend.played.is_empty(),
+            "the over was played into a radio that did not key"
+        );
+        assert!(
+            !s.armed(),
+            "TX is still on (WSJT-X's Halt Tx unticks Enable Tx)"
+        );
+        assert!(
+            s.slot_key_refused().is_some(),
+            "nothing says why TX stopped"
+        );
+        assert!(s.unkeyed_after_the_key(), "the radio was not unkeyed");
+    }
+
+    // The control: a radio that keys gets the over, and TX stays on.
+    let mut s = Scene::on(Key::Accepts, FT8_DIAL, ft8_cq_at_the_boundary);
+    s.run_to(300.0);
+    assert_eq!(s.keys(), 1, "control: the boundary keyed once");
+    assert!(!s.backend.played.is_empty(), "control: no over");
+    assert!(s.armed(), "control: TX went off");
+    assert_eq!(s.slot_key_refused(), None, "control");
+}
+
+/// ⭐ HAMLIB'S OWN "THE RIG DID NOT ANSWER" TO AN FT8 KEY HALTS TX, AS WSJT-X HALTS ON IT. This is
+/// where a slot over differs from the voice keyer, RTTY, Tune and the rest, which play on it with
+/// their warning: WSJT-X makes no exception for Hamlib's timeout codes.
+#[test]
+fn hamlibs_own_no_answer_to_an_ft8_key_halts_tx() {
+    for code in NO_ANSWER {
+        let mut s = Scene::on(Key::Answers(code), FT8_DIAL, ft8_cq_at_the_boundary);
+        assert!(s.armed(), "premise: RPRT {code}: Call CQ armed TX");
+        s.run_to(300.0);
+        assert!(
+            s.keys() >= 1,
+            "premise: RPRT {code}: the boundary tried the key"
+        );
+        assert!(
+            s.backend.played.is_empty(),
+            "RPRT {code}: the over was played into a radio that did not key"
+        );
+        assert!(!s.armed(), "RPRT {code}: TX is still on");
+        assert!(
+            s.slot_key_refused().is_some(),
+            "RPRT {code}: nothing says why"
+        );
+        assert!(
+            s.unkeyed_after_the_key(),
+            "RPRT {code}: the radio was not unkeyed"
+        );
+    }
+}
+
+/// ⭐ A LATE ANSWER TO AN FT8 KEY STILL PLAYS THE OVER. Nexus's own PTT deadline has no counterpart
+/// in WSJT-X, which waits on Hamlib: a slow radio keys late and its over goes out, as it always did
+/// here.
+#[test]
+fn a_late_answer_to_an_ft8_key_still_plays_the_over() {
+    let mut s = Scene::on(Key::AnswersLate, FT8_DIAL, ft8_cq_at_the_boundary);
+    s.run_to(300.0);
+    assert_eq!(s.keys(), 1, "premise: the boundary tried the key, once");
+    assert!(!s.backend.played.is_empty(), "the over was not played");
+    assert!(s.armed(), "TX went off");
+    assert_eq!(s.slot_key_refused(), None);
+}
+
+/// ⭐ THE LATE START (a Call CQ or a double-click inside our own slot) IS A SLOT KEY TOO: a refused
+/// one plays nothing and halts TX. The loop is settled first (its FT8 clock built, slot 0's
+/// boundary consumed), as a running station is, so the over keys mid-slot.
+#[test]
+fn a_refused_late_start_ft8_key_is_not_played_and_halts_tx() {
+    for key in [Key::Refuses, Key::Accepts] {
+        let mut s = Scene::on(key, FT8_DIAL, |e| e.set_tier(Tier::Ft8));
+        s.run_to(100.0);
+        assert_eq!(
+            s.state.last_slot,
+            Some(0),
+            "scene guard: slot 0's boundary is consumed"
+        );
+        ft8_cq(&mut s.engine.lock().unwrap());
+        s.run_to(200.0);
+        assert_eq!(s.keys(), 1, "premise: the late start tried the key, once");
+        assert!(
+            !s.state.boundary_keyed.is_some_and(|k| k.tx_this_slot),
+            "scene guard: the boundary did not key"
+        );
+        if key == Key::Refuses {
+            assert!(s.backend.played.is_empty(), "the over was played");
+            assert!(!s.armed(), "TX is still on");
+            assert!(s.slot_key_refused().is_some(), "nothing says why");
+            assert!(s.unkeyed_after_the_key(), "the radio was not unkeyed");
+        } else {
+            assert!(!s.backend.played.is_empty(), "control: no over");
+            assert!(s.armed(), "control: TX went off");
+            assert_eq!(s.slot_key_refused(), None, "control");
+        }
+    }
+}
+
+/// ⏱ A KEY THE RADIO ACCEPTS GOES OUT ON THE FIRST TICK OF ITS SLOT, AS IT ALWAYS DID. The CQ is
+/// armed in slot 0 after its boundary passed, so it waits for slot 2 (slot 1 is the other
+/// station's): no key before 30 s, and the key and the audio on the tick that crosses it.
+#[test]
+fn a_keyed_ft8_over_keys_on_the_first_tick_of_its_slot() {
+    let mut s = Scene::on(Key::Accepts, FT8_DIAL, |e| e.set_tier(Tier::Ft8));
+    s.run_to(100.0);
+    ft8_cq_at_the_boundary(&mut s.engine.lock().unwrap());
+    s.run_to(29_990.0);
+    assert_eq!(s.keys(), 0, "keyed before its slot");
+    assert!(s.backend.played.is_empty(), "played before its slot");
+    s.run_to(30_000.0);
+    assert_eq!(s.keys(), 1, "not keyed on the first tick of its slot");
+    assert!(
+        !s.backend.played.is_empty(),
+        "no audio on the first tick of its slot"
+    );
+    assert!(s.armed() && s.slot_key_refused().is_none());
 }

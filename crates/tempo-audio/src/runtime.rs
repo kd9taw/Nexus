@@ -57,13 +57,25 @@ impl<B: AudioBackend> Transceiver<B> {
     /// (the caller should hold PTT that long, then call [`end_tx`]). Returns
     /// `None` on a receive slot.
     ///
+    /// A key the radio refuses plays nothing, unkeys and halts TX, as the radio loop's slot overs
+    /// do and as WSJT-X does on a rig failure ([`crate::slot::slot_key_failure`]); it returns
+    /// `None` too. PTT still asserted from an over not yet ended is this loop's hold.
+    ///
     /// [`end_tx`]: Transceiver::end_tx
     pub fn try_transmit(&mut self, slot: u64) -> Option<f32> {
         let waves = self.engine.poll_tx(slot);
         if waves.is_empty() {
             return None;
         }
-        let _ = self.rig.ptt(true);
+        let held = self.rig.keyed;
+        let key = self.rig.ptt(true);
+        if let Some(why) = crate::slot::slot_key_failure(&key, held) {
+            // Nothing else here would release it: WSJT-X's own "ensure PTT isn't left set"
+            // (Transceiver/TransceiverBase.cpp:245-247).
+            let _ = self.rig.ptt(false);
+            self.engine.halt_tx_for_refused_key(&why);
+            return None;
+        }
         let mut samples = 0usize;
         for w in &waves {
             samples += w.len();
@@ -139,6 +151,26 @@ mod tests {
         // SAFETY: we know B is MockBackend here.
         trx.end_tx();
         assert!(!trx.is_keyed());
+    }
+
+    #[test]
+    fn a_key_the_radio_refuses_plays_nothing_and_halts_tx() {
+        // The library's slot loop refuses as the radio loop's does
+        // (`crate::slot::slot_key_failure`): nothing is played into a radio that did not key, and
+        // TX halts, as WSJT-X halts on a rig failure. This rigctld answers every key `RPRT -1`.
+        let peer = crate::rig::remote_tests::retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true);
+        eng.set_beacon(true);
+        let mut trx = Transceiver::new(eng, MockBackend::new(), Rig::rigctld(&peer.address));
+
+        assert_eq!(trx.try_transmit(0), None, "a refused key reported an over");
+        assert!(trx.backend.played.is_empty(), "the over was played");
+        assert!(!trx.engine.tx_enabled(), "TX is still on");
+        assert!(
+            trx.snapshot().radio.slot_key_refused.is_some(),
+            "nothing says why"
+        );
     }
 
     #[test]

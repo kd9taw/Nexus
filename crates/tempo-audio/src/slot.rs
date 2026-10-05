@@ -160,10 +160,20 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
 /// Check Remote authority on both sides of blocking PTT I/O. Native TX has
 /// no Remote permit and keeps its established keying behavior. A loss during
 /// key-up is unkeyed before any waveform reaches the output device.
+///
+/// ⛔ A KEY THE RADIO DID NOT ACCEPT SENDS NOTHING AND HALTS TX, AS WSJT-X DOES
+/// ([`slot_key_failure`]). The key's answer used to be ignored, so a radio that said no had the
+/// whole over played into it while it was receiving, and TX stayed armed to try again next cycle.
+/// Now the caller plays nothing, and [`Engine::halt_tx_for_refused_key`] presses Stop TX, whose
+/// slot abort the loop's next tick turns into the unkey and the flush, and says why. `held`: the
+/// loop already holds the transmitter (an over's PTT hold, or the operator's PTT), so this key is
+/// not a new one. A key the radio accepts is untouched: nothing new runs before it, or between its
+/// answer and the audio.
 pub(crate) fn key_slot_transmitter(
     eng: &mut Engine,
     rig: &mut Rig,
     backend: &mut impl AudioBackend,
+    held: bool,
 ) -> bool {
     if eng.poll_remote_transmit(std::time::Instant::now()) {
         if rig.keyed {
@@ -172,13 +182,44 @@ pub(crate) fn key_slot_transmitter(
         backend.flush_output();
         return false;
     }
-    let _ = rig.ptt(true);
+    let key = rig.ptt(true);
     if eng.poll_remote_transmit(std::time::Instant::now()) {
         let _ = rig.ptt(false);
         backend.flush_output();
         return false;
     }
+    if let Some(why) = slot_key_failure(&key, held) {
+        eng.halt_tx_for_refused_key(&why);
+        return false;
+    }
     true
+}
+
+/// Why a slot over must not go out on its key's answer, or `None` when it goes out: WSJT-X's rule
+/// (3.0.2), on the ways a key ends here.
+///
+/// - **Keyed** (`RPRT 0`): WSJT-X starts the audio once the rig reports PTT on
+///   (`widgets/mainwindow.cpp:12440-12448`). Goes out, unchanged.
+/// - **Refused**: any other `RPRT` code (the Flex client's and the CI-V daemon's refusals are
+///   `RPRT -1`), the connection closed, no rigctld, a serial PTT line that would not open. Hamlib's
+///   error throws there (`Transceiver/HamlibTransceiver.cpp:277-284`, `:1292`), the rig-failure
+///   handler presses Halt Tx (`mainwindow.cpp:12556-12564`), and no audio plays, since PTT never
+///   came on. `Some`: nothing is played and TX halts.
+/// - **Hamlib's own "the rig did not answer"** (`RPRT -5`, `-6`, `-13`, `-14`): the same throw,
+///   since `error_check` excepts nothing but `RIG_OK`. `Some`, as a refusal. The other modes play
+///   on these codes, with their warning (`service::KeyUp::NoAnswer`).
+/// - **Nexus's PTT deadline passed** ([`crate::rig::deadline_passed`]): WSJT-X sets no deadline of
+///   its own and waits on Hamlib, so a slow rig keys late and plays. `None`: goes out, as it always
+///   did.
+/// - **Any failure while `held`**: WSJT-X asks for PTT only on a change
+///   (`Transceiver/TransceiverBase.cpp:133`), so it makes no new key. `None`: goes out on the held
+///   key, as it always did.
+pub(crate) fn slot_key_failure(key: &std::io::Result<()>, held: bool) -> Option<String> {
+    let e = key.as_ref().err()?;
+    if held || crate::rig::deadline_passed(e) {
+        return None;
+    }
+    Some(e.to_string())
 }
 
 /// Run one slot boundary.
@@ -230,7 +271,18 @@ pub fn run_slot(
     };
 
     // 2. Transmit decision for the NEW slot (now informed by the decode above).
-    slot_tx_phase(eng, rig, backend, rx, slot, now_ms, did_rx, rx_frame, None)
+    slot_tx_phase(
+        eng,
+        rig,
+        backend,
+        rx,
+        slot,
+        now_ms,
+        did_rx,
+        rx_frame,
+        None,
+        currently_tx,
+    )
 }
 
 /// Whether this boundary should decode the just-ended slot's RX audio: only when
@@ -266,6 +318,9 @@ pub fn slot_tx_phase(
     // hands the result in through this argument. Timing on the air is unchanged —
     // the same wait happens in the same place, just without the engine held.
     prebuilt: Option<Vec<Vec<f32>>>,
+    // The loop already holds the transmitter (an over's PTT hold, or the operator's PTT): a key
+    // that fails then is not a new one refused ([`key_slot_transmitter`]).
+    held: bool,
 ) -> SlotAction {
     let waves = if eng.poll_remote_transmit(std::time::Instant::now()) {
         Vec::new()
@@ -279,9 +334,10 @@ pub fn slot_tx_phase(
         // Split Operation: move the TX dial (if the engine reduced the audio)
         // BEFORE the carrier keys.
         let split = apply_tx_dial_shift(eng, rig);
-        if !key_slot_transmitter(eng, rig, backend) {
+        if !key_slot_transmitter(eng, rig, backend, held) {
             // Preserve split cleanup even when permission disappears during
-            // CAT preparation. The native loop restores it on its next idle tick.
+            // CAT preparation, or the radio refuses the key. The native loop restores it on its
+            // next idle tick.
             return SlotAction {
                 tx_until_ms: None,
                 did_rx,
@@ -417,6 +473,7 @@ mod tests {
                 false,
                 None,
                 Some(vec![vec![0.25; 120]]),
+                false,
             );
             if scene == "valid" {
                 assert!(action.tx_this_slot);
@@ -716,6 +773,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
 
         let after = steered_now_ms(&eng);
@@ -764,6 +822,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
         let after = steered_now_ms(&eng);
 
@@ -822,6 +881,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
 
         let after = steered_now_ms(&eng);
@@ -893,13 +953,17 @@ mod tests {
                 _ => (false, None),
             };
             // Phase 2b: the TX decision — now informed by the decode above.
-            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, true, rx_frame, None);
+            let act = slot_tx_phase(
+                eng, rig, backend, rx, slot, now_ms, true, rx_frame, None, false,
+            );
             (act, folded)
         } else {
             if prev_was_tx || currently_tx {
                 rx.clear();
             }
-            let act = slot_tx_phase(eng, rig, backend, rx, slot, now_ms, false, None, None);
+            let act = slot_tx_phase(
+                eng, rig, backend, rx, slot, now_ms, false, None, None, false,
+            );
             (act, false)
         }
     }
@@ -964,6 +1028,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
 
         let sent = log.lock().unwrap().clone();
@@ -1019,6 +1084,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
 
         assert!(act.tx_this_slot, "the CQ keyed");
@@ -1215,5 +1281,294 @@ mod tests {
         );
         assert!(act.did_rx, "run_slot decodes the RX slot");
         assert!(!act.tx_this_slot);
+    }
+
+    // ── A key the radio does not accept: WSJT-X's rig failure ──────────────────────────────
+    // WSJT-X 3.0.2 starts an over's audio only once the rig reports PTT on (mainwindow.cpp:
+    // 12440-12448, "safe to start audio"), and a PTT Hamlib answers with ANY error code, its own
+    // timeouts included, is a rig failure that presses Halt Tx (:12556-12564). It sets no deadline
+    // of its own on the key: a slow rig keys late and its audio follows.
+
+    /// A rigctld that answers the key (`T 1`) with `key` after `delay_ms`, and everything else
+    /// with `RPRT 0` at once. Logs each line as it arrives, and the instant the key's answer was
+    /// written.
+    fn keying_rigctld(
+        key: &str,
+        delay_ms: u64,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    ) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let answered = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (log_w, answered_w) = (log.clone(), answered.clone());
+        let key = key.to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut w = stream.try_clone().unwrap();
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    let t = line.trim().to_string();
+                    if t.is_empty() {
+                        continue;
+                    }
+                    log_w.lock().unwrap().push(t.clone());
+                    let reply = if t == "T 1" {
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                        *answered_w.lock().unwrap() = Some(std::time::Instant::now());
+                        format!("{key}\n")
+                    } else {
+                        "RPRT 0\n".to_string()
+                    };
+                    if w.write_all(reply.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        (addr, log, answered)
+    }
+
+    /// One over through the TX phase, as the boundary keys it with nothing else holding the
+    /// transmitter, on a waveform built beforehand so only the key and the play are measured.
+    fn key_one_over(
+        eng: &mut Engine,
+        rig: &mut Rig,
+        backend: &mut impl AudioBackend,
+    ) -> SlotAction {
+        let mut rx = RxRing::new();
+        let now = steered_now_ms(eng);
+        slot_tx_phase(
+            eng,
+            rig,
+            backend,
+            &mut rx,
+            0,
+            now,
+            false,
+            None,
+            Some(vec![vec![0.25; 1200]]),
+            false,
+        )
+    }
+
+    /// What a refused key must leave: nothing played, nothing held, TX off as WSJT-X's Halt Tx
+    /// leaves it, the loop told to cut and unkey as Stop TX tells it, and the reason kept.
+    fn assert_sent_nothing_and_halted(
+        what: &str,
+        eng: &mut Engine,
+        act: &SlotAction,
+        backend: &MockBackend,
+        log: &std::sync::Mutex<Vec<String>>,
+    ) {
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "{what}: premise: the over tried the key"
+        );
+        assert!(
+            backend.played.is_empty(),
+            "{what}: the over was played into a radio that did not key"
+        );
+        assert!(
+            !act.tx_this_slot && act.tx_until_ms.is_none(),
+            "{what}: the over was taken as sent"
+        );
+        assert!(
+            !eng.tx_enabled(),
+            "{what}: TX is still on (WSJT-X's Halt Tx unticks Enable Tx)"
+        );
+        assert!(
+            eng.take_slot_tx_abort(),
+            "{what}: the loop was not told to cut and unkey, as Stop TX tells it"
+        );
+        assert!(
+            eng.snapshot().radio.slot_key_refused.is_some(),
+            "{what}: nothing says why TX stopped"
+        );
+    }
+
+    #[test]
+    fn a_key_the_radio_refuses_sends_nothing_and_halts_tx_as_wsjtx_does() {
+        // ⭐ THE DEFECT. Every slot over keyed with `let _ = rig.ptt(true)` and played whatever
+        // the answer, so a radio that said no got the whole over played into it while it was
+        // receiving, and TX stayed armed to do it again next cycle. WSJT-X plays nothing (its
+        // audio waits for PTT on) and halts.
+        for (tier, answer) in [
+            (tempo_app::dto::Tier::Ft8, "RPRT -1"),
+            (tempo_app::dto::Tier::Ft8, "RPRT -9"),
+            (tempo_app::dto::Tier::Ft4, "RPRT -1"),
+        ] {
+            let what = format!("{tier:?} {answer}");
+            let mut eng = Engine::new("W9XYZ", "EN37", 0);
+            eng.set_tier(tier);
+            eng.set_tx_enabled(true);
+            assert!(eng.tx_enabled(), "{what}: premise: TX is armed");
+            let (addr, log, _) = keying_rigctld(answer, 0);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let act = key_one_over(&mut eng, &mut rig, &mut backend);
+            assert_sent_nothing_and_halted(&what, &mut eng, &act, &backend, &log);
+            let why = eng.snapshot().radio.slot_key_refused.unwrap().why;
+            assert!(why.contains(answer), "{what}: the rig's own answer: {why}");
+        }
+
+        // The control, in the same scene: a radio that keys gets its over, and TX stays on.
+        let mut eng = armed_engine();
+        let (addr, _log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let act = key_one_over(&mut eng, &mut rig, &mut backend);
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty(),
+            "control: no over"
+        );
+        assert!(eng.tx_enabled(), "control: TX went off");
+        assert!(!eng.take_slot_tx_abort(), "control: a cut was asked for");
+        assert_eq!(eng.snapshot().radio.slot_key_refused, None, "control");
+    }
+
+    #[test]
+    fn hamlibs_own_no_answer_to_a_key_halts_tx_as_wsjtx_does() {
+        // ⭐ HERE A SLOT OVER DIFFERS FROM THE OTHER MODES, ON PURPOSE. rigctld answers a key it
+        // could not get the radio to answer with Hamlib's own code (`RPRT -5` timeout, `-6` I/O,
+        // `-13` bus error, `-14` bus busy). The voice keyer, RTTY and the rest play on it, with
+        // their warning (`service::KeyUp::NoAnswer`). WSJT-X's `error_check` throws on every code
+        // but `RIG_OK` (HamlibTransceiver.cpp:277-284), so for it this is a rig failure like any
+        // refusal, and the slot overs follow WSJT-X.
+        for code in [-5, -6, -13, -14] {
+            let what = format!("RPRT {code}");
+            let mut eng = armed_engine();
+            assert!(eng.tx_enabled(), "{what}: premise: TX is armed");
+            let (addr, log, _) = keying_rigctld(&what, 0);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let act = key_one_over(&mut eng, &mut rig, &mut backend);
+            assert_sent_nothing_and_halted(&what, &mut eng, &act, &backend, &log);
+        }
+    }
+
+    #[test]
+    fn a_late_answer_to_a_key_still_plays_the_over() {
+        // Nexus's own PTT deadline is the one failure WSJT-X has no counterpart for: it waits on
+        // Hamlib, and a slow rig keys late and plays. A slow radio behind rigctld (a Xiegu, a
+        // vintage Kenwood, any rig at 19200 baud or less) answers after the deadline, so its over
+        // still goes out here, as it always did. 1.5 s, because the deadline is looked at only
+        // between 500 ms reads (an answer inside the first second is still taken as keyed).
+        let mut eng = armed_engine();
+        let (addr, log, _) = keying_rigctld("RPRT 0", 1_500);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let act = key_one_over(&mut eng, &mut rig, &mut backend);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "premise: the over tried the key"
+        );
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty(),
+            "a late answer dropped the over"
+        );
+        assert!(eng.tx_enabled(), "a late answer turned TX off");
+        assert!(!eng.take_slot_tx_abort(), "a late answer asked for a cut");
+        assert_eq!(eng.snapshot().radio.slot_key_refused, None);
+        assert!(
+            rig.keyed,
+            "the radio may be keying: PTT stays asserted for the over"
+        );
+    }
+
+    #[test]
+    fn a_failed_key_while_the_loop_holds_the_transmitter_still_plays() {
+        // A key while the loop already holds the transmitter is not a new one. Nexus's own Flex
+        // client refuses every key after the first while one of ours is held (`AlreadyKeyed`), and
+        // WSJT-X never sends one (it asks for PTT only on a change). The over goes out on the held
+        // key, as it always did, and as the other modes' `service::KeyUp::Held` does.
+        let mut eng = armed_engine();
+        let (addr, log, _) = keying_rigctld("RPRT -1", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+        let now = steered_now_ms(&eng);
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            now,
+            false,
+            None,
+            Some(vec![vec![0.25; 1200]]),
+            true,
+        );
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "premise: the over tried the key"
+        );
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty(),
+            "a key refused while held dropped the over"
+        );
+        assert!(eng.tx_enabled(), "a key refused while held turned TX off");
+        assert!(!eng.take_slot_tx_abort());
+        assert_eq!(eng.snapshot().radio.slot_key_refused, None);
+    }
+
+    /// A backend that notes when it was first handed audio.
+    #[derive(Default)]
+    struct StampedBackend {
+        played: usize,
+        first_play: Option<std::time::Instant>,
+    }
+
+    impl AudioBackend for StampedBackend {
+        fn capture(&mut self) -> Vec<f32> {
+            Vec::new()
+        }
+        fn play(&mut self, samples: &[f32]) {
+            self.first_play.get_or_insert_with(std::time::Instant::now);
+            self.played += samples.len();
+        }
+    }
+
+    #[test]
+    fn a_keyed_over_starts_its_audio_the_moment_the_key_is_answered() {
+        // ⏱ THE POSITIVE CONTROL FOR THE REFUSED-KEY STOP: on a key the radio accepts, nothing
+        // new runs before the key or between its answer and the audio. The key is the first
+        // line on the wire and the only one, and the audio starts after the answer, never
+        // before it (WSJT-X's own order), with no CAT exchange or wait in between. Ordering
+        // assertions plus a bound under one PTT deadline, not a tolerance on machine speed: the
+        // measured times are printed for the record (`--nocapture`).
+        const KEY_MS: u64 = 200;
+        let mut answered_to_play = Vec::new();
+        let mut call_to_answer = Vec::new();
+        for _ in 0..5 {
+            let mut eng = armed_engine();
+            let (addr, log, answered) = keying_rigctld("RPRT 0", KEY_MS);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = StampedBackend::default();
+            let called = std::time::Instant::now();
+            let act = key_one_over(&mut eng, &mut rig, &mut backend);
+            let returned = std::time::Instant::now();
+            assert!(act.tx_this_slot && backend.played == 1200, "the over keyed");
+            assert_eq!(*log.lock().unwrap(), ["T 1"], "the key, and only the key");
+            let answered = answered.lock().unwrap().expect("the key was answered");
+            let first_play = backend.first_play.expect("the audio was played");
+            assert!(first_play >= answered, "audio before the key's answer");
+            assert!(first_play <= returned);
+            let gap = first_play - answered;
+            assert!(
+                gap < std::time::Duration::from_millis(500),
+                "{gap:?} between the key's answer and the audio: something now waits there"
+            );
+            answered_to_play.push(gap.as_secs_f64() * 1000.0);
+            call_to_answer.push((answered - called).as_secs_f64() * 1000.0);
+        }
+        println!(
+            "keyed over: call to answer {call_to_answer:.2?} ms (the key itself is {KEY_MS} ms), \
+             answer to audio {answered_to_play:.3?} ms"
+        );
     }
 }
