@@ -64,7 +64,8 @@ import {
   usePanelLayout,
 } from '../features/panelState'
 import { surfaceGet, surfaceHasOwn, surfaceId, surfaceSet } from '../features/windowScope'
-import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
+import { keepIntentSetup, loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
+import { keepSatFavOnly } from '../features/satChase'
 import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
@@ -544,6 +545,21 @@ export function ConnectView({
   // until it makes a change of its own.
   const surface = useMemo(() => surfaceId(), [])
   const panels = usePanelLayout(CONNECT_PANELS, surface, 'main')
+  // A POP-OUT KEEPS WHAT IT SHOWS (operator report, 2026-10-04: the dashboard window "all of a sudden
+  // shows every satellite ever launched ... I never turned them on"). Until it writes a value of its
+  // own, a pop-out reads the main window's (features/windowScope `surfaceGet`), and it read the intent,
+  // that intent's map pick (the 2-D map takes its setup over when it mounts; on the 3-D globe nothing
+  // did) and the ★/All choice afresh on every open. A reload or a reopen, with
+  // nothing pressed in it, put it on whatever the main window had moved to since, and the layers of
+  // that intent came with it. So the first time a pop-out shows Conditions, what it shows becomes its
+  // own, and after that only a press here changes it. The main window reads only its own values, so it
+  // writes nothing here.
+  useEffect(() => {
+    if (surface === 'main') return
+    if (!surfaceHasOwn('nexus.connect.intent')) surfaceSet('nexus.connect.intent', intent)
+    keepIntentSetup(intent, mapPick)
+    keepSatFavOnly()
+  }, [surface, intent, mapPick])
   // THE BAR (a layout's, features/connectPresets `bar`): this surface's record of whether the view draws
   // the dashboard bar over its header. Where the host draws the bar itself (`hostBar`) the record is
   // still kept, and read back, but the view draws no second bar.
@@ -578,8 +594,8 @@ export function ConnectView({
     bar?: boolean
   } | null>(null)
   // A LAYOUT'S REACH INTO THE MAP (features/connectPresets `mapLayers`): the layers it turns on are
-  // written into both maps' records on this surface — the 2-D map's for the intent in use, and the
-  // 3-D globe's — and this revision tells whichever map is on screen to read its layers again.
+  // written into the record of the map on screen on this surface — the 2-D map's for the intent in
+  // use, or the 3-D globe's — and this revision tells that map to read its layers again.
   const [mapLayersRev, setMapLayersRev] = useState(0)
   const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
     beforeSwitch.current = null
@@ -624,10 +640,12 @@ export function ConnectView({
     // kept layout is one too, with its own splits and its tabs' rotation.
     const p = id === 'standard' ? STANDARD_LAYOUT : id === 'kept' ? kept : table[id]
     if (!p) return
+    // On the map on screen only (2026-10-04). Ticked into the other map's record too, a layer waited
+    // there unseen: unticked on the map in view, it came back the day the other map was shown.
     const turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> = []
     for (const layer of p.mapLayers ?? []) {
-      if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })
-      if (setGlobeLayer(layer, true)) turnedOn.push({ layer, map: '3d' })
+      if (map3d ? setGlobeLayer(layer, true) : setIntentMapLayer(intent, layer, true))
+        turnedOn.push({ layer, map: map3d ? '3d' : '2d' })
     }
     beforeSwitch.current = { slots, tabs, rotate, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined, bar: barOn }
     // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes

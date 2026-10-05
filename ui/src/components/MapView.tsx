@@ -979,7 +979,7 @@ export function MapView({
   const satAllHidden = useMemo(() => {
     if (embedded || !satsOn || !satFav || !sats || sats.birds.length === 0) return 0
     const keys = satChaseKeys()
-    if (keys.names.size === 0) return 0 // zero stars = filter inert, sky full
+    if (keys.names.size === 0) return 0 // zero stars: no ★ bird to miss, the workable birds show
     return filterSatsToChased(sats.birds, keys).length === 0 ? sats.birds.length : 0
     // satChaseRev: star toggles land in storage, not props — the rev is the rerender.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1874,11 +1874,17 @@ export function MapView({
     if (layers.sats.visible && sats) {
       const chaseKeys = satChaseKeys()
       // ★-only filter (the Passes-pane chip; one surface-scoped key shared with
-      // the globe). Read per draw — the ~1 s sat tick then picks up stars and
-      // chip flips without a poll. The EMBEDDED detail globe is exempt: it must
-      // show the clicked bird starred or not (and solos it below anyway).
+      // the globe). The stars are read per draw — the ~1 s sat tick then picks
+      // them up without a poll. The ★/All choice is this window's `satFav`, the
+      // value its chip shows, which SAT_CHASE_EVENT keeps in step with the
+      // Passes pane and the globe here. Read out of storage per draw, it made a
+      // pop-out with no choice of its own follow the MAIN window's chip live:
+      // the main window flipped to All and the pop-out filled with every bird,
+      // its own chip still reading ★ (2026-10-04). The EMBEDDED detail globe is
+      // exempt: it must show the clicked bird starred or not (and solos it below
+      // anyway).
       const shownBirds =
-        !embedded && satFavOnly() ? filterSatsToChased(sats.birds, chaseKeys) : sats.birds
+        !embedded && satFav ? filterSatsToChased(sats.birds, chaseKeys) : sats.birds
       const nowSecs = Date.now() / 1000
       // Lerp helper along a track — lon wraps through ±180 correctly.
       const posAt = (track: [number, number, number][], t: number): LatLon | null => {
@@ -3408,7 +3414,13 @@ export function MapView({
                       className={`sat-fav-toggle${satFav ? ' on' : ''}`}
                       aria-label={t('map.sats.filter.aria')}
                       aria-pressed={satFav}
-                      title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
+                      title={
+                        !satFav
+                          ? t('map.sats.filter.off.title')
+                          : satChaseKeys().names.size === 0
+                            ? t('map.sats.filter.none.title')
+                            : t('map.sats.filter.on.title')
+                      }
                       onClick={() => setSatFavOnly(!satFav)}
                     >
                       {satFav ? '★' : t('map.sats.filter.all')}
