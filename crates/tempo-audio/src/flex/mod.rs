@@ -64,6 +64,7 @@ use tempo_app::engine::slices::{SliceIntent, SliceReport};
 use tempo_net::flex::admission::another_dax_feeder;
 use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxAudio, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
+use tempo_net::flex::reconnect::End;
 use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot};
 use tempo_net::flex::streams::{UDP_REGISTRATION_PORT, VITA_PORT};
 
@@ -236,7 +237,7 @@ pub struct FlexDaemon {
     watch_thread: Option<JoinHandle<()>>,
     tx_intent: Arc<AtomicBool>,
     /// What the operator must be told about the transmitter, once it happens (sticky).
-    alarm: Arc<Mutex<Option<String>>>,
+    alarm: Arc<Mutex<Alarm>>,
     state: Arc<ClientState>,
     audio: Option<audio::Audio>,
     routing: Mutex<Routing>,
@@ -318,7 +319,7 @@ impl FlexDaemon {
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let tx_intent = Arc::new(AtomicBool::new(false));
-        let alarm = Arc::new(Mutex::new(None));
+        let alarm = Arc::new(Mutex::new(Alarm::default()));
         let shim: Arc<dyn RigBackend> = Arc::new(shim::FlexShim::new(
             Arc::downgrade(&conn),
             tx_intent.clone(),
@@ -407,7 +408,8 @@ impl FlexDaemon {
     }
 
     /// What the operator must be told about the transmitter — the radio did not confirm an unkey,
-    /// or a lost session of ours may still hold it — once it has happened.
+    /// the session ended during a transmission, or a lost session of ours may still hold it — once
+    /// it has happened.
     pub fn alarm(&self) -> Option<String> {
         // The session publishes its closed state before it sends that step's events, so a daemon
         // that reads dead may not have heard the alarm yet: wait for the watcher to read the
@@ -423,7 +425,19 @@ impl FlexDaemon {
         self.alarm
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .text
             .clone()
+    }
+
+    /// An alarm raised since the last call, for the radio loop to show while the session lives:
+    /// each one once. [`Self::alarm`] is the one it reads once the session has ended.
+    pub fn take_new_alarm(&self) -> Option<String> {
+        let mut alarm = lock(&self.alarm);
+        if std::mem::take(&mut alarm.new) {
+            alarm.text.clone()
+        } else {
+            None
+        }
     }
 
     // ── Audio (Beta, opt-in) ──────────────────────────────────────────────────────────────
@@ -817,17 +831,28 @@ fn drain_reason(conn: &Connection, closed: bool) -> Option<String> {
     why
 }
 
+/// What the operator must be told about the transmitter.
+#[derive(Default)]
+struct Alarm {
+    /// The latest raised, kept.
+    text: Option<String>,
+    /// Raised since the radio loop last took it ([`FlexDaemon::take_new_alarm`]).
+    new: bool,
+}
+
 /// Drain the session's events, log the ones that matter, and keep what the operator must be told.
 /// Ends at the session's last event (`Closed`: nothing follows it), or when the daemon stops.
 fn watch(
     conn: std::sync::Weak<Connection>,
     radio: SocketAddr,
     stop: &AtomicBool,
-    alarm: &Mutex<Option<String>>,
+    alarm: &Mutex<Alarm>,
 ) {
     let raise = |text: &str| {
         tempo_core::applog::warn("cat", &format!("Flex client ({radio}): {text}"));
-        *alarm.lock().unwrap_or_else(PoisonError::into_inner) = Some(text.to_string());
+        let mut alarm = lock(alarm);
+        alarm.text = Some(text.to_string());
+        alarm.new = true;
     };
     while !stop.load(Ordering::Relaxed) {
         let Some(conn) = conn.upgrade() else { break };
@@ -873,6 +898,20 @@ fn watch(
                     "cat",
                     &format!("Flex client ({radio}): session ended ({end:?}, keyed: {was_keyed})"),
                 );
+                // A session that ends with a transmission of ours unconfirmed (the connection
+                // lost, the radio silent) leaves the transmitter unknown: the radio may still be
+                // transmitting. An unconfirmed unkey has already said so, in its own words.
+                if was_keyed && end != End::UnkeyUnconfirmed {
+                    let what = match end {
+                        End::Lost => "the connection to the radio was lost",
+                        End::KeepaliveLost => "the radio stopped answering",
+                        _ => "the session with the radio ended",
+                    };
+                    raise(&format!(
+                        "{what} during a transmission — it may still be transmitting. Check the \
+                         radio now."
+                    ));
+                }
                 break;
             }
             _ => {}

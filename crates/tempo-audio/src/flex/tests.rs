@@ -636,6 +636,70 @@ fn a_confirmed_unkey_raises_no_alarm() {
     assert_eq!(d.alarm(), None);
 }
 
+/// ⭐ The session is LOST during an over (the radio drops the connection mid-over and stays keyed):
+/// nothing confirmed the unkey, so the radio may still be transmitting, and the operator is told so,
+/// in the words of what happened. The end of the session alone was only logged.
+#[test]
+fn a_session_lost_mid_over_is_the_alarm_the_radio_loop_reads() {
+    let sim = simulator(
+        SimSession::v4_gui_client(),
+        vec![Fault::DisconnectMidOver {
+            after: Duration::from_millis(100),
+            radio_stays_keyed: true,
+        }],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_dead(&d);
+    let alarm = d.alarm();
+    assert!(
+        alarm.as_deref().is_some_and(|a| a.starts_with(
+            "the connection to the radio was lost during a transmission — it may still be \
+             transmitting"
+        )),
+        "{alarm:?}"
+    );
+}
+
+/// …and the radio STOPS ANSWERING during an over. The first missed ping unkeys at once and says so,
+/// but the radio never answers again, and the fifth miss ends the session four seconds later: inside
+/// the production five-second unkey deadline, so the unkey is still unconfirmed and the session never
+/// escalates. The missed-ping notice alone says Nexus sent the unkey, which reads as handled; the
+/// operator must read that the radio may still be transmitting.
+#[test]
+fn a_session_that_stops_answering_mid_over_is_the_alarm_the_radio_loop_reads() {
+    let sim = simulator(
+        SimSession::v4_gui_client(),
+        vec![
+            // Pings 1 and 2 answered; none from the third on. The key goes in before the first miss.
+            Fault::DropPings {
+                first: 3,
+                count: 100,
+            },
+            // The radio acknowledges the unkey and never shows it: the readback cannot prove it.
+            Fault::StuckTransmit,
+        ],
+    );
+    let mut config = session::Config::new(Station::new(STATION).unwrap());
+    config.teardown_timeout_ms = 1000;
+    let d = FlexDaemon::start_with(sim.tcp_addr(), 0, config).expect("the daemon starts");
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_dead(&d);
+    // These words come only from a session that the keepalive ended while keyed: an escalation
+    // would have ended it as an unconfirmed unkey, in that alarm's words.
+    let alarm = d.alarm();
+    assert!(
+        alarm.as_deref().is_some_and(|a| a.starts_with(
+            "the radio stopped answering during a transmission — it may still be transmitting"
+        )),
+        "{alarm:?}"
+    );
+}
+
 /// ⭐ Teardown unkeys FIRST, then removes the slice and panadapter it made (the waterfall too),
 /// then closes.
 #[test]
