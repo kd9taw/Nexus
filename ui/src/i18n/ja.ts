@@ -1590,6 +1590,7 @@ export const JA: PartialCatalog = {
   "map.insights.bands.head": "バンドコンディション",
   "map.insights.outlook.head": "見通し",
   "map.insights.heatmap.head": "モデル予測（バンド×時刻）",
+  "connect.globe3d.standIn": "このコンピューターでは現在3D地球儀を表示できないため、地図は地球儀で表示しています。3Dの選択はそのまま保持されます。",
   "globe.unsupported": "このマシンのグラフィックスでは3D地球儀を表示できません。地球儀・平面・ビームを選んでください。どの環境でも動作します。",
   "globe.spin.stop.title": "地球儀の回転を停止",
   "globe.spin.start.title": "地球儀を回転",

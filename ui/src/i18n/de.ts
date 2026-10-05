@@ -4033,6 +4033,7 @@ export const DE: PartialCatalog = {
   "status.alertCritical.label": "Kritisch",
   "status.alertWarning.label": "Warnung",
   "status.alertInfo.label": "Info",
+  "connect.globe3d.standIn": "Der 3-D-Globus kann auf diesem Rechner gerade nicht dargestellt werden, daher zeigt die Karte Globus. Ihre Auswahl 3D bleibt erhalten.",
   "globe.unsupported": "Die Grafik dieses Rechners kann den 3-D-Globus nicht darstellen. Globus, Flach oder Beam wählen — die laufen überall.",
   "globe.spin.stop.title": "Drehung des Globus anhalten",
   "globe.spin.start.title": "Globus drehen",

@@ -62,6 +62,7 @@ import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { useStableByKey } from '../features/useStableByKey'
 import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
+import { ownGlobePicks, type SharedMapLayer } from '../features/globeLayers'
 import { MapPicker, FLAT_MAP_CHOICES } from './MapPicker'
 import {
   gridToLatLon,
@@ -313,6 +314,19 @@ const INTENT_PRESETS: Record<
  *  pop-out) opens its preset projection instead of the WebGL globe it cannot draw. */
 function flatPick(map: MapChoice | undefined): Projection | null {
   return map && map !== '3d' ? map : null
+}
+
+/** The 2-D table of a window where the 2-D map has never been shown starts, for the layers both maps
+ *  draw, from what the operator chose on THIS window's 3-D globe (features/globeLayers
+ *  `ownGlobePicks`); an intent's preset goes on top, so the layers it names keep that intent's promise.
+ *  A window that lived on the globe used to meet a 2-D table nobody there had chosen — another window's,
+ *  or the defaults with their state outlines — the day it showed the 2-D map (2026-10-04). */
+function withOwnGlobePicks(L: Record<LayerKey, Layer>): Record<LayerKey, Layer> {
+  const next = { ...L }
+  for (const [k, on] of Object.entries(ownGlobePicks()) as [SharedMapLayer, boolean][]) {
+    next[k] = { ...next[k], visible: on }
+  }
+  return next
 }
 
 /** An intent's preset applied SOFTLY over a layer table: only the layers it names change, so the
@@ -764,7 +778,8 @@ export function MapView({
     [muf],
   )
   // THE OPERATOR'S SETUP FOR THIS INTENT (features/intentMapSettings): what they left here, or —
-  // the first time this intent is used on this surface — its preset. The embedded detail/APRS maps
+  // the first time this intent is used on this surface — its preset, over what was chosen on this
+  // window's 3-D globe (`withOwnGlobePicks`). The embedded detail/APRS maps
   // force their own projection and layers and never read or write it (they are transient insets;
   // touching it would fight the operator's real Connect map).
   const [initialSetup] = useState(() =>
@@ -784,7 +799,9 @@ export function MapView({
         ? APRS_EMBED_LAYERS
         : EMBED_LAYERS
       : (layersFromValue(initialSetup?.layers) ??
-        (intent ? withIntentPreset(DEFAULT_LAYERS, intent) : DEFAULT_LAYERS)),
+        (intent
+          ? withIntentPreset(withOwnGlobePicks(DEFAULT_LAYERS), intent)
+          : withOwnGlobePicks(DEFAULT_LAYERS))),
   )
   // SWITCHING INTENT restores that intent's setup — or applies its preset if it has never been used
   // here. Done DURING RENDER (React's "adjust state when a prop changes" pattern), not in an effect:

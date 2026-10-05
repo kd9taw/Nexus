@@ -1766,6 +1766,7 @@ export const ES: PartialCatalog = {
   "globe.spin.play": "▶ Giro",
   "globe.spin.start.title": "Girar el globo",
   "globe.spin.stop.title": "Parar el giro del globo",
+  "connect.globe3d.standIn": "El globo 3D no puede dibujarse ahora en este ordenador, así que el mapa muestra Globo. Tu elección 3D se conserva.",
   "globe.unsupported": "Los gráficos de este ordenador no pueden con el globo 3D. Elige Globo, Plano o Rumbos — van en cualquier PC.",
   "hideCalls.chip.label": "Ocultar ind.",
   "hideCalls.chip.title": "Oculta indicativos (o prefijos tipo VP8*) de este panel — solo un filtro de visualización; la decodificación, el log, las alertas y el respondedor automático no se tocan",
