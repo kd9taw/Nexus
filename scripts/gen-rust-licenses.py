@@ -148,7 +148,12 @@ def alternatives(expression):
 def read(path):
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    return text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+    return text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+
+
+def block(text):
+    """A text as one block of an entry, which separates its blocks by exactly one blank line."""
+    return text.rstrip("\n")
 
 
 def version_key(version):
@@ -194,16 +199,16 @@ def entry(package, allowed, rank, upstream, used):
              package.get("repository") or f"https://crates.io/crates/{name}/{version}"]
     for f, ids in carried.items():
         if not ids or ids & taken:
-            lines += ["", f, "", texts[f]]
+            lines += ["", f, "", block(texts[f])]
     if pin:
         lines += ["", f"The published package carries no {elected} text. Reviewed in its place, each from "
                   "the address", "above it:"]
         for source, text in pin:
-            lines += ["", source, "", text]
+            lines += ["", source, "", block(text)]
     if "Apache-2.0" in taken:
         for f in sorted(os.listdir(root)):
             if NOTICE_FILE.match(f):
-                lines += ["", f, "", read(os.path.join(root, f))]
+                lines += ["", f, "", block(read(os.path.join(root, f)))]
     return "\n".join(lines) + "\n"
 
 
