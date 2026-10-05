@@ -1,0 +1,143 @@
+# The street map's host, maps.hamradiotools.io: a Cloudflare R2 bucket (nexus-street-maps) behind
+# a custom domain. Quarterly, this copies the newest Protomaps basemap build (the planet as one
+# PMTiles file, about 139 GB of OpenStreetMap data under the ODbL) from its publisher into the
+# bucket at a key that is never overwritten, checks it as stored, adds the fonts and icons the
+# street map draws with, and publishes streetmaps.json, the index Nexus reads
+# (crates/street-map/src/manifest.rs). Monthly, it deletes what the index stopped naming at least
+# 14 days earlier, so a download begun on the old index can finish. The rules live in
+# scripts/street-maps.mjs, tested by scripts/street-maps.test.mjs here and in ci.yml.
+#
+# Two jobs, so the bucket's token never shares a machine with code compiled from elsewhere:
+#   plan    no secret. Tests the rules, builds the fonts-and-icons archive (its sprite generator
+#           is compiled from the style's own commit), reads the publisher's index and the hosted
+#           one, and decides. Its log is the whole plan, and it uploads what a copy would publish.
+#   bucket  the `street-maps` environment (deployment branch: main), whose three secrets are the
+#           bucket's token. It runs pinned rclone and the script's copy or retire, nothing else.
+#
+# Dispatch: `gh workflow run street-maps.yml --ref main -f operation=copy`. Without -f it runs
+# the default, `plan`, which prints what a copy would do and touches nothing. The schedule only
+# refreshes a hosted copy: hosting the FIRST copy is a publish, made by hand.
+name: Street maps
+
+on:
+  schedule:
+    # Must equal COPY_CRON and RETIRE_CRON in scripts/street-maps.mjs (its test holds them equal).
+    - cron: '23 5 6 1,4,7,10 *'
+    - cron: '23 5 22 * *'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: >-
+          plan (the default) prints what a copy would do and touches nothing. copy copies the
+          newest build, checks it and publishes the index. retire deletes what the index stopped
+          naming at least 14 days ago.
+        type: choice
+        options: [plan, copy, retire]
+        default: plan
+
+permissions:
+  contents: read
+
+concurrency:
+  group: street-maps
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Test the job's rules before they act
+        run: node --test scripts/street-maps.test.mjs
+
+      - name: Install Rust 1.93.1 (the sprite generator)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.93.1
+
+      - name: Build the fonts-and-icons archive (pinned commits, reproducible)
+        run: bash scripts/street-maps-assets.sh "$RUNNER_TEMP/street-assets" out
+
+      - name: Plan
+        id: plan
+        env:
+          OPERATION: ${{ inputs.operation }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: >-
+          node scripts/street-maps.mjs plan --out out --event "$GITHUB_EVENT_NAME"
+          --operation "$OPERATION" --schedule "$SCHEDULE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: street-maps-plan
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
+
+  bucket:
+    needs: plan
+    if: needs.plan.outputs.action == 'copy' || needs.plan.outputs.action == 'retire'
+    runs-on: ubuntu-latest
+    # Copying and reading back 139 GB takes hours; stop cleanly inside the 6 h limit.
+    timeout-minutes: 330
+    environment: street-maps
+    env:
+      ACTION: ${{ needs.plan.outputs.action }}
+      BUCKET: nexus-street-maps
+      # The `r2` remote, all but its credentials (those are step-scoped below).
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_REGION: auto
+      RCLONE_CONFIG_R2_ACL: private
+      # The token is scoped to one bucket and cannot create one.
+      RCLONE_CONFIG_R2_NO_CHECK_BUCKET: 'true'
+      # About 2,100 parts for the planet (R2 allows 10,000), 8 in flight: 512 MiB of buffers.
+      RCLONE_CONFIG_R2_CHUNK_SIZE: 64Mi
+      RCLONE_CONFIG_R2_UPLOAD_CONCURRENCY: '8'
+      RCLONE_STATS: 1m
+      RCLONE_STATS_ONE_LINE: 'true'
+      RCLONE_STATS_LOG_LEVEL: NOTICE
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@v4
+        with:
+          name: street-maps-plan
+          path: out
+
+      - name: Install rclone 1.75.1, checked against its published SHA-256
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/rclone.zip" https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip
+          echo "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab  $RUNNER_TEMP/rclone.zip" | sha256sum -c -
+          unzip -q -j -d "$RUNNER_TEMP/bin" "$RUNNER_TEMP/rclone.zip" rclone-v1.75.1-linux-amd64/rclone
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/rclone" version
+
+      - name: Copy the build, check it as stored and through the host, publish the index
+        if: env.ACTION == 'copy'
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: node scripts/street-maps.mjs copy --from out --dest "r2:$BUCKET"
+
+      - name: Retire what the index stopped naming at least 14 days ago
+        if: env.ACTION == 'retire'
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: node scripts/street-maps.mjs retire --dest "r2:$BUCKET"

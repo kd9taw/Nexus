@@ -584,6 +584,13 @@ jobs:
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
 
+      # Same argument for the street map's host: street-maps.yml copies and deletes unattended,
+      # and the index it publishes is what every street-map download reads. Its rules are tested
+      # here too, and here, after `npm ci`, the test can also hold the icons the hosting job
+      # generates to the style the UI actually ships.
+      - name: Test the street-map hosting job
+        run: node --test scripts/street-maps.test.mjs
+
       # (The fd-rules publish gate used to have a node half here, walking a
       # corpus against a second validator written in JS. There is one validator
       # now — the loader itself — so the gate and its corpus both live in the
