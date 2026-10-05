@@ -9,8 +9,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { BrowserClient, RemoteError } from './client'
 import type { AccountSession } from './client'
 import { RemoteApp } from './RemoteApp'
+import type { StationKeyView } from './station-key'
 
+type View = Promise<StationKeyView | null>
 const kept = vi.hoisted(() => new Map<string, string>())
+// One read of the kept keys can be made late: it reads the kept key at once, and the page has its view
+// only when the test lets it go, as a read still hashing when the operator presses Accept would.
+const late = vi.hoisted(() => ({ next: null as null | ((view: View) => View) }))
 vi.mock('./station-key', async importOriginal => {
   const actual = await importOriginal<typeof import('./station-key')>()
   const pins = {
@@ -19,7 +24,11 @@ vi.mock('./station-key', async importOriginal => {
     forget: async (id: string) => { kept.delete(id) },
   }
   return { ...actual,
-    stationKeyView: (id: string, listed: string | null | undefined) => actual.stationKeyView(id, listed, pins),
+    stationKeyView: (id: string, listed: string | null | undefined) => {
+      const view = actual.stationKeyView(id, listed, pins), hold = late.next
+      late.next = null
+      return hold ? hold(view) : view
+    },
     acceptStationKey: (id: string, key: string) => actual.acceptStationKey(id, key, pins),
     forgetStationKey: (id: string) => actual.forgetStationKey(id, pins) }
 })
@@ -31,7 +40,7 @@ vi.mock('./device-key', async importOriginal => {
   return { ...actual, deviceKey: (stationId: string) => actual.deviceKey(stationId, store) }
 })
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); kept.clear() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); kept.clear(); late.next = null })
 
 // Made-up shapes of a station key (the P-256 SPKI prefix, 04, then one byte sixty-four times), not
 // keys; and the first 128 bits of the SHA-256 of each, as both ends show them.
@@ -55,6 +64,14 @@ function client(session: AccountSession) {
 }
 const approved = () => ({ id: crypto.randomUUID(), name: 'Laptop', approved: 1 })
 const streamButton = () => screen.getByRole('button', { name: 'Stream' }) as HTMLButtonElement
+/** The page's next read of the kept keys, made late: it has read the kept key once `begun` settles, and
+ *  the page has its view only on `deliver`, which answers that view. */
+function lateRead() {
+  let release!: () => void, read!: View
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const begun = new Promise<void>(resolve => { late.next = view => { read = view; resolve(); return gate.then(() => view) } })
+  return { begun, deliver: () => { release(); return read } }
+}
 
 it('S3-L1: the card keeps the first key the service lists for the station, and shows it beside this browser\'s, both in eight groups', async () => {
   const session = account(), stationId = crypto.randomUUID()
@@ -109,6 +126,29 @@ it('S3-L1: another key listed: the card says so with both keys and Stream is off
   expect(await screen.findByText(`This station’s key: ${SHOWN_B}`)).toBeTruthy()
   expect(screen.queryByText(CHANGED)).toBeNull()
   expect(streamButton().disabled, 'control: Stream is back').toBe(false)
+})
+
+it('S3-L1: a poll that read the kept key before Accept and finishes after it never brings the warning back', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  const session = account(), stationId = crypto.randomUUID()
+  kept.set(stationId, KEY_A)
+  session.stations.push({ id: stationId, name: 'Home', stationKey: KEY_B, device: approved() })
+  client(session)
+  render(<RemoteApp />)
+  expect(await screen.findByText(CHANGED)).toBeTruthy()
+  // The next poll reads the kept key, still A, and is still working when the operator accepts B.
+  const read = lateRead()
+  await act(async () => { vi.advanceTimersByTime(5000) })
+  await read.begun
+  fireEvent.click(screen.getByRole('button', { name: 'Accept the new key' }))
+  await waitFor(() => expect(kept.get(stationId)).toBe(KEY_B))
+  expect(await screen.findByText(`This station’s key: ${SHOWN_B}`)).toBeTruthy()
+  // The poll finishes now, after the accept, with what it read before it.
+  const view = await act(() => read.deliver())
+  expect(view && view.keptPrint !== view.print, 'control: the late read saw the key kept before Accept').toBe(true)
+  expect(screen.queryByText(CHANGED)).toBeNull()
+  expect(screen.getByText(`This station’s key: ${SHOWN_B}`)).toBeTruthy()
+  expect(streamButton().disabled, 'Stream stays on').toBe(false)
 })
 
 it('S3-L1: removing this browser\'s approval, or revoking the station, on the page clears the station\'s kept key', async () => {

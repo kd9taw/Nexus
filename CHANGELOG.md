@@ -93,6 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
+- **Remote: the changed-key warning stays gone once you accept the new key.** If the page happened
+  to be re-reading your stations as you pressed **Accept the new key**, the warning that the
+  station's key had changed came back, with Stream greyed out, for up to five seconds. The key you
+  accepted was kept all the same. The card now shows the accepted key, and Stream, once you accept.
 - **Remote: Stop TX is never refused.** For about a second after any stop at the station (an Esc
   over the stream's picture, a band change, a Stop TX or a logger's halt at the shack, the high-SWR
   cutoff, a switch of radio), the browser's Stop TX was refused, and the page said nothing. A
