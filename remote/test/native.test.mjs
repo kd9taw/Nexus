@@ -138,6 +138,7 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
       assert.deepEqual((await operation({ type: 'result', operationId: logged.request.requestId })).value, logged.value)
       assert.equal((await probe.send({ type: 'ftQsoEvidence' })).adif, after.adif)
     }
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     socket?.close()
     try { await probe.stop() } finally { await app.mf.dispose() }
@@ -200,6 +201,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     for (let i = 0; i < 50 && !status?.stationId; i++) { status = (await probe.send({ type: 'status' })).status; if (!status.stationId) await delay(100) }
     assert.equal(status.phase, 'disabled', 'Turn off Remote is remembered')
     assert.deepEqual(status.transmitPermissions, [])
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
@@ -243,6 +245,7 @@ test('actual native A5: the station pins the device key it showed, and keeps it 
       if (!status?.pinnedDevices?.includes(requested.deviceId)) await delay(100)
     }
     assert.deepEqual(status.pinnedDevices, [requested.deviceId], 'the pin survived a restart')
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
@@ -278,6 +281,7 @@ test('actual native A5: approving the pairing pins the key the confirming browse
     assert.deepEqual(status.pinnedDevices, [device.id], 'and it is pinned, on first use')
     const { value: session } = await browser.post('session')
     assert.equal(session.stations.find(s => s.id === stationId).device.publicKey, publicKey, 'the page reads its own key back')
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
@@ -339,6 +343,7 @@ test('actual native S1-M1/S3-M1: the station\'s key is recorded for its pages, a
     const stop = await ask(request({ type: 'stopTransmit', stationBootId: held.stationBootId, leaseId: held.leaseId,
       transmitEpoch: held.transmitEpoch }))
     assert.deepEqual(stop.value, { stop: 'accepted' }, JSON.stringify(stop))
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { socket?.close() } catch { /* already closed */ }
     try { await probe.stop() } finally { await app.mf.dispose() }
@@ -404,16 +409,20 @@ async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
   const queue = [], waiting = []
-  // Never forward raw probe output: its pipe includes the one-time pairing code.
-  child.stderr.resume()
-  let exited = false
+  // Never forward raw probe output: its pipe includes the one-time pairing code. Only a panic's place is kept,
+  // `panicked at <file>:<line>:<col>`, which names a source line and nothing else.
+  let panic = null
+  createInterface({ input: child.stderr }).on('line', line => { panic ??= line.match(/panicked at (\S+:\d+:\d+)/)?.[1] ?? null })
+  let exited = false, exitCode = null
+  const gone = what => new Error(`native probe exited (code ${exitCode}${panic ? `, panicked at ${panic}` : ''}) before answering ${what}`)
   const exit = new Promise(resolve => {
     const finish = code => {
-      exited = true
-      for (const waiter of waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(new Error('native probe exited')) }
+      exited = true; exitCode = code
+      for (const waiter of waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(gone(waiter.what)) }
       resolve(code)
     }
-    child.once('exit', finish)
+    // `close`, not `exit`: it comes once the pipes are read to the end, the panic's line included.
+    child.once('close', finish)
     child.once('error', () => finish(null))
   })
   const lines = createInterface({ input: child.stdout })
@@ -424,24 +433,27 @@ async function nativeProbe(binary, origin) {
     if (waiter) { clearTimeout(waiter.timer); waiter.resolve(value) } else queue.push(value)
   })
   child.stdin.write(JSON.stringify({ origin, configurationRoot:profile }) + '\n')
-  async function receive() {
+  async function receive(what) {
     if (queue.length) return queue.shift()
-    if (exited) throw new Error('native probe exited')
+    if (exited) throw gone(what)
     return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject, timer: null }
-      waiter.timer = setTimeout(() => { waiting.splice(waiting.indexOf(waiter), 1); reject(new Error('native probe response timed out')) }, 15000)
+      const waiter = { resolve, reject, timer: null, what }
+      waiter.timer = setTimeout(() => { waiting.splice(waiting.indexOf(waiter), 1); reject(new Error(`native probe response to ${what} timed out`)) }, 15000)
       waiting.push(waiter)
     })
   }
   return {
-    ready: receive,
-    async send(action) { child.stdin.write(JSON.stringify(action) + '\n'); return receive() },
+    ready: () => receive('ready'),
+    async send(action) { child.stdin.write(JSON.stringify(action) + '\n'); return receive(action.type) },
+    /** Ends the probe and returns its exit code; a second call returns it again. It asserts nothing: a test
+     *  asserts the code as its body's last step, because an error thrown from its `finally` would replace the
+     *  body's own, and a probe that died mid-test then read as nothing but its exit code. */
     async stop() {
       if (!exited) child.stdin.end('{"type":"exit"}\n')
       const timer = setTimeout(() => child.kill('SIGTERM'), 5000)
       const code = await exit; clearTimeout(timer)
       await rm(profile,{recursive:true,force:true})
-      assert.equal(code, 0, 'native probe must exit successfully')
+      return code
     },
   }
 }
@@ -909,6 +921,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const forgotten = await probe.send({ type: 'forget' })
     assert.equal(forgotten.ok, true, JSON.stringify(forgotten)); assert.equal(forgotten.status.stationId, null)
     assert.equal((await app.db.prepare('SELECT enabled FROM stations WHERE id=?').bind(stationId).first()).enabled, 0)
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally { try { await probe.stop() } finally { await app.mf.dispose() } }
 })
 
@@ -1310,5 +1323,6 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
    const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)
   }
+  assert.equal(await probe.stop(),0,'native probe must exit successfully')
  }finally{for(const timer of renewals.values())clearInterval(timer);socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
 })

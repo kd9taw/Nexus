@@ -278,6 +278,25 @@ fn refused_enable_does_not_change_local_authority() {
     assert!(!service.control.lock().unwrap().enabled);
 }
 
+/// A station read asked as the page asks one (`askAgainWhenBusy`, ui/src/remote-web/application-client.ts):
+/// `applicationBusy` is asked again, three attempts at most and 250 ms apart. Any other answer, and a third
+/// busy, comes back as it came. The station's reads take the Engine with try_lock, so in the probe they
+/// answer busy whenever its readings thread holds it.
+fn ask_again_when_busy<T>(
+    mut read: impl FnMut() -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let mut attempt = 1;
+    loop {
+        match read() {
+            Err("applicationBusy") if attempt < 3 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            answer => return answer,
+        }
+    }
+}
+
 #[test]
 #[ignore = "invoked by remote/test/native.test.mjs with ephemeral account data over pipes"]
 fn cloud_runtime_probe() {
@@ -616,7 +635,7 @@ fn cloud_runtime_probe() {
                 serde_json::from_value(json!({"version":1,"projects":value["projects"]})).unwrap();
             let bytes = serde_json::to_vec(&file).unwrap();
             std::fs::write(&path, &bytes).unwrap();
-            let result = query::configuration_probe(&engine).unwrap();
+            let result = ask_again_when_busy(|| query::configuration_probe(&engine)).unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), bytes);
             assert!(!engine.lock().unwrap().snapshot().radio.tx_enabled);
             println!("REMOTE_TEST:{}", result);
