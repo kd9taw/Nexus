@@ -244,6 +244,7 @@ pub(crate) fn slot_key_failure(key: &std::io::Result<()>, held: bool) -> Option<
 /// (`Configuration.cpp:5434-5452`), and reopening it sends no PTT command (`:5055`,
 /// `TransceiverBase.cpp:133-137`). Here a failed unkey leaves `Rig::keyed` set, so the radio loop's
 /// idle self-heal sends the unkey every tick until the radio takes it, TX halted or not.
+#[cfg(feature = "device")]
 pub(crate) fn slot_unkey_failure(unkey: &std::io::Result<()>, slot_over: bool) -> Option<String> {
     let e = unkey.as_ref().err()?;
     if !slot_over || crate::rig::deadline_passed(e) {
