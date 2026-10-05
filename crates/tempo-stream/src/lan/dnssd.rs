@@ -223,8 +223,8 @@ pub fn advertise(record: &Record) -> Option<Advert> {
     }
 }
 
-/// The shacks that answer on this computer's networks within `wait`, then within `wait` again
-/// for their records. Blocks for that long: call it off any thread that must not wait.
+/// The shacks that answer on this computer's networks within `wait`, their records with them.
+/// Blocks for that long: call it off any thread that must not wait.
 pub fn find(wait: Duration) -> Result<Vec<Found>, Unavailable> {
     #[cfg(windows)]
     {
