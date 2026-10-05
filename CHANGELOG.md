@@ -74,6 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its warning. A radio that is only slow to answer, past the time Nexus waits, still sends its
   over as before: WSJT-X keeps waiting for such a radio and transmits once it keys. NEEDS-BENCH on
   real radios: one that refuses PTT (a wrong PTT method or port), and a slow serial CAT rig.
+- **FT8, FT4, JS8 and the other timed-slot modes: when the radio does not accept PTT off, TX stops
+  and the status bar says so, as in WSJT-X.** If the radio answered PTT off with an error, at the
+  end of an over or when Stop TX or a logger's HaltTx cut one, TX stayed on and nothing was said.
+  Now TX turns off and the status bar shows **PTT OFF FAILED — TX STOPPED** with the time and what
+  the radio answered, until you turn TX on again. Nexus keeps sending PTT off until the radio
+  accepts it, as before. NEEDS-BENCH on real radios.
 - **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
   radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
   background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
