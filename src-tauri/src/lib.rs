@@ -39,6 +39,9 @@ mod cluster_nodes;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
+/// Remote over this network on the PC an operator works from: its key for each station, pairing,
+/// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
+mod lan_client;
 /// The Logbook's changes to one contact, addressed by id and the edit key of the version the
 /// caller holds (SPEC-2 v2 §3).
 mod log_by_id;
@@ -32257,6 +32260,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.health)
         .manage(d.fd_board)
         .manage(d.connect_web)
+        .manage(remote_window::LanOrigin::default())
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
         .manage(SolarIndicesCache::default())
@@ -32564,6 +32568,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             window_state::get_window_behind,
             window_state::set_window_behind,
             remote_window::open_remote_stations_window,
+            remote_window::open_lan_stations_window,
             set_area,
             qso_resend,
             qso_freetext,

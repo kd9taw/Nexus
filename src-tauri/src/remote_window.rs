@@ -43,6 +43,15 @@
 //! builds, so the stream cannot start; on macOS, WKWebView has WebRTC but no `AudioDecoder` before
 //! Safari 26, so the station's audio could not play. Neither is offered: the command refuses, and
 //! Settings says to use a browser there.
+//!
+//! **Its sibling for Remote over this network: the Stations on this network window** ([`LAN_LABEL`],
+//! the operator's ruling of 2026-10-04, "Window only in v1"). The same window for a station paired
+//! over the shack's own network, with no internet: the stream page bundled in this Nexus, served
+//! from a loopback origin of this computer's own (`lan_client::Origin`), which Tauri counts as a
+//! remote page, so it too reaches no command. That origin runs while the window is open and ends
+//! with it. The window shows its own page and nothing else ([`route_lan`]): any other web page goes
+//! to the system browser, and this computer's own loopback and app hosts go nowhere. It asks the
+//! Remote service for nothing, so it opens with no internet. Same F11 and browser keys as above.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,11 +59,20 @@ use std::time::Duration;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
+use crate::lan_client::{computer_name, Origin, Reach, Stations};
+use crate::remote_service::vault::SystemVault;
 use crate::remote_service::REMOTE_ORIGIN;
 use crate::window_state;
 
 /// The window's label. In no capability's `windows` list, so it gets nothing even as a local page.
 pub const LABEL: &str = "remote-stations";
+
+/// The Stations on this network window's label, in no capability's `windows` list either.
+pub const LAN_LABEL: &str = "lan-stations";
+
+/// The languages the Stations on this network window's page can be opened in: the catalogs it
+/// ships with.
+const LOCALES: [&str; 5] = ["en", "de", "es", "fr", "ja"];
 
 /// Opening size, in logical px: room for the shack's window and the page's own controls.
 const DEFAULT_INNER: (f64, f64) = (1280.0, 800.0);
@@ -122,6 +140,33 @@ fn route_new_window(target: &Url) -> Route {
         Route::SystemBrowser
     } else {
         Route::Refuse
+    }
+}
+
+/// Where a navigation in the Stations on this network window goes, with `page` the address it
+/// opened at: its own page's origin here; any other web page to the system browser, except this
+/// computer's own hosts (loopback, `localhost`, `*.localhost`), which go nowhere; and everything
+/// that is not a web page nowhere.
+fn route_lan(target: &Url, page: &Url) -> Route {
+    if !matches!(target.scheme(), "http" | "https") {
+        return Route::Refuse;
+    }
+    if target.origin() == page.origin() {
+        return Route::InWindow;
+    }
+    let own = target.host_str().is_none_or(|host| {
+        host == "localhost"
+            || host.ends_with(".localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified())
+    });
+    if own {
+        Route::Refuse
+    } else {
+        Route::SystemBrowser
     }
 }
 
@@ -265,6 +310,111 @@ pub async fn open_remote_stations_window(app: tauri::AppHandle) -> Result<(), St
     }
     let window = builder.build().map_err(|_| NOT_OPENED)?;
     window_state::arm_remote_capture(&window);
+    #[cfg(windows)]
+    quiet_browser_keys(&window);
+    Ok(())
+}
+
+/// The loopback origin the Stations on this network window's page comes from, while the window is
+/// open.
+#[derive(Default)]
+pub struct LanOrigin(Mutex<Option<Origin>>);
+
+/// What the window's page can reach: the app's own embedded files (the same the main window
+/// loads, so nothing is read from disk and nothing can differ from the shipped page), this
+/// computer's paired stations in the OS credential store, and the stations Windows' own DNS-SD
+/// finds by name.
+fn reach(app: &tauri::AppHandle) -> Reach {
+    let files = app.clone();
+    Reach {
+        assets: Arc::new(move |path: &str| {
+            let resolver = files.asset_resolver();
+            let asset = resolver
+                .get(format!("/{path}"))
+                .or_else(|| resolver.get(path.to_string()))?;
+            Some((asset.bytes, asset.mime_type))
+        }),
+        stations: Arc::new(Stations::new(Arc::new(SystemVault))),
+        find: Arc::new(tempo_stream::lan::dnssd::find),
+        name: computer_name(),
+    }
+}
+
+/// Open the Stations on this network window, or bring it forward when it is already open, with
+/// its page in `locale` (one of [`LOCALES`]; otherwise the page's own choice).
+///
+/// Called by Settings ▸ Station ▸ Remote access on this PC's own window; the window's page cannot
+/// call it (or anything else).
+#[tauri::command]
+pub async fn open_lan_stations_window(
+    app: tauri::AppHandle,
+    origin: tauri::State<'_, LanOrigin>,
+    locale: Option<String>,
+) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err(UNAVAILABLE.into());
+    }
+    if let Some(window) = app.get_webview_window(LAN_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let page = {
+        let mut running = origin.0.lock().map_err(|_| NOT_OPENED)?;
+        if running.is_none() {
+            *running = Some(Origin::start(reach(&app)).map_err(|_| NOT_OPENED)?);
+        }
+        running.as_ref().map(Origin::page).ok_or(NOT_OPENED)?
+    };
+    let mut page = Url::parse(&page).map_err(|_| NOT_OPENED)?;
+    if let Some(locale) = locale.filter(|l| LOCALES.contains(&l.as_str())) {
+        page.query_pairs_mut().append_pair("lang", &locale);
+    }
+    let (here, here_too) = (page.clone(), page.clone());
+    let (to_browser, new_to_browser) = (app.clone(), app.clone());
+    let window = WebviewWindowBuilder::new(&app, LAN_LABEL, WebviewUrl::External(page))
+        .title("Nexus — Stations on this network")
+        .inner_size(DEFAULT_INNER.0, DEFAULT_INNER.1)
+        .min_inner_size(MIN_INNER.0, MIN_INNER.1)
+        .disable_drag_drop_handler()
+        .on_navigation(move |target| match route_lan(target, &here) {
+            Route::InWindow => true,
+            Route::SystemBrowser => {
+                open_in_browser(&to_browser, target);
+                false
+            }
+            Route::Refuse => false,
+        })
+        .on_new_window(move |target, _| {
+            if route_lan(&target, &here_too) == Route::SystemBrowser {
+                open_in_browser(&new_to_browser, &target);
+            }
+            NewWindowResponse::Deny
+        })
+        .prevent_overflow()
+        .center()
+        .build();
+    let window = match window {
+        Ok(window) => window,
+        Err(_) => {
+            if let Ok(mut running) = origin.0.lock() {
+                running.take();
+            }
+            return Err(NOT_OPENED.into());
+        }
+    };
+    // The origin lives as long as the window: closing it ends the page's session, and any road
+    // to a station with it, which ends that computer's stream and lease at the station.
+    let closing = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Some(origin) = closing.try_state::<LanOrigin>() {
+                if let Ok(mut running) = origin.0.lock() {
+                    running.take();
+                }
+            }
+        }
+    });
     #[cfg(windows)]
     quiet_browser_keys(&window);
     Ok(())
@@ -621,6 +771,175 @@ mod tests {
         assert!(
             reached.is_empty(),
             "remote content reaches commands: {reached:#?}"
+        );
+    }
+
+    // ---- the Stations on this network window ----------------------------------------------
+
+    /// The page the Stations on this network window opens at, as the loopback origin makes it.
+    fn lan_page() -> Url {
+        url(&format!(
+            "http://127.0.0.1:{}/{}/lan.html?lang=de",
+            crate::lan_client::PREFERRED_PORT,
+            "0a".repeat(32)
+        ))
+    }
+
+    #[test]
+    fn the_lan_window_shows_its_own_page_and_nothing_else() {
+        let page = lan_page();
+        for here in [
+            page.as_str(),
+            // The origin's own: what is not the page there is refused by its gates, not here.
+            "http://127.0.0.1:42076/",
+            "http://127.0.0.1:42076/another/path?x=1#y",
+        ] {
+            assert_eq!(route_lan(&url(here), &page), Route::InWindow, "{here}");
+        }
+        for elsewhere in [
+            "https://www.qrz.com/db/KD9TAW",
+            "https://remote-staging.hamradiotools.io/",
+            "http://example.net/",
+            "https://192.168.1.20/",
+        ] {
+            assert_eq!(
+                route_lan(&url(elsewhere), &page),
+                Route::SystemBrowser,
+                "{elsewhere}"
+            );
+        }
+        for own in [
+            // Another port, another loopback address, or the app's own hosts: never a browser's.
+            "http://127.0.0.1:42075/",
+            "https://127.0.0.1:42076/",
+            "http://127.0.0.2:42076/",
+            "http://localhost:42076/",
+            "http://tauri.localhost/index.html",
+            "https://ipc.localhost/",
+            "http://[::1]:42076/",
+            "http://0.0.0.0:42076/",
+            // Not a web page at all.
+            "javascript:alert(1)",
+            "data:text/html,<p>x</p>",
+            "file:///C:/Windows/win.ini",
+            "blob:http://127.0.0.1:42076/1234",
+            "tauri://localhost/",
+            "about:blank",
+        ] {
+            assert_eq!(route_lan(&url(own), &page), Route::Refuse, "{own}");
+        }
+    }
+
+    /// Tauri's own reading of "is this the app's own page?" (`Webview::is_local_url`, in tauri
+    /// 2.11.2's `webview/mod.rs`), which decides whether a page may call the app's own commands at
+    /// all: a page that is not the app's own may call none unless a capability names its address,
+    /// and none does (`no_capability_names_a_remote_url`). Tauri keeps it private, so this asks
+    /// its three questions of this build's own configuration: Tauri's own scheme; an address under
+    /// the dev URL, or under `tauri.localhost` where the dist files are served; and a custom
+    /// scheme's `<name>.localhost` host (any one of them counts here, registered or not).
+    fn local_to_tauri(page: &Url) -> bool {
+        let config = context().config().clone();
+        let mut own = vec![
+            url("tauri://localhost/"),
+            url("http://tauri.localhost/"),
+            url("https://tauri.localhost/"),
+        ];
+        own.extend(config.build.dev_url.clone());
+        own.iter().any(|base| base.make_relative(page).is_some())
+            || page.host_str().is_some_and(|h| h.ends_with(".localhost"))
+    }
+
+    /// ⛔ The Stations on this network window's page is not the app's own to Tauri, at the port
+    /// the origin asks for first or at any other: so it reaches no app command (the window's own
+    /// rule), however many the app adds. CONTROL: the same reading takes the app's own pages, its
+    /// dev URL and a custom scheme's host as its own.
+    #[test]
+    fn the_lan_page_is_not_the_apps_own_to_tauri() {
+        for own in [
+            "http://tauri.localhost/index.html",
+            "https://tauri.localhost/lan.html",
+            "tauri://localhost/lan.html",
+            "http://asset.localhost/x",
+        ] {
+            assert!(local_to_tauri(&url(own)), "the control: {own}");
+        }
+        let dev = context()
+            .config()
+            .build
+            .dev_url
+            .clone()
+            .expect("the build names a dev URL");
+        assert!(
+            local_to_tauri(&dev.join("lan.html").unwrap()),
+            "the control: {dev}"
+        );
+        for port in [crate::lan_client::PREFERRED_PORT, 1024, 49152, 65535] {
+            let page = url(&format!(
+                "http://127.0.0.1:{port}/{}/lan.html",
+                "0a".repeat(32)
+            ));
+            assert!(!local_to_tauri(&page), "{page}");
+        }
+    }
+
+    /// ⛔ The page in the Stations on this network window calls no command the app's own page can
+    /// call: each one any permission grants that the main window's own page may call (Tauri's own
+    /// decision over this build's access list, as for the Remote stations window) is refused to
+    /// the LAN page, in this window or any other. The app's own commands, the radio's among them,
+    /// are not compared: with no app ACL manifest the list holds none of them, so the same
+    /// question refuses them to the app's own page too and its "no" proves nothing. Their refusal
+    /// to this page rests on Tauri counting it remote (`the_lan_page_is_not_the_apps_own_to_tauri`),
+    /// and the tripwire below fails if the app ever declares a manifest. CONTROL, command by
+    /// command: the main window's own page may call each one compared, `plugin:event|listen`
+    /// among them.
+    #[test]
+    fn no_page_in_the_lan_window_can_call_a_command() {
+        let mut context = context();
+        let authority = context.runtime_authority_mut();
+        let commands = every_command();
+        assert!(
+            commands.len() > 100,
+            "only {} commands read",
+            commands.len()
+        );
+        let own = tauri::ipc::Origin::Local;
+        let callable: Vec<&String> = commands
+            .iter()
+            .filter(|command| {
+                authority
+                    .resolve_access(command, "main", "main", &own)
+                    .is_some()
+            })
+            .collect();
+        assert!(
+            callable
+                .iter()
+                .any(|command| *command == "plugin:event|listen"),
+            "the main window's own page must be able to listen, or this test asks nothing"
+        );
+        for radio in ["set_ptt", "halt_tx", "set_tune", "stop_voice"] {
+            assert!(
+                authority
+                    .resolve_access(radio, "main", "main", &own)
+                    .is_none(),
+                "the app now declares an ACL manifest: compare {radio} and its kind here too"
+            );
+        }
+        let origin = tauri::ipc::Origin::Remote { url: lan_page() };
+        let reached: Vec<String> = callable
+            .iter()
+            .filter(|command| {
+                [LAN_LABEL, "main", "panel-connect"].iter().any(|label| {
+                    authority
+                        .resolve_access(command, label, label, &origin)
+                        .is_some()
+                })
+            })
+            .map(|command| command.to_string())
+            .collect();
+        assert!(
+            reached.is_empty(),
+            "the LAN page reaches commands: {reached:#?}"
         );
     }
 

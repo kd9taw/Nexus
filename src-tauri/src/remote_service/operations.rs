@@ -264,6 +264,10 @@ struct Lease {
     device: String,
     until: Instant,
     sequence: u64,
+    /// The LAN connection that took it, or `None` for the relay's. The lease is bound to that
+    /// connection: it ends with it, and nothing on the other road ends it (the operator's ruling of
+    /// 2026-10-04, "both at once").
+    lan: Option<u64>,
 }
 struct Receipt {
     id: String,
@@ -395,6 +399,20 @@ pub struct Authority {
     /// bounded queue, set per socket. None, or a full queue, means the browser polls as it did
     /// before operation v5 — this is never load-bearing.
     completions: Mutex<Option<tokio::sync::mpsc::Sender<CompletionNotice>>>,
+    /// The LAN road's open connections. Its own lock, never held while another is taken, so
+    /// asking whether a connection is open can wait on nothing.
+    lan: Mutex<LanRoad>,
+    /// The LAN connection that holds the lease, or 0: a mirror of the lease, kept under Core, for
+    /// the relay's departures, which revoke without Core and must leave a LAN controller's
+    /// transmission alone. Without a LAN connection it is always 0, and they revoke as before.
+    lan_lease: AtomicU64,
+    /// One stream at a time for the whole station, whichever road it came by: a stream's end
+    /// is the station's (its presence, the held PTT, the window's reset), so a second may not start
+    /// while the first is still ending. See `claim_stream`.
+    streaming: std::sync::atomic::AtomicBool,
+    /// The LAN road's paired computers, who hold station control while LAN is on (see
+    /// `hold_lan_devices`). Unset in a build of the service without a LAN road.
+    lan_devices: std::sync::OnceLock<LanDevices>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
     /// Tests post self-spots here, one poster per target. A test build has no path to pota.app or
@@ -420,6 +438,9 @@ type PotaPoster = Box<
 >;
 #[cfg(test)]
 type ClusterPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + Sync>;
+/// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
+/// Called under Core: it may take no lock that is ever held while Core is taken.
+pub type LanDevices = Box<dyn Fn() -> Vec<String> + Send + Sync>;
 impl Authority {
     /// Self-spot posts publicly from the station's own call, to pota.app and its cluster login, so
     /// it has its own switch (`logging::SELF_SPOT`).
@@ -483,11 +504,31 @@ impl Authority {
         self.transmit.revoke();
         self.presence.revoke();
     }
+    /// The relay's road moved (its socket replaced or gone, or a browser on it left): what was
+    /// issued under its lease ends at once, before Core is free, as it always has. A lease held on
+    /// the LAN is not the relay's, and what it keeps on the air goes on. With no LAN
+    /// connection there is no LAN lease, and this is `revoke_execution`.
+    fn revoke_relay_execution(&self) {
+        if self.lan_lease.load(Ordering::SeqCst) == 0 {
+            self.revoke_execution();
+        }
+    }
     pub fn with_spots(spots: Option<crate::SharedSpots>) -> Self {
         Self {
             spots,
             ..Self::default()
         }
+    }
+    /// The LAN road's paired computers hold station control while LAN is on, whatever clears
+    /// grants: `reconcile` reads `devices` each time and gives each one it names its grant back,
+    /// so a local decision that clears every grant (`invalidate`: Turn Remote on or off, take over,
+    /// revoking a browser) leaves them theirs before any next request is answered, as `restore`
+    /// does for hosted browsers once the service lists them. It only ever gives: a computer
+    /// removed at the shack, or LAN going off, is first dropped from `devices` and then revoked
+    /// (`permit_station`), and the revoke stands. Set once, by the LAN road at its start; with no
+    /// LAN road, or nobody paired, or LAN off, `reconcile` is as it was.
+    pub fn hold_lan_devices(&self, devices: LanDevices) {
+        let _ = self.lan_devices.set(devices);
     }
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
@@ -498,7 +539,7 @@ impl Authority {
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
     }
     pub fn start_connection(&self) -> u64 {
-        self.revoke_execution();
+        self.revoke_relay_execution();
         self.connection
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
             .map_or(u64::MAX, |n| n + 1)
@@ -509,8 +550,56 @@ impl Authority {
             .compare_exchange(id, id.saturating_add(1), Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
+            self.revoke_relay_execution();
+        }
+    }
+    /// A computer's connection on the LAN road opened. It disturbs nothing: not the relay's
+    /// connection, nor a lease held on either road. Its id carries [`LAN_ROAD`].
+    pub fn start_lan_connection(&self) -> u64 {
+        let Ok(mut lan) = self.lan.lock() else {
+            return u64::MAX;
+        };
+        if lan.next >= LAN_ROAD - 1 {
+            return u64::MAX;
+        }
+        lan.next += 1;
+        let id = LAN_ROAD | lan.next;
+        lan.open.insert(id);
+        id
+    }
+    /// That connection ended. If it held the lease, what the lease kept on the air ends at once,
+    /// before Core is free, and the lease itself at the next `reconcile`. Any other connection's
+    /// lease, on either road, is untouched.
+    pub fn retire_lan_connection(&self, id: u64) {
+        if let Ok(mut lan) = self.lan.lock() {
+            lan.open.remove(&id);
+        }
+        if self
+            .lan_lease
+            .compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             self.revoke_execution();
         }
+    }
+    fn lan_open(&self, id: u64) -> bool {
+        self.lan.lock().is_ok_and(|lan| lan.open.contains(&id))
+    }
+    /// May a request on `connection` be answered: the relay's current socket, or a LAN connection
+    /// still open?
+    fn current(&self, connection: u64) -> bool {
+        match lan_road(connection) {
+            Some(id) => self.lan_open(id),
+            None => connection == self.connection.load(Ordering::SeqCst),
+        }
+    }
+    /// Hold the station's one stream slot (see `streaming`), or `None` while a stream on either
+    /// road still holds it. Given back when the claim is dropped, however its stream ends.
+    pub fn claim_stream(self: &std::sync::Arc<Self>) -> Option<StreamClaim> {
+        self.streaming
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+            .then(|| StreamClaim(self.clone()))
     }
     fn reconcile(&self, c: &mut Core, now: Instant) -> Result<(), &'static str> {
         let epoch = self.epoch.load(Ordering::SeqCst);
@@ -525,6 +614,21 @@ impl Authority {
         if c.connection != connection || c.lease_epoch != lease_epoch {
             c.lease_epoch = lease_epoch;
             c.connection = connection;
+            // The relay's road moved. A lease the LAN holds is not the relay's to end.
+            if c.lease.as_ref().is_none_or(|l| l.lan.is_none()) {
+                c.lease = None;
+                c.windows.clear();
+                self.advance(c)?;
+            }
+        }
+        // A lease taken on the LAN ends with its connection. `retire_lan_connection` has
+        // already revoked what it kept on the air, unless it was taken while the connection ended.
+        if c.lease
+            .as_ref()
+            .and_then(|l| l.lan)
+            .is_some_and(|id| !self.lan_open(id))
+        {
+            self.revoke_execution();
             c.lease = None;
             c.windows.clear();
             self.advance(c)?;
@@ -538,6 +642,12 @@ impl Authority {
             c.windows.clear();
             c.context = None;
             self.advance(c)?;
+        }
+        // The LAN road's paired computers keep station control while LAN is on (see
+        // `hold_lan_devices`). Before the queued revocations below, so a revoke wins.
+        if let Some(devices) = self.lan_devices.get() {
+            c.control_grants
+                .extend(devices().into_iter().filter(|d| identifier(d)));
         }
         // A local revoke cannot wait behind a durable append. Retire its grant
         // before any later heartbeat, state or command can consume Core again.
@@ -665,7 +775,7 @@ impl Authority {
         let engine = tempo_app::engine::engine_lock_result(engine).ok()?;
         let mut c = self.core.lock().ok()?;
         self.reconcile(&mut c, now).ok()?;
-        if notice.connection != self.connection.load(Ordering::SeqCst) {
+        if !self.current(notice.connection) {
             return None;
         }
         let value = c
@@ -905,7 +1015,7 @@ impl Authority {
     /// survive; a controller must explicitly acquire a fresh lease afterward.
     pub fn disconnect_session(&self, session: &str) {
         if identifier(session) {
-            self.revoke_execution();
+            self.revoke_relay_execution();
             let _ = self
                 .lease_epoch
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
@@ -1145,7 +1255,7 @@ impl Authority {
         {
             return Err("stationUnsupported");
         }
-        if connection != self.connection.load(Ordering::SeqCst) {
+        if !self.current(connection) {
             return Err("staleConnection");
         }
         if !identifier(session) || !identifier(device) || !identifier(request.id()) {
@@ -1297,7 +1407,8 @@ impl Authority {
                     return Err("staleStation");
                 }
                 if let Some(l) = &c.lease {
-                    if l.session != session || l.device != device {
+                    // One controller for the whole station, on either road.
+                    if l.session != session || l.device != device || l.lan != lan_road(connection) {
                         return Err("controllerBusy");
                     }
                 } else {
@@ -1307,6 +1418,7 @@ impl Authority {
                         device: device.into(),
                         until: now + LEASE,
                         sequence: 0,
+                        lan: lan_road(connection),
                     });
                     self.advance(&mut c)?;
                 }
@@ -1407,7 +1519,7 @@ impl Authority {
                 if current.saturating_duration_since(window.at) >= WINDOW
                     || current >= l.until
                     || self.epoch.load(Ordering::SeqCst) != c.epoch
-                    || connection != self.connection.load(Ordering::SeqCst)
+                    || !self.current(connection)
                     || c.lease_epoch != self.lease_epoch.load(Ordering::SeqCst)
                 {
                     return Err("windowExpired");
@@ -1703,6 +1815,48 @@ fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
             }
         }
         _ => true,
+    }
+}
+
+/// A LAN connection's id carries this bit, so no relay connection's id is ever a LAN one's.
+/// The relay's ids count up from 1, with `u64::MAX` its exhausted mark, so neither ever has this
+/// bit alone at the top.
+pub const LAN_ROAD: u64 = 1 << 62;
+
+/// The LAN connection `connection` names, or `None` for the relay's.
+fn lan_road(connection: u64) -> Option<u64> {
+    (connection >> 62 == 1).then_some(connection)
+}
+
+/// The LAN road's connections: the ones open now, and the count their ids are made from.
+#[derive(Default)]
+struct LanRoad {
+    next: u64,
+    open: BTreeSet<u64>,
+}
+
+/// The station's one stream slot, held by a stream from its offer until it has finished ending.
+pub struct StreamClaim(std::sync::Arc<Authority>);
+impl Drop for StreamClaim {
+    fn drop(&mut self) {
+        self.0.streaming.store(false, Ordering::SeqCst);
+    }
+}
+
+/// One computer's connection on the LAN road. Retired when dropped, however it ends.
+pub struct LanConnection {
+    pub authority: std::sync::Arc<Authority>,
+    pub id: u64,
+}
+impl LanConnection {
+    pub fn new(authority: std::sync::Arc<Authority>) -> Self {
+        let id = authority.start_lan_connection();
+        Self { authority, id }
+    }
+}
+impl Drop for LanConnection {
+    fn drop(&mut self) {
+        self.authority.retire_lan_connection(self.id)
     }
 }
 

@@ -944,6 +944,12 @@ export async function openRemoteStationsWindow(): Promise<void> {
   await invoke('open_remote_stations_window')
 }
 
+/** Open (or bring forward) the Stations on this network window: stations paired over the shack's
+ *  own network, with no internet, its page in `locale`. Windows only; rejects elsewhere. */
+export async function openLanStationsWindow(locale: string): Promise<void> {
+  await invoke('open_lan_stations_window', { locale })
+}
+
 /** Close a panel's torn-off window if it is open (#263 — re-dock must not leave a second copy
  *  up). A no-op when that window is not open. */
 export async function closePanelWindow(panel: string): Promise<void> {

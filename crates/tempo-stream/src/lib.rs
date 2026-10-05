@@ -10,7 +10,8 @@
 //!   against the same files.
 //! - [`offer`] — what a page's offer must be before the station answers it: DTLS-SRTP only.
 //! - [`frame_clock`] — how old the picture the page last showed is, on the station's own clock.
-//! - [`lan`] — the last check that no LAN address leaves the shack.
+//! - [`lan`] — the last check that no LAN address leaves the shack, and where Remote over this
+//!   network may listen and whom it may hear.
 //! - [`stun`] — the one binding request that learns the station's reflexive address.
 //! - [`session`] — one streamed session over WebRTC: answer, candidates, video, data channels.
 //! - [`video`] — the picture: the station's window, captured and encoded as VP8.

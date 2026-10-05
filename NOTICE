@@ -1001,6 +1001,9 @@ principal third-party components, not a substitute for that gate:
   page) — MIT, and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both
   are already in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the
   webview Tauri uses.
+- **tokio-rustls** (Remote over this network: the shack's own listener, TLS 1.3 with raw keys pinned at
+  pairing) — MIT OR Apache-2.0 (© 2017 quininer kel). Not a new crate: already in the tree at the same
+  version (0.26) as a dependency of reqwest, hyper-rustls and tokio-tungstenite.
 - **io-kit-sys**, **core-foundation-sys**, **coreaudio-sys** (macOS only: reading USB
   topology from the IO registry, so the pickers can say WHICH RADIO a serial port or a sound
   card belongs to — two rigs with the same bridge and codec chips are otherwise identical

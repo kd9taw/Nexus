@@ -2,6 +2,8 @@
 mod audio;
 #[path = "export_tests.rs"]
 mod export;
+#[path = "lan_lease_tests.rs"]
+mod lan_lease;
 #[cfg(feature = "radio")]
 #[path = "level_tests.rs"]
 mod level;
@@ -154,7 +156,14 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     // was built to stop, so the list is now every file that has a test reaching the badge.
     // The stream's tests are a sixth (2026-10-03): their Stops on the data channel reach
     // `stop_station` as any other does, and three of them ran unguarded outside this list.
-    const SOURCES: [(&str, &str); 6] = [
+    // The LAN road's two are a seventh and eighth (2026-10-04): a LAN controller's Stop reaches it
+    // the same way, on the authority and on the LAN channel.
+    const SOURCES: [(&str, &str); 8] = [
+        ("lan_lease_tests.rs", include_str!("lan_lease_tests.rs")),
+        (
+            "remote_service/lan/tests.rs",
+            include_str!("../lan/tests.rs"),
+        ),
         ("transmit_tests.rs", include_str!("transmit_tests.rs")),
         ("satellite_tests.rs", include_str!("satellite_tests.rs")),
         ("rotator_tests.rs", include_str!("rotator_tests.rs")),

@@ -73,13 +73,20 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    // Never a script inlined as a data: URL, whatever its size: the Stations on this network page's
+    // `script-src 'self'` refuses one, and its receive-audio worklet is a file of its own origin
+    // for that reason (the hosted page's rule, vite.remote.config.ts).
+    assetsInlineLimit: file => file.endsWith('.js') ? false : undefined,
     rollupOptions: {
-      // Two entries: the desktop app, and the TV page the LAN server hands to a
-      // browser (connect_web.rs serves `connect-tv.html` at `/`). Same components,
-      // same chunks — a Connect improvement reaches the TV in the same build.
+      // Three entries: the desktop app; the TV page the LAN server hands to a browser
+      // (connect_web.rs serves `connect-tv.html` at `/`), same components, same chunks, so a
+      // Connect improvement reaches the TV in the same build; and the Stations on this network
+      // window's page (`lan.html`), which this computer's own loopback origin serves
+      // (src-tauri/src/lan_client/origin.rs).
       input: {
         main: 'index.html',
         tv: 'connect-tv.html',
+        lan: 'lan.html',
       },
     },
   },

@@ -6,6 +6,10 @@ import { initialState, startMonitor } from '../remote-monitor/session'
 import { AudioListen, audioCaption, audioEnded } from './AudioListen'
 import { BetaNote } from './BetaNote'
 import type { HostedConnection } from './client'
+
+/** What the stream view uses of a connection: the hosted one, or the window's road to a station on
+ *  the shack's own network (`../lan/connection.ts`). */
+export type StreamConnection = Pick<HostedConnection, 'operations' | 'stream' | 'audio' | 'source'>
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { MIC_LEVEL_DB, MIC_METER_FLOOR_DB, MIC_METER_TOP_DB, meterDb } from './mic-level'
@@ -41,7 +45,9 @@ const TOUCH_HOLD_MS = 100
  *  once - on the stream's own control channel and on the observe socket - so a stream that has
  *  frozen or died still leaves a way to unkey the rig. */
 export function StreamView({ connection, station, disconnect, signOut, autostart = false, browserKey = null, mode = 'stream' }: {
-  connection: HostedConnection; station: string; disconnect: () => void; signOut: () => void
+  connection: StreamConnection; station: string; disconnect: () => void
+  /** Absent where there is no account to sign out of (the road on the shack's own network). */
+  signOut?: () => void
   /** Opened by the station card's Stream or Listen: that press is the operator asking, so the view
    *  starts once, the first moment Start could be pressed, and never again on its own. */
   autostart?: boolean
@@ -188,7 +194,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
     title={fullScreen.on ? undefined : t('remote.stream.fullscreen.title')}>{fullScreen.on ? t('remote.stream.fullscreen.exit') : t('remote.stream.fullscreen')}</button>
   const leave = <>
     <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
-    <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>
+    {signOut && <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>}
   </>
 
   return <div className="app remote-monitor-app remote-stream-app" data-stream-phase={stream.phase} data-layout={layout}>
@@ -673,7 +679,7 @@ function stageOf(element: HTMLVideoElement | null): Stage | null {
  *  them. A tap shorter than the wait sends its press and its release together; a second finger after
  *  the press went ends it at the shack with a cancel, which clicks nothing there. A finger has no
  *  hover, so it moves nothing at the shack unless its press went. */
-function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedConnection, active: boolean,
+function useInput(video: RefObject<HTMLVideoElement | null>, connection: StreamConnection, active: boolean,
   zoom: PictureZoom, drawZoom: () => void): void {
   useEffect(() => {
     const element = video.current

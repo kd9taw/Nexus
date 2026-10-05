@@ -6,6 +6,8 @@ mod aprs;
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
 mod audio;
+/// Remote over this network: the shack's own listener, for a paired computer on the same network.
+pub(crate) mod lan;
 /// The relay's older lanes, held to the browser's own key (security review S1-M1).
 mod lanes;
 pub(crate) mod operations;
@@ -20,7 +22,7 @@ pub(crate) mod stream;
 #[cfg(test)]
 mod tests;
 mod transport;
-mod vault;
+pub(crate) mod vault;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -56,6 +58,10 @@ pub struct Status {
     /// S3-M1: the service holds another signing key for this station, so browsers refuse its stream
     /// until it is paired again. Its own field, because it lasts past any one request's error.
     key_refused: bool,
+    /// Remote over this network (`lan`): its switch, its paired computers and its pairing window.
+    /// Absent only from a build of the service without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lan: Option<lan::LanStatus>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -183,6 +189,36 @@ pub enum Action {
         #[serde(default)]
         key: Option<String>,
     },
+    /// Remote over this network on, at the shack (`lan`): on `address`, this computer's private
+    /// IPv4 address the operator picked, or with none as `lan` chooses; on `port`, or as it was.
+    LanOn {
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        port: Option<u16>,
+    },
+    /// Remote over this network off, at the shack: the port closes and every LAN session ends.
+    LanOff {},
+    /// Where Remote over this network listens, picked at the shack: one of this computer's private
+    /// IPv4 addresses, or with none as `lan` chooses. Kept, on or off.
+    LanAddress {
+        #[serde(default)]
+        address: Option<String>,
+    },
+    /// Pair a computer over this network, at the shack: the pairing window opens with a new code,
+    /// and this press is the approval (as ruled on 2026-10-04, "One press").
+    LanPair {},
+    /// Close the pairing window early.
+    LanCancel {},
+    /// Remove a paired computer, at the shack: out at once, its station control and its session
+    /// with it.
+    LanRevoke {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
+    /// Reset this station's network identity, at the shack: a new LAN key, and every paired
+    /// computer removed.
+    LanReset {},
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -418,6 +454,9 @@ struct Control {
     /// The service holds another key for this station (`stationKeyPinned`): pages will refuse its
     /// answers until it is paired again. Said at the shack.
     key_refused: bool,
+    /// Remote over this network (`lan`), beside the relay's road and sharing its authority.
+    /// Taken out of the lock to be used. `None` in a test build of the service.
+    lan: Option<Arc<lan::Lan>>,
 }
 impl Control {
     fn stop(&mut self) {
@@ -505,21 +544,60 @@ impl Service {
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
-        Self::start(
+        let feeds = transport::Feeds {
+            monitor: publisher,
+            spectrum: Some(spectrum),
+            meters,
+            sources,
+            // One encoder for the station, whoever listens: the Listen lane and every stream.
+            #[cfg(feature = "radio")]
+            audio: audio.map(audio::ReceiveFanout::new),
+            stream,
+        };
+        let service = Self::start(
             REMOTE_ORIGIN.to_string(),
             Box::new(SystemVault),
+            engine.clone(),
+            feeds.clone(),
+        );
+        // Its LAN key and paired computers are in the OS credential store, read on its own thread.
+        service.with_lan(
+            crate::settings_path().with_file_name("remote-lan.json"),
             engine,
-            transport::Feeds {
-                monitor: publisher,
-                spectrum: Some(spectrum),
-                meters,
-                sources,
-                // One encoder for the station, whoever listens: the Listen lane and every stream.
-                #[cfg(feature = "radio")]
-                audio: audio.map(audio::ReceiveFanout::new),
-                stream,
-            },
+            feeds,
+            Arc::new(lan::Book::new(Arc::new(SystemVault))),
+            Arc::new(tempo_stream::lan::look),
         )
+    }
+    /// Remote over this network, beside the relay's road and sharing its one authority: its switch
+    /// kept at `path`, its key and paired computers in `book`.
+    fn with_lan(
+        self,
+        path: std::path::PathBuf,
+        engine: crate::SharedEngine,
+        feeds: transport::Feeds,
+        book: Arc<lan::Book>,
+        resolve: lan::Resolve,
+    ) -> Self {
+        let authority = self.control.lock().ok().map(|c| c.operations.clone());
+        if let Some(authority) = authority {
+            let lan = Arc::new(lan::Lan::start(
+                path,
+                lan::Deps {
+                    authority,
+                    engine,
+                    feeds,
+                    book,
+                    resolve,
+                    advertise: lan::advertise(),
+                    firewall: lan::firewall_says(),
+                },
+            ));
+            if let Ok(mut control) = self.control.lock() {
+                control.lan = Some(lan);
+            }
+        }
+        self
     }
     #[cfg(test)]
     fn configured(
@@ -655,11 +733,21 @@ impl Service {
             .collect();
         status.observation_generation = enabled.then(|| control.generation.to_string());
         status.key_refused = control.key_refused;
+        status.lan = control.lan.as_deref().map(lan::Lan::status);
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
             status.phase = "disabled".into();
         }
         Ok(status)
+    }
+    /// Remote over this network, out of the lock.
+    fn lan(&self) -> Result<Option<Arc<lan::Lan>>, &'static str> {
+        Ok(self
+            .control
+            .lock()
+            .map_err(|_| "serviceUnavailable")?
+            .lan
+            .clone())
     }
     fn publish_memories(&self, generation: &str, bank: Option<&str>) -> bool {
         // Parse outside the control lock. Recheck the local enable generation at
@@ -734,7 +822,59 @@ impl Service {
                 let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
                 control.operations.invalidate();
                 control.remember(Persist::ClearGrants);
+                let lan = control.lan.clone();
                 drop(control);
+                // "End remote control" ends Remote over this network too: its port closes and every
+                // LAN session ends, and the shack says why until it is turned on again.
+                if let Some(lan) = lan {
+                    lan.end_at_shack();
+                }
+                return self.status();
+            }
+            Action::LanOn { address, port } => {
+                let lan = self.lan()?.ok_or("serviceUnavailable")?;
+                lan.turn_on(address.as_deref(), *port)?;
+                return self.status();
+            }
+            Action::LanOff {} => {
+                if let Some(lan) = self.lan()? {
+                    lan.turn_off();
+                }
+                return self.status();
+            }
+            Action::LanAddress { address } => {
+                self.lan()?
+                    .ok_or("serviceUnavailable")?
+                    .pick(address.as_deref())?;
+                return self.status();
+            }
+            Action::LanPair {} => {
+                self.lan()?.ok_or("serviceUnavailable")?.pair()?;
+                return self.status();
+            }
+            Action::LanCancel {} => {
+                if let Some(lan) = self.lan()? {
+                    lan.cancel_pairing();
+                }
+                return self.status();
+            }
+            Action::LanRevoke { device_id } => {
+                if !identifier(device_id) {
+                    return Err("invalidRequest");
+                }
+                let (lan, device) = (self.lan()?.ok_or("serviceUnavailable")?, device_id.clone());
+                // Off this thread, since the credential store can block. Inside, the computer is
+                // out and its control revoked before the store is written.
+                tokio::task::spawn_blocking(move || lan.revoke(&device))
+                    .await
+                    .map_err(|_| "serviceUnavailable")??;
+                return self.status();
+            }
+            Action::LanReset {} => {
+                let lan = self.lan()?.ok_or("serviceUnavailable")?;
+                tokio::task::spawn_blocking(move || lan.reset())
+                    .await
+                    .map_err(|_| "serviceUnavailable")??;
                 return self.status();
             }
             _ => {}
@@ -1203,7 +1343,14 @@ impl Controller {
             Action::LoggingPermission { .. }
             | Action::StationPermission { .. }
             | Action::TransmitPermission { .. }
-            | Action::TakeOverLogging {} => return Err("invalidRequest"),
+            | Action::TakeOverLogging {}
+            | Action::LanOn { .. }
+            | Action::LanOff {}
+            | Action::LanAddress { .. }
+            | Action::LanPair {}
+            | Action::LanCancel {}
+            | Action::LanRevoke { .. }
+            | Action::LanReset {} => return Err("invalidRequest"),
             Action::Begin { name } => {
                 if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
                     return Err("invalidRequest");
