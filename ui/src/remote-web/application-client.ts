@@ -24,6 +24,19 @@ type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; rej
  * until its late answer arrives, because the relay is still holding its own slot for the same read. */
 type Current = Job & { requestId: string; at: number; timer: ReturnType<typeof setTimeout>; abandoned?: boolean }
 const interval: Record<ApplicationCommand, number> = { get_snapshot: 500, get_spectrum_row: 100, get_meters: 200, get_settings: 1000, get_band_plan: 1000 }
+/** A read the station answered `applicationBusy` is asked again: three attempts at most, 250 ms apart. The station
+ * reads with try_lock and never queues behind the radio loop, so busy is routine. Any other answer, and a third busy,
+ * goes back to the caller as it came. The page's one retry for a station read: a collection page, a v1 read and a
+ * stream sample all ask through it (the operator's pick "Retry like the page", 2026-10-04). */
+export async function askAgainWhenBusy<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await read() }
+    catch (error) {
+      if (attempt === 2 || !(error instanceof Error) || error.message !== 'applicationBusy') throw error
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
+  }
+}
 export class ApplicationClient implements ApplicationTransport {
   readonly kind = 'remote' as const
   private phase: ApplicationPhase = 'connecting'
@@ -123,6 +136,11 @@ export class ApplicationClient implements ApplicationTransport {
       if (args?.collection !== 'recall') return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args, 4) as Promise<T>
     }
+    return askAgainWhenBusy(() => this.sample<T>(command, args))
+  }
+  /** One reading of a sample: off the stream's frames from v2, or one `applicationRead` on v1. A collection page is
+   * asked again by its own source (`RemoteCollections.page`), never here, so no read is asked again twice over. */
+  private sample<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     if (this.phase === 'ready' && this.version >= 2) {
       if (!streamTopic(command, applicationStreamVersion(this.version)) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
       if (command === 'get_remote_satellite_state') return this.stream.invoke<unknown>(command).then(value => parseSatelliteLive(value, this.stream.age(command)) as T)

@@ -159,10 +159,12 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   useEffect(() => { link.audio.setMuted(onAir) }, [onAir, link])
   const identify = useIdReminder(running, stream.station?.keyed === true)
   // What the PTT shows, and all that starts a hold: a live picture under a fresh lease. A press on a greyed-out PTT
-  // sends nothing (the operator's pick "Refuse it on the page", 2026-10-04); its handlers ask too, because pointer
-  // events reach a disabled button. A HELD PTT stays lit whatever this says (the operator's pick "Keep held PTT
-  // enabled", 2026-10-04): the state is stale for a round trip now and then, and a browser that blurs a focused button
-  // it disables (Chrome 154 does) would end the over through onBlur. Every other way an over ends still ends it.
+  // sends nothing (the operator's pick "Refuse it on the page", 2026-10-04), and its handlers are what refuse it:
+  // greyed out it is aria-disabled, never disabled, so every pointer, key and click still reaches it. A browser blurs
+  // a focused button it disables (Chrome 154 does), so a disabled PTT lost the keyboard's focus at every lapse and
+  // Space did nothing until the operator focused it again (the operator's pick "Stay focusable while greyed",
+  // 2026-10-04). A HELD PTT stays lit whatever this says (the operator's pick "Keep held PTT enabled", 2026-10-04):
+  // the state is stale for a round trip now and then. Every other way an over ends still ends it.
   const pttReady = stream.phase === 'live' && !!lease
 
   // THE PHONE LAYOUT (the operator's pick, 2026-10-03), from the window this page has (streamLayout): the header row,
@@ -215,7 +217,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
         <div className="remote-stream-operate">
         {stream.control && <AudioListen audio={link.audio} client={operations} />}
         {stream.control && <button type="button" className="remote-button remote-stream-ptt" aria-pressed={stream.ptt}
-          title={t('remote.stream.ptt.title')} disabled={!stream.ptt && !pttReady} data-keyed={stream.keyed || undefined}
+          title={t('remote.stream.ptt.title')} aria-disabled={(!stream.ptt && !pttReady) || undefined} data-keyed={stream.keyed || undefined}
           data-voice={stream.station?.keyed ? 'keyed' : undefined}
           onPointerDown={event => {
             if (event.button !== 0 || !pttReady) return

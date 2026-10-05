@@ -422,11 +422,11 @@ it.each(PRESSES)('%s on a greyed-out PTT starts nothing, the lease lapsed or the
     await v.live()
     const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
     const holds = () => v.peer.channel('ptt').sent.filter(m => m.type === 'pttHold')
-    // Focused while lit: a key still lands on a focused button that greys out, until the browser blurs it.
+    // Focused while lit: greyed out, it keeps that focus, so a key still lands on it.
     ptt.focus()
     // The state stale for a round trip: no lease, so greyed out, and the press sends nothing.
     v.set({ fresh: false })
-    expect(ptt.disabled, 'greyed out by the lapse').toBe(true)
+    expect(ptt.getAttribute('aria-disabled'), 'greyed out by the lapse').toBe('true')
     press(ptt)
     expect(holds(), 'a press on the PTT greyed out by the lapse').toEqual([])
     expect(ptt.getAttribute('aria-pressed')).toBe('false')
@@ -435,16 +435,75 @@ it.each(PRESSES)('%s on a greyed-out PTT starts nothing, the lease lapsed or the
     // The picture blind: greyed out, and the press sends nothing.
     act(() => { v.advance(STREAM_BLIND_MS + 250) })
     expect(v.link.getSnapshot().phase).toBe('stalled')
-    expect(ptt.disabled, 'greyed out by the blind picture').toBe(true)
+    expect(ptt.getAttribute('aria-disabled'), 'greyed out by the blind picture').toBe('true')
     press(ptt)
     expect(holds(), 'a press on the PTT greyed out by the blind picture').toEqual([])
     letGo(ptt)
     // CONTROL: a picture again, under the fresh lease: lit, and the same press holds.
     act(() => { frames.get(v.video)?.(0, { rtpTimestamp: 270000 }) })
-    expect(ptt.disabled).toBe(false)
+    expect(ptt.getAttribute('aria-disabled')).toBe(null)
     press(ptt)
     expect(holds(), 'the press holds once the PTT is lit').toHaveLength(1)
     letGo(ptt)
+    expect(last(v.peer.channel('ptt').sent)).toMatchObject({ type: 'pttRelease' })
+  } finally { vi.useRealTimers() }
+})
+
+// An idle PTT the operator tabbed to keeps the keyboard's focus through a lapse (the operator's pick "Stay focusable
+// while greyed", 2026-10-04). A browser blurs a focused button it disables (measured on Chrome: stale, focusout,
+// disabled, then the next key on the page body), so Space did nothing after a lapse until the PTT was focused again.
+// jsdom keeps the focus of a button it disables, and will not blur one; `browserFocus` moves that focus to the page,
+// with its blur, as the browser does.
+const browserFocus = () => {
+  const at = document.activeElement
+  if (!(at instanceof HTMLButtonElement) || !at.disabled) return
+  document.body.tabIndex = -1; document.body.focus(); document.body.removeAttribute('tabindex')
+}
+
+it('an idle PTT keeps its focus through a lapse: greyed out, unavailable to a screen reader, and looking as a disabled button does', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
+  ptt.focus()
+  v.set({ fresh: false })
+  browserFocus()
+  expect(document.activeElement, 'the PTT keeps its focus through the lapse').toBe(ptt)
+  expect(ptt.getAttribute('aria-disabled'), 'greyed out, it is unavailable to a screen reader').toBe('true')
+  const disabledLook = PAGE_RULES.find(rule => rule.selector === '.remote-button:disabled')!.decls
+  for (const mode of THEMES) for (const { prop, value } of disabledLook) {
+    expect(winnerAt(PAGE_RULES, mode, chainOf(ptt), prop)?.value, `greyed out, its ${prop} in ${mode}`).toBe(value)
+  }
+  v.set({ fresh: true })
+  expect(ptt.getAttribute('aria-disabled'), 'lit again').toBe(null)
+  expect(document.activeElement, 'and still focused').toBe(ptt)
+})
+
+it('Space or Enter on the greyed-out PTT that kept its focus starts nothing, nor does the click a key makes; CONTROL: lit again, the same Space holds', async () => {
+  pageTimers()
+  try {
+    const v = view(controlling)
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await v.live()
+    const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
+    const holds = () => v.peer.channel('ptt').sent.filter(m => m.type === 'pttHold')
+    // Where the browser sends a key: the focused element, never the PTT by name.
+    const focused = () => document.activeElement as HTMLElement
+    ptt.focus()
+    v.set({ fresh: false })
+    browserFocus()
+    for (const key of [{ key: ' ', code: 'Space' }, { key: 'Enter', code: 'Enter' }]) {
+      fireEvent.keyDown(focused(), key)
+      fireEvent.keyUp(focused(), key)
+      // A focusable button turns Space and Enter into a click; nothing on the PTT starts an over from one.
+      fireEvent.click(focused())
+    }
+    expect(holds(), 'Space or Enter on the greyed-out PTT').toEqual([])
+    expect(ptt.getAttribute('aria-pressed')).toBe('false')
+    v.set({ fresh: true })
+    fireEvent.keyDown(focused(), { key: ' ', code: 'Space' })
+    expect(holds(), 'lit again, the same Space press holds').toHaveLength(1)
+    fireEvent.keyUp(focused(), { key: ' ', code: 'Space' })
     expect(last(v.peer.channel('ptt').sent)).toMatchObject({ type: 'pttRelease' })
   } finally { vi.useRealTimers() }
 })
@@ -479,7 +538,7 @@ it.each(ENDINGS)('a PTT held through a lapse of the lease stays lit, and still e
     ptt.focus()
     press(ptt)
     v.set({ fresh: false })
-    expect(ptt.disabled, 'held: lit through the lapse').toBe(false)
+    expect(ptt.getAttribute('aria-disabled'), 'held: lit through the lapse').toBe(null)
     expect(ptt.getAttribute('aria-pressed')).toBe('true')
     expect(releases(), 'nothing let go of it').toEqual([])
     end(v, ptt)
@@ -487,7 +546,7 @@ it.each(ENDINGS)('a PTT held through a lapse of the lease stays lit, and still e
     expect(releases(), 'released once').toHaveLength(1)
     // Let go under the lapse, it is greyed out at once, as it always was (where a teardown has not taken it away).
     const after = screen.queryByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
-    if (after) expect(after.disabled, 'let go: greyed out by the lapse').toBe(true)
+    if (after) expect(after.getAttribute('aria-disabled'), 'let go: greyed out by the lapse').toBe('true')
   } finally { vi.useRealTimers() }
 })
 
@@ -498,7 +557,7 @@ it('Stop TX still goes both ways for a PTT held through a lapse of the lease: th
   const ptt = screen.getByRole<HTMLButtonElement>('button', { name: 'Hold PTT' })
   mouseDown(ptt)
   v.set({ fresh: false })
-  expect(ptt.disabled, 'held: lit through the lapse').toBe(false)
+  expect(ptt.getAttribute('aria-disabled'), 'held: lit through the lapse').toBe(null)
   fireEvent.click(screen.getByRole('button', { name: 'Stop TX' }))
   expect(v.peer.channel('control').sent.filter(m => m.type === 'stopTransmit'), 'on the stream')
     .toEqual([expect.objectContaining({ stationBootId: BOOT, leaseId: LEASE, transmitEpoch: EPOCH })])
