@@ -11,8 +11,8 @@
 //   2. a redraw that is not a view change reuses the cached base map (land, coast, borders, grid).
 //
 // jsdom has no 2-D canvas, so each canvas gets a recording context (no pixels); MapView is the REAL
-// component. `basemap()` is wrapped with a counter: it is the country-outline geometry the base
-// layer projects, so one call is one re-projection of the world.
+// component. The base geography's two painters (basemap.ts `paintProjected`, `paintEquirect`) are
+// wrapped with a counter: one call is one re-projection of the world.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import type { MapSpot, PropagationSnapshot, Station } from '../types'
@@ -26,13 +26,17 @@ vi.mock('../api', () => ({
   getOtaMapSpots: vi.fn(async () => []),
 }))
 const basemapCalls = { n: 0 }
-vi.mock('../mapGeo', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../mapGeo')>()
+vi.mock('../basemap', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../basemap')>()
   return {
     ...real,
-    basemap: () => {
+    paintProjected: (...a: Parameters<typeof real.paintProjected>) => {
       basemapCalls.n++
-      return real.basemap()
+      return real.paintProjected(...a)
+    },
+    paintEquirect: (...a: Parameters<typeof real.paintEquirect>) => {
+      basemapCalls.n++
+      return real.paintEquirect(...a)
     },
   }
 })

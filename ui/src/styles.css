@@ -5218,39 +5218,42 @@ body.resizing-row {
 }
 
 /* ---- MAP BASEMAP: the map's land and sea (MapView.tsx; features/skins.ts STANDARD_MAP) -------
-   The map bakes its basemap from these tokens: the sea, the land (darker on the globe), the
-   coastlines, the US state borders, the globe's rim and its lit and deep ocean. The standard
-   basemap is dark in BOTH themes on purpose (a map should read as a map, as wall maps
-   do), so both themes declare the same values, per the layout contract. A dark
-   built-in theme brings its own in its THEMES block; a light one keeps these. Plain hexes: the
-   canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
+   The map bakes its basemap from these tokens: the sea (and the lakes), the land (a step darker on
+   the 2-D globe), the coastlines and country borders (and the grid and range rings drawn over them),
+   the US state lines, the globe's rim (and the rivers) and its lit and deep sea; the 3-D globes paint
+   their texture from the same tokens (features/globeBasemap.ts). The standard basemap is a LIGHT
+   atlas palette under Natural Earth's shaded relief (operator pick 2026-10-04: a refined palette,
+   "lighter look"): the day side is light, so the greyline's night shading reads strongly, and
+   every marker carries its dark halo. Both themes declare the same values, per the layout contract.
+   A dark built-in theme brings its own in its THEMES block; a light one keeps these. Plain hexes:
+   the canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
 :root,
 [data-theme='dark'] {
-  --map-ocean: #0f2334;
-  --map-land: #364a3c;
-  --map-land-globe: #1c2b2a;
-  --map-coast: #6f8a98;
-  --map-state: #4d6675;
-  --map-rim: #2a4254;
-  --map-ocean-lit: #1c4a66;
-  --map-ocean-deep: #06101c;
+  --map-ocean: #bcd3e3;
+  --map-land: #eeebe2;
+  --map-land-globe: #e3dfd3;
+  --map-coast: #5f7f96;
+  --map-state: #9aa3aa;
+  --map-rim: #82a3bc;
+  --map-ocean-lit: #d5e5f0;
+  --map-ocean-deep: #8fb0c6;
 }
 [data-theme='light'] {
-  --map-ocean: #0f2334;
-  --map-land: #364a3c;
-  --map-land-globe: #1c2b2a;
-  --map-coast: #6f8a98;
-  --map-state: #4d6675;
-  --map-rim: #2a4254;
-  --map-ocean-lit: #1c4a66;
-  --map-ocean-deep: #06101c;
+  --map-ocean: #bcd3e3;
+  --map-land: #eeebe2;
+  --map-land-globe: #e3dfd3;
+  --map-coast: #5f7f96;
+  --map-state: #9aa3aa;
+  --map-rim: #82a3bc;
+  --map-ocean-lit: #d5e5f0;
+  --map-ocean-deep: #8fb0c6;
 }
 
 /* ---- MAP SKY: the sun and the moon on the map (MapView.tsx, Globe3D.tsx; features/skyGlyphs.ts;
    features/skins.ts STANDARD_SKY) ----------------------------------------------------------------
    The markers where the sun and the moon are overhead: the sun, and the moon's lit and unlit parts.
    The same inks in both themes and under every built-in theme: the sun is the sun, and both are drawn
-   over the basemap, which is dark in both themes, so no theme block declares them. Plain hexes: the
+   over the basemap with the markers' dark halo, so no theme block declares them. Plain hexes: the
    canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
 :root,
 [data-theme='dark'] {

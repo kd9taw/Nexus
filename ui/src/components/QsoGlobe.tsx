@@ -24,13 +24,24 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
-import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
+import { coarsestBasemap, loadBasemap } from '../basemap'
+import {
+  GLOBE_AMBIENT,
+  GLOBE_SUN,
+  disposeGlobeLines,
+  globeLines,
+  nightOnlyEmissive,
+  loadRelief,
+  paintGlobeTexture,
+  readMapInks,
+} from '../features/globeBasemap'
+import { usePaletteKey } from '../usePaletteRoles'
 import { gridCountsToPoints } from '../features/qsoPoints'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
 import { BAND_COLOR, bandColor } from '../bandColors'
-import { subsolarPoint, usStateBorders } from '../mapGeo'
+import { subsolarPoint } from '../mapGeo'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 
@@ -111,31 +122,59 @@ export default function QsoGlobe({ logTick }: { logTick?: number }) {
   const squares = useLogAnswer(squaresQuestion, logTick) ?? emptyAnswer(squaresQuestion)
   const points = useMemo(() => gridCountsToPoints(squares), [squares])
 
-  // US state borders as a static reference overlay (the SAME us-atlas mesh Connect's Globe3D
-  // draws) — most logs are WAS-minded, so seeing which state a dot sits in is the point. One
-  // decode, [lat,lng] pairs for react-globe.gl's path layer; drawn once, no animation.
-  const statePaths = useMemo(() => {
-    const geo = usStateBorders() as unknown as { coordinates?: [number, number][][] }
-    return (geo.coordinates ?? []).map((line) => line.map(([lon, lat]) => [lat, lon] as [number, number]))
-  }, [])
-
-  // Same material recipe as the Connect globe (Globe3D) so the two read as one app:
-  // day relief darkened to the cool blue-grey, city lights as a dim night-side glow.
+  // Same base map as the Connect globe (features/globeBasemap.ts), so the two read as one app: the
+  // 2-D map's own picture painted onto the sphere (again when the theme changes; the sea's colour
+  // until then), city lights as a dim night-side glow, and the coast, borders and US state lines as
+  // lines just above the surface — most logs are WAS-minded, so seeing which state a dot sits in is
+  // the point. 1:50m: this band never zooms in close enough to want more.
   const globeMat = useMemo(() => {
     const loader = new THREE.TextureLoader()
-    const day = loader.load(earthUrl)
-    day.colorSpace = THREE.SRGBColorSpace
     const night = loader.load(earthNightUrl)
     night.colorSpace = THREE.SRGBColorSpace
-    return new THREE.MeshPhongMaterial({
-      map: day,
-      color: new THREE.Color('#28323d'),
+    const m = new THREE.MeshPhongMaterial({
+      color: new THREE.Color(readMapInks().water),
       emissiveMap: night,
       emissive: new THREE.Color('#ffffff'),
       emissiveIntensity: 0.35,
       shininess: 4,
     })
+    nightOnlyEmissive(m)
+    return m
   }, [])
+  const paletteKey = usePaletteKey()
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    let live = true
+    let lines: THREE.Group | null = null
+    void Promise.all([loadBasemap('50m'), loadRelief()]).then(([map, img]) => {
+      if (!live) return
+      const base = map ?? coarsestBasemap()
+      const inks = readMapInks()
+      const caps = g.renderer().capabilities
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.min(4096, caps.maxTextureSize)
+      canvas.height = canvas.width / 2
+      paintGlobeTexture(canvas, base, inks, img)
+      const tex = new THREE.CanvasTexture(canvas)
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.anisotropy = caps.getMaxAnisotropy()
+      globeMat.map?.dispose()
+      globeMat.map = tex
+      globeMat.color.set('#ffffff')
+      globeMat.needsUpdate = true
+      lines = globeLines(base, inks)
+      g.scene().add(lines)
+    })
+    return () => {
+      live = false
+      if (lines) {
+        g.scene().remove(lines)
+        disposeGlobeLines(lines)
+      }
+    }
+  }, [ready, globeMat, paletteKey])
+  useEffect(() => () => globeMat.map?.dispose(), [globeMat])
 
   // One-time light setup: warm sun at the subsolar point + low ambient (real
   // day/night terminator, night side never pure black). No bloom, no starfield —
@@ -143,11 +182,11 @@ export default function QsoGlobe({ logTick }: { logTick?: number }) {
   useEffect(() => {
     const g = globeRef.current
     if (!g || !ready) return
-    const sun = new THREE.DirectionalLight('#fff2dc', 1.7)
+    const sun = new THREE.DirectionalLight(GLOBE_SUN.color, GLOBE_SUN.intensity)
     const ss = subsolarPoint(Date.now())
     const p = g.getCoords(ss.lat, ss.lon, 2)
     sun.position.set(p.x, p.y, p.z)
-    const ambient = new THREE.AmbientLight('#8899bb', 0.35)
+    const ambient = new THREE.AmbientLight(GLOBE_AMBIENT.color, GLOBE_AMBIENT.intensity)
     const scene = g.scene()
     // Replace globe.gl's default camera-chasing lights so the terminator is real.
     const defaults = scene.children.filter((c) => c.type.endsWith('Light'))
@@ -297,12 +336,6 @@ export default function QsoGlobe({ logTick }: { logTick?: number }) {
           showAtmosphere
           atmosphereColor="#68a8e2"
           atmosphereAltitude={0.18}
-          pathsData={statePaths}
-          pathPointLat={(p: unknown) => (p as [number, number])[0]}
-          pathPointLng={(p: unknown) => (p as [number, number])[1]}
-          pathColor={() => 'rgba(126,158,180,0.5)'}
-          pathStroke={0.9}
-          pathTransitionDuration={0}
         />
       )}
     </div>

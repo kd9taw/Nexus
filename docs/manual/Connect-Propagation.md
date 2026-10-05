@@ -8,11 +8,11 @@ Conditions is Nexus's unified situational-awareness surface: a live Canvas2D wor
 
 Three projections are available via the toolbar toggle:
 
-- **Orthographic globe** — drag to spin, scroll wheel to zoom; rendered with Canvas2D 3-D shading (170-point star field, atmospheric rim glow, ocean gradient, limb vignette, and a darker "night-earth" landmass so the colored spots and arcs stand out). No WebGL required — the globe runs on any PC, including integrated graphics. (A high-fidelity WebGL 3-D mode for higher-end machines is planned as an opt-in option.)
+- **Orthographic globe** — drag to spin, scroll wheel to zoom; rendered with Canvas2D 3-D shading (170-point star field, atmospheric rim glow, ocean gradient and limb vignette). No WebGL required — the globe runs on any PC, including integrated graphics. (A high-fidelity WebGL 3-D mode for higher-end machines is planned as an opt-in option.)
 - **Azimuthal-equidistant beam map** — true great-circle headings and range rings from your QTH. Bearing and distance to any selected station are read directly off the rings.
-- **Equirectangular world view** — flat projection with a shaded-relief basemap (Natural Earth I 50 m, public domain, bundled offline as a 2048×1024 WebP).
+- **Equirectangular world view** — flat projection with Natural Earth's shaded relief laid under the coastlines and borders (public domain, bundled offline).
 
-The basemap is available only on the flat world view; the azimuthal-equidistant and globe projections do not support inverse-projection raster blitting.
+Every projection draws Natural Earth's land, lakes, major rivers, country borders and US state lines, at 1:110m, 1:50m or 1:10m depending on how far you are zoomed in, so the lines stay sharp at any zoom. The shaded relief shows on the flat world view (and on the 3D globe); the azimuthal-equidistant and globe projections do not support inverse-projection raster blitting.
 
 ### Range rings
 
