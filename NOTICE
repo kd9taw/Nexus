@@ -1084,7 +1084,7 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   `countries-110m` geometry derives from **Natural Earth** (**public domain**).
   No map tiles or network map services are used.
 - **us-atlas** (ISC) — the `states-10m` TopoJSON is bundled in the UI to draw the
-  Connect map's US state borders, and is also the build-time source for
+  repeater map's US state borders, and is also the build-time source for
   `grid_state.bin`. Its geometry derives from **US Census Bureau** cartographic
   boundary files (**public domain**); see the WAS grid-state note above.
 - **three.js** and **react-globe.gl** / **globe.gl** — **MIT** (© Mikola Lysenko /
