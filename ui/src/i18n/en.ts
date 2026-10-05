@@ -230,6 +230,11 @@ export const EN = {
   "remote.thisBrowserRenewsUntil": "This browser is approved until {{until}} UTC. Using the station from here keeps it approved, up to {{limit}} UTC.",
   "remote.thisBrowserApprovalEnding": "This browser’s approval ends {{until}} UTC. To keep using it, approve it again in Nexus at the shack.",
   "remote.thisBrowserKey": "This browser’s key: {{key}}",
+  "remote.thisStationKey": "This station’s key: {{key}}",
+  "remote.stationKey.changed": "This station’s key has changed: the Remote service now lists a different key for it than the one this browser kept. Nothing connects until you accept the new key. Compare it with “This station’s key” in Nexus at the shack, and accept it only if they match.",
+  "remote.stationKey.kept": "Key this browser kept: {{key}}",
+  "remote.stationKey.new": "New key: {{key}}",
+  "remote.stationKey.accept": "Accept the new key",
   "remote.stationAccess": "Station access",
   "remote.revokeHint": "Revoking access disconnects this station and removes the approval of every browser that used it. To use it again, pair it again at the shack and approve your browsers there again.",
   "remote.revokeStation": "Revoke station access",
@@ -457,6 +462,7 @@ export const EN = {
   "remote.stream.ended.keyChanged": "This browser’s key has changed, so Nexus at the shack asks you to approve it again. Approve it there if it shows this browser’s key, below, then start the stream again.",
   "remote.stream.ended.stationKey": "This reply was not signed with your station's key, so it may not have come from your station. Nothing was connected.",
   "remote.stream.ended.stationUnsigned": "Nexus at the shack did not sign its reply, so this browser can't tell it came from your station. Update Nexus at the shack, then start the stream again.",
+  "remote.stream.ended.stationKeyChanged": "This station’s key has changed, so nothing was connected. Return to your stations to compare the new key with “This station’s key” in Nexus at the shack.",
   "remote.stream.offline": "The station isn't online. Check that Nexus is running at the shack with Remote turned on, and that the computer is awake.",
   // The station card (the operator, 2026-10-02: "Each station card has one big "Stream" button and a
   // small "Listen" for audio only"): one sentence for where this browser stands, then the next step.

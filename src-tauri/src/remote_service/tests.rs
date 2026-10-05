@@ -3419,3 +3419,74 @@ fn s3m1_a_station_key_record_fits_the_windows_credential_blob() {
         * 2;
     assert!(bytes <= 2560, "{bytes} bytes");
 }
+
+// ---- This station's key, shown at the shack (security review S3-L1) -----------------------------
+//
+// The Remote page keeps the first key the service lists for a station and shows its fingerprint. The
+// shack shows the fingerprint of the key it signs with, worked out the same way, so the operator can
+// compare the two: equal means the service lists the station's own key.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3l1_the_shack_shows_the_fingerprint_of_its_own_key_while_it_is_paired() {
+    let cloud = fake_cloud().await;
+    let vault = MemoryVault::default();
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    service
+        .action(Action::Begin {
+            name: "Test station".into(),
+        })
+        .await
+        .unwrap();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        service.status().unwrap().station_key,
+        None,
+        "no key before the pairing"
+    );
+    service
+        .action(Action::Approve {
+            enrollment_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+            transmit: false,
+        })
+        .await
+        .unwrap();
+    let made = kept_station_key(&vault).expect("approving the pairing makes the station's key");
+    // What a page shows for the key the service lists: SHA-256 of its SPKI, lowercase hex.
+    let spki = tempo_stream::protocol::hex_bytes(&made).unwrap();
+    let expected: String = ring::digest::digest(&ring::digest::SHA256, &spki)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let status = service.status().unwrap();
+    assert_eq!(status.station_key.as_deref(), Some(expected.as_str()));
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["stationKey"],
+        expected.as_str(),
+        "the desktop is given it as stationKey"
+    );
+    service.action(Action::Forget {}).await.unwrap();
+    assert_eq!(
+        service.status().unwrap().station_key,
+        None,
+        "it goes with the pairing"
+    );
+}
+
+#[test]
+fn s3l1_the_shack_and_the_page_fingerprint_a_key_alike() {
+    // A made-up key shape (the P-256 SPKI prefix, 04, then 0xab sixty-four times), not a key. The
+    // page's tests show this same fingerprint as A8DD D2FF AD49 30AC 6B77 647B 8DE0 D379.
+    let shape = format!(
+        "{}04{}",
+        tempo_stream::protocol::P256_SPKI_PREFIX_HEX,
+        "ab".repeat(64)
+    );
+    assert_eq!(
+        fingerprint(&shape).as_deref(),
+        Some("a8ddd2ffad4930ac6b77647b8de0d37935aaeb9fb957326da6370df67205dc77")
+    );
+    assert_eq!(fingerprint("not a key"), None, "control: refused");
+}

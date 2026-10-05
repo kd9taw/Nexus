@@ -128,6 +128,9 @@ export function RemoteStation() {
         </div>
       </div>}
       {offerFailed && <p role="alert">{t('remote.autostartOfferFailed')}</p>}
+      {/* S3-L1: this station's own key, as the Remote page shows the key it kept for the station: the
+          operator compares the two, group by group. */}
+      {status.stationKey && <p>{t('remote.thisStationKey', { key: shortFingerprint(status.stationKey) })}</p>}
       {/* The browsers, each with its key and the one thing to do next: the same actions as the
           per-browser block under Advanced, with its transmit tick (off unless ticked there). */}
       <h3>{t('remote.native.browsers')}</h3>

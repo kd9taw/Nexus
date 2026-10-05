@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have been sent what you typed on the picture and your microphone. A stream from a station that
   cannot sign is refused, and the page says to update Nexus at the shack. If the station's key is
   ever lost, revoke station access and pair again.
+- **Remote: your browser keeps your station's key, and both ends show more of every key.** The
+  Remote page now keeps your station's key the first time it sees it and shows it on the station's
+  card as **This station's key**; Nexus at the shack shows its own the same way (Settings →
+  Station → Remote access), so you can compare the two. If the Remote service ever lists a
+  different key for your station, the page says so, shows both keys, and connects nothing until you
+  press **Accept the new key**. Accept it only if the new key matches the one at the shack. Before,
+  the page took the service's word for your station's key every time, so anyone able to change the
+  service's records could have stood in for your station. Every key is now shown as eight groups
+  of four characters instead of four, at both ends, including the browser key you compare when you
+  approve a browser. An older Nexus at the shack still shows four groups: they are the first four
+  the page shows. Revoking the station, or removing a browser's approval, on the page lets that
+  browser forget the station's key.
 - **Remote: control, Listen and commands carry the browser's own key.** Taking control, keeping
   it, releasing it, **Listen**, and every command and log entry from the Remote page now carry
   the signature of that browser's key, the one you compare when you approve it at the shack, and

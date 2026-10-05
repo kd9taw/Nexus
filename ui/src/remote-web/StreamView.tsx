@@ -608,6 +608,9 @@ function ended(reason: string | null): string {
     // S3-M1: the answer did not carry this station's own signature for this offer and session.
     : reason === 'stationKeyMismatch' ? t('remote.stream.ended.stationKey')
     : reason === 'stationNotSigned' ? t('remote.stream.ended.stationUnsigned')
+    // S3-L1: the service lists another key for the station than the one this browser kept. Its card
+    // shows both, and taking the new one is the operator's act there.
+    : reason === 'stationKeyChanged' ? t('remote.stream.ended.stationKeyChanged')
     : reason === 'streamUnsupported' ? t('remote.stream.ended.unsupported')
     : reason === 'streamHidden' ? t('remote.stream.ended.hidden')
     : t('remote.stream.ended.failed')

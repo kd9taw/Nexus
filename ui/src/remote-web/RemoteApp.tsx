@@ -6,6 +6,7 @@ import { BrowserClient, HostedConnection, RemoteError } from './client'
 import { FeedWatch } from './FeedWatch'
 import { StreamView } from './StreamView'
 import { deviceKey } from './device-key'
+import { acceptStationKey, forgetStationKey, stationKeyView, type StationKeyView } from './station-key'
 import { browserLabel } from './browser-label'
 import { BetaNote } from './BetaNote'
 import { shortFingerprint } from './stream-protocol'
@@ -70,6 +71,11 @@ export function RemoteApp() {
   // A5: this browser's device key for each station it has a device on, by station: its fingerprint,
   // shown beside the browser for the operator to compare with Nexus at the shack.
   const [keys, setKeys] = useState<Record<string, string>>({})
+  // S3-L1: the station's own key, by station, for each station this browser has a device on: kept here
+  // the first time the service lists one, and shown beside this browser's key to compare with Nexus at
+  // the shack. While the service lists another, the card says so with both, and the stream stays off
+  // until the operator accepts the new one there.
+  const [stationKeys, setStationKeys] = useState<Record<string, StationKeyView>>({})
   const registered = useRef(new Set<string>())
 
   useEffect(() => {
@@ -121,6 +127,16 @@ export function RemoteApp() {
     }
     return () => { active = false }
   }, [client, session])
+  // S3-L1: each listing of the stations: the station's key kept at first sight, against the one listed.
+  useEffect(() => {
+    if (!session) return
+    let active = true
+    void Promise.all(session.stations.map(async station =>
+      [station.id, station.device ? await stationKeyView(station.id, station.stationKey) : null] as const))
+      .then(views => { if (active) setStationKeys(Object.fromEntries(views.filter((view): view is readonly [string, StationKeyView] => view[1] !== null))) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [session])
 
   async function act(work: () => Promise<void>) {
     if (busy) return
@@ -160,6 +176,12 @@ export function RemoteApp() {
     }
     setWorkspace(application); setStreaming(stream); setListening(listen); setOpened(stationId); setConnection(next); next.start()
   }
+  // S3-L1: the operator takes the key the card shows as new, having compared it with the shack's.
+  const acceptKey = (stationId: string, view: StationKeyView) => void act(async () => {
+    await acceptStationKey(stationId, view.listed)
+    setStationKeys(current => ({ ...current, [stationId]: { ...view, keptPrint: view.print } }))
+  })
+  const keyChanged = (stationId: string) => !!stationKeys[stationId] && stationKeys[stationId].keptPrint !== stationKeys[stationId].print
   const leave = () => { connection?.stop(); setConnection(null) }
   const signOutOfSession = () => { connection?.stop(); setConnection(null); setSession(null); void client?.signOut() }
   // Opened from the card's Stream or Listen, which IS the operator asking: the view starts once, on
@@ -207,9 +229,9 @@ export function RemoteApp() {
   const trialReason = trial?.state === 'ended' ? t('remote.trialEnded', { until: utcDate(trial.expiresAt) })
     : trial?.state === 'disabled' ? t('remote.trialDisabled') : t('remote.trialNotStarted')
   // The card's two ways in: Stream, the big one, and Listen, audio only. Stream only from a service
-  // that carries the stream's signalling.
-  const stationActions = (stream: () => void, listen: () => void) => <div className="remote-actions remote-station-actions">
-    {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary remote-station-stream" disabled={busy || !entitled} onClick={stream}>{t('remote.stream.open')}</button>}
+  // that carries the stream's signalling, and not while the station's key has changed (S3-L1).
+  const stationActions = (stream: () => void, listen: () => void, streamOff = false) => <div className="remote-actions remote-station-actions">
+    {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary remote-station-stream" disabled={busy || !entitled || streamOff} onClick={stream}>{t('remote.stream.open')}</button>}
     <button className="remote-button remote-station-listen" disabled={busy || !entitled} onClick={listen}>{t('remote.listen.open')}</button>
   </div>
 
@@ -334,9 +356,20 @@ export function RemoteApp() {
               ? t('remote.card.waiting', { browser: station.device.name, key: shortFingerprint(keys[station.id]) })
               : t('remote.card.waitingNoKey', { browser: station.device.name })
             : t('remote.card.notApproved')}</p>
+          {/* S3-L1: the service lists another key for this station than the one this browser kept. Both
+              are shown, to compare with Nexus at the shack, and only Accept takes the new one. */}
+          {keyChanged(station.id) && <>
+            <p className="rm-warning" role="alert">{t('remote.stationKey.changed')}</p>
+            <p>{t('remote.stationKey.kept', { key: shortFingerprint(stationKeys[station.id].keptPrint) })}</p>
+            <p>{t('remote.stationKey.new', { key: shortFingerprint(stationKeys[station.id].print) })}</p>
+            <div className="remote-actions">
+              <button type="button" className="remote-button" disabled={busy} onClick={() => acceptKey(station.id, stationKeys[station.id])}>{t('remote.stationKey.accept')}</button>
+            </div>
+          </>}
           {station.device?.approved === 1 ? <>
-            {stationActions(() => open(station.id, false, station.name), () => open(station.id, false, null, station.name))}
+            {stationActions(() => open(station.id, false, station.name), () => open(station.id, false, null, station.name), keyChanged(station.id))}
             {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })}</p>}
+            {stationKeys[station.id] && !keyChanged(station.id) && <p>{t('remote.thisStationKey', { key: shortFingerprint(stationKeys[station.id].print) })}</p>}
             {/* How long this browser stays approved, off the service's clock. The warning is for the
                 end that using it cannot move: before that, opening the station keeps it approved. */}
             {station.device.expires_at !== undefined && <p>{station.device.renewsUntil
@@ -351,7 +384,9 @@ export function RemoteApp() {
             </div>}
             <div className="remote-actions">
               <button className="remote-button remote-button--quiet" disabled={busy} onClick={() => void act(async () => {
-                await client?.post(`stations/${station.id}/forget-device`); await refresh()
+                // S3-L1: the station's key kept here goes with this browser's approval, and is kept
+                // again when this browser asks again.
+                await client?.post(`stations/${station.id}/forget-device`); await forgetStationKey(station.id).catch(() => {}); await refresh()
               })}>{t('remote.forgetBrowser')}</button>
             </div>
           </> : station.device ? <p role="note">{t('remote.card.browserCode', { code: station.device.id.slice(-6) })}</p> : <>
@@ -360,7 +395,9 @@ export function RemoteApp() {
             {session.stations.length > 1 && <p>{t('remote.browserPerStation')}</p>}
           </>}
           <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
-            <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.post(`stations/${station.id}/revoke`); await refresh() })}>{t('remote.revokeStation')}</button>
+            <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
+              await client?.post(`stations/${station.id}/revoke`); await forgetStationKey(station.id).catch(() => {}); await refresh()
+            })}>{t('remote.revokeStation')}</button>
           </details>
         </section>)}
         {/* Signing out does not remove a browser's approval (it is per station and account), so on a

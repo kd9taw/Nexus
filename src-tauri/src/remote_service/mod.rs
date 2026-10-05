@@ -55,6 +55,10 @@ pub struct Status {
     /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
     /// stream. An approved browser listed with a key and missing here is approved again to stream.
     pinned_devices: Vec<String>,
+    /// S3-L1: SHA-256 of this station's own signing key, lowercase hex, worked out as a page works out
+    /// the key the service lists: shown as "This station's key" for the operator to compare with the
+    /// key the page kept. Its public half only. `None` while there is no pairing or no key.
+    station_key: Option<String>,
     /// S3-M1: the service holds another signing key for this station, so browsers refuse its stream
     /// until it is paired again. Its own field, because it lasts past any one request's error.
     key_refused: bool,
@@ -87,8 +91,8 @@ struct Device {
     #[serde(skip_deserializing)]
     key: Option<String>,
 }
-/// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). `None` for anything that
-/// is not the shape of a P-256 key.
+/// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). The station's own key is
+/// shown the same way (S3-L1). `None` for anything that is not the shape of a P-256 key.
 fn fingerprint(public_key: &str) -> Option<String> {
     if !tempo_stream::protocol::device_key(public_key) {
         return None;
@@ -731,6 +735,10 @@ impl Service {
             .filter(|d| d.key.is_some() && control.remembered.pins.get(&d.id) == d.key.as_ref())
             .map(|d| d.id.clone())
             .collect();
+        status.station_key = control
+            .station_key
+            .as_ref()
+            .and_then(|key| fingerprint(key.public_key()));
         status.observation_generation = enabled.then(|| control.generation.to_string());
         status.key_refused = control.key_refused;
         status.lan = control.lan.as_deref().map(lan::Lan::status);

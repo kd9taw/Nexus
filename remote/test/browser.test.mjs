@@ -395,6 +395,28 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await evaluate('window.__frameDelay=0')
     await pair.native.post(`stations/${pair.stationId}/native/approve-device`,{deviceId:device.id})
     await until(`!!${button('Remove this browser’s approval')}`)
+    // S3-L1 in real Chrome: the page keeps the key the service lists for the station the first time it
+    // sees it, in a database of its own. With another key kept (what a changed listing looks like to
+    // the page), the card says so with both keys, laid out at a phone's size and a desktop's, Stream is
+    // off, and only Accept keeps the listed key again.
+    if(stream){
+      const keptKey=`new Promise(done=>{const open=indexedDB.open('nexus-remote-station-keys');open.onsuccess=()=>{const got=open.result.transaction('keys').objectStore('keys').get(${JSON.stringify(pair.stationId)});got.onsuccess=()=>done(got.result??null)}})`
+      const changed=`document.body.textContent.includes('This station’s key has changed')`
+      await until(`document.body.textContent.includes('This station’s key: ')`)
+      assert.equal(await evaluate(keptKey),signer.publicKey,'S3-L1: the page kept the key the service lists')
+      assert.equal(await evaluate(changed),false,'control: nothing changed yet')
+      // A made-up key shape (the P-256 SPKI prefix, 04, then 0xab sixty-four times), not a key.
+      const other='3059301306072a8648ce3d020106082a8648ce3d03010703420004'+'ab'.repeat(64)
+      await evaluate(`new Promise(done=>{const open=indexedDB.open('nexus-remote-station-keys');open.onsuccess=()=>{const t=open.result.transaction('keys','readwrite');t.objectStore('keys').put(${JSON.stringify(other)},${JSON.stringify(pair.stationId)});t.oncomplete=()=>done(true)}})`)
+      // The card reads the stations again every five seconds.
+      await until(changed,15000)
+      assert.ok(await evaluate(`document.body.textContent.includes('Key this browser kept: A8DD D2FF AD49 30AC 6B77 647B 8DE0 D379')`),'S3-L1: both keys are shown, in eight groups')
+      assert.equal(await evaluate(`${button('Stream')}.disabled`),true,'S3-L1: nothing connects while the key has changed')
+      for(const [w,h] of [[360,740],[1280,800]])await geometry(w,h,1,'dark')
+      await click(button('Accept the new key'))
+      await until(`!${changed}&&!${button('Stream')}.disabled`)
+      assert.equal(await evaluate(keptKey),signer.publicKey,'S3-L1: Accept kept the listed key')
+    }
     for(const [w,h] of [[360,740],[390,844],[844,390],[1024,768],[1280,800],[1366,768],[3440,1440]])for(const theme of ['dark','light'])await geometry(w,h,1,theme)
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe

@@ -15,6 +15,9 @@ export type RemoteStationStatus = {
   /** S3-M1: the service holds another signing key for this station, so browsers refuse its stream
    *  until it is paired again. */
   keyRefused?: boolean
+  /** S3-L1: SHA-256 of this station's own key, lowercase hex, while it has one: shown as "This
+   *  station's key", the way the Remote page shows the key it kept for the station. */
+  stationKey?: string | null
   observationGeneration?: string | null
   error: string | null
   /** Remote over this network: absent only from a build without it. */
