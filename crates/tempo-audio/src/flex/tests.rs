@@ -1008,6 +1008,41 @@ fn native_audio_streams_the_served_slice_on_the_one_session() {
     );
 }
 
+/// ⭐ THE REGISTRATION DATAGRAM GOES BEFORE `client udpport` (port plan §4.2, and the order the
+/// session's own docs give). Firmware that answers `client udpport` with "not supported" learns
+/// our UDP endpoint only from the datagram's source; the client sent it after its whole bring-up,
+/// about 46 ms after the command. Here the radio accepts the connection and never answers, so the
+/// session can never reach `client udpport`, and the datagram must arrive all the same. The
+/// simulator logs it on its own UDP thread, so the test waits on that log, never reads it once.
+#[test]
+fn the_registration_datagram_goes_before_client_udpport() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    // The radio's API port: it accepts, and sends no prologue.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let radio = silent.local_addr().unwrap();
+    let options = Options {
+        vita: sim.udp_addr(),
+        registration: sim.udp_addr(),
+        memory: memory(),
+    };
+    let start = std::thread::spawn(move || {
+        FlexDaemon::start_full(radio, 0, config(Vec::new()), options).is_ok()
+    });
+    let arrived = sim.wait_for(WAIT, |log| {
+        log.iter()
+            .any(|l| matches!(&l.event, SimEvent::UdpIn { bytes, .. } if *bytes == [0u8]))
+    });
+    drop(silent); // the waiting connection goes with it, and the start gives up
+    assert!(
+        !start.join().unwrap(),
+        "premise: a radio that never answered registered Nexus"
+    );
+    assert!(
+        arrived,
+        "the registration datagram waited for a session that never registered"
+    );
+}
+
 /// The control for the test above: with native audio off, nothing about DAX reaches the wire.
 #[test]
 fn without_native_audio_no_dax_command_is_sent() {
