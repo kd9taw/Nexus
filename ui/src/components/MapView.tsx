@@ -81,8 +81,6 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   aprsMapCenter,
-  basemap,
-  usStateBorders,
   graticule,
   makeProjection,
   project,
@@ -109,8 +107,19 @@ import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
-// A shaded-relief basemap (Natural Earth I 50m, public domain),
-// downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
+// The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
+// laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
+import {
+  basemapAt,
+  onBasemapLoaded,
+  paintEquirect,
+  paintProjected,
+  paintRelief,
+  pxPerDegree,
+  reliefAlphaFor,
+  scaleFor,
+  visibleRegion,
+} from '../basemap'
 import reliefUrl from '../assets/earth-relief.webp'
 
 /** Connect intent presets — beginner picks a goal once; the map configures
@@ -582,9 +591,9 @@ const PATH_LP = 'LP'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
-// basemap (features/skins.ts STANDARD_MAP) is deliberately theme-agnostic and dark (as
-// wall maps are), so it looks intentional in any UI theme, and a dark built-in theme brings
-// its own. Read at bake like every other token here; STANDARD_MAP is also what paints where no
+// basemap (features/skins.ts STANDARD_MAP) is a light atlas palette, the same in both UI themes,
+// so the greyline's night shading reads on its day side, and a dark built-in theme brings its
+// own. Read at bake like every other token here; STANDARD_MAP is also what paints where no
 // sheet is loaded. Globe (orthographic) 3D shading: a lit ocean highlight toward the top-left
 // light source, deepening to a dark limb, plus an atmospheric rim glow and a star field — turns
 // the flat disc into a planet floating in space without any WebGL.
@@ -943,6 +952,10 @@ export function MapView({
     }
     img.src = reliefUrl
   }, [])
+  // A finer Natural Earth scale arriving (basemap.ts fetches 1:50m and 1:10m the first time a
+  // zoom wants them) redraws the base map from it.
+  const [basemapRev, setBasemapRev] = useState(0)
+  useEffect(() => onBasemapLoaded(() => setBasemapRev((n) => n + 1)), [])
   // Ticking clock for the greyline (it drifts ~0.25°/min; a 60 s tick is plenty).
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
@@ -1567,52 +1580,38 @@ export function MapView({
       ctx.lineWidth = 1
       ctx.stroke()
 
-      const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
-      if (useRelief) {
-        // Shaded relief: a direct stretch-blit to the equirectangular
-        // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
-        // greyline night shading draws on top → a true day/night terrain map. Only
-        // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
-        const tl = project(proj, { lat: 90, lon: -180 })
-        const br = project(proj, { lat: -90, lon: 180 })
-        if (tl && br) {
-          ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
-        }
-        if (layers.coast.visible) {
-          // A faint coastline keeps borders crisp over the raster.
-          ctx.globalAlpha = layers.coast.opacity * 0.5
-          ctx.beginPath()
-          path(basemap())
-          ctx.strokeStyle = mapInk('--map-coast')
-          ctx.lineWidth = 0.5
-          ctx.stroke()
-          ctx.globalAlpha = 1
-        }
-      } else {
-        // Filled-vector land (the AEQD beam map, or World with relief off).
-        ctx.beginPath()
-        path(basemap())
-        ctx.fillStyle = mapInk(isGlobe ? '--map-land-globe' : '--map-land')
-        ctx.fill()
-        if (layers.coast.visible) {
-          ctx.globalAlpha = layers.coast.opacity
-          ctx.strokeStyle = mapInk('--map-coast')
-          ctx.lineWidth = 0.6
-          ctx.stroke()
-          ctx.globalAlpha = 1
-        }
+      // THE BASE GEOGRAPHY (basemap.ts): land, lakes, major rivers, US state lines (a CORE
+      // operating layer: an op reads which STATE a spot or their own QTH sits in), country borders
+      // and the coast, from the Natural Earth scale this zoom wants and only the tiles in view. The
+      // flat World map is linear in lon/lat, so it draws cached tile paths under one transform and
+      // lays the shaded relief over the land (the greyline night shading draws on top of it: a
+      // day/night terrain map); the globe and the beam map stream the tiles through d3. The
+      // 3-D globe's texture is painted by the same paintEquirect, so the two read as one map.
+      const ppd = pxPerDegree(proj)
+      const paint = {
+        map: basemapAt(scaleFor(ppd)),
+        region: visibleRegion(kind, proj, w, h),
+        inks: {
+          land: mapInk(isGlobe ? '--map-land-globe' : '--map-land'),
+          water: mapInk('--map-ocean'),
+          // The rim's blue: a step from the sea in every theme (lighter on a dark map, deeper on
+          // a light one), so a river one pixel wide still reads against the land.
+          river: mapInk('--map-rim'),
+          coast: mapInk('--map-coast'),
+          state: mapInk('--map-state'),
+        },
+        pxPerDeg: ppd,
+        coast: layers.coast.visible ? layers.coast.opacity : 0,
+        states: layers.states.visible ? layers.states.opacity : 0,
       }
-      // US state borders — a CORE operating layer: an op reads which STATE a spot or
-      // their own QTH sits in (WAS, state QSOs), not just the coastline. A single-line
-      // mesh (shared borders once), thin + quiet so it adds detail without burying spots.
-      if (layers.states.visible) {
-        ctx.globalAlpha = layers.states.opacity
-        ctx.beginPath()
-        path(usStateBorders())
-        ctx.strokeStyle = mapInk('--map-state')
-        ctx.lineWidth = 0.5
-        ctx.stroke()
-        ctx.globalAlpha = 1
+      if (kind === 'world') {
+        const [tx, ty] = proj.translate()
+        const relief = layers.relief.visible ? reliefRef.current : null
+        paintEquirect(ctx, ppd, tx, ty, paint, relief
+          ? (c) => paintRelief(c, relief, tx - 180 * ppd, ty - 90 * ppd, tx + 180 * ppd, ty + 90 * ppd, w, h, reliefAlphaFor(ppd) * layers.relief.opacity)
+          : undefined)
+      } else {
+        paintProjected(ctx, proj, paint)
       }
       // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
       // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
@@ -1630,10 +1629,12 @@ export function MapView({
         ctx.restore()
       }
       if (layers.grid.visible) {
-        ctx.globalAlpha = layers.grid.opacity
+        // In the map's own line ink, not the UI's border colour: the grid lies on the basemap, and
+        // has to read on it in either UI theme.
+        ctx.globalAlpha = layers.grid.opacity * 0.6
         ctx.beginPath()
         path(graticule())
-        ctx.strokeStyle = cssVar('--border-soft')
+        ctx.strokeStyle = mapInk('--map-coast')
         ctx.lineWidth = 0.5
         ctx.stroke()
       }
@@ -1720,7 +1721,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, me, theme, colourRoles, reliefReady, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, me, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -2040,7 +2041,8 @@ export function MapView({
     }
     if (layers.rings.visible && kind !== 'world') {
       ctx.globalAlpha = layers.rings.opacity
-      ctx.strokeStyle = cssVar('--border')
+      // The map's line ink, like the grid: the rings lie on the basemap, not on a UI surface.
+      ctx.strokeStyle = mapInk('--map-coast')
       ctx.setLineDash([3, 3])
       ctx.lineWidth = 0.75
       for (const km of RINGS_KM) {
@@ -2316,13 +2318,19 @@ export function MapView({
     if (me && (txLines.length > 0 || rxLines.length > 0)) {
       const drawPaths = (lines: MapPath[], color: string, dash: number[], layerAlpha: number) => {
         if (lines.length === 0) return
-        ctx.strokeStyle = color
-        ctx.lineWidth = 1.1
         ctx.setLineDash(dash)
         for (const ln of lines) {
-          ctx.globalAlpha = layerAlpha * 0.75 * ln.fade
           ctx.beginPath()
           path(greatCircle(me, ln.ll))
+          // A dark casing under each dash — MARKER_HALO's trick, for a line: the path keeps its
+          // exact colour and still reads over the light land and sea, the relief and the greyline.
+          ctx.globalAlpha = layerAlpha * 0.45 * ln.fade
+          ctx.strokeStyle = MARKER_HALO
+          ctx.lineWidth = 2.6
+          ctx.stroke()
+          ctx.globalAlpha = layerAlpha * 0.75 * ln.fade
+          ctx.strokeStyle = color
+          ctx.lineWidth = 1.1
           ctx.stroke()
         }
         ctx.setLineDash([])
@@ -2621,7 +2629,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the

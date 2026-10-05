@@ -540,7 +540,7 @@ function mapProblems(rules: Rule[], mode: Mode, want: Readonly<Record<string, st
 
 describe('the map basemap is a theme’s, and every mode declares all of it', () => {
   it('the standard basemap is declared in both themes, in every standard mode and colour-role set', () => {
-    // Both themes declare it (the layout contract), with one value: the basemap is dark in both.
+    // Both themes declare it (the layout contract), with one value: the same basemap in both.
     const standard = [...BASE_MODES, ...PALETTE_SETS.flatMap((set) => BASE_MODES.map((b): Mode => `${b} ${set}`))]
     expect(standard.flatMap((m) => mapProblems(RULES, m, STANDARD_MAP))).toEqual([])
   })
@@ -622,7 +622,7 @@ describe('the checks fire', () => {
 
   it('a mode missing a basemap token, or a theme painting another theme’s, is caught', () => {
     const rules = parseRules(blank(RAW).replace(/--map-rim:[^;]*;/g, '') + '\n' + PANES)
-    expect(mapProblems(rules, 'dark', STANDARD_MAP)).toEqual(['dark: --map-rim paints "", wanted #2a4254'])
+    expect(mapProblems(rules, 'dark', STANDARD_MAP)).toEqual([`dark: --map-rim paints "", wanted ${STANDARD_MAP['--map-rim']}`])
     expect(mapProblems(RULES, 'dark skin=lagoon', SKINS.find((x) => x.id === 'slate')!.map!).length).toBeGreaterThan(0)
   })
 

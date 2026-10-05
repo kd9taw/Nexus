@@ -45,7 +45,8 @@ vi.mock('react-globe.gl', async () => {
     })(),
     postProcessingComposer: () => ({ addPass() {}, passes: [] }),
     controls: () => controls,
-    pointOfView: () => {},
+    // globe.gl's getter: where the camera is (its setter form is the same call with arguments).
+    pointOfView: () => ({ lat: 0, lng: 0, altitude: 2.2 }),
     // globe.gl's render loop, reduced to the one fact the tests read: is it running?
     paused: false,
     /** Frames drawn: globe.gl's resume draws one synchronously, so each resume is a frame. */
@@ -591,14 +592,14 @@ describe('Globe3D keeps the QTH ping ring across a snapshot', () => {
 //    This asserts the references, not the work: jsdom has no WebGL and three-globe is stubbed, so
 //    what is provable here is exactly what react-kapsule reads — prop identity. `htmlElement` has
 //    its own test in §4 because a new one CLEARS that layer rather than merely re-digesting it.
+//    The state lines have since left the paths layer: they are one GPU line object with the coast
+//    and the borders (features/globeBasemap.ts), built once per scale and theme, so no paths
+//    accessor is passed to globe.gl at all.
 describe('Globe3D hands globe.gl the same layer accessors across a snapshot', () => {
   // Every accessor prop whose layer declares it `triggerUpdate: true` (the default). `ringColor`
   // and its four siblings are deliberately absent: the rings layer declares them
   // `triggerUpdate: false`, so pinning them would assert a reference the layer never reads back.
   const ACCESSORS = [
-    'pathPointLat',
-    'pathPointLng',
-    'pathColor',
     'polygonGeoJsonGeometry',
     'polygonCapColor',
     'polygonSideColor',
