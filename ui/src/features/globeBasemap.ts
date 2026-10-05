@@ -1,37 +1,33 @@
-// THE 3-D GLOBES' BASE MAP — the 2-D map's own picture on the sphere, for Connect's globe
-// (Globe3D) and the logbook's (QsoGlobe), so switching between the flat map and the globe never
-// changes the look.
+// THE 3-D GLOBES' BASE MAP — the Earth as NASA's satellites photographed it, for Connect's globe
+// (Globe3D) and the logbook's (QsoGlobe): the Blue Marble on the day side and the Black Marble, the
+// Earth's lights at night, on the night side, crossing at the live terminator, so the greyline is the
+// boundary you see. The flat map keeps its own painted map (MapView, basemap.ts).
 //
-// THE TEXTURE is the flat map's paintEquirect, run once onto an offscreen equirectangular canvas:
-// the theme's sea and land, the shaded relief, lakes and the major rivers. 4096 × 2048 where the
-// GPU takes it (about 11 px per degree, 32 MB), else what it does take. It is repainted when the
-// theme changes (the --map-* tokens), never per frame.
+// THE PICTURES are 4096 × 2048 equirectangular WebPs (about 11 px per degree, 32 MB each on the GPU;
+// a GPU that takes less gets them scaled down), made by scripts/gen-globe-textures.py. The day picture
+// is the sphere's colour, lit by the sun at the subsolar point; the night picture is its emissive glow,
+// shown only where the sun is down (nightOnlyEmissive). Neither follows the theme.
 //
 // THE LINES — the coast (land and lake shores), the country borders and the US states — are NOT in
 // the texture: a texture blurs when the camera comes close, so they are GPU line segments a hair
-// above the sphere, from the same Natural Earth data, sharp at any distance. The caller picks the
-// scale (1:50m from afar, 1:10m close in) and swaps the group when it changes.
+// above the sphere, from Natural Earth data, in the theme's map colours, sharp at any distance. The
+// caller picks the scale (1:50m from afar, 1:10m close in) and swaps the group when it changes.
 //
 // This module is only imported by the two lazy-loaded globes, so three.js stays out of the main
 // bundle, as their headers promise.
 import * as THREE from 'three'
-import {
-  paintEquirect,
-  paintRelief,
-  reliefAlphaFor,
-  type Basemap,
-  type BasemapInks,
-  type BasemapTile,
-} from '../basemap'
+import type { Basemap, BasemapInks, BasemapTile } from '../basemap'
 import { STANDARD_MAP, type MapToken } from './skins'
-import reliefUrl from '../assets/earth-relief.webp'
+import dayUrl from '../assets/earth-day.webp'
 
-/** How the globes are lit now that they carry the map's own colours: the sun at the subsolar point
- *  brings the day side up to about the flat map's colours, and the ambient holds the night side at
- *  a little under half of them — about the flat map's greyline shading — with the city lights
- *  showing there. (three.js lights are physical: a directional light's diffuse is intensity / π.) */
-export const GLOBE_SUN = { color: '#fff6e8', intensity: 1.75 }
-export const GLOBE_AMBIENT = { color: '#ffffff', intensity: 0.45 }
+/** How the globes are lit: the sun at the subsolar point brings the day picture up to its own
+ *  colours where the sun is overhead, and the ambient is low, so the night side is the night picture
+ *  and not a dimmed day. (three.js lights are physical: a light's diffuse is intensity / π.) */
+export const GLOBE_SUN = { color: '#fff6e8', intensity: 2.8 }
+export const GLOBE_AMBIENT = { color: '#ffffff', intensity: 0.08 }
+/** The night picture's strength (the material's emissiveIntensity) while the city lights show: in
+ *  full, the Black Marble as NASA made it. */
+export const GLOBE_CITY_LIGHTS = 1
 /** Bloom on Connect's globe only lifts what is brighter than the lit land: spots, arcs, city lights. */
 export const GLOBE_BLOOM_THRESHOLD = 0.85
 /** Camera altitude (globe radii) below which the globe's lines switch to 1:10m, and above which they
@@ -39,10 +35,11 @@ export const GLOBE_BLOOM_THRESHOLD = 0.85
 export const GLOBE_TEN_BELOW = 0.9
 export const GLOBE_FIFTY_ABOVE = 1.1
 
-/** City lights only where it is night. three.js adds a material's emissive light everywhere, which
- *  on the map-coloured day side reads as white blots, so it is faded out across the terminator by
- *  the surface's angle to the sun (the scene's first directional light). The lights layer still
- *  sets the strength through `emissiveIntensity`. */
+/** The night picture only where it is night. three.js adds a material's emissive light everywhere,
+ *  which would light the day side with the city lights, so it is faded in across the terminator by
+ *  the surface's angle to the sun (the scene's first directional light): none where the sun is more
+ *  than about 5° up, all of it where the sun is more than about 7° down. The lights layer still sets
+ *  the strength through `emissiveIntensity`. */
 export function nightOnlyEmissive(mat: THREE.MeshPhongMaterial): void {
   mat.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -65,43 +62,19 @@ export function readMapInks(): BasemapInks {
   return { land: ink('--map-land'), water: ink('--map-ocean'), river: ink('--map-rim'), coast: ink('--map-coast'), state: ink('--map-state') }
 }
 
-let relief: Promise<HTMLImageElement | null> | null = null
-/** The shaded relief, loaded once for every globe (null if it cannot be: the globe is then painted
- *  without it). */
-export function loadRelief(): Promise<HTMLImageElement | null> {
-  if (!relief) {
-    relief = new Promise((ok) => {
+let day: Promise<HTMLImageElement | null> | null = null
+/** The day side's picture (the Blue Marble), loaded once for every globe (null if it cannot be: the
+ *  globe then stays the theme's sea colour). */
+export function loadDayImage(): Promise<HTMLImageElement | null> {
+  if (!day) {
+    day = new Promise((ok) => {
       const img = new Image()
       img.onload = () => ok(img)
       img.onerror = () => ok(null)
-      img.src = reliefUrl
+      img.src = dayUrl
     })
   }
-  return relief
-}
-
-const WORLD = { kind: 'rect', west: -180, south: -90, east: 180, north: 90 } as const
-
-/** Paint the globe's texture onto `canvas` (2:1): the flat map's picture without its lines. */
-export function paintGlobeTexture(canvas: HTMLCanvasElement, map: Basemap, inks: BasemapInks, img: HTMLImageElement | null): void {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  const w = canvas.width
-  const h = canvas.height
-  const k = w / 360
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.globalAlpha = 1
-  ctx.globalCompositeOperation = 'source-over'
-  ctx.fillStyle = inks.water
-  ctx.fillRect(0, 0, w, h)
-  paintEquirect(
-    ctx,
-    k,
-    w / 2,
-    h / 2,
-    { map, region: WORLD, inks, pxPerDeg: k, coast: 0, states: 0 },
-    img ? (c) => paintRelief(c, img, 0, 0, w, h, w, h, reliefAlphaFor(k)) : undefined,
-  )
+  return day
 }
 
 /** three-globe's sphere: radius 100, lat/lon placed by its polar2Cartesian. The lines ride 0.15%

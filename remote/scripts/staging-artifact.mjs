@@ -45,7 +45,7 @@ export async function createArtifact(root, values, row = target()) {
   requireValue(assets.includes('index.html') && assets.includes('remote-licenses.txt')
     && assets.some(name => /^assets\/.+\.js$/.test(name)), 'The compiled browser and license asset must exist')
   for (const name of assets) {
-    const nexusMapAsset = /^assets\/(earth-night|earth-relief)-[A-Za-z0-9_-]+\.webp$/.test(name)
+    const nexusMapAsset = /^assets\/(earth-day|earth-night|earth-relief)-[A-Za-z0-9_-]+\.webp$/.test(name)
       || /^assets\/cqzones-[A-Za-z0-9_-]+\.geojson$/.test(name)
       // The map's 1:50m and 1:10m Natural Earth geography (ui/src/basemap.ts), fetched when a map zooms.
       || /^assets\/basemap-(50m|10m)-[A-Za-z0-9_-]+\.bin$/.test(name)

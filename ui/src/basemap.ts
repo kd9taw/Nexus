@@ -24,8 +24,8 @@
 // with no per-point JavaScript at all, and lays the shaded relief under the lines. The globe and the
 // beam map are not linear, so `paintProjected` streams the visible tiles through the d3 projection
 // (its clipping and resampling included) into the canvas, as `geoPath` would, without building any
-// GeoJSON. The 3-D globe's texture is `paintEquirect` onto an offscreen canvas, so the flat map and
-// the globe are one picture.
+// GeoJSON. The 3-D globes draw the same lines over NASA's pictures of the Earth
+// (features/globeBasemap.ts).
 import type { GeoProjection, GeoStream } from 'd3-geo'
 import coarsest from './data/basemap-110m'
 import url50m from './data/basemap-50m.bin?url'
@@ -624,7 +624,7 @@ function inRegion(layer: BasemapLayer, region: Region): BasemapTile[] {
   return layer.tiles.filter((t) => tileInRegion(t, region))
 }
 
-/** The flat map and the 3-D globe's texture: equirectangular, so lon/lat go to the canvas through
+/** The flat map: equirectangular, so lon/lat go to the canvas through
  *  one transform — x = tx + k·lon, y = ty − k·lat — and the cached tile paths are drawn as they are.
  *  `relief`, when given, is drawn over the land and under every line (see `paintRelief`). */
 export function paintEquirect(

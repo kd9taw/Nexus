@@ -2,8 +2,8 @@
 // machines. The 2-D Canvas globe (MapView) stays the universal default; this is lazy-
 // loaded, so a low-end shack PC never downloads three.js unless the operator turns it on.
 // It reuses the SAME propagation data as MapView (spots, the operator's QTH, the selected
-// station) and renders it on a real sphere wearing the 2-D map's own picture
-// (features/globeBasemap.ts), a subsolar day/night terminator, band-colored spots,
+// station) and renders it on a real sphere wearing NASA's Blue Marble by day and Black Marble by
+// night (features/globeBasemap.ts), crossing at a subsolar day/night terminator, band-colored spots,
 // selected/heard-me great-circle arcs, a QTH ping, a starfield, and bloom. Phase A of the
 // 3-D plan (look + foundation).
 // On a tracked satellite pass it ALSO becomes the "this pass" view (satellite visual
@@ -37,18 +37,18 @@ import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
 import earthNightUrl from '../assets/earth-night.webp'
-import { basemapAt, coarsestBasemap, loadBasemap, type BasemapScale } from '../basemap'
+import { basemapAt, loadBasemap, type BasemapScale } from '../basemap'
 import {
   GLOBE_AMBIENT,
   GLOBE_BLOOM_THRESHOLD,
+  GLOBE_CITY_LIGHTS,
   GLOBE_FIFTY_ABOVE,
   GLOBE_SUN,
   GLOBE_TEN_BELOW,
   disposeGlobeLines,
   globeLines,
   nightOnlyEmissive,
-  loadRelief,
-  paintGlobeTexture,
+  loadDayImage,
   readMapInks,
 } from '../features/globeBasemap'
 import { usePaletteKey } from '../usePaletteRoles'
@@ -731,12 +731,11 @@ function Globe3DView({
   // accessors either — `ringColor` and friends are `triggerUpdate: false` in the shipped layer.
   const rings = useMemo(() => (qth ? [{ lat: qth.lat, lng: qth.lon }] : []), [qth])
 
-  // The globe surface material: the 2-D map's own picture (features/globeBasemap.ts) — the theme's
-  // sea and land, the shaded relief, lakes and rivers — painted onto the sphere once the basemap and
-  // the relief are here, and again when the theme changes; the sea's colour until then. Built here
-  // (not via a ref getter — react-globe.gl takes it as a prop) so it's ready before first paint. Lit
-  // by the subsolar light set up below: the day side comes up to the flat map's colours, the night
-  // side falls to about a third of them, and the city lights glow there as a dimmed emissive.
+  // The globe surface material: NASA's pictures of the Earth (features/globeBasemap.ts) — the Blue
+  // Marble as the sphere's colour once it is here (the theme's sea colour until then), and the Black
+  // Marble as its glow on the night side. Built here (not via a ref getter — react-globe.gl takes it as
+  // a prop) so it's ready before first paint. Lit by the subsolar light set up below: the day side
+  // comes up to the picture's own colours under the sun, and the night side is the night picture.
   const globeMat = useMemo(() => {
     const loader = new THREE.TextureLoader()
     // A texture that finishes loading while the render loop is paused must still reach the screen.
@@ -746,7 +745,7 @@ function Globe3DView({
       color: new THREE.Color(readMapInks().water),
       emissiveMap: night,
       emissive: new THREE.Color('#ffffff'),
-      emissiveIntensity: 0.35, // dimmed city lights — a faint glow, not a blaze
+      emissiveIntensity: GLOBE_CITY_LIGHTS,
       shininess: 4,
     })
     nightOnlyEmissive(m)
@@ -757,16 +756,12 @@ function Globe3DView({
     const g = globeRef.current
     if (!g || !ready) return
     let live = true
-    void Promise.all([loadBasemap('50m'), loadRelief()]).then(([map, img]) => {
-      if (!live) return
-      const caps = g.renderer().capabilities
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.min(4096, caps.maxTextureSize)
-      canvas.height = canvas.width / 2
-      paintGlobeTexture(canvas, map ?? coarsestBasemap(), readMapInks(), img)
-      const tex = new THREE.CanvasTexture(canvas)
+    void loadDayImage().then((img) => {
+      if (!live || !img) return
+      const tex = new THREE.Texture(img)
       tex.colorSpace = THREE.SRGBColorSpace
-      tex.anisotropy = caps.getMaxAnisotropy()
+      tex.anisotropy = g.renderer().capabilities.getMaxAnisotropy()
+      tex.needsUpdate = true
       globeMat.map?.dispose()
       globeMat.map = tex
       globeMat.color.set('#ffffff')
@@ -776,7 +771,7 @@ function Globe3DView({
     return () => {
       live = false
     }
-  }, [ready, globeMat, paletteKey])
+  }, [ready, globeMat])
   useEffect(() => () => globeMat.map?.dispose(), [globeMat])
 
   // The coast, the borders and the US states as lines a hair above the sphere: 1:50m from afar,
@@ -833,14 +828,14 @@ function Globe3DView({
     const g = globeRef.current
     if (!g || !ready) return
     try {
-      // Day/night: a warm directional light at the subsolar point + a low ambient so
-      // the night side isn't pure black. Replaces globe.gl's camera-following light.
+      // Day/night: a warm directional light at the subsolar point + a low ambient.
+      // Replaces globe.gl's camera-following light.
       const sun = new THREE.DirectionalLight(GLOBE_SUN.color, GLOBE_SUN.intensity)
       const ss = subsolarPoint(Date.now())
       const p = g.getCoords(ss.lat, ss.lon, 2)
       sun.position.set(p.x, p.y, p.z)
-      // Enough ambient that the night side reads (land, coasts and the city lights), the way the
-      // flat map's greyline shades it, but low enough that the lights are not washed out.
+      // The ambient is low, so the night side is the night picture (the Black Marble's lights) and
+      // not a dimmed day.
       g.lights([new THREE.AmbientLight(GLOBE_AMBIENT.color, GLOBE_AMBIENT.intensity), sun])
       // Starfield: a shell of points around the scene (no texture asset needed).
       const N = 1400
@@ -863,8 +858,8 @@ function Globe3DView({
       // blowout — the "globe goes massively bright after resizing the window, and only a 2D↔3D
       // toggle resets it" bug. Size the pass off the live container so the first frame is correct.
       const el = wrapRef.current
-      // The threshold sits above the day side's own brightness: on the map-coloured earth only the
-      // spots, the arcs and the city lights are bright enough to glow, never the land itself.
+      // The threshold sits above the day side's own brightness: on the day picture only the spots,
+      // the arcs and the city lights are bright enough to glow, never the land itself.
       const bloom = new UnrealBloomPass(
         new THREE.Vector2(el?.clientWidth || 1, el?.clientHeight || 1),
         0.6,
@@ -985,7 +980,7 @@ function Globe3DView({
 
   // City-lights on/off from the layers panel (dim the emissive to 0 when off).
   useEffect(() => {
-    globeMat.emissiveIntensity = show.lights ? 0.35 : 0
+    globeMat.emissiveIntensity = show.lights ? GLOBE_CITY_LIGHTS : 0
     globeMat.needsUpdate = true
   }, [globeMat, show.lights])
 

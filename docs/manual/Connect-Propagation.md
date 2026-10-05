@@ -12,7 +12,7 @@ Three projections are available via the toolbar toggle:
 - **Azimuthal-equidistant beam map** — true great-circle headings and range rings from your QTH. Bearing and distance to any selected station are read directly off the rings.
 - **Equirectangular world view** — flat projection with Natural Earth's shaded relief laid under the coastlines and borders (public domain, bundled offline).
 
-Every projection draws Natural Earth's land, lakes, major rivers, country borders and US state lines, at 1:110m, 1:50m or 1:10m depending on how far you are zoomed in, so the lines stay sharp at any zoom. The shaded relief shows on the flat world view (and on the 3D globe); the azimuthal-equidistant and globe projections do not support inverse-projection raster blitting.
+Every projection draws Natural Earth's land, lakes, major rivers, country borders and US state lines, at 1:110m, 1:50m or 1:10m depending on how far you are zoomed in, so the lines stay sharp at any zoom. The shaded relief shows on the flat world view; the azimuthal-equidistant and globe projections do not support inverse-projection raster blitting. The 3D globe shows NASA's Blue Marble on the day side and its Black Marble city lights on the night side, meeting at the live greyline.
 
 ### Range rings
 
