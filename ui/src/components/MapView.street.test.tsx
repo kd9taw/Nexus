@@ -317,23 +317,53 @@ describe('MapView on Street — a gesture holds the picture and redraws once, at
     expect(canvas.style.transform).toBe('')
   })
 
-  it("zooms by scaling the drawn picture about the map's centre, and redraws once at the end", async () => {
+  it("zooms out by scaling the drawn picture down about the map's centre, redrawing nothing until it stops", async () => {
     const { canvas } = await mountStreet()
-    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 8)))
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 9)))
     drawn = []
-    for (const z of [8.25, 8.5, 8.75, 9]) {
+    for (const z of [8.75, 8.5, 8.25, 8]) {
       act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, z, true)))
-      // The centre stays put and everything else spreads from it: s = 2^Δzoom, about (W/2, H/2).
-      const s = 2 ** (z - 8)
+      // The centre stays put and everything else draws in towards it: s = 2^Δzoom, about (W/2, H/2).
+      const s = 2 ** (z - 9)
       const t = shiftOf(canvas)!
       expect(t.s).toBeCloseTo(s, 6)
       expect(t.x).toBeCloseTo((W / 2) * (1 - s), 4)
       expect(t.y).toBeCloseTo((H / 2) * (1 - s), 4)
     }
-    expect(drawn.filter(([k]) => k === 'rect')).toHaveLength(0)
-    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 9)))
+    expect(redraws()).toBe(0)
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 8)))
     expect(redraws()).toBe(1)
     expect(canvas.style.transform).toBe('')
+  })
+
+  // A zoom-in magnifies the held picture, and the offset of its lines with it (operator ruling
+  // 2026-10-05): it is redrawn in the very frame it would show more than 5% larger than drawn.
+  it('redraws a zoom-in at each 5% step, in the frame itself, so the picture never shows more than 5% larger', async () => {
+    const { canvas } = await mountStreet()
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 8)))
+    drawn = []
+    let drawnZoom = 8
+    const expected: number[] = []
+    const seen: number[] = []
+    for (let k = 1; k <= 50; k++) {
+      const z = 8 + 0.02 * k
+      const before = redraws()
+      let shown = 1
+      act(() => {
+        streetProps().onCamera?.(camera(ME.lon, ME.lat, z, true))
+        // What MapLibre's frame shows: read before any later work, as the browser paints it.
+        shown = shiftOf(canvas)?.s ?? 1
+      })
+      expect(shown).toBeLessThanOrEqual(1.05)
+      if (redraws() > before) seen.push(k)
+      // The rule, independently: past 5% larger than drawn, the frame is redrawn.
+      if (2 ** (z - drawnZoom) > 1.05) {
+        expected.push(k)
+        drawnZoom = z
+      }
+    }
+    expect(expected).toHaveLength(12)
+    expect(seen).toEqual(expected)
   })
 
   it('finds a target where the moving map shows it: a double-click mid-pan works the park', async () => {

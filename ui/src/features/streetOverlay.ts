@@ -25,6 +25,12 @@ export const WORLD_PX = 512
 /** Where street scale begins (MapLibre zoom). */
 export const STREET_SCALE_ZOOM = 8
 
+/** How much larger than it was drawn a picture held through a zoom-in may show (MapView). Holding a
+ *  picture magnifies it, and the offset of its lines from the map with it; past this it is redrawn,
+ *  so through a zoom-in the overlays stay within 5% of their offset at rest (operator ruling
+ *  2026-10-05). */
+export const HELD_ZOOM_IN_LIMIT = 1.05
+
 /** Paths are clipped this far outside the map, so the cut edge of a clipped area is never stroked
  *  where it can be seen. */
 const CLIP_MARGIN_PX = 16

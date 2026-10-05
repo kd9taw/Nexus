@@ -11,6 +11,7 @@
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useContext } from 'react'
+import { flushSync } from 'react-dom'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -130,6 +131,7 @@ import {
   GRID_LABEL_MIN_PX,
   GRID_LEVELS,
   GRID_LINE_MIN_PX,
+  HELD_ZOOM_IN_LIMIT,
   STREET_SCALE_ZOOM,
   WORLD_SCALE_LAYERS,
   gridCells,
@@ -975,7 +977,9 @@ export function MapView({
   // after a drag) its motion redraws nothing: the transform holds the picture on the map, and the
   // camera becomes `streetView`, one redraw, only once the map stops (operator ruling 2026-10-05: a
   // redraw in every frame made a pan with the overlays on several times slower than the street map
-  // alone).
+  // alone). A ZOOM-IN is the exception: holding the picture magnifies it, and the offset of its lines
+  // with it, so it is redrawn in the very frame it would show more than HELD_ZOOM_IN_LIMIT larger than
+  // drawn (operator ruling 2026-10-05). Pans and zoom-outs stay held.
   const [streetView, setStreetView] = useState<StreetView | null>(null)
   const liveViewRef = useRef<StreetView | null>(null)
   const drawnViewRef = useRef<StreetView | null>(null)
@@ -994,7 +998,12 @@ export function MapView({
     liveViewRef.current = v
     streetMovingRef.current = cam?.moving ?? false
     lockOverlay()
-    if (!cam?.moving) setStreetView((prev) => (sameStreetView(prev, v) ? prev : v))
+    const commit = () => setStreetView((prev) => (sameStreetView(prev, v) ? prev : v))
+    const drawn = drawnViewRef.current
+    if (!cam?.moving) commit()
+    // Synchronous, so the redraw lands before this frame is shown: React runs the draw (an effect)
+    // before a synchronous render returns.
+    else if (v && drawn && 2 ** (v.zoom - drawn.zoom) > HELD_ZOOM_IN_LIMIT) flushSync(commit)
   }
   const streetScale = kind === 'street' && streetView != null && streetView.zoom >= STREET_SCALE_ZOOM
   // Star field for the globe's space backdrop: fixed relative positions generated
