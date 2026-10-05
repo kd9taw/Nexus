@@ -12853,6 +12853,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: var(--accent);
   color: var(--accent);
 }
+/* Settings ▸ Licenses (SettingsLicenses.tsx): license texts are written to about 80 columns, so
+   the dialog is wider than the 640px default; the box scrolls the text (.ui-dialog's max-height). */
+.ui-dialog.licenses-dialog {
+  width: min(760px, calc(100vw - 2 * var(--space-4)));
+}
+.licenses-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
 .settings-form {
   flex: 1;
   min-height: 0;

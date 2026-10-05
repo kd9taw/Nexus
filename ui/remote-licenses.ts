@@ -1,4 +1,5 @@
-// Copyright notices for the packages actually present in the hosted chunks.
+// Copyright notices for the packages actually present in the bundled chunks: the hosted
+// browser's (vite.remote.config.ts) and the desktop app's (vite.config.ts).
 // Reuse installed, lockfile-verified license texts; never invent a notice or
 // publish an arbitrary node_modules file. A missing notice stops packaging.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'

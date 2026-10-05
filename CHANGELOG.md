@@ -256,6 +256,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
   an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
   in every theme.
+- **Nexus now carries the license texts of the packages its interface is built with.** NOTICE named
+  them, but their MIT, ISC and Apache-2.0 licenses ask for the license text itself to travel with
+  every copy, and the installers did not carry it. Every installer now has them, with the CQ-zone
+  data's notice, in `resources/ui/THIRD-PARTY.txt` beside COPYING and NOTICE, and the new
+  **Licenses** button in the Settings header, beside **Check for updates**, shows them.
 
 ### Changed
 
