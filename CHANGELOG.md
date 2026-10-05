@@ -62,7 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still goes out, as it did before, and shows the warning above (an APRS packet goes without one,
   as it always did). A soundcard CW macro still plays every word on a radio that refuses a second
   key while the first is held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot
-  modes are unchanged.
+  modes follow WSJT-X instead (next entry).
+- **FT8, FT4, JS8 and the other timed-slot modes: when the radio refuses to key, nothing is sent
+  and TX stops, as in WSJT-X.** If the radio answered the key with an error, Nexus played the
+  whole over anyway into a radio that was still receiving, and left TX on to try again the next
+  cycle. Now the over is not played, the radio is unkeyed, TX turns off, and the status bar shows
+  **PTT REFUSED — TX STOPPED** with the time and what the radio answered, until you turn TX on
+  again. That is what WSJT-X does: it stops transmitting, unticks Enable Tx and reports a rig
+  control error. Like WSJT-X, this includes Hamlib's own "the rig did not answer" (a radio
+  switched off, or too slow even for Hamlib); for the other modes that still sends the over with
+  its warning. A radio that is only slow to answer, past the time Nexus waits, still sends its
+  over as before: WSJT-X keeps waiting for such a radio and transmits once it keys. NEEDS-BENCH on
+  real radios: one that refuses PTT (a wrong PTT method or port), and a slow serial CAT rig.
 - **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
   radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
   background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
