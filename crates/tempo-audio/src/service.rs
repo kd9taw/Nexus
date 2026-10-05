@@ -2944,6 +2944,43 @@ enum ErrOwner {
     SilentCapture,
 }
 
+/// What came of a key for one of the loop's own overs ([`RadioLoop::key_over`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum KeyUp {
+    /// The radio accepted the key.
+    Keyed,
+    /// The radio refused this key while the loop already held the transmitter for an over in
+    /// progress (`tx_until_ms`, or the operator's own PTT): the over goes out on that key, as it
+    /// always did, and its warning still reports the refusal. Nexus's Flex client refuses every
+    /// key after the first while one of ours is held (`AlreadyKeyed`), so each word of a soundcard
+    /// CW macro after the first meets this.
+    Held,
+    /// The radio refused the key and nothing of the loop's holds the transmitter: the radio did
+    /// not key, so nothing may be played or sent. Carries the refusal, for the log.
+    Refused(String),
+}
+
+impl KeyUp {
+    /// Whether the over may go out: anything but a refusal.
+    fn sends(&self) -> bool {
+        !matches!(self, KeyUp::Refused(_))
+    }
+
+    /// Whether the radio refused this key, held or not: what each over's warning reports.
+    fn refused(&self) -> bool {
+        *self != KeyUp::Keyed
+    }
+}
+
+/// The log's line for an over a refused key dropped ([`KeyUp::Refused`]), in the words the voice
+/// keyer's and APRS's refusals use: `<what>: the radio did not accept the key (<why>) (dropped)`.
+fn note_refused_key(what: &str, why: &str) {
+    tempo_core::applog::info(
+        "tx",
+        &format!("{what}: the radio did not accept the key ({why}) (dropped)"),
+    );
+}
+
 /// How long native DAX RX may deliver NOTHING before we call it broken, fall back to the
 /// sound card and say so.
 ///
@@ -5021,18 +5058,19 @@ impl RadioLoop {
     }
 
     /// Surface (or clear) a "the rig didn't accept PTT" status on the shared audio-error
-    /// banner. A keyed-but-NAK'd rig plays modem audio into a receiver = silent dead air
-    /// with no warning, so `keying` calls that swallowed the `ptt()` result now route it
-    /// here. Uses the err-owner arbitration so a PTT status never clobbers a device/mic
-    /// error, and clears only its OWN status when keying succeeds again.
+    /// banner: the words the voice keyer, SSTV, the Remote microphone, the tune and the
+    /// operator's own PTT give a key the rig refused. A refused key used to be played into a
+    /// receiving rig with no warning ("silent dead air"); now the over is not played at all
+    /// ([`Self::key_over`]), and this says why. Uses the err-owner arbitration so a PTT status
+    /// never clobbers a device/mic error, and clears only its OWN status when keying succeeds
+    /// again.
     fn report_ptt(&mut self, engine: &Arc<Mutex<Engine>>, failed: bool) {
         if failed {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_audio_error(Some(
-                        "The rig didn't accept PTT — check your PTT method and CAT/port. \
-                         Modem audio may be going out while the radio is still receiving."
+                        "The rig didn't accept PTT — check your PTT method and CAT/port."
                             .to_string(),
                     ));
                 }
@@ -5044,6 +5082,37 @@ impl RadioLoop {
                 eng.set_audio_error(None);
             }
             self.err_owner = ErrOwner::None;
+        }
+    }
+
+    /// Key the transmitter for an over whose audio (or, `plain`, FSK keyline) this loop sends,
+    /// and say what came of it.
+    ///
+    /// ⛔ A KEY THE RADIO REFUSED SENDS NOTHING ([`KeyUp::Refused`]). Every over here used to go
+    /// out whatever the key's answer: the voice keyer, SSTV, RTTY, PSK, the soundcard CW keyer
+    /// and the Remote microphone reported a refusal and played anyway, into a receiving radio,
+    /// and the tune and APRS did not look at it. Nexus's Flex client refuses a key while the radio
+    /// is still letting go of the last over, so an APRS frame keyed into that half second was
+    /// played unkeyed and lost without a word. On a refusal the caller plays and sends nothing,
+    /// drops the over (never held for later, as every refused send is), says so on its own line,
+    /// and logs it ([`note_refused_key`]). A refusal while the loop already holds the transmitter
+    /// is not one: see [`KeyUp::Held`].
+    ///
+    /// It only ever ADDS a refusal: the key itself, the hold, the unkey and every gate before
+    /// this are unchanged. `Rig::ptt` leaves `keyed` set after a refused key (fail-safe), so with
+    /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
+    /// all.
+    fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
+        let held = self.tx_until_ms.is_some() || self.manual_ptt_applied;
+        let key = if plain {
+            rig.ptt_plain(true)
+        } else {
+            rig.ptt(true)
+        };
+        match key {
+            Ok(()) => KeyUp::Keyed,
+            Err(_) if held => KeyUp::Held,
+            Err(e) => KeyUp::Refused(e.to_string()),
         }
     }
 
@@ -8781,20 +8850,31 @@ impl RadioLoop {
                             tempo_fast::SAMPLE_RATE as u32,
                         );
                         if !buf.is_empty() {
-                            // Capture PTT: if the rig won't key, the tone still plays locally so
-                            // it LOOKS like it sent while nothing reaches the air — surface that
-                            // instead of the silent false-positive. (Audio-routing problems can't
-                            // be detected here — see the Soundcard control's caveat.)
+                            // Capture PTT: a word the rig would not key is not played (it LOOKED
+                            // sent while nothing reached the air), and the warning says why
+                            // ([`Self::key_over`]). (Audio-routing problems can't be detected
+                            // here — see the Soundcard control's caveat.)
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
-                            let ptt_err = rig.ptt(true).is_err();
-                            backend.play(&buf);
-                            let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            let key = self.key_over(rig, false);
+                            if key.sends() {
+                                backend.play(&buf);
+                                let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            } else {
+                                // Nothing keyed, so nothing to wait out: a new send keys at once.
+                                self.cw_busy_until = 0.0;
+                            }
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_cw_keyer_error(ptt_err.then(|| {
+                                if let KeyUp::Refused(why) = &key {
+                                    note_refused_key("CW not keyed", why);
+                                    // …and the rest of the send with it, so it cannot resume
+                                    // mid-message on a later word the radio does key.
+                                    eng.cw_key_refused();
+                                }
+                                eng.set_cw_keyer_error(key.refused().then(|| {
                                     "Soundcard keyer: the rig didn't accept PTT. Check your PTT \
                                      method + that Nexus's audio output is routed to the rig \
                                      (like FT8). If in doubt, use the WinKeyer or CAT keyer."
@@ -9159,7 +9239,7 @@ impl RadioLoop {
                                 }
                             }
                             let open_err = self.rtty_keyer.is_none();
-                            let mut ptt_err = false;
+                            let mut key = KeyUp::Keyed;
                             if !open_err && need_key {
                                 self.ensure_commanded(rig); // assert dial/mode before the key
                             }
@@ -9168,26 +9248,33 @@ impl RadioLoop {
                                     // Keyed with `ptt_plain`: FSK's tones are the keyed line, not
                                     // audio, so a Rear/Data radio (#381) keys it as it always has.
                                     self.publish_tx_intent_now(); // before keying
-                                    ptt_err = rig.ptt_plain(true).is_err();
+                                    key = self.key_over(rig, true);
                                 }
-                                k.send(bits.clone(), baud);
-                                self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
-                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                // A stream the rig would not key sends nothing (`key_over`).
+                                if key.sends() {
+                                    k.send(bits.clone(), baud);
+                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                    self.tx_until_ms =
+                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                }
                             }
                             {
                                 let mut eng = engine_lock(engine);
-                                if open_err {
-                                    // Nothing can key on this backend, so the latch is
-                                    // a lie — drop it rather than leave the operator
-                                    // looking at a lit TX button that transmits nothing.
+                                if let KeyUp::Refused(why) = &key {
+                                    note_refused_key("RTTY not keyed", why);
+                                }
+                                if open_err || !key.sends() {
+                                    // Nothing can key on this backend (or the rig refused the
+                                    // key), so the latch is a lie — drop it rather than leave
+                                    // the operator looking at a lit TX button that transmits
+                                    // nothing.
                                     eng.drop_rtty_latch();
                                     self.rtty_stream = None;
                                 }
                                 eng.set_rtty_keyer_error(if open_err {
                                     open_err_msg
-                                } else if ptt_err {
+                                } else if key.refused() {
                                     Some(
                                         "FSK keyer: the rig didn't accept PTT. Check your PTT \
                                          method (CAT, or the separate PTT line) — the FSK data \
@@ -9205,18 +9292,29 @@ impl RadioLoop {
                             // modem and the one-shot RTTY path use, so the operator's
                             // tx_level / drive / ALC discipline applies unchanged.
                             if !buf.is_empty() {
-                                let mut ptt_err = false;
+                                let mut key = KeyUp::Keyed;
                                 if need_key {
                                     self.ensure_commanded(rig); // assert before key
                                     self.publish_tx_intent_now(); // before keying
-                                    ptt_err = rig.ptt(true).is_err();
+                                    key = self.key_over(rig, false);
                                 }
-                                backend.play(&buf);
-                                self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
-                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                                if ptt_err {
+                                // A stream the rig would not key is not played (`key_over`):
+                                // the latch goes, as on the FSK backend above.
+                                if key.sends() {
+                                    backend.play(&buf);
+                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                    self.tx_until_ms =
+                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                } else {
+                                    let mut eng = engine_lock(engine);
+                                    eng.drop_rtty_latch();
+                                    self.rtty_stream = None;
+                                }
+                                if let KeyUp::Refused(why) = &key {
+                                    note_refused_key("RTTY not keyed", why);
+                                }
+                                if key.refused() {
                                     let mut eng = engine_lock(engine);
                                     eng.set_rtty_keyer_error(Some(
                                         "AFSK keyer: the rig didn't accept PTT. Check your PTT \
@@ -9278,7 +9376,7 @@ impl RadioLoop {
                             }
                         }
                         let open_err = self.rtty_keyer.is_none();
-                        let mut ptt_err = false;
+                        let mut key = KeyUp::Keyed;
                         if !open_err {
                             // Hoisted out of the keyer borrow below (read-only launch):
                             // assert dial/mode BEFORE the key, same as every other site.
@@ -9290,28 +9388,36 @@ impl RadioLoop {
                             // unkeys the moment the final stop bit ends (+ tail).
                             // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
                             self.publish_tx_intent_now(); // before keying
-                            ptt_err = rig.ptt_plain(true).is_err();
-                            k.send(bits.clone(), baud);
-                            let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            key = self.key_over(rig, true);
+                            // An over the rig would not key sends nothing (`key_over`).
+                            if key.sends() {
+                                k.send(bits.clone(), baud);
+                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            }
                         }
-                        if open_err {
+                        let sent = !open_err && key.sends();
+                        if !sent {
                             // Nothing keyed — don't sit "busy" for a send that never started.
                             self.rtty_busy_until = 0.0;
                         }
+                        if let KeyUp::Refused(why) = &key {
+                            note_refused_key("RTTY not keyed", why);
+                        }
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_rtty_sending(!open_err);
+                            eng.set_rtty_sending(sent);
                             // #379: the keyline has the over — the transcript echo and the TX
-                            // line start from here. A port that would not open keyed nothing,
-                            // so nothing is echoed and the TX line does not claim it.
-                            if !open_err {
+                            // line start from here. A port that would not open, or a key the rig
+                            // refused, keyed nothing, so nothing is echoed and the TX line does
+                            // not claim it.
+                            if sent {
                                 eng.rtty_over_keyed(&text, baud, now);
                             }
                             eng.set_rtty_keyer_error(if open_err {
                                 open_err_msg
-                            } else if ptt_err {
+                            } else if key.refused() {
                                 Some(
                                     "FSK keyer: the rig didn't accept PTT. Check your PTT \
                                      method (CAT, or the separate PTT line) — the FSK data \
@@ -9345,17 +9451,29 @@ impl RadioLoop {
                         if !buf.is_empty() {
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
-                            let ptt_err = rig.ptt(true).is_err();
-                            backend.play(&buf);
-                            let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            let key = self.key_over(rig, false);
+                            // An over the rig would not key is not played (`key_over`).
+                            if key.sends() {
+                                backend.play(&buf);
+                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            } else {
+                                // Nothing keyed — don't sit "busy" for a send that never started.
+                                self.rtty_busy_until = 0.0;
+                            }
+                            if let KeyUp::Refused(why) = &key {
+                                note_refused_key("RTTY not keyed", why);
+                            }
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_rtty_sending(true);
-                                // #379: the audio ring has the over — the echo starts here.
-                                eng.rtty_over_keyed(&text, baud, now);
-                                eng.set_rtty_keyer_error(ptt_err.then(|| {
+                                eng.set_rtty_sending(key.sends());
+                                // #379: the audio ring has the over — the echo starts here, and
+                                // only for an over that keyed.
+                                if key.sends() {
+                                    eng.rtty_over_keyed(&text, baud, now);
+                                }
+                                eng.set_rtty_keyer_error(key.refused().then(|| {
                                     "AFSK keyer: the rig didn't accept PTT. Check your PTT \
                                      method + that Nexus's audio output is routed to the rig \
                                      (like FT8)."
@@ -9505,20 +9623,31 @@ impl RadioLoop {
                     // unkey instead of sticking (the RTTY bound, PSK's numbers).
                     let chunk_ms = buf.len() as f64 / 12.0;
                     if chunk_ms > 0.0 {
-                        let mut ptt_err = false;
+                        let mut key = KeyUp::Keyed;
                         if need_key {
                             self.ensure_commanded(rig); // assert dial/mode before the key
                             self.publish_tx_intent_now(); // before keying
-                            ptt_err = rig.ptt(true).is_err();
+                            key = self.key_over(rig, false);
                         }
-                        backend.play(&buf);
-                        self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
-                        let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                        if let Some(st) = self.psk_stream.as_mut() {
-                            st.keyed = true;
+                        // A stream the rig would not key is not played (`key_over`): its latch
+                        // goes, as RTTY's does.
+                        if key.sends() {
+                            backend.play(&buf);
+                            self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
+                            let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            if let Some(st) = self.psk_stream.as_mut() {
+                                st.keyed = true;
+                            }
+                        } else {
+                            engine_lock(engine).drop_psk_latch();
+                            self.psk_stream = None;
                         }
-                        if ptt_err {
+                        if let KeyUp::Refused(why) = &key {
+                            note_refused_key("PSK not keyed", why);
+                        }
+                        if key.refused() {
                             let mut eng = engine_lock(engine);
                             eng.set_psk_keyer_error(Some(
                                 "PSK keyer: the rig didn't accept PTT. Check your PTT method + \
@@ -9557,14 +9686,23 @@ impl RadioLoop {
                     self.psk_busy_until = now + total_ms + keyboard::PSK31.char_ms(psk_baud);
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying
-                    let ptt_err = rig.ptt(true).is_err();
-                    backend.play(&buf);
-                    let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    let key = self.key_over(rig, false);
+                    // An over the rig would not key is not played (`key_over`).
+                    if key.sends() {
+                        backend.play(&buf);
+                        let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    } else {
+                        // Nothing keyed — don't sit "busy" for a send that never started.
+                        self.psk_busy_until = 0.0;
+                    }
+                    if let KeyUp::Refused(why) = &key {
+                        note_refused_key("PSK not keyed", why);
+                    }
                     {
                         let mut eng = engine_lock(engine);
-                        eng.set_psk_sending(true);
-                        eng.set_psk_keyer_error(ptt_err.then(|| {
+                        eng.set_psk_sending(key.sends());
+                        eng.set_psk_keyer_error(key.refused().then(|| {
                             "PSK keyer: the rig didn't accept PTT. Check your PTT method + \
                              that Nexus's audio output is routed to the rig (like FT8)."
                                 .to_string()
@@ -9587,16 +9725,18 @@ impl RadioLoop {
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now();
-                let key = rig.ptt(true);
-                backend.play(&buf);
-                let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
-                self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
-                // A key the radio refused sent nothing (Nexus's Flex client refuses one while the
-                // radio is still letting go of the last over): say so, and never send the frame
-                // again into the same refusal. Everything else runs as it always has:
-                // `tx_until_ms` still drops PTT.
-                if let Err(e) = key {
-                    engine_lock(engine).aprs_key_refused(&e.to_string());
+                // A key the radio refused sends nothing (Nexus's Flex client refuses one while the
+                // radio is still letting go of the last over), so the frame is not played into the
+                // receiving radio (`key_over`): say so, and never send the frame again into the
+                // same refusal. The engine's line says which frame went, and logs it.
+                let key = self.key_over(rig, false);
+                if key.sends() {
+                    backend.play(&buf);
+                    let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
+                    self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
+                }
+                if let KeyUp::Refused(why) = &key {
+                    engine_lock(engine).aprs_key_refused(why);
                 }
             }
         }
@@ -9707,13 +9847,18 @@ impl RadioLoop {
                     let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                    let ptt_err = rig.ptt(true).is_err();
-                    backend.play(&buf);
-                    let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                    // A NAK here means the modem audio above went out while the rig stayed in
-                    // RX — surface it instead of silent dead air.
-                    self.report_ptt(engine, ptt_err);
+                                                  // A NAK here used to play the message into a receiving rig: it is not played
+                                                  // (`key_over`), and the line says why instead of silent dead air.
+                    let key = self.key_over(rig, false);
+                    if key.sends() {
+                        backend.play(&buf);
+                        let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    if let KeyUp::Refused(why) = &key {
+                        note_refused_key("voice-keyer message not played", why);
+                    }
+                    self.report_ptt(engine, key.refused());
                 }
             }
             // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
@@ -9869,23 +10014,29 @@ impl RadioLoop {
                 if let Some(job) = job {
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                    let ptt_err = rig.ptt(true).is_err();
-                    // Hold PTT for the WHOLE image via the precomputed duration; the
-                    // tx_until_ms expiry below drops it even if every other mechanism fails.
-                    let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                    {
-                        let mut eng = engine_lock(engine);
-                        eng.set_sstv_sending(true);
+                                                  // A NAK here would send the picture into a receiving rig: it is not sent
+                                                  // (`key_over`, a dropped picture, never held), and the line says why.
+                    let key = self.key_over(rig, false);
+                    if key.sends() {
+                        // Hold PTT for the WHOLE image via the precomputed duration; the
+                        // tx_until_ms expiry below drops it even if every other mechanism fails.
+                        let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.set_sstv_sending(true);
+                        }
+                        self.sstv_feed = Some(SstvFeed {
+                            samples: job.samples,
+                            cursor: 0,
+                            started_ms: now,
+                            total_ms: job.duration_ms,
+                        });
                     }
-                    // A NAK here means modem audio would go out into a receiving rig — surface it.
-                    self.report_ptt(engine, ptt_err);
-                    self.sstv_feed = Some(SstvFeed {
-                        samples: job.samples,
-                        cursor: 0,
-                        started_ms: now,
-                        total_ms: job.duration_ms,
-                    });
+                    if let KeyUp::Refused(why) = &key {
+                        note_refused_key("SSTV not keyed", why);
+                    }
+                    self.report_ptt(engine, key.refused());
                 }
             }
             // Chunked look-ahead feed + progress + completion.
@@ -9976,15 +10127,24 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
-                        let ptt_err = rig.ptt(true).is_err();
-                        self.report_ptt(engine, ptt_err);
-                        self.mic_keyed = true;
-                        self.mic_busy_until = now;
-                        // The lead-in and the silent pre-roll come before any audio is queued:
-                        // hold PTT across them, and no further.
-                        let until =
-                            now + (MIC.lead_in_ms + MIC.ahead_ms) as f64 + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        let key = self.key_over(rig, false);
+                        self.report_ptt(engine, key.refused());
+                        if let KeyUp::Refused(why) = &key {
+                            // The rig did not key, so none of the operator's voice may be played
+                            // (`key_over`): the over ends here, through its one kill path.
+                            note_refused_key("Remote microphone over not keyed", why);
+                            engine_lock(engine).drop_mic_latch();
+                        } else {
+                            self.mic_keyed = true;
+                            self.mic_busy_until = now;
+                            // The lead-in and the silent pre-roll come before any audio is
+                            // queued: hold PTT across them, and no further.
+                            let until = now
+                                + (MIC.lead_in_ms + MIC.ahead_ms) as f64
+                                + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
                     }
                     MicTick::Samples(buf) => {
                         backend.play(&buf);
@@ -10858,7 +11018,9 @@ impl RadioLoop {
                 }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                let _ = rig.ptt(true);
+                let key = self.key_over(rig, false);
+                // The tune's line, in the words the voice keyer gives a refused key.
+                self.report_ptt(engine, key.refused());
                 self.tuning_keyed = true;
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
@@ -10866,6 +11028,15 @@ impl RadioLoop {
                 self.tune_queued_ms = 0.0;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
+                if let KeyUp::Refused(why) = &key {
+                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`). The tune
+                    // ends here, through the same call its auto-release makes, and the next
+                    // tick's release below unkeys and puts the DATA mode and the power back, as
+                    // it does for every tune.
+                    note_refused_key("tune not keyed", why);
+                    engine_lock(engine).set_tune(false);
+                    return Ok(());
+                }
             }
             // TOP THE CARRIER'S LEAD UP TOWARD [`TUNE_LEAD_MS`] — never add to it.
             //
@@ -14099,6 +14270,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 mod tests {
     mod flex_audio;
     mod receive_source;
+    mod refused_key;
     mod remote_radio;
     use super::should_command_rf_power;
 

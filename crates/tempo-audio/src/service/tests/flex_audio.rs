@@ -1189,14 +1189,14 @@ fn slow_release(ms: u64) -> SimSession {
     s
 }
 
-/// ⭐ A REFUSED APRS KEY IS REPORTED, NOT SILENT. A beacon queued the moment the last one's over
-/// has unkeyed meets a radio still letting go of the transmitter (three seconds here, so the
+/// ⭐ A REFUSED APRS KEY PLAYS NOTHING AND IS REPORTED. A beacon queued the moment the last one's
+/// over has unkeyed meets a radio still letting go of the transmitter (three seconds here, so the
 /// window is certain): the client refuses the key, so the packet never goes out. The loop played
-/// it into the receiving radio and said nothing. The APRS status line says the radio did not
-/// accept the key, and nothing sends the packet later. The control, in the same scene: once the
-/// radio has let go, the next beacon keys.
+/// it into the receiving radio anyway and said nothing. It is not played, the APRS status line
+/// says the radio did not accept the key, and nothing sends the packet later. The control, in the
+/// same scene: once the radio has let go, the next beacon keys.
 #[test]
-fn a_refused_aprs_key_is_reported_not_silent() {
+fn a_refused_aprs_key_plays_nothing_and_is_reported() {
     let mut s = FlexScene::with_session(false, slow_release(3_000));
     beacon(&s);
     run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
@@ -1204,14 +1204,19 @@ fn a_refused_aprs_key_is_reported_not_silent() {
         unkeys(s) == 1 && s.state.tx_until_ms.is_none()
     });
     beacon(&s);
-    run_until(&mut s, "the second beacon never reached the key", |s| {
-        s.backend.played.lock().unwrap().len() == 2
+    run_until(&mut s, "the refused beacon was never reported", |s| {
+        s.engine.lock().unwrap().aprs_tx_notice().is_some()
     });
     s.run(300);
     assert_eq!(
         keys(&s),
         1,
         "the radio was never keyed for the second beacon"
+    );
+    assert_eq!(
+        s.backend.played.lock().unwrap().len(),
+        1,
+        "the refused frame was played into the receiving radio"
     );
     let notice = s
         .engine
@@ -1226,9 +1231,9 @@ fn a_refused_aprs_key_is_reported_not_silent() {
         "{notice:?}"
     );
 
-    // The refused over still ends with the loop's unkey, which here lands while the client waits
-    // for the first one's proof, so the radio starts its three-second release again. Wait for the
-    // client itself to read the radio idle.
+    // The refused key still meets the loop's unkey (its idle self-heal, on the same tick), which
+    // here lands while the client waits for the first one's proof, so the radio starts its
+    // three-second release again. Wait for the client itself to read the radio idle.
     run_until(&mut s, "the client never read the radio idle", |s| {
         idle(s) && client_ready(s)
     });
