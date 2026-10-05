@@ -585,6 +585,30 @@ fn read_should_retry(kind: std::io::ErrorKind) -> bool {
     )
 }
 
+/// What a command's `TimedOut` error carries when its deadline passed before a whole reply came
+/// back, in the error's own words. The line went out, so the radio may be acting on it right now
+/// and answer late: no answer in time, which is not a refusal ([`no_answer_in_time`]).
+#[derive(Debug)]
+struct NoAnswerInTime(String);
+
+impl std::fmt::Display for NoAnswerInTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NoAnswerInTime {}
+
+/// Whether `e` is a command's deadline passing with its line sent and no whole reply back
+/// ([`NoAnswerInTime`]), rather than an answer that said no or any other failure. For a key it is
+/// the difference between a radio that may be keying and one that is not: a slow radio behind
+/// rigctld (a Xiegu, a vintage Kenwood, any rig at 19200 baud or less) keys, and answers after
+/// [`PTT_DEADLINE_MS`].
+pub(crate) fn no_answer_in_time(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .is_some_and(|inner| inner.is::<NoAnswerInTime>())
+}
+
 impl Rig {
     /// General constructor: an optional CAT control channel + a PTT method. This is
     /// the seam that decouples control from keying — pass `Some(addr)` for a CAT rig
@@ -890,10 +914,10 @@ impl Rig {
             if std::time::Instant::now() >= deadline {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    format!(
+                    NoAnswerInTime(format!(
                         "rig reply incomplete after {deadline_ms} ms (got {:?})",
                         String::from_utf8_lossy(&out)
-                    ),
+                    )),
                 ));
             }
         };
@@ -1054,7 +1078,8 @@ impl Rig {
                         ptt_line(on)
                     };
                     // PTT is time-critical: a fixed 700 ms deadline (not the slow-transport
-                    // 2.5 s read window) so the un-key can't hang the radio loop.
+                    // 2.5 s read window) so the un-key can't hang the radio loop. Missing it is
+                    // not a refusal ([`no_answer_in_time`]): a slow radio keys and answers late.
                     match self.command_with_deadline(&line, Some(PTT_DEADLINE_MS)) {
                         Ok(reply) if reply_ok(&reply) || reply.is_empty() => Ok(()),
                         Ok(reply) => Err(std::io::Error::other(format!(
@@ -3075,6 +3100,38 @@ mod tests {
         // stopped holding at Hamlib 4.6.5 (the dummy now accepts PTT), so the assertion moved
         // here, where it needs no daemon and cannot rot with a Hamlib release.
         assert!(rig.keyed, "a FAILED key-down must still leave keyed=true");
+    }
+
+    #[test]
+    fn a_key_with_no_answer_in_time_is_told_apart_from_a_refusal() {
+        // ⭐ A KEY CAN FAIL TWO WAYS, AND THE RADIO LOOP MUST TELL THEM APART. A slow radio
+        // behind rigctld keys and answers after the PTT deadline; a refusal is an answer that
+        // says no. The loop plays the first over, as it always has, and drops the second
+        // (`service::KeyUp`), so the error must say which it was.
+        let (addr, _log) = mock_rigctld(|_l| {
+            std::thread::sleep(std::time::Duration::from_millis(1_500));
+            "RPRT 0\n".to_string()
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let late = rig.ptt(true).expect_err("premise: the deadline passed");
+        assert!(super::no_answer_in_time(&late), "{late}");
+        // In the deadline's own words, as before.
+        assert!(
+            late.to_string()
+                .starts_with("rig reply incomplete after 700 ms"),
+            "{late}"
+        );
+        assert!(rig.keyed, "a key with no answer may have keyed the rig");
+
+        let (addr, _log) = mock_rigctld(|_l| "RPRT -1\n".to_string());
+        let refused = Rig::rigctld(&addr).ptt(true).expect_err("premise: refused");
+        assert!(!super::no_answer_in_time(&refused), "{refused}");
+
+        // Nothing listening: the key never went out.
+        let unsent = Rig::rigctld("127.0.0.1:1")
+            .ptt(true)
+            .expect_err("premise: no rigctld");
+        assert!(!super::no_answer_in_time(&unsent), "{unsent}");
     }
 
     #[test]

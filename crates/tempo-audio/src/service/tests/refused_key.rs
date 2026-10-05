@@ -9,6 +9,10 @@
 //! The rig is a rigctld that refuses the key (`T 1`, and `T 3`, the DATA key) with `RPRT -1`; the
 //! loop is the real `RadioLoop::step`. Each test has its control in the same scene: the same over
 //! on a rigctld that accepts the key plays, as it always did.
+//!
+//! A late answer is not a refusal. A slow radio reached through rigctld (a Xiegu, a vintage
+//! Kenwood, any rig at 19200 baud or less) can key and answer after the loop's PTT deadline; its
+//! over went out then, with the warning, and still does (`a_late_answer_*`).
 
 use super::*;
 
@@ -22,7 +26,14 @@ enum Key {
     /// `RPRT -1` while a key of its own is still held (a key not yet followed by `T 0`), as Nexus's
     /// Flex client refuses a second key while one of ours is held (`AlreadyKeyed`).
     RefusesASecond,
+    /// `RPRT 0`, after [`LATE`]: a slow radio that keyed, answering past the PTT deadline.
+    AnswersLate,
 }
+
+/// How long [`Key::AnswersLate`] takes to answer the key. The PTT deadline is 700 ms, but the
+/// rig reads in 500 ms windows and looks at the deadline only between them, so an answer inside
+/// the first second is still taken; this one comes well after that.
+const LATE: Duration = Duration::from_millis(1_500);
 
 /// A rigctld answering the key as `key`, `f` with a 20 m dial and everything else `RPRT 0`,
 /// logging every line it was sent.
@@ -51,8 +62,11 @@ fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
                 log2.lock().unwrap().push(l.clone());
                 let refused = match l.as_str() {
                     "T 1" | "T 3" => {
+                        if key == Key::AnswersLate {
+                            std::thread::sleep(LATE);
+                        }
                         let refused = match key {
-                            Key::Accepts => false,
+                            Key::Accepts | Key::AnswersLate => false,
                             Key::Refuses => true,
                             Key::RefusesASecond => held,
                         };
@@ -439,4 +453,113 @@ fn a_refused_remote_microphone_over_plays_nothing_and_ends() {
             assert_eq!(banner, None);
         }
     }
+}
+
+/// ⭐ A LATE ANSWER TO THE TUNE'S KEY IS NOT A REFUSAL. A slow radio keyed and answered after the
+/// PTT deadline, and the tune put its carrier into it, as it always did. Only a radio that answers
+/// no drops the tune; this one keeps it, and the line says the key was not confirmed.
+#[test]
+fn a_late_answer_to_the_tune_key_still_plays_the_carrier() {
+    let mut s = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.set_tune(true);
+    });
+    s.run_to(300.0);
+    assert!(s.keys() >= 1, "premise: the tune tried the key");
+    // The words of a key that did not come back accepted: the premise that this one was late.
+    assert_eq!(s.banner().as_deref(), Some(REFUSED));
+    assert!(!s.backend.played.is_empty(), "the carrier was dropped");
+    assert!(s.engine.lock().unwrap().tuning(), "the tune ended");
+}
+
+/// ⭐ A VOICE MESSAGE WHOSE KEY IS ANSWERED LATE IS PLAYED, WHOLE, WITH THE WARNING.
+#[test]
+fn a_late_answer_to_the_voice_keyers_key_still_plays_the_message() {
+    let mut s = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    });
+    s.run_to(2_000.0);
+    assert!(s.keys() >= 1, "premise: the keyer tried the key");
+    assert_eq!(s.banner().as_deref(), Some(REFUSED));
+    assert_eq!(s.backend.played.len(), 12_000, "the message was not played");
+}
+
+/// ⭐ AN SSTV PICTURE WHOSE KEY IS ANSWERED LATE IS SENT.
+#[test]
+fn a_late_answer_to_the_sstv_key_still_sends_the_picture() {
+    let mut s = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.sstv_send(vec![0.05; 12_000], "Scottie 1".to_string())
+            .unwrap();
+    });
+    s.run_to(2_000.0);
+    assert!(s.keys() >= 1, "premise: the picture tried the key");
+    assert_eq!(s.banner().as_deref(), Some(REFUSED));
+    assert!(!s.backend.played.is_empty(), "the picture was not sent");
+}
+
+/// ⭐ AN RTTY OVER WHOSE KEY IS ANSWERED LATE IS PLAYED AND ECHOED AS SENT, with the keyer's
+/// warning.
+#[test]
+fn a_late_answer_to_the_rtty_key_still_plays_and_echoes_the_over() {
+    let mut s = Scene::new(Key::AnswersLate, |e| {
+        e.set_operating_mode("rtty", false);
+        e.rtty_send_text("CQ TEST").unwrap();
+    });
+    s.run_to(3_000.0);
+    assert!(s.keys() >= 1, "premise: the over tried the key");
+    let st = s.engine.lock().unwrap().rtty_state();
+    assert!(
+        st.keyer_error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("AFSK keyer: the rig didn't accept PTT")),
+        "{:?}",
+        st.keyer_error
+    );
+    assert!(!s.backend.played.is_empty(), "the over was not played");
+    assert_eq!(rtty_sent(&s.engine), "CQ TEST", "the over was not echoed");
+}
+
+/// ⭐ A SOUNDCARD CW SEND WHOSE KEYS ARE ANSWERED LATE PLAYS WHOLE. A refused word drops the rest of
+/// the send; a late one must not, or every macro on a slow radio would stop at its first word.
+#[test]
+fn a_late_answer_to_the_cw_keyers_key_still_plays_the_whole_send() {
+    let send = |e: &mut Engine| {
+        cw(e);
+        e.send_cw("CQ TEST");
+    };
+    let mut whole = Scene::new(Key::Accepts, send);
+    whole.run_to(6_000.0);
+    let mut s = Scene::new(Key::AnswersLate, send);
+    s.run_to(6_000.0);
+    assert!(s.keys() >= 1, "premise: the keyer tried the key");
+    let error = s.engine.lock().unwrap().cw_keyer_error();
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Soundcard keyer: the rig didn't accept PTT")),
+        "{error:?}"
+    );
+    assert!(!whole.backend.played.is_empty(), "control: nothing played");
+    assert_eq!(
+        s.backend.played.len(),
+        whole.backend.played.len(),
+        "the send was cut"
+    );
+}
+
+/// ⭐ AN APRS FRAME WHOSE KEY IS ANSWERED LATE IS PLAYED, and the APRS line does not say it was not
+/// sent.
+#[test]
+fn a_late_answer_to_the_aprs_key_still_plays_the_frame() {
+    let mut s = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.aprs_beacon(41.88, -87.63, '/', '>', "", &[])
+            .expect("the beacon is queued");
+    });
+    s.run_to(3_000.0);
+    assert_eq!(s.keys(), 1, "premise: the beacon tried the key, once");
+    assert!(!s.backend.played.is_empty(), "the frame was not played");
+    assert_eq!(s.engine.lock().unwrap().aprs_tx_notice(), None);
 }
