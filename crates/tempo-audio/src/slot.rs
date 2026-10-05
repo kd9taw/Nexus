@@ -1289,17 +1289,18 @@ mod tests {
     // timeouts included, is a rig failure that presses Halt Tx (:12556-12564). It sets no deadline
     // of its own on the key: a slow rig keys late and its audio follows.
 
-    /// A rigctld that answers the key (`T 1`) with `key` after `delay_ms`, and everything else
-    /// with `RPRT 0` at once. Logs each line as it arrives, and the instant the key's answer was
-    /// written.
-    fn keying_rigctld(
-        key: &str,
-        delay_ms: u64,
-    ) -> (
+    /// What [`keying_rigctld`] hands back: its address, every line it was sent, and the instant it
+    /// answered the key.
+    type KeyingRigctld = (
         String,
         std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
-    ) {
+    );
+
+    /// A rigctld that answers the key (`T 1`) with `key` after `delay_ms`, and everything else
+    /// with `RPRT 0` at once. Logs each line as it arrives, and the instant the key's answer was
+    /// written.
+    fn keying_rigctld(key: &str, delay_ms: u64) -> KeyingRigctld {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
