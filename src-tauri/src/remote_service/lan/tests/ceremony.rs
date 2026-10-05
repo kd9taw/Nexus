@@ -760,6 +760,104 @@ fn a_list_that_is_not_this_keys_admits_nobody() {
     assert_eq!(book.open(Instant::now(), 0), Err("noKey"));
 }
 
+/// ★ The two LAN entries read past a field a newer Nexus may have added: a key record with one more
+/// field keeps its key and its computer, and a list with one more field, on the list and on its
+/// computer, admits that computer, and nothing is written. CONTROL: the same records as this build
+/// writes them read the same.
+#[test]
+fn the_lan_entries_read_past_a_field_a_newer_nexus_added() {
+    let computer = Computer::new();
+    let key = fixture_key();
+    let public = tls::Identity::new(&key, STATION.into())
+        .unwrap()
+        .public_key()
+        .to_string();
+    let store = LanStore::holding(&key, STATION, &[(&computer.pin, "Laptop")]);
+    let book = book_on(&store);
+    assert_eq!(book.identity().unwrap().0.public_key(), public, "control");
+    assert_eq!(book.paired(&computer.pin), Some(computer.device.clone()));
+    let grow = |slot: &Mutex<Option<String>>, grown: &dyn Fn(&mut Value)| {
+        let mut value: Value =
+            serde_json::from_str(slot.lock().unwrap().as_deref().unwrap()).unwrap();
+        grown(&mut value);
+        *slot.lock().unwrap() = Some(value.to_string());
+    };
+    grow(&store.key, &|key| {
+        key["createdAt"] = json!(1_759_536_000_000_u64)
+    });
+    grow(&store.devices, &|list| {
+        list["revision"] = json!(2);
+        list["devices"][0]["l"] = json!("2026-10-04");
+    });
+    let book = book_on(&store);
+    assert_eq!(
+        book.identity().unwrap().0.public_key(),
+        public,
+        "a key record with one more field was taken for none"
+    );
+    assert_eq!(
+        book.paired(&computer.pin),
+        Some(computer.device.clone()),
+        "a list with one more field admitted nobody"
+    );
+    assert_eq!(store.writes.load(Ordering::SeqCst), 0, "written over");
+}
+
+/// ★ A LAN entry that does not read is never taken for none, and nothing is made or written over
+/// it. A key record that is not JSON, not this shape, or not a key leaves the station with no key,
+/// so the listener says `noKey`, and the paired list stays as it was. A list that does not read,
+/// or is out of shape, admits nobody, opens no window, keeps no pairing and is not written over.
+/// Resetting the network identity at the shack is what replaces them. CONTROL: a store that holds
+/// no key at all still gets one.
+#[test]
+fn a_lan_entry_that_does_not_read_is_kept_as_it_is() {
+    let computer = Computer::new();
+    let key = fixture_key();
+    let not_a_key = json!({"stationId": STATION, "pkcs8": "00"}).to_string();
+    for unread in ["not json", r#"{"station":"x"}"#, not_a_key.as_str()] {
+        let store = LanStore::holding(&key, STATION, &[(&computer.pin, "Laptop")]);
+        let list = store.devices.lock().unwrap().clone();
+        *store.key.lock().unwrap() = Some(unread.into());
+        let book = book_on(&store);
+        assert!(book.identity().is_none(), "a key was made over {unread}");
+        assert_eq!(store.key.lock().unwrap().as_deref(), Some(unread));
+        assert_eq!(
+            *store.devices.lock().unwrap(),
+            list,
+            "the list went: {unread}"
+        );
+        assert_eq!(store.writes.load(Ordering::SeqCst), 0, "{unread}");
+        assert_eq!(book.open(Instant::now(), 0), Err("noKey"));
+    }
+    let pin = hex(&computer.pin);
+    let twice = json!({"stationId": STATION, "devices": [{"p": pin, "n": "Laptop"},
+        {"p": pin, "n": "Laptop"}]})
+    .to_string();
+    for unread in ["not json", twice.as_str()] {
+        let store = LanStore::holding(&key, STATION, &[(&computer.pin, "Laptop")]);
+        *store.devices.lock().unwrap() = Some(unread.into());
+        let book = book_on(&store);
+        assert!(book.identity().is_some(), "the key reads: {unread}");
+        assert_eq!(book.paired(&computer.pin), None);
+        assert_eq!(
+            book.open(Instant::now(), 0),
+            Err("credentialStoreUnavailable"),
+            "{unread}"
+        );
+        assert_eq!(
+            book.add(Computer::new().pin, "Den PC", STATION),
+            Err("unavailable"),
+            "{unread}"
+        );
+        assert_eq!(store.devices.lock().unwrap().as_deref(), Some(unread));
+        assert_eq!(store.writes.load(Ordering::SeqCst), 0, "{unread}");
+    }
+    assert!(
+        book_on(&LanStore::default()).identity().is_some(),
+        "the control: no key made for a store that holds none"
+    );
+}
+
 // ----- Removing a computer, and resetting the key -----
 
 /// ★ Removing a computer at the shack ends it at once: its session closes, its over halts, its

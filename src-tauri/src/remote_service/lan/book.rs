@@ -9,8 +9,10 @@
 //! key: the two are paired and revoked separately. Its private half is never logged, shown or
 //! sent. The book hands out [`tls::Identity`] (no `Debug`, `Clone` or `Serialize`) and the public
 //! half's fingerprint, nothing else. A store that will not answer makes no key, because one may be
-//! in it: the listener then says `noKey`. An unreadable one is no key, and a new one is made, which
-//! every paired computer refuses until it is paired again.
+//! in it: the listener then says `noKey`. A key record that does not read, as JSON or as a key, is
+//! treated the same, and so is a paired list that does not read or is out of shape (it admits
+//! nobody and is not written over): either may be a newer Nexus's, and making a key over one would
+//! delete the paired list too. Resetting the network identity at the shack is what replaces them.
 //!
 //! ## The paired computers
 //!
@@ -106,9 +108,10 @@ enum Key {
     /// Not read yet.
     #[default]
     Unread,
-    /// The store would not answer. No key is made, because one may be in it.
+    /// The store would not answer, or holds one that does not read. No key is made, because one
+    /// may be in it.
     Locked,
-    /// The store holds none (or none that reads): one is made when the listener first starts.
+    /// The store holds none: one is made when the listener first starts.
     Absent,
     /// The key, and the fingerprint of its public half (SHA-256 of its SPKI, lowercase hex).
     Kept { key: LanKey, fingerprint: String },
@@ -237,7 +240,8 @@ impl Book {
     /// the store can block. Once both have been read it reads nothing again, so nothing read here
     /// can undo a later change; until then (a store that would not answer) each call tries again,
     /// and nothing could have changed meanwhile, since nothing is added or removed until the
-    /// computers have been read. A list for another key, or one out of shape, admits nobody.
+    /// computers have been read. A list for another key admits nobody; one that does not read, or is
+    /// out of shape, admits nobody and is never written over, as a store that would not answer.
     pub fn load(&self) {
         let _writing = self.writing.lock();
         if self
@@ -248,7 +252,7 @@ impl Book {
             return;
         }
         let key = match self.vault.lan_key() {
-            Ok(Some(key)) => kept(key).unwrap_or(Key::Absent),
+            Ok(Some(key)) => kept(key).unwrap_or(Key::Locked),
             Ok(None) => Key::Absent,
             Err(_) => Key::Locked,
         };
@@ -257,11 +261,7 @@ impl Book {
                 Ok(Some(list)) if list.station_id == key.station_id => {
                     let devices: Option<Vec<Device>> =
                         list.devices.iter().map(Device::from_record).collect();
-                    Some(
-                        devices
-                            .filter(|d| d.len() <= MAX_PAIRED && unique(d))
-                            .unwrap_or_default(),
-                    )
+                    devices.filter(|d| d.len() <= MAX_PAIRED && unique(d))
                 }
                 Ok(_) => Some(Vec::new()),
                 Err(_) => None,

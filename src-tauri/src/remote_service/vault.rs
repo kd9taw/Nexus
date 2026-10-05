@@ -34,7 +34,11 @@
 //! The sixth lists the computers paired with that key: for each, only the SHA-256 of its key and
 //! the name it gave, which is no secret. It is bound to the LAN station id, so a list left behind by
 //! another key admits nobody, and eight records fit the smallest credential blob (Windows, 2560
-//! bytes of UTF-16) in one entry.
+//! bytes of UTF-16) in one entry. Unlike the records above, these two read past a field they do not
+//! know, so a newer Nexus may add one and this build still reads them (a list it writes again
+//! keeps only the fields it knows). One that does not read at all is never taken for none
+//! ([`lan_entry`]): no key is made over it and the list is never written over or deleted on its
+//! own; the station has no key, or admits nobody, until the operator resets its network identity.
 //!
 //! The rest belong to the other end of Remote over this network, the computer an operator works
 //! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
@@ -128,17 +132,19 @@ pub struct StationKey {
 }
 
 /// The shack's LAN key (Remote over this network): its PKCS#8 document, lowercase hex, and the LAN
-/// station id that goes with it. No `Debug` and no `Clone`, as [`StationKey`].
+/// station id that goes with it. No `Debug` and no `Clone`, as [`StationKey`]. Read past a field it
+/// does not know (see the header).
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LanKey {
     pub station_id: String,
     pub pkcs8: String,
 }
 
-/// The computers paired over this network with the LAN key whose station id this is.
+/// The computers paired over this network with the LAN key whose station id this is. Read past a
+/// field it does not know, as each [`LanDevice`] is (see the header).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LanDevices {
     pub station_id: String,
     pub devices: Vec<LanDevice>,
@@ -148,7 +154,6 @@ pub struct LanDevices {
 /// it, and the name it gave. Its device id is worked out from the pin, so the record does not
 /// carry one. One-letter keys, so eight records fit one entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LanDevice {
     #[serde(rename = "p")]
     pub pin: String,
@@ -338,12 +343,22 @@ impl Vault for SystemVault {
         }
     }
 }
+/// One of Remote over this network's two entries, as the store gave it: read past any field it does
+/// not know, and `Err` for one that does not read at all, as for a store that would not answer, so
+/// it is never taken for no entry and nothing is made or written over it (see the header).
+pub(crate) fn lan_entry<T: serde::de::DeserializeOwned>(
+    value: &str,
+) -> Result<Option<T>, &'static str> {
+    serde_json::from_str(value)
+        .map(Some)
+        .map_err(|_| "unreadable")
+}
+
 impl LanVault for SystemVault {
     fn lan_key(&self) -> Result<Option<LanKey>, &'static str> {
         match entry(LAN_KEY)?.get_password() {
-            // Unreadable is no key, as the station key's is: a new one is made, which every paired
-            // computer refuses until it is paired again.
-            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            // One that does not read is not none: no key is made over it.
+            Ok(value) => lan_entry(&value),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err("credentialStoreUnavailable"),
         }
@@ -356,8 +371,8 @@ impl LanVault for SystemVault {
     }
     fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str> {
         match entry(LAN_DEVICES)?.get_password() {
-            // An unreadable list admits nobody: every computer is paired again.
-            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            // One that does not read admits nobody, and is not written over.
+            Ok(value) => lan_entry(&value),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err("credentialStoreUnavailable"),
         }

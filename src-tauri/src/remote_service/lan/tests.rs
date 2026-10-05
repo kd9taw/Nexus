@@ -131,11 +131,10 @@ impl LanStore {
         if self.locked.load(Ordering::SeqCst) {
             return Err("credentialStoreUnavailable");
         }
-        Ok(slot
-            .lock()
-            .unwrap()
-            .as_deref()
-            .and_then(|v| serde_json::from_str(v).ok()))
+        match slot.lock().unwrap().as_deref() {
+            Some(value) => super::super::vault::lan_entry(value),
+            None => Ok(None),
+        }
     }
 }
 
