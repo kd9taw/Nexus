@@ -1437,6 +1437,34 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const leaked=await atShack(`[...__shack.received.control.slice(${controlBefore}).filter(m=>m.type==='pointer'&&(m.action!=='move'||m.buttons!==0)),...__shack.received.ptt.slice(${pttBefore}).filter(m=>m.type==='held'&&m.buttons!==0)]`)
         assert.deepEqual(leaked,[],'the prompt\'s own press reached nothing at the shack')
         assert.equal(await evaluate(`document.querySelector('.remote-stream-app')?.dataset.streamPhase`),'live','answered: the stream carries on')
+        // The same press held until the prompt has gone. The press is the answer, so the page's next look (once a
+        // second) takes the prompt down while the button is still held, its pointer capture goes with it, and Chrome
+        // hands the rest of the press to the picture under it. The picture never sends a press it did not take. Held
+        // for 100 ms as above, the press outlived that look now and then, and its move reached the shack marked pressed.
+        await evaluate(`window.__idleSkew+=15*60000+1000;true`)
+        await until(`!!document.querySelector('.remote-stream-idle')`,5000)
+        {
+          const keep=await center('.remote-stream-idle button'),below={x:keep.x,y:keep.y+140}
+          const [controlBefore,pttBefore]=await atShack('[__shack.received.control.length,__shack.received.ptt.length]')
+          await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...keep,button:'left',buttons:1,clickCount:1},session)
+          await until(`!document.querySelector('.remote-stream-idle')`,3000)
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',...below,button:'left',buttons:1},session)
+          await sleep(100)
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...below,button:'left',buttons:0,clickCount:1},session)
+          await sleep(400)
+          const leaked=await atShack(`[...__shack.received.control.slice(${controlBefore}).filter(m=>m.type==='pointer'&&(m.action!=='move'||m.buttons!==0)),...__shack.received.ptt.slice(${pttBefore}).filter(m=>m.type==='held'&&m.buttons!==0)]`)
+          assert.deepEqual(leaked,[],'a press on the prompt, held while the prompt went, reached nothing at the shack')
+          // CONTROL: a drag that began on the picture reaches the shack as a press, pressed moves and a release.
+          const from=await center('.remote-stream-video'),to={x:from.x+30,y:from.y+20},since=await atShack('__shack.received.control.length')
+          await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...from,button:'left',buttons:1,clickCount:1},session)
+          await sleep(100)
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',...to,button:'left',buttons:1},session)
+          await sleep(100)
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...to,button:'left',buttons:0,clickCount:1},session)
+          await untilShack(`__shack.received.control.slice(${since}).some(m=>m.type==='pointer'&&m.action==='up')`)
+          const dragged=await atShack(`__shack.received.control.slice(${since}).filter(m=>m.type==='pointer'&&(m.action!=='move'||m.buttons!==0)).map(m=>m.action+' '+m.buttons)`)
+          assert.ok(dragged[0]==='down 1'&&dragged.at(-1)==='up 0'&&dragged.length>2&&dragged.slice(1,-1).every(m=>m==='move 1'),'control: a drag that began on the picture is sent: '+JSON.stringify(dragged))
+        }
         // Unanswered: fifteen minutes on the prompt is back, and a minute after that the stream ends -
         // the close on the signalling lane and control released, which is what End the stream sends.
         const releases=()=>operationWire.filter(v=>v.direction==='out'&&v.type==='release').length

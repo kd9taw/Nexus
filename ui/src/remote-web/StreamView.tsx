@@ -294,9 +294,10 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
         </>}
       </div>}
       {/* "Still there?", over the picture and never over the header, so Stop TX stays where it is,
-          uncovered. A press anywhere on it stays its own until it is let go (the capture), so no part
-          of it lands on the picture and reaches Nexus. The button needs no handler: every click and
-          key on this page is the operator's answer (useStillThere). */}
+          uncovered. A press anywhere on it stays its own while the prompt is up (the capture). The
+          prompt can go before that press is let go (useStillThere's next look), and the rest of the
+          press then lands on the picture, which never sends a press it did not take (useInput). The
+          button needs no handler: every click and key on this page is the operator's answer (useStillThere). */}
       {running && asking && <div className="remote-stream-idle"
         onPointerDown={event => { try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* it is still pressed here */ } }}>
         <p role="alert">{t('remote.stream.idle.prompt')}</p>
@@ -393,10 +394,11 @@ const coarsePointer = () => window.matchMedia?.('(pointer: coarse)').matches ?? 
 
 /** "Still there?" (the operator's pick, "15 min + prompt"): true while it is asked. Any click, key or
  *  turn of the wheel on this page is the operator's, wherever it lands, and the link counts a held PTT; watching,
- *  listening and the station transmitting are not. A press keeps the prompt up until it is let go.
- *  Unanswered for a minute, `idle` runs. Each look reads the link's clock, every second and whenever
- *  the tab is shown or hidden, so a tab whose timers are throttled still ends on its first look past
- *  the minute, however few looks it had. */
+ *  listening and the station transmitting are not. A press counts as it lands, and the prompt goes when it is let
+ *  go or at the next look, whichever comes first: a press held past that look ends on the picture, which never sends
+ *  a press it did not take (useInput). Unanswered for a minute, `idle` runs. Each look reads the link's clock, every
+ *  second and whenever the tab is shown or hidden, so a tab whose timers are throttled still ends on its first look
+ *  past the minute, however few looks it had. */
 function useStillThere(running: boolean, link: StreamLink, idle: () => void): boolean {
   const [asking, setAsking] = useState(false)
   const ending = useRef(idle)
@@ -671,7 +673,9 @@ function stageOf(element: HTMLVideoElement | null): Stage | null {
 }
 
 /** The input bridge's page half (S11, A2). Listeners go on the PICTURE and nowhere else: a pointer
- *  on the header, a key typed while any other control has focus, never reaches the station. What
+ *  on the header, a key typed while any other control has focus, never reaches the station. A press
+ *  is the picture's only if it went down on the frame: one that began anywhere else is never sent,
+ *  wherever it moves and is let go, whatever came and went over the picture while it was held. What
  *  was pressed through the picture is released through it when it loses focus or stops being live,
  *  so nothing is left held at the shack by a key-up this page never saw.
  *
@@ -770,10 +774,14 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: StreamC
       try { element.setPointerCapture(event.pointerId) } catch { /* moves still arrive while over the picture */ }
       send(message)
     }
-    // A drag may run past the picture's edge, and is pinned to it; a plain hover outside is not sent.
+    // A drag may run past the picture's edge, and is pinned to it; a plain hover outside is not sent. A button held
+    // that the picture did not press is not the picture's: a press that began on the page's own controls, on the bars
+    // beside the frame, or on "Still there?" or More's cover (both can go while it is held, and the browser then hands
+    // the rest of the press to the picture under them) is never sent, however long it is held. Its release is not sent
+    // either (`up`), and the pointer's next move with nothing held is a hover again.
     const move = (event: PointerEvent) => {
       if (event.pointerType === 'touch') touchMove(event)
-      else send(pointerMessage('move', box(), event, held.dragging))
+      else if (held.dragging || !event.buttons) send(pointerMessage('move', box(), event, held.dragging))
     }
     const up = (event: PointerEvent) => {
       if (event.pointerType === 'touch') touchEnd(event, 'up')
