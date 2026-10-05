@@ -1833,6 +1833,12 @@ button.nb-chip:hover {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* …and while Globe stands in for a stored 3D pick, the bar says so beside the picker (ConnectView). */
+.connect-map-note {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
+}
 /* The lazy 3-D chunk's placeholder fills what is left under the bar, not the whole cell. */
 .connect-map > .globe3d-loading {
   flex: 1;

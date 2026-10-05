@@ -14,7 +14,7 @@
 // unless it says so.
 //
 // Drives the REAL ConnectView + REAL MapView. Globe3D is stubbed only so a test can see which map
-// mounted (jsdom has no WebGL), and the GPU probe answers "capable".
+// mounted (jsdom has no WebGL), and the GPU probe is stubbed so both of its answers can be driven.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, render, fireEvent, screen, act, within } from '@testing-library/react'
 
@@ -35,8 +35,10 @@ vi.mock('../api', async (importOriginal) => ({
   getOtaMapSpots: vi.fn(async () => []),
 }))
 vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> }))
-vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true }))
+const gpu = { ok: true }
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => gpu.ok }))
 import { ConnectView } from './ConnectView'
+import { DEFAULT_LAYERS } from './MapView'
 import { pastTheSwitch } from './ConnectView.testkit'
 
 class RO {
@@ -84,6 +86,7 @@ const shownMap = () =>
 describe('a pop-out keeps what it shows across its own reload', () => {
   beforeEach(() => {
     localStorage.clear()
+    gpu.ok = true
     pastTheSwitch('main', 'connect')
   })
   afterEach(() => cleanup())
@@ -184,5 +187,69 @@ describe('a pop-out keeps what it shows across its own reload', () => {
       Object.keys(localStorage).filter((k) => k === 'nexus.connect.intent' || k === 'nexus.sats.favOnly'),
       'the main window wrote a value it only read',
     ).toEqual([])
+  })
+})
+
+// WHEN THE 3-D GLOBE CANNOT DRAW AT A RELOAD (the operator, 2026-10-04: "once I got rid of the
+// satellites, I noticed that the state outline had appeared as well" … "here's the 3d with no
+// satellites. but when I switch to flat, I get the satellites again"). Nothing switches the map in a
+// running window: whether the 3-D globe can draw is asked once, when Conditions opens. A reload or a
+// reopen that finds the graphics unable to (a GPU fallen back to software, a remote desktop) shows the
+// 2-D Globe for a stored 3D pick, and said so only in the 3D button's tooltip. The 2-D layers it then
+// showed were ones nobody chose in that window: the main window's, taken over with the 3D pick, and
+// with them the satellites a Frame tap on the main window's 3-D globe had ticked into its 2-D record.
+describe('a pop-out on the 3-D globe that opens on the 2-D map', () => {
+  const STATES = 'US states'
+  const states = () => (screen.getByLabelText(STATES) as HTMLInputElement).checked
+  const note = () => document.querySelector('.connect-map-note')
+
+  beforeEach(() => {
+    localStorage.clear()
+    gpu.ok = true
+    pastTheSwitch('main', 'connect')
+    // The main window: Chase DX on the 3-D globe, and in its 2-D record what a Frame tap there left
+    // before Frame ticked only the map on screen: the satellites on, beside the 2-D defaults.
+    localStorage.setItem(
+      'nexus.connect.intents',
+      JSON.stringify({ dx: { map: '3d', layers: { ...DEFAULT_LAYERS, sats: { visible: true, opacity: 0.9 } } } }),
+    )
+  })
+  afterEach(() => cleanup())
+
+  it('shows the layers chosen on this window’s globe, not satellites and state outlines nobody chose here', async () => {
+    await open('popout')
+    expect(await screen.findByTestId('globe3d-stub'), 'CONTROL: the pop-out opened on 3D').toBeTruthy()
+    // What the operator chose on this window's 3-D globe (Globe3D keeps its picks per window).
+    localStorage.setItem(
+      'nexus.connect.globe3d.layers.connect',
+      JSON.stringify({ spots: true, arcs: true, states: false, sats: false, heat: true, rings: true }),
+    )
+    cleanup()
+    // A reload that finds the graphics unable to run the 3-D globe.
+    gpu.ok = false
+    await open('popout')
+    expect(screen.queryByTestId('globe3d-stub'), 'CONTROL: the 2-D map stands in').toBeNull()
+    expect(sats(), 'satellites nobody chose in this window').toBe(false)
+    expect(states(), 'state outlines this window’s operator turned off').toBe(false)
+  })
+
+  it('says why the map changed, for as long as the 2-D map stands in for 3D', async () => {
+    await open('popout')
+    expect(await screen.findByTestId('globe3d-stub'), 'CONTROL').toBeTruthy()
+    expect(note(), 'CONTROL: nothing to say while 3D draws').toBeNull()
+    cleanup()
+    gpu.ok = false
+    await open('popout')
+    expect(note()?.textContent, 'the map changed with nothing said').toMatch(/3D/)
+    expect(shownMap(), 'CONTROL: the 2-D Globe stands in').toEqual(['Globe'])
+    // Picking a 2-D map is the operator's own choice: nothing stands in, so nothing to say.
+    choose('Flat')
+    expect(note()).toBeNull()
+  })
+
+  it('the main window says so too', async () => {
+    gpu.ok = false
+    await open('main')
+    expect(note()?.textContent).toMatch(/3D/)
   })
 })

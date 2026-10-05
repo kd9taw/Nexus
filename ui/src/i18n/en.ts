@@ -2378,6 +2378,9 @@ export const EN = {
   // the 2-D map's and NOT the same list, so the two must not share keys.
   'globe.unsupported':
     "This machine's graphics can't run the 3-D globe. Pick Globe, Flat or Beam — they work everywhere.",
+  // Beside the map picker while Globe stands in for a stored 3D pick (ConnectView).
+  'connect.globe3d.standIn':
+    "The 3-D globe can't draw on this computer right now, so the map shows Globe. Your 3D pick is kept.",
   'globe.spin.stop.title': 'Stop the globe spinning',
   'globe.spin.start.title': 'Spin the globe',
   'globe.spin.pause': '⏸ Spin',

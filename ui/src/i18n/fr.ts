@@ -1771,6 +1771,7 @@ export const FR: PartialCatalog = {
   "globe.spin.play": "▶ Rotation",
   "globe.spin.start.title": "Faire tourner le globe",
   "globe.spin.stop.title": "Arrêter la rotation du globe",
+  "connect.globe3d.standIn": "Le globe 3-D ne peut pas s'afficher sur cette machine pour l'instant, la carte montre donc Globe. Votre choix 3D est conservé.",
   "globe.unsupported": "La carte graphique de cette machine ne peut pas afficher le globe 3-D. Choisissez Globe, Plate ou Azimutale — elles fonctionnent partout.",
   "hideCalls.chip.label": "Masquer ind.",
   "hideCalls.chip.title": "Masquer des indicatifs (ou des préfixes du style VP8*) dans ce panneau — filtre d'affichage seulement ; décodage, journal, alertes et réponse automatique ne changent pas",

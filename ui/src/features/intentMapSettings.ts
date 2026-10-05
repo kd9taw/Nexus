@@ -148,9 +148,12 @@ export function saveIntentSetup(intent: MapIntent, patch: IntentMapSetup, dedica
   surfaceSet(INTENTS_KEY, JSON.stringify(own))
 }
 
-/** Make the setup this surface shows for `intent` its own, if it is still reading the main window's
- *  (ConnectView, on a pop-out's first show). The 2-D map does this itself when it mounts; on the 3-D
- *  globe nothing did, so every reopen followed the main window's map for that intent. */
+/** Make the map pick this surface shows for `intent` its own, if it is still reading the main
+ *  window's (ConnectView, on a pop-out's first show). The 2-D map takes its setup over itself when it
+ *  mounts; on the 3-D globe nothing did, so every reopen followed the main window's map for that
+ *  intent. The pick ALONE: the 2-D layers stored beside it are the main window's and were never shown
+ *  here, and the day this window shows its 2-D map, those layers start from what was chosen on this
+ *  window's own globe (MapView), not from another window's record (2026-10-04). */
 export function keepIntentSetup(intent: MapIntent, map: MapChoice): void {
-  if (!surfaceHasOwn(INTENTS_KEY)) saveIntentSetup(intent, { map })
+  if (!surfaceHasOwn(INTENTS_KEY)) surfaceSet(INTENTS_KEY, JSON.stringify({ [intent]: { map } }))
 }

@@ -170,6 +170,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flipping it there no longer fills the pop-out with every satellite while the pop-out still says ★.
   And **Frame** ticks **Satellites** only on the map you are looking at: untick it there and it stays
   off when you switch between the 2-D map and the 3-D globe.
+- **Conditions says when 3D can't draw, and the 2-D map brings your layers with it.** Whether the
+  3-D globe can draw is checked when Conditions opens, so after the computer's graphics fell back to
+  software, or on a remote desktop, a reload or a reopen quietly showed the Globe map instead, with
+  2-D layers nobody had picked in that window, satellites and US state outlines among them. A note
+  beside the map picker now says Globe is standing in and that your 3D pick is kept, and the first
+  time a window shows the 2-D map, its layers start from the ones you picked on that window's 3-D
+  globe.
 - **The satellite layer shows the birds you can work.** With no ★ birds picked, **Satellites** on the
   map and the 3-D globe drew every satellite in the catalog, about 350, most of them small
   telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM

@@ -832,6 +832,15 @@ export function ConnectView({
                 onPick={chooseMap}
                 threeDUnavailable={!gpuOk}
               />
+              {/* A 3D PICK THIS MACHINE CANNOT DRAW RIGHT NOW is shown as Globe, and said so here for as
+                  long as Globe stands in (2026-10-04). Whether 3D can draw is asked once, when this view
+                  opens, so a reload or a reopen that finds the GPU fallen back to software (or a remote
+                  desktop) opened on a different map with only the 3D button's tooltip to say why. */}
+              {mapPick === '3d' && !gpuOk && (
+                <span className="connect-map-note" role="status">
+                  {t('connect.globe3d.standIn')}
+                </span>
+              )}
             </div>
             {map3d ? (
               <Suspense

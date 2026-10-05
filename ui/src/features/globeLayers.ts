@@ -3,7 +3,7 @@
 // with three.js and Connect writes this record too: a layout that turns a map layer on
 // (features/connectPresets `mapLayers`; Frame: the satellites) turns it on here, and must not pull
 // three.js in to do it.
-import { surfaceGet, surfaceSet } from './windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceSet } from './windowScope'
 
 /** The 3-D globe's toggleable layers. Persisted per-surface (#211) — the 2-D map already
  * remembered its layer picks (#199) but the globe reset to defaults on every mount, so a Connect
@@ -84,6 +84,38 @@ export function globeLayersFromStored(v: string | null): Partial<GlobeLayers> {
 /** What the globe shows on this surface: its defaults, with the operator's own picks over them. */
 export function loadGlobeLayers(showStates: boolean): GlobeLayers {
   return { ...defaultGlobeLayers(showStates), ...globeLayersFromStored(surfaceGet(GLOBE_LAYERS_KEY)) }
+}
+
+/** The layers both maps draw, under the same id and with the same meaning. (`grid` is not one: the
+ *  2-D map's is the 20°×10° Maidenhead grid, the globe's a graticule.) */
+export const SHARED_MAP_LAYERS = [
+  'states',
+  'sats',
+  'aurora',
+  'muf',
+  'pca',
+  'flare',
+  'heat',
+  'openings',
+  'rings',
+  'cqzones',
+  'coverage',
+  'dxped',
+  'sunMoon',
+] as const
+export type SharedMapLayer = (typeof SHARED_MAP_LAYERS)[number]
+
+/** What the operator chose on THIS window's 3-D globe for the layers both maps draw, and nothing for a
+ *  window whose globe was never shown. Its own record only: another window's globe is not this
+ *  window's choice. The 2-D map starts from these on a window where it has never been shown
+ *  (MapView), so a window that lives on the globe never meets a 2-D map whose layers nobody there
+ *  picked — the satellites and state outlines that "all of a sudden came alive" (2026-10-04). */
+export function ownGlobePicks(): Partial<Record<SharedMapLayer, boolean>> {
+  if (!surfaceHasOwn(GLOBE_LAYERS_KEY)) return {}
+  const stored = globeLayersFromStored(surfaceGet(GLOBE_LAYERS_KEY))
+  const out: Partial<Record<SharedMapLayer, boolean>> = {}
+  for (const k of SHARED_MAP_LAYERS) if (typeof stored[k] === 'boolean') out[k] = stored[k]
+  return out
 }
 
 /** Keep every pick, so the next launch opens the globe the operator left. */
