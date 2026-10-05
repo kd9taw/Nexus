@@ -1195,16 +1195,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           RTCDataChannel.prototype.send=function(data){if(this.label==='ptt')log.push({...JSON.parse(data),at:at()});return send.call(this,data)}
           for(const type of ['pointerdown','pointerup','focusout'])b.addEventListener(type,()=>log.push({type,at:at()}),true)
           for(const type of ['keydown','keyup'])addEventListener(type,e=>log.push({type,on:e.target===b?'PTT':e.target.tagName,at:at()}),true)
-          new MutationObserver(()=>log.push({type:b.disabled?'disabled':'enabled',at:at()})).observe(b,{attributeFilter:['disabled']})
+          new MutationObserver(()=>log.push({type:b.disabled||b.getAttribute('aria-disabled')==='true'?'greyed':'lit',aria:b.getAttribute('aria-disabled'),at:at()})).observe(b,{attributeFilter:['disabled','aria-disabled']})
           const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f&&!f.memoizedProps?.connection)f=f.return
           const ops=f.memoizedProps.connection.operations,reads=[];let {fresh,state}=ops.getSnapshot()
           ops.subscribe(()=>{const s=ops.getSnapshot();if(s.fresh!==fresh){fresh=s.fresh;log.push({type:fresh?'fresh':'stale',at:at()})}if(s.state!==state){state=s.state;if(s.fresh)for(const read of reads.splice(0))read(true)}})
           window.__afterRead=()=>new Promise((resolve,reject)=>{reads.push(resolve);setTimeout(()=>reject(new Error('the station state was not read again within 5 s')),5000)});return true})()`)
         // One press of the PTT, held `hold` ms, by the mouse or by `key` on the focused button; `meanwhile` runs from the press.
-        const heldPress=async(hold,meanwhile,key)=>{
+        // `focus` false presses the key on whatever already has the focus.
+        const heldPress=async(hold,meanwhile,key,focus=true)=>{
           const from=await evaluate('window.__ptt.length'),got=(await atShack('__shack.received.ptt')).length,point=await center('.remote-stream-ptt')
-          // Focused only once the read lands: a lapse greys out a PTT that is not held, and the browser blurs it.
-          await evaluate(`window.__afterRead().then(()=>{${key?"document.querySelector('.remote-stream-ptt').focus();":''}return true})`)
+          // Pressed only once the read lands: a lapse greys out a PTT that is not held, and a press then starts nothing.
+          await evaluate(`window.__afterRead().then(()=>{${key&&focus?"document.querySelector('.remote-stream-ptt').focus();":''}return true})`)
           await Promise.all([key?(async()=>{await browser.call('Input.dispatchKeyEvent',{type:'keyDown',text:key.key,...key},session);await sleep(hold);await browser.call('Input.dispatchKeyEvent',{type:'keyUp',...key},session);await sleep(50)})():press(point,hold),meanwhile?.()])
           // The page's own release, waited for no longer than it could take: a press the page never lets go is the red.
           const released=`window.__ptt.slice(${from}).some(m=>m.type==='pttRelease')`
@@ -1220,7 +1221,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.ok(pttReleases[0].at>=letGo&&pttReleases[0].at-letGo<50,'released when let go, not before and not after'+told)
           assert.equal(new Set([...holds,...pttReleases,...ptt].map(m=>m.holdId)).size,1,'one press, one hold id')
           assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
-          assert.ok(!sent.some(m=>m.type==='disabled'&&m.at>pressed&&m.at<letGo),'held, the PTT is never greyed out'+told)
+          assert.ok(!sent.some(m=>m.type==='greyed'&&m.at>pressed&&m.at<letGo),'held, the PTT is never greyed out'+told)
           return {holds,lapsed:sent.some(m=>m.type==='stale'&&m.at>pressed&&m.at<letGo),told}
         }
         const {holds}=await heldPress(450)
@@ -1237,6 +1238,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         heartbeatReplyDelayMs=0
         assert.ok(spaceThroughLapse.lapsed,'the state lapsed while Space held the PTT'+spaceThroughLapse.told)
         console.log('Stream PTT held by Space through a lapse of the state'+spaceThroughLapse.told)
+        // An idle PTT the operator tabbed to keeps its focus through a lapse (the operator's pick "Stay focusable while
+        // greyed", 2026-10-04): greyed out it is aria-disabled, never disabled, which a browser blurs, and Space then went
+        // to the page until the PTT was focused again. Once it is lit again, Space on it holds, nothing focusing it first.
+        const idleFrom=await evaluate('window.__ptt.length')
+        await evaluate(`window.__afterRead().then(()=>{document.querySelector('.remote-stream-ptt').focus();return true})`)
+        heartbeatReplyDelayMs=400
+        await until(`window.__ptt.slice(${idleFrom}).some(m=>m.type==='greyed')`,8000)
+        heartbeatReplyDelayMs=0
+        await evaluate('window.__afterRead()')
+        const idle=(await evaluate('window.__ptt')).slice(idleFrom),idleTold=` (${idle.map(m=>m.type+(m.aria===undefined?'':` aria-disabled=${m.aria}`)).join(', ')})`
+        assert.ok(!idle.some(m=>m.type==='focusout')&&await evaluate(`document.activeElement===document.querySelector('.remote-stream-ptt')`),'greyed out by a lapse, the idle PTT keeps its focus'+idleTold)
+        assert.ok(idle.some(m=>m.type==='greyed'&&m.aria==='true'),'greyed out, it is aria-disabled: unavailable to a screen reader'+idleTold)
+        const keptFocus=await heldPress(450,undefined,{key:' ',code:'Space',windowsVirtualKeyCode:32},false)
+        console.log('Stream PTT kept its focus through a lapse'+idleTold+', and Space on it held once lit'+keptFocus.told)
         await evaluate('window.__afterRead()')
         // THE DEAD-MAN, the page's half: a key held on the picture goes as itself and is re-asserted on
         // ptt at once and every 100 ms while held, and not after; a button held on the picture likewise. Judged on
