@@ -7294,6 +7294,14 @@ export const EN = {
     'Ask your own Cloudlog/Wavelog which station locations it has, and fill the number in. This sends your API key to your instance, and only when you press it.',
   'settings.confirmations.cloudlog.stations.none':
     'That instance reports no station locations — add one in Cloudlog/Wavelog first.',
+  // Shown under the station profile id when the location it names is not the operator. Wavelog
+  // files every QSO under the location's callsign and grid, and refuses one whose own
+  // STATION_CALLSIGN is not the location's. `{{location}}`, `{{call}}` and `{{grid}}` are a
+  // callsign and Maidenhead grids — tokens, never translated.
+  'settings.confirmations.cloudlog.stations.callMismatch':
+    "This location's callsign is {{location}}, but Nexus logs as {{call}}: Wavelog will refuse these QSOs. Pick a location with your callsign, or change this one in Wavelog.",
+  'settings.confirmations.cloudlog.stations.gridMismatch':
+    "This location's grid is {{location}}, but your grid is {{grid}}: Wavelog files these QSOs under {{location}}, and refuses any that carry your grid. Pick a location with your grid, or change this one in Wavelog.",
   'settings.confirmations.cloudlog.apiKey.label': 'API key',
   'settings.confirmations.cloudlog.apiKey.placeholder': 'your instance API key',
   'settings.confirmations.cloudlog.apiKey.forget.title':

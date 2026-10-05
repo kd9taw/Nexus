@@ -4679,6 +4679,8 @@ export const ES: PartialCatalog = {
   "settings.confirmations.cloudlog.stations.busy": "Consultando…",
   "settings.confirmations.cloudlog.stations.title": "Pregunta a tu propio Cloudlog/Wavelog qué ubicaciones de estación tiene y rellena el número. Envía tu clave API a tu instancia, y solo cuando lo pulsas.",
   "settings.confirmations.cloudlog.stations.none": "Esa instancia no reporta ubicaciones de estación — crea una en Cloudlog/Wavelog primero.",
+  "settings.confirmations.cloudlog.stations.callMismatch": "El indicativo de esta ubicación es {{location}}, pero Nexus registra como {{call}}: Wavelog rechazará estos QSO. Elige una ubicación con tu indicativo o cambia esta en Wavelog.",
+  "settings.confirmations.cloudlog.stations.gridMismatch": "El locator de esta ubicación es {{location}}, pero tu locator es {{grid}}: Wavelog archiva estos QSO bajo {{location}} y rechaza los que lleven tu locator. Elige una ubicación con tu locator o cambia esta en Wavelog.",
   "settings.confirmations.cloudlog.stationId.label": "Id del perfil de estación",
   "settings.confirmations.cloudlog.upload.hint": "Envía cada QSO a la instancia de arriba según lo anotas.",
   "settings.confirmations.cloudlog.upload.label": "Reenviar QSOs automáticamente",

@@ -34,6 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cloudlog / Wavelog: a refused QSO says why.** Wavelog answers a QSO it will not file with its
+  reason in a field Nexus did not read, so the connection log said only "refused the upload, and
+  said no more", even though Wavelog had named the reason, such as a duplicate or a station location
+  whose callsign is not yours ("Differing station callsign … SKIPPED"). Nexus now shows that reason.
+  Settings ▸ Logging & Connectors also warns beside the station profile id when the location you
+  pick, or the one already chosen when you press **Find my station locations**, has a callsign
+  other than the one Nexus logs as (Wavelog refuses every such QSO) or a different grid. A refused
+  upload names that mismatch too. Pick a location with your callsign, or change that location in
+  Wavelog. Every failed upload, for each service Nexus uploads to as you log, now also writes one
+  line to `nexus-diag.log`: the service, the kind of failure, the HTTP status and the contact's
+  call. The line never includes the service's own words or your key, and it lets a support request
+  show what went wrong.
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.

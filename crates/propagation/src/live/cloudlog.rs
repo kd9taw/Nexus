@@ -22,6 +22,9 @@
 //!   [`echoes_key`] reduces the chance the key is among them, and **it is best-effort, not a
 //!   guarantee** — see its own note. Do not build anything on it, and do not add a round to
 //!   it: three were spent, and the server picks the encoding.
+//! - **`nexus-diag.log`** (rotated, on disk, made to be emailed to whoever is helping): the
+//!   class and the HTTP status only, never `.message` — `diag_upload_failure` in
+//!   `src-tauri/src/lib.rs` takes nothing else.
 //! - **stderr is NOT ephemeral, and that is why [`CloudlogError`] has no `Display`.** On
 //!   Linux the desktop session redirects a GUI process's stderr into `~/.xsession-errors`,
 //!   mode 0644, which outlives the session exactly as `conn-health.json` does. A type that
@@ -92,6 +95,10 @@ impl CloudlogFailure {
 pub struct CloudlogError {
     pub class: CloudlogFailure,
     pub message: String,
+    /// The HTTP status the instance answered with, or `None` when nothing was sent or nothing
+    /// came back. A number off the status line, never the body — so, like `class`, it may go
+    /// where the instance's words may not (`nexus-diag.log`).
+    pub status: Option<u16>,
 }
 
 impl CloudlogError {
@@ -99,7 +106,14 @@ impl CloudlogError {
         Self {
             class,
             message: message.into(),
+            status: None,
         }
+    }
+
+    /// The same failure, recorded as answered with `status`.
+    fn answered(mut self, status: u16) -> Self {
+        self.status = Some(status);
+        self
     }
 }
 
@@ -532,6 +546,9 @@ fn echoes_key(text: &str, key: &str) -> bool {
 /// machine shape rather than words for an operator. A body that is not JSON at all — a
 /// reverse proxy's HTML page, a PHP notice — IS the message, and a bounded slice of it is
 /// worth showing: knowing a proxy answered instead of Cloudlog is the actionable half.
+///
+/// The fields, in order: `reason`, the one Cloudlog and Wavelog write for a client; then
+/// Wavelog's `messages` (see [`joined_messages`]); then `message` and `error`.
 fn server_reason(text: &str, key: &str) -> Option<String> {
     let k = key.trim();
     let scrubbed = match k {
@@ -539,16 +556,24 @@ fn server_reason(text: &str, key: &str) -> Option<String> {
         k => text.replace(k, "[api key]"),
     };
     let words = match serde_json::from_str::<serde_json::Value>(&scrubbed) {
-        Ok(v) => ["reason", "message", "error"]
-            .iter()
-            .find_map(|f| v.get(f).and_then(serde_json::Value::as_str))
-            .or_else(|| v.as_str())
-            .map(str::to_string)?,
+        Ok(v) => v
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| joined_messages(&v))
+            .or_else(|| {
+                ["message", "error"]
+                    .iter()
+                    .find_map(|f| v.get(f).and_then(serde_json::Value::as_str))
+                    .or_else(|| v.as_str())
+                    .map(str::to_string)
+            })?,
         Err(_) => scrubbed.clone(),
     };
     // Fail closed. Both views are checked: `scrubbed` is the body as it arrived, and `words`
     // is what serde produced from it — by which point any `\uXXXX` the server escaped the key
-    // with has already been decoded back into the key itself.
+    // with has already been decoded back into the key itself, and any markup splitting it has
+    // become a space.
     if !k.is_empty() && (echoes_key(&scrubbed, k) || echoes_key(&words, k)) {
         return Some(KEY_ECHOED.to_string());
     }
@@ -573,6 +598,53 @@ fn server_reason(text: &str, key: &str) -> Option<String> {
         out = out.chars().take(REASON_MAX_CHARS).collect::<String>() + "…";
     }
     Some(out)
+}
+
+/// Wavelog's explanation of a QSO its import refused: the non-empty strings of `messages`,
+/// joined, with their markup turned into spaces — or `None` when there are none.
+///
+/// ⚠️ This is where a refused QSO's reason actually is. Wavelog's `Api.php` `qso()` (read
+/// 2026-10-04) answers it with HTTP 400 and
+/// `{"status":"abort",…,"messages":["","<reason html>"]}`: no `reason` field at all, so Nexus
+/// read nothing and told the operator the instance "said no more" — while Wavelog had named the
+/// QSO, the callsign and the station location it refused. The reason is
+/// `Logbook_model::import_bulk`'s, written for a web page (`<b>` around values, `<br>` after
+/// each line), which is why the tags go.
+fn joined_messages(v: &serde_json::Value) -> Option<String> {
+    let said: Vec<String> = v
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(without_tags)
+        .filter(|m| !m.trim().is_empty())
+        .collect();
+    (!said.is_empty()).then(|| said.join(" "))
+}
+
+/// `text` with every HTML tag (`<br>`, `<b>`, `</b>`, `<br />`) turned into a space, so the
+/// words either side of a `<br>` stay apart. A `<` that does not open a tag — nothing but a
+/// letter, `/` or `!` after it, or no `>` to close it — is left as it is.
+fn without_tags(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        let opens = after.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
+        match after.find('>') {
+            Some(end) if opens => {
+                out.push(' ');
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push('<');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// POST one ADIF record to a Cloudlog/Wavelog instance. `Ok(body)` when the record is actually
@@ -659,16 +731,15 @@ pub fn upload(
 fn classify(status: u16, text: &str, key: &str) -> Result<String, CloudlogError> {
     let reason = server_reason(text, key);
     if (200..300).contains(&status) {
-        return classify_body(text, reason.as_deref());
+        return classify_body(text, reason.as_deref()).map_err(|e| e.answered(status));
     }
     // #378: neither client follows a redirect with the key in the request, so a 3xx arrives
     // here as an answer. Say which answer it was: "refused the upload" would read as the
     // instance saying no, when it only said "not here".
     if (300..400).contains(&status) {
-        return Err(CloudlogError::new(
-            CloudlogFailure::Refused,
-            redirected(status),
-        ));
+        return Err(
+            CloudlogError::new(CloudlogFailure::Refused, redirected(status)).answered(status),
+        );
     }
     // The status line is a bounded value Nexus reads off the wire, not text out of the body,
     // so classifying by it carries nothing the instance chose. 404 is the wrong-URL case
@@ -695,7 +766,8 @@ fn classify(status: u16, text: &str, key: &str) -> Result<String, CloudlogError>
             ),
             None => format!("Cloudlog HTTP {status} — {what}, and said no more."),
         },
-    ))
+    )
+    .answered(status))
 }
 
 /// What the operator is told about a redirect, which is never followed with the API key.
@@ -716,6 +788,102 @@ pub struct CloudlogStation {
     pub callsign: String,
     pub gridsquare: String,
     pub active: bool,
+}
+
+/// How a station location disagrees with the QSO filed under it — the two checks Wavelog's
+/// import makes before it files one (`Logbook_model::import`, read 2026-10-04), and refuses it
+/// on with HTTP 400: a STATION_CALLSIGN that is not the location's ("Differing station callsign
+/// … SKIPPED"), or a MY_GRIDSQUARE that does not fit the location's grid ("Differing locator …
+/// SKIPPED"). Nexus stamps STATION_CALLSIGN on every contact it logs, so a location carrying any
+/// other callsign refuses all of them.
+///
+/// The rule is Settings' warning at the pick too (`ui/src/settings/cloudlogLocation.ts`); keep
+/// the two alike. The callsign is compared whole, the grid on its first four characters, a
+/// location listing several grids (comma-separated) matches on any of them, and an empty side
+/// gives no verdict — Wavelog fills a missing STATION_CALLSIGN or MY_GRIDSQUARE from the
+/// location, so a QSO without one cannot disagree on it. ⚠️ Wavelog compares grids more strictly
+/// than this (one must begin with the other, so DM41AB against DM41CD is refused too); that case
+/// reaches the operator in Wavelog's own words, through [`joined_messages`], rather than here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LocationMismatch {
+    /// The location's callsign is not the QSO's STATION_CALLSIGN.
+    pub callsign: bool,
+    /// The location's grid is not the QSO's MY_GRIDSQUARE, in its first four characters.
+    pub grid: bool,
+}
+
+/// The first four characters of a grid, uppercased — or `None` when there are fewer.
+fn square(grid: &str) -> Option<String> {
+    let sq: String = grid.trim().to_ascii_uppercase().chars().take(4).collect();
+    (sq.chars().count() == 4).then_some(sq)
+}
+
+/// Compare a station location with the STATION_CALLSIGN and MY_GRIDSQUARE a QSO carries (empty
+/// when it carries none). See [`LocationMismatch`].
+pub fn location_mismatch(
+    location: &CloudlogStation,
+    station_call: &str,
+    my_grid: &str,
+) -> LocationMismatch {
+    let call = station_call.trim().to_ascii_uppercase();
+    let theirs = location.callsign.trim().to_ascii_uppercase();
+    let squares: Vec<String> = location.gridsquare.split(',').filter_map(square).collect();
+    LocationMismatch {
+        callsign: !call.is_empty() && !theirs.is_empty() && call != theirs,
+        grid: square(my_grid).is_some_and(|mine| !squares.is_empty() && !squares.contains(&mine)),
+    }
+}
+
+/// A value the instance sent about a location, fit to repeat to the operator: shaped like a
+/// callsign, a station number or a grid list — letters, digits, `/`, `-` and `,`, at most 20.
+/// These are the instance's words, so anything else (a direction override, a sentence, a
+/// 33-character key) is not repeated.
+fn plain(value: &str) -> Option<&str> {
+    let v = value.trim();
+    let fits = !v.is_empty()
+        && v.chars().count() <= 20
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | ','));
+    fits.then_some(v)
+}
+
+/// What the operator is told beside Wavelog's own refusal when the QSO it refused does not
+/// match the station location it was sent to — in Nexus's words, naming both sides. `None` when
+/// they match, or when a location value it would have to repeat is not [`plain`]: then the
+/// instance's own refusal stands alone.
+///
+/// Ephemeral, like the rest of [`CloudlogError::message`]: the toast and this session's
+/// connection log, never a file.
+pub fn location_mismatch_note(
+    location: &CloudlogStation,
+    station_call: &str,
+    my_grid: &str,
+) -> Option<String> {
+    let m = location_mismatch(location, station_call, my_grid);
+    let mut said = Vec::new();
+    if m.callsign {
+        said.push(format!(
+            "its callsign is {}, but this QSO was logged as {}",
+            plain(&location.callsign)?,
+            station_call.trim().to_ascii_uppercase()
+        ));
+    }
+    if m.grid {
+        said.push(format!(
+            "its grid is {}, but this QSO carries {}",
+            plain(&location.gridsquare)?,
+            my_grid.trim().to_ascii_uppercase()
+        ));
+    }
+    if said.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Station location {} is not this QSO's station: {}. Pick a location that matches in \
+         Settings, or change this one in Wavelog",
+        plain(&location.station_id)?,
+        said.join("; ")
+    ))
 }
 
 /// The station_info endpoint for a base URL — Wavelog's own shape, with the API key in the
@@ -1399,6 +1567,207 @@ mod tests {
         );
         let err = classify(500, "", KEY).unwrap_err().message;
         assert!(err.contains("500"), "the status must still be named: {err}");
+    }
+
+    /// Wavelog's refusal of a QSO its import would not file, as `Api.php` `qso()` writes it
+    /// (read 2026-10-04): HTTP 400, `"status":"abort"`, and the reason in a `messages` ARRAY —
+    /// an empty first entry, then `Logbook_model::import_bulk`'s HTML. PHP's `json_encode`
+    /// escapes every `/`, so `</b>` arrives as `<\/b>`. Nexus read only `reason`, `message`
+    /// and `error`, so this arrived as "refused the upload, and said no more".
+    fn wavelog_abort(reason_html: &str) -> String {
+        format!(
+            r#"{{"status":"abort","type":"adif","string":"","adif_count":1,"adif_errors":1,"messages":["","{reason_html}"]}}"#
+        )
+    }
+
+    #[test]
+    fn a_wavelog_import_refusal_says_what_it_refused() {
+        // A station location whose callsign is not the one on the QSO: Wavelog's import skips
+        // it as a critical error.
+        let body = wavelog_abort(
+            r"Differing station callsign <b>N0CALL<\/b> while importing QSO with DL1ABC for <b>PRACTICE<\/b>: SKIPPED<br>",
+        );
+        let e = classify(400, &body, KEY).unwrap_err();
+        assert_eq!(e.class, CloudlogFailure::Refused, "{}", e.message);
+        assert!(
+            e.message.contains(
+                "Differing station callsign N0CALL while importing QSO with DL1ABC for PRACTICE"
+            ),
+            "Wavelog's reason must reach the operator, without its markup: {}",
+            e.message
+        );
+        assert!(
+            !e.message.contains('<') && !e.message.contains('>'),
+            "HTML tags reached the operator: {}",
+            e.message
+        );
+        assert!(
+            !e.message.contains("said no more"),
+            "the instance did say more: {}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn a_wavelog_duplicate_says_it_is_a_duplicate() {
+        // The other refusal an operator meets every day: the QSO is already in the log.
+        let body = wavelog_abort(
+            r"Date\/Time: 2026-10-04 12:34:00 Callsign: DL1ABC Band: 20m Duplicate for N0CALL<br>",
+        );
+        let e = classify(400, &body, KEY).unwrap_err();
+        assert!(
+            e.message.contains(
+                "Date/Time: 2026-10-04 12:34:00 Callsign: DL1ABC Band: 20m Duplicate for N0CALL"
+            ),
+            "{}",
+            e.message
+        );
+        assert!(!e.message.contains("<br>"), "{}", e.message);
+    }
+
+    /// ⛔ CREDENTIAL. Reading `messages` must not open a way round the echo check: a key the
+    /// instance echoes inside it is withheld exactly as one inside `reason` is.
+    #[test]
+    fn an_api_key_echoed_inside_messages_still_fails_closed() {
+        let cases = [
+            ("verbatim", KEY.to_string()),
+            ("json unicode escapes", KEY.replace('-', r"\u002d")),
+            ("html entities", KEY.replace('-', "&#45;")),
+            // Split by markup, which `messages` is read with turned into spaces.
+            ("split by tags", KEY.replace('-', r"<b>-<\/b>")),
+        ];
+        for (what, echoed) in cases {
+            let body = wavelog_abort(&format!(
+                r"Differing station callsign <b>N0CALL<\/b> for key {echoed}<br>"
+            ));
+            // The positive control: readable key material really is in the body.
+            let runs = key_runs(KEY);
+            assert!(
+                !runs.is_empty() && runs.iter().all(|r| body.contains(r.as_str())),
+                "control ({what}): no key material in the body to leak"
+            );
+            let e = classify(400, &body, KEY).unwrap_err();
+            for r in &runs {
+                assert!(
+                    !e.message.contains(r.as_str()),
+                    "API key survived {what} into the message ({r}): {}",
+                    e.message
+                );
+            }
+            if what != "verbatim" {
+                // A verbatim echo is replaced in place; an encoded one withholds everything.
+                assert!(
+                    e.message.contains(KEY_ECHOED),
+                    "{what}: the body was not withheld: {}",
+                    e.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reason_is_preferred_over_messages() {
+        // Wavelog's earlier refusals (a bad key, a station id that is not the key owner's) carry
+        // `reason`; when both are present it is the one written for the client.
+        let body = r#"{"status":"failed","reason":"station id does not belong to the API key owner.","messages":["","something else"]}"#;
+        let err = classify(401, body, KEY).unwrap_err().message;
+        assert!(err.contains("station id does not belong"), "{err}");
+        assert!(!err.contains("something else"), "{err}");
+    }
+
+    #[test]
+    fn a_failure_carries_the_http_status_it_was_answered_with() {
+        let body = wavelog_abort(r"Duplicate for N0CALL<br>");
+        assert_eq!(classify(400, &body, KEY).unwrap_err().status, Some(400));
+        let refused_record = r#"{"status":"failed","reason":"ADIF field BAND is missing"}"#;
+        assert_eq!(
+            classify(200, refused_record, KEY).unwrap_err().status,
+            Some(200)
+        );
+        assert_eq!(classify(301, "", KEY).unwrap_err().status, Some(301));
+        assert_eq!(classify(503, "", KEY).unwrap_err().status, Some(503));
+        // Nothing was sent, so nothing answered.
+        let unsent = upload(&dest("https://log.example.org"), "", "7", "<EOR>").unwrap_err();
+        assert_eq!(unsent.class, CloudlogFailure::NotConfigured);
+        assert_eq!(unsent.status, None);
+    }
+
+    fn location(callsign: &str, gridsquare: &str) -> CloudlogStation {
+        CloudlogStation {
+            station_id: "11".to_string(),
+            profile_name: "26PRACTICE".to_string(),
+            callsign: callsign.to_string(),
+            gridsquare: gridsquare.to_string(),
+            active: true,
+        }
+    }
+
+    /// The backend half of `ui/src/settings/cloudlogLocation.ts` — the same cases, the same
+    /// answers.
+    #[test]
+    fn a_station_location_that_is_not_the_qso_is_a_mismatch() {
+        let both = LocationMismatch {
+            callsign: true,
+            grid: true,
+        };
+        let none = LocationMismatch::default();
+        assert_eq!(
+            location_mismatch(&location("PRACTICE", "DM42"), "N0CALL", "DM41"),
+            both
+        );
+        // The control: the comparison can also say no, whatever the case or spacing.
+        assert_eq!(
+            location_mismatch(&location(" n0call ", "dm41ab"), "N0CALL", "DM41"),
+            none
+        );
+        assert!(!location_mismatch(&location("N0CALL", "DM41XY"), "N0CALL", "DM41AB").grid);
+        assert!(location_mismatch(&location("N0CALL", "DM42AB"), "N0CALL", "DM41AB").grid);
+        assert!(location_mismatch(&location("N0CALL/P", "DM41"), "N0CALL", "DM41").callsign);
+        assert!(!location_mismatch(&location("N0CALL", "DM41,DM42"), "N0CALL", "DM42").grid);
+        assert!(location_mismatch(&location("N0CALL", "DM41,DM42"), "N0CALL", "DM43").grid);
+        // A QSO that carries no STATION_CALLSIGN or MY_GRIDSQUARE is filled from the location
+        // by Wavelog, so there is nothing to disagree with.
+        assert_eq!(
+            location_mismatch(&location("PRACTICE", "DM42"), "", ""),
+            none
+        );
+        assert_eq!(
+            location_mismatch(&location("", "DM"), "N0CALL", "DM41"),
+            none
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_the_location_mismatch_it_found() {
+        let note = location_mismatch_note(&location("PRACTICE", "DM42"), "N0CALL", "DM41")
+            .expect("a location that is not the QSO is named");
+        for want in ["PRACTICE", "N0CALL", "DM42", "DM41"] {
+            assert!(note.contains(want), "{want} is not named: {note}");
+        }
+        let call_only = location_mismatch_note(&location("PRACTICE", "DM41"), "N0CALL", "")
+            .expect("a callsign mismatch alone is named");
+        assert!(
+            call_only.contains("PRACTICE") && !call_only.contains("grid"),
+            "{call_only}"
+        );
+        // The control: a location that is the QSO says nothing.
+        assert_eq!(
+            location_mismatch_note(&location("N0CALL", "DM41AB"), "N0CALL", "DM41"),
+            None
+        );
+        // The location's values are the instance's own: one that is not shaped like a callsign
+        // or a grid is not repeated, and the instance's own refusal stands alone.
+        for odd in [
+            "PRACTICE\u{202e}X",
+            "A-VERY-LONG-NAME-THAT-IS-NO-CALLSIGN",
+            "PRAC TICE",
+        ] {
+            assert_eq!(
+                location_mismatch_note(&location(odd, "DM42"), "N0CALL", "DM41"),
+                None,
+                "{odd:?} was repeated to the operator"
+            );
+        }
     }
 
     // ---- #378: plain http, and only on the operator's own network ----------------------------

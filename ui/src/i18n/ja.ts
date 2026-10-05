@@ -4481,6 +4481,8 @@ export const JA: PartialCatalog = {
   "settings.confirmations.cloudlog.stations.busy": "問い合わせ中…",
   "settings.confirmations.cloudlog.stations.title": "自分の Cloudlog／Wavelog にステーションロケーションを問い合わせ、番号を入力します。押したときだけ、自分のインスタンスへ API キーを送信します。",
   "settings.confirmations.cloudlog.stations.none": "このインスタンスにはステーションロケーションがありません — まず Cloudlog／Wavelog で作成してください。",
+  "settings.confirmations.cloudlog.stations.callMismatch": "このロケーションのコールサインは {{location}} ですが、Nexus は {{call}} としてログします。Wavelog はこれらの QSO を拒否します。自局のコールサインのロケーションを選ぶか、Wavelog でこのロケーションを変更してください。",
+  "settings.confirmations.cloudlog.stations.gridMismatch": "このロケーションのグリッドは {{location}} ですが、自局のグリッドは {{grid}} です。Wavelog はこれらの QSO を {{location}} として記録し、自局のグリッドを含む QSO は拒否します。自局のグリッドのロケーションを選ぶか、Wavelog でこのロケーションを変更してください。",
   "settings.confirmations.cloudlog.apiKey.label": "APIキー",
   "settings.confirmations.cloudlog.apiKey.placeholder": "インスタンスのAPIキー",
   "settings.confirmations.cloudlog.apiKey.forget.title": "保存済みのCloudlogキーをシステムのキーチェーンから削除",

@@ -170,6 +170,7 @@ import { sayExportLacks } from '../features/exportLacks'
 import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
 import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
+import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
 import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
 import { getClusterNodes } from '../api'
@@ -1561,11 +1562,29 @@ export function SettingsPanel({
   const [cloudlogStations, setCloudlogStations] = useState<CloudlogStation[] | null>(null)
   const [cloudlogStationsBusy, setCloudlogStationsBusy] = useState(false)
   const [cloudlogStationsError, setCloudlogStationsError] = useState<string | null>(null)
+  // The location the station profile id names, as the instance last described it: the one the
+  // operator picked, or the one already chosen when the answer includes it. Kept apart from the
+  // list so the warning under the field outlives the list closing on a pick. Screen state only —
+  // these are the instance's words, and nothing here is saved.
+  const [cloudlogPicked, setCloudlogPicked] = useState<CloudlogStation | null>(null)
+  const cloudlogChosen =
+    form !== null &&
+    cloudlogPicked !== null &&
+    cloudlogPicked.stationId === (form.cloudlogStationId ?? '').trim()
+      ? cloudlogPicked
+      : null
+  const cloudlogMismatch =
+    form !== null && cloudlogChosen !== null
+      ? cloudlogLocationMismatch(cloudlogChosen, form.mycall, form.mygrid)
+      : null
   const findCloudlogStations = async () => {
     setCloudlogStationsBusy(true)
     setCloudlogStationsError(null)
     try {
-      setCloudlogStations(await getCloudlogStations())
+      const list = await getCloudlogStations()
+      setCloudlogStations(list)
+      const chosen = (form?.cloudlogStationId ?? '').trim()
+      setCloudlogPicked(list.find((st) => st.stationId === chosen) ?? null)
     } catch (e) {
       // The backend's sentence is Nexus's own or a redacted category — never the URL, which
       // carries the key (see cloudlog_station_info).
@@ -11578,6 +11597,25 @@ export function SettingsPanel({
                         {t('settings.confirmations.cloudlog.stationId.notNumber')}
                       </span>
                     )}
+                  {/* Wavelog files every QSO under the location's callsign and grid, and refuses
+                      one whose STATION_CALLSIGN is not the location's — which Nexus stamps on every
+                      contact. So a location that is not the operator is said where it is chosen. */}
+                  {cloudlogChosen && cloudlogMismatch?.callsign && (
+                    <span className="settings-note" role="note">
+                      {t('settings.confirmations.cloudlog.stations.callMismatch', {
+                        location: cloudlogChosen.callsign.trim(),
+                        call: form.mycall.trim().toUpperCase(),
+                      })}
+                    </span>
+                  )}
+                  {cloudlogChosen && cloudlogMismatch?.grid && (
+                    <span className="settings-note" role="note">
+                      {t('settings.confirmations.cloudlog.stations.gridMismatch', {
+                        location: cloudlogChosen.gridsquare.trim(),
+                        grid: form.mygrid.trim().toUpperCase(),
+                      })}
+                    </span>
+                  )}
                   {/* #226: ask the instance rather than making the operator go and look. The
                       request carries the API key, so it fires on this press and nowhere else. */}
                   <div className="settings-input-row">
@@ -11609,6 +11647,7 @@ export function SettingsPanel({
                           className="log-filter-chip"
                           onClick={() => {
                             update('cloudlogStationId', st.stationId)
+                            setCloudlogPicked(st)
                             setCloudlogStations(null)
                           }}
                         >

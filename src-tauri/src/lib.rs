@@ -20977,7 +20977,8 @@ struct ConnEventView {
 /// | stderr → `~/.xsession-errors` (0644) | until next login | **no** | [`conn_log`] prints `connector`/`level` only, both `&'static str`; this type has no `Display`/`Debug` to print. The qrz-sync worker is the other printer on this row and prints [`QrzSyncFailure::detail`], a [`ConnDetail`] |
 /// | [`CONN_LOG`] ring (200) → [`get_connection_log`] | the process | yes | it is a screen — that is #226's whole point |
 /// | a command's `Err(String)` → the operator's toast | the moment | yes | same |
-/// | `nexus-diag.log` ([`tempo_core::applog`]) | rotated, on disk | **no** | no connector path calls it, and nothing but this line says so |
+/// | `nexus-diag.log` ([`tempo_core::applog`]) | rotated, on disk | **no** | one connector path writes to it, [`diag_upload_failure`], and its parameters are the allow-list: a `&'static str` connector and class, a status number and the contact's own call — the standing of the stderr row |
+/// | [`CLOUDLOG_LOCATIONS`] (the instance's station locations) | the process | yes | memory only, never written; read to name a station-location mismatch in a refusal, which then goes where the toast and the ring go |
 /// | any file written through serde — a settings dump, a crash report, a debug dump | permanent | **convention** | the RING ([`ConnEvent`]) implements no serde trait, so `to_string(&ring)` and a `derive` on it do not compile — but its wire twin [`ConnEventView`] MUST serialize for the Connections IPC and holds the same words as a plain `String`, so `fs::write(p, to_string(&get_connection_log()))` DOES compile (round 7 F6). Nothing writes it, and the source check keeps `reveal_on_screen` to `get_connection_log` alone — the same standing as the ring row above, NOT a compile guarantee |
 /// | `PendingUpload` retry queue | the process | n/a | it carries the QSO and a retry count, never an error string |
 /// | `log.adi` `APP_TEMPO_UL_*` → **every export**, incl. the TQSL-signed LoTW batch | permanent, and uploaded to ARRL | **no** | [`tempo_core::logbook::UploadDetail`]: the wire carries a class token, and a tail that is not one is dropped when the record is READ |
@@ -25311,6 +25312,7 @@ async fn cloudlog_station_info(
                 "ok",
                 format!("station locations offered: {}", list.len()),
             );
+            *CLOUDLOG_LOCATIONS.lock().unwrap_or_else(|e| e.into_inner()) = list.clone();
             Ok(list
                 .into_iter()
                 .map(|s| CloudlogStationDto {
@@ -25346,6 +25348,7 @@ fn cloudlog_push_qso_impl(
         .map_err(|e| CloudlogError {
             class: CloudlogFailure::NotConfigured,
             message: e,
+            status: None,
         })?
         .get_password()
         .unwrap_or_default()
@@ -25355,19 +25358,82 @@ fn cloudlog_push_qso_impl(
         return Err(CloudlogError {
             class: CloudlogFailure::NotConfigured,
             message: "no Cloudlog URL set".to_string(),
+            status: None,
         });
     }
     if key.is_empty() {
         return Err(CloudlogError {
             class: CloudlogFailure::NotConfigured,
             message: "no Cloudlog API key set".to_string(),
+            status: None,
         });
     }
     let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
     let adif = tempo_core::logbook::adif_record(&rec);
+    // The station-location check runs before sending and is said only if the instance refuses:
+    // Wavelog is the authority, so the QSO goes either way. The QSO's side is what the record
+    // sends — its STATION_CALLSIGN, and its MY_GRIDSQUARE whether modelled or carried through
+    // from an import — each empty when it carries none.
+    let my_grid = rec
+        .my_grid
+        .as_deref()
+        .or_else(|| {
+            rec.extra
+                .iter()
+                .find(|(field, _)| field == "MY_GRIDSQUARE")
+                .map(|(_, value)| value.as_str())
+        })
+        .unwrap_or("");
+    let note = cloudlog_location_note(
+        &CLOUDLOG_LOCATIONS.lock().unwrap_or_else(|e| e.into_inner()),
+        &station_id,
+        rec.station_callsign.as_deref().unwrap_or(""),
+        my_grid,
+    );
     let dest = propagation::live::cloudlog::Destination::check(&url)?;
     warn_cloudlog_cleartext(&dest);
     propagation::live::cloudlog::upload(&dest, &key, &station_id, &adif)
+        .map_err(|e| name_the_mismatch(e, note))
+}
+
+/// The station locations the operator's Cloudlog/Wavelog listed the last time "Find my station
+/// locations" was pressed this session — kept so that when Wavelog refuses a QSO filed under a
+/// location that is not its station, the refusal can say so (see [`cloudlog_location_note`]).
+///
+/// ⛔ Memory only, and it must stay that way: a location's callsign and grid are the instance's
+/// words, so they are never written down — like the [`CONN_LOG`] ring, they die with the
+/// process. Filled only by that button press, because the request carries the API key; after a
+/// restart it is empty until the operator presses it again, and a refusal meanwhile carries the
+/// instance's own words alone.
+static CLOUDLOG_LOCATIONS: Mutex<Vec<propagation::live::cloudlog::CloudlogStation>> =
+    Mutex::new(Vec::new());
+
+/// What a refusal should add about the station location a QSO was filed under: the location
+/// the station profile id names, from the ones the instance listed this session, compared with
+/// the STATION_CALLSIGN and MY_GRIDSQUARE the QSO carries. `None` when that location was not
+/// listed this session, or matches. See `propagation::live::cloudlog::location_mismatch`.
+fn cloudlog_location_note(
+    locations: &[propagation::live::cloudlog::CloudlogStation],
+    station_id: &str,
+    station_call: &str,
+    my_grid: &str,
+) -> Option<String> {
+    let location = locations.iter().find(|l| l.station_id == station_id)?;
+    propagation::live::cloudlog::location_mismatch_note(location, station_call, my_grid)
+}
+
+/// A Cloudlog/Wavelog failure, with what the station-location check found named beside the
+/// instance's own words — when the instance refused the QSO. Any other failure (a key, a URL, an
+/// instance in trouble) is not the location's doing, and is left as it was.
+fn name_the_mismatch(
+    mut e: propagation::live::cloudlog::CloudlogError,
+    note: Option<String>,
+) -> propagation::live::cloudlog::CloudlogError {
+    use propagation::live::cloudlog::CloudlogFailure as F;
+    if let Some(note) = note.filter(|_| matches!(e.class, F::Refused | F::RecordRefused)) {
+        e.message = format!("{}. {note}", e.message.trim_end_matches('.'));
+    }
+    e
 }
 
 /// #378: where this session has already been told that its Cloudlog/Wavelog API key travels
@@ -25428,6 +25494,60 @@ fn cloudlog_refusal_line(
     ))
 }
 
+/// One line in `nexus-diag.log` for an upload that did not land: the connector, the class of
+/// failure, the HTTP status, and the contact's call. Before this the file said nothing about
+/// connectors at all, so an operator's diagnostic log showed audio, CAT and transmit lines and
+/// not one word about the uploads that were being refused.
+///
+/// ⛔ NEXUS'S OWN WORDS ONLY. That file is made to be emailed to a stranger, and a service's
+/// words can carry the key the request went out with (see THE SINK INVENTORY above). So the
+/// parameters are the rule: the connector and the class are `&'static str` — the standing the
+/// stderr breadcrumb in [`conn_log`] has — the status is a number off the status line, and the
+/// call is read off the contact itself, which is why this takes the QSO rather than a `&str`.
+/// No parameter can carry a response body or an error string.
+fn diag_upload_failure(
+    connector: &'static str,
+    class: &'static str,
+    status: Option<u16>,
+    qso: &LoggedQso,
+) {
+    tempo_core::applog::warn(
+        "upload",
+        &upload_failure_line(connector, class, status, &qso.call),
+    );
+}
+
+/// The text of [`diag_upload_failure`]'s line. Pure, because the log itself is inert in tests.
+fn upload_failure_line(
+    connector: &'static str,
+    class: &'static str,
+    status: Option<u16>,
+    call: &str,
+) -> String {
+    // The call is the operator's own data, but a line break in one would still forge a line.
+    let call: String = call.trim().chars().filter(|c| !c.is_control()).collect();
+    let status = match status {
+        Some(code) => format!("HTTP {code}"),
+        None => "no HTTP status recorded".to_string(),
+    };
+    format!("{connector} did not take the QSO with {call}: {class}, {status}")
+}
+
+/// A Cloudlog/Wavelog failure class as [`diag_upload_failure`] names it. Exhaustive, so a class
+/// added later has to be named here before it compiles.
+fn cloudlog_class_name(class: propagation::live::cloudlog::CloudlogFailure) -> &'static str {
+    use propagation::live::cloudlog::CloudlogFailure as F;
+    match class {
+        F::NotConfigured => "NotConfigured",
+        F::Unreachable => "Unreachable",
+        F::Credentials => "Credentials",
+        F::NotAnApi => "NotAnApi",
+        F::RecordRefused => "RecordRefused",
+        F::ServerError => "ServerError",
+        F::Refused => "Refused",
+    }
+}
+
 /// Which connectors are enabled, for [`auto_push_one`] — bundled into one struct
 /// purely to keep that function's argument count down; each field is independent.
 struct ConnectorToggles {
@@ -25476,6 +25596,13 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                             .unwrap_or_default()
                     ),
                 );
+                if !ok {
+                    let class = match r.result.as_str() {
+                        "authFail" => "Credentials",
+                        _ => "Refused",
+                    };
+                    diag_upload_failure("QRZ Logbook", class, None, &dto);
+                }
                 let part = match r.result.as_str() {
                     "ok" => "QRZ ✓".to_string(),
                     "replace" => "QRZ ✓ (updated)".to_string(),
@@ -25495,6 +25622,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-push QSO with {call} — {e}"),
                 );
+                diag_upload_failure("QRZ Logbook", "Unreachable", None, &dto);
                 (format!("QRZ ✗ {e}"), false, true) // transport error → retry
             }
         };
@@ -25520,6 +25648,14 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                             .unwrap_or_default()
                     ),
                 );
+                if !ok {
+                    let class = match r.result.as_str() {
+                        "authFail" => "Credentials",
+                        "serverError" => "ServerError",
+                        _ => "Refused",
+                    };
+                    diag_upload_failure("ClubLog", class, None, &dto);
+                }
                 let part = match r.result.as_str() {
                     "ok" | "modified" => "ClubLog ✓".to_string(),
                     "duplicate" => "ClubLog dup".to_string(),
@@ -25536,6 +25672,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-push QSO with {call} — {e}"),
                 );
+                diag_upload_failure("ClubLog", "Unreachable", None, &dto);
                 (format!("ClubLog ✗ {e}"), false, true)
             }
         };
@@ -25563,6 +25700,14 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                             .unwrap_or_default()
                     ),
                 );
+                if !ok {
+                    let class = match r.result.as_str() {
+                        "authFail" => "Credentials",
+                        "unknown" => "ServerError",
+                        _ => "Refused",
+                    };
+                    diag_upload_failure("HRDLog.net", class, None, &dto);
+                }
                 // HRDLog.net is a live-logging/awards site — never DXCC/WAS credit.
                 let part = match r.result.as_str() {
                     "ok" => "HRDLog ✓".to_string(),
@@ -25580,6 +25725,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-push QSO with {call} — {e}"),
                 );
+                diag_upload_failure("HRDLog.net", "Unreachable", None, &dto);
                 (format!("HRDLog ✗ {e}"), false, HRDLOG_UNREACHABLE, true)
             }
         };
@@ -25601,6 +25747,14 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     if ok { "ok" } else { "error" },
                     format!("auto-push QSO with {call} — {}", r.outcome),
                 );
+                if !ok {
+                    let class = match r.outcome.as_str() {
+                        "authfail" => "Credentials",
+                        "retry" => "ServerError",
+                        _ => "Refused",
+                    };
+                    diag_upload_failure("eQSL", class, None, &dto);
+                }
                 let part = match r.outcome.as_str() {
                     "accepted" => "eQSL ✓".to_string(),
                     "duplicate" => "eQSL dup".to_string(),
@@ -25619,6 +25773,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             }
             Err(e) => {
                 conn_log("eQSL", "error", format!("auto-push QSO with {call} — {e}"));
+                diag_upload_failure("eQSL", "Unreachable", None, &dto);
                 (format!("eQSL ✗ {e}"), false, true)
             }
         };
@@ -25644,6 +25799,14 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                             .unwrap_or_default()
                     ),
                 );
+                if !ok {
+                    let class = match r.result.as_str() {
+                        "authFail" => "Credentials",
+                        "pending" => "ServerError",
+                        _ => "Refused",
+                    };
+                    diag_upload_failure("World Radio League", class, None, &dto);
+                }
                 let part = match r.result.as_str() {
                     "accepted" => "WRL ✓".to_string(),
                     "duplicate" => "WRL dup".to_string(),
@@ -25661,6 +25824,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-push QSO with {call} — {e}"),
                 );
+                diag_upload_failure("World Radio League", "Unreachable", None, &dto);
                 (format!("WRL ✗ {e}"), false, WRL_UNREACHABLE, true)
             }
         };
@@ -25679,6 +25843,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             }
             Err(e) => {
                 conn_log("N3FJP", "error", format!("auto-forward {call} — {e}"));
+                diag_upload_failure("N3FJP", "Unreachable", None, &dto);
                 (format!("N3FJP ✗ {e}"), false, true)
             }
         };
@@ -25700,6 +25865,9 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-forward {call} — {}", e.message),
                 );
+                // The class and the status only — `e.message` is the instance's, and stays on
+                // screen.
+                diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
                 // #226: only a failure that can clear on its own is retried. A refusal (a
                 // callsign where the location number goes, a bad key, a URL that is not the
                 // API) was retried up to the budget and failed the same way every time; it is
@@ -33496,6 +33664,118 @@ mod tests {
         }
         // Every class is decided one way or the other: a class added later must land here.
         assert_eq!(F::ALL.len(), 2 + refused.len());
+    }
+
+    /// A refused upload left no trace in `nexus-diag.log`: the reported log held audio,
+    /// transmit and CAT lines and nothing about the QSOs Wavelog was refusing. One line per
+    /// failure now, in Nexus's own words — the connector, the class, the HTTP status and the
+    /// contact's call — and never the instance's words, which can carry the API key.
+    #[test]
+    fn a_connector_failure_is_one_diag_line_in_nexuss_own_words() {
+        use propagation::live::cloudlog::{CloudlogError, CloudlogFailure as F};
+        const KEY: &str = "cl0udl0g-4pi-k3y-abcdef0123456789";
+        let e = CloudlogError {
+            class: F::Refused,
+            status: Some(400),
+            message: format!(
+                "Cloudlog HTTP 400 — refused the upload: Differing station callsign N0CALL for \
+                 key {KEY}"
+            ),
+        };
+        // The control: the toast's half really does carry the instance's words and the key.
+        assert!(e.message.contains(KEY) && e.message.contains("Differing"));
+        let line = super::upload_failure_line(
+            "Cloudlog",
+            super::cloudlog_class_name(e.class),
+            e.status,
+            "DL1ABC",
+        );
+        // Exactly this, so nothing else can ride along.
+        assert_eq!(
+            line,
+            "Cloudlog did not take the QSO with DL1ABC: Refused, HTTP 400"
+        );
+        assert_eq!(
+            super::upload_failure_line("QRZ Logbook", "Unreachable", None, "DL1ABC"),
+            "QRZ Logbook did not take the QSO with DL1ABC: Unreachable, no HTTP status recorded"
+        );
+        // A call is the operator's data, but a line break in one must not forge a second line.
+        let forged = super::upload_failure_line("eQSL", "Refused", None, "DL1ABC\u{a}ERROR forged");
+        assert!(!forged.contains('\u{a}'), "{forged:?}");
+        // Every Cloudlog class has its own name, so the line says which failure it was.
+        let names: Vec<&str> = F::ALL
+            .iter()
+            .map(|c| super::cloudlog_class_name(*c))
+            .collect();
+        for (i, a) in names.iter().enumerate() {
+            assert!(!a.is_empty(), "{:?} has no name", F::ALL[i]);
+            assert!(
+                !names[i + 1..].contains(a),
+                "two classes share the name {a}"
+            );
+        }
+    }
+
+    /// Wavelog refuses a QSO whose STATION_CALLSIGN is not its station location's, and Nexus
+    /// stamps STATION_CALLSIGN on every contact. When the locations listed this session show the
+    /// configured one is not the QSO's station, the refusal says so — and only the refusal.
+    #[test]
+    fn a_refusal_names_the_station_location_that_is_not_the_qso() {
+        use propagation::live::cloudlog::{CloudlogError, CloudlogFailure as F, CloudlogStation};
+        let at = |id: &str, call: &str, grid: &str| CloudlogStation {
+            station_id: id.to_string(),
+            profile_name: "26PRACTICE".to_string(),
+            callsign: call.to_string(),
+            gridsquare: grid.to_string(),
+            active: true,
+        };
+        let listed = [at("11", "PRACTICE", "DM42"), at("12", "N0CALL", "DM41AB")];
+        let note = super::cloudlog_location_note(&listed, "11", "N0CALL", "")
+            .expect("location 11 is not N0CALL");
+        assert!(
+            note.contains("PRACTICE") && note.contains("N0CALL"),
+            "{note}"
+        );
+        // The controls: the location that is the QSO, and one this session never listed.
+        assert_eq!(
+            super::cloudlog_location_note(&listed, "12", "N0CALL", "DM41"),
+            None
+        );
+        assert_eq!(
+            super::cloudlog_location_note(&listed, "13", "N0CALL", ""),
+            None
+        );
+
+        let said = "Cloudlog HTTP 400 — refused the upload: Differing station callsign N0CALL";
+        let err = |class| CloudlogError {
+            class,
+            status: Some(400),
+            message: said.to_string(),
+        };
+        for class in [F::Refused, F::RecordRefused] {
+            let e = super::name_the_mismatch(err(class), Some(note.clone()));
+            assert!(
+                e.message.contains(said) && e.message.contains(&note),
+                "{class:?}: {}",
+                e.message
+            );
+            assert_eq!((e.class, e.status), (class, Some(400)));
+        }
+        // A key, a URL or an instance in trouble is not the location's doing.
+        for class in [
+            F::Credentials,
+            F::NotAnApi,
+            F::ServerError,
+            F::Unreachable,
+            F::NotConfigured,
+        ] {
+            let e = super::name_the_mismatch(err(class), Some(note.clone()));
+            assert_eq!(e.message, said, "{class:?}");
+        }
+        assert_eq!(
+            super::name_the_mismatch(err(F::Refused), None).message,
+            said
+        );
     }
 
     /// #378: plain http to the operator's own network sends the API key unencrypted, and the

@@ -154,3 +154,73 @@ describe('Cloudlog/Wavelog station location picker (#226)', () => {
     expect(await screen.findByText(/no station locations/i)).toBeTruthy()
   })
 })
+
+// Wavelog files every QSO under the picked location's callsign and grid, and refuses one whose own
+// STATION_CALLSIGN is not the location's — with HTTP 400 and nothing Nexus used to show. Nexus
+// stamps STATION_CALLSIGN on every contact, so a location named for something else refuses them
+// all. Settings says so where the location is chosen, in the operator's terms.
+describe('a station location that is not the operator is said at the pick', () => {
+  const PRACTICE = {
+    stationId: '11', profileName: '26PRACTICE', callsign: 'PRACTICE', gridsquare: 'DM42', active: true,
+  }
+  const HOME = {
+    stationId: '12', profileName: 'Home', callsign: 'N0CALL', gridsquare: 'DM41AB', active: false,
+  }
+
+  function asOperator(over: Record<string, unknown> = {}) {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...(settingsFixture() as object), mycall: 'N0CALL', mygrid: 'DM41', ...over }),
+    )
+    api.get('getCloudlogStations').mockImplementation(() => Promise.resolve([PRACTICE, HOME]))
+  }
+
+  function stationField() {
+    const group = screen
+      .getByRole('button', { name: 'Find my station locations' })
+      .closest('label.settings-field') as HTMLElement
+    return group.querySelector('input[inputmode="numeric"]') as HTMLInputElement
+  }
+
+  async function find() {
+    await openLogging()
+    fireEvent.click(screen.getByRole('button', { name: 'Find my station locations' }))
+  }
+
+  it('warns when the picked location carries another callsign and another grid', async () => {
+    asOperator()
+    await find()
+    fireEvent.click(await screen.findByRole('button', { name: /26PRACTICE/ }))
+    expect(
+      await screen.findByText(
+        "This location's callsign is PRACTICE, but Nexus logs as N0CALL: Wavelog will refuse these QSOs. Pick a location with your callsign, or change this one in Wavelog.",
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText(/This location's grid is DM42, but your grid is DM41/)).toBeTruthy()
+  })
+
+  it('says nothing when the picked location is the operator', async () => {
+    asOperator()
+    await find()
+    fireEvent.click(await screen.findByRole('button', { name: /Home/ }))
+    // The pick landed (the control), and nothing was said about it.
+    await waitFor(() => expect(stationField().value).toBe('12'))
+    expect(screen.queryByText(/This location's/)).toBeNull()
+  })
+
+  it('warns as soon as the answer names the location already chosen', async () => {
+    // The reported case: the number was already right and every QSO was still refused. Asking
+    // for the list is enough to see why, without picking it again.
+    asOperator({ cloudlogStationId: '11' })
+    await find()
+    expect(await screen.findByText(/This location's callsign is PRACTICE/)).toBeTruthy()
+  })
+
+  it('drops the warning once the number no longer names that location', async () => {
+    asOperator()
+    await find()
+    fireEvent.click(await screen.findByRole('button', { name: /26PRACTICE/ }))
+    await screen.findByText(/This location's callsign is PRACTICE/)
+    fireEvent.change(stationField(), { target: { value: '12' } })
+    await waitFor(() => expect(screen.queryByText(/This location's/)).toBeNull())
+  })
+})
