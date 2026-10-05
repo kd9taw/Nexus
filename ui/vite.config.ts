@@ -55,6 +55,9 @@ export default defineConfig({
   plugins: [react()],
   define: {
     __BUILD_ID__: JSON.stringify(buildId()),
+    // The street map's renderer (components/StreetMap, MapLibre) is part of the desktop build; the
+    // hosted Remote build leaves it out (vite.remote.config.ts).
+    __STREET_MAP__: 'true',
   },
   // Relative base so the built bundle works when served from inside Tauri.
   base: './',

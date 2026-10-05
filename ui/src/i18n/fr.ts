@@ -2476,6 +2476,7 @@ export const FR: PartialCatalog = {
   "map.street.paused": "Plan des rues en pause",
   "map.street.reload": "Recharger",
   "map.street.unreadable": "Impossible de lire ce plan des rues.",
+  "map.street.worldScale": "Dessiné à l'échelle de la planète : aucun détail au niveau des rues",
   "map.projection.world.label": "Plate",
   "map.projection.world.title": "Planisphère avec relief ombré",
   "map.prov.cached": "CACHE",

@@ -21,7 +21,10 @@ import countriesTopo from 'world-atlas/countries-50m.json'
 import statesTopo from 'us-atlas/states-10m.json'
 import type { LatLon } from './grid'
 
-export type Projection = 'globe' | 'aeqd' | 'world'
+/** `street` is the downloadable street map: MapLibre's Web Mercator, drawn by components/StreetMap.
+ *  `makeProjection` never builds it; MapView locks a Mercator to MapLibre's camera instead
+ *  (features/streetOverlay.ts). */
+export type Projection = 'globe' | 'aeqd' | 'world' | 'street'
 
 /** Interactive view controls: zoom (scale multiplier), orthographic rotation
  * `[λ, φ]` in degrees (Globe only; null = centered on the operator), and a screen

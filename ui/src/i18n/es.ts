@@ -2476,6 +2476,7 @@ export const ES: PartialCatalog = {
   "map.street.paused": "Mapa de calles en pausa",
   "map.street.reload": "Recargar",
   "map.street.unreadable": "No se pudo leer este mapa de calles.",
+  "map.street.worldScale": "Se dibuja a escala del planeta: sin detalle a nivel de calle",
   "map.projection.world.label": "Plano",
   "map.projection.world.title": "Mapa mundial plano con relieve sombreado",
   "map.prov.cached": "CACHÉ",

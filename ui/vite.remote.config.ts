@@ -5,7 +5,9 @@ import react from '@vitejs/plugin-react'
 import { readFileSync } from 'node:fs'
 import { bundledLicenses } from './remote-licenses'
 export default defineConfig({
-  define: { __BUILD_ID__: JSON.stringify(process.env.GITHUB_SHA?.slice(0, 8) ?? 'remote-pilot') },
+  // The Remote page never offers the street map (its packs live on the station's disk), so the
+  // street renderer and MapLibre stay out of this bundle: MapView's lazy import of it is dead code here.
+  define: { __BUILD_ID__: JSON.stringify(process.env.GITHUB_SHA?.slice(0, 8) ?? 'remote-pilot'), __STREET_MAP__: 'false' },
   root: 'remote', plugins: [react(), {
     name: 'remote-license-texts',
     generateBundle(_options, bundle) {

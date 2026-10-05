@@ -18,8 +18,15 @@
 //
 // THE CAMERA, for Nexus's overlays (the caller draws them above this; nothing here does):
 // `onCamera` hears the centre, MapLibre's zoom, the bearing and MapLibre's own `project` at once,
-// and again on every move and resize. Rotation and pitch are off, and the world is not repeated, so
-// a Mercator locked to the camera lines up with the map exactly.
+// and again on every move, resize and rendered frame, so an overlay re-syncs in the frame MapLibre
+// draws; it hears null when the map goes (unmounted, paused, unreadable). Rotation and pitch are off,
+// and the world is not repeated, so a Mercator locked to the camera lines up with the map exactly
+// (features/streetOverlay.ts).
+//
+// INPUT. MapLibre owns drag and zoom. `onPointer` hands the caller MapLibre's own pointer events in
+// the map's CSS px, for the overlays' hit test; `preventDefault()` on a double-click keeps MapLibre
+// from zooming, so a double-click on one of the caller's targets keeps the caller's meaning. `cursor`
+// replaces MapLibre's grab hand while the pointer is over such a target.
 //
 // ZERO NETWORK: the style, glyphs, sprites and tiles all come through features/streetPack.ts, and
 // MapLibre's worker is a file of this build. The © OpenStreetMap credit is always on screen: the
@@ -27,8 +34,8 @@
 
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './StreetMap.css'
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AttributionControl, GPUInitializationError, MapLibreMap, setWorkerUrl } from 'maplibre-gl'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { AttributionControl, GPUInitializationError, MapLibreMap, setWorkerUrl, type MapMouseEvent } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { webgl2Available } from '../gpu'
 import { t } from '../i18n'
@@ -60,6 +67,21 @@ export interface StreetCamera {
   project: (lonLat: [number, number]) => [number, number]
 }
 
+/** One of MapLibre's pointer events, where it happened in the map's CSS px. */
+export interface StreetPointer {
+  type: 'move' | 'out' | 'click' | 'dblclick'
+  x: number
+  y: number
+  /** On a double-click: MapLibre does not zoom. */
+  preventDefault: () => void
+}
+
+/** What the caller can ask of the open map. */
+export interface StreetMapHandle {
+  /** Zoom in (positive) or out (negative) by whole steps, animated, about the centre. */
+  zoomBy: (steps: number) => void
+}
+
 export interface StreetMapProps {
   /** The installed pack to draw: one entry of `street_map_packs()`. */
   pack: StreetPack
@@ -67,7 +89,10 @@ export interface StreetMapProps {
   center?: [number, number]
   /** The zoom to open at; 12 when absent. Read once, at mount. */
   zoom?: number
-  onCamera?: (camera: StreetCamera) => void
+  onCamera?: (camera: StreetCamera | null) => void
+  onPointer?: (e: StreetPointer) => void
+  /** A CSS cursor over the map instead of MapLibre's own; absent = MapLibre's. */
+  cursor?: string
 }
 
 type Shown = 'map' | 'noWebgl2' | 'paused' | 'unreadable'
@@ -96,7 +121,10 @@ function subscribeLook(onChange: () => void): () => void {
 }
 const lookSnapshot = () => JSON.stringify(readStreetLook())
 
-export default function StreetMap({ pack, center, zoom, onCamera }: StreetMapProps) {
+export default forwardRef<StreetMapHandle, StreetMapProps>(function StreetMap(
+  { pack, center, zoom, onCamera, onPointer, cursor },
+  ref,
+) {
   const locale = useLocale()
   const look = useSyncExternalStore(subscribeLook, lookSnapshot)
   // A pack is the same pack while its id and sha256 are: `street_map_packs()` answers with new
@@ -113,6 +141,10 @@ export default function StreetMap({ pack, center, zoom, onCamera }: StreetMapPro
   const appliedRef = useRef(style)
   const onCameraRef = useRef(onCamera)
   onCameraRef.current = onCamera
+  const onPointerRef = useRef(onPointer)
+  onPointerRef.current = onPointer
+
+  useImperativeHandle(ref, () => ({ zoomBy: (steps) => mapRef.current?.zoomTo(mapRef.current.getZoom() + steps) }), [])
 
   useEffect(() => {
     const host = hostRef.current
@@ -159,7 +191,14 @@ export default function StreetMap({ pack, center, zoom, onCamera }: StreetMapPro
     const report = () => onCameraRef.current?.(cameraOf(map))
     map.on('move', report)
     map.on('resize', report)
+    map.on('render', report)
     report()
+    const pointer = (type: StreetPointer['type']) => (e: MapMouseEvent) =>
+      onPointerRef.current?.({ type, x: e.point.x, y: e.point.y, preventDefault: () => e.preventDefault() })
+    map.on('mousemove', pointer('move'))
+    map.on('mouseout', pointer('out'))
+    map.on('click', pointer('click'))
+    map.on('dblclick', pointer('dblclick'))
 
     // Device pixels per layout pixel, so the map stays sharp under the app's CSS zoom: the
     // MapView/Waterfall pattern. MapLibre's own default, devicePixelRatio, cannot see zoom.
@@ -185,9 +224,16 @@ export default function StreetMap({ pack, center, zoom, onCamera }: StreetMapPro
       mapRef.current = null
       map.remove()
       close()
+      onCameraRef.current?.(null)
     }
     // `center` and `zoom` open the map; they never move one that is already open.
   }, [shown, key])
+
+  // The caller's cursor wins over MapLibre's grab hand only while it names one.
+  useEffect(() => {
+    const map = mapRef.current
+    if (map) map.getCanvasContainer().style.cursor = cursor ?? ''
+  }, [cursor, shown, key])
 
   // A theme, Night, contrast or language change repaints the open map in place.
   useEffect(() => {
@@ -218,4 +264,4 @@ export default function StreetMap({ pack, center, zoom, onCamera }: StreetMapPro
       )}
     </div>
   )
-}
+})

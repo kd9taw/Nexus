@@ -3047,6 +3047,7 @@ export const DE: PartialCatalog = {
   "map.street.paused": "Straßenkarte angehalten",
   "map.street.reload": "Neu laden",
   "map.street.unreadable": "Diese Straßenkarte ließ sich nicht lesen.",
+  "map.street.worldScale": "Im Maßstab des Planeten gezeichnet: keine Details auf Straßenebene",
   "map.zoom.aria": "Zoom",
   "map.zoom.in": "Vergrößern",
   "map.zoom.out": "Verkleinern",

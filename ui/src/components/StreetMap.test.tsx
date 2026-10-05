@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StyleSpecification } from 'maplibre-gl'
 import { t } from '../i18n'
 import { packUrl, type StreetPack } from '../features/streetPack'
-import StreetMap, { type StreetCamera } from './StreetMap'
+import { createRef } from 'react'
+import StreetMap, { type StreetCamera, type StreetMapHandle, type StreetPointer } from './StreetMap'
 
 const h = vi.hoisted(() => {
   const state = { webgl2: true, throwOnCreate: null as Error | null }
@@ -28,6 +29,11 @@ const h = vi.hoisted(() => {
     setPixelRatio = vi.fn((r: number) => {
       this.pixelRatio = r
     })
+    container = document.createElement('div')
+    zoomTo = vi.fn()
+    getCanvasContainer() {
+      return this.container
+    }
     constructor(options: Record<string, unknown>) {
       if (state.throwOnCreate) throw state.throwOnCreate
       this.options = options
@@ -282,7 +288,7 @@ describe('StreetMap — the context-loss watchdog', () => {
 describe('StreetMap — the camera it exposes', () => {
   it('hands over centre, zoom, bearing and the projection at once, then on every move and resize', () => {
     const cameras: StreetCamera[] = []
-    render(<StreetMap pack={PACK} onCamera={(c) => cameras.push(c)} />)
+    render(<StreetMap pack={PACK} onCamera={(c) => c && cameras.push(c)} />)
     const map = theMap()
     expect(cameras).toHaveLength(1)
     expect(cameras[0]).toMatchObject({ center: [expect.closeTo(-97.6, 9), expect.closeTo(38.85, 9)], zoom: 12, bearing: 0 })
@@ -296,5 +302,65 @@ describe('StreetMap — the camera it exposes', () => {
     expect(cameras[1]).toMatchObject({ center: [-97.5, 38.9], zoom: 13.5 })
     act(() => map.fire('resize'))
     expect(cameras).toHaveLength(3)
+  })
+})
+
+describe('StreetMap — what it hands the overlays', () => {
+  it('re-syncs the camera on every frame MapLibre renders, and says null when the map goes', () => {
+    const cameras: Array<StreetCamera | null> = []
+    const { unmount } = render(<StreetMap pack={PACK} onCamera={(c) => cameras.push(c)} />)
+    const map = theMap()
+    map.centre = [-97.4, 38.7]
+    act(() => map.fire('render'))
+    expect(cameras).toHaveLength(2)
+    expect(cameras[1]).toMatchObject({ center: [-97.4, 38.7] })
+    unmount()
+    expect(cameras[cameras.length - 1]).toBeNull()
+  })
+
+  it("passes MapLibre's pointer events on in the map's px, and a double-click the caller takes does not zoom", () => {
+    const seen: StreetPointer[] = []
+    render(
+      <StreetMap
+        pack={PACK}
+        onPointer={(e) => {
+          seen.push(e)
+          if (e.type === 'dblclick') e.preventDefault()
+        }}
+      />,
+    )
+    const map = theMap()
+    const ev = (x: number, y: number) => ({ point: { x, y }, preventDefault: vi.fn() })
+    const move = ev(10, 20)
+    const dbl = ev(30, 40)
+    act(() => {
+      map.fire('mousemove', move)
+      map.fire('click', ev(11, 21))
+      map.fire('dblclick', dbl)
+      map.fire('mouseout', ev(0, 0))
+    })
+    expect(seen.map((e) => [e.type, e.x, e.y])).toEqual([
+      ['move', 10, 20],
+      ['click', 11, 21],
+      ['dblclick', 30, 40],
+      ['out', 0, 0],
+    ])
+    expect(dbl.preventDefault).toHaveBeenCalledTimes(1)
+    expect(move.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it("shows the caller's cursor over the map, and gives MapLibre's own back", () => {
+    const { rerender } = render(<StreetMap pack={PACK} cursor="pointer" />)
+    const map = theMap()
+    expect(map.container.style.cursor).toBe('pointer')
+    rerender(<StreetMap pack={PACK} />)
+    expect(map.container.style.cursor).toBe('')
+  })
+
+  it('zooms by whole steps when asked', () => {
+    const ref = createRef<StreetMapHandle>()
+    render(<StreetMap ref={ref} pack={PACK} />)
+    act(() => ref.current?.zoomBy(-1))
+    expect(theMap().zoomTo).toHaveBeenCalledWith(11)
   })
 })

@@ -13,6 +13,13 @@
   position: absolute;
   inset: 0;
 }
+/* Under the 2-D map's overlay canvas (MapView): the map fills the canvas's box, out of flow like the
+   canvas itself, and comes first so the overlay paints over it. MapLibre's credit corner (z-index 2)
+   stays above both. */
+.map-canvas-wrap > .street-map {
+  position: absolute;
+  inset: 0;
+}
 
 /* The sentences that stand in for the map (no WebGL2, paused, unreadable): never a blank. */
 .street-map-note {

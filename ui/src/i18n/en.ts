@@ -2216,6 +2216,7 @@ export const EN = {
   'map.street.paused': 'Street map paused',
   'map.street.reload': 'Reload',
   'map.street.unreadable': 'This street map could not be read.',
+  'map.street.worldScale': 'Drawn at the scale of the planet: no detail at street zoom',
 
   'map.zoom.aria': 'Zoom',
   'map.zoom.in': 'Zoom in',

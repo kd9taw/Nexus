@@ -1483,6 +1483,7 @@ export const JA: PartialCatalog = {
   "map.street.paused": "ストリートマップを一時停止しました",
   "map.street.reload": "再読み込み",
   "map.street.unreadable": "このストリートマップを読み込めませんでした。",
+  "map.street.worldScale": "地球規模で描画されるため、ストリートの縮尺では詳細は表示されません",
   "map.zoom.aria": "ズーム",
   "map.zoom.in": "拡大",
   "map.zoom.out": "縮小",

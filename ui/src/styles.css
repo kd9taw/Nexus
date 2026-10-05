@@ -4188,6 +4188,12 @@ body.resizing-row {
   width: 100%;
   margin-top: var(--space-1);
 }
+/* STREET SCALE (MapView, features/streetOverlay.ts): a world-scale field shows no detail at street
+   zoom, so its row reads dimmed and its tooltip says why. It stays a working control; only the ink
+   changes. */
+.map-layer.street-dim label {
+  color: var(--text-faint);
+}
 .map-coverage-dim {
   margin-top: var(--space-1);
   width: 100%;
