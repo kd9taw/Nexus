@@ -297,6 +297,44 @@ it('a click on the picture is a click at the shack, counted here: a pointer even
   expect(presses().slice(4)).toEqual(['down 1', 'up 1'])
 })
 
+it('a press that began anywhere but on the picture is never sent, wherever it moves and is let go; CONTROL: a hover, and a drag that began on the picture, are', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  // Laid out wider than the frame, so the picture has a bar either side of it (the frame is x 100..1700).
+  v.video.getBoundingClientRect = () => ({ left: 0, top: 100, width: 1800, height: 900, right: 1800, bottom: 1000, x: 0, y: 100, toJSON: () => ({}) })
+  const pointers = () => v.peer.channel('control').sent.filter(m => m.type === 'pointer').map(m => `${m.action} ${m.buttons}`)
+  const held = () => v.peer.channel('ptt').sent.filter(m => m.type === 'held' && m.buttons !== 0)
+  // A mouse's events on the picture as Chrome sends them: a move names no button of its own (-1), only those held.
+  const mouse = (type: string, x: number, buttons: number) => v.video.dispatchEvent(new MouseEvent(type,
+    { bubbles: true, clientX: x, clientY: 550, button: type === 'pointermove' ? -1 : 0, buttons }))
+  const flushed = () => new Promise(resolve => setTimeout(resolve, 40))
+  // Pressed on the page's own header. So is a press on "Still there?" or on More's cover, which can go while it is
+  // held: the browser hit-tests the rest of the press, so its moves and its release land on the picture.
+  document.querySelector('header')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 10, clientY: 10, button: 0, buttons: 1 }))
+  mouse('pointermove', 800, 1)
+  mouse('pointermove', 900, 1)
+  await flushed()
+  mouse('pointerup', 900, 0)
+  // Pressed on the bar beside the frame, which is no press on Nexus, and dragged onto the frame.
+  mouse('pointerdown', 50, 1)
+  mouse('pointermove', 800, 1)
+  await flushed()
+  mouse('pointerup', 800, 0)
+  await flushed()
+  expect(pointers(), 'nothing of either press reached Nexus').toEqual([])
+  expect(held(), 'nor was anything held there').toEqual([])
+  // CONTROL: the pointer over the picture with nothing held is the shack's pointer moving, and a press that began on
+  // the frame drags there and is let go there.
+  mouse('pointermove', 700, 0)
+  await flushed()
+  mouse('pointerdown', 800, 1)
+  mouse('pointermove', 900, 1)
+  await flushed()
+  mouse('pointerup', 900, 0)
+  expect(pointers()).toEqual(['move 0', 'down 1', 'move 1', 'up 0'])
+})
+
 it('releases at the shack whatever it pressed there when the picture loses focus', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
@@ -1006,8 +1044,8 @@ it('IDLE: the prompt\'s own click keeps the stream and starts the fifteen minute
     const keep = screen.getByRole('button', { name: KEEP })
     const input = () => v.peer.channel('control').sent.filter(m => m.type !== 'heartbeat')
     const sent = input().length
-    // A mouse's click, over the middle of the picture: down, up, click. The prompt stays up while it is
-    // pressed, so no part of the press can land on the picture under it.
+    // A mouse's click, over the middle of the picture: down, up, click. The press alone does not take the
+    // prompt down, so a click let go before the page's next look lands on it whole (one held past it: below).
     fireEvent.pointerDown(keep, { button: 0, buttons: 1, clientX: 800, clientY: 550 })
     expect(stillThere(), 'still up while pressed').toBeTruthy()
     fireEvent.pointerUp(keep, { button: 0, buttons: 0, clientX: 800, clientY: 550 })
@@ -1025,6 +1063,30 @@ it('IDLE: the prompt\'s own click keeps the stream and starts the fifteen minute
     expect(stillThere()).toBeNull()
     watching(v, 2 * MIN)
     expect(v.operations.release).not.toHaveBeenCalled()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: a press on the prompt held past the page\'s next look: the prompt goes from under it, and the rest of the press, on the picture, reaches nothing at the shack', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 15 * MIN)
+    const input = () => v.peer.channel('control').sent.filter(m => m.type !== 'heartbeat')
+    const sent = input().length
+    fireEvent.pointerDown(screen.getByRole('button', { name: KEEP }), { pointerId: 1, button: 0, buttons: 1, clientX: 800, clientY: 550 })
+    // The press is the answer, so the page's next look (once a second) takes the prompt down while the button is still
+    // held, and the prompt's pointer capture goes with it: the browser hands the rest of the press to the picture.
+    watching(v, 1000)
+    expect(stillThere(), 'premise: the prompt went while its press was held').toBeNull()
+    v.video.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 800, clientY: 690, button: -1, buttons: 1 }))
+    act(() => { v.advance(100) })
+    v.video.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 800, clientY: 690, button: 0, buttons: 0 }))
+    act(() => { v.advance(100) })
+    expect(input().slice(sent), 'nothing of the press reached Nexus').toEqual([])
+    expect(v.peer.channel('ptt').sent.filter(m => m.type === 'held'), 'nor was anything held there').toEqual([])
+    // CONTROL: the picture's own press, made after it, is sent.
+    v.video.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 1 }))
+    expect(input().slice(sent).map(m => `${m.type} ${m.action} ${m.buttons}`)).toEqual(['pointer down 1'])
   } finally { vi.useRealTimers() }
 })
 

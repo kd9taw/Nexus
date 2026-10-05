@@ -215,6 +215,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   within the same limits as before. **Fit** shows the whole picture again. A pinch on the buttons
   above the picture still zooms the browser, and the page now keeps its size when it does. It needs
   the Remote page's update; the sharper zoom also needs the new Nexus at the shack.
+- **Remote streaming: a press that starts on the page's own buttons never reaches Nexus at the
+  shack.** Now and then a click on **Keep streaming** ("Still there?") outlasted the question: it went
+  away under the pointer, and moving the mouse before letting go sent that movement to Nexus at the
+  shack, marked as pressed. A mouse or pen press on the picture to close **More** in the phone layout
+  did the same every time, and so did a press that started on the dark bars beside the picture.
+  Nexus at the shack had seen no press, so it only moved its pointer and dragged nothing, but the page
+  should not have sent it. Now the picture sends nothing of a press that started anywhere else, until
+  it is let go. Moving the mouse over the picture, and clicking and dragging on it, work as before.
+  It needs the Remote page's update.
 - **RTTY and PSK macros: a caption that reads as a stop is refused in every language.** The F-key
   editor refused a caption like Stop, Esc or Abort only in English, so a key that transmits could be
   saved as "Stopp", "Parar", "Arrêter" or "停止", which looks like the key to press to stop. It now
