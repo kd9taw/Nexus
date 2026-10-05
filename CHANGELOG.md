@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line to `nexus-diag.log`: the service, the kind of failure, the HTTP status and the contact's
   call. The line never includes the service's own words or your key, and it lets a support request
   show what went wrong.
+- **CW scope: the frequency scale no longer reads the CW pitch off** (600 Hz by default). It also ran
+  backwards on reverse CW (CW-R) and with the soundcard keyer below 10 MHz. The numbers now match the
+  spot tags and where a click tunes. In AM and FM the Phone scope's audio picture shows no numbers,
+  since a click there does not tune.
+- **CW scope: the frequency scale reads to 100 Hz on CW's narrow window.** It showed the same kHz under
+  every tick (`7.030` five times by default); now `7.0296 7.0298 7.0300 7.0302 7.0304`. Any scale with
+  ticks under 1 kHz apart does the same, including the Phone scope at a 2.4 kHz width. Wider scales are
+  unchanged.
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
@@ -297,6 +305,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes: the dial, tuning, Tune, PTT and Stop TX work as before, and the banner never covers
   Stop TX.
 
+- **FT8, JS8, RTTY, PSK and SSTV: the radio's own scope as a pane.** ⊞ Panels has a new **RF
+  scope** entry in the five digital cockpits, off until you tick it, so nobody's screen changes on
+  the update. It draws the radio's panadapter, an Icom's scope over CI-V at 115200 baud or a
+  FlexRadio's with the native panadapter on, and the audio waterfall stays where it was. In FT8 it
+  stands beside the waterfall and shares its height; in JS8 it heads the first column; in RTTY, PSK
+  and SSTV it is the first pane under the Stop TX strip. It only shows the band: a click on it does
+  not tune the radio. An Icom in a data mode streams its scope over CAT only while the pane is on
+  screen, and stops two seconds after you hide it; it still pauses while you transmit. Not yet
+  checked on a radio.
+- **The scopes: spot tags, your licence-class edges, and FT8 decodes on the RF scope.** The Phone
+  and CW scopes tag the spots Band Activity shows for your band (SSB on Phone, CW on CW) at their
+  frequencies, in Band Activity's colours, fading over half an hour; where too many crowd together
+  the freshest are shown and the rest counted. Click a tag to work the station, as a click in Band
+  Activity does; while you transmit, on the Remote page or with CAT down a tag is only a label,
+  and a filter edge you can drag keeps the click. Every scope also tints the frequencies your
+  licence class (Settings ▸ Station) may not transmit the current mode on, from the same table
+  as the transmit lock. It only shows the lock: 🔒 TX LOCKED still decides, judging your whole
+  signal, and an Open class has no tint. In FT8 and FT4 the RF scope pane tags the last slot's
+  decodes at the dial plus their offset and draws the RX and TX offsets; it still tunes nothing.
+  The tags and tint draw on a layer of their own, so a new spot never redraws the waterfall. The
+  tint is not on the Remote page yet. Not yet checked on a radio.
 - **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
   a new place, **Left side**: a column from under the header down to the dock, beside the scope,
   so the band map and the two boards get the whole height of the window instead of what is left
@@ -349,6 +378,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the screens attached. You sign in there and approve the window at the station once, like a new
   browser. The page in it can reach nothing in Nexus, exactly as in a browser. Linux and macOS
   keep using Remote in a browser for now.
+- **Phone and CW scope: the filter you are listening through, with a handle on it.** Where the radio
+  reports its filter width, the scope shades the passband at the dial. On SSB its far edge, and on CW
+  both edges, can be dragged to set the width, in the same range and steps as the BW − and + buttons;
+  the radio follows within a second or two. The edge is not offered in FM, in a DATA mode, on the Remote
+  page, or while anything is transmitting, and no width is ever sent to a keyed radio. A manual notch
+  the radio reports on draws as a red line through the scope. With the scope focused, keys do what
+  the mouse does: ← and → tune (Shift for bigger steps), Enter tunes onto the signal in the passband,
+  [ and ] narrow and widen the filter, and ↑ and ↓ scroll back while paused. On an IC-7300, IC-705,
+  IC-905, IC-7610 or IC-9700 on Nexus's own CI-V connection, the filter width is now read from the
+  radio and set on it; before, BW showed a width it had never sent there. Not yet checked on a radio.
 
 ## [1.16.0] — 2026-10-03
 

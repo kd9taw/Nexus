@@ -925,6 +925,90 @@ impl CivBackend {
                 .is_some_and(|r| r.iter().all(Result::is_ok)),
         )
     }
+
+    // ---- THE IF FILTER WIDTH (`1A 03`), Main's — the passband the scope's filter edges move ----
+    //
+    // ⚠️ DELIBERATELY NOT THROUGH `M` / `m`. The rigctld mode verb carries a width, and the radio
+    // loop sends one with every DATA-mode assert (`M PKTUSB 3000`): honouring it there would
+    // rewrite the operator's DATA filter on every FT8 arm, which this daemon has never done.
+    // `m` keeps answering width 0 for the same reason — the FT8 arm's width check reads it. So
+    // these two are the daemon's own verbs, called by the radio loop beside its scope controls.
+
+    /// Main's IF filter width in `mode`, the name the `m` read just reported.
+    fn filter_width_in(&self, mode: &str) -> FilterWidthReading {
+        let Some(table) = commands::FilterWidthTable::for_mode_name(mode) else {
+            return FilterWidthReading::Fixed;
+        };
+        self.read_from(
+            Some(ReceiverId::Main),
+            commands::read_filter_width(self.addr),
+            0x1A,
+            Some(0x03),
+        )
+        .as_ref()
+        .and_then(commands::parse_filter_width_code)
+        .and_then(|code| table.hz(code))
+        .map_or(FilterWidthReading::Unread, FilterWidthReading::Width)
+    }
+
+    /// Set Main's IF filter width to the code nearest `hz` in the table of the mode Main is in
+    /// NOW — read from the radio first, because the same code is 1.8 kHz in SSB and 4.6 kHz in
+    /// AM. Returns the width written (the table's, not the ask). Never written in FM or a mode
+    /// the read could not name ([`FilterWidthRefusal::NotSettable`]), nor in a mode `m` names
+    /// as DATA ([`FilterWidthRefusal::DataMode`]).
+    ///
+    /// ⚠️ DATA IS NOT READ HERE (`1A 06`), deliberately: the engine folds every reply into its
+    /// state cache, so one read would turn `m`'s `USB` into `PKTUSB` from then on — and the
+    /// band-change re-assert compares that name against the commanded mode, which is FT8's arm.
+    /// The radio loop is what refuses a width while it has a DATA mode commanded (the filter
+    /// FT8 decodes through, and the soundcard CW keyer's); this only adds the cache's own word.
+    fn set_filter_width_hz(&self, hz: u32) -> Result<u32, FilterWidthRefusal> {
+        if hz == 0 {
+            return Err(FilterWidthRefusal::NotSettable);
+        }
+        let (mode, _) = self.mode();
+        if mode.to_ascii_uppercase().starts_with("PKT") {
+            return Err(FilterWidthRefusal::DataMode);
+        }
+        let table = commands::FilterWidthTable::for_mode_name(&mode)
+            .ok_or(FilterWidthRefusal::NotSettable)?;
+        let code = table.code_for(hz);
+        let set = (commands::set_filter_width(self.addr, code), Expect::Ack);
+        match self
+            .on_receiver(ReceiverId::Main, vec![set])
+            .and_then(|mut r| r.pop())
+        {
+            Some(Ok(_)) => table.hz(code).ok_or(FilterWidthRefusal::NotSettable),
+            Some(Err(CivError::Nak)) => Err(FilterWidthRefusal::Refused),
+            _ => Err(FilterWidthRefusal::NoAnswer),
+        }
+    }
+}
+
+/// Main's IF filter width as the daemon reads it ([`CivDaemon::filter_width`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterWidthReading {
+    /// The width (Hz) of the filter in circuit.
+    Width(u32),
+    /// The mode has no settable width (FM): there is no width to show.
+    Fixed,
+    /// No reading: no answer, a refusal, a byte outside the table, or a selection that could not
+    /// be held on Main.
+    Unread,
+}
+
+/// Why Main's IF filter width was not written ([`CivDaemon::set_filter_width`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterWidthRefusal {
+    /// The mode has no settable width (FM), the mode could not be named, or a zero width.
+    NotSettable,
+    /// DATA mode is on: the filter belongs to the digital modes.
+    DataMode,
+    /// The radio answered NG.
+    Refused,
+    /// Nothing answered, or the selection could not be held on Main. The only one worth trying
+    /// again.
+    NoAnswer,
 }
 
 impl RigBackend for CivBackend {
@@ -1380,6 +1464,9 @@ pub struct CivDaemon {
     /// Can a command sent through this daemon name the SUB receiver — see
     /// [`Self::names_receivers`].
     names_receivers: bool,
+    /// The backend every TCP client is served by, kept for the daemon's own verbs that the
+    /// rigctld protocol deliberately does not carry (the IF filter width).
+    civ: Arc<CivBackend>,
 }
 
 impl CivDaemon {
@@ -1398,13 +1485,14 @@ impl CivDaemon {
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let tx_intent = Arc::new(AtomicBool::new(false));
-        let backend: Arc<dyn RigBackend> = Arc::new(CivBackend::new(
+        let civ = Arc::new(CivBackend::new(
             engine.handle(),
             civ_addr,
             tx_intent.clone(),
             data_mode,
             model,
         ));
+        let backend: Arc<dyn RigBackend> = civ.clone();
         let tcp_stop = Arc::new(AtomicBool::new(false));
         let tcp_thread = {
             let stop = tcp_stop.clone();
@@ -1452,6 +1540,7 @@ impl CivDaemon {
             tcp_thread: Some(tcp_thread),
             tx_intent,
             names_receivers: RxAddressing::for_model(model) != RxAddressing::Single,
+            civ,
         })
     }
 
@@ -1509,6 +1598,19 @@ impl CivDaemon {
     /// daemon's life — it is the model's addressing, not a reading.
     pub fn names_receivers(&self) -> bool {
         self.names_receivers
+    }
+
+    /// Main's IF filter width in `mode` — the name the `m` read just reported. See
+    /// `CivBackend::filter_width_in` for why this is not `m`'s passband.
+    pub fn filter_width(&self, mode: &str) -> FilterWidthReading {
+        self.civ.filter_width_in(mode)
+    }
+
+    /// Set Main's IF filter width to the nearest width the radio has in its current mode, and
+    /// return that width. Refused, with nothing written, in FM and with DATA on — see
+    /// `CivBackend::set_filter_width_hz`. The radio loop calls it at receive time only.
+    pub fn set_filter_width(&self, hz: u32) -> Result<u32, FilterWidthRefusal> {
+        self.civ.set_filter_width_hz(hz)
     }
 
     /// Newest completed scope sweep (latest-wins; `None` until the next arrives).
@@ -4122,6 +4224,152 @@ mod tests {
             roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
             "",
             "the third not-implemented reply in a row hangs up"
+        );
+    }
+
+    // ── THE IF FILTER WIDTH (`1A 03`): the daemon's own verbs, never `M`/`m` ──────────────────
+
+    /// The `1A 03` frames since `from` in the wire log, payload bytes after the sub-command:
+    /// `[]` for a read, `[code]` for a write.
+    fn width_frames(regs: &Arc<Mutex<Regs>>, from: usize) -> Vec<Vec<u8>> {
+        regs.lock().unwrap().log[from..]
+            .iter()
+            .filter(|(cmd, data)| *cmd == 0x1A && data.first() == Some(&0x03))
+            .map(|(_, data)| data[1..].to_vec())
+            .collect()
+    }
+
+    /// ⭐ BY VALUE, ON THE WIRE: a width asked for in Hz reaches the IC-9700 as the ONE code the
+    /// vendor table gives it, as a BCD byte, on Main — and what comes back is the width the
+    /// radio now has, the table's, not the ask.
+    #[test]
+    fn the_filter_width_is_read_and_written_on_main_by_value() {
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        assert_eq!(
+            b.filter_width_in("USB"),
+            FilterWidthReading::Width(2400),
+            "code 28 read back as 2.4 kHz"
+        );
+        let from = regs.lock().unwrap().log.len();
+        assert_eq!(b.set_filter_width_hz(1800), Ok(1800));
+        assert_eq!(
+            width_frames(&regs, from),
+            vec![vec![0x22]],
+            "exactly one write, code 22 as the BCD byte 0x22"
+        );
+        assert_eq!(regs.lock().unwrap().filter_raw, 0x22);
+        assert_eq!(b.filter_width_in("USB"), FilterWidthReading::Width(1800));
+        // CLAMPED BY CONSTRUCTION: past the table's end is its end, never a code the rig lacks.
+        assert_eq!(b.set_filter_width_hz(5000), Ok(3600));
+        assert_eq!(regs.lock().unwrap().filter_raw, 0x40);
+        // A width between two codes is the nearer one, and the answer says which.
+        assert_eq!(b.set_filter_width_hz(1840), Ok(1800));
+        // The Sub's own filter never moved.
+        assert_eq!(regs.lock().unwrap().sub_filter_raw, 0x15);
+        // AM reads in its own table: the same code is another width.
+        regs.lock().unwrap().main_mode = 0x02;
+        assert_eq!(
+            b.filter_width_in("AM"),
+            FilterWidthReading::Width(200 + 200 * 22)
+        );
+        assert_eq!(b.set_filter_width_hz(6000), Ok(6000));
+        assert_eq!(regs.lock().unwrap().filter_raw, 0x29, "AM 6 kHz is code 29");
+    }
+
+    /// ⛔ NOTHING IS WRITTEN WHERE THE WIDTH IS NOT THE SCOPE'S TO MOVE: FM (no row in the table),
+    /// a mode `m` names as DATA (the digital modes' filter — the FT8 arm on this daemon leaves it
+    /// alone), a zero width. A refusal from the radio comes back as one. And no `1A 06` read is
+    /// spent finding out: the width's own verbs never teach the state cache the DATA flag.
+    #[test]
+    fn no_filter_width_is_written_in_fm_with_data_on_or_for_zero() {
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        let from = regs.lock().unwrap().log.len();
+        assert_eq!(
+            b.filter_width_in("FM"),
+            FilterWidthReading::Fixed,
+            "FM has no width to read"
+        );
+        assert_eq!(b.filter_width_in("PKTFM"), FilterWidthReading::Fixed);
+        assert!(width_frames(&regs, from).is_empty(), "…and it is not asked");
+
+        regs.lock().unwrap().main_mode = 0x05; // FM
+        assert_eq!(
+            b.set_filter_width_hz(1800),
+            Err(FilterWidthRefusal::NotSettable)
+        );
+        // USB with DATA on (USB-D), as the state cache knows it — a `1A 06` reply folded in.
+        regs.lock().unwrap().main_mode = 0x01;
+        regs.lock().unwrap().data_mode = true;
+        let _ = b.read(commands::read_data_mode(0xA2), 0x1A, Some(0x06));
+        assert_eq!(
+            b.set_filter_width_hz(1800),
+            Err(FilterWidthRefusal::DataMode)
+        );
+        regs.lock().unwrap().data_mode = false;
+        let _ = b.read(commands::read_data_mode(0xA2), 0x1A, Some(0x06));
+        assert_eq!(
+            b.set_filter_width_hz(0),
+            Err(FilterWidthRefusal::NotSettable)
+        );
+        assert!(
+            width_frames(&regs, from).is_empty(),
+            "no `1A 03` went out for any of them"
+        );
+        let data_reads = regs.lock().unwrap().log[from..]
+            .iter()
+            .filter(|(cmd, data)| *cmd == 0x1A && data.as_slice() == [0x06])
+            .count();
+        assert_eq!(data_reads, 2, "only the test's own two `1A 06` reads");
+        assert_eq!(
+            regs.lock().unwrap().filter_raw,
+            0x28,
+            "Main's filter untouched"
+        );
+
+        // POSITIVE CONTROL: the same radio, USB with DATA off, takes the write.
+        assert_eq!(b.set_filter_width_hz(1800), Ok(1800));
+        // …and a radio that answers NG is reported as having refused.
+        regs.lock().unwrap().nak_filter_width = 1;
+        assert_eq!(
+            b.set_filter_width_hz(2000),
+            Err(FilterWidthRefusal::Refused)
+        );
+        assert_eq!(
+            regs.lock().unwrap().filter_raw,
+            0x22,
+            "the refused write left 1.8 kHz"
+        );
+    }
+
+    /// The IC-7610 names MAIN on the wire (`29 00 1A 03 …`, A7380-7EX-4 marks `1A 03`), so a Sub
+    /// the operator selected at the front panel neither receives the write nor moves.
+    #[test]
+    fn the_ic7610_writes_mains_filter_width_by_name() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        regs.lock().unwrap().sel_sub = true; // the operator's choice, not a stray
+        let from = regs.lock().unwrap().acted.len();
+        assert_eq!(b.set_filter_width_hz(1800), Ok(1800));
+        let r = regs.lock().unwrap();
+        let writes: Vec<_> = r.acted[from..]
+            .iter()
+            .filter(|(_, cmd, data)| *cmd == 0x1A && data.len() == 2 && data[0] == 0x03)
+            .collect();
+        assert_eq!(
+            writes,
+            vec![&(false, 0x1A, vec![0x03, 0x22])],
+            "on Main, by name"
+        );
+        assert_eq!(r.filter_raw, 0x22);
+        assert_eq!(r.sub_filter_raw, 0x15, "the Sub's filter never moved");
+        assert!(
+            r.sel_sub,
+            "the selection was left where the operator put it"
+        );
+        assert!(
+            r.wire
+                .iter()
+                .any(|f| f.windows(5).any(|w| w == [0x29, 0x00, 0x1A, 0x03, 0x22])),
+            "the band-directed form went on the wire"
         );
     }
 }

@@ -31,6 +31,7 @@ import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
+import { RfScopePane } from './RfScopePane'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
   atuTune,
@@ -130,6 +131,7 @@ interface Props {
 /** Display labels for the JS8 removable panels — resolved when the menu is BUILT. */
 const js8PanelLabels = (): Record<Js8PanelId, string> => ({
   scope: t('js8.panel.scope'),
+  rfScope: t('rfScope.title'),
   activity: t('js8.panel.activity'),
   offsets: t('js8.panel.offsets'),
   stations: t('js8.panel.stations'),
@@ -193,9 +195,12 @@ export function Js8Cockpit({
         side: ['stations', 'inbox'],
         main: 'activity',
         labels: js8PanelLabels(),
+        shipsHidden: JS8_PANELS.defaultRemoved,
       })
     : null
-  const shown = (id: Js8PanelId) => (host ? host.shown(id) : true)
+  // No panel record (a render without a host): every pane at its vocabulary's default — shown,
+  // except the RF scope pane, which ships hidden (`defaultRemoved`).
+  const shown = (id: Js8PanelId) => (host ? host.shown(id) : !JS8_PANELS.defaultRemoved?.includes(id))
   // The pane's own ✕ — now routed through panelHost like every other cockpit's, so the five
   // hand-rolled `setPanelState(..., 'removed')` calls this cockpit shipped with cannot drift
   // from the ⊞ tick. Same act, same record; `{}` with no panel host.
@@ -694,6 +699,20 @@ export function Js8Cockpit({
   )
 
   // ---- panes ----
+  // THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID). Placed
+  // like any region pane (it heads the leading column in the stock grouping); display only, it hosts
+  // no stop control and no sender (THE STOP LINE).
+  const rfScopePane = shown('rfScope') && (
+    <RfScopePane
+      closeProps={closeProps('rfScope')}
+      dialMhz={snap?.radio.dialMhz ?? 0}
+      keyed={sending || (snap?.radio.tuning ?? false)}
+      theme={theme}
+      active={active}
+      privilegeMode={snap?.radio.operatingMode}
+    />
+  )
+
   const activityPane = shown('activity') && (
     <CockpitPaneFrame
       title={t('js8.panel.activity')}
@@ -1028,6 +1047,7 @@ export function Js8Cockpit({
   // changes column.
   const paneEls: Record<Js8PanelId, React.ReactNode> = {
     scope: null,
+    rfScope: rfScopePane,
     activity: activityPane,
     offsets: offsetsPane,
     stations: stationsPane,

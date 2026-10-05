@@ -67,6 +67,16 @@ click one to make that station your worked peer.
 **The AF scope** is a narrow 300–1100 Hz display with a hairline drawn at your
 sidetone pitch, so you can zero-beat a station by ear and eye.
 
+Where the radio reports its filter width, the scope also shades the CW filter around your
+pitch; drag either edge to set the width, in the BW buttons' 50 Hz steps from 50 to 2000 Hz.
+It is not offered on the soundcard keyer, which puts the rig in a DATA mode. Tab to the scope
+and ← and → tune (Shift for bigger steps), Enter zero-beats the signal in the passband, [ and ]
+narrow and widen the filter, and ↑ and ↓ scroll back while paused.
+
+CW spots on your band are tagged on the scope where they are, faded by age; a spot on your
+pitch hairline is zero-beat. Click a tag to work the station, as in Band Activity. The scope
+also tints the frequencies your licence class may not send CW on; 🔒 TX LOCKED still decides.
+
 **The zero-beat light** goes further: Nexus measures the tone actually coming in
 and tells you where it sits against your pitch. A light comes on when you are on
 pitch, and beside it a needle and a signed offset in Hz say which way and how far

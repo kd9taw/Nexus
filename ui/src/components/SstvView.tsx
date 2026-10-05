@@ -15,6 +15,7 @@ import { displayNow } from '../remote-web/display-validation'
 import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
+import { RfScopePane } from './RfScopePane'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { FrequencyControl } from './FrequencyControl'
@@ -55,7 +56,7 @@ import {
   type BannerMeasure,
 } from '../sstvOverlay'
 import { normalizeOverlayText } from '../sstvOverlayFont'
-import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
+import { SSTV_PANEL_IDS, SSTV_PANELS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import { setViewerPicture, SSTV_VIEWER_PANEL } from './SstvViewer'
 import {
   atuTune,
@@ -228,6 +229,7 @@ const sstvPanelLabels = (): Record<SstvPanelId, string> => ({
   // decoding. Named for what the tick removes: an arriving picture still takes the stage
   // whatever this box says, because the decode is not a panel. See the gate at the stage.
   scope: t('sstv.panel.waterfall'),
+  rfScope: t('rfScope.title'),
   txcompose: t('sstv.panel.txcompose'),
   gallery: t('sstv.panel.gallery'),
 })
@@ -602,8 +604,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
   // surplus height), the gallery fills — so the old seam/share machinery is meaningless
   // here and was removed with the 50/50 `.sstv-lower` split (census #10).
-  const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: sstvPanelLabels() }) : null
-  const shown = (id: SstvPanelId) => (host ? host.shown(id) : true)
+  const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: sstvPanelLabels(), shipsHidden: SSTV_PANELS.defaultRemoved }) : null
+  // No panel record (a render without a host): every pane at its vocabulary's default — shown,
+  // except the RF scope pane, which ships hidden (`defaultRemoved`).
+  const shown = (id: SstvPanelId) => (host ? host.shown(id) : !SSTV_PANELS.defaultRemoved?.includes(id))
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
   const closeProps = (id: SstvPanelId) => (host ? host.closeProps(id) : {})
   // Live decoder state — polled at 1 Hz while this is the visible view (the
@@ -1988,6 +1992,21 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               .catch((e) => pushToast(String(e), 'error'))
           }
           onStopTx={() => { if(canControl) void haltTx() }}
+        />
+      )}
+
+      {/* THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID):
+          RTTY's placement, a bare fill frame first under the TX strip. Display only — it hosts no
+          stop control and no sender — and separate from the RX stage, which stays the band or the
+          picture whatever this box says. */}
+      {shown('rfScope') && (
+        <RfScopePane
+          closeProps={closeProps('rfScope')}
+          dialMhz={snap?.radio.dialMhz ?? 0}
+          keyed={sending || (snap?.radio.tuning ?? false)}
+          theme={theme}
+          active={active}
+          privilegeMode={snap?.radio.operatingMode}
         />
       )}
 

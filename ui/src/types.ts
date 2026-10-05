@@ -882,6 +882,19 @@ export type PttMethod = 'cat' | 'rts' | 'dtr' | 'vox'
 /** SSB sideband / phone mode used for a channel. */
 export type RadioMode = 'USB' | 'FM'
 
+/** The licence-class band edges a scope tints (`get_privilege_spans`): where the station's class may
+ *  transmit a section's emission, from the transmit gate's own table. Display only — the gate decides. */
+export interface PrivilegeSpans {
+  /** The class the spans are for ('technician' | 'general' | 'extra' | 'open'). */
+  class: string
+  /** The section whose emission they judge ('digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'). */
+  mode: string
+  /** No edges: the gate allows every frequency (`open`), and `spans` is empty. */
+  unrestricted: boolean
+  /** `[lo, hi)` MHz, ascending: inside one the class may key that emission, outside every one it may not. */
+  spans: [number, number][]
+}
+
 /** A preset entry in the band plan (one tap to QSY there). */
 export interface BandChannel {
   band: string

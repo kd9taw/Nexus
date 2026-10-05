@@ -21,9 +21,10 @@ import { rotorPointAt } from './rotorPointAt'
 import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
-import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
+import { RTTY_PANEL_IDS, RTTY_PANELS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
+import { RfScopePane } from './RfScopePane'
 import {
   atuTune,
   getLicensedBandPlan,
@@ -136,6 +137,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
   // and the operator's own word for it here is waterfall. The shared id is `scope` because it
   // is the same ENTRY in every cockpit; only the label is local.
   scope: t('rtty.panel.waterfall'),
+  rfScope: t('rfScope.title'),
   stream: t('rtty.panel.stream'),
 })
 
@@ -311,9 +313,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
   // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
-    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels() })
+    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
     : null
-  const shown = (id: RttyPanelId) => (host ? host.shown(id) : true)
+  // No panel record (a render without a host): every pane at its vocabulary's default — shown,
+  // except the RF scope pane, which ships hidden (`defaultRemoved`).
+  const shown = (id: RttyPanelId) => (host ? host.shown(id) : !RTTY_PANELS.defaultRemoved?.includes(id))
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
   const closeProps = (id: RttyPanelId) => (host ? host.closeProps(id) : {})
   // THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6): the two fill frames share
@@ -989,6 +993,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <div className="cw-keyer-warn" role="alert">
           ⚠ {rtty.keyerError}
         </div>
+      )}
+
+      {/* THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID).
+          A bare fill frame like the transcript's, the first under the TX strip, so it can never push
+          the strip down; display only, it hosts no stop control and no sender (THE STOP LINE). */}
+      {shown('rfScope') && (
+        <RfScopePane
+          closeProps={closeProps('rfScope')}
+          dialMhz={snap?.radio.dialMhz ?? 0}
+          keyed={sending || latched || (snap?.radio.tuning ?? false)}
+          theme={theme}
+          active={active}
+          privilegeMode={snap?.radio.operatingMode}
+        />
       )}
 
       {/* THE ONE CONTENT PANE. RTTY adopts CockpitPaneFrame (per-pane scroll, the shipped

@@ -15,6 +15,7 @@
 //! - `get_spectrum_row` -> `Spectrum`      (one waterfall row)
 //! - `get_scope_row`     -> `Spectrum`      (one rig-scope row, over the scope's own span)
 //! - `get_scope_frame`   -> `SpectrumFrame | null` (the same, newer than the last frame drawn)
+//! - `get_rf_frame`      -> `SpectrumFrame | null` (the radio's own panadapter only: the RF scope pane)
 //!
 //! ## Live radio (`--features radio`, built on the station PC)
 //! With the `radio` feature, `run()` spawns [`tempo_audio::service::run_radio`]
@@ -51,6 +52,9 @@ mod log_queries;
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
 mod pouncer;
+/// The licence-class band edges the scopes draw, read from the transmit gate's own table. Display
+/// only: the gate stays `privileges::tx_allowed`.
+mod privilege_spans;
 mod profile_sync;
 /// The quit when the logbook still has changes on their way to disk: the window is held while
 /// they are saved, with the radio stopped FIRST — see the module header for the order.
@@ -12813,6 +12817,18 @@ fn get_scope_frame(
         .and_then(tempo_core::spectrum::WindowN::from_tag)
         .unwrap_or_default();
     Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
+}
+
+/// The RF scope pane's poll: the radio's own panadapter frame newer than `last_seq` (0 for none),
+/// `null` when the radio has not swept since, or an EMPTY frame when it has no panadapter
+/// streaming. Never the audio FFT — see `SpectrumFeed::rf_frame_after`, whose read is also the
+/// pane's standing request: in a data mode the Icom scope streams only while this is polled.
+#[tauri::command(async)]
+fn get_rf_frame(
+    last_seq: u64,
+    feed: State<'_, tempo_app::engine::SpectrumFeed>,
+) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
+    Ok(feed.rf_frame_after(last_seq))
 }
 
 /// Fast Graph power trace (MSK144): raw 20 ms RMS samples since `since_seq`. Same meter bus,
@@ -32279,6 +32295,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_spectrum_row,
             get_scope_row,
             get_scope_frame,
+            get_rf_frame,
             get_meters,
             get_fast_power,
             set_mode,
@@ -32420,6 +32437,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,
+            privilege_spans::get_privilege_spans,
             dxcc_entity_names,
             dxcc_entity_continents,
             cloudlog_station_info,
@@ -34318,6 +34336,36 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "get_scope_frame,"),
             "get_scope_frame is not registered — the scope's frame poll would fail at runtime"
+        );
+    }
+
+    /// The RF scope pane's poll is also its request for the radio's scope, so it must be
+    /// REGISTERED and must answer from the feed's RF read — a command with a precedence of its own
+    /// could hand the pane the audio FFT, and would place no request.
+    #[test]
+    fn the_rf_frame_command_is_registered_and_answers_from_the_rf_read() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nfn get_rf_frame(")
+            .expect("the command the RF scope pane polls must exist")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("feed.rf_frame_after(last_seq)"),
+            "get_rf_frame must answer from SpectrumFeed::rf_frame_after"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "get_rf_frame,"),
+            "get_rf_frame is not registered — the RF scope pane's poll would fail at runtime"
         );
     }
 

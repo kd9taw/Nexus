@@ -21,6 +21,9 @@ import * as api from '../api'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 import type { PanelLayoutApi, SstvPanelId } from '../features/panelState'
 
+// The RF scope pane's picture is a renderer canvas jsdom cannot draw; its frame and place are what
+// these cases check.
+vi.mock('./PhoneScope', () => ({ PhoneScope: (p: { feed?: string }) => <div data-testid="rfscope-stub" data-feed={p.feed} /> }))
 vi.mock('./Waterfall', () => ({
   // Capture the cadence prop: the liveliness pin below asserts the SSTV band waterfall runs at
   // the live-instrument 50 ms cadence, not the FT surfaces' 120 ms default.
@@ -122,6 +125,24 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('SstvView pane shell', () => {
+  it('the RF scope pane ships hidden; ticked, it is one more frame, FIRST under the TX strip, so the strip never moves', async () => {
+    await renderView()
+    expect(document.querySelector('[data-pane="rfScope"]'), 'the RF scope pane shipped visible').toBeNull()
+    cleanup()
+    await renderView({ panels: fakePanels() })
+    const shell = document.querySelector('main.layout.single.sstv-view')!
+    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
+    expect(frames).toEqual(['rfScope', 'txcompose', 'gallery'])
+    const strip = shell.querySelector(':scope > .cockpit-txstrip')!
+    expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the stage').toBe(true)
+    expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
+    const pane = shell.querySelector('[data-pane="rfScope"]')!
+    expect(pane.getAttribute('data-fit')).toBe('fill')
+    expect(pane.querySelector('[data-testid="rfscope-stub"]')?.getAttribute('data-feed')).toBe('rf')
+    // The RX stage is untouched by it: the band (or a picture) stays the stage.
+    expect(shell.querySelector(':scope > .sstv-canvas')).not.toBeNull()
+  })
+
   it('the shell holds no child kinds beyond the census (header, RX stage and its divider, TX bar, frames)', async () => {
     await renderView()
     const shell = document.querySelector('main.layout.single.sstv-view')!

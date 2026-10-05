@@ -1336,6 +1336,46 @@ describe('beside the left side the scope counts at its FLOOR, not its content (2
   })
 })
 
+describe('THE RF SCOPE PANE beside FT’s waterfall turns the strip into a row, and only then (2026-10-04)', () => {
+  // Operate's waterfall strip is a `.panel`, so a COLUMN, and the opt-in RF scope pane stands beside
+  // the waterfall in it: the pane takes half the strip's WIDTH, none of the decode lists' height, and
+  // the QSO strip with Stop TX under the strip does not move. The direction comes from
+  // `.cockpit-rfbeside` in cockpit-panes.css, the structural sheet, which this file otherwise never
+  // reads — so its rules are folded in here, ordered after styles.css's as main.tsx imports them, and
+  // the winner is computed across both. A guard reading one sheet is how "the override lived in the
+  // other file" ships.
+  const panes = parseRules(
+    readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+  ).map((r) => ({ ...r, order: r.order + 1_000_000 }))
+  const strip = (classes: string[]) => [
+    ...shellChain('operate-cockpit'),
+    new Set(['cockpit-body']),
+    new Set(['cockpit-waterfall', 'panel', ...classes]),
+  ]
+  const winner = (chain: Array<Set<string>>, blockValue: (body: string) => string | null) => {
+    let win: { value: string; selector: string; spec: number; order: number } | null = null
+    for (const r of [...RULES, ...panes]) {
+      if (r.media !== null || !matchesChain(r.selector, chain)) continue
+      const v = blockValue(r.body)
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) {
+        win = { value: v, selector: r.selector, spec, order: r.order }
+      }
+    }
+    return win
+  }
+  it('with the pane ticked the strip is a row with a gap', () => {
+    const dir = winner(strip(['cockpit-rfbeside']), blockFlexDirection)
+    expect(dir?.value, `the strip's direction comes from \`${dir?.selector}\``).toBe('row')
+    expect(winner(strip(['cockpit-rfbeside']), blockLonghand('gap')), 'no gap between the waterfall and the pane').not.toBeNull()
+  })
+  it('without it the strip is the column it always was (control: the stock FT screen is untouched)', () => {
+    expect(winner(strip([]), blockFlexDirection)?.value).toBe('column')
+    expect(winner(strip([]), blockLonghand('gap'))).toBeNull()
+  })
+})
+
 describe("the scope Splitter's declared range is the range the sheet HONOURS", () => {
   // The drag writes a flex-BASIS percentage; the sheet's min-height/max-height then clamp
   // the rendered box. Where the two disagree the surplus travel is DEAD: the pointer

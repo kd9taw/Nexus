@@ -505,6 +505,7 @@ const MIGRATED = [
   'components/FrequencyReadout.tsx',
   'components/TuningStrip.tsx',
   'components/PhoneScope.tsx',
+  'components/RfScopePane.tsx',
   'components/Waterfall.tsx',
   // The scope's ⚙ strip, migrated from birth: its only literals are the window widths and the
   // averaging times, measurements held as named constants.

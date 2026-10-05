@@ -159,7 +159,7 @@ describe('RTTY TX line (#379)', () => {
       reset: () => {},
     }
     // Every ⊞ id hidden at once: the line is not in the vocabulary, so it cannot go with them.
-    expect(RTTY_PANEL_IDS).toEqual(['scope', 'stream'])
+    expect(RTTY_PANEL_IDS).toEqual(['scope', 'rfScope', 'stream'])
     await show({ sending: true, txText: OVER, txKeyed: 9 }, { panels: allHidden })
     const el = line()
     expect(el, 'no TX line in the dock').not.toBeNull()

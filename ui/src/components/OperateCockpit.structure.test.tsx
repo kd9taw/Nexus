@@ -11,15 +11,20 @@
 //   - TX meters are a fixed strip cell, not a permanent body row, and the cell exists
 //     in BOTH RX and TX states (zero mount/unmount with the 15 s cycle).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, within } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
-import { OPERATE_PANEL_IDS } from '../features/panelState'
+import { OPERATE_PANEL_IDS, OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 import * as OD from './OperateDecodes'
 
 vi.mock('./Waterfall', () => ({
   Waterfall: () => <div data-testid="waterfall-canvas" />,
+}))
+// The RF scope pane's picture (PhoneScope, through the spectrum renderer) is a canvas jsdom cannot
+// draw; its frame and its place in the strip are what this file checks.
+vi.mock('./PhoneScope', () => ({
+  PhoneScope: (p: { feed?: string }) => <div data-testid="rfscope-canvas" data-feed={p.feed} />,
 }))
 
 vi.mock('../api', () => {
@@ -104,9 +109,12 @@ function makeSnap(over: { transmitting?: boolean; atu?: boolean | null } = {}): 
 }
 
 function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLayoutApi<OperatePanelId> {
+  const layout = { v: 1 as const, state, share: {} }
   return {
-    layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    layout,
+    // The vocabulary's own reading of an absent entry: docked, but for the panes it ships hidden
+    // (the RF scope pane), exactly as App's record reads it.
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, layout, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),
@@ -118,7 +126,7 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
   }
 }
 
-function renderCockpit(
+function cockpitElement(
   state: Partial<Record<OperatePanelId, PanelState>>,
   over: {
     transmitting?: boolean
@@ -130,7 +138,7 @@ function renderCockpit(
 ) {
   const noop = () => {}
   const onCall = vi.fn()
-  const view = render(
+  const element = (
     <OperateCockpit
       snap={makeSnap(over)}
       theme="dark"
@@ -160,8 +168,17 @@ function renderCockpit(
       onLayoutMode={noop}
       panels={panelsApi(state)}
       active={false}
-    />,
+    />
   )
+  return { element, onCall }
+}
+
+function renderCockpit(
+  state: Partial<Record<OperatePanelId, PanelState>>,
+  over: Parameters<typeof cockpitElement>[1] = {},
+) {
+  const { element, onCall } = cockpitElement(state, over)
+  const view = render(element)
   return { ...view, onCall }
 }
 
@@ -221,6 +238,72 @@ describe('the waterfall strip is hideable, and shown until the operator says oth
     renderCockpit({ waterfall: 'popped' })
     expect(document.querySelector('.cockpit-waterfall')).toBeNull()
     expect(document.querySelector('.wf-redock'), 'a popped-out waterfall left no way back').not.toBeNull()
+  })
+})
+
+// ── THE RF SCOPE PANE BESIDE THE WATERFALL (operator, 2026-10-03: an opt-in pane) ────────────────
+// It ships hidden; ticked, it stands beside the waterfall in the strip (`.cockpit-rfbeside`, a row:
+// cockpit-panes.css), so it takes width from the waterfall and no height from the decode lists or
+// the QSO strip; and adding it never re-parents the waterfall.
+describe('the RF scope pane: hidden until ticked, then beside the waterfall in its strip', () => {
+  it('a stock layout is the waterfall alone, the strip a column as before', () => {
+    const { container } = renderCockpit({})
+    const strip = container.querySelector('.cockpit-waterfall')
+    expect(strip, 'the strip went missing').not.toBeNull()
+    expect(container.querySelector('[data-pane="rfScope"]'), 'the pane shipped visible').toBeNull()
+    expect(strip!.classList.contains('cockpit-rfbeside')).toBe(false)
+    expect(strip!.children.length).toBe(1)
+  })
+
+  it('ticked, it stands beside the waterfall in the strip, drawn as the RF feed', () => {
+    const { container } = renderCockpit({ rfScope: 'docked' })
+    const strip = container.querySelector('.cockpit-waterfall')!
+    expect(strip.classList.contains('cockpit-rfbeside'), 'the strip did not turn into a row').toBe(true)
+    // The waterfall stays the strip's FIRST child (`.cockpit-waterfall > :first-child` sizes it).
+    expect(strip.firstElementChild?.getAttribute('data-testid')).toBe('waterfall-canvas')
+    const pane = strip.querySelector('[data-pane="rfScope"]')
+    expect(pane, 'the pane is not in the strip').not.toBeNull()
+    expect(pane!.getAttribute('aria-label')).toBe('RF scope')
+    expect(pane!.querySelector('[data-testid="rfscope-canvas"]')?.getAttribute('data-feed')).toBe('rf')
+    // Its ✕ is the same act as the tick, and nothing in it transmits or stops.
+    expect(within(pane as HTMLElement).queryAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual([
+      expect.stringMatching(/RF scope/),
+    ])
+    // The QSO strip with Stop TX is outside the waterfall strip, untouched.
+    expect(strip.querySelector('.cockpit-qso')).toBeNull()
+    expect(container.querySelector('.cockpit-qso')).not.toBeNull()
+  })
+
+  it('with the waterfall hidden or popped out, the pane has the strip to itself', () => {
+    for (const waterfall of ['removed', 'popped'] as const) {
+      const { container } = renderCockpit({ waterfall, rfScope: 'docked' })
+      const strip = container.querySelector('.cockpit-waterfall')
+      expect(strip, `${waterfall}: the pane lost its strip`).not.toBeNull()
+      expect(strip!.classList.contains('cockpit-rfbeside'), `${waterfall}: a row of one`).toBe(false)
+      expect(strip!.querySelector('[data-testid="waterfall-canvas"]')).toBeNull()
+      expect(strip!.querySelector('[data-pane="rfScope"]')).not.toBeNull()
+      expect(container.querySelector('.wf-redock') != null, `${waterfall}: the re-dock bar`).toBe(waterfall === 'popped')
+      cleanup()
+    }
+  })
+
+  it('ticking it never remounts the waterfall (the strip gains a sibling, nothing is re-parented)', () => {
+    const view = renderCockpit({})
+    const before = view.container.querySelector('[data-testid="waterfall-canvas"]')
+    expect(before).not.toBeNull()
+    view.rerender(cockpitElement({ rfScope: 'docked' }).element)
+    expect(view.container.querySelector('[data-pane="rfScope"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-testid="waterfall-canvas"]'), 'the waterfall was remounted').toBe(before)
+  })
+
+  it('the ⊞ menu does not count it as something the operator hid', () => {
+    renderCockpit({})
+    const menu = screen.getByRole('button', { name: /⊞ Panels/ })
+    expect(menu.textContent ?? '', 'the stock layout reads as "1 hidden"').not.toMatch(/hidden/i)
+    cleanup()
+    // Control: a pane the operator DID hide is counted.
+    renderCockpit({ bandActivity: 'removed' })
+    expect(screen.getByRole('button', { name: /⊞ Panels/ }).textContent ?? '').toMatch(/1 hidden/)
   })
 })
 

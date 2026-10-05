@@ -63,7 +63,7 @@ const UI = resolve(HERE, '..')
 const BASELINES = join(HERE, 'baselines')
 
 const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
-  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis,offsets
+  --only LIST         backend,pixel,cadence,perf,ipc,render,capability,loss,rperf,axis,offsets,overlays
                       (default: all; the backend always runs)
   --out DIR           results.json, rendered pictures and diffs (default: $TMPDIR/nexus-spectrum-harness)
   --record            re-record the stored pictures of the probes selected (pixel, render): each
@@ -75,7 +75,7 @@ const USAGE = `usage: node ui/spectrum-harness/run.mjs [options]
   --chrome PATH       Chrome binary (default: $CHROME_BIN or google-chrome)
   --cpu-throttle N    DevTools CPU throttling for the perf probe (default 1)`
 
-const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf', 'axis', 'offsets']
+const PROBES = ['backend', 'pixel', 'cadence', 'perf', 'ipc', 'render', 'capability', 'loss', 'rperf', 'axis', 'offsets', 'overlays']
 const opt = {
   only: new Set(PROBES),
   out: join(tmpdir(), 'nexus-spectrum-harness'),
@@ -1035,6 +1035,45 @@ async function offsetChecks(cdp, base) {
   line('CONTROL', 'offsets: clicks 2 px off (600 Hz)', `${moved} of ${c.steps.flat().length} clicks differ`, moved > 0 ? 'rejected, as it must be' : 'ACCEPTED — the comparison is blind')
 }
 
+// ---------------------------------------------------------------------------------------------
+// The overlays probe (PhoneScope's spot tags, licence-class edges and FT offsets, on their own canvas):
+// the tint, a tick and the RX line read back by value, and a spot storm that must redraw no picture,
+// with palette changes under the same count as its control.
+
+async function overlayChecks(cdp, base) {
+  const page = await openPage(cdp, `${base}/index.html?mode=overlays&palette=${opt.palette}`)
+  let r
+  try {
+    r = await waitFor(page, 'done', 60_000)
+  } finally {
+    await page.close()
+  }
+  const v = r.reading
+  const tintOk = v.below > 0 && v.above > 0 && v.inside === 0 && v.edgeLo > v.below && v.edgeHi > v.above
+  const tint = `${v.w}×${v.h}: alpha ${v.below} below the span, ${v.inside} inside it, ${v.above} above; its edges ${v.edgeLo} and ${v.edgeHi}`
+  record({ kind: 'overlays', id: 'licence-class tint', outcome: tintOk ? 'pass' : 'fail', detail: tint })
+  line('OVERLAYS', 'licence-class tint', tint, tintOk ? 'tinted outside the span only, edges marked' : 'FAIL')
+  const marksOk = v.tick > 0 && v.beside === 0 && v.rx > 0
+  const marks = `spot tick alpha ${v.tick} at 14.050 MHz, ${v.beside} beside it; RX line ${v.rx} at dial + 1500 Hz`
+  record({ kind: 'overlays', id: 'spot tick and RX offset', outcome: marksOk ? 'pass' : 'fail', detail: marks })
+  line('OVERLAYS', 'spot tick and RX offset', marks, marksOk ? 'at their frequencies' : 'FAIL')
+  const s = r.storm
+  const stormOk = s.picture === 0 && s.overlays >= 1
+  const storm = `${s.changes} spot changes while paused: ${s.overlays} overlay redraws, ${s.picture} picture draw calls`
+  record({ kind: 'overlays', id: 'a spot change redraws no picture', outcome: stormOk ? 'pass' : 'fail', detail: storm })
+  line('OVERLAYS', 'a spot change redraws no picture', storm, stormOk ? 'ok' : 'FAIL')
+  const fired = r.control.picture > 0
+  const control = `6 palette changes while paused: ${r.control.picture} picture draw calls`
+  record({ kind: 'control', id: 'overlays, a palette change redraws the picture', outcome: fired ? 'control-fired' : 'fail', detail: control })
+  line('CONTROL', 'a palette change under the same count', control, fired ? 'seen, as it must be' : 'FAIL (the count cannot see a picture redraw)')
+  const live = `${r.live.quiet} picture draw calls in 2 s quiet, ${r.live.storm} in 2 s with ${r.live.changes} spot changes (${r.drawnBy})`
+  record({ kind: 'overlays-live', id: 'picture draws, live', outcome: 'measured', detail: live })
+  line('PERF', 'picture draws, live', live, 'measured')
+  const clean = r.unexpected.length === 0
+  record({ kind: 'overlays', id: 'no command outside the stand-ins', outcome: clean ? 'pass' : 'fail', detail: r.unexpected.join(', ') || 'none' })
+  if (!clean) line('OVERLAYS', 'unexpected commands', r.unexpected.join(', '), 'FAIL')
+}
+
 async function main() {
   if (spawnSync(opt.chrome, ['--version'], { encoding: 'utf8' }).status !== 0) bail(2, `no Chrome at "${opt.chrome}" (set --chrome or CHROME_BIN)`)
   mkdirSync(opt.out, { recursive: true })
@@ -1075,6 +1114,7 @@ async function main() {
       if (opt.only.has('rperf')) await rperfChecks(cdp, server.base)
       if (opt.only.has('axis')) await axisChecks(cdp, server.base)
       if (opt.only.has('offsets')) await offsetChecks(cdp, server.base)
+      if (opt.only.has('overlays')) await overlayChecks(cdp, server.base)
     }
   } catch (e) {
     record({ kind: 'harness', id: 'run', outcome: 'fail', detail: e.message })

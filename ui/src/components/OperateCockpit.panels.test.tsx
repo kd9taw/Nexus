@@ -5,7 +5,7 @@ import { OperateCockpit } from './OperateCockpit'
 import { TX_METERS_WHEN } from './TxMeters'
 import type { AppSnapshot } from '../types'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
-import { seamShares } from '../features/panelState'
+import { OPERATE_PANELS, panelStateIn, seamShares } from '../features/panelState'
 import { CLASSIC_FR, classicCommit, classicWidths } from '../features/operateColumns'
 
 // The waterfall paints to a canvas jsdom does not implement, and it polls the spectrum
@@ -82,9 +82,12 @@ const snap = {
 
 /** A host-owned record, frozen for the render under test. */
 function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLayoutApi<OperatePanelId> {
+  const layout = { v: 1 as const, state, share: {} }
   return {
-    layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    layout,
+    // The vocabulary's own reading of an absent entry, as App's record reads it: docked, but for
+    // the pane it ships hidden (the RF scope pane).
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, layout, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

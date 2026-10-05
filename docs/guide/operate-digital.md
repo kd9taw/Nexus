@@ -25,6 +25,12 @@ defaults.
 Decoding is **always on** — there is no Monitor toggle to forget; the decoder
 runs every RX slot regardless of TX state.
 
+**The radio's own scope (opt-in).** Tick **RF scope** in ⊞ Panels to show the radio's panadapter
+beside the waterfall. On it, the last slot's FT8 and FT4 decodes are tagged at their real
+frequencies (the dial plus their offset), the RX and TX offsets are drawn as green and red lines,
+and the frequencies your licence class may not transmit data on are tinted. It only shows: a click
+on it tunes nothing, and 🔒 TX LOCKED still decides whether you may transmit.
+
 ![The ⊞ Panels menu open over the cockpit, six ticked entries — Waterfall, Band Activity, Tx Messages, Rx Frequency, Stations, TX Meters — with "readings appear on transmit" printed under TX Meters, and Undo last change (greyed) beside Reset layout along the bottom.](../img/manual/operate-panels.webp)
 
 *The ⊞ Panels menu in Nexus 1.10.3. Untick a pane to hide it; **Reset layout**

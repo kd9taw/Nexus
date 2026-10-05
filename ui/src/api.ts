@@ -15,6 +15,7 @@ import type {
   AwardSummary,
   GeoLogStats,
   BandChannel,
+  PrivilegeSpans,
   CatTestResult,
   CatProbeResult,
   CwDecodeResult,
@@ -2069,6 +2070,15 @@ export async function setLicenseClass(licenseClass: string): Promise<AppSnapshot
 export async function getLicensedBandPlan(mode: string): Promise<BandChannel[]> {
   return invoke<BandChannel[]>('get_licensed_band_plan', { mode })
 }
+/** The licence-class band edges a scope tints: where the station's class may transmit the section
+ * `mode`'s emission ('digital' | 'phone' | 'cw' | 'rtty' | 'keyboard', the snapshot's
+ * `radio.operatingMode`), from the transmit gate's own table. Display only. The Remote page's
+ * commands are a closed set this is not part of, so there it answers null without asking, and its
+ * scopes draw no edges. */
+export async function getPrivilegeSpans(mode: string): Promise<PrivilegeSpans | null> {
+  if (remoteApplicationTransport()) return null
+  return invoke<PrivilegeSpans>('get_privilege_spans', { mode })
+}
 
 /** Every current DXCC entity name (sorted) — the full table behind the country-hide
  *  picker's "Other country…" search (F4MQS). */
@@ -3450,6 +3460,38 @@ export async function getScopeFrame(
     }
   }
   return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
+}
+
+/**
+ * The RF scope pane's poll: the radio's own panadapter frame newer than `lastSeq` (0 = none drawn
+ * yet), null when the radio has not swept since, or an EMPTY frame (no bins) when no panadapter is
+ * streaming. Never the audio FFT — the pane sits beside the cockpit's audio waterfall, and a copy of
+ * it there would say nothing.
+ *
+ * THE POLL IS THE PANE'S REQUEST. In a data mode the station streams the Icom CI-V scope only while
+ * this is being polled (the request lapses two seconds after the last poll), because that stream
+ * shares the CAT link with the PTT of every over.
+ *
+ * The Remote application transport has no frame command: there the station's own scope row comes
+ * back as an unsequenced frame when it is a radio's panadapter, and as an empty frame otherwise. A
+ * remote viewer asks for nothing — it sees the station's scope only while the station streams it.
+ */
+export async function getRfFrame(lastSeq: number): Promise<SpectrumFrameWire | null> {
+  if (remoteApplicationTransport()) {
+    const s = await invoke<Spectrum>('get_scope_snapshot')
+    const source = s.source ?? ''
+    const rf = source === 'flex' || source === 'civ' || source === 'yaesu'
+    return {
+      seq: 0,
+      tMs: Date.now(),
+      source: rf ? source : '',
+      loHz: rf ? s.loHz ?? 0 : 0,
+      hiHz: rf ? s.hiHz ?? 0 : 0,
+      scale: { kind: 'relative' },
+      bins: rf ? s.row ?? [] : [],
+    }
+  }
+  return invoke<SpectrumFrameWire | null>('get_rf_frame', { lastSeq })
 }
 
 /**

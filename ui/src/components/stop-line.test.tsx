@@ -767,6 +767,23 @@ describe('the stop line, computed against the real cockpits', () => {
     }
   })
 
+  it('the RF scope pane is on screen with nothing hidden in RTTY, PSK, JS8 and SSTV — else hiding it would sweep nothing', async () => {
+    // It SHIPS HIDDEN (defaultRemoved), and every sweep above starts from "nothing hidden", so it is
+    // on screen at their baseline and every hide of it — singly and with everything else — is a real
+    // one. Operate's twin is in OperateCockpit.structure.test.tsx.
+    for (const c of [rtty, psk, js8, sstv] as Array<Case<any>>) {
+      c.render(panelsWith<string>([]))
+      await settle()
+      expect(c.ids, `${c.cockpit}: "rfScope" left the vocabulary`).toContain('rfScope')
+      expect(document.querySelector('[data-pane="rfScope"]'), `${c.cockpit}: the RF scope pane is not on screen`).not.toBeNull()
+      cleanup()
+      c.render(panelsWith<string>(['rfScope']))
+      await settle()
+      expect(document.querySelector('[data-pane="rfScope"]'), `${c.cockpit}: hidden, the RF scope pane is still on screen`).toBeNull()
+      cleanup()
+    }
+  })
+
   it('EVERY vocabulary in the app is swept — here, or in a file named here', () => {
     // A sweep is worth only what it covers, and the failure this whole batch came from was
     // a guard that looked exhaustive and silently skipped a cockpit. So the coverage is
