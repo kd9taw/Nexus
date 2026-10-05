@@ -168,6 +168,23 @@ describe('the Connect map picker', () => {
   })
 })
 
+// FRAME TICKS THE SATELLITES ON THE MAP ON SCREEN, AND ONLY THERE (2026-10-04). It ticked both maps'
+// records, so the one not in view held satellites nobody saw being turned on; unticked on the map in view,
+// they came back the day the other map was picked. ConnectView.panes.test.tsx holds the 2-D side.
+describe('Frame on the 3-D globe', () => {
+  it('ticks the globe’s satellites and leaves the 2-D map’s record alone', async () => {
+    await mount()
+    choose('3D')
+    expect(await onScreen(), 'CONTROL: the 3-D globe is on screen').toBe('3d')
+    fireEvent.click(screen.getByRole('button', { name: 'Layout' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Frame' }))
+    const globe = JSON.parse(localStorage.getItem('nexus.connect.globe3d.layers') ?? 'null')
+    expect(globe?.sats, 'CONTROL: the globe on screen got them').toBe(true)
+    const twoD = JSON.parse(localStorage.getItem(STORE) ?? '{}').dx?.layers?.sats?.visible
+    expect(twoD, 'Frame ticked them into the 2-D map, which is not on screen').not.toBe(true)
+  })
+})
+
 describe('upgrading stored map settings into the picker', () => {
   it.each([
     ['a per-intent map3d:true → 3D (whatever kind it also held)', { [STORE]: JSON.stringify({ dx: { map3d: true, kind: 'aeqd' } }) }, '3D', '3d'],

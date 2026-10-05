@@ -162,6 +162,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   French or Japanese, whichever language the screen is in, and says why; a language added later is
   covered by its own words for Stop and Cancel. In English this adds Halt and Cancel. Ordinary
   captions are not affected. A key captioned that way before keeps its caption until it is edited.
+- **The Conditions pop-out reopens the way you left it.** Reloaded, or closed and opened again, the
+  dashboard window could come back on whatever the main window had moved to since: another intent,
+  and that intent's map as the main window had it the day the pop-out first opened, satellites
+  included, even ones since turned off there. It now keeps its own intent, map and ★ / All, and only
+  a press in it changes them. Its satellites also stopped following the main window's **★ / All**:
+  flipping it there no longer fills the pop-out with every satellite while the pop-out still says ★.
+  And **Frame** ticks **Satellites** only on the map you are looking at: untick it there and it stays
+  off when you switch between the 2-D map and the 3-D globe.
+- **The satellite layer shows the birds you can work.** With no ★ birds picked, **Satellites** on the
+  map and the 3-D globe drew every satellite in the catalog, about 350, most of them small
+  telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM
+  repeater or a digital channel. Star birds in **Satellites** to see just those, or pick **All** for
+  the whole catalog.
 
 ### Changed
 

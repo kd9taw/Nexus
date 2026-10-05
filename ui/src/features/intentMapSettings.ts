@@ -22,7 +22,9 @@
 // ## Surface inheritance (see features/windowScope.ts and `MapView`'s `dedicatedIntent`)
 //
 // A torn-off Connect map INHERITS the primary surface's record on first open (`surfaceGet`), the
-// #199 carry-over, exactly as the old projection/layer keys did. A surface DEDICATED to one intent
+// #199 carry-over, exactly as the old projection/layer keys did — for the intent it shows, which its
+// first write makes its own; the other intents start from their presets there (`saveIntentSetup`).
+// A surface DEDICATED to one intent
 // (the POTA map pop-out) reads and migrates only what was written ON ITSELF: an inherited record is
 // another surface's setup, and inheriting the old shared layer table is precisely what once opened
 // the POTA map with Parks off.
@@ -131,9 +133,24 @@ export function loadIntentSetup(intent: MapIntent, dedicated = false): IntentMap
   return legacy
 }
 
-/** Merge `patch` into `intent`'s record on this surface. */
+/** Merge `patch` into `intent`'s record on this surface.
+ *
+ *  A surface's FIRST write takes over only the intent it saves (as inherited, plus the patch), never
+ *  the rest of the store it was reading. It used to copy every intent's record from the main window
+ *  as it stood that day, so a pop-out kept, for intents it had never shown, the main window's old
+ *  setups (satellites since turned off there included) and brought them back the day it showed one
+ *  (operator report, 2026-10-04). An intent this surface never set gets its preset, as on any first
+ *  use. */
 export function saveIntentSetup(intent: MapIntent, patch: IntentMapSetup, dedicated = false): void {
   const store = readStore(dedicated) ?? {}
-  store[intent] = { ...store[intent], ...patch }
-  surfaceSet(INTENTS_KEY, JSON.stringify(store))
+  const own: Store = surfaceHasOwn(INTENTS_KEY) ? store : {}
+  own[intent] = { ...store[intent], ...patch }
+  surfaceSet(INTENTS_KEY, JSON.stringify(own))
+}
+
+/** Make the setup this surface shows for `intent` its own, if it is still reading the main window's
+ *  (ConnectView, on a pop-out's first show). The 2-D map does this itself when it mounts; on the 3-D
+ *  globe nothing did, so every reopen followed the main window's map for that intent. */
+export function keepIntentSetup(intent: MapIntent, map: MapChoice): void {
+  if (!surfaceHasOwn(INTENTS_KEY)) saveIntentSetup(intent, { map })
 }

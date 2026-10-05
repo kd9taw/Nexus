@@ -26,8 +26,9 @@
 // A preset decides how much of the window the map GETS, never how the map looks — with ONE
 // exception, by operator pick (2026-09-29, "satellites on in the Frame layout"): a layout may name
 // map layers it turns ON when it is tapped (`mapLayers`; Frame's satellites). Only on, never off; in
-// the map on screen and the one behind the picker (the 2-D map's record for the intent in use, the
-// 3-D globe's); nothing else about either map; and the layers are not part of what reads back, so
+// the map on screen only (the 2-D map's record for the intent in use, or the 3-D globe's — never the
+// map behind the picker, where a tick waited unseen until that map was shown, 2026-10-04); nothing
+// else about either map; and the layers are not part of what reads back, so
 // unticking one afterwards is the operator's choice and the layout still reads as picked. Undo takes
 // back exactly what the tap turned on (ConnectView).
 import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, type PaneId, type SlotId } from './connectConfig'
@@ -50,7 +51,7 @@ export interface ConnectLayout {
   /** Rail width preferences in CSS px; null = the tier default. Fitted into the window on load
    *  and on every resize like any dragged width (fitRails), never trusted raw. */
   rails: { left: number | null; right: number | null }
-  /** Map layers the tap turns ON (never off), on both maps; not part of what reads back. */
+  /** Map layers the tap turns ON (never off), on the map on screen; not part of what reads back. */
   mapLayers?: readonly PresetMapLayer[]
   /** The slots that hold tabs: each one's panes in tab order, the shown pane (`slots`) first. Absent is
    *  one pane per slot, which is every layout but Frame + bar. Written and read back like the slots. */

@@ -1736,7 +1736,7 @@ export default function Globe3D({
   const satAllHidden = useMemo(() => {
     if (!show.sats || !satFav || !sats || sats.birds.length === 0) return 0
     const keys = satChaseKeys()
-    if (keys.names.size === 0) return 0 // zero stars = filter inert, sky full
+    if (keys.names.size === 0) return 0 // zero stars: no ★ bird to miss, the workable birds show
     return filterSatsToChased(sats.birds, keys).length === 0 ? sats.birds.length : 0
     // satChaseRev: star toggles land in storage, not props — the rev is the rerender.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1784,7 +1784,13 @@ export default function Globe3D({
                   className={`sat-fav-toggle${satFav ? ' on' : ''}`}
                   aria-label={t('globe.sats.filter.aria')}
                   aria-pressed={satFav}
-                  title={satFav ? t('globe.sats.filter.on.title') : t('globe.sats.filter.off.title')}
+                  title={
+                    !satFav
+                      ? t('globe.sats.filter.off.title')
+                      : satChaseKeys().names.size === 0
+                        ? t('globe.sats.filter.none.title')
+                        : t('globe.sats.filter.on.title')
+                  }
                   onClick={() => setSatFavOnly(!satFav)}
                 >
                   {satFav ? '★' : t('globe.sats.filter.all')}

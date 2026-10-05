@@ -4,7 +4,7 @@
 // and which birds can carry pass alarms (satAlarm.ts).
 
 import { disarmSatAlarm } from './satAlarm'
-import { surfaceGet, surfaceSet } from './windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceSet } from './windowScope'
 import { durableGet, durableSet } from './durableStore'
 
 const KEY = 'nexus.sats.chasing'
@@ -144,13 +144,22 @@ export function isSatChased(
   return keys.names.has(name.toUpperCase())
 }
 
-/** The ★-only view of a bird/pass list. ZERO stars returns the list untouched —
- * a fresh install must never render an empty sky. */
-export function filterSatsToChased<T extends { name: string; norad?: number | null }>(
-  items: T[],
-  keys: SatChaseKeys,
-): T[] {
-  if (keys.names.size === 0) return items
+/** The ★-only view of a bird/pass list. ZERO stars must never render an empty
+ * sky on a fresh install, so it falls back to every bird that can be WORKED: it
+ * drops only a bird the catalog positively classed as nothing but a beacon
+ * (`classes` holding no other class, `[]` included). That fallback used to be the
+ * whole list, a rule written on 2026-08-01 for Celestrak's 97-bird amateur group,
+ * which the catalog stopped being three hours later. The mirror's union carries
+ * 347 birds with elements today, 280 of them beacon-only telemetry cubesats
+ * (measured 2026-10-04), and an operator with nothing starred saw all of them
+ * ("every satellite ever launched", 2026-10-04). An unclassified bird stays (absent
+ * `classes` is never a guess), and a pass row carries no classes, so the Passes
+ * pane's list is unchanged. */
+export function filterSatsToChased<
+  T extends { name: string; norad?: number | null; classes?: string[] | null },
+>(items: T[], keys: SatChaseKeys): T[] {
+  if (keys.names.size === 0)
+    return items.filter((it) => !it.classes || it.classes.some((c) => c !== 'beacon'))
   return items.filter((it) => isSatChased(it.name, it.norad, keys))
 }
 
@@ -160,7 +169,8 @@ export function filterSatsToChased<T extends { name: string; norad?: number | nu
  * WITHIN a surface: a pop-out diverges after its first write — the documented
  * windowScope design, not an accident. Default
  * ON: the operator asked Connect to track the ★ birds; with zero stars the
- * filter is inert (filterSatsToChased shows all), so ON is safe on day one. */
+ * filter falls back to the birds that can be worked (filterSatsToChased), so ON
+ * is safe on day one. */
 export function satFavOnly(): boolean {
   return surfaceGet(FAV_ONLY_KEY) !== '0'
 }
@@ -168,4 +178,12 @@ export function satFavOnly(): boolean {
 export function setSatFavOnly(on: boolean): void {
   surfaceSet(FAV_ONLY_KEY, on ? '1' : '0')
   notifyChanged()
+}
+
+/** Make the ★/All choice this surface shows its own, if it is still the main
+ * window's (ConnectView, on a pop-out's first show): read again on every open,
+ * the borrowed value made a reload follow whatever the main window had flipped
+ * to since. The value is unchanged, so nobody needs telling. */
+export function keepSatFavOnly(): void {
+  if (!surfaceHasOwn(FAV_ONLY_KEY)) surfaceSet(FAV_ONLY_KEY, satFavOnly() ? '1' : '0')
 }

@@ -526,20 +526,19 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         expect(layoutNow()).toBe(LABEL[id])
         expect(chip(LABEL[id]).getAttribute('aria-pressed')).toBe('true')
         // The map's own choices are not the layout's to change — except the layers a layout turns ON
-        // (Frame: the satellites, the operator's pick), and nothing else about either map.
+        // (Frame: the satellites, the operator's pick) on the map on screen, here the 2-D map, and
+        // nothing else about either map.
         expect(localStorage.getItem('nexus.connect.intent')).toBe('pota')
         const on = (p as { mapLayers?: readonly string[] }).mapLayers ?? []
         if (on.length === 0) {
           expect(localStorage.getItem('nexus.connect.intents'), 'the 2-D map’s record').toBe(intents)
-          expect(localStorage.getItem(GLOBE), 'the 3-D globe’s record').toBe(globe)
         } else {
           const want = JSON.parse(intents!)
           for (const k of on) want.pota.layers[k] = { ...want.pota.layers[k], visible: true }
           expect(stored('nexus.connect.intents'), 'the 2-D map: only the layout’s layers turned on').toEqual(want)
-          const now = stored(GLOBE)
-          expect([now.spots, now.aurora], 'the 3-D globe: the operator’s own picks kept').toEqual([false, true])
-          for (const k of on) expect(now[k], `the 3-D globe: ${k} turned on`).toBe(true)
         }
+        // The 3-D globe is not on screen: its record is the operator's, untouched (2026-10-04).
+        expect(localStorage.getItem(GLOBE), 'the 3-D globe’s record').toBe(globe)
 
         cleanup()
         const again = await mount()
@@ -696,8 +695,8 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
   })
 
   // FRAME TURNS THE SATELLITES ON (the operator's pick: "satellites on in the Frame layout"). The one
-  // reach a layout has into the map: it turns layers ON, on the map on screen and the one behind the
-  // picker, and touches nothing else. The REAL MapView answers here, so these are its own boxes.
+  // reach a layout has into the map: it turns layers ON, on the map on screen, and touches nothing
+  // else. The REAL MapView answers here, so these are its own boxes.
   describe('Frame turns the satellites on, and nothing else about the map', () => {
     const SATS = 'Satellites (amateur)'
     /** Every box in the map's Layers panel, by name: what the map shows. */
@@ -706,7 +705,7 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         [...c.querySelectorAll('.map-layers input[type="checkbox"]')].map((b) => [b.closest('label')!.textContent!.trim(), (b as HTMLInputElement).checked]),
       )
 
-    it('picking Frame ticks Satellites on the map on screen and in the 3-D globe’s record, and no other box', async () => {
+    it('picking Frame ticks Satellites on the map on screen, and no other box', async () => {
       const restore = fakeBoxes(1920)
       try {
         const { container } = await mount()
@@ -717,7 +716,21 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         const after = mapBoxes(container)
         expect(after[SATS], 'Frame did not turn the satellites on').toBe(true)
         expect({ ...after, [SATS]: false }, 'Frame moved another box').toEqual(before)
-        expect(stored(GLOBE)?.sats, 'the 3-D globe behind the picker').toBe(true)
+      } finally {
+        restore()
+      }
+    })
+
+    // ON THE MAP ON SCREEN ONLY (2026-10-04). Ticked into the 3-D globe's record as well, the satellites
+    // waited there unseen: unticked on the map in view, they came back the day the globe was shown, which
+    // is not the "untick it and it stays off" the layout promises.
+    it('leaves the 3-D globe’s record alone when the 2-D map is on screen', async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        const { container } = await mount()
+        pick('Frame')
+        expect(mapBoxes(container)[SATS], 'CONTROL: the map on screen got them').toBe(true)
+        expect(localStorage.getItem(GLOBE), 'Frame ticked them into the 3-D globe, a map not on screen').toBeNull()
       } finally {
         restore()
       }
@@ -756,7 +769,7 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
       }
     })
 
-    it('Undo last change takes the satellites back off with the layout, on both maps', async () => {
+    it('Undo last change takes the satellites back off with the layout, on the map it ticked', async () => {
       const restore = fakeBoxes(1920)
       try {
         const { container } = await mount()
@@ -764,7 +777,7 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         expect(mapBoxes(container)[SATS], 'CONTROL').toBe(true)
         fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
         expect(mapBoxes(container)[SATS], 'Undo left the satellites on').toBe(false)
-        expect(stored(GLOBE)?.sats, 'Undo left them on the 3-D globe').toBe(false)
+        expect(localStorage.getItem(GLOBE), 'Undo wrote the 3-D globe, which the tap never touched').toBeNull()
         expect(layoutNow()).toBe('Standard')
       } finally {
         restore()
