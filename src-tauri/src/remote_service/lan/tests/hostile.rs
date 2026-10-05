@@ -583,6 +583,56 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
     controller.renewed(&r.s).await;
 }
 
+/// A port on `on` that hands its first connection to `first` and every later one to `then`, byte
+/// for byte: a machine taking a station's address over between two connections.
+async fn switching(on: Ipv4Addr, first: SocketAddr, then: SocketAddr) -> SocketAddrV4 {
+    let listener = tokio::net::TcpListener::bind((on, 0)).await.unwrap();
+    let at = v4(listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut to = first;
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            let target = std::mem::replace(&mut to, then);
+            tokio::spawn(async move {
+                if let Ok(mut outbound) = TcpStream::connect(target).await {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+            });
+        }
+    });
+    at
+}
+
+/// ★ Pairing again with a station this computer knows shows this computer's own key for that
+/// station to it alone (the operator's ruling of 2026-10-04, "Reuse the PC's own key"): the second
+/// connection pins the key the station presented on the first, so a machine answering in its
+/// place between the two (here the forger, at the same address) is refused in the handshake
+/// before it is shown this computer's key, and nothing is paired; the code is not spent, and it
+/// reached nothing. CONTROL: the first connection reached the station and its proof held, since
+/// the pairing went on to a second connection, which the forger took.
+#[tokio::test]
+async fn pairing_again_shows_this_computers_key_to_its_station_alone() {
+    let Some(r) = listening().await else {
+        return;
+    };
+    let on = *v4(r.at).ip();
+    let forger = forger(on).await;
+    let at = switching(on, r.at, SocketAddr::V4(forger.at)).await;
+    let before = snapshot(&r.s);
+    r.lan.pair().unwrap();
+    let shown = code(&r.lan.status().pairing.unwrap().code).unwrap();
+    let known = paired_record(&r.s, v4(r.at));
+    let paired = pairing::pair(at, shown, "Den PC", &[known]).await;
+    assert_eq!(
+        forger.shown.load(Ordering::SeqCst),
+        0,
+        "this computer showed the forger its key for the station"
+    );
+    assert_eq!(paired.err(), Some("notStation"));
+    assert_eq!(forger.taken.load(Ordering::SeqCst), 1, "the control");
+    assert!(r.lan.status().pairing.is_some(), "the code was spent");
+    reached_nothing(&r.s, &before, "pairing again through a forger");
+}
+
 /// A machine in the middle holding `key`: it takes a computer's connection as if it were the
 /// station, with a pairing window of its own open (so it takes any computer's key), opens its own to
 /// the station at `to` with its key, and passes every message along both ways. How many keys
@@ -710,7 +760,7 @@ async fn a_man_in_the_middle_with_his_own_key_is_refused_at_both_ends() {
     let shown_code = r.lan.status().pairing.unwrap().code;
     let typed = code(&shown_code).unwrap();
     assert_eq!(
-        pairing::pair(middle_at, typed, "Den PC").await.err(),
+        pairing::pair(middle_at, typed, "Den PC", &[]).await.err(),
         Some("stationProofFailed")
     );
     let mut passed = Vec::new();
@@ -734,7 +784,7 @@ async fn a_man_in_the_middle_with_his_own_key_is_refused_at_both_ends() {
         "the middle spent the code"
     );
     reached_nothing(&r.s, &before, "a man in the middle");
-    let kept = pairing::pair(at, typed, "Den PC")
+    let kept = pairing::pair(at, typed, "Den PC", &[])
         .await
         .expect("the control: the same code, direct");
     assert_eq!(kept.station_key, r.s.public_key);
@@ -807,7 +857,7 @@ async fn replayed_pairing_proofs_pair_nobody() {
     r.lan.pair().unwrap();
     let typed = code(&r.lan.status().pairing.unwrap().code).unwrap();
     let (tap_at, kept, done) = tap(*at.ip(), r.at).await;
-    pairing::pair(tap_at, typed, "Den PC")
+    pairing::pair(tap_at, typed, "Den PC", &[])
         .await
         .expect("the control: the recorded pairing pairs");
     tokio::time::timeout(Duration::from_secs(5), done)
@@ -921,7 +971,7 @@ async fn three_wrong_codes_close_the_window_and_reach_nothing() {
         }
     }
     assert_eq!(
-        pairing::pair(at, right, "Den PC").await.err(),
+        pairing::pair(at, right, "Den PC", &[]).await.err(),
         Some("pairingClosed"),
         "the right code, after three wrong ones"
     );

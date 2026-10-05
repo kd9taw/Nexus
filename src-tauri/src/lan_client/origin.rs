@@ -553,12 +553,14 @@ async fn pair(
     if !valid_name(name) {
         return Err("badName");
     }
-    // Room on this computer first: a pairing it could not keep is never made at the station.
+    // Room on this computer first: a pairing it could not keep is never made at the station. The
+    // stations it is paired with already go with the pairing, which may be with one of them again.
     let kept = reach.stations.clone();
-    if store(move || kept.list()).await?.len() >= MAX_STATIONS {
+    let known = store(move || kept.records()).await?;
+    if known.len() >= MAX_STATIONS {
         return Err("stationsFull");
     }
-    let record = pairing::pair(at, code, name).await?;
+    let record = pairing::pair(at, code, name, &known).await?;
     let view = StationView::of(&record).ok_or("notStation")?;
     let kept = reach.stations.clone();
     store(move || kept.keep(&record)).await?;

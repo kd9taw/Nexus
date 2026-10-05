@@ -355,11 +355,11 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
     );
     let typed = [0x5e; 8];
     assert_eq!(
-        pairing::pair(dead, typed, "Den PC").await.err(),
+        pairing::pair(dead, typed, "Den PC", &[]).await.err(),
         Some("refused")
     );
     assert_eq!(
-        pairing::pair(dropping, typed, "Den PC").await.err(),
+        pairing::pair(dropping, typed, "Den PC", &[]).await.err(),
         Some("unreachable")
     );
     let (_, reached) = road::connect_at(&kept, &[dead, dropping, live])
@@ -391,7 +391,7 @@ async fn the_computer_pairs_with_the_code_the_shack_shows() {
     let (_stop, stop) = watch::channel(false);
     let at = behind_a_port(&s, stop).await;
     assert_eq!(
-        pairing::pair(at, [7; 8], "Den PC").await.err(),
+        pairing::pair(at, [7; 8], "Den PC", &[]).await.err(),
         Some("pairingClosed"),
         "the control"
     );
@@ -399,7 +399,7 @@ async fn the_computer_pairs_with_the_code_the_shack_shows() {
     lan.pair().unwrap();
     let shown = lan.status().pairing.unwrap().code;
     let typed = code(&spaced_capitals(&shown)).unwrap();
-    let kept = pairing::pair(at, typed, "Den PC").await.unwrap();
+    let kept = pairing::pair(at, typed, "Den PC", &[]).await.unwrap();
     assert_eq!(
         kept.station_key, s.public_key,
         "not the key the shack presented"
@@ -478,7 +478,7 @@ async fn the_shacks_proof_is_checked_before_the_computer_sends_its_own() {
     wrong[7] ^= 1;
     for _ in 0..super::super::book::WRONG_PROOFS {
         assert_eq!(
-            pairing::pair(at, wrong, "Den PC").await.err(),
+            pairing::pair(at, wrong, "Den PC", &[]).await.err(),
             Some("stationProofFailed")
         );
     }
@@ -486,7 +486,7 @@ async fn the_shacks_proof_is_checked_before_the_computer_sends_its_own() {
         lan.status().pairing.is_some(),
         "a computer's departure was counted"
     );
-    pairing::pair(at, shown, "Den PC")
+    pairing::pair(at, shown, "Den PC", &[])
         .await
         .expect("the right code, after three that never left this computer");
     // The control: proofs that do leave with a wrong code are counted, and the third closes it.
@@ -502,7 +502,7 @@ async fn the_shacks_proof_is_checked_before_the_computer_sends_its_own() {
         "the control: the window stayed open"
     );
     assert_eq!(
-        pairing::pair(at, shown, "Den PC").await.err(),
+        pairing::pair(at, shown, "Den PC", &[]).await.err(),
         Some("pairingClosed")
     );
 }
@@ -525,7 +525,7 @@ async fn a_machine_posing_as_the_station_learns_nothing() {
     let (_stop, stop) = watch::channel(false);
     let at = behind_a_port(&posing, stop).await;
     assert_eq!(
-        pairing::pair(at, typed, "Den PC").await.err(),
+        pairing::pair(at, typed, "Den PC", &[]).await.err(),
         Some("stationProofFailed")
     );
     assert_eq!(
@@ -534,7 +534,9 @@ async fn a_machine_posing_as_the_station_learns_nothing() {
         "it paired this computer"
     );
     let own = code(&posing_lan.status().pairing.unwrap().code).unwrap();
-    let kept = pairing::pair(at, own, "Den PC").await.expect("the control");
+    let kept = pairing::pair(at, own, "Den PC", &[])
+        .await
+        .expect("the control");
     assert_eq!(kept.station_key, posing.public_key);
 }
 
@@ -563,7 +565,10 @@ async fn a_station_of_another_version_says_which_side_to_update() {
             json!({"type":"hello","protocol":VERSIONS.0,"stream":VERSIONS.1,"operation":VERSIONS.2})
         );
         let (at, mut heard) = scripted_station(Ipv4Addr::LOCALHOST, &key, refused).await;
-        assert_eq!(pairing::pair(at, [1; 8], "Den PC").await.err(), Some(side));
+        assert_eq!(
+            pairing::pair(at, [1; 8], "Den PC", &[]).await.err(),
+            Some(side)
+        );
         let asked = heard.recv().await.unwrap();
         assert_eq!(asked["type"], "pair");
         assert_eq!(
@@ -1367,4 +1372,70 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
         "found by name where nothing listens"
     );
     assert_eq!(looks.load(Ordering::SeqCst), 3);
+}
+
+/// ★ Pairing again with a station this computer is paired with already keeps this computer's own
+/// key for it (the operator's ruling of 2026-10-04, "Reuse the PC's own key"), so the station
+/// replaces its one entry: it lists this computer once, under the same device id, and the key this
+/// computer kept still opens the road. The first connection, which met the station's key and left
+/// after the station's proof, spends nothing: the same code pairs on the second. CONTROL: this
+/// computer's key for one station is never another's: knowing only another station's record, the
+/// pairing makes a key of its own. Skipped, saying so, on a box with no private address of its own.
+#[tokio::test]
+async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let scratch = Scratch::new();
+    let lan = lan_on(&s, &scratch);
+    let (_stop, stop) = watch::channel(false);
+    let at = behind_a_port_on(&s, private, stop).await;
+    let store = StationStore::default();
+    let stations = Arc::new(Stations::new(Arc::new(store.clone())));
+    let origin = Origin::start(Reach {
+        assets: Arc::new(|_: &str| None),
+        stations: stations.clone(),
+        find: Arc::new(|_| Ok(Vec::new())),
+        name: "Den PC".into(),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    for _ in 0..2 {
+        lan.pair().unwrap();
+        let shown = lan.status().pairing.unwrap().code;
+        let pair = json!({"type":"pair","address":at.to_string(),"code":shown,"name":"Den PC"});
+        page.send(Message::Text(pair.to_string().into()))
+            .await
+            .unwrap();
+        let paired = told(&mut page).await;
+        assert_eq!(paired["type"], "paired", "{paired}");
+    }
+    let kept = stations.get(STATION).unwrap().unwrap();
+    let devices = lan.status().devices;
+    let ours: Vec<_> = devices.iter().filter(|d| d.name == "Den PC").collect();
+    assert_eq!(
+        ours.len(),
+        1,
+        "the station lists this computer {} times",
+        ours.len()
+    );
+    assert_eq!(ours[0].id, kept.device_id);
+    assert_eq!(devices.len(), 2, "{devices:?}");
+    let (opened, _) = road::connect(&kept, Some(at)).await.unwrap();
+    assert_eq!(opened.ids.device, kept.device_id);
+
+    let mut elsewhere = paired_record(&s, at);
+    elsewhere.station_key = another_key();
+    elsewhere.station_id = "70000000-0000-4000-8000-000000000001".into();
+    lan.pair().unwrap();
+    let shown = code(&lan.status().pairing.unwrap().code).unwrap();
+    let made = pairing::pair(at, shown, "Den PC", &[elsewhere])
+        .await
+        .unwrap();
+    assert!(
+        made.pkcs8 != s.computer.key && made.pkcs8 != kept.pkcs8,
+        "another station's key, or this one's, was used"
+    );
 }

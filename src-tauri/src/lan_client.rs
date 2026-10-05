@@ -270,13 +270,17 @@ impl Stations {
 
     /// Every paired station the store holds a sound record for, in the order they were paired.
     pub(crate) fn list(&self) -> Result<Vec<StationView>, &'static str> {
-        let mut views = Vec::new();
+        Ok(self.records()?.iter().filter_map(StationView::of).collect())
+    }
+
+    /// The same stations' records, this computer's key for each included: what pairing with one of
+    /// them again takes that key from ([`pairing::pair`]).
+    pub(crate) fn records(&self) -> Result<Vec<PairedStation>, &'static str> {
+        let mut records = Vec::new();
         for id in self.ids()? {
-            if let Some(view) = self.get(&id)?.as_ref().and_then(StationView::of) {
-                views.push(view);
-            }
+            records.extend(self.get(&id)?);
         }
-        Ok(views)
+        Ok(records)
     }
 
     /// The record for station `id`, if the store holds a sound one.

@@ -757,13 +757,15 @@ async fn a_pairing_that_reaches_nobody_says_why() {
         at
     };
     assert_eq!(
-        pairing::pair(nothing_listens, [7; 8], "Den PC").await.err(),
+        pairing::pair(nothing_listens, [7; 8], "Den PC", &[])
+            .await
+            .err(),
         Some("refused")
     );
     // TEST-NET-1 (RFC 5737), routed nowhere: nothing answers.
     let nobody = "192.0.2.1:42075".parse().unwrap();
     assert_eq!(
-        pairing::pair(nobody, [7; 8], "Den PC").await.err(),
+        pairing::pair(nobody, [7; 8], "Den PC", &[]).await.err(),
         Some("noAnswer")
     );
 }
