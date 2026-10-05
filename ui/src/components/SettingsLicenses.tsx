@@ -1,11 +1,16 @@
 // Settings ▸ Licenses, in the panel header beside the build stamp: the license texts of the npm
-// packages built into this app's interface. The desktop build derives them from its own bundle and
-// emits them as THIRD-PARTY.txt (ui/vite.config.ts); the installers carry the same text as
-// resources/ui/THIRD-PARTY.txt, beside COPYING and NOTICE. Read when first opened, never at start.
+// packages built into this app's interface, then those of the Rust crates the app is built from.
+// The desktop build derives the first from its own bundle and emits it as THIRD-PARTY.txt, and
+// emits the second, scripts/gen-rust-licenses.py's licenses/rust/THIRD-PARTY.txt, beside it as
+// rust/THIRD-PARTY.txt (ui/vite.config.ts). The installers carry the same texts as
+// resources/ui/THIRD-PARTY.txt and resources/rust/THIRD-PARTY.txt, beside COPYING and NOTICE.
+// Read when first opened, never at start, and shown only whole: half of them would read as all.
 import { useEffect, useState } from 'react'
 import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
 import { Dialog } from './ui/Dialog'
+
+const FILES = ['THIRD-PARTY.txt', 'rust/THIRD-PARTY.txt']
 
 export function SettingsLicenses() {
   const [open, setOpen] = useState(false)
@@ -16,10 +21,10 @@ export function SettingsLicenses() {
     if (!open || text !== null || failed) return
     let live = true
     // A dev server answers a path it lacks with the page itself, so only a text file is the text.
-    fetch('THIRD-PARTY.txt')
+    Promise.all(FILES.map(file => fetch(file)
       .then(response => response.ok && response.headers.get('content-type')?.startsWith('text/plain')
-        ? response.text() : Promise.reject(new Error(`THIRD-PARTY.txt: ${response.status}`)))
-      .then(body => { if (live) setText(body) }, () => { if (live) setFailed(true) })
+        ? response.text() : Promise.reject(new Error(`${file}: ${response.status}`)))))
+      .then(bodies => { if (live) setText(bodies.join('\n\n')) }, () => { if (live) setFailed(true) })
     return () => { live = false }
   }, [open, text, failed])
   return <>

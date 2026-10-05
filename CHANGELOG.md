@@ -271,6 +271,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every copy, and the installers did not carry it. Every installer now has them, with the CQ-zone
   data's notice, in `resources/ui/THIRD-PARTY.txt` beside COPYING and NOTICE, and the new
   **Licenses** button in the Settings header, beside **Check for updates**, shows them.
+- **Nexus now carries the license texts of the Rust crates it is built from, too.** The installers
+  carried the texts of only a few of them, and their licenses, MIT, Apache-2.0, BSD, ISC, Zlib,
+  Unicode and MPL-2.0 among them, ask for the text itself to travel with every copy. Every
+  installer now has the texts of all of them in `resources/rust/THIRD-PARTY.txt`, and the
+  **Licenses** button shows them after the interface's.
 
 ### Changed
 

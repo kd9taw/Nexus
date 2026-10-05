@@ -18,8 +18,8 @@ The tabs, in the order they appear:
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took), a **Check for updates** button and a **Licenses** button (the license
-texts of the packages built into the interface), all at the right-hand end of
-the same row as the search box.
+texts of the packages built into the interface and of the Rust crates the app
+is built from), all at the right-hand end of the same row as the search box.
 
 ![The Settings header: a Find a setting box, and under it the ten tab names in a row with Station first and Radio selected.](../img/manual/settings-tabs.webp)
 

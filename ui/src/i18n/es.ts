@@ -5433,7 +5433,7 @@ export const ES: PartialCatalog = {
   "settings.licenses.button": "Licencias",
   "settings.licenses.title": "Licencias de terceros",
   "settings.licenses.loading": "Cargando los textos de licencia…",
-  "settings.licenses.unavailable": "Este build no incluye los textos de licencia. Un Nexus instalado los tiene en resources/ui/THIRD-PARTY.txt.",
+  "settings.licenses.unavailable": "Este build no incluye los textos de licencia. Un Nexus instalado los tiene en resources/ui/THIRD-PARTY.txt y resources/rust/THIRD-PARTY.txt.",
   "settings.phone.ctcss.hint": "Tono de acceso al repetidor (PL).",
   "settings.phone.ctcss.label": "Tono CTCSS (PL)",
   "settings.phone.ctcss.off": "Off",

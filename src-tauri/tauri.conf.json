@@ -72,6 +72,7 @@
       "../licenses/stream/*": "resources/stream/",
       "../licenses/openssl/*": "resources/openssl/",
       "../licenses/ui/*": "resources/ui/",
+      "../licenses/rust/THIRD-PARTY.txt": "resources/rust/THIRD-PARTY.txt",
       "../COPYING": "COPYING",
       "../NOTICE": "NOTICE"
     },

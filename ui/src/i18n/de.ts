@@ -1176,7 +1176,7 @@ export const DE: PartialCatalog = {
   "settings.licenses.button": "Lizenzen",
   "settings.licenses.title": "Lizenzen von Drittanbietern",
   "settings.licenses.loading": "Lizenztexte werden geladen…",
-  "settings.licenses.unavailable": "Dieser Build enthält die Lizenztexte nicht. Ein installiertes Nexus hat sie in resources/ui/THIRD-PARTY.txt.",
+  "settings.licenses.unavailable": "Dieser Build enthält die Lizenztexte nicht. Ein installiertes Nexus hat sie in resources/ui/THIRD-PARTY.txt und resources/rust/THIRD-PARTY.txt.",
   "settings.panel.tabs.aria": "Bereiche der Einstellungen",
   "settings.panel.save": "Speichern",
   "settings.panel.saving": "Speichern…",
