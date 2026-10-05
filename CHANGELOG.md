@@ -215,6 +215,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FlexRadio: a "may still be transmitting" alarm stays on screen until you dismiss it.** When
+  Nexus cannot be sure the radio let go of the transmitter (the radio did not confirm an unkey,
+  the connection was lost or the radio stopped answering during a transmission, an earlier Nexus
+  session still holds the transmitter, or Nexus unkeyed after missed pings), an amber banner under
+  the cockpit header says so, with the radio's name and the UTC time, and stays until you click
+  **Dismiss**. Before, the alarm reached only the CAT status line, and the next CAT message
+  replaced it, so it could scroll off unseen. A second alarm waits behind the first ("1 of 2")
+  rather than replacing it, and Dismiss clears only the one you are reading. A reconnect, a radio
+  switch or a settings save leaves it on screen. It shows in every cockpit, APRS included, and on
+  the Remote page, where it has no Dismiss: clearing it is done at the shack. Nothing else
+  changes: the dial, tuning, Tune, PTT and Stop TX work as before, and the banner never covers
+  Stop TX.
+
 - **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
   a new place, **Left side**: a column from under the header down to the dock, beside the scope,
   so the band map and the two boards get the whole height of the window instead of what is left

@@ -12,6 +12,7 @@ import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../re
 // moves exactly as PTT Method and the drive slider did) and the CAT pill's two states.
 import { useRef } from 'react'
 import { AmpStrip } from './AmpStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { WheelRange } from './WheelRange'
 import type { ReactNode } from 'react'
 import type { AppSnapshot } from '../types'
@@ -37,8 +38,9 @@ const CAT_BAD = 'CAT ✗'
  * and `children` for the rest) — never forced to look identical, only positioned consistently.
  *
  * Layout regions (left→right, wrapping): identity · frequency(+extras+band) ·
- * mode-extras(elastic) · actions(power·CAT, pinned right). Every region wraps + has min-width:0 so
- * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
+ * mode-extras(elastic) · actions(power·CAT, pinned right), then, while one is up, the transmitter
+ * alarm on its own last row. Every region wraps + has min-width:0 so nothing clips off-screen at a
+ * non-maximized width or 110–125% UI zoom.
  *
  * NO TRANSMIT CONTROLS (2026-10-01). The TX-enable latch, Tune, the rig's ATU
  * and Stop TX left this header for the TX strip under the scope (`CockpitTxStrip`), FT's cluster
@@ -354,6 +356,12 @@ export function CockpitHeader({
           </span>
         )}
       </div>
+
+      {/* The transmitter alarm the CAT status above cannot keep: on screen until the operator
+          dismisses it. Its own row, LAST, so the controls above it never move when it comes or
+          goes. Rendered from `snap` like the amplifier strip, so no cockpit can forget it; it
+          renders nothing while there is no alarm. */}
+      <TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />
     </div>
   )
 }

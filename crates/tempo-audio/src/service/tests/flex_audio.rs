@@ -808,6 +808,111 @@ fn a_session_lost_while_idle_raises_no_alarm() {
     assert!(!names_an_alarm(&detail), "{detail}");
 }
 
+// ── The transmitter alarm stays on screen until the operator dismisses it ────────────────────
+
+/// The transmitter alarms on screen, in the order shown, as `(id, text)`: read off the snapshot in
+/// the form the screen receives it.
+fn tx_alarms(s: &FlexScene) -> Vec<(u64, String)> {
+    let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
+    snap["txAlarms"]
+        .as_array()
+        .map(|alarms| {
+            alarms
+                .iter()
+                .map(|a| {
+                    (
+                        a["id"].as_u64().unwrap_or_default(),
+                        a["text"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// ⭐ THE ALARM OUTLIVES THE CAT LINE (operator ruling, 2026-10-04: "Sticky until dismissed"). The
+/// radio never confirms the unkey after a beacon's over, and the alarm reaches the CAT status. That
+/// line is latest-wins: the next CAT message replaced the alarm, and it could scroll off unseen.
+/// It stays on screen until the operator dismisses it.
+#[test]
+fn a_flex_tx_alarm_stays_on_screen_after_a_later_cat_message() {
+    let unconfirmed =
+        "the radio did not confirm the unkey — it may still be transmitting. Check the radio now.";
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::StuckTransmit],
+        short_deadline(),
+    );
+    s.replace_on_rebuild = true;
+    beacon(&s);
+    let detail = status_after_the_rebuild(&mut s);
+    assert!(
+        detail.starts_with(unconfirmed),
+        "premise: the CAT status carried it: {detail}"
+    );
+    // The next CAT message, through the setter every one of them takes, then the loop's own.
+    s.engine
+        .lock()
+        .unwrap()
+        .set_cat_status(Some(true), "Connected — 14.074 MHz".to_string());
+    s.run(500);
+    let (_, detail) = cat_status(&s);
+    assert!(
+        !detail.contains(unconfirmed),
+        "premise: the CAT line moved on: {detail}"
+    );
+    let shown = tx_alarms(&s);
+    assert_eq!(
+        shown.first().map(|(_, text)| text.as_str()),
+        Some(unconfirmed),
+        "the alarm left the screen with the CAT line: {shown:?}"
+    );
+}
+
+/// ⭐ …AND A RECONNECT KEEPS IT. A session lost mid-over: the alarm is raised as the session ends,
+/// and the loop restarts the client in the same tick. The fresh client finds the lost session
+/// still holding the transmitter and says so too. A newer alarm queues behind the one on screen
+/// and never replaces it, so the first stays first, through the reconnect and after it.
+#[test]
+fn a_reconnect_keeps_the_tx_alarm() {
+    let lost = "the connection to the radio was lost during a transmission — it may still be \
+                transmitting. Check the radio now.";
+    let mut s = lost_mid_over();
+    beacon(&s);
+    status_after_the_rebuild(&mut s);
+    let shown = tx_alarms(&s);
+    assert_eq!(
+        shown.first().map(|(_, text)| text.as_str()),
+        Some(lost),
+        "the reconnect took the alarm off the screen: {shown:?}"
+    );
+    run_until(
+        &mut s,
+        "the fresh client never said the transmitter is held",
+        |s| tx_alarms(s).len() == 2,
+    );
+    let shown = tx_alarms(&s);
+    assert_eq!(shown[0].1, lost, "{shown:?}");
+    assert!(
+        shown[1].1.starts_with("an earlier Nexus session (0x"),
+        "{shown:?}"
+    );
+}
+
+/// The control: an over whose unkey the radio confirms raises no transmitter alarm, so there is
+/// nothing on screen to dismiss.
+#[test]
+fn a_confirmed_unkey_raises_no_tx_alarm() {
+    let mut s = FlexScene::new(false);
+    beacon(&s);
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+    run_until(&mut s, "the beacon's over never ended", idle);
+    s.run(1_000);
+    assert!(unkeys(&s) >= 1, "premise: the over was unkeyed");
+    assert!(tx_alarms(&s).is_empty(), "{:?}", tx_alarms(&s));
+}
+
 /// Whether the client would admit a key: nothing of ours keyed, and its readback has seen the
 /// radio idle.
 fn client_ready(s: &FlexScene) -> bool {

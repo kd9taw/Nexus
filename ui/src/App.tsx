@@ -100,6 +100,7 @@ import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
 import { TempoHeader } from './components/TempoHeader'
 import { CockpitTxStrip } from './components/CockpitTxStrip'
+import { TxAlarmBanner } from './components/TxAlarmBanner'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { markerWidthHz } from './waterfall'
@@ -3704,6 +3705,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                     onStopTx={handleHaltTx}
                   />
                 }
+                txAlarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                 onOpenSettings={openSettingsAt}
               />
             </div>

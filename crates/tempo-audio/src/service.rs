@@ -5979,6 +5979,20 @@ impl RadioLoop {
             } else {
                 flex.and_then(crate::flex::FlexDaemon::take_new_alarm)
             };
+            // …and each one stays on screen until the operator dismisses it: the CAT status is
+            // latest-wins, so the next CAT message replaced it. Raised once each: after a death
+            // `alarm()` repeats the latest for the restart's report, and only what was raised
+            // since the last take is new. About the radio this client serves (`remote_radio_id`),
+            // never whichever one is active by now: a switch flips that before the loop lets go.
+            let new_alarm = if daemon_died {
+                flex.and_then(crate::flex::FlexDaemon::take_new_alarm)
+            } else {
+                flex_alarm.clone()
+            };
+            if let Some(text) = new_alarm {
+                let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
+                engine_lock(engine).raise_tx_alarm(radio, text, now as u64);
+            }
             if daemon_died {
                 crate::civ::diag::note("rigctld died: respawning the active radio's CAT daemon");
                 let mut eng = engine_lock(engine);

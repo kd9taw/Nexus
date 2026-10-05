@@ -380,6 +380,7 @@
 .cockpit-header--quick .ch-freq { grid-column: 1 / -1; min-width: 0; margin: 0; }
 .cockpit-header--quick .ch-mode-extras { grid-column: 1 / -1; }
 .cockpit-header--quick .ch-actions { grid-column: 1 / -1; min-width: 0; margin: 0; flex-wrap: wrap; gap: .35em; }
+.cockpit-header--quick .ch-txalarm { grid-column: 1 / -1; }
 .cockpit-header--brief .panels-menu,
 .cockpit-header--brief .ph-mode-btn:not([aria-pressed='true']) { display: none; }
 .cockpit-header--quick .amp-strip { flex-wrap: wrap; max-width: 100%; gap: .35em; }

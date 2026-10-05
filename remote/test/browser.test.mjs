@@ -2044,6 +2044,54 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const lease=loggingLease
       await evaluate(`void(window.__quickNodes={app:document.querySelector('.app'),cockpit:document.querySelector('.${quickMode}-cockpit'),call:document.querySelector('${call}')})`)
       assert.equal(await evaluate(`document.querySelector('.app').dataset.remotePresentation??'full'`),'full','a new browser starts with the full Nexus interface')
+      // THE TRANSMITTER ALARM (operator ruling 2026-10-04, "Sticky until dismissed"). The station's
+      // alarm is the cockpit header's last row: on screen, nothing over it, never over Stop TX, and
+      // the TX dock never re-laid out for it. Measured in both presentations with real boxes and real
+      // stacking. Where the cockpit column fills the shell, the region gives up the row and the dock
+      // does not move; where the column is content-tall (Quick's contact-first column, or one that
+      // scrolls), the dock is carried down by exactly the header's growth, as by any row above it.
+      // The Remote's strip and dock are the observer's, which scroll with the cockpit rather than
+      // pin. The alarm comes from the station's snapshot and goes when the station stops sending it:
+      // the Remote has no Dismiss.
+      const alarmChecks=[], alarmText='the radio did not confirm the unkey — it may still be transmitting. Check the radio now.'
+      const alarmCheck=async sizes=>{
+        const presentation=await evaluate(`document.querySelector('.app').dataset.remotePresentation??'full'`)
+        const was=await evaluate(`({width:innerWidth,height:innerHeight,zoom:document.documentElement.style.getPropertyValue('--ui-zoom')})`)
+        for(const [width,height,zoom]of sizes){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+          const measure=async()=>{
+            await evaluate(`document.querySelector('.app').scrollTop=0;document.querySelector('.shell').scrollTop=0;document.querySelector('.${quickMode}-cockpit').scrollTop=0`);await settledLayout()
+            const at=`(e,r)=>e.contains(document.elementFromPoint(r.x+r.width/2,r.y+Math.min(r.height,24)/2))`
+            const top=await evaluate(`(()=>{const at=${at},c=document.querySelector('.${quickMode}-cockpit'),dock=c.querySelector('.cockpit-txdock').getBoundingClientRect().toJSON(),alarm=c.querySelector('.cockpit-header .ch-txalarm'),a=alarm?.getBoundingClientRect();return {header:c.querySelector('.cockpit-header').getBoundingClientRect().height,dock,filled:Math.abs(dock.bottom-document.querySelector('.shell').getBoundingClientRect().bottom)<=2,alarm:a?.toJSON()??null,alarmOnTop:a?at(alarm,a):null,alarmText:alarm?.textContent??null,alarmLast:alarm?alarm.parentElement.lastElementChild===alarm:null}})()`)
+            await evaluate(scrolledIntoView(`document.querySelector('.${quickMode}-cockpit .cockpit-txstrip .op-btn.stop')`,{block:'center',behavior:'instant'}));await settledLayout()
+            const stop=await evaluate(`(()=>{const at=${at},stop=document.querySelector('.${quickMode}-cockpit .cockpit-txstrip .op-btn.stop'),r=stop.getBoundingClientRect();return {rect:r.toJSON(),onTop:at(stop,r)}})()`)
+            return {...top,stop}
+          }
+          const before=await measure()
+          assert.ok(before.alarm===null&&before.stop.onTop,'premise: no alarm yet, and Stop TX on top where it is: '+JSON.stringify(before))
+          applicationData.get_snapshot.txAlarms=[{id:1,text:alarmText,radioId:1,radioName:'FLEX-6600',atMs:Date.UTC(2026,9,4,18,42,7)}];applicationRevision++
+          await until(`!!document.querySelector('.${quickMode}-cockpit .cockpit-header .ch-txalarm')`)
+          await settledLayout();await settledLayout()
+          const shown=await measure()
+          if(artifacts){await evaluate(`document.querySelector('.app').scrollTop=0;document.querySelector('.shell').scrollTop=0`);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`txalarm-${presentation}-${width}-${zoom}.png`),Buffer.from(shot.data,'base64'))}
+          const where=JSON.stringify({presentation,width,height,zoom,before,shown})
+          assert.ok(shown.alarmText.includes(alarmText)&&shown.alarmText.includes('FLEX-6600')&&shown.alarmLast,'the alarm is the header\'s last row, with its radio and its words: '+where)
+          assert.ok(shown.alarm.width>0&&shown.alarm.height>0&&shown.alarm.top>=0&&shown.alarm.bottom<=height&&shown.alarmOnTop,'the alarm is on screen and nothing covers it: '+where)
+          assert.ok(shown.stop.onTop,'the alarm never covers Stop TX: '+where)
+          const grew=shown.header-before.header, moved=shown.dock.top-before.dock.top
+          assert.ok(grew>0,'premise: the alarm takes a row of the header: '+where)
+          for(const k of ['left','width','height'])assert.ok(Math.abs(shown.dock[k]-before.dock[k])<=1,`the TX dock was re-laid out (${k}) for the alarm: `+where)
+          assert.ok(before.filled?Math.abs(moved)<=1:Math.abs(moved-grew)<=1,`the TX dock moved ${moved}px for a header ${grew}px taller (${before.filled?'a column filling the shell':'a content-tall column'}): `+where)
+          delete applicationData.get_snapshot.txAlarms;applicationRevision++
+          await until(`!document.querySelector('.${quickMode}-cockpit .ch-txalarm')`)
+          alarmChecks.push({presentation,width,height,zoom,filled:before.filled,grew,moved,alarm:shown.alarm,stop:shown.stop.rect})
+        }
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:was.width,height:was.height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${was.zoom||1}');window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+        console.log('TX_ALARM_PROBE',quickMode,presentation,JSON.stringify(alarmChecks.filter(c=>c.presentation===presentation)))
+      }
+      await alarmCheck([[1280,800,1],[2560,1440,1]])
       await click(`document.querySelector('.remote-session-toggle')`)
       await until(`!!${button('Quick Operate')}`)
       await click(button('Quick Operate'))
@@ -2094,6 +2142,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.activeElement===${picker}`)
         menuChecks.push({width,height,zoom,theme,...menuShape})
       }
+      await alarmCheck([[390,844,1.75],[1280,800,1],[2560,1440,1]])
       // Receiver detail changes the presentation of the SAME scopes/forms.
       // Start and stop its actual native topic before testing further gestures.
       const waitScope=async present=>{

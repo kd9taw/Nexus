@@ -535,6 +535,9 @@ const MIGRATED = [
   // The words for a file the station could not read and kept — migrated from birth. The station
   // sends a store token and a path; every sentence is here, from the catalog.
   'features/keptFiles.ts',
+  // The transmitter alarm's banner — migrated from birth. The alarm's own words are the
+  // station's and pass through as the CAT status's do; everything around them is catalogued.
+  'components/TxAlarmBanner.tsx',
 ]
 
 /**

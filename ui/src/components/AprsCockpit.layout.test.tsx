@@ -112,3 +112,25 @@ describe('APRS’s station list width divider and map side', () => {
     expect(c.querySelector('.np-head')!.contains(sideSwitch())).toBe(false)
   })
 })
+
+// The transmitter alarm (TxAlarmBanner, which App passes in): APRS has no CockpitHeader, so its
+// header line carries the alarm where every other cockpit's header does, as that line's last row.
+describe('the transmitter alarm on APRS', () => {
+  it('is the last row of the header line', async () => {
+    const view = render(
+      <AprsCockpit
+        active
+        theme="dark"
+        myGrid="EM28"
+        onTune={() => {}}
+        txAlarm={<div className="ch-txalarm">alarm</div>}
+      />,
+    )
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve()
+    })
+    const alarm = view.container.querySelector('.ch-txalarm')
+    expect(alarm, 'the alarm passed in is drawn').not.toBeNull()
+    expect(view.container.querySelector('.np-head')!.lastElementChild).toBe(alarm)
+  })
+})

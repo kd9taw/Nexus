@@ -585,6 +585,7 @@ export function AprsCockpit({
   onTune,
   radio,
   txStrip,
+  txAlarm,
   theme,
   myGrid = '',
   onOpenSettings,
@@ -616,6 +617,9 @@ export function AprsCockpit({
    *  cut stops a beacon on the air) and Stop TX (halt_tx). No ⊞ vocabulary exists here, so
    *  nothing can hide it. */
   txStrip?: ReactNode
+  /** The transmitter alarm (TxAlarmBanner), drawn by App: the last row of this screen's header line,
+   *  where the other cockpits' headers draw it. */
+  txAlarm?: ReactNode
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the note below names
    * where the rest of the APRS settings live without offering to open them. */
   onOpenSettings?: (target: string) => void
@@ -1312,6 +1316,7 @@ export function AprsCockpit({
               : t('aprs.showInet.label.hidden', { count: inetOnly })}
           </button>
         )}
+        {txAlarm}
       </div>
 
       {txStrip}

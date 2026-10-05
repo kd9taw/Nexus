@@ -3701,6 +3701,28 @@ pub struct AppSnapshot {
     /// is switched off, which is the default.
     #[serde(default)]
     pub parsec_presence: Option<ParsecPresenceDto>,
+    /// The transmitter alarms the operator has not dismissed, oldest first (`engine/tx_alarms.rs`).
+    /// Empty while there are none, and then not sent at all, so every other snapshot is the one it
+    /// always was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tx_alarms: Vec<TxAlarm>,
+}
+
+/// A transmitter alarm, on screen until the operator dismisses it — see
+/// [`AppSnapshot::tx_alarms`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxAlarm {
+    /// What a dismissal names: it clears this alarm, never one raised since.
+    pub id: u64,
+    /// The radio loop's own words, as the CAT status said them.
+    pub text: String,
+    /// The radio it is about.
+    pub radio_id: u32,
+    /// That radio's name when the alarm was raised; empty when the station names none.
+    pub radio_name: String,
+    /// When it was raised (unix ms).
+    pub at_ms: u64,
 }
 
 /// What Parsec presence mode knows — see [`AppSnapshot::parsec_presence`] and
