@@ -4,31 +4,60 @@
 //! One download runs at a time. Sizing an area keeps its result, and a Download of the same
 //! area right after uses it instead of reading the directories again. A pack that is being
 //! downloaded cannot be removed until the download ends; Cancel ends it.
+//!
+//! [`StreetMaps::install_file`] is the bench aid: it installs a map file the operator already has,
+//! checked as a download is, so the street map can be tried before any host serves packs.
 
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use reqwest::blocking::Client;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::area::{maidenhead, Detail, StreetArea};
-use crate::assets::{self, MAX_ARCHIVE};
+use crate::assets::{self, sha256_hex, MAX_ARCHIVE};
 use crate::error::{ErrorKind, StreetError};
 use crate::http::{client, get_all, with_retry, HttpSource};
-use crate::job::{self, StreetProgress};
+use crate::job::{self, sha256_file, StreetProgress};
 use crate::manifest::{self, Manifest};
 use crate::plan::{self, Plan};
 use crate::store::{
     check_disk, ensure_folder, list_packs, load_registry, now_unix, read_asset, read_pack,
     save_registry, valid_pack_id, AssetsRecord, MapsDir, PackRecord, StreetPack,
 };
+use crate::verify::verify_file;
 use crate::Options;
 
 /// The largest index file accepted.
 const MANIFEST_LIMIT: u64 = 1 << 20;
+
+/// The `build_id` of a pack installed from a file: there is no build on the host to update it from.
+pub const LOCAL_BUILD: &str = "local";
+
+/// What [`StreetMaps::install_file`] installed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StreetInstalled {
+    /// A pack, listed with the downloaded ones.
+    Pack { pack: StreetPack },
+    /// The fonts and icons.
+    Assets,
+}
+
+/// A pack's data date from its metadata: this crate's own `source_date`, else a Protomaps build's
+/// OpenStreetMap replication time; empty when the file states neither.
+fn data_date(m: &Value) -> String {
+    ["source_date", "planetiler:osm:osmosisreplicationtime"]
+        .iter()
+        .filter_map(|k| m.get(*k).and_then(Value::as_str))
+        .find(|d| d.len() >= 10 && d.as_bytes()[4] == b'-' && d.as_bytes()[7] == b'-')
+        .map(|d| d[..10].to_string())
+        .unwrap_or_default()
+}
 
 /// What the download sheet shows before Download: the exact size and whether it fits.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -434,7 +463,11 @@ impl StreetMaps {
         Ok(reg
             .packs
             .into_iter()
-            .filter(|r| r.build_id != manifest.build.id && self.dir.pack(&r.pack.id).is_file())
+            .filter(|r| {
+                r.build_id != manifest.build.id
+                    && r.build_id != LOCAL_BUILD
+                    && self.dir.pack(&r.pack.id).is_file()
+            })
             .map(|r| StreetUpdate {
                 pack_id: r.pack.id,
                 area: r.area,
@@ -443,6 +476,109 @@ impl StreetMaps {
                 new_data_date: manifest.build.date.clone(),
             })
             .collect())
+    }
+
+    /// Install a street map file the operator already has, before any host serves one (the bench
+    /// aid). A gzip file is the fonts-and-icons archive, checked and unpacked as the first download
+    /// would. Anything else must be a PMTiles vector map that passes the same checks as a finished
+    /// download (structure, directories, every tile); it is copied into the maps folder under a
+    /// `local-` id from its SHA-256 and listed with the downloaded packs. Installing the same file
+    /// twice lists it once. Nothing reaches the network, and a local pack is never offered an update.
+    pub fn install_file(&self, path: &Path) -> Result<StreetInstalled, StreetError> {
+        let opened = |e: io::Error| StreetError::io("open the street map file", &e);
+        let mut f = File::open(path).map_err(opened)?;
+        let len = f.metadata().map_err(opened)?.len();
+        let mut magic = [0u8; 2];
+        let gzip = f.read(&mut magic).map_err(opened)? == 2 && magic == [0x1f, 0x8b];
+        if gzip {
+            if len > MAX_ARCHIVE {
+                return Err(StreetError::archive(
+                    "the fonts and icons archive is too large",
+                ));
+            }
+            let bytes = fs::read(path).map_err(opened)?;
+            let sha256 = sha256_hex(&bytes);
+            ensure_folder(&self.dir)?;
+            assets::install(&self.dir, &bytes, &sha256)?;
+            let _held = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut reg = load_registry(&self.dir);
+            reg.assets = Some(AssetsRecord {
+                sha256,
+                url: String::new(),
+                installed_unix: now_unix(),
+            });
+            save_registry(&self.dir, &reg)?;
+            return Ok(StreetInstalled::Assets);
+        }
+
+        let checked = verify_file(&f, len, &AtomicBool::new(false), &mut |_, _| {})?;
+        let sha256 = sha256_file(&f, len)?;
+        let id = format!("local-{}", &sha256[..12]);
+        let h = &checked.header;
+        let e7 = |v: i32| f64::from(v) / 1e7;
+        let bbox = [
+            e7(h.min_lon_e7),
+            e7(h.min_lat_e7),
+            e7(h.max_lon_e7),
+            e7(h.max_lat_e7),
+        ];
+        let (lat, lon) = ((bbox[1] + bbox[3]) / 2.0, (bbox[0] + bbox[2]) / 2.0);
+        let km = (((bbox[3] - bbox[1]) * 111.195).round() as u32).max(1);
+        let detail = if h.max_zoom >= Detail::Streets.max_zoom() {
+            Detail::Streets
+        } else {
+            Detail::Roads
+        };
+        let pack = StreetPack {
+            id: id.clone(),
+            name: format!("{} {km} km", maidenhead(lat, lon)),
+            bbox,
+            min_zoom: h.min_zoom,
+            max_zoom: h.max_zoom,
+            detail,
+            bytes: len,
+            data_date: data_date(&checked.metadata),
+            sha256,
+        };
+        let listed = || {
+            let _held = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+            load_registry(&self.dir)
+                .packs
+                .iter()
+                .any(|r| r.pack.id == id)
+        };
+        if listed() && self.dir.pack(&id).is_file() {
+            return Ok(StreetInstalled::Pack { pack });
+        }
+        ensure_folder(&self.dir)?;
+        if let Ok(free) = (self.free_space)(self.dir.root()) {
+            check_disk(free, len, 0)?;
+        }
+        // Copied under the in-progress name, then named: a copy cut short is never a pack.
+        let part = self.dir.part(&id);
+        if let Err(e) = fs::copy(path, &part) {
+            let _ = fs::remove_file(&part);
+            return Err(StreetError::io("copy the street map file", &e));
+        }
+        fs::rename(&part, self.dir.pack(&id))
+            .map_err(|e| StreetError::io("name the street map file", &e))?;
+        let _held = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut reg = load_registry(&self.dir);
+        reg.packs.retain(|r| r.pack.id != id);
+        reg.packs.push(PackRecord {
+            pack: pack.clone(),
+            build_id: LOCAL_BUILD.to_string(),
+            source_url: String::new(),
+            area: StreetArea {
+                lat,
+                lon,
+                km,
+                detail,
+            },
+            created_unix: now_unix(),
+        });
+        save_registry(&self.dir, &reg)?;
+        Ok(StreetInstalled::Pack { pack })
     }
 
     /// Downloads that stopped before they finished.

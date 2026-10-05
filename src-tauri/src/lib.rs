@@ -32559,6 +32559,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             street_map::street_map_remove,
             street_map::street_map_unfinished,
             street_map::street_map_updates,
+            street_map::street_map_info,
+            street_map::street_map_install_file,
             set_area,
             qso_resend,
             qso_freetext,

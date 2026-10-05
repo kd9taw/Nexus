@@ -45,7 +45,7 @@ use std::time::Duration;
 pub use area::{Detail, StreetArea};
 pub use error::{ErrorKind, StreetError};
 pub use job::StreetProgress;
-pub use service::{StreetMaps, StreetSize, StreetUnfinished, StreetUpdate};
+pub use service::{StreetInstalled, StreetMaps, StreetSize, StreetUnfinished, StreetUpdate};
 pub use store::StreetPack;
 
 /// The host that serves the street map's index, the planet copy, and the fonts and icons.

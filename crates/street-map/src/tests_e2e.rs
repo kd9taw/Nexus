@@ -873,3 +873,119 @@ fn a_range_read_accepts_only_the_exact_partial_response() {
     cancel.store(true, Ordering::SeqCst);
     assert_eq!(src.read(0, 5, &cancel), Err(FetchError::Cancelled));
 }
+
+/// THE BENCH AID. A pack downloaded here stands in for the file the operator already has: it is a
+/// real PMTiles vector map, made from synthetic data.
+#[test]
+fn a_map_file_the_operator_has_installs_as_a_pack_checked_like_a_download() {
+    let f = Fixture::new();
+    let got = f.maps().download(&area(), &no_progress).unwrap();
+    let file = f.dir.join("my-area.pmtiles");
+    fs::copy(f.maps().dir().pack(&got.id), &file).unwrap();
+
+    let bench = f.maps_in("bench");
+    let crate::StreetInstalled::Pack { pack } = bench.install_file(&file).unwrap() else {
+        panic!("a PMTiles file installs as a pack")
+    };
+    assert!(pack.id.starts_with("local-") && crate::store::valid_pack_id(&pack.id));
+    assert_eq!(pack.bytes, fs::metadata(&file).unwrap().len());
+    assert_eq!(pack.sha256, got.sha256, "the same bytes");
+    assert_eq!(
+        (pack.min_zoom, pack.max_zoom, pack.detail),
+        (got.min_zoom, got.max_zoom, Detail::Streets)
+    );
+    for (a, b) in pack.bbox.iter().zip(got.bbox) {
+        assert!((a - b).abs() < 1e-6, "{:?} vs {:?}", pack.bbox, got.bbox);
+    }
+    assert_eq!(
+        pack.data_date, "2026-10-04",
+        "the date the file's metadata states"
+    );
+    assert_eq!(bench.packs(), vec![pack.clone()]);
+    assert_eq!(bench.read(&pack.id, 0, 7).unwrap(), b"PMTiles");
+
+    // The same file twice is one pack.
+    bench.install_file(&file).unwrap();
+    assert_eq!(bench.packs().len(), 1);
+    // The host serves another build, and a file is never offered an update from it.
+    assert!(bench.updates().unwrap().is_empty());
+    // It goes like any pack.
+    assert_eq!(bench.remove(&pack.id).unwrap(), pack.bytes);
+    assert!(bench.packs().is_empty());
+}
+
+#[test]
+fn a_fonts_and_icons_file_installs_the_assets_the_map_reads() {
+    let f = Fixture::new();
+    let file = f.dir.join("street-assets.tar.gz");
+    fs::write(&file, &f.assets).unwrap();
+    let maps = f.maps();
+    assert!(
+        maps.asset("fonts/Noto Sans Regular/0-255.pbf").is_err(),
+        "control: none yet"
+    );
+    assert_eq!(
+        maps.install_file(&file).unwrap(),
+        crate::StreetInstalled::Assets
+    );
+    assert_eq!(
+        maps.asset("fonts/Noto Sans Regular/0-255.pbf").unwrap(),
+        vec![7; 300]
+    );
+    assert!(
+        maps.dir().readme().is_file(),
+        "the folder carries its notice"
+    );
+}
+
+#[test]
+fn a_file_that_is_not_a_whole_street_map_is_refused_and_nothing_is_kept() {
+    let f = Fixture::new();
+    let got = f.maps().download(&area(), &no_progress).unwrap();
+    let good = fs::read(f.maps().dir().pack(&got.id)).unwrap();
+    // A byte inside one of the pack's own tiles (as in `truncated_or_corrupt_packs_are_rejected`).
+    let ranges = area_ranges(&area().bbox().unwrap(), 14);
+    let tile = f
+        .synth
+        .land
+        .iter()
+        .find(|(id, _)| ranges.iter().any(|r| r.contains(id)))
+        .unwrap()
+        .1;
+    let at = good
+        .windows(tile.len())
+        .position(|w| w == tile.as_slice())
+        .expect("the tile is in the pack");
+    let mut flipped = good.clone();
+    flipped[at + tile.len() / 2] ^= 0x40;
+    let bench = f.maps_in("bench");
+    for (name, bytes) in [
+        ("cut.pmtiles", good[..good.len() / 2].to_vec()),
+        ("notes.txt", b"not a map".to_vec()),
+        ("junk.tar.gz", gzip(b"not a tar archive")),
+    ] {
+        let file = f.dir.join(name);
+        fs::write(&file, &bytes).unwrap();
+        assert_eq!(
+            bench.install_file(&file).unwrap_err().kind,
+            ErrorKind::InvalidArchive,
+            "{name}"
+        );
+    }
+    let file = f.dir.join("flipped.pmtiles");
+    fs::write(&file, &flipped).unwrap();
+    assert_eq!(
+        bench.install_file(&file).unwrap_err().kind,
+        ErrorKind::InvalidArchive,
+        "a damaged tile"
+    );
+    assert!(bench.packs().is_empty());
+    let kept: Vec<_> = fs::read_dir(bench.dir().root())
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        kept.iter()
+            .all(|n| !n.to_string_lossy().starts_with("street-")),
+        "{kept:?}"
+    );
+}

@@ -178,6 +178,8 @@ const MIGRATED = [
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
   'components/StreetMap.tsx',
+  'components/StreetDownloadSheet.tsx',
+  'components/SettingsStreetMaps.tsx',
   'propViz.ts',
   'openingAlert.ts',
   'stormAlert.ts',

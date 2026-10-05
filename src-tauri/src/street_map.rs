@@ -14,12 +14,18 @@
 //! 2.11's asset protocol cuts every range response at 1000 KiB, and the pmtiles reader would
 //! take a short directory or tile without noticing. The webview names a pack by id and an
 //! asset by a checked relative path; it never names a file.
+//!
+//! THE BENCH (`street_map_info`, `street_map_install_file`). The Street choice stays hidden until
+//! the hosted index exists. `NEXUS_STREET_MAP=1` in the environment shows it on one computer
+//! anyway, with a bench aid that installs a map file the operator already has: the OS file picker
+//! names the file, so the webview still never does.
 
 use std::sync::{Arc, OnceLock};
 
+use serde::Serialize;
 use street_map::{
-    ErrorKind, StreetArea, StreetError, StreetMaps, StreetPack, StreetProgress, StreetSize,
-    StreetUnfinished, StreetUpdate,
+    ErrorKind, StreetArea, StreetError, StreetInstalled, StreetMaps, StreetPack, StreetProgress,
+    StreetSize, StreetUnfinished, StreetUpdate,
 };
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager};
@@ -30,18 +36,25 @@ pub struct StreetMapState {
     maps: OnceLock<Arc<StreetMaps>>,
 }
 
+/// `$LOCALDATA/Nexus/maps`.
+fn maps_folder(app: &AppHandle) -> Result<std::path::PathBuf, StreetError> {
+    Ok(app
+        .path()
+        .local_data_dir()
+        .map_err(|e| StreetError::new(ErrorKind::Io, format!("no local data folder: {e}")))?
+        .join("Nexus")
+        .join("maps"))
+}
+
 fn maps(app: &AppHandle) -> Result<Arc<StreetMaps>, StreetError> {
     let state = app.state::<StreetMapState>();
     if let Some(m) = state.maps.get() {
         return Ok(Arc::clone(m));
     }
-    let root = app
-        .path()
-        .local_data_dir()
-        .map_err(|e| StreetError::new(ErrorKind::Io, format!("no local data folder: {e}")))?
-        .join("Nexus")
-        .join("maps");
-    let made = Arc::new(StreetMaps::new(root, &street_map::default_origin())?);
+    let made = Arc::new(StreetMaps::new(
+        maps_folder(app)?,
+        &street_map::default_origin(),
+    )?);
     Ok(Arc::clone(state.maps.get_or_init(|| made)))
 }
 
@@ -149,6 +162,56 @@ pub async fn street_map_updates(app: AppHandle) -> Result<Vec<StreetUpdate>, Str
     logged("check for updates", on_pool(app, |m| m.updates()).await)
 }
 
+/// What the Settings block shows about this computer, and whether this run benches the street map.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreetInfo {
+    /// The maps folder, for removing it by hand.
+    folder: String,
+    /// `NEXUS_STREET_MAP=1`: show the hidden Street choice and the bench aid on this computer.
+    bench: bool,
+}
+
+/// The maps folder and the bench switch. Touches neither the disk nor the network.
+#[tauri::command]
+pub async fn street_map_info(app: AppHandle) -> Result<StreetInfo, StreetError> {
+    Ok(StreetInfo {
+        folder: maps_folder(&app)?.display().to_string(),
+        bench: std::env::var("NEXUS_STREET_MAP").is_ok_and(|v| v.trim() == "1"),
+    })
+}
+
+/// THE BENCH AID: the OS file picker, then the crate's `install_file` (a PMTiles pack, or the fonts
+/// and icons archive). `None` when the picker is cancelled. The callback form of the picker, for
+/// the reason `pick_data_folder` gives.
+#[tauri::command]
+pub async fn street_map_install_file(
+    app: AppHandle,
+) -> Result<Option<StreetInstalled>, StreetError> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("PMTiles, fonts and icons", &["pmtiles", "gz", "tgz"])
+        .pick_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let Some(path) = rx.await.ok().flatten().and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let done = logged(
+        "install a file",
+        on_pool(app, move |m| m.install_file(&path)).await,
+    );
+    if let Ok(StreetInstalled::Pack { pack }) = &done {
+        tempo_core::applog::info(
+            "street-map",
+            &format!("installed {} from a file ({} bytes)", pack.id, pack.bytes),
+        );
+    }
+    done.map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     /// Every command here is registered, and registered once: a command missing from the
@@ -168,7 +231,7 @@ mod tests {
             .filter_map(|rest| rest.split_once('('))
             .map(|(name, _)| name)
             .collect();
-        assert_eq!(commands.len(), 9, "{commands:?}");
+        assert_eq!(commands.len(), 11, "{commands:?}");
         for name in commands {
             let entry = format!("street_map::{name},");
             assert_eq!(

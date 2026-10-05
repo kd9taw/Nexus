@@ -188,6 +188,9 @@ interface Props {
   /** The installed street map to draw when `projection` is `street` (the host checks it can draw:
    *  a pack and WebGL2). Without one, a `street` projection draws the flat map. */
   streetPack?: StreetPack
+  /** Where the map's centre was when it last drew, for a host that asks (the street map's download
+   *  sheet: "Around the map's centre"); the station where the centre is not on the planet. */
+  centreRef?: { current: LatLon | null }
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
    * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
@@ -778,6 +781,7 @@ export function MapView({
   onFullChange,
   projection,
   streetPack,
+  centreRef,
   onWorkSpot,
   onSelectSat,
   aprs,
@@ -1585,6 +1589,11 @@ export function MapView({
     lockOverlay()
     // Street before its map has said where it is: nothing to draw on yet.
     if (!proj) return
+    if (centreRef) {
+      const mid = proj.invert?.([w / 2, h / 2])
+      centreRef.current =
+        mid && Number.isFinite(mid[0]) && Number.isFinite(mid[1]) ? { lat: mid[1], lon: mid[0] } : (myQth ?? me)
+    }
     const path = geoPath(proj, ctx)
     const c = showQth && !streetScale ? placePoint(kind, proj, myQth ?? me) : null
     /** STREET SCALE (features/streetOverlay): a position known only by its grid square is drawn as

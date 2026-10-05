@@ -67,6 +67,15 @@ import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProg
 import type { SliceIntent } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { StreetPack } from './features/streetPack'
+import type {
+  StreetArea,
+  StreetInfo,
+  StreetInstalled,
+  StreetProgress,
+  StreetSize,
+  StreetUnfinished,
+  StreetUpdate,
+} from './features/streetMaps'
 import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
 
@@ -75,7 +84,8 @@ type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 declare global {
   interface Window {
     __TAURI__?: {
-      core?: { invoke?: InvokeFn }
+      /** `Channel` streams a command's progress back (the street map's download). */
+      core?: { invoke?: InvokeFn; Channel?: new <T>() => { onmessage: (message: T) => void } }
       invoke?: InvokeFn
       /** Tauri's event bridge (exposed by `withGlobalTauri`). Used by usePounce for the app's
        * one PUSH channel — everything else here polls. */
@@ -3287,6 +3297,56 @@ export async function streetMapRead(packId: string, offset: number, length: numb
 /** One file from the maps folder's `assets/`, raw: a glyph range or a sprite sheet. */
 export async function streetMapAsset(path: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>('street_map_asset', { path })
+}
+
+/** The maps folder, and whether this run benches the street map (NEXUS_STREET_MAP=1). Reads neither
+ *  the disk nor the network. */
+export async function streetMapInfo(): Promise<StreetInfo> {
+  return invoke<StreetInfo>('street_map_info')
+}
+
+/** The exact size of an area against the host's current build, and whether it fits on disk: the
+ *  host's index and a few MB of its directories, no tile data. Only the download sheet asks. */
+export async function streetMapSize(area: StreetArea): Promise<StreetSize> {
+  return invoke<StreetSize>('street_map_size', { area })
+}
+
+/** Download an area, resuming an unfinished download of it. Progress arrives on `onProgress`
+ *  through a Tauri channel, from the same global bridge as `invoke`. Refusals are `{kind, message}`
+ *  (features/streetMaps.ts `StreetError`). */
+export async function streetMapDownload(area: StreetArea, onProgress: (p: StreetProgress) => void): Promise<StreetPack> {
+  const Channel = window.__TAURI__?.core?.Channel
+  if (!Channel) throw new Error('Nexus: the Tauri channel is unavailable — the app must run inside the desktop shell.')
+  const channel = new Channel<StreetProgress>()
+  channel.onmessage = onProgress
+  return invoke<StreetPack>('street_map_download', { area, onProgress: channel })
+}
+
+/** Stop the running street-map download; it keeps what it has. False when nothing runs. */
+export async function streetMapCancel(): Promise<boolean> {
+  return invoke<boolean>('street_map_cancel')
+}
+
+/** Remove a pack, or what an unfinished download of it left. Resolves with the bytes freed. */
+export async function streetMapRemove(packId: string): Promise<number> {
+  return invoke<number>('street_map_remove', { packId })
+}
+
+/** Downloads that stopped before they finished, for Resume. */
+export async function streetMapUnfinished(): Promise<StreetUnfinished[]> {
+  return invoke<StreetUnfinished[]>('street_map_unfinished')
+}
+
+/** Installed packs a newer build on the host could replace. Reads the host's index; downloads
+ *  nothing. */
+export async function streetMapUpdates(): Promise<StreetUpdate[]> {
+  return invoke<StreetUpdate[]>('street_map_updates')
+}
+
+/** THE BENCH AID: the OS file picker opens in the shell (the webview never names the file), and the
+ *  file is installed as a pack or as the fonts and icons. Null when the picker is cancelled. */
+export async function streetMapInstallFile(): Promise<StreetInstalled | null> {
+  return invoke<StreetInstalled | null>('street_map_install_file')
 }
 
 /** Begin an activation (validates + normalizes the reference); returns the state. */

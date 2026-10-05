@@ -74,6 +74,46 @@ whole surface in one tap.
 *The Layers menu in Nexus 1.10.3. Which boxes are ticked is one operator's
 preference, not a recommendation.*
 
+### The street map (not yet available)
+
+> **Not yet available.** The Street choice is built but hidden: it appears once Nexus's street maps
+> are hosted.
+
+**Street** is an optional fifth choice in the map picker: a street-level map of your area,
+downloaded once and kept on your computer, with your Conditions layers drawn on it. Until you
+download an area it carries a download badge, and pressing it opens the download sheet:
+
+- **Where** — around your station (from your grid square) or around the map's centre,
+- **How big** — a square 50, 100, **200** or 400 km across,
+- **Detail** — **All streets** or Main roads.
+
+The sheet shows the exact size before anything downloads, your free disk space (a download needs
+twice its size free) and the map data's licence. A download carries on while you use Nexus, shows
+its percent on the Street choice, and resumes after a restart or a dropped connection.
+
+On the street map, drag and the mouse wheel move the map, a double-click on a spot or park works
+it as anywhere else, and a double-click elsewhere zooms in. From about city zoom, a station or spot
+known only by its grid square is drawn as that square's outline, not a pin (parks and APRS stations
+with their own coordinates stay pins), and grid labels run down to 6- and 8-character squares. The
+world-scale layers (MUF, aurora, flare, PCA, band heat) are greyed in **Layers** there: they show no
+street-level detail. Street needs WebGL2; where a Street pick cannot draw (no area downloaded, or
+graphics without WebGL2) the map shows Flat and says why.
+
+**Settings ▸ Appearance ▸ Map & globe ▸ Street maps** lists each area you have (size, detail and the
+date of its map data), checks for newer map data only when you press **Check for updates**, and
+removes an area, saying how much space that frees.
+
+Street maps live outside your data folder, and uninstalling Nexus leaves them. To remove them by
+hand, close Nexus and delete:
+
+- Windows: `%LOCALAPPDATA%\Nexus\maps`
+- macOS: `~/Library/Application Support/Nexus/maps`. Nexus's other local files on a Mac (its
+  diagnostics log, `ALL.TXT` and the SSTV gallery) are in a second folder, `~/.local/share/Nexus`;
+  delete that too to remove everything Nexus keeps on the computer.
+- Linux: `~/.local/share/Nexus/maps`
+
+Map data © OpenStreetMap contributors, under the Open Database Licence (ODbL).
+
 ### The pane grid
 
 Around the globe is an **assignable pane grid** — seven slots
