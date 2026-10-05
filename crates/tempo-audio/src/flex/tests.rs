@@ -1008,17 +1008,33 @@ fn native_audio_streams_the_served_slice_on_the_one_session() {
     );
 }
 
-/// ⭐ THE REGISTRATION DATAGRAM GOES BEFORE `client udpport` (port plan §4.2, and the order the
-/// session's own docs give). Firmware that answers `client udpport` with "not supported" learns
-/// our UDP endpoint only from the datagram's source; the client sent it after its whole bring-up,
-/// about 46 ms after the command. Here the radio accepts the connection and never answers, so the
-/// session can never reach `client udpport`, and the datagram must arrive all the same. The
-/// simulator logs it on its own UDP thread, so the test waits on that log, never reads it once.
+/// ⭐ THE REGISTRATION DATAGRAM GOES AFTER REGISTRATION, JUST BEFORE `client udpport`, where
+/// upstream sends it (port plan §4.5, step 7). The radio learns our UDP endpoint from its source,
+/// which firmware that answers `client udpport` with "not supported" needs. The client sent it
+/// after its whole bring-up, about 46 ms after the command, and then right after the bind, before
+/// the session even connected, to a radio with no client of ours yet.
+///
+/// The simulator logs datagrams on its own UDP thread, beside each connection's reading thread,
+/// so the test waits on the log, never reads it once, and asserts only the orders the log can
+/// carry: a radio that never registers Nexus is sent nothing, and a radio that does is sent the
+/// datagram after the `client gui` command, which Nexus can only answer once the radio has. Its
+/// place among the commands, after `mic list` and before `client udpport`, is the session's own
+/// order, pinned in the session's tests
+/// (`the_registration_datagram_goes_after_registration_just_before_client_udpport`).
 #[test]
-fn the_registration_datagram_goes_before_client_udpport() {
+fn the_registration_datagram_follows_the_registration() {
+    fn udp_in(l: &tempo_flexsim::server::Logged, payload: &[u8]) -> bool {
+        matches!(&l.event, SimEvent::UdpIn { bytes, .. } if bytes.as_slice() == payload)
+    }
+    fn command(l: &tempo_flexsim::server::Logged, prefix: &str) -> bool {
+        matches!(&l.event, SimEvent::Command { text, .. } if text.starts_with(prefix))
+    }
+    let datagram = |l: &tempo_flexsim::server::Logged| udp_in(l, &[0]);
+
+    // A radio that takes the connection and hangs up without a word: Nexus never registered.
     let sim = simulator(SimSession::v4_gui_client(), vec![]);
-    // The radio's API port: it accepts, and sends no prologue.
     let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    silent.set_nonblocking(true).unwrap();
     let radio = silent.local_addr().unwrap();
     let options = Options {
         vita: sim.udp_addr(),
@@ -1028,18 +1044,41 @@ fn the_registration_datagram_goes_before_client_udpport() {
     let start = std::thread::spawn(move || {
         FlexDaemon::start_full(radio, 0, config(Vec::new()), options).is_ok()
     });
-    let arrived = sim.wait_for(WAIT, |log| {
-        log.iter()
-            .any(|l| matches!(&l.event, SimEvent::UdpIn { bytes, .. } if *bytes == [0u8]))
-    });
-    drop(silent); // the waiting connection goes with it, and the start gives up
+    drop(eventually("Nexus connecting", || silent.accept().ok()));
     assert!(
         !start.join().unwrap(),
         "premise: a radio that never answered registered Nexus"
     );
+    // The simulator reads its UDP port in order: once a datagram sent now is logged, any the start
+    // sent is logged before it.
+    let after = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    after.send_to(&[0xFF, 0xFF], sim.udp_addr()).unwrap();
     assert!(
-        arrived,
-        "the registration datagram waited for a session that never registered"
+        sim.wait_for(WAIT, |log| log.iter().any(|l| udp_in(l, &[0xFF, 0xFF]))),
+        "premise: the simulator logs what reaches its UDP port"
+    );
+    assert!(
+        !sim.log().iter().any(datagram),
+        "the registration datagram went to a radio that never registered Nexus"
+    );
+
+    // A radio that registers Nexus.
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let _d = audio_daemon(&sim, memory());
+    assert!(
+        sim.wait_for(WAIT, |log| log.iter().any(datagram)
+            && log.iter().any(|l| command(l, "client udpport "))),
+        "the registration datagram never came"
+    );
+    let log = sim.log();
+    let gui = log
+        .iter()
+        .position(|l| command(l, "client gui"))
+        .expect("premise: Nexus registered");
+    let sent = log.iter().position(datagram).unwrap();
+    assert!(
+        gui < sent,
+        "the registration datagram went before the radio registered Nexus"
     );
 }
 

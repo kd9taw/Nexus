@@ -285,12 +285,16 @@ impl FlexDaemon {
         // The session registers this port (`client udpport`), so DAX rides the one session.
         let udp = UdpSocket::bind(("0.0.0.0", 0))?;
         config.connect.udp_port = Some(udp.local_addr()?.port());
-        // The one-byte registration datagram, before the session connects, so it always goes
-        // ahead of `client udpport` (port plan §4.2; upstream sends it just before that command).
-        // The radio learns our UDP endpoint from its source, which firmware that answers
-        // `client udpport` with "not supported" needs. ⚠️ NEEDS-BENCH: whether such firmware takes
-        // a datagram that arrives before the TCP client it belongs to.
-        let _ = udp.send_to(&[0u8], options.registration);
+        // The one-byte registration datagram goes from this socket to the radio's port 4992. The
+        // session sends it after registration, just before `client udpport`, where upstream sends
+        // it (`tempo_net::flex::handshake`): the radio learns our UDP endpoint from its source,
+        // which firmware that answers `client udpport` with "not supported" needs. ⚠️ NEEDS-BENCH
+        // on a real Flex.
+        let registering = udp.try_clone()?;
+        let registration = options.registration;
+        config.udp_registration = Some(session::UdpRegistration::new(move || {
+            let _ = registering.send_to(&[0u8], registration);
+        }));
         let conn = Arc::new(Connection::connect(radio, config)?);
         let ready = conn.wait_until(READY_TIMEOUT, |s| {
             matches!(s.phase, Phase::Ready | Phase::Closed)

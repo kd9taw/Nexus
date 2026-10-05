@@ -758,6 +758,95 @@ fn the_connect_sequence_on_the_wire() {
     assert_eq!(h.texts().last().unwrap(), "ping");
 }
 
+/// What the test's UDP registration writes into the wire's log.
+const DATAGRAM: &str = "<the registration datagram>";
+
+/// A transport that also logs each command's text, in a log shared with the test's UDP
+/// registration: one log, in the order the session acted, rather than two sockets' arrivals.
+struct LoggingWire {
+    out: Vec<u8>,
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+impl Write for LoggingWire {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.out.extend_from_slice(buf);
+        let mut log = self.log.lock().unwrap();
+        log.extend(frames(buf).into_iter().map(|(_, text)| text));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A session past its prologue whose UDP registration logs [`DATAGRAM`] in the wire's log.
+fn registering() -> (Session, LoggingWire) {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mut c = config();
+    c.connect.udp_port = Some(4993);
+    let sent = Arc::clone(&log);
+    c.udp_registration = Some(UdpRegistration::new(move || {
+        sent.lock().unwrap().push(DATAGRAM.to_string());
+    }));
+    let mut s = Session::new(c, 0);
+    let mut wire = LoggingWire {
+        out: Vec::new(),
+        log,
+    };
+    s.on_bytes(&mut wire, b"V1.4.0.0\nH12345678\n", 0);
+    (s, wire)
+}
+
+/// The radio's reply to `client gui`: `code|message`.
+fn answer_gui(s: &mut Session, wire: &mut LoggingWire, reply: &str) {
+    let (seq, _) = frames(&wire.out)
+        .into_iter()
+        .find(|(_, text)| text == "client gui")
+        .expect("premise: client gui was sent");
+    s.on_bytes(wire, format!("R{seq}|{reply}\n").as_bytes(), 0);
+}
+
+/// ⭐ THE UDP REGISTRATION'S DATAGRAM GOES AFTER REGISTRATION, JUST BEFORE `client udpport`, where
+/// upstream sends it (port plan §4.5, step 7). The radio learns the client's UDP endpoint from its
+/// source, which firmware that answers `client udpport` with "not supported" needs. Its owner sent
+/// it after the whole bring-up (about 46 ms after the command), and then before the session even
+/// connected. The datagram is its owner's to send (the session has no I/O of its own); here it is
+/// a mark in the wire's own log, so the order asserted is the order the session acted in.
+#[test]
+fn the_registration_datagram_goes_after_registration_just_before_client_udpport() {
+    let (mut s, mut wire) = registering();
+    assert_eq!(
+        *wire.log.lock().unwrap(),
+        ["client program Nexus", "client gui"],
+        "the datagram went before the radio registered the client"
+    );
+    answer_gui(&mut s, &mut wire, "0|6F1C2A3B-0000-4000-8000-00000000B001");
+    let sent = wire.log.lock().unwrap().clone();
+    let at = |text: &str| {
+        sent.iter()
+            .position(|l| l == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {sent:?}"))
+    };
+    assert_eq!(at(DATAGRAM), at("mic list") + 1, "{sent:?}");
+    assert_eq!(at("client udpport 4993"), at(DATAGRAM) + 1, "{sent:?}");
+    assert_eq!(
+        sent.iter().filter(|l| *l == DATAGRAM).count(),
+        1,
+        "{sent:?}"
+    );
+
+    // A radio that refuses the registration is sent none.
+    let (mut s, mut wire) = registering();
+    answer_gui(&mut s, &mut wire, "F3000001|too many clients");
+    assert!(s.is_closed(), "premise: the radio refused the registration");
+    assert!(
+        !wire.log.lock().unwrap().iter().any(|l| l == DATAGRAM),
+        "a radio that refused the client was sent the datagram"
+    );
+}
+
 #[test]
 fn a_previous_session_holding_the_transmitter_is_reported_and_stoppable() {
     let mut h = Harness::new();
