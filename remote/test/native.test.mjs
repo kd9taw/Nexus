@@ -369,14 +369,20 @@ async function queryPage(socket, args) {
 /** One v1 sample, asked as the page's own v1 client asks it (`ApplicationClient.invoke`): every answer is
  *  acknowledged at once, and `applicationBusy` is asked again, three times at most and 250 ms apart. The station
  *  answers busy for a sample it holds no fresh copy of while another thread holds the Engine. Every other answer goes
- *  back to the caller. */
-async function applicationRead(socket, command) {
+ *  back to the caller.
+ *  With `since` (a `performance.now()` time) a sample taken before it is asked again the same way: while another
+ *  thread holds the Engine the station serves the sample it already has, with its true age, if that is under a
+ *  second old, so a read just after a change at the shack can get the sample from before the change. A sample counts
+ *  as taken after `since` only when its age is under the time from `since` to the request: that can take a new
+ *  sample for an old one, which is asked again, and never an old one for a new one. */
+async function applicationRead(socket, command, since = null) {
   for (let attempt = 1; ; attempt++) {
-    const requestId = crypto.randomUUID()
+    const requestId = crypto.randomUUID(), asked = performance.now()
     socket.send({ type: 'applicationRead', requestId, command, revision: null })
     const result = await socket.take(value => value.requestId === requestId)
     socket.send({ type: 'applicationAck', requestId })
-    if (attempt === 3 || result.type !== 'applicationError' || result.error !== 'applicationBusy') return result
+    const older = since !== null && result.type === 'applicationResult' && result.ageMs >= asked - since
+    if (attempt === 3 || !(older || result.type === 'applicationError' && result.error === 'applicationBusy')) return result
     await delay(250)
   }
 }
@@ -538,17 +544,16 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     }
     for (const tier of ['TempoFast','TempoDeep']) {
       const native = await probe.send({type:'seedTempo',tier,conversations:tempoConversations(tier)})
+      const seeded = performance.now()
       await delay(550) // The existing snapshot producer shares one sample per 500 ms.
-      const requestId=crypto.randomUUID()
-      socket.send({type:'applicationRead',requestId,command:'get_snapshot',revision:null})
-      const result=await socket.take(value=>value.requestId===requestId)
+      // A sample taken after the seed: one from before it shows the previous tier.
+      const result = await applicationRead(socket, 'get_snapshot', seeded)
       assert.equal(result.type,'applicationResult')
       assert.equal(result.data.link.tier,tier)
       assert.deepEqual(result.data.conversations,native.conversations,'the original v1 stream preserves every native delivery field and legacy message')
       assert.ok(native.conversations.some(c=>c.messages.some(m=>m.delivered)))
       assert.ok(native.conversations.some(c=>c.messages.some(m=>m.confirmed)))
       assert.equal(result.data.radio.txEnabled,false)
-      socket.send({type:'applicationAck',requestId})
     }
     await probe.send({type:'seedTempo',tier:originalTier,conversations:[]})
     const { value: streamTicket } = await browser.post(`stations/${stationId}/ticket`)
