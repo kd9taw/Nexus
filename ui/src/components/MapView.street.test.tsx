@@ -85,11 +85,12 @@ const ME = gridToLatLon(MY_GRID)!
 // MapLibre's projection for an unrotated camera centred on the canvas (its Web Mercator formula).
 const mx = (lng: number) => (180 + lng) / 360
 const my = (lat: number) => (180 - (180 / Math.PI) * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360))) / 360
-const camera = (lon: number, lat: number, zoom: number): StreetCamera => ({
+const camera = (lon: number, lat: number, zoom: number, moving = false): StreetCamera => ({
   center: [lon, lat],
   zoom,
   bearing: 0,
   project: ([x, y]) => [(mx(x) - mx(lon)) * 512 * 2 ** zoom + W / 2, (my(y) - my(lat)) * 512 * 2 ** zoom + H / 2],
+  moving,
 })
 
 const PACK: StreetPack = {
@@ -279,6 +280,84 @@ describe("MapView on Street — the overlays follow the map's camera", () => {
     act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 12)))
     act(() => streetProps().onCamera?.(null))
     expect(canvas.style.transform).toBe('')
+  })
+})
+
+// While the map moves (a drag, an animated pan or zoom, the drift after a drag), the overlays are not
+// redrawn: the picture drawn when it started is held on the map by the canvas's transform, and the
+// redraw comes once, when the map stops (operator ruling 2026-10-05). Each full redraw draws the
+// station's own grid square once, the only rectangle here (the park is a pin), so counting rectangles
+// counts redraws.
+describe('MapView on Street — a gesture holds the picture and redraws once, at its end', () => {
+  const redraws = () => drawn.filter(([k]) => k === 'rect').length
+  /** The canvas's transform as numbers: a point drawn at p shows at s · p + (x, y). */
+  const shiftOf = (canvas: HTMLCanvasElement) => {
+    const m = /^translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([-\d.e]+)\)$/.exec(canvas.style.transform)
+    return m ? { x: Number(m[1]), y: Number(m[2]), s: Number(m[3]) } : null
+  }
+
+  it('pans by moving the drawn picture with the map, redrawing nothing until the map stops, then once', async () => {
+    const { canvas } = await mountStreet()
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 8)))
+    expect(redraws()).toBe(1)
+    drawn = []
+    const lonPerPx = 360 / (512 * 2 ** 8)
+    for (let k = 1; k <= 12; k++) {
+      // The map moves 25 px east per frame: what was drawn moves 25 px left, frame by frame.
+      act(() => streetProps().onCamera?.(camera(ME.lon + 25 * k * lonPerPx, ME.lat, 8, true)))
+      const t = shiftOf(canvas)
+      expect(t).not.toBeNull()
+      expect(t!.s).toBe(1)
+      expect(t!.x).toBeCloseTo(-25 * k, 6)
+      expect(t!.y).toBeCloseTo(0, 6)
+    }
+    expect(redraws()).toBe(0)
+    act(() => streetProps().onCamera?.(camera(ME.lon + 300 * lonPerPx, ME.lat, 8)))
+    expect(redraws()).toBe(1)
+    expect(canvas.style.transform).toBe('')
+  })
+
+  it("zooms by scaling the drawn picture about the map's centre, and redraws once at the end", async () => {
+    const { canvas } = await mountStreet()
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 8)))
+    drawn = []
+    for (const z of [8.25, 8.5, 8.75, 9]) {
+      act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, z, true)))
+      // The centre stays put and everything else spreads from it: s = 2^Δzoom, about (W/2, H/2).
+      const s = 2 ** (z - 8)
+      const t = shiftOf(canvas)!
+      expect(t.s).toBeCloseTo(s, 6)
+      expect(t.x).toBeCloseTo((W / 2) * (1 - s), 4)
+      expect(t.y).toBeCloseTo((H / 2) * (1 - s), 4)
+    }
+    expect(drawn.filter(([k]) => k === 'rect')).toHaveLength(0)
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 9)))
+    expect(redraws()).toBe(1)
+    expect(canvas.style.transform).toBe('')
+  })
+
+  it('finds a target where the moving map shows it: a double-click mid-pan works the park', async () => {
+    const { onWorkSpot } = await mountStreet()
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 12)))
+    const live = camera(ME.lon + 150 / ((512 * 2 ** 12) / 360), ME.lat - 40 / ((512 * 2 ** 12) / 360), 12, true)
+    act(() => streetProps().onCamera?.(live))
+    const dbl = pointer('dblclick', px(live, PARK.lat, PARK.lon))
+    expect(dbl.preventDefault).toHaveBeenCalledTimes(1)
+    expect(onWorkSpot).toHaveBeenCalledWith(expect.objectContaining({ call: PARK.activator, reference: PARK.reference }))
+    for (const tx of [callStation, setPtt, setTxEnabled, startCq, callCq, haltTx]) expect(tx).not.toHaveBeenCalled()
+  })
+
+  it('reads no hover while the map moves, as the other maps do during a drag, and reads it again once it stops', async () => {
+    await mountStreet()
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 12)))
+    const live = camera(ME.lon + 60 / ((512 * 2 ** 12) / 360), ME.lat, 12, true)
+    act(() => streetProps().onCamera?.(live))
+    pointer('move', px(live, PARK.lat, PARK.lon))
+    expect(document.querySelector('.map-hover')).toBeNull()
+    const still = { ...live, moving: false }
+    act(() => streetProps().onCamera?.(still))
+    pointer('move', px(still, PARK.lat, PARK.lon))
+    expect(document.querySelector('.map-hover')?.textContent).toContain(PARK.reference)
   })
 })
 

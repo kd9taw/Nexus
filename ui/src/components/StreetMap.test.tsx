@@ -23,6 +23,7 @@ const h = vi.hoisted(() => {
     styles: StyleSpecification[] = []
     centre: [number, number]
     zoom: number
+    moving = false
     pixelRatio = 1
     touchZoomRotate = { disableRotation: vi.fn() }
     keyboard = { disableRotation: vi.fn() }
@@ -66,6 +67,9 @@ const h = vi.hoisted(() => {
     }
     getBearing() {
       return 0
+    }
+    isMoving() {
+      return this.moving
     }
     getPixelRatio() {
       return this.pixelRatio
@@ -302,6 +306,23 @@ describe('StreetMap — the camera it exposes', () => {
     expect(cameras[1]).toMatchObject({ center: [-97.5, 38.9], zoom: 13.5 })
     act(() => map.fire('resize'))
     expect(cameras).toHaveLength(3)
+  })
+
+  it('says while the map is moving, and is heard once more when it stops', () => {
+    const cameras: StreetCamera[] = []
+    render(<StreetMap pack={PACK} onCamera={(c) => c && cameras.push(c)} />)
+    const map = theMap()
+    expect(cameras[0].moving).toBe(false)
+    map.moving = true
+    map.centre = [-97.5, 38.9]
+    act(() => map.fire('move'))
+    act(() => map.fire('render'))
+    expect(cameras.slice(1).map((c) => c.moving)).toEqual([true, true])
+    // MapLibre is no longer moving when it fires `moveend`.
+    map.moving = false
+    act(() => map.fire('moveend'))
+    expect(cameras).toHaveLength(4)
+    expect(cameras[3]).toMatchObject({ center: [-97.5, 38.9], moving: false })
   })
 })
 

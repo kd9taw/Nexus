@@ -19,9 +19,11 @@
 // THE CAMERA, for Nexus's overlays (the caller draws them above this; nothing here does):
 // `onCamera` hears the centre, MapLibre's zoom, the bearing and MapLibre's own `project` at once,
 // and again on every move, resize and rendered frame, so an overlay re-syncs in the frame MapLibre
-// draws; it hears null when the map goes (unmounted, paused, unreadable). Rotation and pitch are off,
-// and the world is not repeated, so a Mercator locked to the camera lines up with the map exactly
-// (features/streetOverlay.ts).
+// draws; it hears null when the map goes (unmounted, paused, unreadable). It also hears whether the
+// map is still moving (a drag, an animated pan or zoom, the drift after a drag), and once more when it
+// stops (`moveend`), so an overlay can hold its picture through the motion and redraw at the end.
+// Rotation and pitch are off, and the world is not repeated, so a Mercator locked to the camera lines
+// up with the map exactly (features/streetOverlay.ts).
 //
 // INPUT. MapLibre owns drag and zoom. `onPointer` hands the caller MapLibre's own pointer events in
 // the map's CSS px, for the overlays' hit test; `preventDefault()` on a double-click keeps MapLibre
@@ -65,6 +67,9 @@ export interface StreetCamera {
   bearing: number
   /** A position's CSS px from the map's top-left corner: MapLibre's own projection. */
   project: (lonLat: [number, number]) => [number, number]
+  /** MapLibre is mid-gesture or mid-animation (`isMoving`). The camera is heard again, not moving,
+   *  when it stops. */
+  moving: boolean
 }
 
 /** One of MapLibre's pointer events, where it happened in the map's CSS px. */
@@ -107,6 +112,7 @@ function cameraOf(map: MapLibreMap): StreetCamera {
       const p = map.project(lonLat)
       return [p.x, p.y]
     },
+    moving: map.isMoving(),
   }
 }
 
@@ -190,6 +196,7 @@ export default forwardRef<StreetMapHandle, StreetMapProps>(function StreetMap(
     })
     const report = () => onCameraRef.current?.(cameraOf(map))
     map.on('move', report)
+    map.on('moveend', report)
     map.on('resize', report)
     map.on('render', report)
     report()

@@ -968,14 +968,18 @@ export function MapView({
   const dragRef = useRef<{ x: number; y: number; base: MapView3; moved: boolean } | null>(null)
   useEffect(() => setView(DEFAULT_VIEW), [kind]) // eslint-disable-line react-hooks/exhaustive-deps
   // THE STREET CAMERA (features/streetOverlay.ts). `streetView` is the camera the overlays are drawn
-  // at: state, so a move redraws them. `liveViewRef` is where MapLibre is this instant and
-  // `drawnViewRef` where the overlay canvases were last drawn. A redraw lands after MapLibre has drawn
-  // its frame, so until it does the canvases are moved onto the map by a CSS transform (`lockOverlay`).
-  // Two views of one Mercator differ only by a scale and a shift, so the picture sits on the map
-  // exactly in every frame MapLibre paints, and the redraw then replaces it.
+  // at: state, so a change redraws them. `liveViewRef` is where MapLibre is this instant and
+  // `drawnViewRef` where the overlay canvases were last drawn. Two views of one Mercator differ only by
+  // a scale and a shift, so a CSS transform (`lockOverlay`) puts the drawn picture on the map exactly,
+  // in every frame MapLibre paints. WHILE THE MAP MOVES (a drag, an animated pan or zoom, the drift
+  // after a drag) its motion redraws nothing: the transform holds the picture on the map, and the
+  // camera becomes `streetView`, one redraw, only once the map stops (operator ruling 2026-10-05: a
+  // redraw in every frame made a pan with the overlays on several times slower than the street map
+  // alone).
   const [streetView, setStreetView] = useState<StreetView | null>(null)
   const liveViewRef = useRef<StreetView | null>(null)
   const drawnViewRef = useRef<StreetView | null>(null)
+  const streetMovingRef = useRef(false)
   const streetRef = useRef<StreetMapHandle>(null)
   const lockOverlay = () => {
     const drawn = drawnViewRef.current
@@ -988,8 +992,9 @@ export function MapView({
   const onStreetCamera = (cam: StreetCamera | null) => {
     const v = cam ? streetViewOf(cam) : null
     liveViewRef.current = v
+    streetMovingRef.current = cam?.moving ?? false
     lockOverlay()
-    setStreetView((prev) => (sameStreetView(prev, v) ? prev : v))
+    if (!cam?.moving) setStreetView((prev) => (sameStreetView(prev, v) ? prev : v))
   }
   const streetScale = kind === 'street' && streetView != null && streetView.zoom >= STREET_SCALE_ZOOM
   // Star field for the globe's space backdrop: fixed relative positions generated
@@ -3424,15 +3429,26 @@ export function MapView({
     return true
   }
   /** On Street the overlay canvas lets the pointer through to MapLibre, which owns drag and zoom, and
-   *  the same hit test runs from MapLibre's own events (map CSS px are this canvas's layout px). A
-   *  double-click on a target keeps its meaning here, and only a double-click elsewhere zooms. */
+   *  the same hit test runs from MapLibre's own events (map CSS px are this canvas's layout px). The
+   *  hit targets are where the overlays were last drawn, so a point on the map is first taken back
+   *  through the transform that holds that picture on it (an identity once the map has stopped and
+   *  redrawn). While the map moves no hover is read, as on the other maps during a drag. A double-click
+   *  on a target keeps its meaning here, and only a double-click elsewhere zooms. */
   const onStreetPointer = (e: StreetPointer) => {
     if (e.type === 'out') {
       setHover(null)
       setHoverKey(null)
-    } else if (e.type === 'move') hoverAt(e.x, e.y)
-    else if (e.type === 'click') clickAt(e.x, e.y, e.x, e.y)
-    else if (doubleClickAt(e.x, e.y)) e.preventDefault()
+      return
+    }
+    if (e.type === 'move' && streetMovingRef.current) return
+    const drawn = drawnViewRef.current
+    const live = liveViewRef.current
+    const t = drawn && live ? streetShift(drawn, live) : { s: 1, x: 0, y: 0 }
+    const x = (e.x - t.x) / t.s
+    const y = (e.y - t.y) / t.s
+    if (e.type === 'move') hoverAt(x, y)
+    else if (e.type === 'click') clickAt(x, y, e.x, e.y)
+    else if (doubleClickAt(x, y)) e.preventDefault()
   }
 
   // null snapshot = still LOADING the first poll — show a neutral loading badge

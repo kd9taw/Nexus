@@ -83,7 +83,7 @@ describe('streetProjection — the lock to MapLibre', () => {
 
   it('reads the centre pixel once, so a kept view still says where the map was', () => {
     let at: [number, number] = [800, 450]
-    const cam = { center: [1, 2] as [number, number], zoom: 9, bearing: 0, project: () => at }
+    const cam = { center: [1, 2] as [number, number], zoom: 9, bearing: 0, project: () => at, moving: false }
     const v = streetViewOf(cam)
     at = [0, 0]
     expect(v.at).toEqual([800, 450])
