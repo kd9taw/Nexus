@@ -3699,7 +3699,7 @@ export const JA: PartialCatalog = {
   "settings.rigControl.icomNative.hint": "rigctldを起動する代わりに、NexusがこのIcomのCI-Vを直接制御します。無線機本来のスペクトラムスコープをウォーターフォールに表示（「CI-V RF」）し、ダイヤル追従も即時になります。スコープには<b>115200ボーを無線機とNexusの両方に</b>設定する必要があります: (1) 無線機側で Menu ▸ SET ▸ Connectors ▸ CI-V ▸「CI-V USB Baud Rate」= <b>115200</b>、(2) 同じメニューで「CI-V USB Port」=「Unlink from [REMOTE]」、(3) 上の<b>ボーレート</b>欄も<b>115200</b>に合わせます。これ未満では無線機がスコープの送出を拒否します（CATは動作し、パナアダプターだけがオフのままになります）。保存で適用されます。いつでもオフにして従来のHamlib経路に戻せます。",
   "settings.rigControl.flexPan.label": "Flexネイティブパナアダプター（早期アクセス）",
   "settings.rigControl.flexPan.hint": "このFlexRadioの実際のSmartSDRパナアダプター（VITA-49 FFT）をコックピットのスコープにストリーミングします。ダイヤル周辺のRFスペクトラムを、Flexのスパン/リファレンス操作付きで表示します。<b>実機では未検証</b>のためオプトインです。FlexのIP設定（「無線機を検出」から）と、このネットワークからSmartSDRに到達できることが必要です。スコープが表示されない、またはアプリが引っかかる場合はオフに戻してください。保存で適用されます。",
-  "settings.rigControl.flexAudio.label": "FlexネイティブDAXオーディオ（早期アクセス）",
+  "settings.rigControl.flexAudio.label": "FlexネイティブDAXオーディオ（ベータ）",
   "settings.rigControl.flexAudio.hint": "「DAX Audio RX」/「DAX TX」サウンドデバイス — <b>リモートデスクトップでは見えません</b> — の代わりに、このFlexRadioのオーディオをネットワーク経由（VITA-49 DAX）でやり取りします。<b>Flexネイティブクライアント（ベータ）をオンにする必要があります。</b>SmartSDR CATではこの設定は何もしません。オーディオはサウンドデバイスのままで、設定はクライアント用に保持されます。クライアントでは、デコーダーが無線機から受信オーディオを直接読み取り、<b>デジタルモード</b>とリモートストリームの音声はDAXで送信されます。シャックのPhoneでは無線機自身のマイクを使うため、ボイスキーヤーは再生できません。オフにするか切断すると、ご自身のDAX設定に戻ります。SmartSDRのDAXが接続されている間、Nexusはこの設定を変更しません。<b>ベータ版・実機では未検証です:</b> デコードや送信が止まった場合はオフに戻してください。保存で適用されます。",
   "settings.rigControl.flexClient.label": "Flexネイティブクライアント（ベータ）",
   "settings.rigControl.flexClient.hint": "Nexusは<b>FlexのIP</b>で無線機に直接接続し、SmartSDRクライアントの一つとして自身のスライスでCATとPTTを扱います。ベータ版で<b>実機では未検証</b>です。送信はまずダミーロードで試してください。Nexusが接続できない場合はSmartSDR CATに戻ります。保存で適用されます。",

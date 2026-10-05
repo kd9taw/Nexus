@@ -5808,7 +5808,7 @@ export const EN = {
     "Read the FT-710's own spectrum over its internal USB-SPI bridge instead of the sound card",
   'settings.rigControl.yaesuScope.hint':
     "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
-  'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
+  'settings.rigControl.flexAudio.label': 'Flex native DAX audio (Beta)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices, which are <b>invisible under Remote Desktop</b>. <b>Needs Flex native client (Beta) on.</b> With SmartSDR CAT this does nothing: audio stays on the sound devices, and the setting is kept for the client. On the client, the decoders read receive audio straight from the radio, and <b>digital modes</b> and the Remote stream\'s voice transmit over DAX. Phone at the shack keeps the radio\'s own mic, so the voice keyer can\'t play there. Turning this off or disconnecting puts your own DAX setting back, and Nexus never changes it while SmartSDR\'s DAX is connected. <b>Beta, unverified on hardware:</b> if decodes or transmit stop, turn it back off. Save to apply.',
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',

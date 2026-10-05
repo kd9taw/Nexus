@@ -71,8 +71,8 @@ pub const TX_FRAMES_PER_PACKET: usize = 128;
 /// The radio's VITA-49 receive port, where DAX TX goes (FlexRadio's API documentation,
 /// `TCPIP-meter` and `Discovery-protocol`; the port AetherSDR sends DAX TX to).
 pub const VITA_PORT: u16 = 4991;
-/// The radio's UDP port for a client's one-byte registration datagram, sent before
-/// `client udpport` (port plan §4.2).
+/// The radio's UDP port for a client's one-byte registration datagram, sent after registration,
+/// just before `client udpport` (port plan §4.2 and §4.5, step 7; [`super::handshake`]).
 pub const UDP_REGISTRATION_PORT: u16 = 4992;
 
 /// The last holder's release is acted on this long after it (upstream `kDaxRemovalGraceMs`, far

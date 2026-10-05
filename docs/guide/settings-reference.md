@@ -478,8 +478,8 @@ Baud continue across to the right.*
   baud set on **both** the radio and Nexus, plus "CI-V USB Port = Unlink from
   [REMOTE]" on the rig; below that the rig refuses to stream the scope (CAT still
   works, the panadapter just stays off).
-- **Flex native panadapter (early access)** and **Flex native DAX audio (early
-  access)** — appear on a network Flex. Stream the real SmartSDR panadapter
+- **Flex native panadapter (early access)** and **Flex native DAX audio (Beta)** —
+  appear on a network Flex. Stream the real SmartSDR panadapter
   (VITA-49 FFT) into the cockpit scope, and carry the radio's audio over the
   network instead of the "DAX Audio RX" / "DAX TX" sound devices, **which are
   invisible under Remote Desktop**. Native DAX audio works only through the

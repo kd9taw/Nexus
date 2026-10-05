@@ -913,6 +913,253 @@ fn a_confirmed_unkey_raises_no_tx_alarm() {
     assert!(tx_alarms(&s).is_empty(), "{:?}", tx_alarms(&s));
 }
 
+// ── Every Flex client is read for alarms, the ones in the monitor pool too ─────────────────────
+
+/// The client's words when the radio never confirms an unkey.
+const UNCONFIRMED: &str =
+    "the radio did not confirm the unkey — it may still be transmitting. Check the radio now.";
+
+/// The transmitter alarms on screen as `(radio id, radio name, text)`, in the order shown.
+fn tx_alarms_by_radio(s: &FlexScene) -> Vec<(u64, String, String)> {
+    let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
+    snap["txAlarms"]
+        .as_array()
+        .map(|alarms| {
+            alarms
+                .iter()
+                .map(|a| {
+                    (
+                        a["radioId"].as_u64().unwrap_or(u64::MAX),
+                        a["radioName"].as_str().unwrap_or_default().to_string(),
+                        a["text"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A second radio for the operator to switch the Flex radio (radio 0) away to: connected,
+/// read-only and waiting in the monitor pool, as the monitor thread keeps one. Both radios are
+/// named, so an alarm can be read for the radio it names. Returns the pool and the radio's id.
+fn second_radio_in_the_pool(s: &FlexScene) -> (MonitorPool, u32) {
+    let (cat, _, _) = mock_logging_rigctld();
+    let mut e = s.engine.lock().unwrap();
+    e.rename_radio(0, "FLEX-6400");
+    let id = e.add_radio();
+    e.rename_radio(id, "IC-7300");
+    let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+    let monitor = live_monitor(id, Transport::from_profile(profile), &cat);
+    (Arc::new(MonitorConnections::new(vec![monitor])), id)
+}
+
+/// The operator switches the active radio from `from` to `to`, and the radio loop's handoff takes
+/// the switch, as it does before each step.
+fn switch(s: &mut FlexScene, pool: &MonitorPool, from: u32, to: u32) {
+    s.engine.lock().unwrap().set_active_radio(to);
+    let mut last_active = from;
+    let pending = std::sync::atomic::AtomicBool::new(false);
+    handoff_if_switched(
+        &s.engine,
+        pool,
+        &mut s.rig,
+        &mut s.state,
+        &mut last_active,
+        &pending,
+    );
+    assert_eq!(last_active, to, "premise: the handoff took the switch");
+}
+
+/// The Flex radio's client in the pool, if it is there: its session.
+fn pooled_flex<T>(pool: &MonitorPool, read: impl Fn(&FlexDaemon) -> T) -> Option<T> {
+    pool.lock()
+        .unwrap()
+        .iter()
+        .find(|c| c.id == 0)
+        .and_then(|c| c.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+        .map(read)
+}
+
+/// What the monitor thread wants kept for the Flex radio: the connection the switch handed it.
+fn want_the_flex_radio(pool: &MonitorPool) -> Vec<(u32, Transport)> {
+    let p = pool.lock().unwrap();
+    let conn = p.iter().find(|c| c.id == 0);
+    let conn = conn.expect("premise: the switch handed the Flex radio's client to the pool");
+    vec![(0, conn.transport.clone())]
+}
+
+/// What the monitor thread opens for the Flex radio once its connection has died: a fresh client
+/// of its own on the same radio, which remembers the sessions before it.
+fn reopen_flex(
+    radio: std::net::SocketAddr,
+) -> impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
+    move |_| match FlexDaemon::start(radio, 0) {
+        Ok(d) => {
+            let cat = format!("127.0.0.1:{}", d.local_addr().port());
+            let rig = Rig::with_control(Some(cat), PttMode::Vox);
+            (rig, Some(CatDaemon::Flex(d)), Some(true))
+        }
+        Err(_) => (Rig::vox(), None, Some(false)),
+    }
+}
+
+/// Run the monitor thread's pass over the pool, as `monitor_loop` does (the pool reconciled, then
+/// polled), until `done` holds, or fail with `what`.
+fn monitor_until(
+    s: &FlexScene,
+    pool: &MonitorPool,
+    active: u32,
+    want: &[(u32, Transport)],
+    mut reopen: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
+    what: &str,
+    done: impl Fn(&FlexScene) -> bool,
+) {
+    let pending = std::sync::atomic::AtomicBool::new(false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done(s) {
+        assert!(Instant::now() < deadline, "{what}");
+        reconcile_pool_with_open(pool, want, active, &s.engine, now_unix_ms(), &mut reopen);
+        poll_monitors(pool, active, &s.engine, &pending);
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// The Flex radio on air with a beacon, its unkey never confirmed, and the operator switching to
+/// the second radio mid-over: the handoff unkeys the Flex radio and hands its client to the pool.
+fn switched_away_mid_over() -> (FlexScene, MonitorPool, u32) {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::StuckTransmit],
+        short_deadline(),
+    );
+    let (pool, other) = second_radio_in_the_pool(&s);
+    beacon(&s);
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+    switch(&mut s, &pool, 0, other);
+    (s, pool, other)
+}
+
+/// ⭐ A CLIENT HANDED TO THE MONITOR POOL IS STILL READ. The operator switches radios while a beacon
+/// is on the air: the handoff unkeys the Flex radio and hands its client to the pool, where the
+/// monitor keeps it. The radio never confirms the unkey, and the client says the radio may still be
+/// transmitting, in the pool, where nothing read it: only the active client's alarms reached the
+/// operator. The alarm reaches the screen, and it names the radio it is about, not the one now
+/// active.
+#[test]
+fn a_pooled_clients_alarm_reaches_the_screen_naming_its_radio() {
+    let (s, pool, other) = switched_away_mid_over();
+    let want = want_the_flex_radio(&pool);
+    monitor_until(
+        &s,
+        &pool,
+        other,
+        &want,
+        reopen_flex(s.sim.tcp_addr()),
+        "the pooled client's alarm never reached the screen",
+        |s| !tx_alarms_by_radio(s).is_empty(),
+    );
+    assert_eq!(
+        tx_alarms_by_radio(&s)[0],
+        (0, "FLEX-6400".to_string(), UNCONFIRMED.to_string())
+    );
+}
+
+/// ⭐ …AND A CLIENT THE POOL OPENS IS READ FROM ITS START. The pooled client's session has ended, so
+/// the monitor opens a fresh client for the radio. It finds the earlier session still holding the
+/// transmitter, and says so while it lives in the pool: that too reaches the screen, naming the
+/// radio, behind the first alarm.
+#[test]
+fn a_client_the_pool_opens_is_read_from_its_start() {
+    let (s, pool, other) = switched_away_mid_over();
+    let want = want_the_flex_radio(&pool);
+    monitor_until(
+        &s,
+        &pool,
+        other,
+        &want,
+        reopen_flex(s.sim.tcp_addr()),
+        "the fresh client's alarm never reached the screen",
+        |s| tx_alarms_by_radio(s).len() == 2,
+    );
+    let shown = tx_alarms_by_radio(&s);
+    assert_eq!(shown[0].2, UNCONFIRMED, "{shown:?}");
+    assert_eq!((shown[1].0, shown[1].1.as_str()), (0, "FLEX-6400"));
+    assert!(
+        shown[1].2.starts_with("an earlier Nexus session (0x"),
+        "{shown:?}"
+    );
+    assert!(
+        pooled_flex(&pool, FlexDaemon::is_alive) == Some(true),
+        "premise: the alarm came from the live client in the pool"
+    );
+}
+
+/// ⭐ …AND A CLIENT THE HANDOFF LETS GO IS READ FIRST. The pooled client's session ended before the
+/// monitor looked at it again, and the operator switches back to the Flex radio. The handoff will
+/// not adopt a dead connection, so it lets it go and the radio is opened afresh: the alarm the
+/// client raised as it ended was dropped with it.
+#[test]
+fn a_dead_pooled_client_is_read_before_the_handoff_lets_it_go() {
+    let (mut s, pool, other) = switched_away_mid_over();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while pooled_flex(&pool, FlexDaemon::is_alive) != Some(false) {
+        assert!(
+            Instant::now() < deadline,
+            "premise: the pooled session never ended"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    switch(&mut s, &pool, other, 0);
+    assert!(
+        pooled_flex(&pool, FlexDaemon::is_alive).is_none(),
+        "premise: the handoff let the dead client go"
+    );
+    assert_eq!(
+        tx_alarms_by_radio(&s),
+        vec![(0, "FLEX-6400".to_string(), UNCONFIRMED.to_string())]
+    );
+}
+
+/// The control: a switch made mid-over on a radio that confirms the unkey leaves a client in the
+/// pool with nothing to say, so nothing reaches the screen.
+#[test]
+fn a_switch_after_a_confirmed_unkey_puts_no_alarm_on_screen() {
+    let mut s = FlexScene::new(false);
+    let (pool, other) = second_radio_in_the_pool(&s);
+    beacon(&s);
+    run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
+    switch(&mut s, &pool, 0, other);
+    let want = want_the_flex_radio(&pool);
+    let confirmed = |_: &FlexScene| pooled_flex(&pool, |d| !d.session().snapshot().keyed);
+    monitor_until(
+        &s,
+        &pool,
+        other,
+        &want,
+        |_: &Transport| panic!("the pooled client's session ended"),
+        "premise: the radio never confirmed the unkey",
+        |s| confirmed(s) == Some(true),
+    );
+    // A second and a half more of the monitor's passes, where the alarm would have reached it.
+    let end = Instant::now() + Duration::from_millis(1_500);
+    monitor_until(
+        &s,
+        &pool,
+        other,
+        &want,
+        |_: &Transport| panic!("the pooled client's session ended"),
+        "the monitor's passes never ended",
+        |_| Instant::now() >= end,
+    );
+    assert!(unkeys(&s) >= 1, "premise: the over was unkeyed");
+    assert!(
+        tx_alarms_by_radio(&s).is_empty(),
+        "{:?}",
+        tx_alarms_by_radio(&s)
+    );
+}
+
 /// Whether the client would admit a key: nothing of ours keyed, and its readback has seen the
 /// radio idle.
 fn client_ready(s: &FlexScene) -> bool {
@@ -942,14 +1189,14 @@ fn slow_release(ms: u64) -> SimSession {
     s
 }
 
-/// ⭐ A REFUSED APRS KEY IS REPORTED, NOT SILENT. A beacon queued the moment the last one's over
-/// has unkeyed meets a radio still letting go of the transmitter (three seconds here, so the
+/// ⭐ A REFUSED APRS KEY PLAYS NOTHING AND IS REPORTED. A beacon queued the moment the last one's
+/// over has unkeyed meets a radio still letting go of the transmitter (three seconds here, so the
 /// window is certain): the client refuses the key, so the packet never goes out. The loop played
-/// it into the receiving radio and said nothing. The APRS status line says the radio did not
-/// accept the key, and nothing sends the packet later. The control, in the same scene: once the
-/// radio has let go, the next beacon keys.
+/// it into the receiving radio anyway and said nothing. It is not played, the APRS status line
+/// says the radio did not accept the key, and nothing sends the packet later. The control, in the
+/// same scene: once the radio has let go, the next beacon keys.
 #[test]
-fn a_refused_aprs_key_is_reported_not_silent() {
+fn a_refused_aprs_key_plays_nothing_and_is_reported() {
     let mut s = FlexScene::with_session(false, slow_release(3_000));
     beacon(&s);
     run_until(&mut s, "the beacon never keyed", |s| keys(s) == 1);
@@ -957,14 +1204,19 @@ fn a_refused_aprs_key_is_reported_not_silent() {
         unkeys(s) == 1 && s.state.tx_until_ms.is_none()
     });
     beacon(&s);
-    run_until(&mut s, "the second beacon never reached the key", |s| {
-        s.backend.played.lock().unwrap().len() == 2
+    run_until(&mut s, "the refused beacon was never reported", |s| {
+        s.engine.lock().unwrap().aprs_tx_notice().is_some()
     });
     s.run(300);
     assert_eq!(
         keys(&s),
         1,
         "the radio was never keyed for the second beacon"
+    );
+    assert_eq!(
+        s.backend.played.lock().unwrap().len(),
+        1,
+        "the refused frame was played into the receiving radio"
     );
     let notice = s
         .engine
@@ -979,9 +1231,9 @@ fn a_refused_aprs_key_is_reported_not_silent() {
         "{notice:?}"
     );
 
-    // The refused over still ends with the loop's unkey, which here lands while the client waits
-    // for the first one's proof, so the radio starts its three-second release again. Wait for the
-    // client itself to read the radio idle.
+    // The refused key still meets the loop's unkey (its idle self-heal, on the same tick), which
+    // here lands while the client waits for the first one's proof, so the radio starts its
+    // three-second release again. Wait for the client itself to read the radio idle.
     run_until(&mut s, "the client never read the radio idle", |s| {
         idle(s) && client_ready(s)
     });

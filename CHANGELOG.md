@@ -34,6 +34,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
+  answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
+  radio is still letting go of the last transmission), Nexus played the over anyway: the Tune
+  carrier, an APRS packet, a voice-keyer message, an SSTV picture, soundcard CW, an RTTY or PSK
+  over, or your voice from the Remote stream all went into a radio that was still receiving.
+  Nothing went on the air, and for Tune and APRS nothing said why. Now none of them is played.
+  Tune ends and its button comes back up. Tune, the voice keyer, SSTV and the Remote stream show
+  **RADIO STOPPED** in the status bar with "The rig didn't accept PTT — check your PTT method and
+  CAT/port.". CW, RTTY and PSK show their keyer warning. APRS says "APRS not sent: the radio did
+  not accept the key". What was refused is dropped, never sent later: the rest of a CW send goes
+  with it, and continuous RTTY or PSK turns off. The diagnostic log notes each one. A radio that
+  is only slow to answer is not refusing: some radios on a slow serial link key, but answer after
+  Nexus has stopped waiting, or so late that Hamlib reports the radio did not answer. Their over
+  still goes out, as it did before, and shows the warning above (an APRS packet goes without one,
+  as it always did). A soundcard CW macro still plays every word on a radio that refuses a second
+  key while the first is held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot
+  modes are unchanged.
+- **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
+  radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
+  background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
+  may still be transmitting"), or the client found an earlier Nexus session still holding the
+  transmitter, the alarm went only to the diagnostic log. It now appears in the transmitter-alarm
+  banner, named for that radio and not the one you switched to. A Flex client is also read one
+  last time before Nexus closes or reopens it.
 - **Cloudlog / Wavelog: a refused QSO says why.** Wavelog answers a QSO it will not file with its
   reason in a field Nexus did not read, so the connection log said only "refused the upload, and
   said no more", even though Wavelog had named the reason, such as a duplicate or a station location

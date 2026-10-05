@@ -9175,6 +9175,14 @@ impl Engine {
         std::mem::take(&mut self.cw_abort)
     }
 
+    /// The radio refused the key for the CW word the loop just took from [`Self::poll_cw_one`]
+    /// (the soundcard keyer), so that word was not played: every word still queued behind it is
+    /// DROPPED with it, never held, as a refused send is above, so the send cannot resume
+    /// mid-message on a later word the radio does key. Arms no abort: nothing was keyed.
+    pub fn cw_key_refused(&mut self) {
+        self.cw_queue.clear();
+    }
+
     /// Current CW keyer speed (WPM) — for the radio loop's `set_keyspd` + the snapshot.
     pub fn cw_wpm(&self) -> u32 {
         self.settings.cw_wpm

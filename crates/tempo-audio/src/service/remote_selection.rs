@@ -133,6 +133,7 @@ impl RadioLoop {
             monitor_transport.broker_self_port = None;
             let mut incoming = selection_connection::SelectionConnection::acquire(
                 pool,
+                engine,
                 request.settings().active_radio,
                 monitor_transport,
                 request.permission(),
