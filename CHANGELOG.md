@@ -46,10 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not accept the key". What was refused is dropped, never sent later: the rest of a CW send goes
   with it, and continuous RTTY or PSK turns off. The diagnostic log notes each one. A radio that
   is only slow to answer is not refusing: some radios on a slow serial link key, but answer after
-  Nexus has stopped waiting. Their over still goes out, as it did before, and shows the warning
-  above (an APRS packet goes without one, as it always did). A soundcard CW macro still plays
-  every word on a radio that refuses a second key while the first is held, as Nexus's Flex client
-  does. FT8, FT4 and the other timed-slot modes are unchanged.
+  Nexus has stopped waiting, or so late that Hamlib reports the radio did not answer. Their over
+  still goes out, as it did before, and shows the warning above (an APRS packet goes without one,
+  as it always did). A soundcard CW macro still plays every word on a radio that refuses a second
+  key while the first is held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot
+  modes are unchanged.
 - **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
   radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
   background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
