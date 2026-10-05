@@ -4506,6 +4506,9 @@ export interface AppSnapshot {
   /** Parsec presence mode (Settings ▸ Radio ▸ Transmit limits & sharing). Null while it is
    *  switched off, which is the default; absent from a station older than the mode. */
   parsecPresence?: ParsecPresence | null
+  /** The transmitter alarms the operator has not dismissed, oldest first (dismiss_tx_alarm).
+   *  Absent while there are none, and from a station older than the alarm. */
+  txAlarms?: TxAlarm[]
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the
@@ -4519,6 +4522,19 @@ export interface ParsecPresence {
   stoppedAt: number | null
   /** What that stop ended: 'tune' | 'ptt' | 'rtty' | 'psk'. */
   stopped: string[]
+}
+
+/** A transmitter alarm, on screen until the operator dismisses it (mirror of the Rust TxAlarm). */
+export interface TxAlarm {
+  /** What dismiss_tx_alarm clears: this alarm, never one raised since. */
+  id: number
+  /** The station's own words, as its CAT status said them. */
+  text: string
+  /** The radio it is about, and that radio's name when it was raised ('' when it has none). */
+  radioId: number
+  radioName: string
+  /** When it was raised (unix ms). */
+  atMs: number
 }
 
 /** A file the station could not read, and kept (mirror of the Rust KeptFile). */

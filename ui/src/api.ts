@@ -2305,6 +2305,11 @@ export async function haltTx(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('halt_tx')
 }
 
+/** Dismiss one transmitter alarm: exactly the one with this id, never one raised since. */
+export async function dismissTxAlarm(id: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('dismiss_tx_alarm', { id })
+}
+
 /**
  * Test the rig/CAT connection (WSJT-X-style). The radio loop (re)opens + probes
  * the rig from the current settings; this returns whether it connected and a

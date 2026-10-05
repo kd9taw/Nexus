@@ -16471,6 +16471,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+/* The transmitter alarm (TxAlarmBanner): the header's LAST row, the full width, only while an
+   alarm is up, so the controls above it never move when it comes or goes. Its look is the
+   cockpits' alert box in amber (`.cw-keyer-warn.caution`); this rule only places it. In flow and
+   unpositioned: it can never sit over Stop TX in the strip below. APRS's header line (`.np-head`)
+   wraps the same way. */
+.ch-txalarm {
+  flex: 1 1 100%;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ch-txalarm-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ch-txalarm-queue {
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 /* ⊞ Panels — show/hide this screen's panels. Menu-only removal (no per-panel ✕ an
    inch from a decode list), with Undo + Reset in the footer. */

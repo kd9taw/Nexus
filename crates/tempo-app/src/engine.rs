@@ -36,6 +36,7 @@ pub mod remote_transmit;
 mod session_tests;
 pub mod slices;
 pub mod sub_controls;
+mod tx_alarms;
 #[cfg(test)]
 mod tx_gate_table;
 
@@ -3257,6 +3258,10 @@ pub struct Engine {
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
     cat_status: (Option<bool>, String),
+    /// The transmitter alarms the operator has not dismissed, oldest first (`tx_alarms.rs`).
+    tx_alarms: Vec<crate::dto::TxAlarm>,
+    /// The last alarm id handed out. Never reused, so a dismissal names exactly one alarm.
+    tx_alarm_seq: u64,
     remote_readings: crate::remote_monitor::provenance::Observations,
     /// Dual-radio: LIVE read-back state for the NON-active radios, keyed by radio id. The monitor
     /// thread (one CAT poll per non-active radio, read-only) feeds these via `observe_radio_*`; the
@@ -5227,6 +5232,8 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            tx_alarms: Vec::new(),
+            tx_alarm_seq: 0,
             remote_readings: Default::default(),
             cat_probe_gen: 0,
             cat_port_hold_until: None,
@@ -21343,6 +21350,7 @@ contact yourself."
             .map(Into::into)
             .collect();
         s.parsec_presence = self.parsec_presence_dto();
+        s.tx_alarms = self.tx_alarms.clone();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;

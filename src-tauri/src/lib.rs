@@ -17096,6 +17096,15 @@ fn halt_tx(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     Ok(eng.snapshot())
 }
 
+/// The operator dismissed transmitter alarm `id` (the cockpit header's banner): clear exactly that
+/// one. An alarm raised since stays on screen.
+#[tauri::command(async)]
+fn dismiss_tx_alarm(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.dismiss_tx_alarm(id);
+    Ok(eng.snapshot())
+}
+
 /// Result of a "Test CAT" probe (WSJT-X-style): whether the rig is reachable and
 /// a human-readable detail line (the read frequency, or a specific error).
 #[derive(serde::Serialize)]
@@ -32323,6 +32332,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_tune,
             atu_tune,
             halt_tx,
+            dismiss_tx_alarm,
             test_cat,
             set_tx_even,
             set_tx_cycle_auto,
@@ -34092,6 +34102,31 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "point_rotator_elevation,"),
             "point_rotator_elevation is not registered — the elevation box would fail at runtime"
+        );
+    }
+
+    /// The transmitter alarm's Dismiss clears it only if `dismiss_tx_alarm` is DEFINED and
+    /// REGISTERED: `ui/src/api.ts` invokes it, and a name missing from `generate_handler!` fails at
+    /// runtime with nothing at compile time to catch it, so the alarm would stay on screen however
+    /// often the operator dismissed it. Source-scanned, like the Rotor test above.
+    #[test]
+    fn the_tx_alarm_dismissal_the_banner_calls_is_defined_and_registered() {
+        let src = include_str!("lib.rs");
+        // Column zero, not `contains`: this test's own text is in `src` too.
+        assert!(
+            src.lines().any(|l| l.starts_with("fn dismiss_tx_alarm(")),
+            "the command the banner invokes must exist"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "dismiss_tx_alarm,"),
+            "dismiss_tx_alarm is not registered — the banner's Dismiss would fail at runtime"
         );
     }
 

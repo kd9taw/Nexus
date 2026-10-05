@@ -10596,6 +10596,14 @@ export const EN = {
   'cockpit.header.power.title': "{{label}} — trim so your rig's ALC is just zero",
   'cockpit.header.cat.ok.title': 'CAT link OK',
   'cockpit.header.cat.bad.title': 'No CAT link',
+  // The transmitter alarm the CAT status cannot keep (TxAlarmBanner): {{radio}} is the station's
+  // name for the radio and {{time}} is UTC HH:MM:SS, both verbatim. The alarm's own words follow.
+  // `queue` reads '1 of 3' while more wait behind the one shown.
+  'cockpit.txAlarm.lead.radio': 'Transmitter alarm, {{radio}}, {{time}} UTC:',
+  'cockpit.txAlarm.lead.noRadio': 'Transmitter alarm, {{time}} UTC:',
+  'cockpit.txAlarm.queue': '1 of {{total}}',
+  'cockpit.txAlarm.dismiss.title': 'Clear this alarm once you have checked the radio. An alarm raised since stays on screen.',
+  'cockpit.txAlarm.dismiss.failed': 'Could not clear the transmitter alarm',
 
   // ── The cockpit tuning strip ────────────────────────────────────────────────────────
   // ⚠️ Every step in Hz, the RIT/XIT offsets and the two VFO letters are invariant: `{{hz}}` and
