@@ -219,6 +219,15 @@
 .remote-stream-app[data-layout='rail'] .remote-stream-more-panel { align-self: end; justify-self: end; }
 .remote-stream-app[data-layout='bars'] .remote-stream-more-panel { align-self: start; justify-self: end; }
 
+/* In the header row, on a touch screen only (a tablet; the operator's pick, 2026-10-05): Keyboard follows Mic, and the
+   typing box it opens takes a line of its own after the row's buttons. A mouse has neither, so a computer's row is as
+   it was. */
+.remote-stream-app[data-layout='header'] .remote-stream-typing { order: 1; flex: 1 1 100%; }
+/* While the box is open (`data-typing`) the row may take the page's whole height, not half of it. With a small tablet's
+   own keyboard up the page is about 250 px tall, the browser scrolls the row to bring the box into view, and at half
+   the height that scrolled Stop TX out of sight. The picture gives up the room instead, and only while the box is open. */
+.remote-stream-app[data-layout='header'][data-typing] .remote-stream-header { max-height: var(--vh-eff, 100%); }
+
 /* The typing box: one line, the width of the bar. */
 .remote-stream-typing { display: flex; margin: 0; }
 .remote-stream-typing-field {

@@ -2,9 +2,10 @@
 // The stream page on a phone (the operator's pick, 2026-10-03): on its side, a rail beside the picture with Stop TX
 // first, a PTT of 96 px, Mic and its level, Listen, Keyboard and More (Keyboard on its side since 2026-10-05, with Full
 // screen moved under More to make room, as it is upright); upright, a bar over the picture for Stop TX and the state and
-// a bar of thumb controls under it; a typing box in both; anywhere else, the header as it was. These are measured on the cascade WINNER of the page's own sheets (entry.tsx, then this view)
-// against the rendered tree, never by matching text in the stylesheet. jsdom lays nothing out: the real-browser half
-// is the `phone` scenario of remote/test/browser.test.mjs.
+// a bar of thumb controls under it; a typing box in both, and in the header row on a touch screen (a tablet); anywhere
+// else, the header as it was. These are measured on the cascade WINNER of the page's own sheets (entry.tsx, then
+// this view) against the rendered tree, never by matching text in the stylesheet. jsdom lays nothing out: the
+// real-browser half is the `phone` scenario of remote/test/browser.test.mjs.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -303,6 +304,50 @@ describe('upright: the bars', () => {
   })
 })
 
+describe('a touch screen in the header layout, a tablet (the operator\'s pick, 2026-10-05)', () => {
+  it('Keyboard follows Mic in the header row and opens the typing box on a line of its own after the buttons; CONTROL: a mouse has neither, and the row is as it was', async () => {
+    coarse(true)
+    const v = await streaming(1024, 768)
+    expect(v.app.dataset.layout, 'an iPad on its side').toBe('header')
+    const header = v.app.querySelector('.remote-stream-header')!
+    expect(buttonsIn(header)).toEqual(['Stop TX', 'Hold PTT', 'Mic off', 'Keyboard', 'End the stream', 'Disconnect and return to stations', 'Sign out'])
+    const half = computed(header, 'max-height')
+    fireEvent.click(button('Keyboard'))
+    const field = screen.getByRole('textbox', { name: 'Type here for the field selected at the shack' }) as HTMLInputElement
+    expect(document.activeElement, 'focused by the press, so the tablet raises its keyboard').toBe(field)
+    // Open, the row may take the whole height and not half of it, so the box the browser scrolls into view above the
+    // tablet's own keyboard never scrolls Stop TX out of the row. (`--vh-eff` is set on <html> as the page runs, so the
+    // sheets alone resolve it to its fallback, the whole height.)
+    expect([half, computed(header, 'max-height')]).toEqual(['calc(100% * 0.5)', '100%'])
+    // A flex item of the controls' wrapping row (its group draws no box), after every button, on a line of its own.
+    const controls = header.querySelector('.remote-stream-controls')!
+    expect([computed(field.form!.parentElement!, 'display'), computed(controls, 'flex-wrap')]).toEqual(['contents', 'wrap'])
+    expect([computed(field.form!, 'order'), computed(field.form!, 'flex')]).toEqual(['1', '1 1 100%'])
+    field.value = 'CQ'
+    fireEvent.input(field, { isComposing: false })
+    fireEvent.submit(field.form!)
+    expect(v.input().map(m => m.type === 'text' ? `text ${m.text}` : `${m.type} ${m.action} ${m.key}`)).toEqual(['text CQ', 'key down Enter', 'key up Enter'])
+    cleanup()
+    coarse(false)
+    const w = await streaming(1024, 768)
+    expect(w.app.dataset.layout).toBe('header')
+    expect(buttonsIn(w.app.querySelector('.remote-stream-header')!), 'a mouse: no Keyboard').toEqual(['Stop TX', 'Hold PTT', 'Mic off', 'End the stream', 'Disconnect and return to stations', 'Sign out'])
+  })
+
+  it('the header row holds while the operator types: the tablet\'s keyboard takes height and never width; CONTROL: once the box lets go, the window decides', async () => {
+    coarse(true)
+    const v = await streaming(1024, 768)
+    fireEvent.click(button('Keyboard'))
+    const field = screen.getByRole('textbox') as HTMLInputElement
+    // The tablet's own keyboard up: wider than tall and under 500 px, the rail's shape.
+    await windowSize(1024, 340)
+    expect(v.app.dataset.layout, 'held while typing').toBe('header')
+    expect(document.activeElement, 'the field, and the keyboard with it, stay').toBe(field)
+    act(() => { field.blur() })
+    expect(v.app.dataset.layout, 'not typing: the window decides').toBe('rail')
+  })
+})
+
 describe('the header layout is the page as it was', () => {
   it('no phone rule reaches anything in it, the four groups draw no box, and its controls are in their old order', async () => {
     const v = await streaming(1280, 800)
@@ -443,7 +488,7 @@ describe('the typing box', () => {
     expect(v.sent()).toEqual(['text CQ', 'text  DX'])
   })
 
-  it('Keyboard again closes the box; turning the phone keeps it, the same field, focused, with its text; a window in the header layout has neither', async () => {
+  it('Keyboard again closes the box; turning the phone keeps it, the same field, focused, with its text; a window in the header layout with a mouse has neither', async () => {
     const v = await typing()
     const keyboard = button('Keyboard')
     fireEvent.click(keyboard)

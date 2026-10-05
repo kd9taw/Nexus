@@ -181,8 +181,12 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   const layout = useLayout(typingOpen && typingFocus)
   const phone = layout !== 'header', rail = layout === 'rail', bars = layout === 'bars'
   const more = useMore(phone)
+  // Keyboard and its typing box: in both phone layouts, and in the header row on a touch screen, a tablet's (the
+  // operator's pick, 2026-10-05). A mouse never has them there, so a computer's header row is as it was.
+  const typable = phone || coarsePointer()
+  const typingShown = typable && typingOpen && running
   const typingField = useRef<HTMLInputElement>(null)
-  useEffect(() => { if (!phone || !running) { setTypingOpen(false); setTypingFocus(false) } }, [phone, running])
+  useEffect(() => { if (!typable || !running) { setTypingOpen(false); setTypingFocus(false) } }, [typable, running])
   const keyboard = () => {
     if (typingOpen) { setTypingOpen(false); setTypingFocus(false); return }
     // Opened and focused inside the press itself: a phone raises its keyboard only for a focus a press made.
@@ -197,7 +201,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
     {signOut && <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>}
   </>
 
-  return <div className="app remote-monitor-app remote-stream-app" data-stream-phase={stream.phase} data-layout={layout}>
+  return <div className="app remote-monitor-app remote-stream-app" data-stream-phase={stream.phase} data-layout={layout} data-typing={typingShown || undefined}>
     <header className="rm-header remote-stream-header">
       <span className="remote-stream-title"><strong>{BRAND}</strong> <span>{station}</span></span>
       {/* Where the stream's state is said: in the header's row, in the bar over the picture upright, and on its side
@@ -243,9 +247,9 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
           onClick={() => void link.setMic(stream.mic !== 'on')}>
           {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
         {stream.control && stream.mic === 'on' && <MicLevel link={link} />}
-        {phone && stream.control && <button type="button" className="remote-button remote-stream-keyboard" aria-pressed={typingOpen}
+        {typable && stream.control && <button type="button" className="remote-button remote-stream-keyboard" aria-pressed={typingOpen}
           disabled={stream.phase !== 'live'} onClick={keyboard}>{t('remote.stream.keyboard')}</button>}
-        {phone && typingOpen && running && <TypingBox link={link} live={stream.phase === 'live'} field={typingField} focused={setTypingFocus} />}
+        {typingShown && <TypingBox link={link} live={stream.phase === 'live'} field={typingField} focused={setTypingFocus} />}
         </div>
         <div className="remote-stream-session">
         {!phone && running && endButton}

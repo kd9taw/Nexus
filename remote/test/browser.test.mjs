@@ -1154,6 +1154,62 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await evaluate(`document.querySelector('link[rel=manifest]').href='/manifest.webmanifest';true`)
             phoneRecord.push({manifest:{url:manifest.url,errors:manifest.errors,installable}})
           }
+          // AN iPAD-SIZE WINDOW, 1024 x 768, has the header row (the operator's pick, 2026-10-05). With a mouse it is the row as it
+          // was, with no Keyboard. On a touch screen Keyboard follows Mic, and the typing box it opens takes a line of its own after
+          // the buttons, whole and on screen with Stop TX first and uncovered, and what is typed goes to the shack as on a phone.
+          {
+            const headerAt=async(touch,height)=>{
+              await browser.call('Emulation.setTouchEmulationEnabled',touch?{enabled:true,maxTouchPoints:5}:{enabled:false},session)
+              await browser.call('Emulation.setDeviceMetricsOverride',{width:1024,height,deviceScaleFactor:2,mobile:touch},session)
+              await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+              await until(`getComputedStyle(document.documentElement).getPropertyValue('--vh-eff')==='${height}px'`,3000)
+              await settledLayout()
+              return evaluate(`(()=>{const app=document.querySelector('.remote-stream-app'),header=app.querySelector('.remote-stream-header'),buttons=[...header.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {layout:app.dataset.layout,coarse:matchMedia('(pointer: coarse)').matches,names:buttons.map(e=>e.textContent),first:buttons[0]===${button('Stop TX')},cut:buttons.filter(e=>{const r=e.getBoundingClientRect();return !(r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth&&hit(e))}).map(e=>e.textContent),scrolls:header.scrollHeight>header.clientHeight+1}})()`)
+            }
+            const shoot=async name=>{if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,name),Buffer.from(shot.data,'base64'))}}
+            const row=['Stop TX','Listen','Hold PTT','Mic off','End the stream','Full screen','Disconnect and return to stations','Sign out']
+            const mouse=await headerAt(false,768)
+            console.log('iPad-size header, a mouse: '+JSON.stringify(mouse))
+            assert.deepEqual(mouse,{layout:'header',coarse:false,names:row,first:true,cut:[],scrolls:false},'an iPad-size window with a mouse: the header row as it was, with no Keyboard')
+            await shoot('ipad-1024x768-mouse.png')
+            // A size change on the way, so the page reads the pointer again: a real tablet never changes its pointer.
+            await headerAt(true,767)
+            const touch=await headerAt(true,768)
+            console.log('iPad-size header, a touch screen: '+JSON.stringify(touch))
+            assert.deepEqual(touch,{layout:'header',coarse:true,names:[...row.slice(0,4),'Keyboard',...row.slice(4)],first:true,cut:[],scrolls:false},'an iPad-size touch screen: Keyboard follows Mic in the header row')
+            await shoot('ipad-1024x768-touch.png')
+            await tap(await centreOf(button('Keyboard')))
+            await until(`document.activeElement?.classList.contains('remote-stream-typing-field')`,3000)
+            const placed=await evaluate(`(()=>{const f=document.querySelector('.remote-stream-typing-field'),form=f.form,controls=document.querySelector('.remote-stream-controls'),r=form.getBoundingClientRect(),c=controls.getBoundingClientRect(),buttons=[...controls.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {after:buttons.every(e=>e.getBoundingClientRect().bottom<=r.top+0.5),line:Math.abs(r.left-c.left)<=1&&Math.abs(r.right-c.right)<=1,inside:r.top>=0&&r.bottom<=innerHeight,field:hit(f),stop:hit(${button('Stop TX')}),scrolls:document.querySelector('.remote-stream-header').scrollHeight>document.querySelector('.remote-stream-header').clientHeight+1,w:Math.round(r.width),h:Math.round(r.height)}})()`)
+            console.log('iPad-size header, the typing box: '+JSON.stringify(placed))
+            assert.deepEqual({...placed,w:undefined,h:undefined},{after:true,line:true,inside:true,field:true,stop:true,scrolls:false,w:undefined,h:undefined},'the typing box on a line of its own after the header\'s buttons, whole and on screen, and Stop TX uncovered')
+            const from=await atShack('__shack.received.control.length')
+            await browser.call('Input.insertText',{text:'W1AW'},session)
+            await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'},session)
+            await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+            await untilShack(`__shack.received.control.slice(${from}).some(m=>m.type==='key'&&m.key==='Enter'&&m.action==='up')`)
+            await sleep(300)
+            const sent=await atShack(`__shack.received.control.slice(${from}).filter(m=>['text','key','pointer','wheel'].includes(m.type)).map(m=>m.type==='text'?'text '+m.text:m.type+' '+(m.action??'')+' '+(m.key??''))`)
+            assert.deepEqual(sent,['text W1AW','key down Enter','key up Enter'],'on a tablet, exactly the committed text, then Enter')
+            if(artifacts){await browser.call('Input.insertText',{text:'CQ'},session);await settledLayout()}
+            await shoot('ipad-1024x768-touch-typing.png')
+            // The tablet's own keyboard up takes height and never width: an iPad's page is left about 340 px tall, a small tablet's
+            // on its side about 250. The row holds (the rail's shape is not taken while the operator types), the browser brings the
+            // field into view, and Stop TX is still on screen and takes its taps.
+            const raised=[]
+            for(const height of [340,250]){
+              await browser.call('Emulation.setDeviceMetricsOverride',{width:1024,height,deviceScaleFactor:2,mobile:true},session)
+              await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+              await until(`getComputedStyle(document.documentElement).getPropertyValue('--vh-eff')==='${height}px'`,3000)
+              await settledLayout()
+              const up=await evaluate(`(()=>{const f=document.activeElement;f.scrollIntoView({block:'nearest'});const r=f.getBoundingClientRect(),stop=${button('Stop TX')},s=stop.getBoundingClientRect(),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {height:${height},layout:document.querySelector('.remote-stream-app').dataset.layout,typing:f.classList.contains('remote-stream-typing-field'),field:r.top>=0&&r.bottom<=innerHeight&&hit(f),stop:s.top>=0&&s.bottom<=innerHeight&&hit(stop),stopTop:Math.round(s.top),fieldTop:Math.round(r.top),header:Math.round(document.querySelector('.remote-stream-header').getBoundingClientRect().height)}})()`)
+              console.log(`iPad-size header, its keyboard up (1024 x ${height}): `+JSON.stringify(up))
+              await shoot(`ipad-1024x${height}-touch-typing.png`)
+              raised.push(up)
+            }
+            assert.deepEqual(raised.map(({height,layout,typing,field,stop})=>({height,layout,typing,field,stop})),[340,250].map(height=>({height,layout:'header',typing:true,field:true,stop:true})),'with the tablet\'s keyboard up the row holds, the field is in view, and Stop TX is on screen and takes its taps: '+JSON.stringify(raised))
+            phoneRecord.push({tablet:{mouse,touch,placed,sent,raised}})
+          }
           console.log('Phone input record: '+JSON.stringify(phoneRecord))
           assert.equal(exceptions,0,'the stream view raised no runtime exception')
           assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')

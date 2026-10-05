@@ -447,11 +447,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it without clicking anything at the shack. Stop TX is the first and the largest control either
   way, and turning the phone keeps a held PTT held and Listen playing (and the typing box open). On
   a computer the page is as it was. It needs the Remote page's update.
-- **Remote streaming: type into Nexus from a phone.** **Keyboard**, on a phone held upright or on its
-  side, opens a one-line box with the phone's own keyboard. What you type goes into the field you
-  last tapped in Nexus at the shack as you type it, a word the keyboard corrects or one you delete
-  included. Enter in the box is Enter in Nexus, and Backspace in the empty box deletes there.
-  Nothing is sent while the picture is frozen. It needs the Remote page's update.
+- **Remote streaming: type into Nexus from a phone or a tablet.** **Keyboard**, on a phone held
+  upright or on its side, and after Mic on a tablet's touch screen, opens a one-line box with the
+  on-screen keyboard. What you type goes into the field you last tapped in Nexus at the shack as you
+  type it, a word the keyboard corrects or one you delete included. Enter in the box is Enter in
+  Nexus, and Backspace in the empty box deletes there. Nothing is sent while the picture is frozen.
+  A computer with a mouse has no Keyboard button, as before. It needs the Remote page's update.
 - **Remote: put the page on your phone's home screen.** The Remote page can be installed: Add to
   Home Screen on an iPhone or iPad, or install it from Chrome or Edge. Opened from there it has no
   browser bars, which on an iPhone is the only way to a full-screen stream. It needs the Remote
