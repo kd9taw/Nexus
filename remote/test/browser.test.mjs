@@ -871,13 +871,21 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // "audio started", then sends `audioRx` bundles of five 20 ms Opus frames every 100 ms for the
       // whole stream. The Opus is a tone from this Chrome's own encoder, run on a page of its own
       // because WebCodecs needs a secure context and the station's window is about:blank.
+      // "Audio started" is said until it is SENT. Chrome, standing in for the station here, can drop the
+      // first message a channel the page opened sends: the send is taken, nothing goes out, the channel's
+      // own messagesSent does not count it, and the page never hears it. On one core, Chrome 154 sent no
+      // word in 6 of 1000 streams that said it in ondatachannel, and 4 of 600 that said it on the open
+      // event; the bundles after it went. That is how CI's shard 0 read "heard null" on 2026-10-03, and
+      // timed out waiting for the word on 2026-10-05. The station (str0m) is not Chrome. So the stand-in
+      // reads its own stats first, says the word until they count it (at most three times), and only then
+      // sends audio, as the station does: 0 of 1000 went unsaid, and a word dropped on purpose is said again.
       const encoderWindow=(await browser.call('Target.createTarget',{url:app.origin+'/remote-licenses.txt',background:true})).targetId
       const encoder=(await browser.call('Target.attachToTarget',{targetId:encoderWindow,flatten:true})).sessionId
       let packets
       for(let i=0;i<50&&!packets;i++){const v=await browser.call('Runtime.evaluate',{expression:`isSecureContext&&document.readyState==='complete'&&typeof AudioEncoder==='function'&&(async()=>{const out=[];const enc=new AudioEncoder({output:c=>{const b=new Uint8Array(c.byteLength);c.copyTo(b);out.push(btoa(String.fromCharCode(...b)))},error:()=>{}});enc.configure({codec:'opus',sampleRate:48000,numberOfChannels:1,bitrate:24000});for(let f=0;f<50;f++){const d=new Float32Array(960);for(let i=0;i<960;i++)d[i]=0.3*Math.sin(2*Math.PI*440*(f*960+i)/48000);enc.encode(new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:960,numberOfChannels:1,timestamp:f*20000,data:d}))}await enc.flush();enc.close();return out})()`,returnByValue:true,awaitPromise:true},encoder).catch(()=>null);if(Array.isArray(v?.result?.value)&&v.result.value.length)packets=v.result.value;else await sleep(100)}
       await browser.call('Target.closeTarget',{targetId:encoderWindow})
       assert.ok(packets?.length>=40,'the station stand-in encoded its tone')
-      await atShack(`__shack.largestBundle=0;__shack.feeds=0;__shack.feed=ch=>{__shack.feeds++;ch.send(JSON.stringify({type:'audioState',listening:true}));const packets=${JSON.stringify(packets)};let frame=0;const id=setInterval(()=>{if(ch.readyState!=='open'){if(ch.readyState==='closed')clearInterval(id);return}const bytes=[];for(let i=0;i<5;i++){const p=atob(packets[(frame+i)%packets.length]);bytes.push(p.length>>8,p.length&255,...[...p].map(c=>c.charCodeAt(0)))}const m=JSON.stringify({type:'audioRx',seq:frame,epoch:'00000000000000a1',firstFrameMs:frame*20,frameMs:20,count:5,payload:btoa(String.fromCharCode(...bytes))});__shack.largestBundle=Math.max(__shack.largestBundle,m.length);ch.send(m);frame+=5},100)};true`)
+      await atShack(`__shack.largestBundle=0;__shack.feeds=0;__shack.feed=async(ch,pc)=>{__shack.feeds++;__shack.said=0;const word=JSON.stringify({type:'audioState',listening:true}),sent=async()=>{for(const r of (await pc.getStats()).values())if(r.type==='data-channel'&&r.label==='audio')return r.messagesSent;return 0};try{while(__shack.said<3&&await sent()===0){ch.send(word);__shack.said++;for(let i=0;i<10&&await sent()===0;i++)await new Promise(r=>setTimeout(r,25))}}catch{};const packets=${JSON.stringify(packets)};let frame=0;const id=setInterval(()=>{if(ch.readyState!=='open'){if(ch.readyState==='closed')clearInterval(id);return}const bytes=[];for(let i=0;i<5;i++){const p=atob(packets[(frame+i)%packets.length]);bytes.push(p.length>>8,p.length&255,...[...p].map(c=>c.charCodeAt(0)))}const m=JSON.stringify({type:'audioRx',seq:frame,epoch:'00000000000000a1',firstFrameMs:frame*20,frameMs:20,count:5,payload:btoa(String.fromCharCode(...bytes))});__shack.largestBundle=Math.max(__shack.largestBundle,m.length);ch.send(m);frame+=5},100)};true`)
       let streamSession=null,realAnswer=null
       const offers=[],closes=[]
       const signalling=(async()=>{while(producing&&shackLive){const source=station;let signal;try{signal=await source.take(value=>value.type==='streamSignal',500)}catch{continue}
@@ -890,7 +898,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             // Each signed for this offer and session with the station's key (S3-M1), as the shack signs it.
             const signed=answer=>signer.sign(answer,signal.payload.sdp,pair.stationId,signal.deviceId,signal.sessionId)
             if(realAnswer){source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp:await signed(realAnswer)}});continue}
-            const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data));if(ch.label==='audio'){if(ch.readyState==='open')__shack.feed(ch);else ch.onopen=()=>__shack.feed(ch)}};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
+            const sdp=await atShack(`(async()=>{const pc=new RTCPeerConnection({iceServers:[]});window.__pc=pc;pc.onicecandidate=e=>{if(e.candidate&&e.candidate.candidate)__shack.candidates.push({candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid})};pc.ondatachannel=e=>{const ch=e.channel;__shack[ch.label]=ch;ch.onmessage=m=>__shack.received[ch.label]?.push(JSON.parse(m.data));if(ch.label==='audio'){if(ch.readyState==='open')__shack.feed(ch,pc);else ch.onopen=()=>__shack.feed(ch,pc)}};await pc.setRemoteDescription({type:'offer',sdp:${JSON.stringify(signal.payload.sdp)}});const t=pc.getTransceivers()[0];t.direction='sendonly';await t.sender.replaceTrack(__picture.getVideoTracks()[0]);await pc.setLocalDescription(await pc.createAnswer());return pc.localDescription.sdp})()`)
             source.send({type:'streamSignal',sessionId:signal.sessionId,payload:{kind:'answer',sdp:await signed(sdp)}})
             source.send({type:'streamState',sessionId:signal.sessionId,streaming:true})
           }else if(signal.payload.kind==='candidate')await atShack(`__pc?.addIceCandidate(${JSON.stringify({candidate:signal.payload.candidate,sdpMid:signal.payload.sdpMid})}).then(()=>true,()=>false)`)
@@ -1130,9 +1138,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // The station has been sending since the channel opened. Nobody has asked to listen, so the
         // control still offers Listen, with no state line: its "audio started" turns nothing on.
         assert.equal(await atShack('__shack.feeds'),1,'the station started its audio when the channel opened')
-        // The word crosses the link after the stand-in counts its feed: wait for it to reach the page before
-        // asserting what it did (CI 2026-10-03 read the page first: heard null, Listen still offered).
+        // The word crosses the link after the stand-in counts its feed, and one Chrome dropped is said again
+        // (the feed above): wait for it to reach the page before asserting what it did.
         await until(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return !!c.stream.audioState;f=f.return}return false})()`,10000)
+        const said=await atShack('__shack.said')
+        if(said>1)console.log(`Station stand-in: Chrome did not send "audio started" until it was said ${said} times`)
         assert.deepEqual(await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const a=document.querySelector('.remote-stream-app .remote-audio');return {heard:c.stream.audioState,button:a?.querySelector('button')?.textContent,state:a?.querySelector('.remote-audio-state')?.textContent??null}}f=f.return}return null})()`),{heard:{type:'audioState',listening:true},button:'Listen',state:null},'nobody asked to listen: the station\'s word arrived and turned nothing on')
         await click(audioButton('Listen'))
         await until(`window.__worklets.length>0&&window.__worklets.every(w=>'ok' in w)`,10000)
