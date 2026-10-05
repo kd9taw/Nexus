@@ -66,6 +66,7 @@ import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { SliceIntent } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
+import type { StreetPack } from './features/streetPack'
 import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
 
@@ -3269,6 +3270,23 @@ export async function getSolarIndices(): Promise<DailySolarIndices> {
  *  because a SOTA spot carries no position to plot. */
 export async function getOtaMapSpots(): Promise<OtaMapSpot[]> {
   return invoke<OtaMapSpot[]>('get_ota_map_spots')
+}
+
+/** The street-map packs installed in the maps folder. Empty until the operator downloads one. */
+export async function streetMapPacks(): Promise<StreetPack[]> {
+  return invoke<StreetPack[]>('street_map_packs')
+}
+
+/** `length` bytes of an installed pack from `offset`, raw (an ArrayBuffer): exactly `length`, or
+ *  fewer only at the end of the file. Rust refuses a read over 4 MiB. The pack reader
+ *  (features/streetPack.ts) is the only caller, and it checks every answer. */
+export async function streetMapRead(packId: string, offset: number, length: number): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>('street_map_read', { packId, offset, length })
+}
+
+/** One file from the maps folder's `assets/`, raw: a glyph range or a sprite sheet. */
+export async function streetMapAsset(path: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>('street_map_asset', { path })
 }
 
 /** Begin an activation (validates + normalizes the reference); returns the state. */

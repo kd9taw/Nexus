@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
 //
-// The GPU probe creates a WebGL context to ask its question, and a context nobody releases stays
+// The GPU probes create a WebGL context to ask their question, and a context nobody releases stays
 // live until the page lets go of the canvas. Chromium keeps at most 16 live WebGL contexts per
 // renderer process and evicts the OLDEST when a 17th is made, so a leaked probe context is one
-// fewer for the maps and the spectrum, and enough of them cost a live view its context. The
-// probe must hand its context back, on every path, without changing what it decides.
+// fewer for the maps and the spectrum, and enough of them cost a live view its context. Every
+// probe here must hand its context back, on every path, without changing what it decides.
 //
 // jsdom has no WebGL, so `getContext` is stubbed with just what the probes read: a renderer
 // string, a texture size, and the WEBGL_lose_context handle whose `loseContext` releases it.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { gpuCapableForGlobe } from './gpu'
+import { gpuCapableForGlobe, webgl2Available } from './gpu'
 
 const UNMASKED_RENDERER_WEBGL = 0x9246
 const MAX_TEXTURE_SIZE = 0x0d33
@@ -81,5 +81,41 @@ describe('gpuCapableForGlobe', () => {
   it('answers false with no WebGL at all (nothing to release)', () => {
     serve(null, [])
     expect(gpuCapableForGlobe()).toBe(false)
+  })
+})
+
+describe('webgl2Available — the street map gate', () => {
+  it('is true whenever a WebGL2 context can be created, and releases it', () => {
+    const { gl, loseContext } = fakeGl({})
+    serve(gl, ['webgl2'])
+    expect(webgl2Available()).toBe(true)
+    expect(loseContext).toHaveBeenCalledTimes(1)
+  })
+
+  // The two machines the globe probe turns away: software GL and a masked renderer string. Street
+  // runs on both — every Linux and Pi install masks the string, and software GL is allowed.
+  it('accepts software GL and a masked renderer, which the globe probe refuses', () => {
+    for (const machine of [{ renderer: 'llvmpipe (LLVM 17.0.6, 256 bits)' }, { masked: true }]) {
+      const { gl, loseContext } = fakeGl(machine)
+      serve(gl, ['webgl2'])
+      expect(gpuCapableForGlobe()).toBe(false)
+      expect(webgl2Available()).toBe(true)
+      expect(loseContext).toHaveBeenCalledTimes(2)
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('does not count WebGL 1 — MapLibre v6 needs WebGL2', () => {
+    const { gl, loseContext } = fakeGl({})
+    serve(gl, ['webgl'])
+    expect(webgl2Available()).toBe(false)
+    expect(loseContext).not.toHaveBeenCalled()
+  })
+
+  it('is false when creating the context throws', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => {
+      throw new Error('blocklisted')
+    })
+    expect(webgl2Available()).toBe(false)
   })
 })

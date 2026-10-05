@@ -2208,6 +2208,15 @@ export const EN = {
   'map.projection.world.title': 'Flat world map with shaded relief',
   'map.projection.webgl.title': 'WebGL 3D globe — best on higher-end PCs',
 
+  // The street map (components/StreetMap.tsx): its name for a screen reader, and the sentences
+  // that stand in for the map when it cannot draw, so it is never a blank. "© OpenStreetMap" is
+  // the map data's own credit and stays in the code. WebGL2 is a product name.
+  'map.street.aria': 'Street map',
+  'map.street.noWebgl2': "The street map needs WebGL2, which this computer's graphics cannot provide.",
+  'map.street.paused': 'Street map paused',
+  'map.street.reload': 'Reload',
+  'map.street.unreadable': 'This street map could not be read.',
+
   'map.zoom.aria': 'Zoom',
   'map.zoom.in': 'Zoom in',
   'map.zoom.out': 'Zoom out',
