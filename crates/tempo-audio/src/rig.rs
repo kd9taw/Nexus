@@ -600,11 +600,11 @@ impl std::fmt::Display for NoAnswerInTime {
 impl std::error::Error for NoAnswerInTime {}
 
 /// Whether `e` is a command's deadline passing with its line sent and no whole reply back
-/// ([`NoAnswerInTime`]), rather than an answer that said no or any other failure. For a key it is
+/// (`NoAnswerInTime`), rather than an answer that said no or any other failure. For a key it is
 /// the difference between a radio that may be keying and one that is not: a slow radio behind
 /// rigctld (a Xiegu, a vintage Kenwood, any rig at 19200 baud or less) keys, and answers after
-/// [`PTT_DEADLINE_MS`].
-pub(crate) fn no_answer_in_time(e: &std::io::Error) -> bool {
+/// `PTT_DEADLINE_MS`.
+pub fn no_answer_in_time(e: &std::io::Error) -> bool {
     e.get_ref()
         .is_some_and(|inner| inner.is::<NoAnswerInTime>())
 }
