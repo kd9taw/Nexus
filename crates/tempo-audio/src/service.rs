@@ -2123,6 +2123,43 @@ impl MonitorConn {
     }
 }
 
+/// Put on screen, naming `radio`, what the Flex client in `daemon` has said about the transmitter
+/// since it was last read ([`crate::flex::FlexDaemon::take_new_alarm`]): each alarm once. A session
+/// that has ended is read up to its last event first, as the radio loop reads its own client after
+/// a death, so an alarm raised as it ended is not left behind.
+///
+/// ⭐ EVERY LIVE FLEX CLIENT IS READ UNTIL IT IS TORN DOWN, NOT ONLY THE ACTIVE ONE. The radio loop
+/// reads the active radio's client every tick; the monitor pool holds the others (the radio a
+/// switch left, and the radios the monitor opened). Read only while active, a pooled client's
+/// alarms reached the log and nothing else: a switch made mid-over hands the outgoing client to the
+/// pool before the radio has confirmed its unkey, and "it may still be transmitting" was said
+/// where nobody looked. So the monitor reads every pooled client on each pass, and each place that
+/// lets a client go reads it first ([`drop_pooled`]).
+fn raise_flex_alarm(daemon: Option<&CatDaemon>, radio: u32, engine: &Arc<Mutex<Engine>>) {
+    let Some(flex) = daemon.and_then(CatDaemon::flex) else {
+        return;
+    };
+    if !flex.is_alive() {
+        let _ = flex.alarm();
+    }
+    if let Some(text) = flex.take_new_alarm() {
+        engine_lock(engine).raise_tx_alarm(radio, text, now_unix_ms() as u64);
+    }
+}
+
+/// Let the pooled connections `gone` go, each one's Flex client read for its alarms first
+/// ([`raise_flex_alarm`]). Dropping a connection unkeys and closes its daemon.
+fn drop_pooled(
+    p: &mut Vec<MonitorConn>,
+    engine: &Arc<Mutex<Engine>>,
+    gone: impl Fn(&MonitorConn) -> bool,
+) {
+    for c in p.iter().filter(|c| gone(c)) {
+        raise_flex_alarm(c.rigctld_proc.as_ref(), c.id, engine);
+    }
+    p.retain(|c| !gone(c));
+}
+
 impl Transport {
     /// Build a transport from a SPECIFIC radio profile (not the flat active mirror) — to open a
     /// monitor connection to a non-active radio. Audio/monitor fields are zeroed (monitors are
@@ -2314,6 +2351,10 @@ fn reconcile_pool_with_open(
 ) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+        // Every pooled Flex client's transmitter alarms, on every pass (see `raise_flex_alarm`).
+        for c in p.iter() {
+            raise_flex_alarm(c.rigctld_proc.as_ref(), c.id, engine);
+        }
         let mut to_open = Vec::new();
         for (id, t) in want {
             if pool.claims.contains(*id) {
@@ -2358,7 +2399,7 @@ fn reconcile_pool_with_open(
             .into_iter()
             .filter(|id| !pool.claims.contains(*id))
             .collect();
-        p.retain(|c| !to_close.contains(&c.id)); // drop kills each daemon
+        drop_pooled(&mut p, engine, |c| to_close.contains(&c.id)); // drop kills each daemon
         {
             let mut e = engine_lock(engine);
             for id in &to_close {
@@ -2384,7 +2425,7 @@ fn reconcile_pool_with_open(
                 .iter()
                 .find(|c| c.id == id && !c.transport.rig_differs(&t))
                 .map_or(0, |c| c.open_failures);
-            p.retain(|c| c.id != id); // finish old daemon teardown before opening
+            drop_pooled(&mut p, engine, |c| c.id == id); // finish old daemon teardown before opening
             engine_lock(engine).forget_radio_live(id);
             (claim, failures)
         };
@@ -2698,7 +2739,7 @@ fn handoff_if_switched(
         // the OLD active safely). The old active is not kept monitored in this edge — steady state
         // (both radios configured) always ADOPTS above. An in-flight monitor open holds its claim
         // until its result reaches the pool; the deferral above prevents a competing fallback open.
-        p.retain(|c| c.id != active);
+        drop_pooled(&mut p, engine, |c| c.id == active);
         // step() opens the incoming radio, so it is the loop's from here. The outgoing radio's
         // port stays the loop's until that rebuild drops its daemon; the next tick without a
         // switch in flight lets its claim go (`RadioLoop::settle_port_claims`).
@@ -6059,6 +6100,8 @@ impl RadioLoop {
                         eng.halt_tx_for_context_change("CAT probe hold");
                         eng.remote_close_radio();
                     }
+                    let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
+                    raise_flex_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
                     self.rig_asserted = false;
@@ -6096,6 +6139,10 @@ impl RadioLoop {
                     self.applied.rigctld_port,
                     want.rigctld_port,
                 );
+                // The outgoing client is read until it goes (`raise_flex_alarm`): about the radio
+                // it served, which `remote_radio_id` still names.
+                let served = self.remote_radio_id.unwrap_or(remote_want_radio);
+                raise_flex_alarm(self.rigctld_proc.as_ref(), served, engine);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                                           // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);

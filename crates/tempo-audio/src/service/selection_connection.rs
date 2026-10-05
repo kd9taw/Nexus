@@ -2,7 +2,8 @@
 //! The connection is returned read-only on cancellation. Successful adoption
 //! must retain the claim until the active owner has installed that connection.
 use super::monitor_claims::RadioClaim;
-use super::{CatDaemon, MonitorConn, MonitorPool, PttMode, Rig, Transport};
+use super::{CatDaemon, Engine, MonitorConn, MonitorPool, PttMode, Rig, Transport};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tempo_app::remote_control::{Reason, WritePermission};
 
@@ -19,6 +20,7 @@ impl SelectionConnection {
     /// save for the keying line a CAT-port radio's daemon is told (`open_selection`).
     pub(super) fn acquire(
         pool: &MonitorPool,
+        engine: &Arc<Mutex<Engine>>,
         id: u32,
         transport: Transport,
         permission: &WritePermission,
@@ -64,7 +66,10 @@ impl SelectionConnection {
                 .as_ref()
                 .filter(|connection| !connection.transport.rig_differs(&transport))
                 .map_or(0, |connection| connection.open_failures);
-            drop(lease.connection.take());
+            // A Flex client is read for its alarms until it goes (`raise_flex_alarm`).
+            if let Some(stale) = lease.connection.take() {
+                super::raise_flex_alarm(stale.rigctld_proc.as_ref(), stale.id, engine);
+            }
             permission.check(Instant::now())?;
             let (rig, daemon, _) = open(&transport);
             let (failures, retry_after_ms) =
@@ -163,27 +168,34 @@ mod tests {
         )
     }
 
+    fn engine() -> Arc<Mutex<Engine>> {
+        Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)))
+    }
+
     #[test]
     fn pooled_connection_returns_on_cancellation_and_adoption_retains_its_claim() {
         let pool = Arc::new(MonitorConnections::new(Vec::new()));
         let authority = Revocation::default();
         let allowed = permission(&authority);
         let t = transport();
-        let cold =
-            SelectionConnection::acquire(&pool, 1, t.clone(), &allowed, |_| controlled()).unwrap();
+        let cold = SelectionConnection::acquire(&pool, &engine(), 1, t.clone(), &allowed, |_| {
+            controlled()
+        })
+        .unwrap();
         assert!(pool.claims.contains(1));
         assert!(pool.lock().unwrap().is_empty());
         drop(cold);
         assert!(!pool.claims.contains(1));
         assert_eq!(pool.lock().unwrap().len(), 1);
         assert_eq!(pool.lock().unwrap()[0].rig.ptt_mode(), &PttMode::Vox);
-        let mut warm = SelectionConnection::acquire(&pool, 1, t.clone(), &allowed, |_| {
-            panic!("warm connection must be reused")
-        })
-        .unwrap();
+        let mut warm =
+            SelectionConnection::acquire(&pool, &engine(), 1, t.clone(), &allowed, |_| {
+                panic!("warm connection must be reused")
+            })
+            .unwrap();
         assert!(warm.rig().has_control());
         assert!(matches!(
-            SelectionConnection::acquire(&pool, 1, t, &allowed, |_| panic!(
+            SelectionConnection::acquire(&pool, &engine(), 1, t, &allowed, |_| panic!(
                 "claimed radio must not open"
             )),
             Err(Reason::StationBusy)
@@ -205,16 +217,17 @@ mod tests {
         let pool = Arc::new(MonitorConnections::new(Vec::new()));
         let authority = Revocation::default();
         let allowed = permission(&authority);
-        let result = SelectionConnection::acquire(&pool, 1, transport(), &allowed, |_| {
-            authority.revoke();
-            controlled()
-        });
+        let result =
+            SelectionConnection::acquire(&pool, &engine(), 1, transport(), &allowed, |_| {
+                authority.revoke();
+                controlled()
+            });
         assert!(matches!(result, Err(Reason::AuthorityExpired)));
         assert!(!pool.claims.contains(1));
         assert_eq!(pool.lock().unwrap().len(), 1);
         assert_eq!(pool.lock().unwrap()[0].rig.ptt_mode(), &PttMode::Vox);
         assert!(matches!(
-            SelectionConnection::acquire(&pool, 2, transport(), &allowed, |_| panic!(
+            SelectionConnection::acquire(&pool, &engine(), 2, transport(), &allowed, |_| panic!(
                 "revoked admission must not open"
             )),
             Err(Reason::AuthorityExpired)
@@ -228,9 +241,10 @@ mod tests {
         let authority = Revocation::default();
         let allowed = permission(&authority);
         let before = crate::service::now_unix_ms();
-        let result = SelectionConnection::acquire(&pool, 1, transport(), &allowed, |_| {
-            (Rig::vox(), None, Some(false))
-        });
+        let result =
+            SelectionConnection::acquire(&pool, &engine(), 1, transport(), &allowed, |_| {
+                (Rig::vox(), None, Some(false))
+            });
         assert!(matches!(result, Err(Reason::HardwareUnavailable)));
         assert!(!pool.claims.contains(1));
         let connections = pool.lock().unwrap();
@@ -246,21 +260,27 @@ mod tests {
         let allowed = permission(&authority);
         let t = transport();
         drop(
-            SelectionConnection::acquire(&pool, 1, t.clone(), &allowed, |_| controlled()).unwrap(),
+            SelectionConnection::acquire(&pool, &engine(), 1, t.clone(), &allowed, |_| {
+                controlled()
+            })
+            .unwrap(),
         );
         let mut changed = t;
         changed.baud = changed.baud.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _lease = SelectionConnection::acquire(&pool, 1, changed, &allowed, |_| {
-                panic!("failed opener")
-            });
+            let _lease =
+                SelectionConnection::acquire(&pool, &engine(), 1, changed, &allowed, |_| {
+                    panic!("failed opener")
+                });
         }));
         assert!(result.is_err());
         assert!(!pool.claims.contains(1));
         assert!(!pool.connections.is_poisoned());
         drop(
-            SelectionConnection::acquire(&pool, 1, transport(), &allowed, |_| controlled())
-                .unwrap(),
+            SelectionConnection::acquire(&pool, &engine(), 1, transport(), &allowed, |_| {
+                controlled()
+            })
+            .unwrap(),
         );
         assert_eq!(
             pool.lock().unwrap().len(),
