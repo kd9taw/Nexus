@@ -252,6 +252,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went blank and stayed blank. Nexus now asks for it back and draws the globe again as soon as it
   returns. If it has not come back within 10 seconds, the globe shows **3D view paused** with a
   **Reload** button that brings it back.
+- **The Logbook's globe shows your QSOs again.** When the globe took on the flat map's lighter look,
+  the dots for your worked squares went pale. They were added to the map as light, which only shows
+  on a dark globe, so on the new map each one faded to a white speck without its band colour, and
+  the coast, border and state lines ran across them. Each square is now a dot in its band's colour
+  with a dark edge, as on the flat map, drawn over the lines.
 - **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
   a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
   an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
