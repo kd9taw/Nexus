@@ -1825,3 +1825,58 @@ async fn a_picked_address_that_goes_and_comes_back_is_listened_at_again() {
     eventually(&lan, "not listening again", listening).await;
     assert!(tokio::net::TcpStream::connect(at).await.is_ok());
 }
+
+/// ★ Off never waits behind Windows' firewall: turned off while the firewall is being read (here a
+/// read that does not come back), after the station has looked at its network again more than
+/// once, the port closes at once and the status says off. CONTROL: the port was open while the
+/// read was under way.
+#[tokio::test]
+async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let (reading, mut read) = tokio::sync::mpsc::unbounded_channel();
+    let (answer, answered) = std::sync::mpsc::channel::<()>();
+    let answered = Mutex::new(answered);
+    let firewall: FirewallSays = Arc::new(move |_| {
+        let _ = reading.send(());
+        let _ = answered
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(30));
+        Some("public")
+    });
+    let lan = switch_with(
+        &s,
+        &scratch,
+        Arc::new(move |_| only(Ok(network))),
+        book_of(&s),
+        advertise(),
+        firewall,
+    );
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    tokio::time::timeout(Duration::from_secs(5), read.recv())
+        .await
+        .expect("the firewall was never read");
+    tokio::time::sleep(LOOK_AGAIN + LOOK_AGAIN / 2).await;
+    assert!(
+        tokio::net::TcpStream::connect(at).await.is_ok(),
+        "the control: not listening while the firewall was read"
+    );
+    let started = Instant::now();
+    lan.turn_off();
+    closed(at).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "closed only after {:?}",
+        started.elapsed()
+    );
+    assert!(!lan.status().on);
+    let _ = answer.send(());
+}

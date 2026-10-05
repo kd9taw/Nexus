@@ -616,11 +616,15 @@ async fn supervise(state: Arc<State>, deps: Deps) {
             }
         };
         if let (Some(listener), Some(choice)) = (running.as_mut(), look.chosen()) {
-            if looks.is_multiple_of(FIREWALL_EVERY) {
+            // Read on a task of its own, never on this loop's path, so Off never waits behind
+            // Windows' firewall: its answer is taken at the first look after it comes, and
+            // another read starts only once none is under way.
+            if let Some(read) = listener.reading.take_if(|read| read.is_finished()) {
+                listener.firewall = read.await.unwrap_or(None);
+            }
+            if looks.is_multiple_of(FIREWALL_EVERY) && listener.reading.is_none() {
                 let (says, choice) = (deps.firewall.clone(), choice.clone());
-                listener.firewall = tokio::task::spawn_blocking(move || says(&choice))
-                    .await
-                    .unwrap_or(None);
+                listener.reading = Some(tokio::task::spawn_blocking(move || says(&choice)));
             }
         }
         looks = looks.wrapping_add(1);
@@ -676,6 +680,8 @@ struct Listener {
     advert: Option<Advert>,
     /// What Windows' firewall says of its network, as last read.
     firewall: Option<&'static str>,
+    /// The firewall read under way, if one is. Left to end on its own when the listener stops.
+    reading: Option<tokio::task::JoinHandle<Option<&'static str>>>,
 }
 
 impl Listener {
@@ -723,6 +729,7 @@ impl Listener {
             task,
             advert: None,
             firewall: None,
+            reading: None,
         })
     }
 
