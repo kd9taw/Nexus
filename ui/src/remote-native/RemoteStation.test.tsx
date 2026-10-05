@@ -280,7 +280,8 @@ it('shows each browser approval expiry, and warns and offers approval again in i
 it('shows each browser key beside its name, approves with the key shown, and asks again for a key not pinned here', async () => {
   const day = 86400000, now = Date.now()
   const fingerprint = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
-  const short = (hex: string) => hex.slice(0, 16).toUpperCase().match(/.{4}/g)!.join(' ')
+  // As both ends show a key: the first 128 bits of its fingerprint, eight groups of four (S3-L1).
+  const short = (hex: string) => hex.slice(0, 32).toUpperCase().match(/.{4}/g)!.join(' ')
   const waiting = crypto.randomUUID(), unpinned = crypto.randomUUID(), pinned = crypto.randomUUID(), keyless = crypto.randomUUID()
   const keys = { [waiting]: fingerprint(), [unpinned]: fingerprint(), [pinned]: fingerprint() }
   const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',

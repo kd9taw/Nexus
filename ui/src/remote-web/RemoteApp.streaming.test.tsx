@@ -25,7 +25,7 @@ const CHROME_ON_WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
 const BETA = 'Remote streaming is a beta feature. Access could be revoked at any time.'
 const READY = 'Ready. Stream to see and operate Nexus at the shack, or Listen for its audio only.'
 const NOT_APPROVED = 'This browser isn\'t approved for this station yet. Press Stream, and Nexus at the shack asks you to approve it.'
-const WAITING = /^Waiting for approval at the shack: Nexus there asks whether to let “Chrome on Windows” stream\. Approve it if it shows this key: [0-9A-F]{4} [0-9A-F]{4} [0-9A-F]{4} [0-9A-F]{4}\.$/
+const WAITING = /^Waiting for approval at the shack: Nexus there asks whether to let “Chrome on Windows” stream\. Approve it if it shows this key: [0-9A-F]{4}( [0-9A-F]{4}){7}\.$/
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear() })
 function account(state: AccountSession['entitlement']['state'] = 'active'): AccountSession {

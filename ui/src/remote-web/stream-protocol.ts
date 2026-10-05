@@ -182,10 +182,13 @@ export function offerFingerprint(description: string): Uint8Array | null {
   }
   return found === null ? null : Uint8Array.from(found.split(':'), pair => parseInt(pair, 16))
 }
-/** A device key's fingerprint (SHA-256 of its SPKI, lowercase hex) as both ends show it beside the
- *  browser's name, for the operator to compare: its first eight bytes, four groups of four. */
+/** A key's fingerprint (SHA-256 of its SPKI, lowercase hex) as both ends show it, for the operator to
+ *  compare: its first sixteen bytes (128 bits), eight groups of four uppercase hex digits, the form the
+ *  LAN pairing shows too (security review S3-L1). Eight bytes were too few to compare against a party
+ *  that knows the key and can bring up the question at will. A Nexus from before showed the first
+ *  four of these groups, so those still compare. */
 export function shortFingerprint(fingerprint: string): string {
-  return (fingerprint.slice(0, 16).toUpperCase().match(/.{1,4}/g) ?? []).join(' ')
+  return (fingerprint.slice(0, 32).toUpperCase().match(/.{1,4}/g) ?? []).join(' ')
 }
 /** The bytes an offer's signature covers: the label, SHA-256 of the fingerprint (the caller hashes),
  *  and the station, device and session ids as the relay stamps them - 160 bytes. */

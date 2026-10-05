@@ -17,6 +17,11 @@
 //!   every connection (`native/key`). The service keeps the first key a station sends it and refuses
 //!   any other by name (`stationKeyPinned`), which the shack shows. A page checks each answer against
 //!   the key the service lists for its station, and refuses an answer without a good signature.
+//! - **Kept by each page, and shown at both ends** (security review S3-L1). A page keeps the first
+//!   key the service lists for the station and refuses the stream while the service lists another.
+//!   The shack shows the SHA-256 of the public half as "This station's key" (`Status::station_key`),
+//!   and the page shows the key it kept the same way, the first 128 bits in eight groups of four, so
+//!   the operator can compare them.
 //! - **Lost or rotated means pairing again.** A key that cannot be read back is replaced by a new
 //!   one, which the service refuses. Revoke station access, then pair again: a new pairing is a new
 //!   station with a new key. Nothing else changes it, so neither a relay nor anyone holding only the

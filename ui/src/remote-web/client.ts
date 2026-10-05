@@ -15,7 +15,7 @@ import { StreamLink, browserStream, type StreamEnvironment } from './stream-link
 import { STREAM_SIGNAL_BYTES } from './stream-protocol'
 import { signLane, signOffer, type DeviceKey } from './device-key'
 import { LANE_PROOF_BYTES, LISTEN_LANE, OPERATION_LANE, listenBody } from './lane-proof'
-import { checkAnswer } from './station-key'
+import { checkAnswer, checkPin, type StationPins } from './station-key'
 
 export type AccountSession = {
   accountId: string
@@ -248,10 +248,12 @@ export class HostedConnection {
   /** `device` is this browser's device for the station, and its key (A5): the stream's offer is
    *  signed with it for this session, and so is every message on the older lanes but Stop and `state`
    *  (S1-M1). Without one they go unsigned and the station refuses them by name. `stationKey` is the
-   *  station's own key as the service lists it (S3-M1): the stream takes only an answer it signed. */
+   *  station's own key as the service lists it (S3-M1): the stream takes only an answer it signed, and
+   *  only while it is the key this browser kept for the station in `pins` (S3-L1; this browser's
+   *  IndexedDB unless a test says otherwise). */
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false,
     streamEnvironment: StreamEnvironment = browserStream(), private readonly device?: { id: string; key: () => Promise<DeviceKey | null> },
-    stationKey: string | null = null) {
+    stationKey: string | null = null, pins?: StationPins) {
     this.application = new ApplicationClient(message => {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
@@ -292,10 +294,12 @@ export class HostedConnection {
       return key && sessionId ? signOffer(key, sdp, stationId, device.id, sessionId) : null
     })),
       // S3-M1: the answer must be the station's own, signed with the key the service lists for it, for
-      // this offer from this browser's device in this session.
+      // this offer from this browser's device in this session. S3-L1: and the service must list the key
+      // this browser kept for the station, checked first, so a changed key is refused as that.
       verifyAnswer: streamEnvironment.verifyAnswer ?? (async (answer, offer) => {
         const sessionId = this.sessionId
-        return device && sessionId ? checkAnswer(stationKey, answer, offer, { stationId, deviceId: device.id, sessionId }) : 'stationNotSigned'
+        if (!device || !sessionId) return 'stationNotSigned'
+        return await checkPin(stationId, stationKey, pins) ?? checkAnswer(stationKey, answer, offer, { stationId, deviceId: device.id, sessionId })
       }) })
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)

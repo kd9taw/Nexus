@@ -17,13 +17,15 @@ import { ANSWER, LEASE, SIGNAL, answerChecked, byName, harness } from './stream-
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
 const KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
-const SHORT = 'A1B2 C3D4 E5F6 0718'
+// The key as both ends show it: the first 128 bits of the fingerprint, eight groups of four (S3-L1).
+const SHORT = 'A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90'
 const BETA = 'Remote streaming is a beta feature. Access could be revoked at any time.'
 const OFFLINE = "The station isn't online. Check that Nexus is running at the shack with Remote turned on, and that the computer is awake."
 const OCCUPIED = 'Another browser is using this station. You can start once it lets go.'
 const DISABLED = 'Streaming is off at the shack. In Nexus there, turn on “Stream this station from my browser” (Settings → Station → Remote access), then start the stream again.'
 const IN_USE = 'Another browser is streaming this station. You can stream once it ends.'
 const NOT_PINNED = 'Nexus at the shack is asking you to approve this browser. Approve it there if it shows this browser’s key, below, then start the stream again.'
+const STATION_KEY_CHANGED = 'This station’s key has changed, so nothing was connected. Return to your stations to compare the new key with “This station’s key” in Nexus at the shack.'
 const LISTEN_READY = "Ready. Press Listen to hear the station's receive audio."
 const NO_AUDIO = "This station isn't sending its receive audio. Check that Nexus at the shack is up to date and has the radio's audio input set."
 
@@ -61,8 +63,9 @@ function relayAudio() {
   }
 }
 
-function entry(initial: Partial<OperationView>, props: { autostart?: boolean; mode?: 'stream' | 'listen'; browserKey?: string | null } = {}) {
-  const h = harness()
+function entry(initial: Partial<OperationView>, props: { autostart?: boolean; mode?: 'stream' | 'listen'; browserKey?: string | null } = {},
+  link: Parameters<typeof harness>[0] = {}) {
+  const h = harness(link)
   let snapshot = { supported: true, state: null, fresh: false, connected: true, busy: false, stopAvailable: false,
     stopSending: false, stopAccepted: false, ...initial } as OperationView
   const listeners = new Set<() => void>()
@@ -175,6 +178,24 @@ it('a browser the shack has not approved to stream: the page says Nexus there is
   act(() => { w.h.link.receive(byName(SIGNAL.roomToBrowser, 'refused: streamClosed')) })
   await w.settle()
   expect(screen.queryByText(`This browser’s key: ${SHORT}`)).toBeNull()
+})
+
+it('S3-L1: a stream refused because the service lists another key for the station connects nothing and sends the operator to the station card', async () => {
+  const v = entry({ fresh: true, state: state('controlling') }, { autostart: true, browserKey: KEY }, { verify: async () => 'stationKeyChanged' })
+  await v.settle()
+  await act(async () => { v.h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await answerChecked() })
+  await v.settle()
+  expect(v.h.peer.remote, 'nothing reaches the browser').toBeNull()
+  expect(v.status()).toBe(STATION_KEY_CHANGED)
+  // This browser's key did not change, so it is not the one put up to compare.
+  expect(screen.queryByText(`This browser’s key: ${SHORT}`)).toBeNull()
+  // Control: the station's own answer is taken, and nothing of the sort is said.
+  cleanup()
+  const w = entry({ fresh: true, state: state('controlling') }, { autostart: true, browserKey: KEY })
+  await w.settle()
+  await act(async () => { w.h.link.receive({ type: 'streamSignal', payload: { kind: 'answer', sdp: ANSWER } }); await answerChecked() })
+  expect(w.h.peer.remote).toEqual({ type: 'answer', sdp: ANSWER })
+  expect(document.body.textContent).not.toContain('key has changed')
 })
 
 it('the beta line is on the stream page the whole time: before the stream, and while it is live', async () => {

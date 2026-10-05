@@ -10,7 +10,8 @@ import type { RemoteStationAction, RemoteStationStatus } from './types'
 
 afterEach(() => { cleanup(); delete window.__TAURI_INTERNALS__ })
 const fingerprint = (c: string) => c.repeat(64)
-const short = (hex: string) => hex.slice(0, 16).toUpperCase().match(/.{4}/g)!.join(' ')
+// As both ends show a key: the first 128 bits of its fingerprint, eight groups of four (S3-L1).
+const short = (hex: string) => hex.slice(0, 32).toUpperCase().match(/.{4}/g)!.join(' ')
 
 function mount(status: RemoteStationStatus) {
   const actions: RemoteStationAction[] = []
@@ -93,4 +94,20 @@ it('not linked yet, the card says so and holds the pairing steps; Remote off, th
   expect((await screen.findByRole('status')).textContent).toBe('Remote is off')
   expect(within(main()).getByRole('button', { name: 'Turn on Remote' })).toBeTruthy()
   expect(within(main()).getByText('No current browser requests or approvals')).toBeTruthy()
+})
+
+// S3-L1: the shack shows its own key the way the Remote page shows the key it kept for the station, so
+// the operator can compare the two group by group. The fingerprint is of a made-up key shape (the P-256
+// SPKI prefix, 04, then 0xab sixty-four times), the one the page's test shows as the same eight groups.
+it('the card shows this station\'s key in eight groups, as the Remote page shows it; with no key, none', async () => {
+  const station = { phase: 'connected' as const, origin: 'https://remote-staging.hamradiotools.io', stationId: crypto.randomUUID(),
+    accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, devices: [], error: null }
+  mount({ ...station, stationKey: 'a8ddd2ffad4930ac6b77647b8de0d37935aaeb9fb957326da6370df67205dc77' })
+  const line = await screen.findByText('This station’s key: A8DD D2FF AD49 30AC 6B77 647B 8DE0 D379')
+  expect(line.closest('.remote-native-advanced'), 'on the card itself, not under Advanced').toBeNull()
+  // Control: a station with no key yet (paired by an earlier Nexus, or a store that would not answer).
+  cleanup()
+  mount({ ...station, stationKey: null })
+  await screen.findByText('No current browser requests or approvals')
+  expect(document.body.textContent).not.toContain('This station’s key')
 })

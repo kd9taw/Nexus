@@ -9,7 +9,8 @@ import { APPROVAL_ARM_MS, APPROVAL_POLL_MS, RemoteApprovalPrompt } from './Remot
 import type { RemoteStationAction, RemoteStationStatus } from './types'
 
 const KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
-const SHORT = 'A1B2 C3D4 E5F6 0718'
+// The key as both ends show it: the first 128 bits of the fingerprint, eight groups of four (S3-L1).
+const SHORT = 'A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90'
 const TITLE = 'Let Chrome on Windows stream this station?'
 
 type Device = RemoteStationStatus['devices'][number]

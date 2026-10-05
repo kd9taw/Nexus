@@ -155,12 +155,20 @@ disconnects the station and removes its Remote pairing; pair again to reconnect.
 computer's password store with the pairing; a station paired by an earlier Nexus gets one the
 first time this Nexus starts. The station signs every stream it answers with it, and the
 Remote service records it the first time the station connects. A browser takes only a stream
-this key signed, so nothing between the two can pass itself off as your station. If the key is
-lost (the password store was cleared, say) or you want a new one, use **Revoke station access**
-and pair again: a new pairing makes a new key. Until you do, the card says the Remote service
-holds a different key for this station, and browsers refuse its stream.
+this key signed, so nothing between the two can pass itself off as your station. The card shows
+the key as **This station's key**, eight groups of four characters. Each browser keeps the key
+the Remote service lists for this station the first time it sees one, and shows it on the
+station's card the same way: compare the two, group by group. If the service later lists a
+different key for this station, the browser says so, shows both keys, and connects nothing until
+you press **Accept the new key** there. Accept it only if the new key matches the one shown here.
+If the key is lost (the password store was cleared, say) or you want a new one, use **Revoke
+station access** and pair again: a new pairing makes a new key, which each browser keeps the
+first time it sees it, so compare it then. Until you do, the card says the Remote service holds a
+different key for this station, and browsers refuse its stream.
 
-Each browser has a key too, which you compare when you approve it. Taking control, keeping it,
+Each browser has a key too, which you compare when you approve it, in the same eight groups the
+browser shows. An older Nexus at the shack shows only four groups: they are the browser's first
+four. Taking control, keeping it,
 **Listen** and every command from a browser carry that browser's key, and Nexus takes them
 only from the key you approved; **Stop TX** never needs it. A browser approved before browser
 keys existed is asked for again, here, before it can take control.
