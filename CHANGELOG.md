@@ -263,10 +263,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went blank and stayed blank. Nexus now asks for it back and draws the globe again as soon as it
   returns. If it has not come back within 10 seconds, the globe shows **3D view paused** with a
   **Reload** button that brings it back.
+- **The Logbook's globe shows your QSOs again.** When the globe took on the flat map's lighter look,
+  the dots for your worked squares went pale. They were added to the map as light, which only shows
+  on a dark globe, so on the new map each one faded to a white speck without its band colour, and
+  the coast, border and state lines ran across them. Each square is now a dot in its band's colour
+  with a dark edge, as on the flat map, drawn over the lines.
+- **The Logbook's globe shows day and night again, every time it opens.** It often opened lit evenly
+  all round, pale and washed out, with no night side. The globe's built-in lights could come on after
+  the Logbook had set up its sun, and then stayed on beside it. The Logbook's globe now sets its
+  lights the way Connect's globe does, so the sun lights the day side and the night side stays in
+  shade.
 - **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
   a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
   an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
   in every theme.
+- **Nexus now carries the license texts of the packages its interface is built with.** NOTICE named
+  them, but their MIT, ISC and Apache-2.0 licenses ask for the license text itself to travel with
+  every copy, and the installers did not carry it. Every installer now has them, with the CQ-zone
+  data's notice, in `resources/ui/THIRD-PARTY.txt` beside COPYING and NOTICE, and the new
+  **Licenses** button in the Settings header, beside **Check for updates**, shows them.
 
 ### Changed
 

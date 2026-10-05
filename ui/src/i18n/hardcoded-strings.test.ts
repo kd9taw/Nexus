@@ -107,6 +107,9 @@ const MIGRATED = [
   // and the looks table whose `labelKey` entries name each look.
   'components/SettingsLooks.tsx',
   'features/looks.ts',
+  // Settings ▸ Licenses (2026-10-05) — born migrated: the header button, its dialog and the two
+  // lines shown while the texts load or when a build does not carry them.
+  'components/SettingsLicenses.tsx',
   // The RTTY F-key surface (2026-09-17): the macro buttons, their editor and the set switch,
   // and the set model's caption keys. Migrated as they were written. RttyCockpit.tsx stays on
   // PARTIAL for its stop controls; nothing here stops a transmission.

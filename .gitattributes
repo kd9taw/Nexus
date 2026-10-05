@@ -25,6 +25,11 @@ crates/propagation/tests/fixtures/*.tle    -text
 # as received — rewriting their line endings edits third-party legal text.
 src-tauri/resources/hamlib/*.txt           -text
 
+# The interface's third-party licence texts, bundled the same way (resources/ui/). The file is
+# the UI build's output copied as it is, and CI compares the two with diff; tslib's LICENSE.txt
+# inside it carries CRLF, so translating it would also make the copy differ from the build.
+licenses/ui/THIRD-PARTY.txt               -text
+
 # Captured rigctld/rigctl output, byte for byte as the Windows binary emitted it — CRLF
 # included, because that IS the data being tested. 14 of these 15 files carry CRLF and none
 # contains a NUL byte, so `text=auto` above classifies every one of them as text.

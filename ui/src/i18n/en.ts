@@ -5303,6 +5303,13 @@ export const EN = {
     "This install's build stamp — confirm a fresh install actually took",
   'settings.panel.update.label': 'Check for updates',
   'settings.panel.update.title': 'Check for a newer Nexus release',
+  // Settings ▸ Licenses (SettingsLicenses.tsx). "Nexus" names the product and
+  // resources/ui/THIRD-PARTY.txt is a path, so both stay as they are in every language.
+  'settings.licenses.button': 'Licenses',
+  'settings.licenses.title': 'Third-party licenses',
+  'settings.licenses.loading': 'Loading the license texts…',
+  'settings.licenses.unavailable':
+    'This build does not carry the license texts. An installed Nexus has them in resources/ui/THIRD-PARTY.txt.',
   'settings.panel.tabs.aria': 'Settings sections',
   'settings.panel.save': 'Save',
   'settings.panel.saving': 'Saving…',

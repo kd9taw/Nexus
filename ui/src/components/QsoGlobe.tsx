@@ -7,7 +7,7 @@
 // nothing else, and can never destabilize the Connect globe.
 //
 // The dots are ONE THREE.Points cloud (the same technique as the Connect globe's
-// coverage/space-weather layers): per-vertex band colors, a soft round sprite so
+// coverage/space-weather layers): per-vertex band colors, a round dark-edged sprite so
 // they read as the 2-D map's dots (react-globe.gl's default points layer extrudes
 // CYLINDERS — 1,500 squares looked like rivets on a ball; operator veto 2026-07-21).
 //
@@ -46,6 +46,7 @@ import { BAND_COLOR, bandColor } from '../bandColors'
 import { subsolarPoint } from '../mapGeo'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { GlobePaused, useGlobeWebgl } from './globeWebgl'
+import { MARKER_HALO } from './MapView'
 import { t } from '../i18n'
 
 /** Low→high band order = BAND_COLOR's key order (the app's canonical band list). */
@@ -56,24 +57,35 @@ const BAND_ORDER = Object.keys(BAND_COLOR)
  *  you are reading must not stop the showpiece globe on the other screen. */
 const SPIN_KEY = 'nexus.logbook.globespin'
 
-/** Soft round dot sprite (bright core, quick falloff) so the GPU points render as the
- * 2-D map's round dots instead of PointsMaterial's default squares. Built once. */
+/** A dot as the 2-D map draws a live spot (MapView): a 2.8 px radius disc in the band's colour,
+ *  edged by a 1 px MARKER_HALO stroke on the same circle, so the outside edge is 0.5 px beyond. */
+const DOT_R = 2.8
+const DOT_EDGE = 1
+/** The dot's whole size on screen, its edge included. */
+const DOT_PX = 2 * (DOT_R + DOT_EDGE / 2)
+
+/** That dot as the GPU points' sprite (in place of PointsMaterial's default squares): a white disc,
+ *  which the vertex colour paints in the band's colour, under the dark edge, which stays dark. Built
+ *  once. Not mipmapped: at 6.6 px a mip level blurs the 1 px edge into the map under it. */
 function dotSprite(): THREE.CanvasTexture {
   const c = document.createElement('canvas')
   c.width = 64
   c.height = 64
   const ctx = c.getContext('2d')
   if (ctx) {
-    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
-    g.addColorStop(0, 'rgba(255,255,255,1)')
-    g.addColorStop(0.45, 'rgba(255,255,255,0.95)')
-    g.addColorStop(0.7, 'rgba(255,255,255,0.28)')
-    g.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, 64, 64)
+    const k = 32 / (DOT_PX / 2)
+    ctx.beginPath()
+    ctx.arc(32, 32, DOT_R * k, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.lineWidth = DOT_EDGE * k
+    ctx.strokeStyle = MARKER_HALO
+    ctx.stroke()
   }
   const tex = new THREE.CanvasTexture(c)
   tex.colorSpace = THREE.SRGBColorSpace
+  tex.generateMipmaps = false
+  tex.minFilter = THREE.LinearFilter
   return tex
 }
 
@@ -196,15 +208,12 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
     const p = g.getCoords(ss.lat, ss.lon, 2)
     sun.position.set(p.x, p.y, p.z)
     const ambient = new THREE.AmbientLight(GLOBE_AMBIENT.color, GLOBE_AMBIENT.intensity)
-    const scene = g.scene()
-    // Replace globe.gl's default camera-chasing lights so the terminator is real.
-    const defaults = scene.children.filter((c) => c.type.endsWith('Light'))
-    defaults.forEach((l) => scene.remove(l))
-    scene.add(sun)
-    scene.add(ambient)
+    // globe.gl's own lights, set as Connect's globe sets them: they REPLACE its default camera-chasing
+    // pair, so the terminator is real. Never by taking the scene's lights out here: globe.gl puts its
+    // defaults in the scene from a timer of its own, which the browser may run after this effect, and
+    // then they stayed on beside these (lit all round, washed out, no night side).
+    g.lights([sun, ambient])
     return () => {
-      scene.remove(sun)
-      scene.remove(ambient)
       sun.dispose()
       ambient.dispose()
     }
@@ -234,17 +243,20 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
     }
     let cloud = cloudRef.current
     if (!cloud) {
+      // Painted, never ADDED as light (THREE.AdditiveBlending): added light shows only on a dark
+      // globe, and on the map-coloured one it washed every dot out to a white speck.
       const mat = new THREE.PointsMaterial({
-        size: 5.5, // screen-space px — the 2-D map's ~2.8 px radius dots
+        size: DOT_PX, // screen-space px
         map: dotSprite(),
         vertexColors: true,
         transparent: true,
         opacity: 0.95,
         sizeAttenuation: false,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
       })
       cloud = new THREE.Points(new THREE.BufferGeometry(), mat)
+      // Over the coast, border and state lines (transparent too), as on the 2-D map.
+      cloud.renderOrder = 1
       cloudRef.current = cloud
       g.scene().add(cloud)
     }
