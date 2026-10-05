@@ -1079,24 +1079,28 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   2-D Canvas map remains the default). Its LICENSE.txt records three more notices for code it
   contains: mapbox-gl-js v1.13 and earlier — **BSD-3-Clause**, © 2020 Mapbox; glfx.js —
   **MIT**, © 2011 Evan Wallace; and a portion of d3-color — **BSD-3-Clause**, © 2010-2016 Mike
-  Bostock. Its runtime dependencies: `pbf` and `@mapbox/vector-tile` — **BSD-3-Clause**,
-  © Mapbox; `@mapbox/tiny-sdf` — **BSD-2-Clause**, © 2016-2024 Mapbox, Inc.;
-  `@mapbox/unitbezier` — **BSD-2-Clause**, © 2008 Apple Inc.; `earcut`, `kdbush`, `potpack`,
-  `tinyqueue`, `quickselect`, `@maplibre/geojson-vt`, `@mapbox/point-geometry` and
-  `@maplibre/maplibre-gl-style-spec` — **ISC**; `gl-matrix`, `bidi-js`, `murmurhash-js` and
-  `@maplibre/vt-pbf` — **MIT**; `@maplibre/mlt` — **MIT OR Apache-2.0** (MIT elected),
-  © 2024 MapLibre contributors; and `@types/geojson` — MIT, type definitions only, so none of
-  it ships. Their own dependencies (`resolve-protobuf-schema`, `protocol-buffers-schema`,
-  `require-from-string`, `minimist`, `json-stringify-pretty-compact` and
-  `@mapbox/jsonlint-lines-primitives`) are **MIT**.
+  Bostock. Its published files are pre-built with its runtime dependencies inside: `pbf` and
+  `@mapbox/vector-tile` — **BSD-3-Clause**, © Mapbox; `@mapbox/tiny-sdf` — **BSD-2-Clause**,
+  © 2016-2024 Mapbox, Inc.; `@mapbox/unitbezier` — **BSD-2-Clause**, © 2008 Apple Inc.;
+  `earcut`, `kdbush`, `potpack`, `tinyqueue`, `quickselect`, `@maplibre/geojson-vt`,
+  `@mapbox/point-geometry` and `@maplibre/maplibre-gl-style-spec` — **ISC**; `gl-matrix`,
+  `bidi-js`, `murmurhash-js` (no licence file in its npm package; the text is reproduced under
+  *Licence texts the street map's packages do not publish* below) and `@maplibre/vt-pbf` —
+  **MIT**; and `@maplibre/mlt` — **MIT OR Apache-2.0** (MIT elected), © 2024 MapLibre
+  contributors. `@types/geojson` (MIT) is type definitions only, and six more MIT packages are
+  installed with these only as build and command-line tooling (`@mapbox/jsonlint-lines-primitives`,
+  `json-stringify-pretty-compact`, `minimist`, `protocol-buffers-schema`,
+  `resolve-protobuf-schema` and `require-from-string`), so none of their code ships.
 - **PMTiles** (`pmtiles` 4) — **BSD-3-Clause**, © 2021 Protomaps LLC. Reads the tiles inside a
   downloaded street-map file. It brings **fflate** (decompression) — **MIT**, © Arjun Barrett.
+  The `pmtiles` npm package carries no licence file; its text is reproduced below.
 - **@protomaps/basemaps** (`@protomaps/basemaps` 5, which generates the street map's style) —
   code **BSD-3-Clause**, © 2019-2023 Protomaps LLC, Kelso Cartography. The visual design of the
   Protomaps styles is by Geraldine Sarmiento for Protomaps LLC, released under **CC0 1.0**. The
   tile schema is adapted from the Tilezen project — **MIT**, © 2015-2018 Mapzen, © 2019 Linux
   Foundation. Nexus recolours the style, so it is not called "Protomaps": it is the street map,
-  credited as based on the Protomaps basemaps.
+  credited as based on the Protomaps basemaps. The `@protomaps/basemaps` npm package carries no
+  licence file; its text is reproduced below.
 - **Lucide** icons via `lucide-react` — **ISC** (© Lucide contributors; based
   on Feather Icons, MIT).
 - **Radix UI** primitives `@radix-ui/react-dialog`, `-dropdown-menu`, `-toast`,
@@ -1107,6 +1111,144 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
 Test-only tooling (**vitest**, **jsdom**, **@testing-library/react** and `/dom`, all MIT) is
 a dev dependency and is **not** part of any shipped bundle. As on the Rust side, the
 authoritative machine-checked set is the lockfile — `ui/package-lock.json` — not this list.
+
+### Licence texts the street map's packages do not publish
+
+`pmtiles` 4.5.0, `@protomaps/basemaps` 5.7.2 and `murmurhash-js` 1.0.0 publish no licence file in
+their npm packages. Their licence texts and copyright lines are reproduced here word for word
+(only the line breaks differ), from each upstream repository at the commit its npm package
+records as its source (`gitHead`).
+
+**pmtiles 4.5.0** — `LICENSE` at
+<https://github.com/protomaps/PMTiles/blob/3b10e67edb65c6b04549f74c0279cef8328d859c/LICENSE>:
+
+> The below license (BSD-3) applies to the reference implementations in this repository.
+>
+> The PMTiles specification itself is public domain, or CC0 where applicable.
+>
+> Sample tilesets available in this repository are subject to their own license terms.
+>
+> ---
+>
+> Copyright 2021 Protomaps LLC
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted
+> provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of
+> conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of
+> conditions and the following disclaimer in the documentation and/or other materials provided
+> with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its contributors may be used to
+> endorse or promote products derived from this software without specific prior written
+> permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+> IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+> AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+> CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+> CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+> OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+> POSSIBILITY OF SUCH DAMAGE.
+
+**@protomaps/basemaps 5.7.2** — `LICENSE.md` at
+<https://github.com/protomaps/basemaps/blob/3ea8293a28131c3dc63f1bb20827bdb8a76df06f/LICENSE.md>:
+
+> # Code Licenses and Attribution
+>
+> # The BSD 3-Clause License (BSD-3-Clause)
+>
+> Copyright 2019-2023 Protomaps LLC, Kelso Cartography
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted
+> provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of
+> conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of
+> conditions and the following disclaimer in the documentation and/or other materials provided
+> with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its contributors may be used to
+> endorse or promote products derived from this software without specific prior written
+> permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+> IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+> AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+> CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+> CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+> OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+> POSSIBILITY OF SUCH DAMAGE.
+>
+> # Visual Design
+>
+> The visual design of the Protomaps basemap styles was created by Geraldine Sarmiento for
+> Protomaps LLC and released under a Creative Commons 0 (CC0) license.
+>
+> https://creativecommons.org/publicdomain/zero/1.0/
+>
+> Certain map styles may also include derivatives of icons designed for Mapzen and released
+> under an MIT license.
+>
+> https://github.com/tangrams/icons/blob/master/LICENSE.md
+>
+> # Tile Schema
+>
+> The organization of layers and tags is adapted from the Tilezen project.
+>
+> https://github.com/tilezen/vector-datasource
+> https://github.com/tilezen/vector-datasource/blob/master/docs/LICENSE-SCHEMA.md
+>
+> # The MIT License (MIT)
+>
+> Copyright (c) 2015-2018 Mapzen
+> Copyright (c) 2019 Linux Foundation
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+> and associated documentation files (the "Software"), to deal in the Software without
+> restriction, including without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+> Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+> BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**murmurhash-js 1.0.0** — the "License (MIT)" section of `README.md` at
+<https://github.com/mikolalysenko/murmurhash-js/blob/72aabce3f52cb8f16245692a69fd35951e165af0/README.md>
+(the README in the published package carries the same section). Its source files also name
+Austin Appleby, the author of the MurmurHash algorithm.
+
+> Copyright (c) 2011 Gary Court
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+> and associated documentation files (the "Software"), to deal in the Software without
+> restriction, including without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+> Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+> BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
