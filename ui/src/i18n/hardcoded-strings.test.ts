@@ -177,6 +177,7 @@ const MIGRATED = [
   'components/MapLegend.tsx',
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
+  'components/globeWebgl.tsx',
   'propViz.ts',
   'openingAlert.ts',
   'stormAlert.ts',

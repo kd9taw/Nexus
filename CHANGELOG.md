@@ -182,6 +182,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM
   repeater or a digital channel. Star birds in **Satellites** to see just those, or pick **All** for
   the whole catalog.
+- **The 3-D globes let go of the graphics card when they close.** Each switch from 3D back to Flat on
+  Connect, and each time the Logbook's globe was closed, left that globe's drawing surface and its
+  32 MB picture of the map in memory for as long as Nexus ran. After about fifteen switches the
+  browser started taking the oldest drawing surfaces away to make room, and one of those could be the
+  waterfall's or the scope's. A closed globe now hands everything back at once.
+- **A 3-D globe the graphics card drops comes back, or says so.** A globe whose drawing surface was
+  taken away while it was shown (after sleep, a graphics driver reset, or too many surfaces at once)
+  went blank and stayed blank. Nexus now asks for it back and draws the globe again as soon as it
+  returns. If it has not come back within 10 seconds, the globe shows **3D view paused** with a
+  **Reload** button that brings it back.
+- **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
+  a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
+  an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
+  in every theme.
 
 ### Changed
 

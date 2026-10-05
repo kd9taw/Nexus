@@ -39,6 +39,8 @@ vi.mock('react-globe.gl', async () => {
     scene: () => scene,
     postProcessingComposer: () => ({ addPass() {}, passes: [] }),
     controls: () => controls,
+    // What globeWebgl.tsx hands back when the globe goes (globeWebgl.test.tsx tests that part).
+    renderer: () => renderer,
     // globe.gl's getter: where the camera is (its setter form is the same call with arguments).
     pointOfView: () => ({ lat: 0, lng: 0, altitude: 2.2 }),
     paused: false,
@@ -54,7 +56,15 @@ vi.mock('react-globe.gl', async () => {
   const controls = Object.assign(new THREE.EventDispatcher<Record<string, object>>(), {
     autoRotate: false,
     autoRotateSpeed: 0,
+    connect() {},
+    disconnect() {},
   })
+  const renderer = {
+    domElement: document.createElement('canvas'),
+    getContext: () => ({ isContextLost: () => false }),
+    dispose() {},
+    forceContextLoss() {},
+  }
   const Globe = forwardRef<unknown, Record<string, unknown>>(function Globe(props, ref) {
     useImperativeHandle(ref, () => fake, [])
     useEffect(() => {
@@ -95,7 +105,8 @@ beforeEach(() => {
       opsOf.set(this, ops)
       ctxs.set(
         this,
-        new Proxy({} as Record<string | symbol, unknown>, {
+        // The probe's context has no extensions to hand it back with.
+        new Proxy({ getExtension: () => null } as Record<string | symbol, unknown>, {
           get: (t, k) =>
             k in t
               ? t[k]

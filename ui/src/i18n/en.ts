@@ -2381,6 +2381,12 @@ export const EN = {
   // Beside the map picker while Globe stands in for a stored 3D pick (ConnectView).
   'connect.globe3d.standIn':
     "The 3-D globe can't draw on this computer right now, so the map shows Globe. Your 3D pick is kept.",
+  // Over a 3-D globe whose WebGL context was lost and has not come back (components/globeWebgl.tsx,
+  // both globes): Reload mounts the globe again.
+  'globe.paused.text': '3D view paused',
+  'globe.paused.reload': 'Reload',
+  'globe.paused.reload.title':
+    'The graphics card dropped this 3D view and has not handed it back. Reload draws it again.',
   'globe.spin.stop.title': 'Stop the globe spinning',
   'globe.spin.start.title': 'Spin the globe',
   'globe.spin.pause': '⏸ Spin',
