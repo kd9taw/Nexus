@@ -589,6 +589,7 @@ export const EN = {
   "remote.lan.pair": "Pair a computer",
   "remote.lan.codeHint": "Type this code in Nexus on the other computer. It works once, within ten minutes.",
   "remote.lan.codeWarning": "Whoever types it in time can operate this station, transmit included, so keep it to yourself.",
+  "remote.lan.codeLeft": "Expires in {{time}}",
   "remote.lan.thisStation": "This station: {{address}}, key {{key}}",
   "remote.lan.computers": "Paired computers",
   "remote.lan.noComputers": "No computer is paired yet.",

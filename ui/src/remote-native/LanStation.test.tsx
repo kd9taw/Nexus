@@ -8,7 +8,7 @@
 // stream makes; each refusal is paired with the same press made at the shack, which goes through.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { LanStation } from './LanStation'
+import { LAN_POLL_MS, LanStation } from './LanStation'
 import { StreamInputDispatcher } from './stream-input'
 import type { LanStatus, RemoteStationStatus } from './types'
 import { EN, type PartialCatalog } from '../i18n'
@@ -280,5 +280,92 @@ describe('Windows\' own prompt, the firewall and the name', () => {
     }
     await showing(choosing)
     expect(screen.queryByText(guest)).toBeNull()
+  })
+})
+
+describe('the pairing code leads the card while a window is open', () => {
+  // The operator, 2026-10-05: at the shack the code was hard to find among the card's other lines.
+  // After Pair a computer it is the card's first content, large, with the time it has left counting
+  // down, its hint, warning and Cancel beside it; the press brings it into view and screen readers
+  // hear it. A window already open when the card is shown moves nothing.
+  const OPENED = Date.UTC(2026, 9, 5, 12, 0, 0)
+  const open: LanStatus = { ...listening, pairing: { code: '0123456789abcdef', closesAt: OPENED + 10 * 60_000 } }
+  // The card's own content follows its switch; the status line is always in it.
+  const card = () => screen.getByRole('status').parentElement as HTMLElement
+  const scrolled = vi.fn()
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(OPENED)
+    scrolled.mockReset()
+    // jsdom has no scrollIntoView.
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: scrolled })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+  })
+  const second = async (ms = 1000) => { await act(async () => { vi.advanceTimersByTime(ms) }) }
+
+  it('CONTROL: with no window open the status line comes first, and nothing is reserved for a code', async () => {
+    await showing(listening)
+    expect(card().firstElementChild).toBe(screen.getByRole('status'))
+  })
+
+  it('after Pair a computer: first in the card, announced, counting down, and brought into view', async () => {
+    await showing(listening)
+    remoteStationAction.mockResolvedValue(status(open))
+    getRemoteStationStatus.mockResolvedValue(status(open))
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      await pressedAtShack(screen.getByRole('button', { name: 'Pair a computer' }))
+      const region = card().firstElementChild as HTMLElement
+      expect(region.contains(screen.getByText('0123 4567 89ab cdef')), 'the code is the card’s first content').toBe(true)
+      expect(region.getAttribute('aria-live')).toBe('polite')
+      // Its hint, its warning and Cancel stay beside it.
+      expect(within(region).getByText(/^Type this code in Nexus on the other computer\./)).toBeTruthy()
+      expect(within(region).getByText(/^Whoever types it in time can operate this station/)).toBeTruthy()
+      expect(within(region).getByRole('button', { name: 'Cancel pairing' })).toBeTruthy()
+      // The time left, counting down each second. It changes every second, so it is not read out.
+      const left = within(region).getByRole('timer')
+      expect(left.getAttribute('aria-live')).toBe('off')
+      expect(left.textContent).toBe('Expires in 10:00')
+      await second()
+      expect(left.textContent).toBe('Expires in 9:59')
+      await second(4 * 60_000 + 54_000)
+      expect(left.textContent).toBe('Expires in 5:05')
+      // Never below zero while the station's next read is on its way.
+      await second(6 * 60_000)
+      expect(left.textContent).toBe('Expires in 0:00')
+      // The press brought it into view and moved focus to it (the button pressed is gone), without
+      // the focus scrolling anything by itself.
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' })
+      expect(scrolled.mock.contexts[0]).toBe(region)
+      expect(document.activeElement).toBe(region)
+      expect(focus.mock.lastCall).toEqual([{ preventScroll: true }])
+    } finally {
+      focus.mockRestore()
+    }
+  })
+
+  it('CONTROL: a window already open when the card is shown leads the card, and moves nothing', async () => {
+    await showing(open)
+    const region = card().firstElementChild as HTMLElement
+    expect(region.contains(screen.getByText('0123 4567 89ab cdef'))).toBe(true)
+    expect(within(region).getByRole('timer').textContent).toBe('Expires in 10:00')
+    expect(scrolled).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('CONTROL: a Pair the station refuses, or one through the stream, moves nothing', async () => {
+    await showing(listening)
+    remoteStationAction.mockRejectedValueOnce('lanFull')
+    await pressedAtShack(screen.getByRole('button', { name: 'Pair a computer' }))
+    await pressedThroughStream(screen.getByRole('button', { name: 'Pair a computer' }))
+    // A later read that finds a window open (made some other way) is not this press's.
+    getRemoteStationStatus.mockResolvedValue(status(open))
+    await second(LAN_POLL_MS)
+    expect(screen.getByText('0123 4567 89ab cdef')).toBeTruthy()
+    expect(scrolled).not.toHaveBeenCalled()
   })
 })
