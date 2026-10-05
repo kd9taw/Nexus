@@ -494,16 +494,30 @@ US government, **public domain**). Regenerate with
 `node scripts/gen-grid-state.mjs`.
 
 ### Map / globe textures
-`ui/src/assets/earth-relief.webp` (the shaded relief under the flat map and on the 3-D
-globes) derives from Natural Earth's **Shaded Relief** raster at 1:10m (`SR_HR`, version
+`ui/src/assets/earth-relief.webp` (the shaded relief under the flat map) derives from
+Natural Earth's **Shaded Relief** raster at 1:10m (`SR_HR`, version
 2.0.0, <https://naciscdn.org/naturalearth/10m/raster/SR_HR.zip>; Tom Patterson / Natural
 Earth), **public domain**, downsampled to 4096 × 2048 and regraded for blending.
 Regenerate with `python3 scripts/gen-relief.py` (the download is checked against a
 recorded SHA-256).
-`ui/src/assets/earth-night.webp` (the 3-D globe's dimmed city-lights layer) is a
-downscaled **NASA "Black Marble" / Earth at Night** composite (NASA Earth Observatory),
-a work of the US government — **public domain**. Neither is a map-tile service; both are
-bundled offline.
+
+The 3-D globes' day and night pictures are NASA imagery, works of the US government and
+**public domain**. NASA asks to be credited as below; their use here does not imply NASA's
+endorsement of Nexus.
+- `ui/src/assets/earth-day.webp` (the day side) is **Blue Marble: Next Generation** with
+  topography and bathymetry, July 2004
+  (<https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73751/world.topo.bathy.200407.3x5400x2700.jpg>),
+  produced by Reto Stöckli, NASA Earth Observatory (NASA Goddard Space Flight Center).
+  Credit: **NASA Earth Observatory**.
+- `ui/src/assets/earth-night.webp` (the night side and its city lights) is **Earth at Night
+  (Black Marble) 2016**, the colour map at 3 km
+  (<https://eoimages.gsfc.nasa.gov/images/imagerecords/144000/144898/BlackMarble_2016_3km.jpg>).
+  Credit: **NASA Earth Observatory images by Joshua Stevens, using Suomi NPP VIIRS data from
+  Miguel Román, NASA GSFC**.
+
+Both are downsampled to 4096 × 2048 WebP. Regenerate them with
+`python3 scripts/gen-globe-textures.py` (each download is checked against a recorded
+SHA-256). None of these textures is a map-tile service; all are bundled offline.
 
 ### CQ zone boundaries
 `ui/src/data/cqzones.geojson` is from HB9HIL's hamradio-zones-geojson

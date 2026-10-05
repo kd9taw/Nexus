@@ -503,7 +503,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal),
   [alsa-rs](https://github.com/diwic/alsa-rs) (Linux device names),
-  Natural Earth basemap (public domain),
+  Natural Earth basemap (public domain), NASA Earth Observatory's Blue Marble and Black Marble
+  imagery on the 3-D globes (public domain),
   repeater data courtesy of [hearham.com](https://hearham.com) and
   [RepeaterBook.com](https://repeaterbook.com), city search powered by OpenStreetMap.
 
