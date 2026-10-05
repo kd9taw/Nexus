@@ -1516,10 +1516,15 @@ Downloaded once, with the first pack, as one archive whose SHA-256 the index fil
   (<https://github.com/notofonts>). `OFL.txt` travels inside the archive and is installed beside
   the glyphs.
 - The map icons — derived from Mapzen's tangrams/icons, **MIT**, © 2017 Mapzen, Linux
-  Foundation.
+  Foundation. The icon sheets are generated, not downloaded ready-made: no published sheet carries
+  every icon the style uses, so the street-map hosting job builds them with the Protomaps basemaps
+  project's own sprite generator (`spritegen`, **BSD-3**) from its `refill.svg` icon source, at the
+  same commit as the map style (<https://github.com/protomaps/basemaps>, `3ea8293`).
+  `ICONS-LICENSE.txt` travels inside the archive.
 
-Both come from <https://github.com/protomaps/basemaps-assets>. They are separate data files used
-by the street map, never combined into the program.
+The fonts come from <https://github.com/protomaps/basemaps-assets> and the icons from
+<https://github.com/protomaps/basemaps>. They are separate data files used by the street map,
+never combined into the program.
 
 ### Nexus's own map-file code
 
