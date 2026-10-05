@@ -969,10 +969,11 @@ PATENTS are in the same file.
 
 ### Existing application dependencies
 
-Nexus's Rust workspace — 20 crates under `crates/`: `deepcw`, `fst4`, `ft2`, `ft4`, `ft8`, `js8`,
-`jt65`, `modes`, `msk144`, `propagation`, `q65`, `tempo-app`, `tempo-audio`, `tempo-core`,
-`tempo-fast`, `tempo-fast-sys`, `tempo-net`, `tempo-sstv`, `tempo-stream`, `wspr` — and the
-standalone Tauri shell (`src-tauri/`, which is NOT a workspace member) depend on the crates below.
+Nexus's Rust workspace — 21 crates under `crates/`: `deepcw`, `fst4`, `ft2`, `ft4`, `ft8`, `js8`,
+`jt65`, `modes`, `msk144`, `propagation`, `q65`, `street-map`, `tempo-app`, `tempo-audio`,
+`tempo-core`, `tempo-fast`, `tempo-fast-sys`, `tempo-net`, `tempo-sstv`, `tempo-stream`, `wspr` —
+and the standalone Tauri shell (`src-tauri/`, which is NOT a workspace member) depend on the
+crates below.
 `Cargo.lock` plus `deny.toml` are the authoritative, machine-checked license set: CI runs
 cargo-deny over the whole graph with `all-features = true`, and its `licenses.allow` list is
 the gate that actually fails a build. This section is the human-readable summary of the
@@ -1110,7 +1111,10 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   authors.
 - **world-atlas** (offline basemap package; ISC) — its `countries-50m` /
   `countries-110m` geometry derives from **Natural Earth** (**public domain**).
-  No map tiles or network map services are used.
+  The default maps draw from this bundled geometry: they use no map tiles and no network
+  map service. Only the optional street map uses map tiles: vector tiles in a file the
+  operator chooses to download, read from the operator's own disk (see *Redistributed
+  OpenStreetMap data (street maps)* below).
 - **us-atlas** (ISC) — the `states-10m` TopoJSON is bundled in the UI to draw the
   repeater map's US state borders, and is also the build-time source for
   `grid_state.bin`. Its geometry derives from **US Census Bureau** cartographic
@@ -1118,6 +1122,33 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
 - **three.js** and **react-globe.gl** / **globe.gl** — **MIT** (© Mikola Lysenko /
   Vasco Asturiano / three.js authors). The optional 3-D WebGL Connect globe (lazy-loaded
   only when the operator turns it on); the 2-D Canvas map remains the default.
+- **MapLibre GL JS** (`maplibre-gl` 6) — **BSD-3-Clause**, © 2023 MapLibre contributors. The
+  optional street map's renderer (lazy-loaded only when the operator picks the street map; the
+  2-D Canvas map remains the default). Its LICENSE.txt records three more notices for code it
+  contains: mapbox-gl-js v1.13 and earlier — **BSD-3-Clause**, © 2020 Mapbox; glfx.js —
+  **MIT**, © 2011 Evan Wallace; and a portion of d3-color — **BSD-3-Clause**, © 2010-2016 Mike
+  Bostock. Its published files are pre-built with its runtime dependencies inside: `pbf` and
+  `@mapbox/vector-tile` — **BSD-3-Clause**, © Mapbox; `@mapbox/tiny-sdf` — **BSD-2-Clause**,
+  © 2016-2024 Mapbox, Inc.; `@mapbox/unitbezier` — **BSD-2-Clause**, © 2008 Apple Inc.;
+  `earcut`, `kdbush`, `potpack`, `tinyqueue`, `quickselect`, `@maplibre/geojson-vt`,
+  `@mapbox/point-geometry` and `@maplibre/maplibre-gl-style-spec` — **ISC**; `gl-matrix`,
+  `bidi-js`, `murmurhash-js` (no licence file in its npm package; the text is reproduced under
+  *Licence texts the street map's packages do not publish* below) and `@maplibre/vt-pbf` —
+  **MIT**; and `@maplibre/mlt` — **MIT OR Apache-2.0** (MIT elected), © 2024 MapLibre
+  contributors. `@types/geojson` (MIT) is type definitions only, and six more MIT packages are
+  installed with these only as build and command-line tooling (`@mapbox/jsonlint-lines-primitives`,
+  `json-stringify-pretty-compact`, `minimist`, `protocol-buffers-schema`,
+  `resolve-protobuf-schema` and `require-from-string`), so none of their code ships.
+- **PMTiles** (`pmtiles` 4) — **BSD-3-Clause**, © 2021 Protomaps LLC. Reads the tiles inside a
+  downloaded street-map file. It brings **fflate** (decompression) — **MIT**, © Arjun Barrett.
+  The `pmtiles` npm package carries no licence file; its text is reproduced below.
+- **@protomaps/basemaps** (`@protomaps/basemaps` 5, which generates the street map's style) —
+  code **BSD-3-Clause**, © 2019-2023 Protomaps LLC, Kelso Cartography. The visual design of the
+  Protomaps styles is by Geraldine Sarmiento for Protomaps LLC, released under **CC0 1.0**. The
+  tile schema is adapted from the Tilezen project — **MIT**, © 2015-2018 Mapzen, © 2019 Linux
+  Foundation. Nexus recolours the style, so it is not called "Protomaps": it is the street map,
+  credited as based on the Protomaps basemaps. The `@protomaps/basemaps` npm package carries no
+  licence file; its text is reproduced below.
 - **Lucide** icons via `lucide-react` — **ISC** (© Lucide contributors; based
   on Feather Icons, MIT).
 - **Radix UI** primitives `@radix-ui/react-dialog`, `-dropdown-menu`, `-toast`,
@@ -1137,6 +1168,144 @@ license.
 Test-only tooling (**vitest**, **jsdom**, **@testing-library/react** and `/dom`, all MIT) is
 a dev dependency and is **not** part of any shipped bundle. As on the Rust side, the
 authoritative machine-checked set is the lockfile — `ui/package-lock.json` — not this list.
+
+### Licence texts the street map's packages do not publish
+
+`pmtiles` 4.5.0, `@protomaps/basemaps` 5.7.2 and `murmurhash-js` 1.0.0 publish no licence file in
+their npm packages. Their licence texts and copyright lines are reproduced here word for word
+(only the line breaks differ), from each upstream repository at the commit its npm package
+records as its source (`gitHead`).
+
+**pmtiles 4.5.0** — `LICENSE` at
+<https://github.com/protomaps/PMTiles/blob/3b10e67edb65c6b04549f74c0279cef8328d859c/LICENSE>:
+
+> The below license (BSD-3) applies to the reference implementations in this repository.
+>
+> The PMTiles specification itself is public domain, or CC0 where applicable.
+>
+> Sample tilesets available in this repository are subject to their own license terms.
+>
+> ---
+>
+> Copyright 2021 Protomaps LLC
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted
+> provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of
+> conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of
+> conditions and the following disclaimer in the documentation and/or other materials provided
+> with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its contributors may be used to
+> endorse or promote products derived from this software without specific prior written
+> permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+> IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+> AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+> CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+> CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+> OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+> POSSIBILITY OF SUCH DAMAGE.
+
+**@protomaps/basemaps 5.7.2** — `LICENSE.md` at
+<https://github.com/protomaps/basemaps/blob/3ea8293a28131c3dc63f1bb20827bdb8a76df06f/LICENSE.md>:
+
+> # Code Licenses and Attribution
+>
+> # The BSD 3-Clause License (BSD-3-Clause)
+>
+> Copyright 2019-2023 Protomaps LLC, Kelso Cartography
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted
+> provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of
+> conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of
+> conditions and the following disclaimer in the documentation and/or other materials provided
+> with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its contributors may be used to
+> endorse or promote products derived from this software without specific prior written
+> permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+> IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+> AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+> CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+> CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+> OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+> POSSIBILITY OF SUCH DAMAGE.
+>
+> # Visual Design
+>
+> The visual design of the Protomaps basemap styles was created by Geraldine Sarmiento for
+> Protomaps LLC and released under a Creative Commons 0 (CC0) license.
+>
+> https://creativecommons.org/publicdomain/zero/1.0/
+>
+> Certain map styles may also include derivatives of icons designed for Mapzen and released
+> under an MIT license.
+>
+> https://github.com/tangrams/icons/blob/master/LICENSE.md
+>
+> # Tile Schema
+>
+> The organization of layers and tags is adapted from the Tilezen project.
+>
+> https://github.com/tilezen/vector-datasource
+> https://github.com/tilezen/vector-datasource/blob/master/docs/LICENSE-SCHEMA.md
+>
+> # The MIT License (MIT)
+>
+> Copyright (c) 2015-2018 Mapzen
+> Copyright (c) 2019 Linux Foundation
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+> and associated documentation files (the "Software"), to deal in the Software without
+> restriction, including without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+> Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+> BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**murmurhash-js 1.0.0** — the "License (MIT)" section of `README.md` at
+<https://github.com/mikolalysenko/murmurhash-js/blob/72aabce3f52cb8f16245692a69fd35951e165af0/README.md>
+(the README in the published package carries the same section). Its source files also name
+Austin Appleby, the author of the MurmurHash algorithm.
+
+> Copyright (c) 2011 Gary Court
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+> and associated documentation files (the "Software"), to deal in the Software without
+> restriction, including without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+> Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+> BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
@@ -1177,6 +1346,10 @@ operators and communities who provide them:
 - **ARRL Logbook of the World (LoTW)**, **ClubLog** (Michael Wells, G7VJR),
   **QRZ.com**, **eQSL.cc**, and **HRDLog** — callsign lookup and QSL / log
   synchronization for the connectors the operator opts into.
+- **The street-map host** (`maps.hamradiotools.io`, run by this project) — the optional
+  street map's index file, map data, fonts and icons. Nexus contacts it only when the
+  operator asks to size, download or update a street map, never at startup. Its map data
+  **IS redistributed** — see *Redistributed OpenStreetMap data (street maps)* below.
 
 ---
 
@@ -1216,16 +1389,28 @@ The bundled and linked components combine into the GPLv3 whole:
   (BSD-3-Clause, with its ISC-licensed x86inc.asm, and Google's patent grant)
   combine one way into the GPLv3 whole, on the same reasoning as the other
   permissive components above.
+- The street map's JavaScript (MapLibre GL JS, PMTiles and the Protomaps basemap style
+  generator, BSD-3-Clause; their BSD-2-Clause, ISC and MIT dependencies; `@maplibre/mlt`,
+  MIT OR Apache-2.0, MIT elected) combines one way into the GPLv3 whole, on the same
+  reasoning. The CC0 style design imposes no condition.
+- The street-map data (ODbL 1.0, with CC BY 4.0 landcover), its Noto Sans fonts (SIL OFL 1.1)
+  and its MIT icons are **separate works**, not part of the program: they are downloaded only
+  at the operator's request, never bundled, linked or committed to this repository, and never
+  combined into the GPL program. The ODbL governs those files alone and does not change
+  Nexus's GPL-3.0-only license; nor does the GPL reach the data.
 
 Runtime data services (the "Runtime data services" section above) are **not
 bundled or linked** — the app merely queries them over the network — so their
 terms do not affect the license of the distributed binary; they are
-acknowledged as a courtesy. The one share-alike source that IS redistributed is
+acknowledged as a courtesy. Two share-alike sources ARE redistributed. The first is
 SatNOGS data, CC BY-SA 4.0. None of it is part of any shipped binary: it lives
 in test fixtures, in a data file the project publishes and every install
 downloads at runtime, and — since the seed snapshot — as a standalone copy of
 that same data file inside the installer, carrying its own attribution; see
-*Redistributed SatNOGS material* below.
+*Redistributed SatNOGS material* below. The second is OpenStreetMap data, ODbL 1.0,
+for the optional street map. None of it is in this repository or in any installer: the
+project hosts one copy, and an operator who asks for a street map downloads an area of it;
+see *Redistributed OpenStreetMap data (street maps)* below.
 
 ## Redistributed SatNOGS material
 
@@ -1299,6 +1484,84 @@ network. **CC BY-SA 4.0**, as above.
 ### 4. SatNOGS Network observations (Doppler validation)
 
 See *Test fixtures* below.
+
+## Redistributed OpenStreetMap data (street maps)
+
+OpenStreetMap data (**ODbL 1.0**, <https://opendatacommons.org/licenses/odbl/1-0/>,
+© OpenStreetMap contributors, <https://www.openstreetmap.org/copyright>) is redistributed by
+this project for the optional street map, in the two places below. Neither is part of the
+program: no street-map data is committed to this repository, compiled into a binary or bundled
+in an installer, and Nexus works without it. The licence and the attribution travel inside
+each artifact.
+
+### 1. The hosted copy
+
+One copy of a recent Protomaps basemap build (<https://docs.protomaps.com/basemaps/downloads>,
+a single PMTiles file) is held at `maps.hamradiotools.io`, unmodified, under a name that is
+never reused for a different build, and refreshed every three months. It is there so that
+installs do not draw on the publisher's own servers, as the publisher asks. An index file
+beside it names the build, its date and its source, and carries the attribution and the
+licence.
+
+### 2. The street-map packs
+
+When the operator presses Download, Nexus reads only the parts of that copy it needs and writes
+an extract of one area (a square 50 to 400 km across, around the station or the map centre) to
+the operator's own computer, in the `Nexus/maps` folder of the local application-data directory,
+never the shared data folder. A pack is a subset of the hosted copy: Nexus adds nothing to it,
+never writes other data into it, and never merges its data into the log or any other Nexus data.
+
+- Each pack carries its own notice in its PMTiles metadata: the attribution, `"license":
+  "ODbL-1.0"` with the licence URI, the source build's URL and date, and the area it covers.
+- The folder holds `README-maps.txt`, which states the same terms for the packs beside it.
+- The map shows "© OpenStreetMap", linked to the copyright page above, in a corner whenever the
+  street map is on screen. The download sheet and Settings carry the same credit.
+- Packs are plain files, with no encryption or other technical restriction.
+
+A pack can be read back into data, so besides being displayed as a Produced Work it is
+conveyed as a database under the ODbL. Anyone can obtain the same data free of charge over the
+internet: the hosted copy is public, and each pack's metadata records how it was made (the
+source build, its date and the area).
+
+### What the data contains
+
+- **OpenStreetMap** — © OpenStreetMap contributors, **ODbL 1.0**.
+- **osmdata.openstreetmap.de** water and land polygons (made with osmcoastline, by Jochen Topf
+  and contributors) — **ODbL**, covered by the OpenStreetMap credit.
+- **Natural Earth** — **public domain**; no credit is required.
+- **ESA WorldCover**, through Daylight's landcover, in the `landcover` layer at zoom 0 to 7 —
+  **CC BY 4.0** (<https://creativecommons.org/licenses/by/4.0/>): "© ESA WorldCover project
+  2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover
+  consortium". The packs carry these tiles; Nexus's street-map style does not draw that layer.
+- The tiles are built by the Protomaps basemap (see *JavaScript / UI dependencies* above). The
+  packs are extracts of its build and are not offered under the Protomaps name.
+
+### Fonts and icons
+
+Downloaded once, with the first pack, as one archive whose SHA-256 the index file lists:
+
+- **Noto Sans** glyphs — **SIL Open Font License 1.1**, © 2022 The Noto Project Authors
+  (<https://github.com/notofonts>). `OFL.txt` travels inside the archive and is installed beside
+  the glyphs.
+- The map icons — derived from Mapzen's tangrams/icons, **MIT**, © 2017 Mapzen, Linux
+  Foundation. The icon sheets are generated, not downloaded ready-made: no published sheet carries
+  every icon the style uses, so the street-map hosting job builds them with the Protomaps basemaps
+  project's own sprite generator (`spritegen`, **BSD-3**) from its `refill.svg` icon source, at the
+  same commit as the map style (<https://github.com/protomaps/basemaps>, `3ea8293`).
+  `ICONS-LICENSE.txt` travels inside the archive.
+
+The fonts come from <https://github.com/protomaps/basemaps-assets> and the icons from
+<https://github.com/protomaps/basemaps>. They are separate data files used by the street map,
+never combined into the program.
+
+### Nexus's own map-file code
+
+The reader and writer for these files (`crates/street-map/`) are original code written from the
+published PMTiles v3 specification (public domain, or CC0 where applicable,
+<https://github.com/protomaps/PMTiles>) and the Mapbox Vector Tile 2.1 specification. No code
+from either project is copied. The tests build synthetic map files while they run, so no
+OpenStreetMap-derived data is ever committed here: ODbL material cannot be combined into
+GPL-licensed files.
 
 ## Test fixtures
 

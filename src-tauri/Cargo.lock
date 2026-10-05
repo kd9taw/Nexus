@@ -4896,6 +4896,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "street-map"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "libc",
+ "reqwest 0.12.28",
+ "ring",
+ "serde",
+ "serde_json",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5488,6 +5501,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "street-map",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

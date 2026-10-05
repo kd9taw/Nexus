@@ -377,6 +377,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Street map (not yet visible): a street-level map of your area as a fifth map choice.** Built
+  and tested, and hidden until Nexus's street maps are hosted. **Street** joins Globe, 3D, Flat
+  and Beam in the Conditions map picker (main window and pop-out). Until you download an area it
+  carries a download badge, and pressing it opens a sheet: around your station or the map's
+  centre, a square 50, 100, 200 or 400 km across, All streets or Main roads, with the exact size,
+  your free disk space and the map data's licence shown before anything downloads. The download
+  carries on while you use Nexus, shows its percent on the Street choice, and resumes after a
+  restart or a dropped connection. Your own layers draw on the street map: paths, the greyline,
+  satellites, grid lines and labels down to 6- and 8-character squares, and from city zoom a
+  station or spot known only by its grid square is drawn as that square, not a pin. **Settings ▸
+  Appearance ▸ Map & globe ▸ Street maps** lists the areas you have, checks for newer map data
+  only when you ask, and removes an area. A Street pick that cannot draw (no area downloaded, or
+  graphics without WebGL2) shows Flat and says why. Map data © OpenStreetMap contributors (ODbL).
+
 - **FlexRadio: a "may still be transmitting" alarm stays on screen until you dismiss it.** When
   Nexus cannot be sure the radio let go of the transmitter (the radio did not confirm an unkey,
   the connection was lost or the radio stopped answering during a transmission, an earlier Nexus

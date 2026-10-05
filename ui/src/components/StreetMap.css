@@ -1,0 +1,50 @@
+/* STREET (components/StreetMap.tsx). Loaded with the lazy chunk, after MapLibre's own sheet.
+
+   The map fills what the map cell leaves under the picker's bar, exactly as .globe3d-wrap does, and
+   MapLibre's container sits out of flow on it: a canvas in a measured box goes `absolute; inset: 0`
+   (the UI layout contract). Every colour is a theme token that both themes declare. */
+.street-map {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.street-map > .street-map-canvas {
+  position: absolute;
+  inset: 0;
+}
+/* Under the 2-D map's overlay canvas (MapView): the map fills the canvas's box, out of flow like the
+   canvas itself, and comes first so the overlay paints over it. MapLibre's credit corner (z-index 2)
+   stays above both. */
+.map-canvas-wrap > .street-map {
+  position: absolute;
+  inset: 0;
+}
+
+/* The sentences that stand in for the map (no WebGL2, paused, unreadable): never a blank. */
+.street-map-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+}
+.street-map-note p {
+  margin: 0;
+}
+
+/* The © OpenStreetMap credit, in Nexus's theme. MapLibre's sheet paints it on a half-white strip in
+   both themes; this outranks it (0,3,0 over 0,2,0). It is never compact, so nothing folds it away. */
+.street-map .maplibregl-ctrl.maplibregl-ctrl-attrib {
+  background: color-mix(in srgb, var(--bg-elev) 85%, transparent);
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+}
+.street-map .maplibregl-ctrl-attrib a {
+  color: var(--text);
+}

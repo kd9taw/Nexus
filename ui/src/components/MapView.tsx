@@ -9,8 +9,9 @@
 // modes, bearings, km, MHz, dB, knots, satellite names, CQ zone numbers, the layer and
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useContext } from 'react'
+import { flushSync } from 'react-dom'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -121,6 +122,33 @@ import {
   visibleRegion,
 } from '../basemap'
 import reliefUrl from '../assets/earth-relief.webp'
+// THE STREET MAP (features/streetOverlay.ts): MapLibre draws the base map and this file's overlays sit
+// on it, through a Mercator locked to MapLibre's camera. Lazy, like the 3-D globe: none of MapLibre
+// loads until Street is shown.
+import type { StreetCamera, StreetMapHandle, StreetPointer } from './StreetMap'
+import type { StreetPack } from '../features/streetPack'
+import {
+  GRID_LABEL_MIN_PX,
+  GRID_LEVELS,
+  GRID_LINE_MIN_PX,
+  HELD_ZOOM_IN_LIMIT,
+  STREET_SCALE_ZOOM,
+  WORLD_SCALE_LAYERS,
+  gridCells,
+  gridEdges,
+  gridLevelFor,
+  locatorBounds,
+  packCovers,
+  sameStreetView,
+  squareOfCentre,
+  streetBounds,
+  streetProjection,
+  streetShift,
+  streetViewOf,
+  type Bounds,
+  type StreetView,
+} from '../features/streetOverlay'
+const StreetMap = __STREET_MAP__ ? lazy(() => import('./StreetMap')) : null
 
 /** Connect intent presets — beginner picks a goal once; the map configures
  * itself (projection + default color-by + which layers are on). Soft: the user
@@ -159,6 +187,12 @@ interface Props {
    *  own and never stores a pick — the host does. Omitted, the map owns its projection and puts the
    *  picker (without 3D) in its own toolbar — the dedicated POTA map pop-out. */
   projection?: Projection
+  /** The installed street map to draw when `projection` is `street` (the host checks it can draw:
+   *  a pack and WebGL2). Without one, a `street` projection draws the flat map. */
+  streetPack?: StreetPack
+  /** Where the map's centre was when it last drew, for a host that asks (the street map's download
+   *  sheet: "Around the map's centre"); the station where the centre is not on the planet. */
+  centreRef?: { current: LatLon | null }
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
    * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
@@ -319,10 +353,10 @@ const INTENT_PRESETS: Record<
   vhf: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
 }
 
-/** A stored map pick as a 2-D projection — `null` for 3D or nothing stored. A 2-D-only map (the POTA
- *  pop-out) opens its preset projection instead of the WebGL globe it cannot draw. */
+/** A stored map pick as a 2-D projection — `null` for 3D, Street or nothing stored. A 2-D-only map (the
+ *  POTA pop-out) opens its preset projection instead of a WebGL map it cannot draw. */
 function flatPick(map: MapChoice | undefined): Projection | null {
-  return map && map !== '3d' ? map : null
+  return map && map !== '3d' && map !== 'street' ? map : null
 }
 
 /** The 2-D table of a window where the 2-D map has never been shown starts, for the layers both maps
@@ -748,6 +782,8 @@ export function MapView({
   dedicatedIntent = false,
   onFullChange,
   projection,
+  streetPack,
+  centreRef,
   onWorkSpot,
   onSelectSat,
   aprs,
@@ -797,7 +833,11 @@ export function MapView({
   const [ownKind, setKind] = useState<Projection>(() =>
     embedded ? 'globe' : flatPick(initialSetup?.map) ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
   )
-  const kind = embedded ? 'globe' : (projection ?? ownKind)
+  const kind: Projection = embedded
+    ? 'globe'
+    : projection === 'street' && !streetPack
+      ? 'world'
+      : (projection ?? ownKind)
   const [colorBy, setColorBy] = useState<'need' | 'snr'>(
     () => initialSetup?.colorBy ?? (intent ? INTENT_PRESETS[intent].colorBy : 'need'),
   )
@@ -929,6 +969,43 @@ export function MapView({
   const [view, setView] = useState<MapView3>(DEFAULT_VIEW)
   const dragRef = useRef<{ x: number; y: number; base: MapView3; moved: boolean } | null>(null)
   useEffect(() => setView(DEFAULT_VIEW), [kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  // THE STREET CAMERA (features/streetOverlay.ts). `streetView` is the camera the overlays are drawn
+  // at: state, so a change redraws them. `liveViewRef` is where MapLibre is this instant and
+  // `drawnViewRef` where the overlay canvases were last drawn. Two views of one Mercator differ only by
+  // a scale and a shift, so a CSS transform (`lockOverlay`) puts the drawn picture on the map exactly,
+  // in every frame MapLibre paints. WHILE THE MAP MOVES (a drag, an animated pan or zoom, the drift
+  // after a drag) its motion redraws nothing: the transform holds the picture on the map, and the
+  // camera becomes `streetView`, one redraw, only once the map stops (operator ruling 2026-10-05: a
+  // redraw in every frame made a pan with the overlays on several times slower than the street map
+  // alone). A ZOOM-IN is the exception: holding the picture magnifies it, and the offset of its lines
+  // with it, so it is redrawn in the very frame it would show more than HELD_ZOOM_IN_LIMIT larger than
+  // drawn (operator ruling 2026-10-05). Pans and zoom-outs stay held.
+  const [streetView, setStreetView] = useState<StreetView | null>(null)
+  const liveViewRef = useRef<StreetView | null>(null)
+  const drawnViewRef = useRef<StreetView | null>(null)
+  const streetMovingRef = useRef(false)
+  const streetRef = useRef<StreetMapHandle>(null)
+  const lockOverlay = () => {
+    const drawn = drawnViewRef.current
+    const live = liveViewRef.current
+    const t = drawn && live ? streetShift(drawn, live) : null
+    const css = t && (t.s !== 1 || t.x !== 0 || t.y !== 0) ? `translate(${t.x}px, ${t.y}px) scale(${t.s})` : ''
+    for (const el of [canvasRef.current, fxRef.current]) if (el && el.style.transform !== css) el.style.transform = css
+  }
+  // StreetMap calls this from MapLibre's own frame, and with null when its map goes.
+  const onStreetCamera = (cam: StreetCamera | null) => {
+    const v = cam ? streetViewOf(cam) : null
+    liveViewRef.current = v
+    streetMovingRef.current = cam?.moving ?? false
+    lockOverlay()
+    const commit = () => setStreetView((prev) => (sameStreetView(prev, v) ? prev : v))
+    const drawn = drawnViewRef.current
+    if (!cam?.moving) commit()
+    // Synchronous, so the redraw lands before this frame is shown: React runs the draw (an effect)
+    // before a synchronous render returns.
+    else if (v && drawn && 2 ** (v.zoom - drawn.zoom) > HELD_ZOOM_IN_LIMIT) flushSync(commit)
+  }
+  const streetScale = kind === 'street' && streetView != null && streetView.zoom >= STREET_SCALE_ZOOM
   // Star field for the globe's space backdrop: fixed relative positions generated
   // once (so they don't twinkle/jump on every redraw), scaled to the canvas at draw.
   const stars = useMemo(
@@ -1100,6 +1177,16 @@ export function MapView({
   )
   // Never draw "you are here" at a borrowed centre — that would invent a QTH.
   const showQth = myQth != null
+  /** The projection every overlay is placed, drawn and hit-tested through: the 2-D map's own, or on
+   *  Street the Mercator locked to MapLibre's camera, which is null until the street map has said
+   *  where it is. */
+  const projectionFor = (w: number, h: number): GeoProjection | null =>
+    kind === 'street'
+      ? streetView && streetProjection(streetView, w, h)
+      : me && makeProjection(kind, me, w, h, view)
+  // Street opens on the station when the pack holds it, else on the pack's own centre.
+  const streetOpenAt: [number, number] | undefined =
+    streetPack && myQth && packCovers(streetPack, myQth.lat, myQth.lon) ? [myQth.lon, myQth.lat] : undefined
   // Wheel-zoom — a NON-passive native listener so we can preventDefault (React's
   // onWheel is passive). Re-attaches once the canvas mounts (keyed on `me`).
   useEffect(() => {
@@ -1204,8 +1291,8 @@ export function MapView({
 
   // Project all stations once per draw input (also used for hit-testing).
   const placed = useMemo(() => {
-    if (!me || size.w === 0) return [] as Array<{ s: Station; ll: LatLon; xy: [number, number] }>
-    const proj = makeProjection(kind, me, size.w, size.h, view)
+    const proj = size.w === 0 ? null : projectionFor(size.w, size.h)
+    if (!proj) return [] as Array<{ s: Station; ll: LatLon; xy: [number, number] }>
     const out: Array<{ s: Station; ll: LatLon; xy: [number, number] }> = []
     for (const s of stations) {
       if (!s.grid) continue
@@ -1215,7 +1302,7 @@ export function MapView({
       if (xy) out.push({ s, ll, xy })
     }
     return out
-  }, [me, kind, size, stations, view])
+  }, [me, kind, size, stations, view, streetView])
   // Whether ANY decoded station has a location: the empty-map hint's question, which is not whether
   // one is on screen — on the Globe the stations behind the planet are not.
   const anyLocated = useMemo(() => stations.some((s) => !!s.grid && gridToLatLon(s.grid) != null), [stations])
@@ -1224,10 +1311,10 @@ export function MapView({
   // so they participate in hover tooltips + click/double-click-to-work. Previously
   // these were positioned only inside the draw pass: visible but dead pixels.
   const placedSpots = useMemo(() => {
-    if (!me || size.w === 0 || !prop?.spots) {
+    const proj = size.w === 0 || !prop?.spots ? null : projectionFor(size.w, size.h)
+    if (!proj || !prop?.spots) {
       return [] as Array<{ sp: MapSpot; xy: [number, number] }>
     }
-    const proj = makeProjection(kind, me, size.w, size.h, view)
     const out: Array<{ sp: MapSpot; xy: [number, number] }> = []
     for (const sp of prop.spots) {
       const xy = placePoint(kind, proj, { lat: sp.lat, lon: sp.lon })
@@ -1237,7 +1324,7 @@ export function MapView({
     // Depend on the spots array, not the whole snapshot — a poll that only moved
     // space-weather numbers must not reproject hundreds of points.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me, kind, size, prop?.spots, view])
+  }, [me, kind, size, prop?.spots, view, streetView])
 
   // TX/RX path lines. WHICH stations earn one — and the recency gate, cap and fade that
   // keep a fan from becoming a spider's web — live in `features/mapPaths`, shared with the
@@ -1258,15 +1345,15 @@ export function MapView({
   // Project the DXpedition markers (bearing+distance placement) the same way —
   // retained for hover/click/work; previously glyphs with no hit-target.
   const placedDxped = useMemo(() => {
-    if (!me || size.w === 0) return [] as Array<{ card: WorkableCard; xy: [number, number] }>
-    const proj = makeProjection(kind, me, size.w, size.h, view)
+    const proj = size.w === 0 ? null : projectionFor(size.w, size.h)
+    if (!me || !proj) return [] as Array<{ card: WorkableCard; xy: [number, number] }>
     const out: Array<{ card: WorkableCard; xy: [number, number] }> = []
     for (const card of dxCards) {
       const xy = placePoint(kind, proj, destinationPoint(me, card.bearingDeg, card.distanceKm))
       if (xy) out.push({ card, xy })
     }
     return out
-  }, [me, kind, size, view, dxCards])
+  }, [me, kind, size, view, dxCards, streetView])
 
   // Parks on the air — fetched only while the layer is on, the same politeness rule
   // the aurora and PCA layers follow. An operator who never turns this on never
@@ -1301,15 +1388,15 @@ export function MapView({
   // latitude/longitude, so the marker is the park rather than the 4 km square a grid
   // would round it into).
   const placedOta = useMemo(() => {
-    if (!me || size.w === 0) return [] as Array<{ sp: OtaMapSpot; xy: [number, number] }>
-    const proj = makeProjection(kind, me, size.w, size.h, view)
+    const proj = size.w === 0 ? null : projectionFor(size.w, size.h)
+    if (!proj) return [] as Array<{ sp: OtaMapSpot; xy: [number, number] }>
     const out: Array<{ sp: OtaMapSpot; xy: [number, number] }> = []
     for (const sp of otaSpots) {
       const xy = placePoint(kind, proj, { lat: sp.lat, lon: sp.lon })
       if (xy) out.push({ sp, xy })
     }
     return out
-  }, [me, kind, size, view, otaSpots])
+  }, [me, kind, size, view, otaSpots, streetView])
 
   // Aurora oval — fetched only while the layer is on (polite; OVATION updates
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
@@ -1510,9 +1597,52 @@ export function MapView({
       ctx.stroke()
     }
 
-    const proj = makeProjection(kind, me, w, h, view)
+    const proj = projectionFor(w, h)
+    // What the canvas now shows, for `lockOverlay`: on Street, this camera.
+    drawnViewRef.current = kind === 'street' ? streetView : null
+    lockOverlay()
+    // Street before its map has said where it is: nothing to draw on yet.
+    if (!proj) return
+    if (centreRef) {
+      const mid = proj.invert?.([w / 2, h / 2])
+      centreRef.current =
+        mid && Number.isFinite(mid[0]) && Number.isFinite(mid[1]) ? { lat: mid[1], lon: mid[0] } : (myQth ?? me)
+    }
     const path = geoPath(proj, ctx)
-    const c = showQth ? placePoint(kind, proj, myQth ?? me) : null
+    const c = showQth && !streetScale ? placePoint(kind, proj, myQth ?? me) : null
+    /** STREET SCALE (features/streetOverlay): a position known only by its grid square is drawn as
+     *  that square, never as a pin on a street it does not know. Its name sits at the centre, where
+     *  its hit target already is; `strong` is the hover or selection. The square is clamped to just
+     *  outside the canvas, so a 4-character square at zoom 14 never hands the canvas a 180,000 px rect. */
+    const drawSquare = (b: Bounds, ink: string, alpha: number, label: string, strong: boolean) => {
+      const nw = proj([b.w, b.n])
+      const se = proj([b.e, b.s])
+      if (!nw || !se) return
+      const x0 = Math.max(-8, nw[0])
+      const y0 = Math.max(-8, nw[1])
+      const x1 = Math.min(w + 8, se[0])
+      const y1 = Math.min(h + 8, se[1])
+      if (x1 > x0 && y1 > y0) {
+        ctx.beginPath()
+        ctx.rect(x0, y0, x1 - x0, y1 - y0)
+        ctx.globalAlpha = alpha * 0.55
+        ctx.strokeStyle = MARKER_HALO
+        ctx.lineWidth = (strong ? 4.5 : 3) * ms
+        ctx.stroke()
+        ctx.globalAlpha = alpha
+        ctx.strokeStyle = ink
+        ctx.lineWidth = (strong ? 2.4 : 1.3) * ms
+        ctx.stroke()
+      }
+      const mid = proj([(b.w + b.e) / 2, (b.s + b.n) / 2])
+      if (!mid) return
+      ctx.globalAlpha = alpha
+      ctx.font = `${strong ? 600 : 500} ${Math.round(11 * ms)}px system-ui`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillStyle = ink
+      haloText(label, mid[0], mid[1])
+    }
 
     // ⭐ THE BASE MAP IS CACHED. Everything from the space backdrop to the coverage fill changes only
     // with the VIEW (projection, pan/zoom/spin, size, device scale, QTH), the theme (a built-in
@@ -1552,66 +1682,70 @@ export function MapView({
         ctx.fill()
       }
 
-      // Ocean / sphere body so the map has substance (and AEQD reads as a globe, not
-      // floating coastlines). On the globe a radial gradient (lit toward a top-left
-      // light source, deepening to a dark limb) gives the disc real spherical depth;
-      // AEQD/World keep the flat sea fill. A soft rim defines the disc edge.
-      ctx.globalAlpha = 1
-      ctx.beginPath()
-      path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
-      if (isGlobe) {
-        const sea = ctx.createRadialGradient(
-          gcx - gR * 0.38,
-          gcy - gR * 0.38,
-          gR * 0.05,
-          gcx,
-          gcy,
-          gR * 1.02,
-        )
-        sea.addColorStop(0, mapInk('--map-ocean-lit'))
-        sea.addColorStop(0.55, mapInk('--map-ocean'))
-        sea.addColorStop(1, mapInk('--map-ocean-deep'))
-        ctx.fillStyle = sea
-      } else {
-        ctx.fillStyle = mapInk('--map-ocean')
-      }
-      ctx.fill()
-      ctx.strokeStyle = mapInk('--map-rim')
-      ctx.lineWidth = 1
-      ctx.stroke()
+      // On Street, MapLibre has drawn the land, the water and the streets underneath: none of the
+      // planet below is drawn there, only what lies on top of it.
+      if (kind !== 'street') {
+        // Ocean / sphere body so the map has substance (and AEQD reads as a globe, not
+        // floating coastlines). On the globe a radial gradient (lit toward a top-left
+        // light source, deepening to a dark limb) gives the disc real spherical depth;
+        // AEQD/World keep the flat sea fill. A soft rim defines the disc edge.
+        ctx.globalAlpha = 1
+        ctx.beginPath()
+        path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
+        if (isGlobe) {
+          const sea = ctx.createRadialGradient(
+            gcx - gR * 0.38,
+            gcy - gR * 0.38,
+            gR * 0.05,
+            gcx,
+            gcy,
+            gR * 1.02,
+          )
+          sea.addColorStop(0, mapInk('--map-ocean-lit'))
+          sea.addColorStop(0.55, mapInk('--map-ocean'))
+          sea.addColorStop(1, mapInk('--map-ocean-deep'))
+          ctx.fillStyle = sea
+        } else {
+          ctx.fillStyle = mapInk('--map-ocean')
+        }
+        ctx.fill()
+        ctx.strokeStyle = mapInk('--map-rim')
+        ctx.lineWidth = 1
+        ctx.stroke()
 
-      // THE BASE GEOGRAPHY (basemap.ts): land, lakes, major rivers, US state lines (a CORE
-      // operating layer: an op reads which STATE a spot or their own QTH sits in), country borders
-      // and the coast, from the Natural Earth scale this zoom wants and only the tiles in view. The
-      // flat World map is linear in lon/lat, so it draws cached tile paths under one transform and
-      // lays the shaded relief over the land (the greyline night shading draws on top of it: a
-      // day/night terrain map); the globe and the beam map stream the tiles through d3. The
-      // 3-D globes draw the same lines over NASA's pictures of the Earth (features/globeBasemap.ts).
-      const ppd = pxPerDegree(proj)
-      const paint = {
-        map: basemapAt(scaleFor(ppd)),
-        region: visibleRegion(kind, proj, w, h),
-        inks: {
-          land: mapInk(isGlobe ? '--map-land-globe' : '--map-land'),
-          water: mapInk('--map-ocean'),
-          // The rim's blue: a step from the sea in every theme (lighter on a dark map, deeper on
-          // a light one), so a river one pixel wide still reads against the land.
-          river: mapInk('--map-rim'),
-          coast: mapInk('--map-coast'),
-          state: mapInk('--map-state'),
-        },
-        pxPerDeg: ppd,
-        coast: layers.coast.visible ? layers.coast.opacity : 0,
-        states: layers.states.visible ? layers.states.opacity : 0,
-      }
-      if (kind === 'world') {
-        const [tx, ty] = proj.translate()
-        const relief = layers.relief.visible ? reliefRef.current : null
-        paintEquirect(ctx, ppd, tx, ty, paint, relief
-          ? (c) => paintRelief(c, relief, tx - 180 * ppd, ty - 90 * ppd, tx + 180 * ppd, ty + 90 * ppd, w, h, reliefAlphaFor(ppd) * layers.relief.opacity)
-          : undefined)
-      } else {
-        paintProjected(ctx, proj, paint)
+        // THE BASE GEOGRAPHY (basemap.ts): land, lakes, major rivers, US state lines (a CORE
+        // operating layer: an op reads which STATE a spot or their own QTH sits in), country borders
+        // and the coast, from the Natural Earth scale this zoom wants and only the tiles in view. The
+        // flat World map is linear in lon/lat, so it draws cached tile paths under one transform and
+        // lays the shaded relief over the land (the greyline night shading draws on top of it: a
+        // day/night terrain map); the globe and the beam map stream the tiles through d3. The
+        // 3-D globes draw the same lines over NASA's pictures of the Earth (features/globeBasemap.ts).
+        const ppd = pxPerDegree(proj)
+        const paint = {
+          map: basemapAt(scaleFor(ppd)),
+          region: visibleRegion(kind, proj, w, h),
+          inks: {
+            land: mapInk(isGlobe ? '--map-land-globe' : '--map-land'),
+            water: mapInk('--map-ocean'),
+            // The rim's blue: a step from the sea in every theme (lighter on a dark map, deeper on
+            // a light one), so a river one pixel wide still reads against the land.
+            river: mapInk('--map-rim'),
+            coast: mapInk('--map-coast'),
+            state: mapInk('--map-state'),
+          },
+          pxPerDeg: ppd,
+          coast: layers.coast.visible ? layers.coast.opacity : 0,
+          states: layers.states.visible ? layers.states.opacity : 0,
+        }
+        if (kind === 'world') {
+          const [tx, ty] = proj.translate()
+          const relief = layers.relief.visible ? reliefRef.current : null
+          paintEquirect(ctx, ppd, tx, ty, paint, relief
+            ? (c) => paintRelief(c, relief, tx - 180 * ppd, ty - 90 * ppd, tx + 180 * ppd, ty + 90 * ppd, w, h, reliefAlphaFor(ppd) * layers.relief.opacity)
+            : undefined)
+        } else {
+          paintProjected(ctx, proj, paint)
+        }
       }
       // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
       // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
@@ -1628,7 +1762,37 @@ export function MapView({
         ctx.fillRect(gcx - gR * 1.1, gcy - gR * 1.1, gR * 2.2, gR * 2.2)
         ctx.restore()
       }
-      if (layers.grid.visible) {
+      // THE GRID LADDER ON STREET: field, square, subsquare and extended square (features/streetOverlay),
+      // down to the finest level whose cells are still GRID_LINE_MIN_PX wide, each coarser level's lines
+      // heavier than the finer ones inside it. In the theme's ink: Street follows the UI theme, where the
+      // other maps keep their own palette. Parallels are straight on a Mercator, so both sets of lines are
+      // drawn straight across the canvas.
+      const streetBox = kind === 'street' ? streetBounds(proj, w, h) : null
+      if (layers.grid.visible && streetBox) {
+        const finest = gridLevelFor(pxPerDegree(proj), GRID_LINE_MIN_PX)
+        ctx.strokeStyle = cssVar('--text-dim')
+        for (const l of GRID_LEVELS) {
+          if (!finest || l.chars > finest.chars) break
+          const { lons, lats } = gridEdges(l, streetBox.w, streetBox.s, streetBox.e, streetBox.n)
+          ctx.globalAlpha = layers.grid.opacity * (l === finest ? 0.5 : 0.85)
+          ctx.lineWidth = l === finest ? 0.6 : 1.3
+          ctx.beginPath()
+          for (const lon of lons) {
+            const x = proj([lon, 0])?.[0]
+            if (x == null) continue
+            ctx.moveTo(x, 0)
+            ctx.lineTo(x, h)
+          }
+          for (const lat of lats) {
+            const y = proj([0, lat])?.[1]
+            if (y == null) continue
+            ctx.moveTo(0, y)
+            ctx.lineTo(w, y)
+          }
+          ctx.stroke()
+        }
+        ctx.globalAlpha = 1
+      } else if (layers.grid.visible) {
         // In the map's own line ink, not the UI's border colour: the grid lies on the basemap, and
         // has to read on it in either UI theme.
         ctx.globalAlpha = layers.grid.opacity * 0.6
@@ -1638,10 +1802,27 @@ export function MapView({
         ctx.lineWidth = 0.5
         ctx.stroke()
       }
+      // Maidenhead labels on Street: every cell of the finest level that holds an 8-character name, so
+      // the ladder runs on to 6-character subsquares and, near zoom 13, to 8-character extended squares.
+      if (layers.gridLabels.visible && streetBox) {
+        const l = gridLevelFor(pxPerDegree(proj), GRID_LABEL_MIN_PX)
+        if (l) {
+          ctx.globalAlpha = layers.gridLabels.opacity
+          ctx.fillStyle = cssVar('--text-dim')
+          ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          for (const cell of gridCells(l, streetBox.w, streetBox.s, streetBox.e, streetBox.n)) {
+            const p = proj([cell.lon, cell.lat])
+            if (p) ctx.fillText(cell.name, p[0], p[1])
+          }
+          ctx.globalAlpha = 1
+        }
+      }
       // Maidenhead labels (default off): 2-char FIELD letters when a field spans
       // enough pixels to read, densifying to 4-char squares only inside fields
       // that are large on screen (zoomed in) — bounded work, nothing at low zoom.
-      if (layers.gridLabels.visible) {
+      else if (layers.gridLabels.visible) {
         ctx.globalAlpha = layers.gridLabels.opacity
         ctx.fillStyle = cssVar('--text-faint')
         ctx.textAlign = 'center'
@@ -1721,7 +1902,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, me, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, streetView, me, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -1927,7 +2108,10 @@ export function MapView({
       }
       // Stroke a track segment as short projected legs, breaking at the
       // dateline (a long pixel jump = a wrap, not a path) and at the Globe's
-      // horizon (a point behind the planet has no place on the map).
+      // horizon (a point behind the planet has no place on the map). On Street a leg
+      // between two fixes can be thousands of px long without wrapping, so a wrap there is
+      // a jump of half the world's width.
+      const wrapPx = kind === 'street' ? pxPerDegree(proj) * 180 : w / 2
       const strokeTrack = (pts: LatLon[], style: string, dash: number[]) => {
         ctx.strokeStyle = style
         ctx.setLineDash(dash)
@@ -1940,7 +2124,7 @@ export function MapView({
             prev = null
             continue
           }
-          if (prev && Math.hypot(q[0] - prev[0], q[1] - prev[1]) < w / 2) {
+          if (prev && Math.hypot(q[0] - prev[0], q[1] - prev[1]) < wrapPx) {
             ctx.moveTo(prev[0], prev[1])
             ctx.lineTo(q[0], q[1])
           }
@@ -2371,10 +2555,18 @@ export function MapView({
         const focusF = dimBand(sp.band)
         const isSel = sp.call === selectedCall
         const isHover = sp.call === hoverKey
-        ctx.globalAlpha =
+        const spotAlpha =
           isSel || isHover
             ? layers.liveSpots.opacity
             : layers.liveSpots.opacity * fade * (sp.approx ? 0.7 : 1) * focusF
+        ctx.globalAlpha = spotAlpha
+        // A spot placed by its grid square (not `approx`, the entity's centre) is that square.
+        const sq = streetScale && !sp.approx ? squareOfCentre(sp.lat, sp.lon) : null
+        if (sq) {
+          const ink = isSel ? cssVar('--accent') : sp.heardMe ? GETTING_OUT : bandColor(sp.band)
+          drawSquare(sq, ink, spotAlpha, sp.call, isSel || isHover)
+          continue
+        }
         ctx.beginPath()
         ctx.arc(p[0], p[1], (sp.heardMe ? 3.5 : 2.8) * ms, 0, Math.PI * 2)
         ctx.fillStyle = sp.heardMe ? GETTING_OUT : bandColor(sp.band)
@@ -2488,6 +2680,12 @@ export function MapView({
         // In Need mode, dim worked-and-not-needed so the ones worth working pop.
         const dim = byNeed && s.worked && !nc ? 0.5 : 1
         ctx.globalAlpha = layers.stations.opacity * ageF * dim
+        // A decoded station is only ever where its grid square says.
+        const sq = streetScale ? locatorBounds(s.grid ?? '') : null
+        if (sq) {
+          drawSquare(sq, isSel ? cssVar('--accent') : fill, layers.stations.opacity * ageF * dim, s.call, isSel || isHover || !!ringed)
+          continue
+        }
         ctx.beginPath()
         ctx.arc(xy[0], xy[1], r, 0, Math.PI * 2)
         ctx.fillStyle = fill
@@ -2556,7 +2754,15 @@ export function MapView({
       for (const { sp, xy: p } of placedOta) {
         // Same band-focus rule as the spot dots and dxped glyphs.
         const band = bandLabelForMhz(sp.freqMhz)
-        ctx.globalAlpha = (band ? dimBand(band) : 1) * layers.ota.opacity
+        const parkAlpha = (band ? dimBand(band) : 1) * layers.ota.opacity
+        ctx.globalAlpha = parkAlpha
+        // A park the feed gave no coordinates for was placed by its grid square: draw that square.
+        // A park with its own coordinates keeps its pin.
+        const sq = streetScale && sp.approx ? squareOfCentre(sp.lat, sp.lon) : null
+        if (sq) {
+          drawSquare(sq, sp.newRef ? accent : faint, parkAlpha, sp.activator, sp.activator === hoverKey)
+          continue
+        }
         ctx.beginPath()
         ctx.moveTo(p[0], p[1] - 5 * ms)
         ctx.lineTo(p[0] + 4.5 * ms, p[1] + 3.5 * ms)
@@ -2625,11 +2831,16 @@ export function MapView({
       ctx.fill()
       haloStroke(1.5)
     }
+    // At street scale the station is its own grid square: the crosshair above would name a street.
+    if (showQth && streetScale) {
+      const b = locatorBounds(myGrid)
+      if (b) drawSquare(b, cssVar('--accent'), 0.9, myGrid, true)
+    }
     // theme and the colour roles are draw dependencies so colors refresh when either changes (the
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -2660,7 +2871,8 @@ export function MapView({
     const fctx = fx.getContext('2d')
     if (!fctx) return
     fctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    const proj = makeProjection(kind, me, w, h, view)
+    const proj = projectionFor(w, h)
+    if (!proj) return
     const [gcx, gcy] = proj.translate()
     const gR = proj.scale()
     const r = Math.max(1, flareRScale(xrayEff))
@@ -2804,7 +3016,7 @@ export function MapView({
     }
     raf = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(raf)
-  }, [me, kind, view, size, devScale, flarePulsing, xrayEff, flareOpacity])
+  }, [me, kind, view, streetView, size, devScale, flarePulsing, xrayEff, flareOpacity])
 
   // ⭐ THE HOVER CARD IS PLACED IMPERATIVELY, IN A LAYOUT EFFECT, and that is the point: the
   // clamping and edge-flipping in `placeHoverCard` need the card's MEASURED size, which does not
@@ -2921,8 +3133,9 @@ export function MapView({
       }
       if (best) return best
     }
-    if (layers.muf.visible && me && size.w > 0) {
-      const proj = makeProjection(kind, me, size.w, size.h, view)
+    const mufProj = layers.muf.visible && size.w > 0 ? projectionFor(size.w, size.h) : null
+    if (mufProj) {
+      const proj = mufProj
       let best: MapHit | null = null
       for (const s of mufStations) {
         const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon })
@@ -3068,22 +3281,26 @@ export function MapView({
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
     dragRef.current = { x: e.clientX, y: e.clientY, base: view, moved: false }
   }
+  /** The pointer resting at (mx, my), canvas layout px: the hover card and ring. */
+  const hoverAt = (mx: number, my: number) => {
+    const hit = hitTest(mx, my)
+    // ANCHOR ON THE MARKER, NOT THE CURSOR (see MapHit) — and bail out of the state update
+    // when nothing about the card changed, so crossing a hit target costs zero renders
+    // instead of one per mousemove. Together those are what make the card hold still.
+    setHover((prev) => {
+      if (!hit) return null
+      const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' }
+      return prev && prev.x === next.x && prev.y === next.y && prev.text === next.text && prev.info === next.info
+        ? prev
+        : next
+    })
+    setHoverKey(hitCall(hit)) // state only changes on target enter/leave
+  }
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current
     if (!d) {
       const [mx, my] = canvasXY(e)
-      const hit = hitTest(mx, my)
-      // ANCHOR ON THE MARKER, NOT THE CURSOR (see MapHit) — and bail out of the state update
-      // when nothing about the card changed, so crossing a hit target costs zero renders
-      // instead of one per mousemove. Together those are what make the card hold still.
-      setHover((prev) => {
-        if (!hit) return null
-        const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' }
-        return prev && prev.x === next.x && prev.y === next.y && prev.text === next.text && prev.info === next.info
-          ? prev
-          : next
-      })
-      setHoverKey(hitCall(hit)) // state only changes on target enter/leave
+      hoverAt(mx, my)
       return
     }
     const s = dragScale()
@@ -3112,57 +3329,68 @@ export function MapView({
     dragRef.current = null
     setDragging(false)
     if (d && !d.moved) {
-      // The 2nd click of a double-click must NOT toggle the selection made by the
-      // 1st (select→deselect churn right before the work gesture fires). Single
-      // clicks stay instant; only a rapid same-spot re-click is swallowed.
-      const now = performance.now()
-      const lu = lastUpRef.current
-      lastUpRef.current = { t: now, x: e.clientX, y: e.clientY }
-      if (lu && now - lu.t < 350 && Math.hypot(e.clientX - lu.x, e.clientY - lu.y) < 6) {
-        return
-      }
       const [mx, my] = canvasXY(e)
-      const hit = hitTest(mx, my)
-      if (hit?.kind === 'aprs') {
-        // Selecting on the map selects in the list, and vice versa — one
-        // selection, two views of it. No defer: nothing unmounts on an APRS
-        // select, so the click can land immediately.
-        onSelectAprs?.(hit.name)
-        return
-      }
-      if (hit?.kind === 'sat') {
-        // A sat click opens the bird's passes — it must NOT clear the station
-        // selection (the operator may be mid-QSO watching a pass approach).
-        // Deferred ~320 ms so a double-click (★ toggle) can cancel it first — but
-        // that defer only exists to protect the main map's dbl-click-★ from
-        // unmounting mid-gesture; the embedded detail globe unmounts nothing on
-        // select, so there the click lands instantly.
-        if (onSelectSat) {
-          const name = hit.name
-          if (embedded) {
-            onSelectSat(name)
-          } else {
-            if (satNavTimer.current != null) window.clearTimeout(satNavTimer.current)
-            satNavTimer.current = window.setTimeout(() => {
-              satNavTimer.current = null
-              onSelectSat(name)
-            }, 320)
-          }
-        }
-        return
-      }
-      const call =
-        hit?.kind === 'station' ? hit.s.call : hit?.kind === 'dxped' ? hit.card.call : hit?.kind === 'spot' ? hit.sp.call : null
-      onSelectCall(call ? (call === selectedCall ? null : call) : null)
+      clickAt(mx, my, e.clientX, e.clientY)
     }
+  }
+  /** A click (a press that did not travel) at (mx, my), canvas layout px; (cx, cy) is where it
+   *  happened for telling the second click of a double-click. */
+  const clickAt = (mx: number, my: number, cx: number, cy: number) => {
+    // The 2nd click of a double-click must NOT toggle the selection made by the
+    // 1st (select→deselect churn right before the work gesture fires). Single
+    // clicks stay instant; only a rapid same-spot re-click is swallowed.
+    const now = performance.now()
+    const lu = lastUpRef.current
+    lastUpRef.current = { t: now, x: cx, y: cy }
+    if (lu && now - lu.t < 350 && Math.hypot(cx - lu.x, cy - lu.y) < 6) {
+      return
+    }
+    const hit = hitTest(mx, my)
+    if (hit?.kind === 'aprs') {
+      // Selecting on the map selects in the list, and vice versa — one
+      // selection, two views of it. No defer: nothing unmounts on an APRS
+      // select, so the click can land immediately.
+      onSelectAprs?.(hit.name)
+      return
+    }
+    if (hit?.kind === 'sat') {
+      // A sat click opens the bird's passes — it must NOT clear the station
+      // selection (the operator may be mid-QSO watching a pass approach).
+      // Deferred ~320 ms so a double-click (★ toggle) can cancel it first — but
+      // that defer only exists to protect the main map's dbl-click-★ from
+      // unmounting mid-gesture; the embedded detail globe unmounts nothing on
+      // select, so there the click lands instantly.
+      if (onSelectSat) {
+        const name = hit.name
+        if (embedded) {
+          onSelectSat(name)
+        } else {
+          if (satNavTimer.current != null) window.clearTimeout(satNavTimer.current)
+          satNavTimer.current = window.setTimeout(() => {
+            satNavTimer.current = null
+            onSelectSat(name)
+          }, 320)
+        }
+      }
+      return
+    }
+    const call =
+      hit?.kind === 'station' ? hit.s.call : hit?.kind === 'dxped' ? hit.card.call : hit?.kind === 'spot' ? hit.sp.call : null
+    onSelectCall(call ? (call === selectedCall ? null : call) : null)
   }
   // Double-click = WORK IT (the WSJT-X gesture): spots + DXpeditions hand their
   // call/band/mode/freq to the app's atomic work path (rig jumps band+mode+freq,
   // cockpit opens). Stations stay single-click-select (worked from the cockpit).
   const onDoubleClick = (e: React.MouseEvent) => {
     const [mx, my] = canvasXY(e)
+    doubleClickAt(mx, my)
+  }
+  /** A double-click at (mx, my), canvas layout px. True when it landed on a target, whose meaning it
+   *  then has: Street's map must not also zoom. */
+  const doubleClickAt = (mx: number, my: number): boolean => {
     const hit = hitTest(mx, my)
-    if (hit?.kind === 'sat') {
+    if (!hit) return false
+    if (hit.kind === 'sat') {
       // Double-click a bird = toggle ★ favorite (the sat analog of the
       // double-click-to-work idiom). In ★-only view an unstar HIDES the bird
       // on the repaint — deliberate, it just left the tracked set — and the
@@ -3177,24 +3405,24 @@ export function MapView({
       // controls sit beside it and hold their own state — a silent toggle here
       // would desync them (and disarm alarms with no UI trace).
       if (!embedded) toggleSatChasing(hit.name, hit.norad)
-      return
+      return true
     }
-    if (!onWorkSpot) return
-    if (hit?.kind === 'spot') {
+    if (!onWorkSpot) return true
+    if (hit.kind === 'spot') {
       onWorkSpot({
         call: hit.sp.call,
         band: hit.sp.band,
         mode: hit.sp.mode ?? null,
         freqMhz: hit.sp.freqMhz ?? null,
       })
-    } else if (hit?.kind === 'dxped') {
+    } else if (hit.kind === 'dxped') {
       onWorkSpot({
         call: hit.card.call,
         band: hit.card.band,
         mode: dxpedWorkMode(hit.card.modes),
         freqMhz: null,
       })
-    } else if (hit?.kind === 'ota') {
+    } else if (hit.kind === 'ota') {
       // Same atomic work path as a live spot or DXpedition — QSY + set mode + tag the
       // hunt target (Task 1's `program`/`reference`). No transmit: `handleWorkMapSpot` /
       // `DetachedPanel`'s `onWorkSpot` only ever QSY, set mode, and tag.
@@ -3207,6 +3435,29 @@ export function MapView({
         reference: hit.sp.reference,
       })
     }
+    return true
+  }
+  /** On Street the overlay canvas lets the pointer through to MapLibre, which owns drag and zoom, and
+   *  the same hit test runs from MapLibre's own events (map CSS px are this canvas's layout px). The
+   *  hit targets are where the overlays were last drawn, so a point on the map is first taken back
+   *  through the transform that holds that picture on it (an identity once the map has stopped and
+   *  redrawn). While the map moves no hover is read, as on the other maps during a drag. A double-click
+   *  on a target keeps its meaning here, and only a double-click elsewhere zooms. */
+  const onStreetPointer = (e: StreetPointer) => {
+    if (e.type === 'out') {
+      setHover(null)
+      setHoverKey(null)
+      return
+    }
+    if (e.type === 'move' && streetMovingRef.current) return
+    const drawn = drawnViewRef.current
+    const live = liveViewRef.current
+    const t = drawn && live ? streetShift(drawn, live) : { s: 1, x: 0, y: 0 }
+    const x = (e.x - t.x) / t.s
+    const y = (e.y - t.y) / t.s
+    if (e.type === 'move') hoverAt(x, y)
+    else if (e.type === 'click') clickAt(x, y, e.x, e.y)
+    else if (doubleClickAt(x, y)) e.preventDefault()
   }
 
   // null snapshot = still LOADING the first poll — show a neutral loading badge
@@ -3227,10 +3478,10 @@ export function MapView({
           />
         )}
         <div className="map-proj" role="group" aria-label={t('map.zoom.aria')}>
-          <button onClick={() => setView((v) => ({ ...v, zoom: Math.min(10, v.zoom * 1.3) }))} title={t('map.zoom.in')} aria-label={t('map.zoom.in')}>
+          <button onClick={() => (kind === 'street' ? streetRef.current?.zoomBy(1) : setView((v) => ({ ...v, zoom: Math.min(10, v.zoom * 1.3) })))} title={t('map.zoom.in')} aria-label={t('map.zoom.in')}>
             +
           </button>
-          <button onClick={() => setView((v) => ({ ...v, zoom: Math.max(0.5, v.zoom / 1.3) }))} title={t('map.zoom.out')} aria-label={t('map.zoom.out')}>
+          <button onClick={() => (kind === 'street' ? streetRef.current?.zoomBy(-1) : setView((v) => ({ ...v, zoom: Math.max(0.5, v.zoom / 1.3) })))} title={t('map.zoom.out')} aria-label={t('map.zoom.out')}>
             −
           </button>
         </div>
@@ -3296,6 +3547,21 @@ export function MapView({
 
       <div className="map-body">
         <div className="map-canvas-wrap" ref={wrapRef}>
+          {StreetMap && kind === 'street' && streetPack && (
+            // THE STREET MAP UNDER THE OVERLAYS: MapLibre's canvas, then this file's overlay canvas,
+            // then the chrome. Mounted only while Street is shown (one WebGL context, released on
+            // unmount); its © OpenStreetMap credit sits above the overlay canvas.
+            <Suspense fallback={null}>
+              <StreetMap
+                ref={streetRef}
+                pack={streetPack}
+                center={streetOpenAt}
+                onCamera={onStreetCamera}
+                onPointer={onStreetPointer}
+                cursor={hover ? (hover.info ? 'help' : 'pointer') : undefined}
+              />
+            </Suspense>
+          )}
           <canvas
             ref={canvasRef}
             style={{
@@ -3306,6 +3572,10 @@ export function MapView({
               // dot clicks feel impossible (operator report). Drag still spins/pans.
               cursor: hover ? (hover.info ? 'help' : 'pointer') : dragging ? 'grabbing' : 'default',
               touchAction: 'none',
+              // On Street the pointer goes through to MapLibre (onStreetPointer), and `lockOverlay`
+              // moves this canvas onto the map between redraws, from its top-left corner.
+              pointerEvents: kind === 'street' ? 'none' : undefined,
+              transformOrigin: '0 0',
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -3335,6 +3605,7 @@ export function MapView({
                 width: '100%',
                 height: '100%',
                 pointerEvents: 'none',
+                transformOrigin: '0 0',
               }}
             />
           )}
@@ -3406,7 +3677,13 @@ export function MapView({
               narrow={prop != null && size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
             >
               {(Object.keys(layers) as LayerKey[]).map((k) => (
-                <div className="map-layer" key={k}>
+                // At street scale the world-scale fields show no detail: dimmed, saying why. Their
+                // state is the operator's and is never touched here.
+                <div
+                  className={`map-layer${streetScale && WORLD_SCALE_LAYERS.includes(k) ? ' street-dim' : ''}`}
+                  key={k}
+                  title={streetScale && WORLD_SCALE_LAYERS.includes(k) ? t('map.street.worldScale') : undefined}
+                >
                   <label>
                     <input
                       type="checkbox"

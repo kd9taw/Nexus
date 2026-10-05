@@ -45,8 +45,9 @@ const LEGACY_PROJECTION_KEY = 'nexus.connect.projection'
 const LEGACY_LAYERS_KEY = 'nexus.connect.layers'
 const LEGACY_MAP3D_KEY = 'nexus.connect.map3d'
 
-/** The picker's four choices: the 2-D orthographic globe, the WebGL globe, the flat world map and
- *  the azimuthal beam map. The three 2-D ones are the 2-D map's own projection ids. */
+/** The picker's choices: the 2-D orthographic globe, the WebGL globe, the flat world map, the
+ *  azimuthal beam map and, where it is offered, the street map. The 2-D ones are the 2-D map's own
+ *  projection ids. A build that does not know `street` reads it as Globe (`cleanSetup`). */
 export type MapChoice = Projection | '3d'
 
 /** One intent's remembered map. Every field optional: absent = never set on this surface. */
@@ -61,7 +62,7 @@ type Store = Partial<Record<MapIntent, IntentMapSetup>>
 
 const INTENTS: readonly MapIntent[] = ['dx', 'pota', 'casual', 'vhf']
 const isProjection = (v: unknown): v is Projection => v === 'globe' || v === 'aeqd' || v === 'world'
-const isChoice = (v: unknown): v is MapChoice => v === '3d' || isProjection(v)
+const isChoice = (v: unknown): v is MapChoice => v === '3d' || v === 'street' || isProjection(v)
 
 /** Parse one intent's record, keeping only well-formed fields (a store from another build is
  *  exactly the input this will meet). */

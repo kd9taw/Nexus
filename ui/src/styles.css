@@ -1839,6 +1839,17 @@ button.nb-chip:hover {
   font-size: var(--fs-micro);
   line-height: var(--lh-tight);
 }
+/* The Street choice (MapPicker): a download badge until a street map is installed, and the percent
+   while one downloads. Both ride in the button, in its own ink. */
+.map-picker-chip {
+  margin-left: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+.map-picker-badge {
+  margin-left: var(--space-1);
+  vertical-align: -2px;
+}
 /* The lazy 3-D chunk's placeholder fills what is left under the bar, not the whole cell. */
 .connect-map > .globe3d-loading {
   flex: 1;
@@ -4210,6 +4221,12 @@ body.resizing-row {
 .map-layer input[type='range'] {
   width: 100%;
   margin-top: var(--space-1);
+}
+/* STREET SCALE (MapView, features/streetOverlay.ts): a world-scale field shows no detail at street
+   zoom, so its row reads dimmed and its tooltip says why. It stays a working control; only the ink
+   changes. */
+.map-layer.street-dim label {
+  color: var(--text-faint);
 }
 .map-coverage-dim {
   margin-top: var(--space-1);
@@ -28894,4 +28911,104 @@ tr.sel .aprs-sym {
 .qso-detail-bare {
   color: var(--text-dim);
   margin: 0;
+}
+
+/* ===========================================================================
+   THE STREET MAP'S DOWNLOAD SHEET (StreetDownloadSheet.tsx) and Settings ▸ Appearance ▸ Map & globe ▸
+   Street maps (SettingsStreetMaps.tsx). The sheet is a `ui/Dialog`: its box keeps the portaled
+   dialog's raw-unit sizing (the sanctioned exception) and scrolls its own content past 84vh. Every
+   colour is a token both themes declare.
+   =========================================================================== */
+.ui-dialog.street-sheet {
+  width: min(560px, calc(100vw - 2 * var(--space-4)));
+}
+.street-sheet-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-3) 0;
+}
+.street-sheet-label {
+  min-width: 6em;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.street-sheet-token {
+  margin-left: var(--space-1);
+  font-family: var(--font-mono);
+}
+.street-sheet-size,
+.street-sheet-progress {
+  margin: var(--space-3) 0;
+  font-size: var(--fs-label);
+}
+.street-sheet-size p,
+.street-sheet-progress p {
+  margin: var(--space-1) 0;
+}
+.street-sheet-figure {
+  font-weight: 700;
+  color: var(--text);
+}
+.street-sheet-progress progress {
+  width: 100%;
+}
+.street-sheet-error {
+  color: var(--state-weak);
+}
+.street-sheet-credit {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.street-sheet-credit a {
+  color: var(--text);
+}
+.street-sheet-resume {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  font-size: var(--fs-label);
+}
+/* A list, not one field: the whole width of the section's grid, as `.settings-note` takes it. */
+.settings-field.street-maps {
+  grid-column: 1 / -1;
+}
+.street-maps-body,
+.street-maps-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.street-maps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.street-maps-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+}
+.street-maps-name {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text);
+}
+.street-maps-facts {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.street-maps-folder {
+  overflow-wrap: anywhere;
 }

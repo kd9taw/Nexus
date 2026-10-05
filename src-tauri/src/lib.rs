@@ -74,6 +74,9 @@ mod self_spot;
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
 mod sstv_scope_test;
+/// The optional street map's packs: sizing, download, removal, and the byte reads its renderer
+/// makes. Thin glue over `crates/street-map`.
+mod street_map;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -32269,6 +32272,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedHamQthSession::default())
         .manage(BetaUpdateState::default())
         .manage(log_queries::LogQueries::default())
+        .manage(street_map::StreetMapState::default())
         .invoke_handler(tauri::generate_handler![
             display_metrics,
             update_install_block,
@@ -32569,6 +32573,17 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             window_state::set_window_behind,
             remote_window::open_remote_stations_window,
             remote_window::open_lan_stations_window,
+            street_map::street_map_packs,
+            street_map::street_map_read,
+            street_map::street_map_asset,
+            street_map::street_map_size,
+            street_map::street_map_download,
+            street_map::street_map_cancel,
+            street_map::street_map_remove,
+            street_map::street_map_unfinished,
+            street_map::street_map_updates,
+            street_map::street_map_info,
+            street_map::street_map_install_file,
             set_area,
             qso_resend,
             qso_freetext,

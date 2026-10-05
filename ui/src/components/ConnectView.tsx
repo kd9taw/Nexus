@@ -16,6 +16,9 @@ import type { AmpStatus } from '../types'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
 import { gpuCapableForGlobe } from '../gpu'
+import { gridToLatLon, type LatLon } from '../grid'
+import { packFor, useStreetMaps } from '../features/streetMaps'
+import { StreetDownloadSheet } from './StreetDownloadSheet'
 import { MapView, setIntentMapLayer, type MapIntent } from './MapView'
 import { setGlobeLayer } from '../features/globeLayers'
 // The 3-D WebGL globe is LAZY-loaded: three.js only downloads when an operator turns on
@@ -66,7 +69,7 @@ import {
 import { surfaceGet, surfaceHasOwn, surfaceId, surfaceSet } from '../features/windowScope'
 import { keepIntentSetup, loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
 import { keepSatFavOnly } from '../features/satChase'
-import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
+import { MapPicker, ALL_MAP_CHOICES, STREET_MAP_CHOICES } from './MapPicker'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
 import { useStationCapability } from '../stationAccess'
@@ -464,9 +467,39 @@ export function ConnectView({
   const [gpuOk] = useState(gpuCapableForGlobe)
   const [mapPick, setMapPick] = useState<MapChoice>(() => loadIntentSetup(intent)?.map ?? 'globe')
   const map3d = mapPick === '3d' && gpuOk
-  const shownPick: MapChoice = mapPick === '3d' && !gpuOk ? 'globe' : mapPick
+  // THE STREET MAP (features/streetMaps.ts; operator rulings 2026-10-04, D5): a fifth choice, offered
+  // only once the street map is (hidden until its maps are hosted) and never on the Remote page. It
+  // draws the installed pack that holds the station, else the newest. A stored Street pick that cannot
+  // draw here (no pack, no WebGL2, not offered) shows Flat and says why, without discarding the pick,
+  // as 3D does; while the answer is still being read nothing is said.
+  const streetMaps = useStreetMaps()
+  const streetOffered = !remote && streetMaps.offered === true
+  const streetPack = streetOffered ? packFor(streetMaps.packs, gridToLatLon(myGrid)) : null
+  const streetCanDraw = streetOffered && streetMaps.webgl2 && streetPack != null
+  const streetKnown = streetMaps.offered === false || (streetMaps.offered === true && streetMaps.packs !== null)
+  const streetWhy =
+    mapPick !== 'street' || streetCanDraw || !streetKnown
+      ? null
+      : !streetOffered
+        ? t('map.street.standIn.hidden')
+        : !streetMaps.webgl2
+          ? t('map.street.standIn.noWebgl2')
+          : t('map.street.standIn.noPack')
+  const [sheetOpen, setSheetOpen] = useState(false)
+  // Where the 2-D map's centre was when it last drew (MapView `centreRef`), for the sheet.
+  const mapCentreRef = useRef<LatLon | null>(null)
+  const shownPick: MapChoice =
+    mapPick === '3d' && !gpuOk ? 'globe' : mapPick === 'street' && !streetCanDraw ? 'world' : mapPick
   const chooseMap = (choice: MapChoice) => {
     if (choice === '3d' && !gpuOk) return
+    if (choice === 'street') {
+      if (!streetOffered || !streetMaps.webgl2) return
+      // Without a pack, the press asks for one: the sheet, never a map that cannot draw.
+      if (!streetPack) {
+        setSheetOpen(true)
+        return
+      }
+    }
     setMapPick(choice)
     saveIntentSetup(intent, { map: choice })
   }
@@ -827,11 +860,25 @@ export function ConnectView({
                 choice, so it can never vanish with the 2-D map when 3D mounts (MapPicker). */}
             <div className="connect-map-bar">
               <MapPicker
-                choices={ALL_MAP_CHOICES}
+                choices={streetOffered ? STREET_MAP_CHOICES : ALL_MAP_CHOICES}
                 value={shownPick}
                 onPick={chooseMap}
                 threeDUnavailable={!gpuOk}
+                street={
+                  streetOffered
+                    ? {
+                        installed: streetPack != null,
+                        percent: streetMaps.download.state === 'running' ? streetMaps.download.percent : null,
+                        unavailable: streetMaps.webgl2 ? null : t('map.street.noWebgl2'),
+                      }
+                    : undefined
+                }
               />
+              {streetWhy && (
+                <span className="connect-map-note" role="status">
+                  {streetWhy}
+                </span>
+              )}
               {/* A 3D PICK THIS MACHINE CANNOT DRAW RIGHT NOW is shown as Globe, and said so here for as
                   long as Globe stands in (2026-10-04). Whether 3D can draw is asked once, when this view
                   opens, so a reload or a reopen that finds the GPU fallen back to software (or a remote
@@ -871,6 +918,8 @@ export function ConnectView({
               needByCall={needByCall}
               intent={intent}
               projection={shownPick === '3d' ? 'globe' : shownPick}
+              streetPack={shownPick === 'street' ? (streetPack ?? undefined) : undefined}
+              centreRef={mapCentreRef}
               onWorkSpot={onWorkSpot}
               onSelectSat={onSelectSat}
               focusBand={focusBand}
@@ -881,6 +930,20 @@ export function ConnectView({
               onFullChange={setMapFull}
               layersRev={mapLayersRev}
             />
+            )}
+            {streetOffered && (
+              <StreetDownloadSheet
+                open={sheetOpen}
+                onClose={() => setSheetOpen(false)}
+                myGrid={myGrid}
+                mapCentre={sheetOpen && !map3d ? mapCentreRef.current : null}
+                onInstalled={() => {
+                  // A download asked for from the picker shows the map it brought, as soon as it is in.
+                  setSheetOpen(false)
+                  setMapPick('street')
+                  saveIntentSetup(intent, { map: 'street' })
+                }}
+              />
             )}
           </div>
           {present.right && rail('right', rightSlots)}

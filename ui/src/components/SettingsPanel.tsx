@@ -174,6 +174,7 @@ import { connState, dotClass, stateLabel, whenText } from '../settings/connHealt
 import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
 import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
+import { SettingsStreetMaps } from './SettingsStreetMaps'
 import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
@@ -4161,6 +4162,9 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
                 </span>
               </label>
+              {/* STREET MAPS: shown only once the street map is offered (features/streetMaps.ts), and
+                  never on the Remote page — a pack lives on the station's disk. */}
+              {!remote && <SettingsStreetMaps myGrid={form.mygrid} />}
             </div>
           </fieldset>
           )}

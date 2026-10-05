@@ -1,0 +1,35 @@
+[package]
+publish = false
+name = "street-map"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The optional street map's downloadable packs: sizes an area around the station, extracts it from the hosted PMTiles archive with resumable range reads, verifies it, and serves its bytes. The PMTiles reader and writer are written from the published v3 specification."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# gzip: PMTiles directories and metadata, the tiles themselves, and the font/icon archive.
+# Already in both lockfiles at the same version (js8 uses it directly).
+flate2 = "1"
+# SHA-256 of a finished pack and of the font/icon archive. Already in both lockfiles (rustls's
+# own dependency; src-tauri calls it directly for its Remote digests).
+ring = "0.17"
+# Range reads from the street-map host. The same spec as propagation and src-tauri: rustls,
+# never native-tls (scripts/check-reqwest-rustls-only.sh fails CI if reqwest ever gains it).
+# Not feature-gated like propagation's live adapters: downloading IS this crate, and its range
+# server tests must run under a plain `cargo test --workspace`.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# Free disk space before a download (statvfs). Already in both lockfiles.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Free disk space before a download (GetDiskFreeSpaceExW). The version tempo-audio already uses,
+# so this adds two feature flags to a crate already in the tree, not a package.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

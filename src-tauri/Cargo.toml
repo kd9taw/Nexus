@@ -138,6 +138,9 @@ tempo-sstv = { path = "../crates/tempo-sstv" }
 # in exactly the reviewed configuration (see crates/tempo-stream/Cargo.toml, and NOTICE's "Nexus
 # Remote streaming" for the licences).
 tempo-stream = { path = "../crates/tempo-stream" }
+# The optional street map's downloadable packs (sizing, range download, verification, the
+# capped reads its renderer makes). Its crates are all already in this lockfile.
+street-map = { path = "../crates/street-map" }
 # Real sound-card + rig transport (optional; enabled by the `radio` feature).
 tempo-audio = { path = "../crates/tempo-audio", optional = true }
 
