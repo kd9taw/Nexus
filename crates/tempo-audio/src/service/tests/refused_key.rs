@@ -12,7 +12,10 @@
 //!
 //! A late answer is not a refusal. A slow radio reached through rigctld (a Xiegu, a vintage
 //! Kenwood, any rig at 19200 baud or less) can key and answer after the loop's PTT deadline; its
-//! over went out then, with the warning, and still does (`a_late_answer_*`).
+//! over went out then, with the warning, and still does (`a_late_answer_*`). Nor is Hamlib's own
+//! "the rig did not answer" (`RPRT -5`, and its I/O and bus kin): rigctld sent the key on and heard
+//! nothing back, so the radio may be keying (`hamlibs_no_answer_*`). A rig that rejects the key
+//! (`RPRT -9`) is refusing it.
 
 use super::*;
 
@@ -28,7 +31,13 @@ enum Key {
     RefusesASecond,
     /// `RPRT 0`, after [`LATE`]: a slow radio that keyed, answering past the PTT deadline.
     AnswersLate,
+    /// `RPRT <code>`, always: the code Hamlib gives for the radio behind rigctld.
+    Answers(i32),
 }
+
+/// Hamlib's own codes for "the rig did not answer" (`rig::rprt_is_link_fault`): a timeout, an I/O
+/// error, a bus error, a busy bus.
+const NO_ANSWER: [i32; 4] = [-5, -6, -13, -14];
 
 /// How long [`Key::AnswersLate`] takes to answer the key. The PTT deadline is 700 ms, but the
 /// rig reads in 500 ms windows and looks at the deadline only between them, so an answer inside
@@ -60,31 +69,32 @@ fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
                 }
                 let l = line.trim().to_string();
                 log2.lock().unwrap().push(l.clone());
-                let refused = match l.as_str() {
+                // The Hamlib code the line is answered with.
+                let code = match l.as_str() {
                     "T 1" | "T 3" => {
                         if key == Key::AnswersLate {
                             std::thread::sleep(LATE);
                         }
-                        let refused = match key {
-                            Key::Accepts | Key::AnswersLate => false,
-                            Key::Refuses => true,
-                            Key::RefusesASecond => held,
+                        let code = match key {
+                            Key::Accepts | Key::AnswersLate => 0,
+                            Key::Refuses => -1,
+                            Key::RefusesASecond if held => -1,
+                            Key::RefusesASecond => 0,
+                            Key::Answers(code) => code,
                         };
-                        held |= !refused;
-                        refused
+                        held |= code == 0;
+                        code
                     }
                     "T 0" => {
                         held = false;
-                        false
+                        0
                     }
-                    _ => false,
+                    _ => 0,
                 };
                 let reply = if l == "f" {
-                    "14250000\n"
-                } else if refused {
-                    "RPRT -1\n"
+                    "14250000\n".to_string()
                 } else {
-                    "RPRT 0\n"
+                    format!("RPRT {code}\n")
                 };
                 if stream.write_all(reply.as_bytes()).is_err() {
                     break;
@@ -562,4 +572,123 @@ fn a_late_answer_to_the_aprs_key_still_plays_the_frame() {
     assert_eq!(s.keys(), 1, "premise: the beacon tried the key, once");
     assert!(!s.backend.played.is_empty(), "the frame was not played");
     assert_eq!(s.engine.lock().unwrap().aprs_tx_notice(), None);
+}
+
+/// ⭐ HAMLIB'S OWN "THE RIG DID NOT ANSWER" TO THE TUNE'S KEY IS NOT A REFUSAL. A radio too slow
+/// for Hamlib makes rigctld answer the key with its timeout (`RPRT -5`), as Nexus's own deadline
+/// would; the tune keeps its carrier, with the warning, as it always did. A rejection (`RPRT -9`)
+/// still drops it.
+#[test]
+fn hamlibs_no_answer_to_the_tune_key_still_plays_the_carrier() {
+    let tune = |e: &mut Engine| {
+        phone(e);
+        e.set_tune(true);
+    };
+    for code in NO_ANSWER {
+        let mut s = Scene::new(Key::Answers(code), tune);
+        s.run_to(300.0);
+        assert!(
+            s.keys() >= 1,
+            "premise: RPRT {code}: the tune tried the key"
+        );
+        assert_eq!(s.banner().as_deref(), Some(REFUSED), "RPRT {code}");
+        assert!(
+            !s.backend.played.is_empty(),
+            "RPRT {code}: the carrier was dropped"
+        );
+        assert!(
+            s.engine.lock().unwrap().tuning(),
+            "RPRT {code}: the tune ended"
+        );
+    }
+
+    let mut s = Scene::new(Key::Answers(-9), tune);
+    s.run_to(300.0);
+    assert!(s.keys() >= 1, "premise: RPRT -9: the tune tried the key");
+    assert_eq!(s.banner().as_deref(), Some(REFUSED), "RPRT -9");
+    assert!(
+        s.backend.played.is_empty(),
+        "RPRT -9: a carrier went into the rig"
+    );
+    assert!(
+        !s.engine.lock().unwrap().tuning(),
+        "RPRT -9: the tune is still on"
+    );
+}
+
+/// ⭐ A VOICE MESSAGE WHOSE KEY HAMLIB COULD NOT GET ANSWERED IS PLAYED, WHOLE, WITH THE WARNING. A
+/// rejection (`RPRT -9`) still plays nothing.
+#[test]
+fn hamlibs_no_answer_to_the_voice_keyers_key_still_plays_the_message() {
+    let send = |e: &mut Engine| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    };
+    for code in NO_ANSWER {
+        let mut s = Scene::new(Key::Answers(code), send);
+        s.run_to(2_000.0);
+        assert!(
+            s.keys() >= 1,
+            "premise: RPRT {code}: the keyer tried the key"
+        );
+        assert_eq!(s.banner().as_deref(), Some(REFUSED), "RPRT {code}");
+        assert_eq!(
+            s.backend.played.len(),
+            12_000,
+            "RPRT {code}: the message was not played"
+        );
+    }
+
+    let mut s = Scene::new(Key::Answers(-9), send);
+    s.run_to(2_000.0);
+    assert!(s.keys() >= 1, "premise: RPRT -9: the keyer tried the key");
+    assert_eq!(s.banner().as_deref(), Some(REFUSED), "RPRT -9");
+    assert!(
+        s.backend.played.is_empty(),
+        "RPRT -9: the message was played"
+    );
+}
+
+/// ⭐ AN RTTY OVER WHOSE KEY HAMLIB COULD NOT GET ANSWERED IS PLAYED AND ECHOED AS SENT, with the
+/// keyer's warning. A rejection (`RPRT -9`) is still neither played nor echoed.
+#[test]
+fn hamlibs_no_answer_to_the_rtty_key_still_plays_and_echoes_the_over() {
+    let send = |e: &mut Engine| {
+        e.set_operating_mode("rtty", false);
+        e.rtty_send_text("CQ TEST").unwrap();
+    };
+    let warned = |s: &Scene| {
+        let st = s.engine.lock().unwrap().rtty_state();
+        st.keyer_error
+            .is_some_and(|e| e.starts_with("AFSK keyer: the rig didn't accept PTT"))
+    };
+    for code in NO_ANSWER {
+        let mut s = Scene::new(Key::Answers(code), send);
+        s.run_to(3_000.0);
+        assert!(
+            s.keys() >= 1,
+            "premise: RPRT {code}: the over tried the key"
+        );
+        assert!(warned(&s), "RPRT {code}: no keyer warning");
+        assert!(
+            !s.backend.played.is_empty(),
+            "RPRT {code}: the over was not played"
+        );
+        assert_eq!(
+            rtty_sent(&s.engine),
+            "CQ TEST",
+            "RPRT {code}: the over was not echoed"
+        );
+    }
+
+    let mut s = Scene::new(Key::Answers(-9), send);
+    s.run_to(3_000.0);
+    assert!(s.keys() >= 1, "premise: RPRT -9: the over tried the key");
+    assert!(warned(&s), "RPRT -9: no keyer warning");
+    assert!(s.backend.played.is_empty(), "RPRT -9: the over was played");
+    assert_eq!(
+        rtty_sent(&s.engine),
+        "",
+        "RPRT -9: an over that never keyed was echoed"
+    );
 }

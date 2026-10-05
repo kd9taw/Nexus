@@ -2955,14 +2955,15 @@ enum KeyUp {
     /// Flex client refuses every key after the first while one of ours is held (`AlreadyKeyed`), so
     /// each word of a soundcard CW macro after the first meets this.
     Held,
-    /// No answer to the key came back in time: the PTT deadline passed with the key on the wire
+    /// No answer to the key came back in time: the PTT deadline passed with the key on the wire,
+    /// or rigctld answered it with Hamlib's own "the rig did not answer"
     /// ([`crate::rig::no_answer_in_time`]). Not a refusal: a slow radio behind rigctld (a Xiegu,
-    /// a vintage Kenwood, any rig at 19200 baud or less) keys and answers after it, so the over
-    /// goes out, with its warning, as it always did.
+    /// a vintage Kenwood, any rig at 19200 baud or less) keys and answers late, so the over goes
+    /// out, with its warning, as it always did.
     NoAnswer,
-    /// The radio refused the key, or the key failed in any way but the deadline, and nothing of
-    /// the loop's holds the transmitter: nothing may be played or sent. Carries the refusal, for
-    /// the log.
+    /// The radio refused the key, or the key failed in any way but no answer in time
+    /// ([`KeyUp::NoAnswer`]), and nothing of the loop's holds the transmitter: nothing may be
+    /// played or sent. Carries the refusal, for the log.
     Refused(String),
 }
 
@@ -5108,9 +5109,12 @@ impl RadioLoop {
     ///
     /// ⚠️ NO ANSWER IN TIME IS NOT A REFUSAL ([`KeyUp::NoAnswer`]). The PTT deadline can pass
     /// with the key on the wire and the radio keying: through rigctld, a slow radio (a Xiegu, a
-    /// vintage Kenwood, any rig at 19200 baud or less) answers after it. Such an over always went
-    /// out, with its warning, and still does: dropping it cut those radios' voice, data, CW and
-    /// Tune overs. Only the deadline is this; every other failure of the key is a refusal.
+    /// vintage Kenwood, any rig at 19200 baud or less) answers after it, or so late that Hamlib
+    /// itself gives up and rigctld answers "the rig did not answer" (`RPRT -5`). Such an over
+    /// always went out, with its warning, and still does: dropping it cut those radios' voice,
+    /// data, CW and Tune overs. Only the deadline and Hamlib's own "did not answer" codes
+    /// ([`crate::rig::rprt_is_link_fault`]) are this; every other failure of the key is a refusal,
+    /// a rejection (`RPRT -9`) included.
     ///
     /// It only ever ADDS a refusal: the key itself, the hold, the unkey and every gate before
     /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
