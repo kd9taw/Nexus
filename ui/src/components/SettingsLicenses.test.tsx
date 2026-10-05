@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 //
 // Settings ▸ Licenses: the license texts of the npm packages built into the desktop app's
-// interface, which the desktop build emits as THIRD-PARTY.txt (ui/vite.config.ts). Pinned here:
-// the button sits in the Settings header beside Check for updates on the desktop and is absent from
-// the Remote page's copy of Settings (that page links its own file); nothing is read until it is
-// pressed; the dialog shows the file as it came and gives the keyboard back to the button when it
-// closes; and a build without the file says so in words instead of showing whatever a dev server
-// answered with.
+// interface and of the Rust crates the app is built from, which the desktop build emits as
+// THIRD-PARTY.txt and rust/THIRD-PARTY.txt (ui/vite.config.ts). Pinned here: the button sits in
+// the Settings header beside Check for updates on the desktop and is absent from the Remote page's
+// copy of Settings (that page links its own file); nothing is read until it is pressed; the dialog
+// shows both files as they came and gives the keyboard back to the button when it closes; and a
+// build without either file says so in words instead of showing whatever a dev server answered
+// with, or half of the texts as if they were all of them.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsLicenses } from './SettingsLicenses'
@@ -84,12 +85,14 @@ function answer(body: string, contentType: string, status = 200) {
 }
 
 const TEXT = 'Nexus — third-party notices for the app\'s interface\n\nreact 18.3.1\nMIT License\n'
-const fetchSpy = vi.fn(async (_url: string) => answer(TEXT, 'text/plain'))
+const RUST = 'Nexus — third-party notices for the app\'s Rust crates\n\nserde 1.0.228 — MIT OR Apache-2.0\n'
+const files = async (url: string) => answer(url === 'rust/THIRD-PARTY.txt' ? RUST : TEXT, 'text/plain')
+const fetchSpy = vi.fn(files)
 const theButton = () => screen.queryByRole('button', { name: EN['settings.licenses.button'] })
 
 beforeEach(() => {
   fetchSpy.mockClear()
-  fetchSpy.mockImplementation(async () => answer(TEXT, 'text/plain'))
+  fetchSpy.mockImplementation(files)
   vi.stubGlobal('fetch', fetchSpy)
   for (const spy of Object.values(api.spies)) {
     spy.mockClear()
@@ -129,14 +132,15 @@ describe('in the Settings header', () => {
 })
 
 describe('the dialog', () => {
-  it('reads nothing until the button is pressed, then shows the file as it came', async () => {
+  it('reads nothing until the button is pressed, then shows both files as they came', async () => {
     render(<SettingsLicenses />)
     expect(fetchSpy).not.toHaveBeenCalled()
     fireEvent.click(theButton()!)
     const dialog = await screen.findByRole('dialog', { name: EN['settings.licenses.title'] })
-    await waitFor(() => expect(dialog.querySelector('pre')?.textContent).toBe(TEXT))
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(dialog.querySelector('pre')?.textContent).toBe(`${TEXT}\n\n${RUST}`))
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(fetchSpy).toHaveBeenCalledWith('THIRD-PARTY.txt')
+    expect(fetchSpy).toHaveBeenCalledWith('rust/THIRD-PARTY.txt')
   })
 
   it('says the build has no texts when the answer is a page, not the file', async () => {
@@ -165,5 +169,14 @@ describe('the dialog', () => {
     fireEvent.click(theButton()!)
     const dialog = await screen.findByRole('dialog', { name: EN['settings.licenses.title'] })
     await waitFor(() => expect(dialog.textContent).toContain(EN['settings.licenses.unavailable']))
+  })
+
+  it('shows neither file when only the interface\'s is there', async () => {
+    fetchSpy.mockImplementation(async (url: string) => url === 'rust/THIRD-PARTY.txt' ? answer('', 'text/plain', 404) : answer(TEXT, 'text/plain'))
+    render(<SettingsLicenses />)
+    fireEvent.click(theButton()!)
+    const dialog = await screen.findByRole('dialog', { name: EN['settings.licenses.title'] })
+    await waitFor(() => expect(dialog.textContent).toContain(EN['settings.licenses.unavailable']))
+    expect(dialog.querySelector('pre')).toBeNull()
   })
 })

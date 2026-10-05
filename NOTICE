@@ -1083,6 +1083,20 @@ pure `std` Rust: **socket2** is its only third-party crate, and only because `st
 way to set `SO_REUSEADDR` — which Flex discovery needs in order to share UDP 4992 with a
 co-hosted SmartSDR.
 
+The license texts of every crate the desktop app is built from, those above and the crates they
+depend on, travel in every installer as `resources/rust/THIRD-PARTY.txt`
+(`licenses/rust/THIRD-PARTY.txt` in this repository), and Settings ▸ Licenses shows them.
+`scripts/gen-rust-licenses.py` writes that file from `src-tauri/Cargo.lock`: cargo's build graph on
+every installer target with the release features, proc-macro crates included, each crate followed
+by the license files its published package carries. Where a crate offers a choice, its entry names
+the license Nexus elects, the first of MIT, BSD-3-Clause, BSD-2-Clause, ISC, Zlib and Apache-2.0
+whose text the package carries; every license taken is on deny.toml's allow-list. A package that
+carries no license text takes the reviewed text `licenses/rust/upstream.json` pins for that crate
+version: its upstream repository's license file at the commit the package was published from, or,
+where the repository has none either, the license as SPDX (MIT), the Apache Software Foundation
+(Apache-2.0) or Mozilla (MPL-2.0) publishes it. CI fails when the committed file falls behind the
+lockfile.
+
 ## JavaScript / UI dependencies
 
 The web UI (`ui/`, Vite + React + TypeScript) depends on:

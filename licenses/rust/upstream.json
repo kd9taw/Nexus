@@ -1,0 +1,414 @@
+{
+  "sha256": {
+    "OpenByteDev-dlopen2-LICENSE": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2",
+    "algesten-str0m-LICENSE-MIT.txt": "5b460f37be48ac4cf2181596181cc6cae432fc2caae05944873f380730829a4b",
+    "apache-LICENSE-2.0.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "dropbox-rust-alloc-no-stdlib-LICENSE": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+    "h4llow3En-mac-notification-sys-LICENSE-MIT": "1299b4d9d15e9d67e4ac0e7d47ae9404887ca3cf0764aadeec7588d5a6e8e0cc",
+    "madsmtm-objc2-LICENSE.md": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+    "mozilla-MPL-2.0.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+    "open-i18n-rust-unic-LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "retep998-winapi-rs-LICENSE-MIT": "5b19674a1db628a475850a131956ed49521b744e3dda8f5a94141f9aba681219",
+    "rust-bakery-nom-LICENSE": "4dbda04344456f09a7a588140455413a9ac59b6b26a1ef7cdf9c800c012d87f0",
+    "rustaudio-sample-LICENSE-MIT": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0",
+    "snipsco-tract-LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "spdx-MIT.txt": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+    "wravery-webview2-rs-LICENSE": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+  },
+  "crates": {
+    "alloc-stdlib 0.2.2": {
+      "license": "BSD-3-Clause",
+      "texts": [
+        [
+          "dropbox-rust-alloc-no-stdlib-LICENSE",
+          "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/6032b6a9b20e03737135c55a0270ccffcc1438ef/LICENSE"
+        ]
+      ]
+    },
+    "anymap3 1.1.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "block2 0.6.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "dasp_sample 0.11.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "rustaudio-sample-LICENSE-MIT",
+          "https://raw.githubusercontent.com/rustaudio/sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT"
+        ]
+      ]
+    },
+    "dispatch2 0.3.1": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "dlopen2 0.8.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "OpenByteDev-dlopen2-LICENSE",
+          "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+        ]
+      ]
+    },
+    "dlopen2_derive 0.4.3": {
+      "license": "MIT",
+      "texts": [
+        [
+          "OpenByteDev-dlopen2-LICENSE",
+          "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+        ]
+      ]
+    },
+    "dunce 1.0.5": {
+      "license": "Apache-2.0",
+      "texts": [
+        [
+          "apache-LICENSE-2.0.txt",
+          "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        ]
+      ]
+    },
+    "is 0.11.1": {
+      "license": "MIT",
+      "texts": [
+        [
+          "algesten-str0m-LICENSE-MIT.txt",
+          "https://raw.githubusercontent.com/algesten/str0m/95e5038c6f45de6646d8e3f4c2bca6207a5bedde/LICENSE-MIT.txt"
+        ]
+      ]
+    },
+    "mac-notification-sys 0.6.15": {
+      "license": "MIT",
+      "texts": [
+        [
+          "h4llow3En-mac-notification-sys-LICENSE-MIT",
+          "https://raw.githubusercontent.com/h4llow3En/mac-notification-sys/deb559683962d314a7693478476bf8d052efa84e/LICENSE-MIT"
+        ]
+      ]
+    },
+    "nom-language 0.1.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "rust-bakery-nom-LICENSE",
+          "https://raw.githubusercontent.com/rust-bakery/nom/2cec1b3e4c9ccac62c902d60c00de6d1549ccbe1/LICENSE"
+        ]
+      ]
+    },
+    "objc2 0.6.4": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-app-kit 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-audio-toolbox 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-core-audio 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-core-audio-types 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-core-foundation 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-encode 4.1.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-exception-helper 0.1.1": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-foundation 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-osa-kit 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "objc2-web-kit 0.3.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "madsmtm-objc2-LICENSE.md",
+          "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        ],
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "selectors 0.36.1": {
+      "license": "MPL-2.0",
+      "texts": [
+        [
+          "mozilla-MPL-2.0.txt",
+          "https://www.mozilla.org/media/MPL/2.0/index.txt"
+        ]
+      ]
+    },
+    "serialport 4.9.0": {
+      "license": "MPL-2.0",
+      "texts": [
+        [
+          "mozilla-MPL-2.0.txt",
+          "https://www.mozilla.org/media/MPL/2.0/index.txt"
+        ]
+      ]
+    },
+    "siphasher 1.0.3": {
+      "license": "MIT",
+      "texts": [
+        [
+          "spdx-MIT.txt",
+          "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/MIT.txt"
+        ]
+      ]
+    },
+    "str0m-proto 0.7.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "algesten-str0m-LICENSE-MIT.txt",
+          "https://raw.githubusercontent.com/algesten/str0m/9b159720be773693dd561dec0fb20c6d7e4aa323/LICENSE-MIT.txt"
+        ]
+      ]
+    },
+    "str0m-wincrypto 0.8.1": {
+      "license": "MIT",
+      "texts": [
+        [
+          "algesten-str0m-LICENSE-MIT.txt",
+          "https://raw.githubusercontent.com/algesten/str0m/247b96905bc0b66925bdf52b167fef8a88c364a7/LICENSE-MIT.txt"
+        ]
+      ]
+    },
+    "tract-extra 0.23.4": {
+      "license": "MIT",
+      "texts": [
+        [
+          "snipsco-tract-LICENSE-MIT",
+          "https://raw.githubusercontent.com/snipsco/tract/2dd536931fb878d691ffcd1526ec9ff92f0c1ed6/LICENSE-MIT"
+        ]
+      ]
+    },
+    "tract-transformers 0.23.4": {
+      "license": "MIT",
+      "texts": [
+        [
+          "snipsco-tract-LICENSE-MIT",
+          "https://raw.githubusercontent.com/snipsco/tract/2dd536931fb878d691ffcd1526ec9ff92f0c1ed6/LICENSE-MIT"
+        ]
+      ]
+    },
+    "unic-char-property 0.9.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "open-i18n-rust-unic-LICENSE-MIT",
+          "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        ]
+      ]
+    },
+    "unic-char-range 0.9.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "open-i18n-rust-unic-LICENSE-MIT",
+          "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        ]
+      ]
+    },
+    "unic-common 0.9.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "open-i18n-rust-unic-LICENSE-MIT",
+          "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        ]
+      ]
+    },
+    "unic-ucd-ident 0.9.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "open-i18n-rust-unic-LICENSE-MIT",
+          "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-MIT"
+        ]
+      ]
+    },
+    "unic-ucd-version 0.9.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "open-i18n-rust-unic-LICENSE-MIT",
+          "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT"
+        ]
+      ]
+    },
+    "webview2-com 0.38.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "wravery-webview2-rs-LICENSE",
+          "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE"
+        ]
+      ]
+    },
+    "webview2-com-macros 0.8.1": {
+      "license": "MIT",
+      "texts": [
+        [
+          "wravery-webview2-rs-LICENSE",
+          "https://raw.githubusercontent.com/wravery/webview2-rs/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE"
+        ]
+      ]
+    },
+    "webview2-com-sys 0.38.2": {
+      "license": "MIT",
+      "texts": [
+        [
+          "wravery-webview2-rs-LICENSE",
+          "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE"
+        ]
+      ]
+    },
+    "winapi-x86_64-pc-windows-gnu 0.4.0": {
+      "license": "MIT",
+      "texts": [
+        [
+          "retep998-winapi-rs-LICENSE-MIT",
+          "https://raw.githubusercontent.com/retep998/winapi-rs/9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa/LICENSE-MIT"
+        ]
+      ]
+    }
+  }
+}

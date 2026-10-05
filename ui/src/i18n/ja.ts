@@ -3417,7 +3417,7 @@ export const JA: PartialCatalog = {
   "settings.licenses.button": "ライセンス",
   "settings.licenses.title": "サードパーティのライセンス",
   "settings.licenses.loading": "ライセンス文を読み込み中…",
-  "settings.licenses.unavailable": "このビルドにはライセンス文が含まれていません。インストール済みのNexusでは resources/ui/THIRD-PARTY.txt にあります。",
+  "settings.licenses.unavailable": "このビルドにはライセンス文が含まれていません。インストール済みのNexusでは resources/ui/THIRD-PARTY.txt と resources/rust/THIRD-PARTY.txt にあります。",
   "settings.panel.tabs.aria": "設定セクション",
   "settings.panel.save": "保存",
   "settings.panel.saving": "保存中…",

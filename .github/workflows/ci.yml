@@ -902,6 +902,19 @@ jobs:
       - name: reqwest has no native-tls backend (workspace + src-tauri lockfiles)
         run: bash scripts/check-reqwest-rustls-only.sh
 
+      # The installers carry the license texts of the Rust crates the desktop app is built from as
+      # resources/rust/THIRD-PARTY.txt, copied from licenses/rust/THIRD-PARTY.txt, and Settings ▸
+      # Licenses shows the same file. scripts/gen-rust-licenses.py derives it from src-tauri's
+      # Cargo.lock: cargo's build graph on every installer target with the release features, each
+      # crate's own license files, and, for a package that carries none, the reviewed upstream text
+      # pinned for that crate version in licenses/rust/upstream.json. This fails when the committed
+      # copy is behind the lockfile, so a dependency bump cannot reach an installer with the old
+      # notices, and a new crate with no license text stops here until its text is reviewed. It
+      # takes a few seconds: the step above has already downloaded every crate it reads. To
+      # refresh: `python3 scripts/gen-rust-licenses.py`, and commit the result.
+      - name: The installers' Rust license texts match the lockfile
+        run: python3 scripts/gen-rust-licenses.py --check
+
   # Job 5 — Windows cross-compile. The desktop shell (src-tauri) is outside the
   # workspace and needs a WebView/MinGW toolchain the Linux test job lacks, so
   # `cargo test` never touches it. This job cross-compiles it to
