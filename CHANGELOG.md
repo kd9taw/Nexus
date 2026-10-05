@@ -168,9 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pop-out, a Connect or dashboard-rail box and the Remote page.
 - **Remote over this network: a key or paired list the station cannot read points to Reset network
   identity.** When the station's network key or its list of paired computers could not be read, the
-  card only said to unlock the credential store. It now says to unlock a locked store first, and
-  otherwise to press **Reset network identity** under **Network identity** on the same card, then
-  pair your computers again.
+  card only said to unlock the credential store. It now says to press **Reset network identity**
+  under **Network identity** on the same card, and that a reset means pairing every computer again.
 - **Remote: the Repeaters channel list no longer scrolls sideways.** On the Remote page each FM
   channel carries a Tune button the desktop does not, and in a medium-width window, or on a phone,
   the rows ran past the list under a sideways scrollbar. A row whose buttons do not fit beside its
