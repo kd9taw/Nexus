@@ -11,7 +11,10 @@
 //!
 //! What Nexus never stops doing is sending the unkey. WSJT-X sends PTT off once more as it closes
 //! the rig (`TransceiverBase.cpp:245-247`), then nothing until the operator reopens it. Nexus's idle
-//! self-heal sends it every tick until the radio takes it, and still does, with TX halted.
+//! self-heal sends it every tick until the radio takes it, and still does, with TX halted. Nothing
+//! waits ahead of it either: this halt alone does not ask the radio to stop CW (`\stop_morse`), a
+//! command a radio that has stopped answering would hold for a whole CAT deadline
+//! (`a_failed_unkeys_halt_sends_no_cw_stop_*`).
 //!
 //! The rig is a rigctld that keys and answers the unkey (`T 0`) as each test says; the loop is the
 //! real `RadioLoop::step`. The loop's clock runs on the real clock's timebase, a little ahead of it,
@@ -54,6 +57,11 @@ struct Station {
     peer: Peer,
     /// The radio's own PTT, as the rigctld holds it.
     on_air: Arc<AtomicBool>,
+    /// While set, the rigctld refuses the key (`RPRT -1`).
+    refuses_key: Arc<AtomicBool>,
+    /// While set, the rigctld answers the CW stop (`\stop_morse`) only after [`LATE`]: a radio
+    /// that has stopped answering it.
+    slow_cw_stop: Arc<AtomicBool>,
     /// The start of the slot the first over is keyed in (ms).
     slot: f64,
     t: f64,
@@ -75,9 +83,16 @@ impl Station {
     fn with(unkey: Unkey, dial_hz: u64, mode: &str, setup: impl FnOnce(&mut Engine)) -> Station {
         let on_air = Arc::new(AtomicBool::new(false));
         let ptt = Arc::clone(&on_air);
+        let refuses_key = Arc::new(AtomicBool::new(false));
+        let refuse = Arc::clone(&refuses_key);
+        let slow_cw_stop = Arc::new(AtomicBool::new(false));
+        let slow = Arc::clone(&slow_cw_stop);
         let answered = AtomicUsize::new(0);
         let peer = retuning_peer(dial_hz, mode, move |line, radio| {
             match line {
+                "T 1" | "T 3" if refuse.load(Ordering::SeqCst) => {
+                    return Some("RPRT -1\n".into());
+                }
                 "T 1" | "T 3" => radio.keyed = true,
                 "T 0" => {
                     let i = answered.fetch_add(1, Ordering::SeqCst);
@@ -89,6 +104,12 @@ impl Station {
                         _ => {}
                     }
                     radio.keyed = false;
+                }
+                "\\stop_morse" => {
+                    if slow.load(Ordering::SeqCst) {
+                        std::thread::sleep(LATE);
+                    }
+                    return Some("RPRT 0\n".into());
                 }
                 _ => return None,
             }
@@ -111,6 +132,8 @@ impl Station {
             rig: Rig::rigctld(&peer.address),
             peer,
             on_air,
+            refuses_key,
+            slow_cw_stop,
             slot,
             t: slot + 100.0,
         }
@@ -145,6 +168,12 @@ impl Station {
                 .unwrap();
             self.t += 20.0;
         }
+    }
+
+    /// How many times the rigctld was sent `line`.
+    fn sent(&self, line: &str) -> usize {
+        let lines = self.peer.lines.lock().unwrap();
+        lines.iter().filter(|l| *l == line).count()
     }
 
     /// The keys the rigctld was sent.
@@ -364,7 +393,8 @@ fn a_voice_message_whose_unkey_the_radio_refuses_is_left_as_it_was() {
 /// ⭐ STOP TX WHOSE UNKEY THE RADIO REFUSES SAYS SO, AND THE UNKEY IS SENT UNTIL THE RADIO TAKES IT.
 /// WSJT-X's Halt Tx ends the over through the same PTT off as its end does, and a failure there is
 /// the same rig failure. TX is already off; now the status bar says the unkey failed. The control:
-/// Stop TX on a radio that unkeys sends one unkey and says nothing.
+/// Stop TX on a radio that unkeys sends one unkey and says nothing. Either way Stop TX asks the
+/// radio to stop CW once, as it always did, and the failed unkey adds no second ask.
 #[test]
 fn stop_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on() {
     for unkey in [
@@ -379,6 +409,7 @@ fn stop_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on() {
         let cut = s.slot + 5_000.0;
         s.run_to(cut - 20.0);
         assert_eq!(s.unkeys(), 0, "premise: the over is on the air");
+        let cw_stops = s.sent("\\stop_morse");
         s.engine.lock().unwrap().halt_tx(); // Stop TX
         s.run_to(cut);
         assert_eq!(s.state.tx_until_ms, None, "premise: Stop TX cut the over");
@@ -388,6 +419,11 @@ fn stop_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on() {
             assert_eq!(s.unkeys(), 1, "control: one unkey");
             assert!(!s.on_air() && !s.rig.keyed, "control: still keyed");
             assert_eq!(s.unkey_failed(), None, "control");
+            assert_eq!(
+                s.sent("\\stop_morse") - cw_stops,
+                1,
+                "control: Stop TX no longer asks the radio to stop CW"
+            );
         } else {
             assert!(
                 s.unkey_failed().is_some_and(|f| f.why.contains("RPRT -1")),
@@ -395,6 +431,11 @@ fn stop_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on() {
                 s.unkey_failed()
             );
             s.sends_the_unkey_until_the_radio_takes_it(cut, "Stop TX");
+            assert_eq!(
+                s.sent("\\stop_morse") - cw_stops,
+                1,
+                "Stop TX's own CW stop, and no second one for the unkey that failed"
+            );
         }
     }
 }
@@ -429,6 +470,7 @@ fn a_loggers_halt_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on
         let cut = s.slot + 5_000.0;
         s.run_with(Some(&server), cut - 20.0);
         assert_eq!(s.unkeys(), 0, "premise: the over is on the air");
+        let cw_stops = s.sent("\\stop_morse");
         logger
             .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
             .unwrap();
@@ -443,6 +485,13 @@ fn a_loggers_halt_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on
             assert_eq!(s.unkeys(), 1, "control: one unkey");
             assert!(!s.on_air() && !s.rig.keyed, "control: still keyed");
             assert_eq!(s.unkey_failed(), None, "control");
+            // The HaltTx's CW stop goes out on the tick after it.
+            s.run_with(Some(&server), cut + 20.0);
+            assert_eq!(
+                s.sent("\\stop_morse") - cw_stops,
+                1,
+                "control: the HaltTx no longer asks the radio to stop CW"
+            );
         } else {
             assert!(
                 s.unkey_failed().is_some_and(|f| f.why.contains("RPRT -1")),
@@ -450,6 +499,83 @@ fn a_loggers_halt_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on
                 s.unkey_failed()
             );
             s.sends_the_unkey_until_the_radio_takes_it(cut, "HaltTx");
+            assert_eq!(
+                s.sent("\\stop_morse") - cw_stops,
+                1,
+                "the HaltTx's own CW stop, and no second one"
+            );
         }
     }
+}
+
+// ── The CW stop after a failed unkey: skipped (operator, 2026-10-05: "Skip it when an unkey
+// failed") ──────────────────────────────────────────────────────────────────────────────────
+// Every halt asks the radio to stop CW (`\stop_morse`) on the next tick, before that tick's
+// unkey. Nothing keys CW while a slot over ends, and a radio that has stopped answering holds the
+// command for the whole CAT deadline, the unkey waiting behind it. Stop TX, a logger's HaltTx
+// (above) and the refused key's halt (below) still ask.
+
+/// ⭐ A FAILED UNKEY'S HALT SENDS NO CW STOP, SO NOTHING HOLDS UP THE UNKEY AFTER IT. This radio
+/// answers the CW stop late, as one that has stopped answering does: the tick after the failure
+/// sends its unkey at once.
+#[test]
+fn a_failed_unkeys_halt_sends_no_cw_stop_so_nothing_holds_up_the_unkey_after_it() {
+    let mut s = Station::new(Unkey::Fails {
+        code: -1,
+        n: REFUSALS,
+    });
+    s.slow_cw_stop.store(true, Ordering::SeqCst);
+    let end = s.key_the_over();
+    let cw_stops = s.sent("\\stop_morse");
+    s.run_to(end + 20.0);
+    assert!(
+        !s.armed() && s.unkey_failed().is_some(),
+        "premise: the failed unkey halted TX"
+    );
+    let sent = s.unkeys();
+    let tick = std::time::Instant::now();
+    s.run_to(s.t); // the next tick, alone
+    let took = tick.elapsed();
+    assert_eq!(
+        s.sent("\\stop_morse") - cw_stops,
+        0,
+        "the failed unkey's halt asked the radio to stop CW (the next tick took {took:?})"
+    );
+    assert!(
+        s.unkeys() > sent,
+        "the next tick sent no unkey: {sent}, then {}",
+        s.unkeys()
+    );
+    assert!(
+        took < Duration::from_millis(400),
+        "the next tick's unkey waited {took:?}"
+    );
+}
+
+/// ⏱ THE CONTROL: THE REFUSED KEY'S HALT STILL ASKS THE RADIO TO STOP CW, AS STOP TX DOES.
+#[test]
+fn a_refused_keys_halt_still_sends_the_cw_stop() {
+    let mut s = Station::new(Unkey::Accepts);
+    s.refuses_key.store(true, Ordering::SeqCst);
+    s.run_to(s.t); // the first tick: the slot boundary's key, refused
+    let cw_stops = s.sent("\\stop_morse");
+    assert!(s.keys() >= 1, "premise: the slot boundary tried the key");
+    assert!(s.backend.played.is_empty(), "premise: nothing was played");
+    assert!(!s.armed(), "premise: the refused key halted TX");
+    assert!(
+        s.engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .is_some(),
+        "premise: it was the refused key's halt"
+    );
+    s.run_to(s.slot + 300.0);
+    assert_eq!(
+        s.sent("\\stop_morse") - cw_stops,
+        1,
+        "the refused key's halt no longer asks the radio to stop CW"
+    );
 }

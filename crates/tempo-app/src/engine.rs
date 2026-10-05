@@ -14296,13 +14296,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// sequencer, never the unkey: the radio loop keeps sending that until the radio takes it.
     ///
     /// One event, one line in the log, and no stop for a voice memory, as
-    /// [`Self::halt_tx_for_refused_key`].
+    /// [`Self::halt_tx_for_refused_key`]. Nor, unlike every other halt, a CW stop (operator,
+    /// 2026-10-05: "Skip it when an unkey failed"): the radio loop sends `\stop_morse` on its next
+    /// tick, before that tick's unkey, and nothing keys CW while a slot over ends, so all it could
+    /// do is hold the unkey up for a CAT deadline on a radio that has stopped answering. A Stop TX
+    /// pressed before keeps its own, as it keeps its voice-memory stop.
     pub fn halt_tx_for_failed_unkey(&mut self, why: &str) {
         let voice_mem_halt = self.voice_mem_halt;
+        let cw_abort = self.cw_abort;
         self.quiet_tx_log = true;
         self.halt_tx();
         self.quiet_tx_log = false;
         self.voice_mem_halt = voice_mem_halt;
+        self.cw_abort = cw_abort;
         tempo_core::applog::info(
             "tx",
             &format!(
@@ -32977,6 +32983,37 @@ mod tests {
         assert!(
             e.take_voice_mem_halt(),
             "the operator's Stop TX lost its voice-memory stop"
+        );
+    }
+
+    #[test]
+    fn a_failed_slot_unkey_asks_for_no_cw_stop_and_every_other_halt_still_does() {
+        // Operator (2026-10-05): "Skip it when an unkey failed". The radio loop answers the CW
+        // abort with `\stop_morse` on its next tick, before that tick's unkey; after a slot over
+        // nothing keys CW, and a radio that has stopped answering held the unkey up behind it.
+        let why = "rigctld PTT error: \"RPRT -1\\n\"";
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.take_cw_abort();
+        e.halt_tx_for_failed_unkey(why);
+        assert!(
+            !e.take_cw_abort(),
+            "the failed unkey's halt asked the radio to stop CW"
+        );
+
+        // The controls: Stop TX and the refused key's halt still ask, as they always did…
+        e.halt_tx();
+        assert!(e.take_cw_abort(), "Stop TX no longer asks for a CW stop");
+        e.halt_tx_for_refused_key(why);
+        assert!(
+            e.take_cw_abort(),
+            "the refused key's halt no longer asks for a CW stop"
+        );
+        // …and a Stop TX pressed before an unkey that then fails keeps its own.
+        e.halt_tx();
+        e.halt_tx_for_failed_unkey(why);
+        assert!(
+            e.take_cw_abort(),
+            "the failed unkey took the operator's Stop TX CW stop away"
         );
     }
 
