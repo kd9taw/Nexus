@@ -222,6 +222,36 @@ pub(crate) fn slot_key_failure(key: &std::io::Result<()>, held: bool) -> Option<
     Some(e.to_string())
 }
 
+/// Why the unkey that ended a slot over must halt TX, or `None` when it must not: WSJT-X's rule
+/// (3.0.2), on the ways an unkey ends here, as [`slot_key_failure`] is for the key. It only decides
+/// the halt and what the operator is told ([`Engine::halt_tx_for_failed_unkey`]); the unkey itself
+/// is never given up.
+///
+/// - **Unkeyed** (`RPRT 0`): `None`.
+/// - **Refused**, or **Hamlib's own "the rig did not answer"** (`RPRT -5`, `-6`, `-13`, `-14`): a
+///   PTT off Hamlib answers with anything but `RIG_OK` throws "… while setting PTT off"
+///   (`Transceiver/HamlibTransceiver.cpp:1297-1304`, `:277-284`), the transceiver goes offline
+///   (`TransceiverBase.cpp:193-206`, `:360-373`), and the main window presses Halt Tx and reports
+///   the rig failure (`widgets/mainwindow.cpp:12556-12564`). `Some`.
+/// - **Nexus's PTT deadline passed** ([`crate::rig::deadline_passed`]): WSJT-X sets no deadline of
+///   its own and waits on Hamlib, so a slow rig unkeys late there and nothing halts. `None`.
+/// - **Not a slot over's** (`slot_over` false): the voice keyer's, CW's, a tune's and every other
+///   over's unkey is left as it was. `None`.
+///
+/// What happens to the radio after that is where Nexus does more than WSJT-X, and must go on doing
+/// so. WSJT-X sends PTT off once more as it closes the rig ("try and ensure PTT isn't left set",
+/// `TransceiverBase.cpp:245-247`), then nothing: closing it disconnects the rig
+/// (`Configuration.cpp:5434-5452`), and reopening it sends no PTT command (`:5055`,
+/// `TransceiverBase.cpp:133-137`). Here a failed unkey leaves `Rig::keyed` set, so the radio loop's
+/// idle self-heal sends the unkey every tick until the radio takes it, TX halted or not.
+pub(crate) fn slot_unkey_failure(unkey: &std::io::Result<()>, slot_over: bool) -> Option<String> {
+    let e = unkey.as_ref().err()?;
+    if !slot_over || crate::rig::deadline_passed(e) {
+        return None;
+    }
+    Some(e.to_string())
+}
+
 /// Run one slot boundary.
 ///
 /// At each boundary we FIRST decode the audio of the slot that just ended, THEN

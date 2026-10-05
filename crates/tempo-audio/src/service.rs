@@ -5101,6 +5101,14 @@ impl RadioLoop {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
     }
 
+    /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
+    /// modes): the two slot keying sites stamp its deadline on `slot_tx_until_ms` as well, and
+    /// every other keyed source leaves that behind. The unkey that drops it follows WSJT-X when the
+    /// radio does not take it ([`crate::slot::slot_unkey_failure`]).
+    fn holds_slot_over(&self) -> bool {
+        self.tx_until_ms == Some(self.slot_tx_until_ms)
+    }
+
     /// Key the transmitter for an over whose audio (or, `plain`, FSK keyline) this loop sends,
     /// and say what came of it: keyed, refused, or no answer in time.
     ///
@@ -10632,7 +10640,13 @@ impl RadioLoop {
                     // the mic the over is theirs to end, and a voice/CW tail expiring must not
                     // cut it. That is the same condition the unkey already respects.
                     backend.flush_output();
-                    let _ = rig.ptt(false);
+                    let slot_over = self.holds_slot_over();
+                    let unkey = rig.ptt(false);
+                    // A slot over's unkey the radio does not take halts TX and says so, as in
+                    // WSJT-X; the idle self-heal below goes on sending it.
+                    if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
+                        engine_lock(engine).halt_tx_for_failed_unkey(&why);
+                    }
                 }
                 self.tx_until_ms = None;
                 // Split restore happens in the catch-all below (single drain
@@ -11286,9 +11300,14 @@ impl RadioLoop {
             } else {
                 "hard-stop TX: TX disabled mid-over (non-slot) → unkey"
             });
-            let _ = rig.ptt(false);
+            let slot_over = self.holds_slot_over();
+            let unkey = rig.ptt(false);
             backend.flush_output();
             self.tx_until_ms = None;
+            // Cutting a slot over is WSJT-X's Halt Tx, and its PTT off fails as the over's end does.
+            if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
+                eng.halt_tx_for_failed_unkey(&why);
+            }
         }
 
         // IDLE SELF-HEAL (TX safety): the loop believes the radio should be receiving,
@@ -11296,6 +11315,8 @@ impl RadioLoop {
         // CI-V, rigctld hiccup). Retry key-up every tick until the radio acknowledges —
         // this is what turns "stuck TX light until the radio reboots" into a self-
         // recovering blip. One idempotent CAT call per tick, only while desynced.
+        // A slot over's failed unkey halting TX (`slot::slot_unkey_failure`) stops the
+        // sequencer, never this: it goes on until the radio takes the unkey.
         if rig.keyed && self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied
         {
             crate::civ::diag::note("idle self-heal: rig still keyed but loop thinks RX → unkey");
@@ -11313,9 +11334,14 @@ impl RadioLoop {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
                         eng.halt_tx();
-                        let _ = rig.ptt(false);
+                        let slot_over = self.holds_slot_over();
+                        let unkey = rig.ptt(false);
                         backend.flush_output();
                         self.tx_until_ms = None;
+                        // …and so is a logger's HaltTx cutting one.
+                        if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
+                            eng.halt_tx_for_failed_unkey(&why);
+                        }
                     }
                     WsjtxInbound::Clear { .. } => {
                         // Visual clear only — the engine's decode context (answer
@@ -14402,6 +14428,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod failed_unkey;
     mod filter_width;
     mod flex_audio;
     mod receive_source;
