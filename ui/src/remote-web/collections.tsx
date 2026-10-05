@@ -5,7 +5,7 @@ import { t } from '../i18n'
 import type { Json } from './application-protocol'
 import { ROTATOR_COMMAND, POUNCE_COMMAND, PARKS_COMMAND, CONFIRMATIONS_COMMAND, parkSearch, CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 import type { Collection, QueryArgs, QueryPage } from './application-query-protocol'
-import type { ApplicationClient } from './application-client'
+import { askAgainWhenBusy, type ApplicationClient } from './application-client'
 import { PARK_ROWS, parseParks } from './parks'
 
 type State = { phase: 'loading' | 'ready' | 'unavailable'; total: number; retained: number; at: number }
@@ -63,19 +63,12 @@ export class RemoteCollections implements ApplicationTransport {
   }
   async page(args: QueryArgs): Promise<QueryPage> {
     const generation = this.generation
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
-        const page = await this.client.invoke<QueryPage>(args.collection === 'parks' ? PARKS_COMMAND : args.collection === 'confirmations' ? CONFIRMATIONS_COMMAND : args.collection === 'pounce' ? POUNCE_COMMAND : args.collection === 'rotator' ? ROTATOR_COMMAND : configurationCollection(args.collection) ? CONFIGURATION_COMMAND : navigationCollection(args.collection) ? NAVIGATION_COMMAND : args.collection === 'sstvImage' ? SSTV_IMAGE_COMMAND : args.collection === 'aprs' ? APRS_COMMAND : args.collection === 'js8Context' ? JS8_CONTEXT_COMMAND : args.collection === 'fieldDay' ? FIELD_DAY_COMMAND : args.collection === 'ota' ? OTA_COMMAND : args.collection === 'memories' ? MEMORIES_COMMAND : args.collection === 'dxpeditions' ? DXPEDITIONS_COMMAND : args.collection === 'recall' ? RECALL_COMMAND : insightCollection(args.collection) ? INSIGHTS_COMMAND : QUERY_COMMAND, args)
-        if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
-        return page
-      }
-      catch (error) {
-        if (attempt === 2 || !(error instanceof Error) || error.message !== 'applicationBusy') throw error
-        await new Promise(resolve => setTimeout(resolve, 250))
-      }
-    }
-    throw new Error('applicationUnavailable')
+    return askAgainWhenBusy(async () => {
+      if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
+      const page = await this.client.invoke<QueryPage>(args.collection === 'parks' ? PARKS_COMMAND : args.collection === 'confirmations' ? CONFIRMATIONS_COMMAND : args.collection === 'pounce' ? POUNCE_COMMAND : args.collection === 'rotator' ? ROTATOR_COMMAND : configurationCollection(args.collection) ? CONFIGURATION_COMMAND : navigationCollection(args.collection) ? NAVIGATION_COMMAND : args.collection === 'sstvImage' ? SSTV_IMAGE_COMMAND : args.collection === 'aprs' ? APRS_COMMAND : args.collection === 'js8Context' ? JS8_CONTEXT_COMMAND : args.collection === 'fieldDay' ? FIELD_DAY_COMMAND : args.collection === 'ota' ? OTA_COMMAND : args.collection === 'memories' ? MEMORIES_COMMAND : args.collection === 'dxpeditions' ? DXPEDITIONS_COMMAND : args.collection === 'recall' ? RECALL_COMMAND : insightCollection(args.collection) ? INSIGHTS_COMMAND : QUERY_COMMAND, args)
+      if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
+      return page
+    })
   }
   read(name: Collection, after: number | null = null): Promise<Whole> {
     const ttl = name === 'entities' ? 3600000 : name === 'needs' || name === 'health' ? 15000 : 5000

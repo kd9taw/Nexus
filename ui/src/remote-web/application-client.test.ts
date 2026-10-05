@@ -82,6 +82,39 @@ it('bounds a stalled read without closing the session, and holds the lane until 
   client.receive(result(sent[sent.length - 1], 2, { mycall: 'TEST' }))
   expect(await again).toEqual({ mycall: 'TEST' })
 })
+// A busy station is asked again, as the page's collection reads are (the operator's pick "Retry like the page",
+// 2026-10-04). The station reads with try_lock and never queues behind the radio loop, so `applicationBusy` for a
+// sample it has not cached is routine; the panel used to go blank until its next poll. Three attempts at most,
+// 250 ms apart, and any other answer goes back to the caller at once.
+it('asks a busy read again, three times at most and 250 ms apart, and nothing but busy', async () => {
+  const { client, sent } = setup()
+  const reads = () => sent.filter(m => m.type === 'applicationRead')
+  const latest = () => reads()[reads().length - 1]
+  const refused = (request: Record<string, unknown>, error = 'applicationBusy') => ({ type: 'applicationError', requestId: request.requestId, error })
+  const read = client.invoke('get_snapshot').catch(error => (error as Error).message)
+  client.receive(refused(latest()))
+  expect(sent[sent.length - 1], 'the refusal is ACKed').toEqual({ type: 'applicationAck', requestId: latest().requestId })
+  await vi.advanceTimersByTimeAsync(249)
+  expect(reads(), 'not asked again before 250 ms').toHaveLength(1)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(reads(), 'asked again at 250 ms').toHaveLength(2)
+  client.receive(result(latest(), 1, { mycall: 'TEST' }))
+  expect(await read).toEqual({ mycall: 'TEST' })
+  // Busy three times: the third answer is the caller's.
+  const settings = client.invoke('get_settings').catch(error => (error as Error).message)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    client.receive(refused(latest()))
+    await vi.advanceTimersByTimeAsync(250)
+  }
+  expect(await settings).toBe('applicationBusy')
+  expect(reads().filter(m => m.command === 'get_settings'), 'three attempts').toHaveLength(3)
+  // Any other refusal is the caller's at once.
+  const plan = client.invoke('get_band_plan').catch(error => (error as Error).message)
+  client.receive(refused(latest(), 'applicationUnavailable'))
+  expect(await plan).toBe('applicationUnavailable')
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(reads().filter(m => m.command === 'get_band_plan'), 'never asked again').toHaveLength(1)
+})
 it('reports an older installer without attempting application reads', async () => {
   const { client, sent } = setup()
   client.disconnected()
