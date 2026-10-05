@@ -109,6 +109,11 @@ import * as api from '../api'
 import { ConnectView } from '../components/ConnectView'
 import App from '../App'
 
+// THE BUDGET (2026-10-04). The App this file mounts is real work, and it scales with the CPU a test gets: the
+// slowest test takes 0.38 s on a quiet box, 1.5–1.9 s with a fifth of a CPU and 2.5–3.6 s with a tenth, against
+// vitest's 5 s default. 15 s is over twice the tenth; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** "Who hears me" answers 1, 2, 3 … hearing stations, one more on every call. */
 function countingGetout(): void {
   let n = 0
