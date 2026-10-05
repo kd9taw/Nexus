@@ -12,11 +12,13 @@
 // CYLINDERS — 1,500 squares looked like rivets on a ball; operator veto 2026-07-21).
 //
 // Resource story (the operator's hard requirement): the Logbook view is rendered
-// inside App's view switch, so this component UNMOUNTS when you leave the Logbook —
-// WebGL context destroyed, zero GPU. While mounted, an IntersectionObserver pauses
-// the globe's whole render loop (`pauseAnimation`) once the band scrolls out of view
-// inside the log's scroll container, so reading old QSOs at the bottom of a long log
-// costs nothing either.
+// inside App's view switch, so this component UNMOUNTS when you leave the Logbook, and
+// hands its WebGL context back as it goes (globeWebgl.tsx: unmounting alone never did,
+// so every closed globe kept one). A context lost while the band is shown comes back, or
+// the band offers a Reload. While mounted, an IntersectionObserver pauses the globe's
+// whole render loop (`pauseAnimation`) once the band scrolls out of view inside the
+// log's scroll container, so reading old QSOs at the bottom of a long log costs nothing
+// either.
 //
 // ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Band names are technical
 // tokens and stay here, in the <option> values AND in their labels; the prose is in the
@@ -43,6 +45,7 @@ import { useLogAnswer } from '../features/logSource'
 import { BAND_COLOR, bandColor } from '../bandColors'
 import { subsolarPoint } from '../mapGeo'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { GlobePaused, useGlobeWebgl } from './globeWebgl'
 import { t } from '../i18n'
 
 /** Low→high band order = BAND_COLOR's key order (the app's canonical band list). */
@@ -75,8 +78,14 @@ function dotSprite(): THREE.CanvasTexture {
 }
 
 /** The Logbook's globe. It asks the log for what it draws — the bands in it, and the worked
- *  squares of the band on show — following the Logbook's `logTick`, and never holds the log. */
+ *  squares of the band on show — following the Logbook's `logTick`, and never holds the log.
+ *  Reload, on a globe whose WebGL context was lost and never came back, mounts it afresh. */
 export default function QsoGlobe({ logTick }: { logTick?: number }) {
+  const [mount, setMount] = useState(0)
+  return <QsoGlobeView key={mount} logTick={logTick} onReload={() => setMount((n) => n + 1)} />
+}
+
+function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () => void }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const globeRef = useRef<GlobeMethods | undefined>(undefined)
   const cloudRef = useRef<THREE.Points | null>(null)
@@ -293,6 +302,10 @@ export default function QsoGlobe({ logTick }: { logTick?: number }) {
     }
   }, [ready])
 
+  // Last of the effects, so its cleanup (which hands the context back) runs after theirs: the one
+  // above resumes the loop. The spin draws a restored context again on its own.
+  const paused = useGlobeWebgl(globeRef, ready)
+
   return (
     <div className="qso-globe" ref={wrapRef}>
       <button
@@ -338,6 +351,7 @@ export default function QsoGlobe({ logTick }: { logTick?: number }) {
           atmosphereAltitude={0.18}
         />
       )}
+      {paused && <GlobePaused onReload={onReload} />}
     </div>
   )
 }

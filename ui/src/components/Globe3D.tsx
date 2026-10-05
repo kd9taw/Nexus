@@ -10,6 +10,10 @@
 // design §3.3): the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
 // ray from the QTH to the bird — the 2-D map stays the "everything at once" view.
 //
+// Its WebGL context is handed back when the globe goes (Flat picked, Connect closed), and a loss
+// while it is shown is survived, with "3D view paused" and a Reload after RESTORE_WAIT_MS: both in
+// globeWebgl.tsx, shared with the Logbook's globe. The probe below hands its own context back too.
+//
 // ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Satellite names, bands, grids,
 // bearings, elevations, km and the layer ids are technical tokens and stay here; `MUF` is
 // the acronym itself and is a named constant below. The prose is in the catalog under
@@ -71,6 +75,7 @@ import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
+import { GlobePaused, useGlobeWebgl } from './globeWebgl'
 import type {
   PropagationSnapshot,
   PathPrediction,
@@ -452,7 +457,12 @@ const LAYER_ROWS: readonly GlobeLayerRow[] = [
 function webglOk(): boolean {
   try {
     const c = document.createElement('canvas')
-    return !!(c.getContext('webgl2') || c.getContext('webgl'))
+    const gl = c.getContext('webgl2') || c.getContext('webgl')
+    if (!gl) return false
+    // Hand the probe's context straight back: the browser keeps only a handful of live WebGL contexts
+    // and takes the oldest away, and this one would otherwise stay until the next garbage collection.
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return true
   } catch {
     return false
   }
@@ -480,7 +490,14 @@ const polygonCap = (d: object) => (d as { fill: string }).fill
 const polygonTransparent = () => 'rgba(0,0,0,0)'
 const polygonAlt = (d: object) => (d as { alt: number }).alt
 
-export default function Globe3D({
+/** The Connect globe. Reload, on a globe whose WebGL context was lost and never came back, mounts it
+ *  afresh: the same path as picking 3D again (the layers come back from their store). */
+export default function Globe3D(props: Props) {
+  const [mount, setMount] = useState(0)
+  return <Globe3DView key={mount} {...props} onReload={() => setMount((n) => n + 1)} />
+}
+
+function Globe3DView({
   myGrid,
   prop,
   selectedCall,
@@ -493,7 +510,8 @@ export default function Globe3D({
   stations: stationsProp,
   showStates = true,
   layersRev = 0,
-}: Props) {
+  onReload,
+}: Props & { onReload: () => void }) {
   const remoteMap=useContext(NavigationMapContext)
   const remoteConnect=remoteMap?.connect
   const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
@@ -1821,6 +1839,10 @@ export default function Globe3D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [show.sats, satFav, sats, satChaseRev])
 
+  // Last of the effects, so its cleanup (which hands the context back) runs after theirs. A restored
+  // context needs a frame, and this globe's loop sleeps while nothing changes.
+  const paused = useGlobeWebgl(globeRef, ready, () => kickRef.current())
+
   if (!ok) {
     return <div className="globe3d-fallback">{t('globe.unsupported')}</div>
   }
@@ -1960,6 +1982,7 @@ export default function Globe3D({
           ringRepeatPeriod={2600}
         />
       )}
+      {paused && <GlobePaused onReload={onReload} />}
       {hover && (
         <div
           ref={hoverRef}

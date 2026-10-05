@@ -1862,6 +1862,29 @@ button.nb-chip:hover {
   color: var(--text-dim);
   font-size: 0.9rem;
 }
+/* "3D view paused" and its Reload, over a 3-D globe (Connect's or the Logbook's) whose WebGL context
+   was lost and has not come back (components/globeWebgl.tsx). A card in the middle of the blank
+   scene, in the theme's own text on its own panel, so it reads on whatever backdrop the host paints
+   (the Logbook band's is a dark gradient in both themes); under the globe's own controls (z-index 2
+   to 4), which stay usable around it. */
+.globe-paused {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.9rem;
+  text-align: center;
+}
 /* Spin on/off, overlaid on the globe (top-right). */
 .globe3d-spin {
   position: absolute;
