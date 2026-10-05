@@ -503,6 +503,7 @@ export const ES: PartialCatalog = {
   "remote.lan.pair": "Vincular un ordenador",
   "remote.lan.codeHint": "Escribe este código en Nexus en el otro ordenador. Sirve una sola vez, durante diez minutos.",
   "remote.lan.codeWarning": "Quien lo escriba a tiempo podrá manejar esta estación, incluida la transmisión, así que no lo compartas.",
+  "remote.lan.codeLeft": "Caduca en {{time}}",
   "remote.lan.thisStation": "Esta estación: {{address}}, clave {{key}}",
   "remote.lan.computers": "Ordenadores vinculados",
   "remote.lan.noComputers": "Todavía no hay ningún ordenador vinculado.",

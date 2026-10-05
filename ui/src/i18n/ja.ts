@@ -493,6 +493,7 @@ export const JA: PartialCatalog = {
   "remote.lan.pair": "コンピューターをペアリング",
   "remote.lan.codeHint": "このコードを、もう一台のコンピューターの Nexus に入力してください。使えるのは1回だけで、有効期限は10分です。",
   "remote.lan.codeWarning": "期限内にこのコードを入力した人は誰でも、送信を含めてこの局を操作できます。他人に知られないようにしてください。",
+  "remote.lan.codeLeft": "有効期限まで {{time}}",
   "remote.lan.thisStation": "この局：{{address}}、キー {{key}}",
   "remote.lan.computers": "ペアリング済みのコンピューター",
   "remote.lan.noComputers": "ペアリング済みのコンピューターはまだありません。",

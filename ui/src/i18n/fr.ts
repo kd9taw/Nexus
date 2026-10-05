@@ -503,6 +503,7 @@ export const FR: PartialCatalog = {
   "remote.lan.pair": "Associer un ordinateur",
   "remote.lan.codeHint": "Saisissez ce code dans Nexus sur l’autre ordinateur. Il ne sert qu’une fois, dans les dix minutes.",
   "remote.lan.codeWarning": "Quiconque le saisit à temps peut piloter cette station, émission comprise : gardez-le pour vous.",
+  "remote.lan.codeLeft": "Expire dans {{time}}",
   "remote.lan.thisStation": "Cette station : {{address}}, clé {{key}}",
   "remote.lan.computers": "Ordinateurs associés",
   "remote.lan.noComputers": "Aucun ordinateur n’est encore associé.",

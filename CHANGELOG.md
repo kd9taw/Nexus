@@ -371,6 +371,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says it can't play, APRS and SSTV say they can't send, and none of them keys anything. An
   automatic APRS ack that can't go out is skipped and noted in the diagnostic log. Everywhere
   else they work as before.
+- **Remote over this network: the pairing code is hard to miss.** After you press **Pair a
+  computer**, the code shows at the top of the card in large type, with the time it has left
+  counting down, and the card scrolls to it.
 
 ### Added
 

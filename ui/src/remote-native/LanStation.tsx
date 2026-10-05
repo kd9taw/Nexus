@@ -15,7 +15,12 @@
 // picks. WINDOWS' OWN PROMPT (the same day's ruling): Nexus adds no firewall rule. The card says
 // beforehand to allow Private networks only, says what in the firewall stands in the way once it
 // listens, and says plainly what it cannot see from here: a network that keeps its devices apart.
-import { useEffect, useRef, useState } from 'react'
+//
+// THE CODE LEADS THE CARD (the operator, 2026-10-05: at the shack it was hard to find in the middle
+// of the card): while a window is open its code is the card's first content, large, with the time the
+// window has left. The press that opens the window brings the code into view and moves focus to
+// it, since the button pressed is gone; a window already open when the card is shown moves nothing.
+import { useEffect, useId, useRef, useState } from 'react'
 import { getRemoteStationStatus, remoteStationAction } from '../api'
 import { t } from '../i18n'
 import { isStreamInput } from './stream-input'
@@ -29,6 +34,11 @@ export const LAN_POLL_MS = 2000
 const grouped = (hex: string, chars: number) => (hex.slice(0, chars).match(/.{1,4}/g) ?? []).join(' ')
 /** A key's fingerprint as both ends show it: its first 128 bits, eight groups of four. */
 const fingerprint = (hex: string) => grouped(hex.toUpperCase(), 32)
+/** Milliseconds as m:ss, rounded up and never below zero: 0:00 only once the window has closed. */
+const minutesSeconds = (ms: number) => {
+  const seconds = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
 
 function statusLine(lan: LanStatus | null): string {
   if (lan?.on && lan.listening) return t('remote.lan.listening', { address: lan.listening })
@@ -72,6 +82,10 @@ export function LanStation() {
   const [error, setError] = useState<string | null>(null)
   const [refused, setRefused] = useState(false)
   const mounted = useRef(true)
+  const codeRegion = useRef<HTMLDivElement | null>(null)
+  const codeId = useId()
+  // Set by the Pair press, so that only the window it opens is brought into view.
+  const reveal = useRef(false)
   useEffect(() => {
     mounted.current = true
     const read = async () => {
@@ -87,10 +101,27 @@ export function LanStation() {
     // anything awaits, while the stream's dispatch is still the one running.
     if (isStreamInput()) { setRefused(true); return }
     setRefused(false); setBusy(true); setError(null)
+    reveal.current = action.type === 'lanPair'
     try { const next = await remoteStationAction(action); if (mounted.current) setLan(next.lan ?? null) }
-    catch (failure) { if (mounted.current) setError(typeof failure === 'string' ? failure : 'unavailable') }
+    catch (failure) { reveal.current = false; if (mounted.current) setError(typeof failure === 'string' ? failure : 'unavailable') }
     finally { if (mounted.current) setBusy(false) }
   }
+  const code = lan?.pairing?.code
+  useEffect(() => {
+    const region = codeRegion.current
+    if (!code || !reveal.current || !region) return
+    reveal.current = false
+    region.focus({ preventScroll: true })
+    region.scrollIntoView?.({ block: 'nearest' })
+  }, [code])
+  // While a window is open the card reads the clock each second, for the time it has left.
+  const closesAt = lan?.pairing?.closesAt
+  const [, setSecond] = useState(0)
+  useEffect(() => {
+    if (closesAt === undefined) return
+    const timer = setInterval(() => setSecond(second => second + 1), 1000)
+    return () => clearInterval(timer)
+  }, [closesAt])
   const on = lan?.on === true
   const devices = lan?.devices ?? []
   const networks = lan?.networks ?? []
@@ -110,6 +141,19 @@ export function LanStation() {
       {!on && <span className="settings-hint">{t('remote.lan.firewallFirst')}</span>}
     </div>
     <div className="remote-section remote-native">
+      {/* Polite live, and named by its code for the focus the press gives it; the countdown in it
+          changes every second, so it is not read out. */}
+      {lan?.pairing && <div className="remote-lan-pairing" ref={codeRegion} tabIndex={-1} role="group" aria-labelledby={codeId} aria-live="polite">
+        <p id={codeId} className="remote-lan-pairing-code">{t('remote.pairingCode')} <code>{grouped(lan.pairing.code, 16)}</code></p>
+        <p className="remote-lan-pairing-left" role="timer" aria-live="off">
+          {t('remote.lan.codeLeft', { time: minutesSeconds(lan.pairing.closesAt - Date.now()) })}</p>
+        <p>{t('remote.lan.codeHint')}</p>
+        <p className="remote-warning">{t('remote.lan.codeWarning')}</p>
+        {lan.listening && lan.key && <p>{t('remote.lan.thisStation', { address: lan.listening, key: fingerprint(lan.key) })}</p>}
+        <div className="remote-actions">
+          <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'lanCancel' })}>{t('remote.cancelPairing')}</button>
+        </div>
+      </div>}
       <p role="status">{statusLine(lan)}</p>
       {refused && <p role="alert">{t('remote.lan.atShackOnly')}</p>}
       {error && <p role="alert">{errorLine(error)}</p>}
@@ -130,15 +174,6 @@ export function LanStation() {
       {on && !lan?.pairing && <div className="remote-actions">
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'lanPair' })}>{t('remote.lan.pair')}</button>
       </div>}
-      {lan?.pairing && <>
-        <p>{t('remote.pairingCode')} <code>{grouped(lan.pairing.code, 16)}</code></p>
-        <p>{t('remote.lan.codeHint')}</p>
-        <p className="remote-warning">{t('remote.lan.codeWarning')}</p>
-        {lan.listening && lan.key && <p>{t('remote.lan.thisStation', { address: lan.listening, key: fingerprint(lan.key) })}</p>}
-        <div className="remote-actions">
-          <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'lanCancel' })}>{t('remote.cancelPairing')}</button>
-        </div>
-      </>}
       <h3>{t('remote.lan.computers')}</h3>
       {devices.length === 0 ? <p>{t('remote.lan.noComputers')}</p> : <ul className="remote-native-browsers">
         {devices.map(device => <li key={device.id} className="remote-native-browser">

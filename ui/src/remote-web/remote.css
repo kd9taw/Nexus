@@ -65,3 +65,15 @@
 /* The question at the shack: the key large enough to compare group by group with the browser's. */
 .remote-approval-key { margin: 12px 0; }
 .remote-approval-key code { font-family: var(--font-mono); font-size: 1.5em; font-weight: 700; letter-spacing: .08em; overflow-wrap: anywhere; }
+
+/* Remote over this network at the shack: while a pairing window is open its code leads the card, at
+   the size of the app's hero readouts so it can be read out across the room, grouped in fours, with
+   the time the window has left (tabular, so the line does not jitter as it counts down). Its top
+   margin is the one the card's first paragraph has, which keeps it and its focus ring clear of the
+   switch's hint; the scroll margin keeps the ring clear of the panel's edge when the press brings it
+   into view. */
+.remote-lan-pairing { display: grid; gap: 8px; margin-top: 1em; padding: 12px 16px; min-width: 0; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg-elev-2); scroll-margin: 8px; }
+.remote-lan-pairing p { margin: 0; }
+.remote-lan-pairing-code { font-weight: 700; color: var(--text-dim); }
+.remote-lan-pairing-code code { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: var(--fs-display); line-height: var(--lh-tight); letter-spacing: .08em; color: var(--text); }
+.remote-lan-pairing-left { color: var(--text-dim); font-variant-numeric: tabular-nums; }

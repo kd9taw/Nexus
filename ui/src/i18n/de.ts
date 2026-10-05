@@ -488,6 +488,7 @@ export const DE: PartialCatalog = {
   "remote.lan.pair": "Computer koppeln",
   "remote.lan.codeHint": "Gib diesen Code in Nexus auf dem anderen Computer ein. Er gilt einmal und nur zehn Minuten lang.",
   "remote.lan.codeWarning": "Wer ihn rechtzeitig eingibt, kann diese Station bedienen, auch senden. Behalte ihn also für dich.",
+  "remote.lan.codeLeft": "Läuft ab in {{time}}",
   "remote.lan.thisStation": "Diese Station: {{address}}, Schlüssel {{key}}",
   "remote.lan.computers": "Gekoppelte Computer",
   "remote.lan.noComputers": "Noch ist kein Computer gekoppelt.",
