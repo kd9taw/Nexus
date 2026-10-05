@@ -964,10 +964,12 @@ fn native_audio_streams_the_served_slice_on_the_one_session() {
             .find_map(|c| c.strip_prefix("client udpport ").map(str::to_string))
     });
     assert!(port.parse::<u16>().is_ok_and(|p| p != 0));
+    // The daemon has sent the datagram by the time it is up, but the simulator logs it on its own
+    // UDP thread, which may not have run yet: wait for it, as `wait_count` does for a command.
     assert!(
-        sim.log().iter().any(
+        sim.wait_for(WAIT, |log| log.iter().any(
             |l| matches!(&l.event, SimEvent::UdpIn { bytes, from } if *bytes == [0u8] && from.port().to_string() == port)
-        ),
+        )),
         "the registration datagram, from the registered port"
     );
     d.set_native_audio(true);
