@@ -69,6 +69,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still end the over, and the station still decides whether to key. Pressing PTT while it is greyed
   out now does nothing, as the button shows; a press that lands in one of those few milliseconds needs
   pressing again.
+- **Remote streaming: Space works on the Remote PTT after a brief connection hiccup.** If you had
+  tabbed to the stream page's PTT, Space and Enter stopped working on it after the next brief hiccup
+  in the page's link to the station (a few milliseconds, every few seconds), until you clicked or
+  tabbed to it again: the browser took the focus off the greyed-out button. The PTT now keeps the
+  focus while it is greyed out, and Space works on it again the moment it is lit. A press while it is
+  greyed out still does nothing, and a screen reader still announces it as unavailable.
+- **Remote: panels no longer blank on a busy station.** When Nexus at the shack was busy with the
+  radio just as the Remote page first asked for a panel's reading, the shack answered that it was
+  busy and the panel stayed blank until it asked again. The page now asks again up to three times, a
+  quarter of a second apart, as it already did for the log and the other lists. Only readings are
+  asked again, never anything that transmits.
 - **Remote streaming: leaving full screen sends Stop TX in Chrome and Edge too.** In Firefox and
   Safari, leaving full screen any way but **Exit full screen** already sent Stop TX. Chrome and Edge
   skipped that Stop, trusting Esc to reach the page and stop first, so a browser that reported
