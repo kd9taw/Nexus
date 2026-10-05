@@ -90,6 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every tick (`7.030` five times by default); now `7.0296 7.0298 7.0300 7.0302 7.0304`. Any scale with
   ticks under 1 kHz apart does the same, including the Phone scope at a 2.4 kHz width. Wider scales are
   unchanged.
+- **Scope: a frequency label no longer prints over the one beside it on a narrow scope.** On a phone,
+  the Remote page's CW scope drew its right-edge label on top of its neighbour at 20 m and 2 m. A label
+  with no room is now left off and its tick stays; wider scopes draw every label as before.
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
