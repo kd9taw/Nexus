@@ -4,10 +4,30 @@
 // renderers (SwiftShader / llvmpipe / Microsoft Basic Render) and require a real texture
 // budget. A capable machine → 3D is a choice; anything else → 3D is shown unavailable, and
 // every machine opens on the 2-D Globe either way.
+//
+// `webgl2Available` is the street map's gate, and it asks only what MapLibre needs: can a WebGL2
+// context be created at all. Software GL counts. It must never reuse the globe's probe, which
+// fails closed whenever the renderer string is masked — WebKitGTK masks it by default, so that
+// probe would hide the street map on every Linux and Raspberry Pi install.
+//
+// EVERY PROBE RELEASES ITS CONTEXT. A context nobody releases stays live until the page lets go
+// of the canvas, and Chromium keeps at most 16 live WebGL contexts per renderer process, evicting
+// the OLDEST when another is made — a leaked probe is one fewer for the maps and the spectrum.
+
+/** Hand a probe's context back now, the way the spectrum renderer does on destroy. */
+function release(gl: WebGLRenderingContext | null): void {
+  try {
+    gl?.getExtension('WEBGL_lose_context')?.loseContext()
+  } catch {
+    /* already lost or never usable: nothing to hand back */
+  }
+}
+
 export function gpuCapableForGlobe(): boolean {
+  let gl: WebGLRenderingContext | null = null
   try {
     const c = document.createElement('canvas')
-    const gl = (c.getContext('webgl2') ||
+    gl = (c.getContext('webgl2') ||
       c.getContext('webgl')) as WebGLRenderingContext | null
     if (!gl) return false
     const dbg = gl.getExtension('WEBGL_debug_renderer_info')
@@ -26,5 +46,20 @@ export function gpuCapableForGlobe(): boolean {
     return !software && maxTex >= 4096
   } catch {
     return false
+  } finally {
+    release(gl)
+  }
+}
+
+/** Whether this webview can create a WebGL2 context — the street map's whole requirement. */
+export function webgl2Available(): boolean {
+  let gl: WebGL2RenderingContext | null = null
+  try {
+    gl = document.createElement('canvas').getContext('webgl2')
+    return gl !== null
+  } catch {
+    return false
+  } finally {
+    release(gl)
   }
 }
