@@ -7526,10 +7526,14 @@ select optgroup {
   --need-state: #0f766e; /* teal — new US state (WAS) */
   --need-confirm: #64748b;
   --need-dxped: #0369a1;
-  --need-pota: #15803d;
+  /* A step darker than the #15803d it was (operator, 2026-10-05: "Add a brightness difference too"), so the
+     dim POTA mark below differs from it in light and not mostly in colour, which is all an operator who cannot
+     tell two greens apart has to go on: 0.094 apart in OKLab L, where they were 0.04. No darker: the Phone
+     scope paints the light theme's need inks on its dark floor too, and this one reads 3.03:1 there. */
+  --need-pota: #006f30;
   --need-sota: #6d28d9;
-  /* The dim POTA mark: the new-park green reads only 3.6 to 3.9:1 on the light tracks, so this
-     one gives up its colour more than its light — 48 % of the chroma, 3.15 to 3.35:1. */
+  /* The dim POTA mark: the new-park green reads 4.6 to 4.9:1 on the light tracks, and this one 3.15 to
+     3.35:1, a step lighter and with half its chroma. */
   --pota-dim: #52836a;
   --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
   --need-mode-rtty: #8a5200;

@@ -343,7 +343,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets a dim green mark with its P, even when there is nothing new to gain from it, so you can
   see every activation on the band at a glance. A park you still need keeps the full new-park
   green, and a real need such as a new country still shows its own colour first. The dim
-  colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged.
+  colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged. In the light
+  theme the full new-park green (and the P badge with it) is a shade darker, so the two greens
+  differ in brightness and not only in colour, which helps if you find greens hard to tell apart.
 - **A park you still need now comes before a confirmation everywhere.** When an activator is at
   a park or summit you have not worked in this activation and is also a confirmation opportunity
   (worked before, not yet confirmed), the park now leads: Band activity and its band map show the

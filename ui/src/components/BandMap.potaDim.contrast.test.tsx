@@ -7,11 +7,16 @@
 // activity strip and of the pop-out band map. The new-park colour it must stay dimmer than is the
 // POTA green (`--need-pota`), which a park still to be worked keeps. The two themes leave it very
 // different room: on the dark tracks that green reads about 9.4 to 11.5:1, so the dim colour can
-// give up most of its light and its colour; on the light tracks it reads only about 3.6 to 3.9:1,
-// so a dim colour has almost no light to give up before the floor and is dimmed mostly in colour
+// give up most of its light and its colour; on the light tracks it reads about 4.6 to 4.9:1, so a
+// dim colour has little light to give up before the floor and gives up more of its colour
 // (chroma). "Dimmer" is held as all three: less contrast on the track than the new-park colour,
 // at most 60 % of its chroma, and a visible step away from it (ΔE_OK ≥ 0.06, three just-noticeable
 // differences).
+//
+// AND A STEP IN LIGHTNESS (operator, 2026-10-05, "Add a brightness difference too"). An operator who cannot tell
+// two greens apart by their colour tells them apart by their light. The light theme's pair differed mostly in
+// colour, 0.04 apart in OKLab L, when its new-park green read only 3.6 to 3.9:1 on the light tracks; that green
+// is now darker, and the two are held at least 0.09 apart in every theme.
 //
 // The strip and the map are rendered and the cascade is resolved on their own chains with the app's
 // own resolver (cssCascade.ts), in every base mode (day and night, standard and high contrast), bare
@@ -61,7 +66,15 @@ const DARK_ONLY = RULES.map((r) =>
   r.selector === "[data-theme='light']" ? { ...r, decls: r.decls.filter((d) => d.prop !== '--pota-dim') } : r,
 )
 
+/** The light theme's new-park green as it shipped until 2026-10-05, 0.04 darker than the dim colour. */
+const LIGHT_AS_SHIPPED = RULES.map((r) =>
+  r.selector === "[data-theme='light']" ? { ...r, decls: r.decls.map((d) => (d.prop === '--need-pota' ? { ...d, value: '#15803d' } : d)) } : r,
+)
+
 const MARK_MIN = 3
+/** The least step in OKLab lightness between a dim mark and the new-park colour: four and a half just-noticeable
+ *  differences (0.02 each), more than twice the light theme's old 0.04. */
+const LIGHTNESS_STEP = 0.09
 const skinsOf = (theme: 'light' | 'dark') => ['', ...SKINS.filter((s) => s.base === theme).map((s) => s.id)]
 /** Every base mode, bare and on every built-in theme of its base. */
 const MODES: Mode[] = BASE_MODES.flatMap((b) => skinsOf(baseTheme(b)).map((skin) => (skin ? withRoles(b, { skin }) : b)))
@@ -223,6 +236,19 @@ function notDimmer(rules: Rule[], modes: readonly Mode[]): string[] {
   return out
 }
 
+/** Every dim mark less than a clear step in lightness from the new-park tick beside it. */
+function tooAlike(rules: Rule[], modes: readonly Mode[]): string[] {
+  const out: string[] = []
+  for (const mode of modes)
+    for (const m of measure(rules, mode, SURFACES))
+      for (const d of m.dim) {
+        const [ld, lp] = [oklch(d).L, oklch(m.park).L]
+        if (Math.abs(ld - lp) < LIGHTNESS_STEP)
+          out.push(`${m.name} ${mode}: ${hex(d)} L ${ld.toFixed(3)} vs new-park ${hex(m.park)} L ${lp.toFixed(3)}`)
+      }
+  return out
+}
+
 describe('the dim POTA colour on Band activity and its band map, in every theme', () => {
   it('renders the marks it measures (the census cannot silently empty out)', () => {
     expect(SURFACES.map((s) => [s.name, s.dim.length])).toEqual([
@@ -252,6 +278,10 @@ describe('the dim POTA colour on Band activity and its band map, in every theme'
     expect(notDimmer(RULES, MODES)).toEqual([])
   }, 60_000)
 
+  it(`every dim mark is a step in lightness from the new-park colour: ${LIGHTNESS_STEP} or more in OKLab L`, () => {
+    expect(tooAlike(RULES, MODES)).toEqual([])
+  }, 60_000)
+
   it('no colour-role preset sets a token this measures, so leaving them out hides nothing', () => {
     const measured = ['--bg', '--text', '--panel', '--need-pota', '--pota-dim']
     const set = PALETTE_ROLES.flatMap((r) => [...r.tokens, ...r.aliases])
@@ -270,5 +300,10 @@ describe('the dim POTA colour on Band activity and its band map, in every theme'
     expect(found.length).toBeGreaterThan(0)
     expect(found.every((f) => LIGHT.some((m) => f.includes(` ${m}: `)))).toBe(true)
     expect(notDimmer(DARK_ONLY, DARK)).toEqual([])
+  }, 60_000)
+
+  it('FIRES: the light theme’s greens as they shipped, 0.04 apart in lightness, are caught on every light mark, and only there', () => {
+    expect(tooAlike(LIGHT_AS_SHIPPED, MODES)).toHaveLength(LIGHT.length * 3)
+    expect(tooAlike(LIGHT_AS_SHIPPED, DARK)).toEqual([])
   }, 60_000)
 })
