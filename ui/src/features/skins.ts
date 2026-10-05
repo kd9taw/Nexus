@@ -96,7 +96,7 @@ export interface Skin {
   /** A light skin's display wells at night. */
   nightWell?: SkinValues
   /** A dark skin's map basemap (MAP_TOKENS), in its day block and so at night too. A light
-   *  skin keeps the standard one: the basemap is dark in every theme. */
+   *  skin keeps the standard one. */
   map?: SkinValues
 }
 
@@ -138,23 +138,24 @@ export const MAP_TOKENS = [
 export type MapToken = (typeof MAP_TOKENS)[number]
 
 /** The standard basemap, in both standard themes and on a light built-in theme: a map should read
- *  as a MAP (filled land and sea), not a wireframe, and this one is deliberately theme-agnostic
- *  and dark (as wall maps are), so it looks intentional in any theme. MapView also paints
- *  it where no sheet is loaded. */
+ *  as a MAP (filled land and sea), not a wireframe. A light atlas palette under the shaded relief
+ *  (operator pick 2026-10-04: "lighter look"), so the greyline's night shading reads strongly on
+ *  the day side, the same in every theme. MapView also paints it where no sheet is loaded, and the
+ *  3-D globes paint their texture from it. */
 export const STANDARD_MAP: Readonly<Record<MapToken, string>> = {
-  '--map-ocean': '#0f2334', // deep sea
-  '--map-land': '#364a3c', // muted continental green (the flat World and AEQD maps)
-  '--map-land-globe': '#1c2b2a', // a darker landmass on the globe, a moody night-earth, so the spots and arcs are what pop
-  '--map-coast': '#6f8a98', // coastlines and borders, visible but quiet
-  '--map-state': '#4d6675', // US state borders, quieter than the coast and still readable
-  '--map-rim': '#2a4254', // the globe's edge (AEQD reads as a sphere)
-  '--map-ocean-lit': '#1c4a66', // the globe's lit ocean, toward the light
-  '--map-ocean-deep': '#06101c', // the globe's limb, its dark edge
+  '--map-ocean': '#bcd3e3', // the sea and the lakes: a soft blue-grey
+  '--map-land': '#eeebe2', // warm paper land under the relief (the flat World and AEQD maps)
+  '--map-land-globe': '#e3dfd3', // a step darker on the 2-D globe, so its shading reads as a sphere
+  '--map-coast': '#5f7f96', // coastlines and borders (and the grid and range rings): steel blue, crisp
+  '--map-state': '#9aa3aa', // US state lines, quieter than the coast and still readable
+  '--map-rim': '#82a3bc', // the globe's edge, and the rivers: a step deeper than the sea
+  '--map-ocean-lit': '#d5e5f0', // the globe's lit sea, toward the light
+  '--map-ocean-deep': '#8fb0c6', // the globe's limb, its shaded edge
 }
 
 /** The sun and the moon on the map (MapView, Globe3D; drawn by features/skyGlyphs). The same inks in
- *  every theme and mode: the sun is the sun, and both are drawn over the basemap, which is dark in
- *  both themes. So no theme may declare one (a theme block declares a theme's tokens only), and
+ *  every theme and mode: the sun is the sun, and both are drawn over the basemap with the markers'
+ *  dark halo. So no theme may declare one (a theme block declares a theme's tokens only), and
  *  styles.css MAP SKY holds the one table. */
 export const SKY_TOKENS = ['--map-sun', '--map-moon-lit', '--map-moon-dark'] as const
 export type SkyToken = (typeof SKY_TOKENS)[number]

@@ -39,7 +39,8 @@ vi.mock('react-globe.gl', async () => {
     scene: () => scene,
     postProcessingComposer: () => ({ addPass() {}, passes: [] }),
     controls: () => controls,
-    pointOfView: () => {},
+    // globe.gl's getter: where the camera is (its setter form is the same call with arguments).
+    pointOfView: () => ({ lat: 0, lng: 0, altitude: 2.2 }),
     paused: false,
     frames: 0,
     pauseAnimation: () => {

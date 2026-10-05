@@ -81,8 +81,8 @@ const R_EARTH_KM = 6371
 /** How much of the box the searched area spans, either way, leaving the edge for a label. */
 const FIT = 0.84
 
-/** The machines: amber reads on the basemap's dark land and sea, which are dark in both themes
- *  (styles.css "MAP BASEMAP"), and on every built-in theme's own basemap. */
+/** The machines: amber, edged with the dark halo, reads on the basemap's land and sea (styles.css
+ *  "MAP BASEMAP") and on every built-in theme's own basemap. */
 const MACHINE = '#ffcc44'
 /** The radius ring and the route's corridor: the 2-D map's quiet path blue, so the area recedes
  *  under the machines in it. */
@@ -90,7 +90,7 @@ const AREA = '#8fb8d8'
 const AREA_FILL = 'rgba(143, 184, 216, 0.14)'
 const INK = '#eef3f6'
 /** The ring on a linked or selected dot: white over the dark halo, so it reads on the basemap in every theme
- *  (the basemap is dark in both) and on the amber dot it circles. */
+ *  and on the amber dot it circles. */
 const LINK_RING = '#ffffff'
 /** MapView's MARKER_HALO: a dark edge that lifts a marker or a label off whatever it lands on. */
 const HALO = 'rgba(2, 7, 12, 0.9)'

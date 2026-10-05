@@ -2,9 +2,10 @@
 // machines. The 2-D Canvas globe (MapView) stays the universal default; this is lazy-
 // loaded, so a low-end shack PC never downloads three.js unless the operator turns it on.
 // It reuses the SAME propagation data as MapView (spots, the operator's QTH, the selected
-// station) and renders it on a real textured sphere with a dark night-earth mood, a
-// subsolar day/night terminator, band-colored spots, selected/heard-me great-circle arcs,
-// a QTH ping, a starfield, and bloom. Phase A of the 3-D plan (look + foundation).
+// station) and renders it on a real sphere wearing the 2-D map's own picture
+// (features/globeBasemap.ts), a subsolar day/night terminator, band-colored spots,
+// selected/heard-me great-circle arcs, a QTH ping, a starfield, and bloom. Phase A of the
+// 3-D plan (look + foundation).
 // On a tracked satellite pass it ALSO becomes the "this pass" view (satellite visual
 // design §3.3): the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
 // ray from the QTH to the bird — the 2-D map stays the "everything at once" view.
@@ -31,8 +32,22 @@ import {
 import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
-import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
+import { basemapAt, coarsestBasemap, loadBasemap, type BasemapScale } from '../basemap'
+import {
+  GLOBE_AMBIENT,
+  GLOBE_BLOOM_THRESHOLD,
+  GLOBE_FIFTY_ABOVE,
+  GLOBE_SUN,
+  GLOBE_TEN_BELOW,
+  disposeGlobeLines,
+  globeLines,
+  nightOnlyEmissive,
+  loadRelief,
+  paintGlobeTexture,
+  readMapInks,
+} from '../features/globeBasemap'
+import { usePaletteKey } from '../usePaletteRoles'
 import { gridToLatLon } from '../grid'
 import { placeHoverCard, MARKER_HALO } from './MapView'
 import { MOON_DISC, SUN_DISC, SUN_REACH, drawMoon, drawSun } from '../features/skyGlyphs'
@@ -41,7 +56,6 @@ import { bandColor, openingModeColor } from '../bandColors'
 import {
   subsolarPoint,
   moonAt,
-  usStateBorders,
   flareField,
   flareRScale,
   destinationPoint,
@@ -458,9 +472,6 @@ function webglOk(): boolean {
 // Not every accessor matters: the rings layer declares `ringColor` and its four siblings
 // `triggerUpdate: false`, so an inline one there reaches the layer and changes nothing. Check
 // the prop's declaration before assuming either way.
-const pathPointLat = (p: unknown) => (p as [number, number])[0]
-const pathPointLng = (p: unknown) => (p as [number, number])[1]
-const pathColor = () => 'rgba(126,158,180,0.8)'
 // react-globe.gl declares polygon coordinates as number[] — wrong for polygons (runtime accepts
 // the standard nested GeoJSON rings) — so cast to its shape.
 const polygonGeometry = (d: object) =>
@@ -693,13 +704,6 @@ export default function Globe3D({
   }, [spots, stations, selectedCall, qth, show.arcs, show.rxarcs])
   const arcs = useStableByKey(arcsBuilt, JSON.stringify(arcsBuilt))
 
-  // US state borders as globe paths (one path per border line-string).
-  const statePaths = useMemo(() => {
-    // usStateBorders() returns a GeoJSON MultiLineString mesh (lon/lat coords).
-    const geo = usStateBorders() as unknown as { coordinates?: [number, number][][] }
-    return (geo.coordinates ?? []).map((line) => line.map(([lon, lat]) => [lat, lon] as [number, number]))
-  }, [])
-
   // The QTH ping ring — HELD BY ITS DATUM, for the spots' reason (§4/§5 of the render test).
   // three-globe's rings layer joins on DATUM IDENTITY too, and its `onCreateObj` returns a Group
   // with no `__nextRingTime`, so a rebuilt one spawns a ring at radius 0 on the next frame: built
@@ -709,30 +713,103 @@ export default function Globe3D({
   // accessors either — `ringColor` and friends are `triggerUpdate: false` in the shipped layer.
   const rings = useMemo(() => (qth ? [{ lat: qth.lat, lng: qth.lon }] : []), [qth])
 
-  // The globe surface material: the day-side texture darkened toward the 2-D globe's
-  // night-earth mood. Built here (not via a ref getter — react-globe.gl takes it as a
-  // prop) so it's ready before first paint. Lit by the subsolar light set up below.
+  // The globe surface material: the 2-D map's own picture (features/globeBasemap.ts) — the theme's
+  // sea and land, the shaded relief, lakes and rivers — painted onto the sphere once the basemap and
+  // the relief are here, and again when the theme changes; the sea's colour until then. Built here
+  // (not via a ref getter — react-globe.gl takes it as a prop) so it's ready before first paint. Lit
+  // by the subsolar light set up below: the day side comes up to the flat map's colours, the night
+  // side falls to about a third of them, and the city lights glow there as a dimmed emissive.
   const globeMat = useMemo(() => {
     const loader = new THREE.TextureLoader()
     // A texture that finishes loading while the render loop is paused must still reach the screen.
-    const day = loader.load(earthUrl, () => frameRef.current())
-    day.colorSpace = THREE.SRGBColorSpace
     const night = loader.load(earthNightUrl, () => frameRef.current())
     night.colorSpace = THREE.SRGBColorSpace
-    return new THREE.MeshPhongMaterial({
-      map: day,
-      color: new THREE.Color('#28323d'), // cool dark blue-grey — moody, less green than the raw relief
-      // City lights as a DIMMED emissive glow: brightest on the dark (night) side, washed
-      // out by the sun on the day side. This is the "dark earth, less lights" look.
+    const m = new THREE.MeshPhongMaterial({
+      color: new THREE.Color(readMapInks().water),
       emissiveMap: night,
       emissive: new THREE.Color('#ffffff'),
       emissiveIntensity: 0.35, // dimmed city lights — a faint glow, not a blaze
       shininess: 4,
     })
+    nightOnlyEmissive(m)
+    return m
   }, [])
+  const paletteKey = usePaletteKey()
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    let live = true
+    void Promise.all([loadBasemap('50m'), loadRelief()]).then(([map, img]) => {
+      if (!live) return
+      const caps = g.renderer().capabilities
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.min(4096, caps.maxTextureSize)
+      canvas.height = canvas.width / 2
+      paintGlobeTexture(canvas, map ?? coarsestBasemap(), readMapInks(), img)
+      const tex = new THREE.CanvasTexture(canvas)
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.anisotropy = caps.getMaxAnisotropy()
+      globeMat.map?.dispose()
+      globeMat.map = tex
+      globeMat.color.set('#ffffff')
+      globeMat.needsUpdate = true
+      frameRef.current()
+    })
+    return () => {
+      live = false
+    }
+  }, [ready, globeMat, paletteKey])
+  useEffect(() => () => globeMat.map?.dispose(), [globeMat])
 
-  // One-time three.js setup once the globe is ready: dark material, a subsolar
-  // day/night light, a starfield, and bloom. Guarded so a GPU quirk degrades to a
+  // The coast, the borders and the US states as lines a hair above the sphere: 1:50m from afar,
+  // 1:10m once the camera is close (with a margin each way, so a wheel step at the edge does not
+  // flip it back and forth). The states follow their layer toggle.
+  const [lineScale, setLineScale] = useState<BasemapScale>('50m')
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const controls = g.controls() as unknown as THREE.EventDispatcher<Record<string, object>>
+    const onChange = () => {
+      const alt = g.pointOfView().altitude
+      setLineScale((s) => (s === '50m' && alt < GLOBE_TEN_BELOW ? '10m' : s === '10m' && alt > GLOBE_FIFTY_ABOVE ? '50m' : s))
+    }
+    controls.addEventListener('change', onChange)
+    onChange()
+    return () => controls.removeEventListener('change', onChange)
+  }, [ready])
+  const showStatesRef = useRef(show.states)
+  showStatesRef.current = show.states
+  const baseLinesRef = useRef<THREE.Group | null>(null)
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    let live = true
+    let group: THREE.Group | null = null
+    void loadBasemap(lineScale).then(() => {
+      if (!live) return
+      group = globeLines(basemapAt(lineScale), readMapInks())
+      group.getObjectByName('states')!.visible = showStatesRef.current
+      baseLinesRef.current = group
+      g.scene().add(group)
+      frameRef.current()
+    })
+    return () => {
+      live = false
+      if (group) {
+        g.scene().remove(group)
+        disposeGlobeLines(group)
+        if (baseLinesRef.current === group) baseLinesRef.current = null
+      }
+    }
+  }, [ready, lineScale, paletteKey])
+  useEffect(() => {
+    const states = baseLinesRef.current?.getObjectByName('states')
+    if (states) states.visible = show.states
+    frameRef.current()
+  }, [show.states])
+
+  // One-time three.js setup once the globe is ready: a subsolar day/night light, a
+  // starfield, and bloom. Guarded so a GPU quirk degrades to a
   // plain lit globe rather than a blank panel.
   useEffect(() => {
     const g = globeRef.current
@@ -740,13 +817,13 @@ export default function Globe3D({
     try {
       // Day/night: a warm directional light at the subsolar point + a low ambient so
       // the night side isn't pure black. Replaces globe.gl's camera-following light.
-      const sun = new THREE.DirectionalLight('#fff2dc', 1.7)
+      const sun = new THREE.DirectionalLight(GLOBE_SUN.color, GLOBE_SUN.intensity)
       const ss = subsolarPoint(Date.now())
       const p = g.getCoords(ss.lat, ss.lon, 2)
       sun.position.set(p.x, p.y, p.z)
-      // Enough ambient that the night side reads (dark land + coasts + the city lights),
-      // but low enough that the lights aren't washed out — a moonlit night, not daylight.
-      g.lights([new THREE.AmbientLight('#4a5566', 0.7), sun])
+      // Enough ambient that the night side reads (land, coasts and the city lights), the way the
+      // flat map's greyline shades it, but low enough that the lights are not washed out.
+      g.lights([new THREE.AmbientLight(GLOBE_AMBIENT.color, GLOBE_AMBIENT.intensity), sun])
       // Starfield: a shell of points around the scene (no texture asset needed).
       const N = 1400
       const pos = new Float32Array(N * 3)
@@ -768,11 +845,13 @@ export default function Globe3D({
       // blowout — the "globe goes massively bright after resizing the window, and only a 2D↔3D
       // toggle resets it" bug. Size the pass off the live container so the first frame is correct.
       const el = wrapRef.current
+      // The threshold sits above the day side's own brightness: on the map-coloured earth only the
+      // spots, the arcs and the city lights are bright enough to glow, never the land itself.
       const bloom = new UnrealBloomPass(
         new THREE.Vector2(el?.clientWidth || 1, el?.clientHeight || 1),
         0.6,
         0.7,
-        0.2,
+        GLOBE_BLOOM_THRESHOLD,
       )
       const composer = g.postProcessingComposer()
       composer.addPass(bloom)
@@ -1669,7 +1748,7 @@ export default function Globe3D({
   // and the graticule), the pass fly-to, and a resize.
   useEffect(() => {
     kickRef.current()
-  }, [arcs, points, sectorPolys, statePaths, show, selectedCall, livePass, size.w, size.h])
+  }, [arcs, points, sectorPolys, show, selectedCall, livePass, size.w, size.h])
   // ONE FRAME: everything this component writes straight into the scene — the point clouds, the
   // line overlays and labels, the satellite scene, the sun and the moon, and the 1 s breath.
   useEffect(() => {
@@ -1736,7 +1815,7 @@ export default function Globe3D({
   const satAllHidden = useMemo(() => {
     if (!show.sats || !satFav || !sats || sats.birds.length === 0) return 0
     const keys = satChaseKeys()
-    if (keys.names.size === 0) return 0 // zero stars = filter inert, sky full
+    if (keys.names.size === 0) return 0 // zero stars: no ★ bird to miss, the workable birds show
     return filterSatsToChased(sats.birds, keys).length === 0 ? sats.birds.length : 0
     // satChaseRev: star toggles land in storage, not props — the rev is the rerender.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1784,7 +1863,13 @@ export default function Globe3D({
                   className={`sat-fav-toggle${satFav ? ' on' : ''}`}
                   aria-label={t('globe.sats.filter.aria')}
                   aria-pressed={satFav}
-                  title={satFav ? t('globe.sats.filter.on.title') : t('globe.sats.filter.off.title')}
+                  title={
+                    !satFav
+                      ? t('globe.sats.filter.off.title')
+                      : satChaseKeys().names.size === 0
+                        ? t('globe.sats.filter.none.title')
+                        : t('globe.sats.filter.on.title')
+                  }
                   onClick={() => setSatFavOnly(!satFav)}
                 >
                   {satFav ? '★' : t('globe.sats.filter.all')}
@@ -1868,11 +1953,6 @@ export default function Globe3D({
           polygonStrokeColor={polygonTransparent}
           polygonAltitude={polygonAlt}
           polygonsTransitionDuration={0}
-          pathsData={show.states ? statePaths : []}
-          pathPointLat={pathPointLat}
-          pathPointLng={pathPointLng}
-          pathColor={pathColor}
-          pathStroke={1.1}
           ringsData={rings}
           ringColor={() => '#4ea1ff'}
           ringMaxRadius={1.6}

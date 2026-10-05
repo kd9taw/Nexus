@@ -62,6 +62,7 @@ import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { useStableByKey } from '../features/useStableByKey'
 import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
+import { ownGlobePicks, type SharedMapLayer } from '../features/globeLayers'
 import { MapPicker, FLAT_MAP_CHOICES } from './MapPicker'
 import {
   gridToLatLon,
@@ -80,8 +81,6 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   aprsMapCenter,
-  basemap,
-  usStateBorders,
   graticule,
   makeProjection,
   project,
@@ -108,8 +107,19 @@ import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
-// A shaded-relief basemap (Natural Earth I 50m, public domain),
-// downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
+// The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
+// laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
+import {
+  basemapAt,
+  onBasemapLoaded,
+  paintEquirect,
+  paintProjected,
+  paintRelief,
+  pxPerDegree,
+  reliefAlphaFor,
+  scaleFor,
+  visibleRegion,
+} from '../basemap'
 import reliefUrl from '../assets/earth-relief.webp'
 
 /** Connect intent presets — beginner picks a goal once; the map configures
@@ -313,6 +323,19 @@ const INTENT_PRESETS: Record<
  *  pop-out) opens its preset projection instead of the WebGL globe it cannot draw. */
 function flatPick(map: MapChoice | undefined): Projection | null {
   return map && map !== '3d' ? map : null
+}
+
+/** The 2-D table of a window where the 2-D map has never been shown starts, for the layers both maps
+ *  draw, from what the operator chose on THIS window's 3-D globe (features/globeLayers
+ *  `ownGlobePicks`); an intent's preset goes on top, so the layers it names keep that intent's promise.
+ *  A window that lived on the globe used to meet a 2-D table nobody there had chosen — another window's,
+ *  or the defaults with their state outlines — the day it showed the 2-D map (2026-10-04). */
+function withOwnGlobePicks(L: Record<LayerKey, Layer>): Record<LayerKey, Layer> {
+  const next = { ...L }
+  for (const [k, on] of Object.entries(ownGlobePicks()) as [SharedMapLayer, boolean][]) {
+    next[k] = { ...next[k], visible: on }
+  }
+  return next
 }
 
 /** An intent's preset applied SOFTLY over a layer table: only the layers it names change, so the
@@ -568,9 +591,9 @@ const PATH_LP = 'LP'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
-// basemap (features/skins.ts STANDARD_MAP) is deliberately theme-agnostic and dark (as
-// wall maps are), so it looks intentional in any UI theme, and a dark built-in theme brings
-// its own. Read at bake like every other token here; STANDARD_MAP is also what paints where no
+// basemap (features/skins.ts STANDARD_MAP) is a light atlas palette, the same in both UI themes,
+// so the greyline's night shading reads on its day side, and a dark built-in theme brings its
+// own. Read at bake like every other token here; STANDARD_MAP is also what paints where no
 // sheet is loaded. Globe (orthographic) 3D shading: a lit ocean highlight toward the top-left
 // light source, deepening to a dark limb, plus an atmospheric rim glow and a star field — turns
 // the flat disc into a planet floating in space without any WebGL.
@@ -764,7 +787,8 @@ export function MapView({
     [muf],
   )
   // THE OPERATOR'S SETUP FOR THIS INTENT (features/intentMapSettings): what they left here, or —
-  // the first time this intent is used on this surface — its preset. The embedded detail/APRS maps
+  // the first time this intent is used on this surface — its preset, over what was chosen on this
+  // window's 3-D globe (`withOwnGlobePicks`). The embedded detail/APRS maps
   // force their own projection and layers and never read or write it (they are transient insets;
   // touching it would fight the operator's real Connect map).
   const [initialSetup] = useState(() =>
@@ -784,7 +808,9 @@ export function MapView({
         ? APRS_EMBED_LAYERS
         : EMBED_LAYERS
       : (layersFromValue(initialSetup?.layers) ??
-        (intent ? withIntentPreset(DEFAULT_LAYERS, intent) : DEFAULT_LAYERS)),
+        (intent
+          ? withIntentPreset(withOwnGlobePicks(DEFAULT_LAYERS), intent)
+          : withOwnGlobePicks(DEFAULT_LAYERS))),
   )
   // SWITCHING INTENT restores that intent's setup — or applies its preset if it has never been used
   // here. Done DURING RENDER (React's "adjust state when a prop changes" pattern), not in an effect:
@@ -926,6 +952,10 @@ export function MapView({
     }
     img.src = reliefUrl
   }, [])
+  // A finer Natural Earth scale arriving (basemap.ts fetches 1:50m and 1:10m the first time a
+  // zoom wants them) redraws the base map from it.
+  const [basemapRev, setBasemapRev] = useState(0)
+  useEffect(() => onBasemapLoaded(() => setBasemapRev((n) => n + 1)), [])
   // Ticking clock for the greyline (it drifts ~0.25°/min; a 60 s tick is plenty).
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
@@ -979,7 +1009,7 @@ export function MapView({
   const satAllHidden = useMemo(() => {
     if (embedded || !satsOn || !satFav || !sats || sats.birds.length === 0) return 0
     const keys = satChaseKeys()
-    if (keys.names.size === 0) return 0 // zero stars = filter inert, sky full
+    if (keys.names.size === 0) return 0 // zero stars: no ★ bird to miss, the workable birds show
     return filterSatsToChased(sats.birds, keys).length === 0 ? sats.birds.length : 0
     // satChaseRev: star toggles land in storage, not props — the rev is the rerender.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1550,52 +1580,38 @@ export function MapView({
       ctx.lineWidth = 1
       ctx.stroke()
 
-      const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
-      if (useRelief) {
-        // Shaded relief: a direct stretch-blit to the equirectangular
-        // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
-        // greyline night shading draws on top → a true day/night terrain map. Only
-        // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
-        const tl = project(proj, { lat: 90, lon: -180 })
-        const br = project(proj, { lat: -90, lon: 180 })
-        if (tl && br) {
-          ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
-        }
-        if (layers.coast.visible) {
-          // A faint coastline keeps borders crisp over the raster.
-          ctx.globalAlpha = layers.coast.opacity * 0.5
-          ctx.beginPath()
-          path(basemap())
-          ctx.strokeStyle = mapInk('--map-coast')
-          ctx.lineWidth = 0.5
-          ctx.stroke()
-          ctx.globalAlpha = 1
-        }
-      } else {
-        // Filled-vector land (the AEQD beam map, or World with relief off).
-        ctx.beginPath()
-        path(basemap())
-        ctx.fillStyle = mapInk(isGlobe ? '--map-land-globe' : '--map-land')
-        ctx.fill()
-        if (layers.coast.visible) {
-          ctx.globalAlpha = layers.coast.opacity
-          ctx.strokeStyle = mapInk('--map-coast')
-          ctx.lineWidth = 0.6
-          ctx.stroke()
-          ctx.globalAlpha = 1
-        }
+      // THE BASE GEOGRAPHY (basemap.ts): land, lakes, major rivers, US state lines (a CORE
+      // operating layer: an op reads which STATE a spot or their own QTH sits in), country borders
+      // and the coast, from the Natural Earth scale this zoom wants and only the tiles in view. The
+      // flat World map is linear in lon/lat, so it draws cached tile paths under one transform and
+      // lays the shaded relief over the land (the greyline night shading draws on top of it: a
+      // day/night terrain map); the globe and the beam map stream the tiles through d3. The
+      // 3-D globe's texture is painted by the same paintEquirect, so the two read as one map.
+      const ppd = pxPerDegree(proj)
+      const paint = {
+        map: basemapAt(scaleFor(ppd)),
+        region: visibleRegion(kind, proj, w, h),
+        inks: {
+          land: mapInk(isGlobe ? '--map-land-globe' : '--map-land'),
+          water: mapInk('--map-ocean'),
+          // The rim's blue: a step from the sea in every theme (lighter on a dark map, deeper on
+          // a light one), so a river one pixel wide still reads against the land.
+          river: mapInk('--map-rim'),
+          coast: mapInk('--map-coast'),
+          state: mapInk('--map-state'),
+        },
+        pxPerDeg: ppd,
+        coast: layers.coast.visible ? layers.coast.opacity : 0,
+        states: layers.states.visible ? layers.states.opacity : 0,
       }
-      // US state borders — a CORE operating layer: an op reads which STATE a spot or
-      // their own QTH sits in (WAS, state QSOs), not just the coastline. A single-line
-      // mesh (shared borders once), thin + quiet so it adds detail without burying spots.
-      if (layers.states.visible) {
-        ctx.globalAlpha = layers.states.opacity
-        ctx.beginPath()
-        path(usStateBorders())
-        ctx.strokeStyle = mapInk('--map-state')
-        ctx.lineWidth = 0.5
-        ctx.stroke()
-        ctx.globalAlpha = 1
+      if (kind === 'world') {
+        const [tx, ty] = proj.translate()
+        const relief = layers.relief.visible ? reliefRef.current : null
+        paintEquirect(ctx, ppd, tx, ty, paint, relief
+          ? (c) => paintRelief(c, relief, tx - 180 * ppd, ty - 90 * ppd, tx + 180 * ppd, ty + 90 * ppd, w, h, reliefAlphaFor(ppd) * layers.relief.opacity)
+          : undefined)
+      } else {
+        paintProjected(ctx, proj, paint)
       }
       // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
       // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
@@ -1613,10 +1629,12 @@ export function MapView({
         ctx.restore()
       }
       if (layers.grid.visible) {
-        ctx.globalAlpha = layers.grid.opacity
+        // In the map's own line ink, not the UI's border colour: the grid lies on the basemap, and
+        // has to read on it in either UI theme.
+        ctx.globalAlpha = layers.grid.opacity * 0.6
         ctx.beginPath()
         path(graticule())
-        ctx.strokeStyle = cssVar('--border-soft')
+        ctx.strokeStyle = mapInk('--map-coast')
         ctx.lineWidth = 0.5
         ctx.stroke()
       }
@@ -1703,7 +1721,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, me, theme, colourRoles, reliefReady, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, me, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -1874,11 +1892,17 @@ export function MapView({
     if (layers.sats.visible && sats) {
       const chaseKeys = satChaseKeys()
       // ★-only filter (the Passes-pane chip; one surface-scoped key shared with
-      // the globe). Read per draw — the ~1 s sat tick then picks up stars and
-      // chip flips without a poll. The EMBEDDED detail globe is exempt: it must
-      // show the clicked bird starred or not (and solos it below anyway).
+      // the globe). The stars are read per draw — the ~1 s sat tick then picks
+      // them up without a poll. The ★/All choice is this window's `satFav`, the
+      // value its chip shows, which SAT_CHASE_EVENT keeps in step with the
+      // Passes pane and the globe here. Read out of storage per draw, it made a
+      // pop-out with no choice of its own follow the MAIN window's chip live:
+      // the main window flipped to All and the pop-out filled with every bird,
+      // its own chip still reading ★ (2026-10-04). The EMBEDDED detail globe is
+      // exempt: it must show the clicked bird starred or not (and solos it below
+      // anyway).
       const shownBirds =
-        !embedded && satFavOnly() ? filterSatsToChased(sats.birds, chaseKeys) : sats.birds
+        !embedded && satFav ? filterSatsToChased(sats.birds, chaseKeys) : sats.birds
       const nowSecs = Date.now() / 1000
       // Lerp helper along a track — lon wraps through ±180 correctly.
       const posAt = (track: [number, number, number][], t: number): LatLon | null => {
@@ -2017,7 +2041,8 @@ export function MapView({
     }
     if (layers.rings.visible && kind !== 'world') {
       ctx.globalAlpha = layers.rings.opacity
-      ctx.strokeStyle = cssVar('--border')
+      // The map's line ink, like the grid: the rings lie on the basemap, not on a UI surface.
+      ctx.strokeStyle = mapInk('--map-coast')
       ctx.setLineDash([3, 3])
       ctx.lineWidth = 0.75
       for (const km of RINGS_KM) {
@@ -2293,13 +2318,19 @@ export function MapView({
     if (me && (txLines.length > 0 || rxLines.length > 0)) {
       const drawPaths = (lines: MapPath[], color: string, dash: number[], layerAlpha: number) => {
         if (lines.length === 0) return
-        ctx.strokeStyle = color
-        ctx.lineWidth = 1.1
         ctx.setLineDash(dash)
         for (const ln of lines) {
-          ctx.globalAlpha = layerAlpha * 0.75 * ln.fade
           ctx.beginPath()
           path(greatCircle(me, ln.ll))
+          // A dark casing under each dash — MARKER_HALO's trick, for a line: the path keeps its
+          // exact colour and still reads over the light land and sea, the relief and the greyline.
+          ctx.globalAlpha = layerAlpha * 0.45 * ln.fade
+          ctx.strokeStyle = MARKER_HALO
+          ctx.lineWidth = 2.6
+          ctx.stroke()
+          ctx.globalAlpha = layerAlpha * 0.75 * ln.fade
+          ctx.strokeStyle = color
+          ctx.lineWidth = 1.1
           ctx.stroke()
         }
         ctx.setLineDash([])
@@ -2598,7 +2629,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3408,7 +3439,13 @@ export function MapView({
                       className={`sat-fav-toggle${satFav ? ' on' : ''}`}
                       aria-label={t('map.sats.filter.aria')}
                       aria-pressed={satFav}
-                      title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
+                      title={
+                        !satFav
+                          ? t('map.sats.filter.off.title')
+                          : satChaseKeys().names.size === 0
+                            ? t('map.sats.filter.none.title')
+                            : t('map.sats.filter.on.title')
+                      }
                       onClick={() => setSatFavOnly(!satFav)}
                     >
                       {satFav ? '★' : t('map.sats.filter.all')}

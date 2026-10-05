@@ -2091,7 +2091,7 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   and the signal and Needed colours are the same in every theme. **High contrast** keeps
   its own look whatever the theme, **Night** dims each theme in its own colours, and a
   colour you pick in **Colours** wins over the theme's. On a dark theme the map's land,
-  sea and coastlines take the theme's colours; the light themes keep the usual dark map.
+  sea and coastlines take the theme's colours; the light themes keep the standard light map.
 - **High contrast** — Off or On. Strengthens text against its background in
   whichever theme you are using, and changes nothing else — the interface stays
   exactly the size you have set it. This is the one to reach for if the screen

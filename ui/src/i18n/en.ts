@@ -2255,6 +2255,9 @@ export const EN = {
     'Showing your ★ birds (Passes pane + globe follow) — click to show all satellites',
   'map.sats.filter.off.title':
     'Showing all satellites — click to show only your ★ birds (Passes pane + globe follow)',
+  // ★ on with nothing starred: the sky shows the birds that can be worked, never the beacon-only ones.
+  'map.sats.filter.none.title':
+    'No ★ birds yet, so this shows the satellites you can work (linear, FM, digital), not the beacon-only ones (globe follows) — click to show all satellites',
   // The chip reads ★ when the filter is on and this word when it is off.
   'map.sats.filter.all': 'All',
 
@@ -2375,6 +2378,9 @@ export const EN = {
   // the 2-D map's and NOT the same list, so the two must not share keys.
   'globe.unsupported':
     "This machine's graphics can't run the 3-D globe. Pick Globe, Flat or Beam — they work everywhere.",
+  // Beside the map picker while Globe stands in for a stored 3D pick (ConnectView).
+  'connect.globe3d.standIn':
+    "The 3-D globe can't draw on this computer right now, so the map shows Globe. Your 3D pick is kept.",
   'globe.spin.stop.title': 'Stop the globe spinning',
   'globe.spin.start.title': 'Spin the globe',
   'globe.spin.pause': '⏸ Spin',
@@ -2406,6 +2412,8 @@ export const EN = {
     'Showing your ★ birds (Passes pane + 2-D map follow) — click to show all satellites',
   'globe.sats.filter.off.title':
     'Showing all satellites — click to show only your ★ birds (Passes pane + 2-D map follow)',
+  'globe.sats.filter.none.title':
+    'No ★ birds yet, so this shows the satellites you can work (linear, FM, digital), not the beacon-only ones (2-D map follows) — click to show all satellites',
   'globe.sats.filter.all': 'All',
   // The tracked pass in words — the text equivalent of a WebGL scene a screen reader
   // cannot see. `El`/`Az`/`LOS` are the standard satellite abbreviations.

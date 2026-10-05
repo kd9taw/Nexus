@@ -79,6 +79,19 @@ describe('★ filter derivation (the Connect satellite surfaces)', () => {
     expect(filterSatsToChased(birds, satChaseKeys())).toEqual(birds)
   })
 
+  // The fallback was the whole list until 2026-10-04: with the catalog's 280 beacon-only birds that was
+  // "every satellite ever launched". Only a bird positively classed as nothing but a beacon drops.
+  it('zero stars → the birds that can be worked: beacon-only and silent ones drop, unclassified ones stay', () => {
+    const sky = [
+      { name: 'RS-44', norad: 44909, classes: ['linear', 'beacon'] },
+      { name: 'CUBESAT', norad: 90001, classes: ['beacon'] },
+      { name: 'SILENT', norad: 90002, classes: [] },
+      { name: 'OLD-PAYLOAD', norad: 90003 },
+      { name: 'NOT-CLASSIFIED', norad: 90004, classes: null },
+    ]
+    expect(filterSatsToChased(sky, satChaseKeys()).map((b) => b.name)).toEqual(['RS-44', 'OLD-PAYLOAD', 'NOT-CLASSIFIED'])
+  })
+
   it('stars filter by name', () => {
     toggleSatChasing('RS-44', 44909)
     expect(filterSatsToChased(birds, satChaseKeys()).map((b) => b.name)).toEqual(['RS-44'])

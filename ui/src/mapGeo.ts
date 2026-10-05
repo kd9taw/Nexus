@@ -3,7 +3,9 @@
 // grid: every operator→point great circle is a straight radial (= true beam
 // heading) and concentric range rings are exact great-circle distance. A
 // secondary equirectangular "world" projection reuses the same renderer/data.
-// Basemap is the bundled world-atlas 110m TopoJSON — no tiles, no network, no key.
+// The map's base geography is basemap.ts (Natural Earth at the scale the zoom wants); `basemap()`
+// and `usStateBorders()` below are the bundled world-atlas and us-atlas sets the repeater map
+// draws — no tiles, no network, no key.
 import {
   geoAzimuthalEquidistant,
   geoEquirectangular,

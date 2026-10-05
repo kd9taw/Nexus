@@ -469,6 +469,19 @@ LAN with no internet, and the page makes no external request of any kind.
 Regenerate with `python3 scripts/gen-fd-globe-land.py` (deterministic: the
 same input reproduces the shipped blob byte for byte).
 
+### Natural Earth geography (the map's land, lakes, rivers and borders)
+The map's base geography — `ui/src/data/basemap-110m.ts`, `ui/src/data/basemap-50m.bin`
+and `ui/src/data/basemap-10m.bin`, drawn by the 2-D map and the 3-D globes — is derived
+from **Natural Earth** vector data (<https://www.naturalearthdata.com/>), release
+**v5.1.2**, which is **public domain**. The datasets, at 1:110m, 1:50m and 1:10m:
+`land`, `lakes`, `rivers_lake_centerlines`, `admin_0_boundary_lines_land` and
+`admin_1_states_provinces_lines` (the US lines only), read as GeoJSON from the release
+tag (<https://github.com/nvkelso/natural-earth-vector/tree/v5.1.2/geojson>, dataset
+versions 4.1.0 to 5.1.1 as stamped there) and checked against the SHA-256 recorded in
+the generator. They are quantized, cut into tiles and delta-coded, and the coastline is
+derived from the land and lake outlines. Regenerate with `node scripts/gen-basemap.mjs`
+(deterministic: the same input reproduces the shipped files byte for byte).
+
 ### WAS grid-square → US-state table (grid_state.bin)
 `crates/propagation/data/grid_state.bin` (32,400 bytes, embedded via
 `include_bytes!`) maps each 4-character Maidenhead grid to a US state for the
@@ -481,8 +494,12 @@ US government, **public domain**). Regenerate with
 `node scripts/gen-grid-state.mjs`.
 
 ### Map / globe textures
-`ui/src/assets/earth-relief.webp` (the flat map's shaded-relief basemap) derives from
-**Natural Earth I** raster (Tom Patterson / Natural Earth), **public domain**.
+`ui/src/assets/earth-relief.webp` (the shaded relief under the flat map and on the 3-D
+globes) derives from Natural Earth's **Shaded Relief** raster at 1:10m (`SR_HR`, version
+2.0.0, <https://naciscdn.org/naturalearth/10m/raster/SR_HR.zip>; Tom Patterson / Natural
+Earth), **public domain**, downsampled to 4096 × 2048 and regraded for blending.
+Regenerate with `python3 scripts/gen-relief.py` (the download is checked against a
+recorded SHA-256).
 `ui/src/assets/earth-night.webp` (the 3-D globe's dimmed city-lights layer) is a
 downscaled **NASA "Black Marble" / Earth at Night** composite (NASA Earth Observatory),
 a work of the US government — **public domain**. Neither is a map-tile service; both are

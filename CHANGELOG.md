@@ -182,9 +182,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   French or Japanese, whichever language the screen is in, and says why; a language added later is
   covered by its own words for Stop and Cancel. In English this adds Halt and Cancel. Ordinary
   captions are not affected. A key captioned that way before keeps its caption until it is edited.
+- **The Conditions pop-out reopens the way you left it.** Reloaded, or closed and opened again, the
+  dashboard window could come back on whatever the main window had moved to since: another intent,
+  and that intent's map as the main window had it the day the pop-out first opened, satellites
+  included, even ones since turned off there. It now keeps its own intent, map and ★ / All, and only
+  a press in it changes them. Its satellites also stopped following the main window's **★ / All**:
+  flipping it there no longer fills the pop-out with every satellite while the pop-out still says ★.
+  And **Frame** ticks **Satellites** only on the map you are looking at: untick it there and it stays
+  off when you switch between the 2-D map and the 3-D globe.
+- **Conditions says when 3D can't draw, and the 2-D map brings your layers with it.** Whether the
+  3-D globe can draw is checked when Conditions opens, so after the computer's graphics fell back to
+  software, or on a remote desktop, a reload or a reopen quietly showed the Globe map instead, with
+  2-D layers nobody had picked in that window, satellites and US state outlines among them. A note
+  beside the map picker now says Globe is standing in and that your 3D pick is kept, and the first
+  time a window shows the 2-D map, its layers start from the ones you picked on that window's 3-D
+  globe.
+- **The satellite layer shows the birds you can work.** With no ★ birds picked, **Satellites** on the
+  map and the 3-D globe drew every satellite in the catalog, about 350, most of them small
+  telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM
+  repeater or a digital channel. Star birds in **Satellites** to see just those, or pick **All** for
+  the whole catalog.
 
 ### Changed
 
+- **The map: sharp coastlines, borders and terrain at every zoom, on the flat map and the 3D
+  globe alike.** The map is now drawn from Natural Earth's detailed geography at three levels of
+  detail, picked by how far you are zoomed in, so coastlines, lakes, the major rivers, country
+  borders and US state lines stay crisp from the whole world down to a single state; the old flat
+  map was a blurred picture once you zoomed. The flat map lays shaded relief under the lines, and
+  the 3D globe (and the logbook's globe) now wears the same map, lit by the sun with city lights on
+  the night side, so switching views no longer changes the look. A lighter palette makes the
+  greyline's day and night easy to tell apart; the "heard you" and "you heard" paths carry a dark
+  edge so they read on the lighter land, and the grid and range rings are drawn in the map's own
+  line colour. The detailed map is only loaded when you zoom in, so the map opens as quickly as
+  before, and panning and zooming the flat map takes a fraction of the work it did. A built-in
+  dark theme keeps its own map colours.
 - **Linux and Raspberry Pi without a graphics card: a shorter pause as the scope and waterfall
   start.** On Linux, Nexus times its two ways of drawing the scope and waterfall once, just after
   the window opens, and keeps the faster. Where graphics are drawn in software, the first timed
