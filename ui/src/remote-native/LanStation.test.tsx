@@ -111,7 +111,7 @@ describe('only at the shack: a press through the stream changes nothing', () => 
 describe('what the card says', () => {
   it('names each reason it is off or not listening', async () => {
     const said: [LanStatus['reason'], boolean, string][] = [
-      ['noKey', false, 'Off: this station has no network key it can read. If your operating system’s credential store is locked, unlock it, then turn this on again. If it is not, press Reset network identity under Network identity below, and pair your computers again.'],
+      ['noKey', false, 'Off: this station has no network key it can read. Press Reset network identity under Network identity below, then turn this on again. A reset removes every paired computer, so each one has to be paired again.'],
       ['endedAtShack', false, 'Off: remote control was ended here. Turn this on again when you want it.'],
       ['addressGone', true, 'Not listening: 10.0.0.9 is not this computer’s address right now. Nexus listens there again when it is back, or choose another network.'],
       ['chooseAddress', true, 'Not listening: choose which of this computer’s networks to listen on.'],
@@ -147,36 +147,44 @@ describe('what the card says', () => {
     expect(screen.getByRole('alert').textContent).toBe('Eight computers are paired already. Remove one to pair another.')
     remoteStationAction.mockRejectedValueOnce('credentialStoreUnavailable')
     await pressedAtShack(screen.getByRole('button', { name: 'Pair a computer' }))
-    expect(screen.getByRole('alert').textContent).toBe('Nexus could not read or keep this station’s network key and paired computers in your operating system’s credential store. If the store is locked, unlock it and try again. If it is not, press Reset network identity under Network identity below, and pair your computers again.')
+    expect(screen.getByRole('alert').textContent).toBe('Nexus could not read or keep this station’s network key and paired computers in your operating system’s credential store. Press Reset network identity under Network identity below. A reset removes every paired computer, so each one has to be paired again.')
   })
 
-  it('sends a key or a paired list it cannot read to Reset network identity, named as the card names it', async () => {
+  it('sends a key or a paired list it cannot read to Reset network identity only, named as the card names it', async () => {
     // The station cannot tell a store that would not answer from a record this Nexus cannot read (a newer
-    // Nexus's): both say so. Unlocking comes first, since a reset removes every paired computer; resetting
-    // is the way out of a record that does not read.
-    const WAY_OUT = 'press Reset network identity under Network identity below'
+    // Nexus's). Both name the one way out, Reset network identity, and what it costs; neither offers
+    // unlocking the credential store first (the operator's ruling, 2026-10-05).
+    const WAY_OUT = 'Press Reset network identity under Network identity below'
+    const COST = 'A reset removes every paired computer, so each one has to be paired again.'
     await showing({ on: false, reason: 'noKey', devices: [] })
     // CONTROL: the control the advice names is on this card, under that section.
     const reset = screen.getByRole('button', { name: 'Reset network identity' })
     expect(reset.closest('details')?.querySelector('summary')?.textContent).toBe('Network identity')
     const off = screen.getByRole('status').textContent ?? ''
     expect(off).toContain(WAY_OUT)
-    expect(off.indexOf('unlock it'), 'unlocking is offered before a reset').toBeLessThan(off.indexOf(WAY_OUT))
+    expect(off).toContain(COST)
     cleanup()
     // Pair refused with no key, or with a paired list the station could not read.
     for (const refusal of ['noKey', 'credentialStoreUnavailable']) {
       await showing(listening)
       remoteStationAction.mockRejectedValueOnce(refusal)
       await pressedAtShack(screen.getByRole('button', { name: 'Pair a computer' }))
-      expect(screen.getByRole('alert').textContent, refusal).toContain(WAY_OUT)
+      const alert = screen.getByRole('alert').textContent ?? ''
+      expect(alert, refusal).toContain(WAY_OUT)
+      expect(alert, refusal).toContain(COST)
       cleanup()
     }
-    // In every catalog, both sentences name the button and its section by that language's own labels.
+    // In every catalog, both sentences name the button and its section by that language's own labels, and
+    // neither says to unlock the store. CONTROL: each language's word for unlocking is found in the hosted
+    // Remote's own advice, which does say to unlock it.
     const catalogs: Record<string, PartialCatalog> = { en: EN, de: DE, es: ES, fr: FR, ja: JA }
+    const UNLOCK: Record<string, RegExp> = { en: /unlock/i, de: /entsperr/i, es: /desbloque/i, fr: /déverrouill/i, ja: /解除/ }
     for (const [locale, catalog] of Object.entries(catalogs)) {
+      expect(catalog['remote.vaultFailed'], `control: ${locale} says unlock as ${UNLOCK[locale]}`).toMatch(UNLOCK[locale])
       for (const key of ['remote.lan.reason.noKey', 'remote.lan.vaultFailed'] as const) {
         expect(catalog[key], `${locale} ${key}`).toContain(catalog['remote.lan.reset'])
         expect(catalog[key], `${locale} ${key}`).toContain(catalog['remote.lan.resetTitle'])
+        expect(catalog[key], `${locale} ${key} offers unlocking`).not.toMatch(UNLOCK[locale])
       }
     }
   })

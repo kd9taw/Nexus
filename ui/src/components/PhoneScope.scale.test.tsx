@@ -36,6 +36,8 @@ vi.mock('../api', () => ({
 /** Each canvas's paint calls, by its class: the overlays' and the marks'. */
 const painted = new Map<string, string[]>()
 const of = (cls: string) => painted.get(cls) ?? []
+/** The width the stand-in canvas measures a string at: 6 px a character. */
+const measured = (s: string) => s.length * 6
 beforeEach(() => {
   seq = 0
   served = AUDIO_ROW
@@ -72,7 +74,7 @@ beforeEach(() => {
       fillText: (text: string, x: number) => log(`text ${text} ${r(x)}`),
       clearRect: () => { painted.set(cls, []) },
       putImageData() {}, beginPath() {}, closePath() {}, lineTo() {}, fill() {}, stroke() {}, setLineDash() {},
-      save() {}, restore() {}, rect() {}, clip() {}, measureText: (s: string) => ({ width: s.length * 6 }),
+      save() {}, restore() {}, rect() {}, clip() {}, measureText: (s: string) => ({ width: measured(s) }),
       createLinearGradient: () => ({ addColorStop() {} }),
     }
   }
@@ -399,4 +401,111 @@ describe('a tag, the notch and a click land where the scale says', () => {
     await draw()
     expect(labelAt(xAudio(landing), scaleRead()), 'the scale after the click').toBe(labelAt(xAudio(700), before))
   })
+})
+
+describe('no label prints over another, at any width', () => {
+  // On a narrow scope the label at the right edge, nudged in so it is not clipped, stood over the one before it:
+  // the Remote page's CW scope on a phone, at 20 m and at 2 m, where the 100 Hz digit lengthens every label
+  // (2026-10-05). A label with no room beside the one before it is left off, and its tick stays. Every other
+  // label stands where it always has, 3 px right of its tick or nudged in from an edge, so a scale with room for
+  // all of them is drawn as it was.
+
+  /** The scope laid out `width` px wide, at no zoom: the scale's text unit is 1 px. */
+  const sized = (width: number) => vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0,
+    left: 0, top: 0, width, height: 200, right: width, bottom: 200, toJSON() { return {} } })
+  /** The x of every tick drawn, left to right. */
+  const ticksRead = () => of('marks').filter((p) => p.startsWith(TICK_RULE)).map((p) => Number(p.slice(TICK_RULE.length).split(' ')[0]))
+  /** The labels drawn, left to right: each one's tick, its text, and where it starts and ends. */
+  function labelsRead() {
+    const out: { tick: number; text: string; x: number; end: number }[] = []
+    let tick: number | null = null
+    for (const p of of('marks')) {
+      if (p.startsWith(TICK_RULE)) tick = Number(p.slice(TICK_RULE.length).split(' ')[0])
+      else if (tick != null && /^text \d+\.\d{3,4} /.test(p)) {
+        const [, text, x] = p.split(' ')
+        out.push({ tick, text, x: Number(x), end: Number(x) + measured(text) })
+        tick = null
+      }
+    }
+    return out
+  }
+  /** Where the scale has always put a label `w` wide: 3 px right of its tick, nudged in to 2 px from an edge. */
+  const placed = (tick: number, w: number, width: number) => Math.min(width - w - 2, Math.max(2, tick + 3))
+  /** The room a label keeps from the one before it: the 3 px it keeps from its own tick. */
+  const ROOM = 3
+
+  /** The CW cockpit's 300-800 Hz window (a 550 Hz pitch behind a 400 Hz filter): six ticks 100 Hz apart, the
+   *  last on the right edge. */
+  const NARROW = { pitch: 550, viewLoHz: 300, viewHiHz: 800 }
+  const cwView = (v: typeof NARROW) => ({ pitchHz: v.pitch, markerHz: v.pitch, viewLoHz: v.viewLoHz, viewHiHz: v.viewHiHz })
+
+  it.each([{ band: '20 m', dial: 14_030_050 }, { band: '2 m', dial: 144_050_050 }])(
+    'the CW scope on a phone at $band: each label stands clear of the one before it', async ({ band, dial }) => {
+      // A phone held upright.
+      for (const width of [360, 390, 412]) {
+        sized(width)
+        scene(kind('true CW'), dial, cwView(NARROW))
+        await draw()
+        const labels = labelsRead()
+        expect(labels.length, `control: ${band} at ${width} px has a scale`).toBeGreaterThanOrEqual(3)
+        for (let i = 1; i < labels.length; i++) {
+          expect(labels[i].x - labels[i - 1].end, `${band} at ${width} px: ${labels[i - 1].text} then ${labels[i].text}`)
+            .toBeGreaterThanOrEqual(ROOM)
+        }
+        cleanup()
+      }
+    })
+
+  it('at every width, a label is left off only where it has no room, and the rest stand where they always have', async () => {
+    // Every scale the scopes draw: CW's 300-800 Hz window from 40 m to 23 cm (the longest labels), its widest
+    // window (200-1000 Hz, the last tick on the edge), Phone at a 2.4 kHz width, and a native RF row.
+    const SCALES: { name: string; k: Kind; dial: number; view?: typeof NARROW }[] = [
+      { name: 'CW at 40 m', k: kind('true CW'), dial: 7_030_050, view: NARROW },
+      { name: 'CW at 20 m', k: kind('true CW'), dial: 14_030_050, view: NARROW },
+      { name: 'CW at 2 m', k: kind('true CW'), dial: 144_050_050, view: NARROW },
+      { name: 'CW at 23 cm', k: kind('true CW'), dial: 1_296_050_050, view: NARROW },
+      { name: 'CW, 200-1000 Hz', k: kind('true CW'), dial: 14_030_000, view: { pitch: 600, viewLoHz: 200, viewHiHz: 1000 } },
+      { name: 'Phone at 2.4 kHz', k: kind("Phone's carrier-centred axis, USB"), dial: 14_200_000 },
+      { name: 'a native RF row', k: kind('a native RF row'), dial: 14_200_030 },
+    ]
+    // Phone widths closely, then the widths a desktop cockpit gives it.
+    const WIDTHS = [...Array.from({ length: 34 }, (_, i) => 200 + 16 * i), 800, 1024, 1280]
+    let leftOff = 0
+    for (const { name, k, dial, view } of SCALES) {
+      // What each tick reads (the model, as above), left to right.
+      const texts = scaleWanted(k, dial, view).map((p) => p.split(' ')[1])
+      for (const width of WIDTHS) {
+        sized(width)
+        scene(k, dial, view ? cwView(view) : {})
+        await draw()
+        const at = `${name} at ${width} px`
+        const ticks = ticksRead()
+        const labels = labelsRead()
+        // Every tick stands, labelled or not.
+        expect(ticks.length, at).toBe(texts.length)
+        let end = -Infinity
+        let j = 0
+        for (let i = 0; i < ticks.length; i++) {
+          const x = placed(ticks[i], measured(texts[i]), width)
+          if (labels[j]?.tick === ticks[i]) {
+            // Drawn: the tick's own reading, where the scale always put it, and clear of the label before it.
+            expect(labels[j].text, at).toBe(texts[i])
+            expect(labels[j].x, `${at}: ${texts[i]}`).toBe(x)
+            expect(x - end, `${at}: ${texts[i]} stands clear of the label before it`).toBeGreaterThanOrEqual(ROOM)
+            end = labels[j].end
+            j++
+          } else {
+            // Left off: only where it would have stood within that room.
+            expect(x - end, `${at}: ${texts[i]} was left off with room for it`).toBeLessThan(ROOM)
+            leftOff++
+          }
+        }
+        expect(j, `${at}: every label drawn is its tick's`).toBe(labels.length)
+        // At a desktop cockpit's widths every tick keeps its label: those scales are drawn as they always were.
+        if (width >= 800) expect(labels.length, at).toBe(ticks.length)
+        cleanup()
+      }
+    }
+    expect(leftOff, 'control: some width here is too narrow for every label').toBeGreaterThan(0)
+  }, 60_000)
 })

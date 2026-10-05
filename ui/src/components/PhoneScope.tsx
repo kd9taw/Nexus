@@ -1085,6 +1085,8 @@ export function PhoneScope({
         // (operator, 2026-10-04). There each label carries the 100 Hz digit too. A lone tick only
         // stands on a window narrow enough for the finest step.
         const fine = ticks.length < 2 || ticks[1] - ticks[0] < 1_000
+        // Where the next label may start: past the last one drawn, by the room a label keeps from its tick.
+        let clearFrom = -Infinity
         for (const t of ticks) {
           const abs = axisToRf(axis, t)
           if (abs == null) break
@@ -1108,7 +1110,13 @@ export function PhoneScope({
           const w = ctx.measureText(label).width
           ctx.textAlign = 'left'
           const lx = Math.min(Wd - w - 2 * textPx, Math.max(2 * textPx, tx + 3 * textPx))
+          // A label that would stand on the one before it is left off, and its tick stays: two labels run
+          // together read as one wrong number. Only a narrow scope does it, most often at the right edge,
+          // where the nudge pushes the last label back over its neighbour (a phone-width CW scope at 20 m
+          // or 2 m, 2026-10-05). A scale with room for every label draws them all, where it always has.
+          if (lx < clearFrom) continue
           ctx.fillText(label, lx, devH - 2 * textPx)
+          clearFrom = lx + w + 3 * textPx
         }
       }
 
