@@ -983,7 +983,8 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   // stationBusy means the request was refused before anything changed, so an operator clicks again. A request
   // the device is allowed to make retries once; `again` re-reads state first when the request carries a command
   // window. Any other refusal, or a second stationBusy, stands. Refusals this case expects
-  // (localPermissionRequired, staleContext) are never wrapped.
+  // (localPermissionRequired, staleContext) are never asked with a state read afresh, which would answer
+  // something else: the stale FT command is asked again exactly as it was.
   // ⚠️ It does NOT only mean "the native Engine was held", which this comment used to claim. TWO unrelated
   // producers send the same string: `operations.rs` when the Engine `try_lock` fails, and `transport.rs` when
   // another operation is already in flight on this connection, which never touches the Engine. Nothing on the
@@ -1249,7 +1250,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        // The acknowledgement alone is not evidence of the native engine stopping.
        for(let i=0;i<30&&(await probe.send({type:'ftEvidence'})).txEnabled;i++)await delay(50)
        assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:false,owned:false,logCount:1})
-       assert.equal((await action(ft,{action:'ft.cq',expectedTier:tier,direction:null})).response.error,'staleContext')
+       // The Stop retired this state's transmit epoch, so the command is stale on purpose. A busy answer is asked
+       // again with the same command, never through `action`, whose retry builds it from a state read afresh.
+       assert.equal((await allowed(()=>command(ft,{action:'ft.cq',expectedTier:tier,direction:null}))).response.error,'staleContext')
        assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
        const selection = await probe.send({type:'ftCallDecode'})
        assert.match(selection.message,/CQ W1AW FN31/)
