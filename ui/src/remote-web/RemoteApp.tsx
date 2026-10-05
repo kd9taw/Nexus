@@ -76,6 +76,8 @@ export function RemoteApp() {
   // the shack. While the service lists another, the card says so with both, and the stream stays off
   // until the operator accepts the new one there.
   const [stationKeys, setStationKeys] = useState<Record<string, StationKeyView>>({})
+  // Counts the operator's accepts of a new station key: each one has the kept keys read again.
+  const [keyAccepts, setKeyAccepts] = useState(0)
   const registered = useRef(new Set<string>())
 
   useEffect(() => {
@@ -128,6 +130,8 @@ export function RemoteApp() {
     return () => { active = false }
   }, [client, session])
   // S3-L1: each listing of the stations: the station's key kept at first sight, against the one listed.
+  // Read again after an accept, and only the latest read is shown: a poll's read begun before the
+  // accept still holds the key it replaced, and would otherwise bring the warning back after it.
   useEffect(() => {
     if (!session) return
     let active = true
@@ -136,7 +140,7 @@ export function RemoteApp() {
       .then(views => { if (active) setStationKeys(Object.fromEntries(views.filter((view): view is readonly [string, StationKeyView] => view[1] !== null))) })
       .catch(() => {})
     return () => { active = false }
-  }, [session])
+  }, [session, keyAccepts])
 
   async function act(work: () => Promise<void>) {
     if (busy) return
@@ -176,10 +180,11 @@ export function RemoteApp() {
     }
     setWorkspace(application); setStreaming(stream); setListening(listen); setOpened(stationId); setConnection(next); next.start()
   }
-  // S3-L1: the operator takes the key the card shows as new, having compared it with the shack's.
+  // S3-L1: the operator takes the key the card shows as new, having compared it with the shack's. The
+  // card then shows the keys as kept, read again.
   const acceptKey = (stationId: string, view: StationKeyView) => void act(async () => {
     await acceptStationKey(stationId, view.listed)
-    setStationKeys(current => ({ ...current, [stationId]: { ...view, keptPrint: view.print } }))
+    setKeyAccepts(value => value + 1)
   })
   const keyChanged = (stationId: string) => !!stationKeys[stationId] && stationKeys[stationId].keptPrint !== stationKeys[stationId].print
   const leave = () => { connection?.stop(); setConnection(null) }
