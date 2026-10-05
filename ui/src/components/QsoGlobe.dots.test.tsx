@@ -11,8 +11,8 @@
 // jsdom has no WebGL, so `react-globe.gl` is a stub holding a real three.js scene, and what the GPU would
 // put where a dot lands is worked out from the dot's material: three.js asks WebGL for NormalBlending as
 // (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) and for AdditiveBlending as (SRC_ALPHA, ONE), both on the canvas's
-// sRGB values. The maps under the dots are the standard basemap and every built-in theme's, the colours
-// the globe's texture is painted from (features/globeBasemap.ts).
+// sRGB values. The maps under the dots are the standard basemap and every built-in theme's, light and
+// dark (the globes have since taken NASA's day and night pictures, features/globeBasemap.ts).
 //
 // What a dot must keep is its COLOUR (OKLCH chroma): the band is what it says, and a dot that loses its
 // colour reads as a speck of the map. Worked out this way, added dots kept 63 to 119 % of it on the dark
@@ -35,11 +35,10 @@ vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
 }))
-// jsdom loads no images and has no Path2D: the texture is not what is under test, the dots are.
+// jsdom loads no images: the day picture is not what is under test, the dots are.
 vi.mock('../features/globeBasemap', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/globeBasemap')>()),
-  loadRelief: () => Promise.resolve(null),
-  paintGlobeTexture: () => {},
+  loadDayImage: () => Promise.resolve(null),
 }))
 
 /** three-globe's sphere radius, and where it puts (lat, lng) at `alt` globe radii up. */

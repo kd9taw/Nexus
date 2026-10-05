@@ -1586,7 +1586,7 @@ export function MapView({
       // flat World map is linear in lon/lat, so it draws cached tile paths under one transform and
       // lays the shaded relief over the land (the greyline night shading draws on top of it: a
       // day/night terrain map); the globe and the beam map stream the tiles through d3. The
-      // 3-D globe's texture is painted by the same paintEquirect, so the two read as one map.
+      // 3-D globes draw the same lines over NASA's pictures of the Earth (features/globeBasemap.ts).
       const ppd = pxPerDegree(proj)
       const paint = {
         map: basemapAt(scaleFor(ppd)),

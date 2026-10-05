@@ -731,7 +731,7 @@ test('artifact verification rejects changed bytes, unlisted files, symlinks and 
 test('the hosted Nexus artifact carries its reviewed map assets and bundled dependency notices', async () => {
   const directory = join(scratch, 'remote/staging-artifact/assets')
   const files = Object.keys(artifact.manifest.files)
-  for (const stem of ['earth-night', 'earth-relief', 'cqzones', 'basemap-50m', 'basemap-10m']) {
+  for (const stem of ['earth-day', 'earth-night', 'earth-relief', 'cqzones', 'basemap-50m', 'basemap-10m']) {
     assert.ok(files.some(name => name.startsWith(`assets/assets/${stem}-`)), 'existing Nexus map assets must travel in the artifact')
   }
   const notices = await readFile(join(directory, 'remote-licenses.txt'), 'utf8')

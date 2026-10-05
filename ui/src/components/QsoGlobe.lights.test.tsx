@@ -29,11 +29,10 @@ vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
 }))
-// jsdom loads no images and has no Path2D: the texture is not what is under test, the lights are.
+// jsdom loads no images: the day picture is not what is under test, the lights are.
 vi.mock('../features/globeBasemap', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/globeBasemap')>()),
-  loadRelief: () => Promise.resolve(null),
-  paintGlobeTexture: () => {},
+  loadDayImage: () => Promise.resolve(null),
 }))
 
 /** three-globe's sphere radius, and where it puts (lat, lng) at `alt` globe radii up. */

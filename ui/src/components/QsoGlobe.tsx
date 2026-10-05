@@ -30,12 +30,12 @@ import earthNightUrl from '../assets/earth-night.webp'
 import { coarsestBasemap, loadBasemap } from '../basemap'
 import {
   GLOBE_AMBIENT,
+  GLOBE_CITY_LIGHTS,
   GLOBE_SUN,
   disposeGlobeLines,
   globeLines,
   nightOnlyEmissive,
-  loadRelief,
-  paintGlobeTexture,
+  loadDayImage,
   readMapInks,
 } from '../features/globeBasemap'
 import { usePaletteKey } from '../usePaletteRoles'
@@ -143,11 +143,11 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
   const squares = useLogAnswer(squaresQuestion, logTick) ?? emptyAnswer(squaresQuestion)
   const points = useMemo(() => gridCountsToPoints(squares), [squares])
 
-  // Same base map as the Connect globe (features/globeBasemap.ts), so the two read as one app: the
-  // 2-D map's own picture painted onto the sphere (again when the theme changes; the sea's colour
-  // until then), city lights as a dim night-side glow, and the coast, borders and US state lines as
-  // lines just above the surface — most logs are WAS-minded, so seeing which state a dot sits in is
-  // the point. 1:50m: this band never zooms in close enough to want more.
+  // Same earth as the Connect globe (features/globeBasemap.ts), so the two read as one app: NASA's
+  // Blue Marble by day (the theme's sea colour until it is here), its Black Marble by night, and the
+  // coast, borders and US state lines, in the theme's map colours, as lines just above the surface —
+  // most logs are WAS-minded, so seeing which state a dot sits in is the point. 1:50m: this band never
+  // zooms in close enough to want more.
   const globeMat = useMemo(() => {
     const loader = new THREE.TextureLoader()
     const night = loader.load(earthNightUrl)
@@ -156,7 +156,7 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
       color: new THREE.Color(readMapInks().water),
       emissiveMap: night,
       emissive: new THREE.Color('#ffffff'),
-      emissiveIntensity: 0.35,
+      emissiveIntensity: GLOBE_CITY_LIGHTS,
       shininess: 4,
     })
     nightOnlyEmissive(m)
@@ -167,24 +167,30 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
     const g = globeRef.current
     if (!g || !ready) return
     let live = true
-    let lines: THREE.Group | null = null
-    void Promise.all([loadBasemap('50m'), loadRelief()]).then(([map, img]) => {
-      if (!live) return
-      const base = map ?? coarsestBasemap()
-      const inks = readMapInks()
-      const caps = g.renderer().capabilities
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.min(4096, caps.maxTextureSize)
-      canvas.height = canvas.width / 2
-      paintGlobeTexture(canvas, base, inks, img)
-      const tex = new THREE.CanvasTexture(canvas)
+    void loadDayImage().then((img) => {
+      if (!live || !img) return
+      const tex = new THREE.Texture(img)
       tex.colorSpace = THREE.SRGBColorSpace
-      tex.anisotropy = caps.getMaxAnisotropy()
+      tex.anisotropy = g.renderer().capabilities.getMaxAnisotropy()
+      tex.needsUpdate = true
       globeMat.map?.dispose()
       globeMat.map = tex
       globeMat.color.set('#ffffff')
       globeMat.needsUpdate = true
-      lines = globeLines(base, inks)
+    })
+    return () => {
+      live = false
+    }
+  }, [ready, globeMat])
+  useEffect(() => () => globeMat.map?.dispose(), [globeMat])
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    let live = true
+    let lines: THREE.Group | null = null
+    void loadBasemap('50m').then((map) => {
+      if (!live) return
+      lines = globeLines(map ?? coarsestBasemap(), readMapInks())
       g.scene().add(lines)
     })
     return () => {
@@ -194,26 +200,31 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
         disposeGlobeLines(lines)
       }
     }
-  }, [ready, globeMat, paletteKey])
-  useEffect(() => () => globeMat.map?.dispose(), [globeMat])
+  }, [ready, paletteKey])
 
-  // One-time light setup: warm sun at the subsolar point + low ambient (real
-  // day/night terminator, night side never pure black). No bloom, no starfield —
-  // this is a band above a data table, not a full-screen scene.
+  // The lights: a warm sun at the subsolar point, moved with the sun every minute so the day/night
+  // terminator is the live one, and a low ambient, so the night side is the night picture. No bloom,
+  // no starfield — this is a band above a data table, not a full-screen scene.
   useEffect(() => {
     const g = globeRef.current
     if (!g || !ready) return
     const sun = new THREE.DirectionalLight(GLOBE_SUN.color, GLOBE_SUN.intensity)
-    const ss = subsolarPoint(Date.now())
-    const p = g.getCoords(ss.lat, ss.lon, 2)
-    sun.position.set(p.x, p.y, p.z)
+    const follow = () => {
+      const ss = subsolarPoint(Date.now())
+      const p = g.getCoords(ss.lat, ss.lon, 2)
+      sun.position.set(p.x, p.y, p.z)
+    }
+    follow()
     const ambient = new THREE.AmbientLight(GLOBE_AMBIENT.color, GLOBE_AMBIENT.intensity)
     // globe.gl's own lights, set as Connect's globe sets them: they REPLACE its default camera-chasing
     // pair, so the terminator is real. Never by taking the scene's lights out here: globe.gl puts its
     // defaults in the scene from a timer of its own, which the browser may run after this effect, and
     // then they stayed on beside these (lit all round, washed out, no night side).
     g.lights([sun, ambient])
+    // globe.gl draws this globe every frame it is on show, so the next frame shows the sun moved.
+    const id = setInterval(follow, 60_000)
     return () => {
+      clearInterval(id)
       sun.dispose()
       ambient.dispose()
     }

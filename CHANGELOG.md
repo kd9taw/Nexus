@@ -274,13 +274,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detail, picked by how far you are zoomed in, so coastlines, lakes, the major rivers, country
   borders and US state lines stay crisp from the whole world down to a single state; the old flat
   map was a blurred picture once you zoomed. The flat map lays shaded relief under the lines, and
-  the 3D globe (and the logbook's globe) now wears the same map, lit by the sun with city lights on
-  the night side, so switching views no longer changes the look. A lighter palette makes the
+  the 3D globe (and the logbook's globe) draws the same sharp lines over NASA's pictures of the
+  Earth (next entry). A lighter palette makes the
   greyline's day and night easy to tell apart; the "heard you" and "you heard" paths carry a dark
   edge so they read on the lighter land, and the grid and range rings are drawn in the map's own
   line colour. The detailed map is only loaded when you zoom in, so the map opens as quickly as
   before, and panning and zooming the flat map takes a fraction of the work it did. A built-in
   dark theme keeps its own map colours.
+- **The 3D globe and the Logbook's globe show the Earth as NASA photographed it.** The day side is
+  NASA's Blue Marble and the night side its Black Marble, the Earth's city lights after dark. The
+  two meet at the greyline where it is right now, so the lights come on wherever the sun has set.
+  The coastlines, borders and US state lines (in your theme's map colours), every layer and the
+  Logbook's QSO dots are drawn over the pictures. The Logbook's globe now moves its day and night
+  with the sun while it stays open; it used to keep them where they were when it opened. With City
+  lights turned off, the night side is dark. The flat map keeps its own look. The two pictures add
+  about 665 KB to the download.
 - **Linux and Raspberry Pi without a graphics card: a shorter pause as the scope and waterfall
   start.** On Linux, Nexus times its two ways of drawing the scope and waterfall once, just after
   the window opens, and keeps the faster. Where graphics are drawn in software, the first timed
