@@ -200,7 +200,7 @@ describe('the pairing dialog', () => {
       expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION })
       socket.tell({ type: 'connectRefused', reason })
       expect(screen.getByRole('alert').textContent, reason)
-        .toBe(EN[reason === 'unreachable' ? 'lanWindow.reason.unreachable' : `remote.lan.reach.${reason}`])
+        .toBe(EN[(reason === 'unreachable' ? 'lanWindow.reason.unreachable' : `remote.lan.reach.${reason}`) as keyof typeof EN])
       fireEvent.change(screen.getByLabelText(EN['lanWindow.otherAddress']), { target: { value: '192.168.1.44' } })
       fireEvent.click(last(screen.getAllByRole('button', { name: EN['lanWindow.stream'] }))!)
       expect(last(socket.sent), reason).toEqual({ type: 'connect', stationId: STATION, address: '192.168.1.44' })

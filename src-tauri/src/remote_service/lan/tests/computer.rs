@@ -277,10 +277,10 @@ async fn the_remembered_addresses_are_tried_in_order() {
 /// connection made and then dropped before the handshake was done (as the shack's gate drops a
 /// source it will not hear) is `unreachable`, on the road as on a pairing. Across the addresses a
 /// road tries, the most telling is told whatever their order: `refused`, then `otherNetwork`, then
-/// `noAnswer`, then `unreachable`, which is also what nowhere to try says. CONTROL: past them, the
-/// station's own port welcomes this computer. (`otherNetwork` reads this computer's own networks,
-/// which only Windows gives: `unreached`'s own test pins it.) Skipped, saying so, on a box with no
-/// private address of its own.
+/// `noAnswer`, then `unreachable`, which is also what nowhere to try says. An address on none of this
+/// computer's networks is `otherNetwork` where that can be read (Windows) and `noAnswer` elsewhere.
+/// CONTROL: past them, the station's own port welcomes this computer. Skipped, saying so, on a box
+/// with no private address of its own.
 #[tokio::test]
 async fn nothing_answering_is_said_as_the_window_says_it() {
     let Some(private) = own_private_address() else {
@@ -309,8 +309,14 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
         });
         at
     };
-    // A documentation address (RFC 5737): nothing answers there.
+    // A documentation address (RFC 5737): nothing answers there, and it is on none of this
+    // computer's networks, which only Windows can tell.
     let silent = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 42075);
+    let silent_says = if cfg!(windows) {
+        "otherNetwork"
+    } else {
+        "noAnswer"
+    };
     let kept = paired_record(&s, live);
     let (at_dead, at_silent, at_dropping) = ([dead], [silent], [dropping]);
     let (refused, timed, dropped) = tokio::join!(
@@ -319,7 +325,7 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
         road::connect_at(&kept, &at_dropping),
     );
     assert_eq!(refused.err(), Some("refused"));
-    assert_eq!(timed.err(), Some("noAnswer"));
+    assert_eq!(timed.err(), Some(silent_says));
     assert_eq!(dropped.err(), Some("unreachable"));
     assert_eq!(
         road::connect_at(&kept, &[]).await.err(),
@@ -344,8 +350,8 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
     );
     assert_eq!(
         between.err(),
-        Some("noAnswer"),
-        "no answer says more than a connection dropped"
+        Some(silent_says),
+        "nothing answering says more than a connection dropped"
     );
     let typed = [0x5e; 8];
     assert_eq!(
