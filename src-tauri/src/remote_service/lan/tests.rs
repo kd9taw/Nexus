@@ -560,6 +560,72 @@ fn the_gate_remembers_a_bounded_number_of_addresses() {
         .is_ok());
 }
 
+/// ★ A flood of connections from one address costs the gate eleven entries, whatever its rate:
+/// a thousand a second for a minute, the first two held open, is two admitted and the rest
+/// refused, as before, and never more than the newest eleven arrivals held. Arrivals at every
+/// pace, bursts and lulls, get exactly the answer the whole minute counted out arrival by arrival
+/// gives. CONTROL: that count holds every arrival of a burst, so the bound is the gate's own.
+#[test]
+fn a_flood_of_connections_costs_the_gate_eleven_entries() {
+    let gate = Arc::new(Gate::default());
+    let t0 = Instant::now();
+    let (mut held, mut refused, mut most) = (Vec::new(), 0, 0);
+    for n in 0..60_000 {
+        match gate.admit(source(1), t0 + Duration::from_millis(n)) {
+            Ok(ticket) => held.push(ticket),
+            Err(_) => refused += 1,
+        }
+        most = most.max(gate.arrivals(source(1)));
+    }
+    assert_eq!((held.len(), refused), (2, 59_998));
+    assert_eq!(
+        most,
+        ARRIVALS_PER_MINUTE + 1,
+        "the arrivals held through a flood"
+    );
+    drop(held);
+
+    // The minute counted out in full, against the gate, with each ticket given back at once.
+    let gate = Arc::new(Gate::default());
+    let mut every = std::collections::VecDeque::new();
+    let (mut at, mut seed, mut largest) = (t0, 7u64, 0);
+    let (mut admitted, mut too_fast) = (0, 0);
+    for _ in 0..20_000 {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        // A burst a quarter of the time, otherwise a lull of up to twenty seconds.
+        let gap = if seed >> 62 == 0 { 200 } else { 20_000 };
+        at += Duration::from_millis((seed >> 20) % gap);
+        every.push_back(at);
+        while every
+            .front()
+            .is_some_and(|t| at.saturating_duration_since(*t) >= Duration::from_secs(60))
+        {
+            every.pop_front();
+        }
+        largest = largest.max(every.len());
+        let refused = gate.admit(source(1), at).err();
+        assert_eq!(
+            refused == Some(Refused::TooFast),
+            every.len() > ARRIVALS_PER_MINUTE,
+            "{} arrivals in the minute to {at:?}, answered {refused:?}",
+            every.len()
+        );
+        if refused.is_none() {
+            admitted += 1;
+        } else {
+            too_fast += 1;
+        }
+        assert!(gate.arrivals(source(1)) <= ARRIVALS_PER_MINUTE + 1);
+    }
+    assert!(
+        admitted > 1000 && too_fast > 1000,
+        "{admitted} admitted, {too_fast} refused"
+    );
+    assert!(largest > ARRIVALS_PER_MINUTE + 1, "the control: {largest}");
+}
+
 // ----- The ladder, end to end over TCP -----
 
 /// The next status line from the station, other messages passed over; `"none"` if none comes in

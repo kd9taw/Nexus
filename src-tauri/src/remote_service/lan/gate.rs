@@ -90,7 +90,9 @@ impl Drop for Ticket {
 
 impl Gate {
     /// May `source` start a connection now? Every arrival counts toward its rate, a refused one
-    /// included, so a source that hammers the port stays refused.
+    /// included, so a source that hammers the port stays refused. Only the newest
+    /// [`ARRIVALS_PER_MINUTE`] + 1 are kept, all the rule ever reads, so a flood costs one address
+    /// eleven entries however fast it comes.
     pub fn admit(self: &Arc<Self>, source: IpAddr, now: Instant) -> Result<Ticket, Refused> {
         let mut sources = self.sources.lock().map_err(|_| Refused::Full)?;
         sources.retain(|_, s| {
@@ -106,6 +108,9 @@ impl Gate {
             return Err(Refused::Ignored);
         }
         entry.arrivals.push_back(now);
+        while entry.arrivals.len() > ARRIVALS_PER_MINUTE + 1 {
+            entry.arrivals.pop_front();
+        }
         if entry.arrivals.len() > ARRIVALS_PER_MINUTE {
             return Err(Refused::TooFast);
         }
@@ -120,6 +125,14 @@ impl Gate {
             gate: self.clone(),
             source,
         })
+    }
+
+    /// How many of `source`'s arrivals the gate holds now.
+    #[cfg(test)]
+    pub fn arrivals(&self, source: IpAddr) -> usize {
+        self.sources
+            .lock()
+            .map_or(0, |s| s.get(&source).map_or(0, |s| s.arrivals.len()))
     }
 
     /// A handshake from `source` failed: it never proved a paired key, spoke another protocol, or
