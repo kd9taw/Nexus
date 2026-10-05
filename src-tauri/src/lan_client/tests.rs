@@ -746,9 +746,16 @@ async fn the_pages_find_offers_the_stations_found_by_name() {
 /// ★ Why a pairing reached nobody, as the pairing dialog says it (`tempo_stream::lan::unreached`,
 /// in the card's own words): an address whose computer answers that nothing listens there is
 /// `refused`, and one where nothing answers at all is `noAnswer`. Off Windows every address counts
-/// as on this computer's network, so `otherNetwork` is shown by that function's own tests.
+/// as on this computer's network. On Windows, where this computer's networks are read, neither
+/// address is on one of them (loopback is no adapter's network, and TEST-NET-1 is routed nowhere),
+/// so both are `otherNetwork` there: that function asks it first.
 #[tokio::test]
 async fn a_pairing_that_reaches_nobody_says_why() {
+    let (refused, nobody_answers) = if cfg!(windows) {
+        ("otherNetwork", "otherNetwork")
+    } else {
+        ("refused", "noAnswer")
+    };
     let nothing_listens = {
         let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let std::net::SocketAddr::V4(at) = probe.local_addr().unwrap() else {
@@ -760,12 +767,12 @@ async fn a_pairing_that_reaches_nobody_says_why() {
         pairing::pair(nothing_listens, [7; 8], "Den PC", &[])
             .await
             .err(),
-        Some("refused")
+        Some(refused)
     );
     // TEST-NET-1 (RFC 5737), routed nowhere: nothing answers.
     let nobody = "192.0.2.1:42075".parse().unwrap();
     assert_eq!(
         pairing::pair(nobody, [7; 8], "Den PC", &[]).await.err(),
-        Some("noAnswer")
+        Some(nobody_answers)
     );
 }
