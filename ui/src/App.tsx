@@ -175,6 +175,7 @@ import { tickIssAutoArm } from './features/issAutoArm'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
+import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -708,6 +709,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('slotKeyRefused', remote ? null : slotKeyRefusedLane(snap?.radio.slotKeyRefused))
   }, [snap?.radio.slotKeyRefused?.at, snap?.radio.slotKeyRefused?.why, remote])
+
+  // …and one whose unkey the radio did not accept: the station halted TX the same way and keeps
+  // sending the unkey until the radio takes it. The lane says so until TX is turned on again; not
+  // on the Remote page either.
+  useEffect(() => {
+    setStatus('slotUnkeyFailed', remote ? null : slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
+  }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why, remote])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —

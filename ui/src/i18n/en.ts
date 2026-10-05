@@ -9949,6 +9949,12 @@ export const EN = {
   'shell.lane.slotKeyRefused.message': 'PTT REFUSED — TX STOPPED',
   'shell.lane.slotKeyRefused.detail':
     'The radio did not accept PTT at {{time}} UTC ({{why}}), so that over was not sent and TX was turned off. Check your PTT method and CAT/port, then turn TX on again.',
+  // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
+  // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
+  // again. `{{why}}` is the radio's own answer, as data.
+  'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
+  'shell.lane.slotUnkeyFailed.detail':
+    'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':
     'No live propagation data yet — set your callsign in Settings and check your internet connection.',

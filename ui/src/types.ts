@@ -1524,6 +1524,11 @@ export interface RadioStatus {
    *  transmit halted, as WSJT-X halts on a rig failure. Kept until TX is turned on again; absent
    *  otherwise, and from a station older than it. */
   slotKeyRefused?: SlotKeyRefused | null
+  /** The radio did not accept the unkey that ended a slot over (FT8, FT4, JS8 …), so transmit
+   *  halted, as WSJT-X halts on a rig failure; the station keeps sending the unkey until the radio
+   *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
+   *  it. */
+  slotUnkeyFailed?: SlotUnkeyFailed | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -4534,6 +4539,15 @@ export interface SlotKeyRefused {
   /** When it happened (unix seconds). */
   at: number
   /** What came back for the key, in the rig link's own words: data, never translated. */
+  why: string
+}
+
+/** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words
+ *  are the UI's, in features/slotUnkeyFailed.ts. */
+export interface SlotUnkeyFailed {
+  /** When it happened (unix seconds). */
+  at: number
+  /** What came back for the unkey, in the rig link's own words: data, never translated. */
   why: string
 }
 

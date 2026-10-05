@@ -6188,6 +6188,8 @@ export const DE: PartialCatalog = {
   "shell.lane.parsecStop.what.tune": "Tune",
   "shell.lane.slotKeyRefused.message": "PTT ABGELEHNT — TX GESTOPPT",
   "shell.lane.slotKeyRefused.detail": "Das Funkgerät hat die PTT um {{time}} UTC nicht angenommen ({{why}}), daher wurde diese Sendung nicht gesendet und TX ausgeschaltet. Prüfen Sie Ihre PTT-Methode und CAT/Port und schalten Sie TX dann wieder ein.",
+  "shell.lane.slotUnkeyFailed.message": "PTT AUS FEHLGESCHLAGEN — TX GESTOPPT",
+  "shell.lane.slotUnkeyFailed.detail": "Das Funkgerät hat das Abschalten der PTT um {{time}} UTC nicht angenommen ({{why}}), daher wurde TX ausgeschaltet. Es sendet möglicherweise noch: Prüfen Sie das Funkgerät sofort. Nexus schaltet die PTT weiter ab, bis das Funkgerät es annimmt. Schalten Sie TX wieder ein, sobald das Funkgerät empfängt.",
   "shell.lane.prop.offline.message": "Ausbreitung: keine Livedaten",
   "shell.lane.prop.offline.detail": "Noch keine Live-Ausbreitungsdaten — Rufzeichen in den Einstellungen setzen und die Internetverbindung prüfen.",
   "shell.lane.prop.cached.message": "Ausbreitung: Cache {{minutes}}m",
