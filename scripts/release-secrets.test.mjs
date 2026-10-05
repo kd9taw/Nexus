@@ -54,6 +54,9 @@ const BUILD_LINUX = process.env.BUILD_LINUX || path.join(ROOT, 'scripts', 'build
 // checks read too: ci.yml gates every push, and Dockerfile.pi builds the Pi packages that ship.
 const CI_WORKFLOW = process.env.CI_WORKFLOW || path.join(ROOT, '.github', 'workflows', 'ci.yml');
 const DOCKERFILE_PI = process.env.DOCKERFILE_PI || path.join(ROOT, 'scripts', 'Dockerfile.pi');
+// STREET_MAPS_WORKFLOW does the same for street-maps.yml, whose bucket job holds a write token for the
+// street-map host and runs what it downloads.
+const STREET_MAPS_WORKFLOW = process.env.STREET_MAPS_WORKFLOW || path.join(ROOT, '.github', 'workflows', 'street-maps.yml');
 
 // Which step sees which secret's VALUE: every one of them, so this table is the map. A presence
 // test (`secrets.X != ''`, which the Verify steps use to decide whether a signature is required)
@@ -775,6 +778,8 @@ const SCRIPT = fs.readFileSync(BUILD_LINUX, 'utf8');
 const CI_TEXT = fs.readFileSync(CI_WORKFLOW, 'utf8');
 const CI_WF = readWorkflow(CI_TEXT, path.basename(CI_WORKFLOW));
 const DOCKERFILE = fs.readFileSync(DOCKERFILE_PI, 'utf8');
+const STREET_TEXT = fs.readFileSync(STREET_MAPS_WORKFLOW, 'utf8');
+const STREET_WF = readWorkflow(STREET_TEXT, path.basename(STREET_MAPS_WORKFLOW));
 
 test('the readers account for every step of ci.yml and every instruction of Dockerfile.pi', () => {
   // The positive controls for the two other files: a reader that dropped a step or an instruction
@@ -791,8 +796,27 @@ test('the readers account for every step of ci.yml and every instruction of Dock
 });
 
 test('everything the release and CI fetch to build with is pinned', () => {
-  const v = [...unpinnedDownloads(WF, SCRIPT), ...unpinnedInWorkflow(CI_WF, 'ci.yml'), ...unpinnedInDockerfile(DOCKERFILE, 'Dockerfile.pi')];
+  const v = [
+    ...unpinnedDownloads(WF, SCRIPT),
+    ...unpinnedInWorkflow(CI_WF, 'ci.yml'),
+    ...unpinnedInWorkflow(STREET_WF, 'street-maps.yml'),
+    ...unpinnedInDockerfile(DOCKERFILE, 'Dockerfile.pi'),
+  ];
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
+});
+
+test('an unpinned download planted in street-maps.yml is reported', () => {
+  const steps = [...STREET_WF.jobs.values()].reduce((n, j) => n + j.steps.filter(Boolean).length, 0);
+  assert.equal(steps, STREET_TEXT.match(/^ {6}- [A-Za-z0-9_-]+:/gm)?.length ?? 0, 'the reader found a different number of steps than street-maps.yml has');
+  const sha = '02cb101ec7c40f2c49e1d9714d64511d8e1b74de';
+  const cases = [
+    [plant(STREET_TEXT, `dtolnay/rust-toolchain@${sha}  # master, 2026-09-12`, 'dtolnay/rust-toolchain@master'), 'street-maps.yml: job plan: `dtolnay/rust-toolchain@master` names a branch or a tag'],
+    [plant(STREET_TEXT, '          echo "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab  $RUNNER_TEMP/rclone.zip" | sha256sum -c -\n', ''), 'street-maps.yml: job bucket, step "Install rclone 1.75.1, checked against its published SHA-256": downloads with no checksum check'],
+  ];
+  for (const [text, needle] of cases) {
+    const v = unpinnedInWorkflow(readWorkflow(text, 'street-maps.yml'), 'street-maps.yml');
+    assert.ok(v.some((x) => x.includes(needle)), `a planted unpinned download was not reported. Expected:\n  ${needle}\ngot:\n  ${v.join('\n  ') || '(nothing)'}`);
+  }
 });
 
 test('an unpinned download planted in the workflow or build-linux.sh is reported', () => {
