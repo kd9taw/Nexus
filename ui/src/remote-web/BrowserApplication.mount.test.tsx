@@ -26,6 +26,11 @@ import fixtures from '../remote-monitor/fixtures.v2.json'
 import settingsFixture from '../components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-04). The App this file mounts (through BrowserApplication) is real work, and it scales with
+// the CPU a test gets: the slowest test takes 0.49 s on a quiet box, 2.3 s with a fifth of a CPU and 4.1–4.7 s with
+// a tenth, against vitest's 5 s default. 15 s is over twice the tenth; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // The real App, counted. Wrapping the export rather than a stub: a stub would measure how
 // often BrowserApplication asks for a render, and the question here is how often the
 // 3,000-line workspace actually runs. Hooks called inside `render` attach to the counting

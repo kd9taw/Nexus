@@ -111,6 +111,12 @@ vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="wa
 
 import App from './App'
 
+// THE BUDGET (2026-10-04). Both tests mount the real App, and the second follows the link three times: real work,
+// and it scales with the CPU a test gets. The first takes 1.1 s on a quiet box, 7.5 s with a fifth of a CPU and
+// 11–13 s with a tenth, past vitest's 5 s default; the second takes 1.5 s, 8.2–8.8 s and 19.5 s, past the 15 s it
+// had, with no assertion failing. 45 s is over twice that; a test that hangs still fails, after 45 s.
+vi.setConfig({ testTimeout: 45_000 })
+
 /** The id of every element asked to scroll into view. Settings scrolls the section a deep link
  *  targets to the top, so this tells the TARGETED section apart from its neighbours on the same
  *  tab, all of which render. */
@@ -219,7 +225,5 @@ describe('#353 — the WSJT-X note in Getting started opens the switch it names'
       ).toBe('true'),
     )
     expect(document.getElementById('settings-integrations-feeds')).not.toBeNull()
-    // It mounts the whole App and follows the link three times: about 1 s alone, and past the
-    // default 5 s on a loaded box, where it timed out without a single assertion failing.
-  }, 15_000)
+  })
 })

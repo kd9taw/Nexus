@@ -46,6 +46,12 @@ import { allFeatureIds, featureById, type View } from '../features/registry'
 import { dismissToast, subscribeToasts, withErrorToast } from '../toast'
 import { EN } from '../i18n'
 
+// THE BUDGET (2026-10-04). The App the hosted-page tests here mount is real work, and it scales with the CPU a test
+// gets. Apart from the Esc sweep, which has its own budget below, the slowest test takes 0.41 s on a quiet box,
+// 2.4–2.9 s with a fifth of a CPU and 6.0 s with a tenth, against vitest's 5 s default. 15 s is over twice the
+// tenth; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../components/PhoneScope', () => ({ PhoneScope: () => <div/> }))
 vi.mock('../components/BandStrip', () => ({ BandStrip: () => <div/> }))
 vi.mock('../components/LogEntry', () => ({ LogEntry: () => <div/> }))
@@ -322,6 +328,8 @@ it.each([['operate (the reference)', 'operate', 'FT'], ...[...ESC_RAIL, ...COCKP
     expect(h.commands(), 'an Esc sent an ordinary station command').toHaveLength(0)
   })
 
+// THIS TEST'S BUDGET (2026-10-04). It walks every screen and presses Esc on each: 0.52 s on a quiet box, 3.8–4.6 s
+// with a fifth of a CPU and 9.9–13.3 s with a tenth. 30 s is over twice the tenth; a hang still fails, after 30 s.
 it('the hosted page: a browser without control sends nothing for Esc on any of those screens', async () => {
   const h = session('noControl', [], hostedAnswer)
   hosted(h.client)
@@ -333,7 +341,7 @@ it('the hosted page: a browser without control sends nothing for Esc on any of t
   }
   expect(h.stops()).toHaveLength(0)
   expect(h.commands()).toHaveLength(0)
-})
+}, 30_000)
 
 // Stop authority is what every Stop TX button follows (useStationStopControl), and App's Esc follows
 // it too: an observer's Esc is not a refused halt, it is no halt at all, so it never reaches the

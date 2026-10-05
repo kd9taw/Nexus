@@ -96,6 +96,11 @@ import { getSettings } from './api'
 import { announce } from './announce'
 import { txEarcon } from './alerts'
 
+// THE BUDGET (2026-10-04). The App this file mounts is real work, and it scales with the CPU a test gets: the
+// slowest test takes 0.54 s on a quiet box, 2.4–3.9 s with a fifth of a CPU and 5.1–5.6 s with a tenth, against
+// vitest's 5 s default. 15 s is over twice the tenth; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
