@@ -192,6 +192,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went blank and stayed blank. Nexus now asks for it back and draws the globe again as soon as it
   returns. If it has not come back within 10 seconds, the globe shows **3D view paused** with a
   **Reload** button that brings it back.
+- **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
+  a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
+  an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
+  in every theme.
 
 ### Changed
 

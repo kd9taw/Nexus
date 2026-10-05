@@ -15131,8 +15131,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 700;
 }
 /* Need-tagged rows in the band-activity feed — same vocabulary + palette as the
-   Needed panel so the two views read as one system. (dxped/pota/sota are icon-only and
-   never colour a row; the award tier keeps the colour.) */
+   Needed panel so the two views read as one system. (The DXPED/POTA/SOTA activity badges are
+   icon-only and never colour a row; the award tier keeps the colour. A park still to be worked is
+   a need, and its row takes the needed-park green the band strip and the map give it.) */
 .decode-row.need-watch {
   border-left: 3px solid var(--need-watch);
   background: color-mix(in srgb, var(--need-watch) 24%, transparent);
@@ -15165,6 +15166,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
 }
+/* A needed park calling CQ outranks the CQ's green for the row (operator, 2026-10-04: "Give it the
+   needed-park colour"); without this the row lost the CQ tint and read plainer than an ordinary CQ.
+   OperateDecodes.needPark.test.tsx holds it in every theme. */
+.decode-row.need-pota {
+  border-left: 3px solid var(--need-pota);
+  background: color-mix(in srgb, var(--need-pota) 22%, transparent);
+}
 /* THE LEAD CHIP ON ITS OWN ROW (operator, 2026-09-30: "Chip drops its tint there"). A row tinted in a need's colour
    leads with that need's chip. With the word in the ink, the chip's own tint stacked on the row's, and in the night
    modes, whose ink is dimmer than the bright need colours, WATCH on a watched station's row read 3.12:1 in Chrome. So
@@ -15177,7 +15185,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-row.need-mode .need-chip.need-mode,
 .decode-row.need-grid .need-chip.need-grid,
 .decode-row.need-state .need-chip.need-state,
-.decode-row.need-confirm .need-chip.need-confirm {
+.decode-row.need-confirm .need-chip.need-confirm,
+.decode-row.need-pota .need-chip.need-pota {
   background: transparent;
 }
 /* Need micro-icon cluster trailing the message text. */
