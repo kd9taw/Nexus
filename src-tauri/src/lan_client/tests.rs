@@ -126,20 +126,22 @@ fn the_code_is_read_as_the_operator_types_it() {
     }
 }
 
-/// ★ A station's address is a private IPv4 address, with or without its port. CONTROL: the
-/// station's own default port is filled in; everything a station never listens on is refused.
+/// ★ A station's address is a private IPv4 address, with or without its port: the one rule both
+/// ends keep (`tempo_stream::lan::typed`). CONTROL: the station's own default port is filled in;
+/// everything a station never listens on is refused.
 #[test]
 fn only_a_private_address_is_a_stations() {
+    use tempo_stream::lan::typed;
     assert_eq!(
-        address("192.168.1.20"),
+        typed("192.168.1.20"),
         Some("192.168.1.20:42075".parse().unwrap())
     );
     assert_eq!(
-        address(" 10.0.0.7:5000 "),
+        typed(" 10.0.0.7:5000 "),
         Some("10.0.0.7:5000".parse().unwrap())
     );
     assert_eq!(
-        address("172.16.4.1:42075"),
+        typed("172.16.4.1:42075"),
         Some("172.16.4.1:42075".parse().unwrap())
     );
     for refused in [
@@ -155,7 +157,7 @@ fn only_a_private_address_is_a_stations() {
         "",
         "192.168.1",
     ] {
-        assert_eq!(address(refused), None, "{refused:?}");
+        assert_eq!(typed(refused), None, "{refused:?}");
     }
 }
 
@@ -738,5 +740,30 @@ async fn the_pages_find_offers_the_stations_found_by_name() {
     assert_eq!(
         told(answer.unwrap()),
         json!({"type":"found","available":false,"shacks":[]})
+    );
+}
+
+/// ★ Why a pairing reached nobody, as the pairing dialog says it (`tempo_stream::lan::unreached`,
+/// in the card's own words): an address whose computer answers that nothing listens there is
+/// `refused`, and one where nothing answers at all is `noAnswer`. Off Windows every address counts
+/// as on this computer's network, so `otherNetwork` is shown by that function's own tests.
+#[tokio::test]
+async fn a_pairing_that_reaches_nobody_says_why() {
+    let nothing_listens = {
+        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let std::net::SocketAddr::V4(at) = probe.local_addr().unwrap() else {
+            unreachable!()
+        };
+        at
+    };
+    assert_eq!(
+        pairing::pair(nothing_listens, [7; 8], "Den PC").await.err(),
+        Some("refused")
+    );
+    // TEST-NET-1 (RFC 5737), routed nowhere: nothing answers.
+    let nobody = "192.0.2.1:42075".parse().unwrap();
+    assert_eq!(
+        pairing::pair(nobody, [7; 8], "Den PC").await.err(),
+        Some("noAnswer")
     );
 }

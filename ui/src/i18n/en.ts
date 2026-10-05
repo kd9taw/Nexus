@@ -658,6 +658,7 @@ export const EN = {
   "lanWindow.reason.badAddress": "That is not a station’s address. Type it as the station shows it, on this network.",
   "lanWindow.reason.badCode": "The code is sixteen characters, 0 to 9 and a to f. Check it against the station’s screen.",
   "lanWindow.reason.badName": "Give this computer a name of 1 to 32 characters.",
+  "lanWindow.reason.unreachable": "Nothing answered. Check that the station is on, that Remote over this network is on there, and that this computer is on the same network.",
   "lanWindow.reason.pairingClosed": "The station is not pairing now. Press Pair a computer at the station, then type the new code within ten minutes.",
   "lanWindow.reason.wrongCode": "The station refused the code. Check it against the station’s screen. After three wrong codes the station needs a new one.",
   "lanWindow.reason.stationProofFailed": "The code does not match the station’s. Check the code and the address. If both are right, something else on this network may be answering in the station’s place.",

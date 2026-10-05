@@ -9,7 +9,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { LanApp, type PageSocket } from './LanApp'
 import { CLOSED_REASONS, CONNECT_REASONS, PAIR_REASONS } from './protocol'
 import { EN } from '../i18n/en'
-import { lanUnreached } from '../remote-native/lanReach'
 import { harness, last } from '../remote-web/stream-link.testkit'
 
 const PAGE = `http://127.0.0.1:42076/${'5e'.repeat(32)}/lan.html?lang=en`
@@ -70,10 +69,10 @@ it('opens its socket beside the page, with the launch secret in its path, and as
 })
 
 describe('every reason, in a sentence', () => {
-  // Nothing answering is said in the station card's own words (`lanReachLine`).
+  const REACH = ['otherNetwork', 'refused', 'noAnswer']
   const sentences = (prefix: string, reasons: readonly string[]) => reasons.map(reason =>
     [reason, EN[(reason === 'disconnected' ? 'lanWindow.disconnected'
-      : lanUnreached(reason) ? `remote.lan.reach.${reason}` : `${prefix}${reason}`) as keyof typeof EN]] as const)
+      : REACH.includes(reason) ? `remote.lan.reach.${reason}` : `${prefix}${reason}`) as keyof typeof EN]] as const)
   it.each(sentences('lanWindow.reason.', PAIR_REASONS))('a pairing refused %s', (reason, said) => {
     page()
     socket.tell({ type: 'pairRefused', reason })
@@ -151,6 +150,15 @@ describe('the pairing dialog', () => {
     expect(last(socket.sent)).toEqual({ type: 'pair', address: '192.168.1.44', code: '0a1b2c3d4e5f6071', name: 'DEN-PC' })
   })
 
+  it('says why a pairing reached nobody, in the words the card uses', () => {
+    for (const reach of ['otherNetwork', 'refused', 'noAnswer'] as const) {
+      cleanup()
+      page()
+      socket.tell({ type: 'pairRefused', reason: reach })
+      expect(screen.queryByRole('alert')?.textContent, reach).toBe(EN[`remote.lan.reach.${reach}`])
+    }
+  })
+
   it('says why no station was found by name, and looks again only where it can', () => {
     page()
     socket.tell({ type: 'stations', stations: [], computer: 'DEN-PC' })
@@ -183,15 +191,16 @@ describe('the pairing dialog', () => {
     expect(last(socket.sent)).toEqual({ type: 'forget', stationId: STATION })
   })
 
-  it('says why nothing answered, as the reason names it, and offers to type where the station is now', () => {
-    for (const reason of ['otherNetwork', 'refused', 'noAnswer'] as const) {
+  it('says why nothing answered where the station was, and offers to type where it is now', () => {
+    for (const reason of ['unreachable', 'otherNetwork', 'refused', 'noAnswer'] as const) {
       cleanup()
       page()
       socket.tell({ type: 'stations', computer: '', stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '00'.repeat(32) }] })
       fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.stream'] }))
       expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION })
       socket.tell({ type: 'connectRefused', reason })
-      expect(screen.getByRole('alert').textContent, reason).toBe(EN[`remote.lan.reach.${reason}`])
+      expect(screen.getByRole('alert').textContent, reason)
+        .toBe(EN[reason === 'unreachable' ? 'lanWindow.reason.unreachable' : `remote.lan.reach.${reason}`])
       fireEvent.change(screen.getByLabelText(EN['lanWindow.otherAddress']), { target: { value: '192.168.1.44' } })
       fireEvent.click(last(screen.getAllByRole('button', { name: EN['lanWindow.stream'] }))!)
       expect(last(socket.sent), reason).toEqual({ type: 'connect', stationId: STATION, address: '192.168.1.44' })

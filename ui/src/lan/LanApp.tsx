@@ -44,9 +44,7 @@ function sentence(reason: PairReason | ConnectReason | ClosedReason): string {
     case 'badAddress': return t('lanWindow.reason.badAddress')
     case 'badCode': return t('lanWindow.reason.badCode')
     case 'badName': return t('lanWindow.reason.badName')
-    case 'otherNetwork':
-    case 'refused':
-    case 'noAnswer': return lanReachLine(reason)
+    case 'unreachable': return t('lanWindow.reason.unreachable')
     case 'pairingClosed': return t('lanWindow.reason.pairingClosed')
     case 'wrongCode': return t('lanWindow.reason.wrongCode')
     case 'stationProofFailed': return t('lanWindow.reason.stationProofFailed')
@@ -64,6 +62,10 @@ function sentence(reason: PairReason | ConnectReason | ClosedReason): string {
     case 'stationLeft': return t('lanWindow.reason.stationLeft')
     case 'connectionLost': return t('lanWindow.reason.connectionLost')
     case 'disconnected': return t('lanWindow.disconnected')
+    // Nothing answered at the address: the card's own words for why (`tempo_stream::lan::unreached`).
+    case 'otherNetwork':
+    case 'refused':
+    case 'noAnswer': return lanReachLine(reason)
   }
 }
 
@@ -149,7 +151,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setBusy(null)
           setSaid({ text: sentence(told.reason), alert: true })
           // Nothing answered where the station was: it may have moved, so offer to type where it is.
-          if (lanUnreached(told.reason) && connecting.current) setAnother({ id: connecting.current, address: '' })
+          if ((told.reason === 'unreachable' || lanUnreached(told.reason)) && connecting.current) setAnother({ id: connecting.current, address: '' })
           return
         case 'closed':
           leave()

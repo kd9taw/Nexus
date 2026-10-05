@@ -136,7 +136,7 @@ impl Controller {
 /// application data is read; the computer's real client says `notPaired`. Its address pays at the
 /// gate: after five, the
 /// address is ignored, and a new connection from there with the paired key is dropped before TLS too
-/// (`noAnswer`), a denial of service of LAN Remote's new connections and nothing else. It reached
+/// (`unreachable`), a denial of service of LAN Remote's new connections and nothing else. It reached
 /// nothing. CONTROL: the paired computer was welcomed from this address before, and its own
 /// connection keeps control and the over through all of it.
 #[tokio::test]
@@ -169,7 +169,7 @@ async fn an_unpinned_key_is_refused_in_the_handshake_and_reaches_nothing() {
         road::connect_at(&paired_record(&r.s, at), &[at])
             .await
             .err(),
-        Some("noAnswer"),
+        Some("unreachable"),
         "a new connection from an ignored address was heard"
     );
     reached_nothing(&r.s, &before, "an unpinned key");
@@ -369,7 +369,7 @@ async fn a_flood_of_frames_and_connections_reaches_nothing_and_never_the_over() 
         road::connect_at(&paired_record(&r.s, at), &[at])
             .await
             .err(),
-        Some("noAnswer"),
+        Some("unreachable"),
         "the flooding address is still heard"
     );
     let (flooding, mut beat, mut more) = (Instant::now(), Instant::now(), 0);

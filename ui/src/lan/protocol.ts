@@ -3,7 +3,6 @@
 // as JSON; what it is told is read here, strictly, and anything else is refused. The station's own
 // messages on an open road (operation answers, stream signals and state, the status line) pass
 // through as the station sent them, to the code that reads them on the hosted road too.
-import { LAN_UNREACHED } from '../remote-native/lanReach'
 
 /** A paired station as the page is shown it: its LAN station id, where it answered (the last that
  *  worked first), and its key's fingerprint (SHA-256 of the key, lowercase hex). Never this
@@ -19,15 +18,18 @@ export type LanFound = { name: string; address: string; protocol: number; key: s
 /** The road, open: the ids the station stamped and the key this computer pinned for it. */
 export type LanRoad = { stationId: string; deviceId: string; sessionId: string; stationKey: string; address: string }
 
-/** Why a pairing did not happen, as this computer's Nexus names it. */
-export const PAIR_REASONS = ['badAddress', 'badCode', 'badName', ...LAN_UNREACHED, 'pairingClosed', 'wrongCode',
+/** Why a pairing did not happen, as this computer's Nexus names it. Nothing answering at the address
+ *  is told as `tempo_stream::lan::unreached` names it (`otherNetwork`, `refused`, `noAnswer`). */
+export const PAIR_REASONS = ['badAddress', 'badCode', 'badName', 'unreachable', 'pairingClosed', 'wrongCode',
   'stationProofFailed', 'pairingFull', 'stationUnavailable', 'updateStation', 'updateComputer', 'stationsFull',
-  'storeUnavailable', 'notStation', 'unavailable'] as const
+  'storeUnavailable', 'notStation', 'unavailable', 'otherNetwork', 'refused', 'noAnswer'] as const
 export type PairReason = (typeof PAIR_REASONS)[number]
 
-/** Why the road did not open. */
-export const CONNECT_REASONS = ['badAddress', ...LAN_UNREACHED, 'keyChanged', 'notPaired', 'updateStation',
-  'updateComputer', 'notStation', 'storeUnavailable', 'unknownStation'] as const
+/** Why the road did not open. Nothing answering at the addresses tried is told as
+ *  `tempo_stream::lan::unreached` names it, the most telling of them: `refused`, then `otherNetwork`,
+ *  then `noAnswer`. */
+export const CONNECT_REASONS = ['badAddress', 'unreachable', 'keyChanged', 'notPaired', 'updateStation',
+  'updateComputer', 'notStation', 'storeUnavailable', 'unknownStation', 'otherNetwork', 'refused', 'noAnswer'] as const
 export type ConnectReason = (typeof CONNECT_REASONS)[number]
 
 /** Why an open road closed. */

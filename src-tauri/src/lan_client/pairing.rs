@@ -71,7 +71,7 @@ fn refusal(reason: &str) -> &'static str {
     }
 }
 
-/// The station's next word on a pairing connection. Gone without one is `noAnswer`: what a
+/// The station's next word on a pairing connection. Gone without one is `unreachable`: what a
 /// station does when its pairing session runs out of time.
 async fn heard(socket: &mut Socket) -> Result<FromStation, &'static str> {
     loop {
@@ -80,7 +80,7 @@ async fn heard(socket: &mut Socket) -> Result<FromStation, &'static str> {
                 return serde_json::from_str(&text).map_err(|_| "notStation");
             }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-            _ => return Err("noAnswer"),
+            _ => return Err("unreachable"),
         }
     }
 }
@@ -97,7 +97,7 @@ pub(crate) async fn pair(
     }
     tokio::time::timeout(PAIRING, ceremony(at, code, name.trim()))
         .await
-        .unwrap_or(Err("noAnswer"))
+        .unwrap_or(Err("unreachable"))
 }
 
 async fn ceremony(
@@ -115,7 +115,11 @@ async fn ceremony(
     } = road::open(at, config)
         .await
         .map_err(|failed| match failed {
-            Failed::Unreachable(why) => why,
+            Failed::Unreachable => "unreachable",
+            // Nothing answered at the address: why, in the words the card uses for it.
+            Failed::NotConnected(how) => {
+                tempo_stream::lan::unreached(&how.into(), tempo_stream::lan::here(*at.ip()))
+            }
             // A station takes a key it does not know only while its pairing window is open.
             Failed::Refused => "pairingClosed",
             // On a pairing connection any P-256 key is taken: one that is not is no station's.
@@ -130,7 +134,7 @@ async fn ceremony(
         "name":name,"nonce":hex(&ours)});
     road::say(&mut socket, asked.to_string())
         .await
-        .map_err(|_| "noAnswer")?;
+        .map_err(|_| "unreachable")?;
     let (theirs, station_proof) = match heard(&mut socket).await? {
         FromStation::PairProof { nonce, proof } => (
             hex32(&nonce).ok_or("notStation")?,
@@ -149,7 +153,7 @@ async fn ceremony(
     let ours_proof = json!({"type":"pairProof","proof":hex(&proof(&k, Side::Computer, &t))});
     road::say(&mut socket, ours_proof.to_string())
         .await
-        .map_err(|_| "noAnswer")?;
+        .map_err(|_| "unreachable")?;
     let (device, station_id) = match heard(&mut socket).await? {
         FromStation::Paired {
             device_id,

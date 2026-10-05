@@ -272,14 +272,15 @@ async fn the_remembered_addresses_are_tried_in_order() {
     );
 }
 
-/// ★ Nothing answering is said as the window says it (`tempo_stream::lan::unreached`), on the road
-/// and on a pairing alike, in place of one sentence for all of it: a port where nothing listens is
-/// `refused`; a machine that takes the connection and drops it before the handshake is done, as the
-/// shack's gate drops a source it will not hear, is `noAnswer`, and so is nowhere to try; and the
-/// first address's own word stands over an equal one after it. CONTROL: past the port where nothing
-/// listens, the station's own welcomes this computer. (`otherNetwork` reads this computer's own
-/// networks, which only Windows gives: `unreached`'s own test pins it.) Skipped, saying so, on a box
-/// with no private address of its own.
+/// ★ Nothing answering is said as the window says it (`tempo_stream::lan::unreached`): a port where
+/// nothing listens is `refused`, an address where nothing answers in time is `noAnswer`, and a
+/// connection made and then dropped before the handshake was done (as the shack's gate drops a
+/// source it will not hear) is `unreachable`, on the road as on a pairing. Across the addresses a
+/// road tries, the most telling is told whatever their order: `refused`, then `otherNetwork`, then
+/// `noAnswer`, then `unreachable`, which is also what nowhere to try says. CONTROL: past them, the
+/// station's own port welcomes this computer. (`otherNetwork` reads this computer's own networks,
+/// which only Windows gives: `unreached`'s own test pins it.) Skipped, saying so, on a box with no
+/// private address of its own.
 #[tokio::test]
 async fn nothing_answering_is_said_as_the_window_says_it() {
     let Some(private) = own_private_address() else {
@@ -308,30 +309,44 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
         });
         at
     };
+    // A documentation address (RFC 5737): nothing answers there.
+    let silent = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 42075);
     let kept = paired_record(&s, live);
-    assert_eq!(
-        road::connect_at(&kept, &[dead]).await.err(),
-        Some("refused")
+    let (at_dead, at_silent, at_dropping) = ([dead], [silent], [dropping]);
+    let (refused, timed, dropped) = tokio::join!(
+        road::connect_at(&kept, &at_dead),
+        road::connect_at(&kept, &at_silent),
+        road::connect_at(&kept, &at_dropping),
     );
-    assert_eq!(
-        road::connect_at(&kept, &[dropping]).await.err(),
-        Some("noAnswer")
-    );
+    assert_eq!(refused.err(), Some("refused"));
+    assert_eq!(timed.err(), Some("noAnswer"));
+    assert_eq!(dropped.err(), Some("unreachable"));
     assert_eq!(
         road::connect_at(&kept, &[]).await.err(),
-        Some("noAnswer"),
+        Some("unreachable"),
         "nowhere to try"
     );
-    for (order, first) in [
-        ([dead, dropping], "refused"),
-        ([dropping, dead], "noAnswer"),
-    ] {
-        assert_eq!(
-            road::connect_at(&kept, &order).await.err(),
-            Some(first),
-            "the first address's own word: {order:?}"
-        );
-    }
+    let (tried_last, tried_first, no_refusal) = (
+        [dropping, silent, dead],
+        [dead, silent, dropping],
+        [dropping, silent],
+    );
+    let (last, first, between) = tokio::join!(
+        road::connect_at(&kept, &tried_last),
+        road::connect_at(&kept, &tried_first),
+        road::connect_at(&kept, &no_refusal),
+    );
+    assert_eq!(last.err(), Some("refused"), "the most telling, tried last");
+    assert_eq!(
+        first.err(),
+        Some("refused"),
+        "the most telling, tried first"
+    );
+    assert_eq!(
+        between.err(),
+        Some("noAnswer"),
+        "no answer says more than a connection dropped"
+    );
     let typed = [0x5e; 8];
     assert_eq!(
         pairing::pair(dead, typed, "Den PC").await.err(),
@@ -339,9 +354,9 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
     );
     assert_eq!(
         pairing::pair(dropping, typed, "Den PC").await.err(),
-        Some("noAnswer")
+        Some("unreachable")
     );
-    let (_, reached) = road::connect_at(&kept, &[dead, live])
+    let (_, reached) = road::connect_at(&kept, &[dead, dropping, live])
         .await
         .expect("the control");
     assert_eq!(reached, live);
