@@ -1079,7 +1079,13 @@ export function PhoneScope({
       // unknown, an AM/FM baseband, where a click does not tune either), and then nothing is
       // drawn — a wrong number on a scale someone tunes by is worse than a blank one.
       {
-        for (const t of axisTicks(lo, hi, 6)) {
+        const ticks = axisTicks(lo, hi, 6)
+        // Ticks under a kilohertz apart (CW's 300–800 Hz window; Phone's at a 2.4 kHz width) put the
+        // same kHz under several labels at three decimals: CW's default scale read `7.030` five times
+        // (operator, 2026-10-04). There each label carries the 100 Hz digit too. A lone tick only
+        // stands on a window narrow enough for the finest step.
+        const fine = ticks.length < 2 || ticks[1] - ticks[0] < 1_000
+        for (const t of ticks) {
           const abs = axisToRf(axis, t)
           if (abs == null) break
           const tx = Math.round(((t - lo) / (hi - lo)) * Wd)
@@ -1094,9 +1100,11 @@ export function PhoneScope({
           ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
           ctx.font = `${Math.max(8, Math.round(9 * textPx))}px system-ui, sans-serif`
           ctx.textBaseline = 'bottom'
-          // Three decimals of MHz is the kHz an operator dials. Nudged inward at the edges so a
-          // label is never half-clipped — a truncated frequency is a misleading one.
-          const label = (abs / 1e6).toFixed(3)
+          // Three decimals of MHz is the kHz an operator dials; a fine scale adds the 100 Hz digit,
+          // rounded in whole hertz first. `toFixed` alone rounds the binary double, so two ticks 100 Hz
+          // apart that both end in 50 Hz can round toward each other and read alike. Nudged inward at
+          // the edges so a label is never half-clipped — a truncated frequency is a misleading one.
+          const label = fine ? (Math.round(abs / 100) / 1e4).toFixed(4) : (abs / 1e6).toFixed(3)
           const w = ctx.measureText(label).width
           ctx.textAlign = 'left'
           const lx = Math.min(Wd - w - 2 * textPx, Math.max(2 * textPx, tx + 3 * textPx))

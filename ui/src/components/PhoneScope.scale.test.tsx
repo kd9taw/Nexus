@@ -7,14 +7,16 @@
 // true CW a tone at the pitch IS the dial, so the CW scope read the pitch high (600 Hz by default), and it
 // ran backwards on the reverse sideband and for the soundcard keyer below 10 MHz, where the rig is on LSB
 // (2026-10-04). Read off the real scope's marks canvas: each tick's x and the label drawn beside it, at a
-// pitch that is not the default.
+// pitch that is not the default. A label is three decimals of MHz, and four (the 100 Hz digit) where the
+// ticks stand under a kilohertz apart, so CW's narrow window no longer reads the same kHz under every tick
+// (operator, 2026-10-04).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 import type { SpotRow } from '../types'
 import { axisToRf } from '../spectrum/overlays'
 import { notchOnAxis, type AxisKind } from '../spectrum/markers'
-import { axisTicks, isSymmetricMode, scopeView, sidebandSign } from '../waterfall'
+import { axisTicks, cwScopeWindow, isSymmetricMode, scopeView, sidebandSign } from '../waterfall'
 
 /** The row served: demodulated audio, or a native RF sweep. Flat, so a click finds no signal to snap
  *  to and lands where it was aimed. */
@@ -158,30 +160,44 @@ function scaleRead(): string[] {
   let x: string | null = null
   for (const p of of('marks')) {
     if (p.startsWith(TICK_RULE)) x = p.slice(TICK_RULE.length).split(' ')[0]
-    else if (x != null && /^text \d+\.\d{3} /.test(p)) {
+    else if (x != null && /^text \d+\.\d{3,4} /.test(p)) {
       out.push(`${x} ${p.split(' ')[1]}`)
       x = null
     }
   }
   return out
 }
-const mhz = (hz: number) => (hz / 1e6).toFixed(3)
+/** The label for `hz` on a scale whose ticks stand `step` apart: the kHz an operator dials, three decimals
+ *  of MHz, from a kilohertz up; below that the 100 Hz digit too, rounded in whole hertz. */
+const mhz = (hz: number, step: number) => (step < 1000 ? (Math.round(hz / 100) / 1e4).toFixed(4) : (hz / 1e6).toFixed(3))
 /** The label the scale draws at x, or undefined where it draws none. */
 const labelAt = (x: number, scale: string[]) => scale.find((p) => p.startsWith(`${Math.round(x)} `))?.split(' ')[1]
+
+/** The drawn view for this kind, as PhoneScope builds it from the row it is served. */
+function viewOf(k: Kind, dial: number | null, over: { pitch?: number; viewLoHz?: number; viewHiHz?: number } = {}) {
+  const row = k.rf ? RF_ROW : AUDIO_ROW
+  return scopeView(row.loHz, row.hiHz, row.source, over.viewLoHz ?? k.viewLoHz, over.viewHiHz ?? k.viewHiHz,
+    isCw(k) && !k.rf ? (over.pitch ?? PITCH) : null, sidebandSign(k.sideband), dial, isSymmetricMode(k.sideband), k.carrierCentered === true)
+}
+/** The step between the scale's ticks on that view. */
+function stepOf(k: Kind, dial: number | null, over: { pitch?: number; viewLoHz?: number; viewHiHz?: number } = {}): number {
+  const v = viewOf(k, dial, over)
+  const ticks = axisTicks(v.loHz, v.hiHz, 6)
+  return ticks[1] - ticks[0]
+}
 
 /** What the scale must read: at each round tick of the drawn view, the model's RF there (`axisToRf`), at
  *  the tick's pixel. Nothing where the model has no honest answer. */
 function scaleWanted(k: Kind, dial: number | null, over: { pitch?: number; viewLoHz?: number; viewHiHz?: number } = {}): string[] {
   const pitch = over.pitch ?? PITCH
-  const row = k.rf ? RF_ROW : AUDIO_ROW
-  const v = scopeView(row.loHz, row.hiHz, row.source, over.viewLoHz ?? k.viewLoHz, over.viewHiHz ?? k.viewHiHz,
-    isCw(k) && !k.rf ? pitch : null, sidebandSign(k.sideband), dial, isSymmetricMode(k.sideband), k.carrierCentered === true)
+  const v = viewOf(k, dial, over)
   const a = axisOf(k, dial, pitch)
+  const ticks = axisTicks(v.loHz, v.hiHz, 6)
   const out: string[] = []
-  for (const t of axisTicks(v.loHz, v.hiHz, 6)) {
+  for (const t of ticks) {
     const hz = axisToRf(a, t)
     if (hz == null) break
-    out.push(`${Math.round(((t - v.loHz) / (v.hiHz - v.loHz)) * 800)} ${mhz(hz)}`)
+    out.push(`${Math.round(((t - v.loHz) / (v.hiHz - v.loHz)) * 800)} ${mhz(hz, ticks[1] - ticks[0])}`)
   }
   return out
 }
@@ -210,7 +226,7 @@ describe('the frequency scale is the axis model, by value', () => {
   })
 
   it('reads the dial under the pitch line in true CW, on either sideband and at any pitch', async () => {
-    // 7.030130 MHz reads "7.030"; a pitch-high scale read 7.030630 or 7.030830, "7.031".
+    // 7.030130 MHz reads "7.0301"; a pitch-high scale read 7.030630 or 7.030830, "7.0306" or "7.0308".
     for (const name of ['true CW', 'true CW on the reverse sideband']) {
       for (const pitch of [500, 700]) {
         // `cwScopeWindow(pitch, 400)`: the pitch lands at x = 400 either way.
@@ -219,7 +235,7 @@ describe('the frequency scale is the axis model, by value', () => {
         await draw()
         expect(axisToRf(axisOf(kind(name), 7_030_130, pitch), pitch), 'the model: a tone at the pitch IS the dial').toBe(7_030_130)
         expect(scaleRead(), `${name} at ${pitch} Hz`).toEqual(scaleWanted(kind(name), 7_030_130, { pitch, ...view }))
-        expect(labelAt(400, scaleRead()), `${name} at ${pitch} Hz`).toBe('7.030')
+        expect(labelAt(400, scaleRead()), `${name} at ${pitch} Hz`).toBe('7.0301')
         cleanup()
       }
     }
@@ -241,6 +257,98 @@ describe('the frequency scale is the axis model, by value', () => {
       scene(k, dial)
       await draw()
       expect(scaleRead(), k.name).toEqual([])
+      cleanup()
+    }
+  })
+})
+
+describe('the scale reads to 100 Hz where its ticks stand under a kilohertz apart', () => {
+  // Operator, 2026-10-04: on CW's narrow window, 300 to 800 Hz wide, three decimals of MHz put the same kHz
+  // under every tick (`7.030` five times by default). Under a 1 kHz step each label carries the 100 Hz digit;
+  // from 1 kHz up it is the label it always was. AM and FM stay blank (above).
+  const CW_KINDS = KINDS.filter(isCw)
+  /** Every width the CW cockpit's window takes (`cwScopeWindow`: the filter plus a quarter, from 300 to
+   *  800 Hz), and the 300-800 Hz window itself. */
+  const CW_WINDOWS = [...[240, 400, 500, 560, null].map((f) => cwScopeWindow(PITCH, f)), { loHz: 300, hiHz: 800 }]
+
+  it('pins a 300-800 Hz window, with its ticks off a 50 Hz rounding edge and on one', async () => {
+    const view = { viewLoHz: 300, viewHiHz: 800 }
+    scene(kind('true CW'), 7_030_000, view)
+    await draw()
+    expect(scaleRead()).toEqual(['0 7.0298', '160 7.0299', '320 7.0300', '480 7.0301', '640 7.0302', '800 7.0303'])
+    cleanup()
+    // Every tick ends in 50 Hz: rounded half up in whole hertz, never toward its neighbour.
+    scene(kind('true CW'), 7_030_050, view)
+    await draw()
+    expect(scaleRead()).toEqual(['0 7.0299', '160 7.0300', '320 7.0301', '480 7.0302', '640 7.0303', '800 7.0304'])
+    cleanup()
+    // A window too narrow for two ticks (no cockpit makes one: CW's floors at 300 Hz) reads like the finest step.
+    scene(kind('true CW'), 7_030_000, { viewLoHz: 450, viewHiHz: 520 })
+    await draw()
+    expect(scaleRead()).toEqual(['571 7.0300'])
+  })
+
+  it.each(CW_KINDS)('$name: adjacent labels are one step apart, never alike, on every CW window and dial', async (k) => {
+    for (const w of CW_WINDOWS) {
+      const view = { viewLoHz: w.loHz, viewHiHz: w.hiHz }
+      const s = scene(k, k.dial, view)
+      // Through a whole 100 Hz at the CW tuning step, 10 Hz, so the ticks cross the 50 Hz rounding edge.
+      for (let d = 0; d < 100; d += 10) {
+        const dial = k.dial - 30 + d
+        s.rerender({ dialHz: dial })
+        await draw()
+        const labels = scaleRead().map((p) => p.split(' ')[1])
+        const at = `${k.name}, window ${w.loHz}-${w.hiHz} Hz, dial ${dial}`
+        expect(labels.length, `control: ${at} has a scale`).toBeGreaterThanOrEqual(3)
+        // Not merely different: a step's own distance apart, so two ticks 100 Hz apart never read 200.
+        const units = stepOf(k, dial, view) / 100
+        for (let i = 1; i < labels.length; i++) {
+          const apart = Math.abs(Math.round((Number(labels[i]) - Number(labels[i - 1])) * 1e4))
+          expect(apart, `${at}: ${labels[i - 1]} then ${labels[i]}`).toBe(units)
+        }
+      }
+      cleanup()
+    }
+  })
+
+  it("does the same on Phone's scope at a 2.4 kHz width, where the ticks stand 500 Hz apart", async () => {
+    // It read `14.200 14.200 14.201 14.201 14.202` here.
+    scene(kind("Phone's carrier-centred axis, USB"), 14_200_000)
+    await draw()
+    expect(scaleRead()).toEqual(['89 14.2000', '237 14.2005', '385 14.2010', '533 14.2015', '681 14.2020'])
+  })
+
+  it('keeps its three decimals, byte for byte, where the ticks stand a kilohertz or more apart', async () => {
+    // What the scale drew before the 100 Hz digit, `(hz / 1e6).toFixed(3)` at the model's RF: Phone at a 4 kHz
+    // width and plain audio over the whole row (a tick every 1 kHz), and a native RF row 6, 12, 30 and 100 kHz
+    // wide (1, 2, 5 and 20 kHz).
+    const phone = kind("Phone's carrier-centred axis, USB")
+    scene(phone, 14_200_030, { viewLoHz: 0, viewHiHz: 4000 })
+    await draw()
+    expect(scaleRead()).toEqual(['89 14.200', '267 14.201', '444 14.202', '622 14.203', '800 14.204'])
+    cleanup()
+    const wide: [Kind, number, number][] = [
+      [phone, 0, 4000],
+      [kind("Phone's carrier-centred axis, LSB"), 0, 4000],
+      [kind('plain USB audio'), 0, 4000],
+      [kind('plain LSB audio'), 0, 4000],
+      ...[3_000, 6_000, 15_000, 50_000].map((h): [Kind, number, number] => [kind('a native RF row'), -h, h]),
+    ]
+    for (const [k, lo, hi] of wide) {
+      const view = { viewLoHz: lo, viewHiHz: hi }
+      const s = scene(k, k.dial, view)
+      for (const d of [0, 20, 470, 950]) {
+        const dial = k.dial + d
+        s.rerender({ dialHz: dial })
+        await draw()
+        const at = `${k.name}, ${lo} to ${hi} Hz, dial ${dial}`
+        expect(stepOf(k, dial, view), `control: ${at} steps a kilohertz or more`).toBeGreaterThanOrEqual(1000)
+        const v = viewOf(k, dial, view)
+        const before = axisTicks(v.loHz, v.hiHz, 6).map((t) =>
+          `${Math.round(((t - v.loHz) / (v.hiHz - v.loHz)) * 800)} ${(axisToRf(axisOf(k, dial), t)! / 1e6).toFixed(3)}`)
+        expect(before.length, `control: ${at} has a scale`).toBeGreaterThan(2)
+        expect(scaleRead(), at).toEqual(before)
+      }
       cleanup()
     }
   })
@@ -271,7 +379,7 @@ describe('a tag, the notch and a click land where the scale says', () => {
 
     // The tag's tick stands on the 600 Hz tick of the scale, and the scale there reads the spot.
     expect(of('overlays')).toContain(`move  ${xAudio(600)} 27`)
-    expect(labelAt(xAudio(600), before)).toBe(mhz(at600))
+    expect(labelAt(xAudio(600), before)).toBe(mhz(at600, stepOf(k, dial)))
 
     // The notch band is centred on the 700 Hz tick (3 px wide from x = 719), and the RF it removes, where
     // the RF scope draws it, is what the scale reads there.
