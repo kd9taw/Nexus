@@ -671,7 +671,9 @@ async fn page(
 
 /// The road to station `id`, opened: the road, and what the page is told of it. It is tried at the
 /// address the operator typed, then at the remembered ones, the last that worked first, and only
-/// when none of them answered, where a look by name finds the station now ([`found_at`]).
+/// when none of them welcomed it because nothing answered, or because another key did (another
+/// station at an address that was this one's), where a look by name finds the station now
+/// ([`found_at`]).
 async fn connect(
     reach: &Reach,
     id: &str,
@@ -687,12 +689,15 @@ async fn connect(
         .await?
         .ok_or("unknownStation")?;
     let (opened, at) = match road::connect(&record, typed).await {
-        Err(why) if road::UNREACHED.contains(&why) => {
+        Err(why) if road::UNREACHED.contains(&why) || why == "keyChanged" => {
             let tried = road::order(&record, typed);
             let found = found_at(reach, &record, &tried).await;
-            // Nothing found by name: the page hears why the addresses tried did not answer.
+            // Nothing found by name: the page hears why the addresses tried did not welcome this
+            // computer. Another key there is told unless what was found by name told more.
             road::connect_at(&record, &found).await.map_err(|later| {
-                if found.is_empty() {
+                if found.is_empty()
+                    || (why == "keyChanged" && road::weight(later) <= road::weight(why))
+                {
                     why
                 } else {
                     later

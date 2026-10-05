@@ -184,7 +184,7 @@ pub(crate) const UNREACHED: [&str; 4] = ["unreachable", "otherNetwork", "refused
 
 /// How much a reason says, for the one to tell when no address welcomed this computer. Nothing
 /// answering says least, and of its words a refusal says most: the station's computer answered.
-fn weight(reason: &str) -> u8 {
+pub(crate) fn weight(reason: &str) -> u8 {
     match reason {
         "updateStation" | "updateComputer" => 7,
         "notPaired" => 6,

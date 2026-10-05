@@ -46,8 +46,8 @@
 //! The pairing dialog's address field offers the stations Windows' own DNS-SD finds on this
 //! computer's networks (`tempo_stream::lan::dnssd::find`, through the page's socket), and a typed
 //! address still works. A paired station is tried where it answered before, the last address that
-//! worked first, and only when none of those answers, where a look by name finds it: an advert
-//! whose key tag starts the key pinned for it. A station found by name is a hint, never an
+//! worked first, and only when none of those answers, or another key answers there, where a look
+//! by name finds it: an advert whose key tag starts the key pinned for it. A station found by name is a hint, never an
 //! identity, since the road takes only the pinned key.
 //!
 //! ## The loopback origin ([`origin`])

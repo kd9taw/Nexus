@@ -1266,3 +1266,105 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
     );
     assert_eq!(looks.load(Ordering::SeqCst), 2);
 }
+
+/// ★ Another station at a remembered address (a DHCP lease moved the shack, and another Nexus with
+/// LAN on took its old address) does not end the connect: past it, the remaining remembered
+/// addresses are tried, then where a look by name finds this station, and the road opens there.
+/// The page is told `keyChanged` only when no address yields the pinned key, and then also when
+/// what was found by name told less (nothing listens there). CONTROL: with nothing found by name,
+/// the remembered address's own answer is told (`keyChanged`).
+#[tokio::test]
+async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
+    use ring::digest::{digest, SHA256};
+    use tempo_stream::lan::dnssd::Found;
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let other = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let live = behind_a_port_on(&s, private, stop.clone()).await;
+    let taken = behind_a_port_on(&other, private, stop).await;
+    let spki = tempo_stream::protocol::hex_bytes(&s.public_key).unwrap();
+    let tag = hex(digest(&SHA256, &spki).as_ref())[..16].to_string();
+    let found = vec![Found {
+        name: "Nexus 3F2A 9B1C".into(),
+        address: live,
+        protocol: 1,
+        key: tag,
+    }];
+    let adverts = Arc::new(Mutex::new(found));
+    let looks = Arc::new(AtomicUsize::new(0));
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let origin = Origin::start(Reach {
+        assets: Arc::new(|_: &str| None),
+        stations: Arc::new(Stations::new(Arc::new(store.clone()))),
+        find: {
+            let (adverts, looks) = (adverts.clone(), looks.clone());
+            Arc::new(move |_| {
+                looks.fetch_add(1, Ordering::SeqCst);
+                Ok(adverts.lock().unwrap().clone())
+            })
+        },
+        name: "Den PC".into(),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    let remembered = |addresses: &[SocketAddrV4]| {
+        let mut kept = paired_record(&s, live);
+        kept.addresses = addresses.iter().map(|a| a.to_string()).collect();
+        stations.keep(&kept).unwrap();
+    };
+
+    remembered(&[taken]);
+    let connected = page_connect(&mut page, None).await;
+    assert_eq!(connected["type"], "connected", "{connected}");
+    assert_eq!(connected["address"], live.to_string());
+    assert_eq!(looks.load(Ordering::SeqCst), 1);
+
+    remembered(&[taken, live]);
+    let connected = page_connect(&mut page, None).await;
+    assert_eq!(
+        connected["address"],
+        live.to_string(),
+        "the remembered address past the other station's"
+    );
+    assert_eq!(
+        looks.load(Ordering::SeqCst),
+        1,
+        "a look past one that worked"
+    );
+
+    adverts.lock().unwrap().clear();
+    remembered(&[taken]);
+    assert_eq!(
+        page_connect(&mut page, None).await,
+        json!({"type":"connectRefused","reason":"keyChanged"}),
+        "the control"
+    );
+    assert_eq!(looks.load(Ordering::SeqCst), 2);
+
+    let dead = {
+        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
+        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
+            unreachable!()
+        };
+        at
+    };
+    let spki = tempo_stream::protocol::hex_bytes(&s.public_key).unwrap();
+    *adverts.lock().unwrap() = vec![Found {
+        name: "Nexus 3F2A 9B1C".into(),
+        address: dead,
+        protocol: 1,
+        key: hex(digest(&SHA256, &spki).as_ref())[..16].to_string(),
+    }];
+    remembered(&[taken]);
+    assert_eq!(
+        page_connect(&mut page, None).await,
+        json!({"type":"connectRefused","reason":"keyChanged"}),
+        "found by name where nothing listens"
+    );
+    assert_eq!(looks.load(Ordering::SeqCst), 3);
+}
