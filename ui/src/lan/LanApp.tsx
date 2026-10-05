@@ -57,6 +57,7 @@ function sentence(reason: PairReason | ConnectReason | ClosedReason): string {
     case 'notStation': return t('lanWindow.reason.notStation')
     case 'unavailable': return t('lanWindow.reason.unavailable')
     case 'keyChanged': return t('lanWindow.reason.keyChanged')
+    case 'notThisStation': return t('lanWindow.reason.notThisStation')
     case 'notPaired': return t('lanWindow.reason.notPaired')
     case 'unknownStation': return t('lanWindow.reason.unknownStation')
     case 'stationLeft': return t('lanWindow.reason.stationLeft')

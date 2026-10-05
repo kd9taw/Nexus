@@ -699,6 +699,11 @@ async fn connect(
                     || (why == "keyChanged" && road::weight(later) <= road::weight(why))
                 {
                     why
+                } else if later == "keyChanged" {
+                    // Only an advert answered with another key: a forged or foreign one, since an
+                    // advert is a hint and never an identity. Not a sign that this station's key
+                    // changed, so never told as one.
+                    "notThisStation"
                 } else {
                     later
                 }

@@ -562,6 +562,7 @@ export const DE: PartialCatalog = {
   "lanWindow.reason.notStation": "Dort antwortete etwas, das keine Nexus-Station ist. Prüfe die Adresse.",
   "lanWindow.reason.unavailable": "Nexus konnte das auf diesem Computer nicht tun. Versuche es erneut.",
   "lanWindow.reason.keyChanged": "Der Schlüssel dieser Station hat sich geändert. Wurde Nexus an der Station neu installiert oder ihre Netzwerkidentität zurückgesetzt, kopple diesen Computer erneut.",
+  "lanWindow.reason.notThisStation": "Eine Station hat sich mit Namen gemeldet, aber es ist nicht die, mit der dieser Computer gekoppelt ist, deshalb hat Nexus sich nicht mit ihr verbunden. Prüfe, ob die Station eingeschaltet ist und ob dort „Remote in diesem Netzwerk“ eingeschaltet ist, oder gib die Adresse ein, die sie anzeigt.",
   "lanWindow.reason.notPaired": "Die Station kennt diesen Computer nicht mehr. Er wurde dort vielleicht entfernt: Kopple ihn erneut.",
   "lanWindow.reason.unknownStation": "Dieser Computer ist mit dieser Station nicht mehr gekoppelt.",
   "lanWindow.reason.stationLeft": "Die Station hat die Verbindung beendet. Vielleicht wurde „Remote in diesem Netzwerk“ dort ausgeschaltet oder dieser Computer entfernt.",

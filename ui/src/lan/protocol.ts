@@ -27,9 +27,11 @@ export type PairReason = (typeof PAIR_REASONS)[number]
 
 /** Why the road did not open. Nothing answering at the addresses tried is told as
  *  `tempo_stream::lan::unreached` names it, the most telling of them: `refused`, then `otherNetwork`,
- *  then `noAnswer`. */
-export const CONNECT_REASONS = ['badAddress', 'unreachable', 'keyChanged', 'notPaired', 'updateStation',
-  'updateComputer', 'notStation', 'storeUnavailable', 'unknownStation', 'otherNetwork', 'refused', 'noAnswer'] as const
+ *  then `noAnswer`. `notThisStation`: only a station found by name answered, with a key this
+ *  computer did not pair with. */
+export const CONNECT_REASONS = ['badAddress', 'unreachable', 'keyChanged', 'notThisStation', 'notPaired',
+  'updateStation', 'updateComputer', 'notStation', 'storeUnavailable', 'unknownStation', 'otherNetwork', 'refused',
+  'noAnswer'] as const
 export type ConnectReason = (typeof CONNECT_REASONS)[number]
 
 /** Why an open road closed. */

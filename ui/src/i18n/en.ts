@@ -671,6 +671,7 @@ export const EN = {
   "lanWindow.reason.notStation": "Something answered there that is not a Nexus station. Check the address.",
   "lanWindow.reason.unavailable": "Nexus could not do that on this computer. Try again.",
   "lanWindow.reason.keyChanged": "This station’s key has changed. If Nexus was reinstalled at the station, or its network identity reset, pair this computer again.",
+  "lanWindow.reason.notThisStation": "A station answered by name, but it is not the one this computer paired with, so Nexus did not connect to it. Check that the station is on and that Remote over this network is on there, or type the address it shows.",
   "lanWindow.reason.notPaired": "The station no longer knows this computer. It may have been removed there: pair it again.",
   "lanWindow.reason.unknownStation": "This computer is no longer paired with that station.",
   "lanWindow.reason.stationLeft": "The station ended the connection. Remote over this network may have been turned off there, or this computer removed.",

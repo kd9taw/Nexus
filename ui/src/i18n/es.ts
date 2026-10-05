@@ -577,6 +577,7 @@ export const ES: PartialCatalog = {
   "lanWindow.reason.notStation": "Ahí respondió algo que no es una estación Nexus. Comprueba la dirección.",
   "lanWindow.reason.unavailable": "Nexus no pudo hacer eso en este ordenador. Vuelve a intentarlo.",
   "lanWindow.reason.keyChanged": "La clave de esta estación ha cambiado. Si se reinstaló Nexus en la estación o se restableció su identidad de red, vuelve a vincular este ordenador.",
+  "lanWindow.reason.notThisStation": "Una estación respondió por su nombre, pero no es la que está vinculada con este ordenador, así que Nexus no se conectó a ella. Comprueba que la estación esté encendida y que Remote en esta red esté activado allí, o escribe la dirección que muestra.",
   "lanWindow.reason.notPaired": "La estación ya no conoce este ordenador. Puede que lo hayan quitado allí: vuelve a vincularlo.",
   "lanWindow.reason.unknownStation": "Este ordenador ya no está vinculado con esa estación.",
   "lanWindow.reason.stationLeft": "La estación terminó la conexión. Puede que allí se haya desactivado Remote en esta red o que se haya quitado este ordenador.",

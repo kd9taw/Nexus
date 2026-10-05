@@ -567,6 +567,7 @@ export const JA: PartialCatalog = {
   "lanWindow.reason.notStation": "そのアドレスで応答したのは Nexus の局ではありません。アドレスを確認してください。",
   "lanWindow.reason.unavailable": "このコンピューターでは Nexus がその操作を実行できませんでした。もう一度お試しください。",
   "lanWindow.reason.keyChanged": "この局のキーが変わりました。局で Nexus を再インストールした場合や、ネットワーク ID をリセットした場合は、このコンピューターをもう一度ペアリングしてください。",
+  "lanWindow.reason.notThisStation": "名前で応答した局がありますが、このコンピューターがペアリングした局ではないため、Nexus は接続しませんでした。局の電源が入っていること、局で「このネットワーク上の Remote」がオンになっていることを確認するか、局に表示されているアドレスを入力してください。",
   "lanWindow.reason.notPaired": "局はこのコンピューターを認識していません。局側で削除された可能性があります。もう一度ペアリングしてください。",
   "lanWindow.reason.unknownStation": "このコンピューターはその局とペアリングされていません。",
   "lanWindow.reason.stationLeft": "局が接続を終了しました。局で「このネットワーク上の Remote」がオフにされたか、このコンピューターが削除された可能性があります。",

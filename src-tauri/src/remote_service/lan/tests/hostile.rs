@@ -468,7 +468,8 @@ async fn forger(on: Ipv4Addr) -> Forger {
 /// A reply naming an address the shack never listens at (public, loopback, link-local, carrier NAT)
 /// or a system port is not read as a station's at all. At the shack it reached nothing: the one
 /// connection opened there is the honest road. CONTROL: with the forged reply alone, nothing
-/// connects, and the page is told only that the key it met is not the pinned one (`keyChanged`).
+/// connects, and the page is told only that a station answered by name that is not the one this
+/// computer paired with (`notThisStation`), never that this station's key changed.
 #[tokio::test]
 async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
     use ring::digest::{digest, SHA256};
@@ -574,7 +575,7 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
     stations.keep(&kept).unwrap();
     assert_eq!(
         page_connect(&mut page, None).await,
-        json!({"type":"connectRefused","reason":"keyChanged"}),
+        json!({"type":"connectRefused","reason":"notThisStation"}),
         "the control"
     );
     assert_eq!(forger.taken.load(Ordering::SeqCst), 2);
