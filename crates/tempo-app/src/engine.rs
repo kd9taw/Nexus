@@ -100,6 +100,9 @@ struct FeedRows {
     scope_win: spectrum::WindowN,
     /// The last frame number stamped, 0 before the first. One counter for all three slots.
     seq: u64,
+    /// When the RF scope pane last read the RF slot — its standing request for the radio's own
+    /// panadapter. See [`SpectrumFeed::rf_frame_after`]: it rides the read and expires on its own.
+    rf_req: Option<Instant>,
 }
 
 impl FeedRows {
@@ -655,6 +658,100 @@ impl SpectrumFeed {
             }
         }
         self.frame()
+    }
+
+    /// How long the RF scope pane's request stands after the read that renewed it. The scope span
+    /// request's two seconds ([`Self::SCOPE_REQ_TTL`]), for its reason: far longer than the pane's
+    /// poll period, far shorter than a person would notice.
+    const RF_REQ_TTL: Duration = Duration::from_secs(2);
+
+    /// How old an RF frame may be and still be the pane's picture. Longer than the one second
+    /// [`Self::row`]'s precedence allows, because this read decides nothing about precedence: it
+    /// asks only whether the radio's scope is still there. A slow scope (a few sweeps a second) and
+    /// the moment a stream takes to resume after an over both fit inside it; a stream that has
+    /// really stopped does not.
+    const RF_PANE_STALE: Duration = Duration::from_secs(3);
+
+    /// THE RF SCOPE PANE'S READ: the radio's own panadapter and nothing else, and, in the same call,
+    /// the standing request that keeps it streaming in a data mode.
+    ///
+    /// THE PANE CHOOSES ITS SLOT. The digital cockpits' audio waterfalls read the audio slot
+    /// ([`Self::audio_row`]), and this pane reads the RF slot, so neither needs the radio loop to
+    /// clear the other's. Until the pane existed (operator's pick, 2026-10-03: an opt-in RF scope
+    /// pane in the FT, JS8, RTTY, PSK and SSTV cockpits), a data mode kept the Icom scope off and
+    /// cleared the RF slot instead. It still does when no pane is reading: see
+    /// [`Self::rf_wanted`].
+    ///
+    /// The answers, by what the RF slot holds:
+    /// - a fresh frame newer than `last_seq` (0 = none drawn yet): that frame;
+    /// - a fresh frame the pane has already drawn: `None`, "nothing new", so a pane polling faster
+    ///   than the radio sweeps draws each sweep once;
+    /// - nothing fresh: an EMPTY frame (no bins, no source), so the pane says the radio's scope is
+    ///   not there instead of holding a picture that is no longer the band. Never the audio FFT:
+    ///   an audio row in this pane would be a second copy of the waterfall beside it.
+    ///
+    /// Held through a transmission like the audio slot: the radio stops sweeping while keyed (the
+    /// CI-V stream is paused for every keyed state), and under a young transmit hold the last
+    /// sweep stays the pane's picture rather than going stale halfway through an over.
+    ///
+    /// THE REQUEST RIDES THE READ, as the scope span's does ([`Self::scope_row`]): it renews itself
+    /// for as long as the pane polls and lapses [`Self::RF_REQ_TTL`] after it stops, so a hidden
+    /// pane, a cockpit kept alive behind another screen and a closed window all stop the stream
+    /// with no unmount hook to forget.
+    pub fn rf_frame_after(&self, last_seq: u64) -> Option<SpectrumFrame> {
+        let held = self.tx_hold.load(std::sync::atomic::Ordering::Relaxed);
+        let mut g = self.rows.lock().ok()?;
+        g.rf_req = Some(Instant::now());
+        let held = held && Self::hold_is_young(g.tx_hold_since);
+        match &g.rf {
+            Some((frame, at))
+                if !frame.bins.is_empty() && (held || at.elapsed() < Self::RF_PANE_STALE) =>
+            {
+                (frame.seq > last_seq).then(|| frame.clone())
+            }
+            _ => Some(SpectrumFrame {
+                seq: 0,
+                t_ms: now_unix_millis(),
+                source: String::new(),
+                lo_hz: 0.0,
+                hi_hz: 0.0,
+                scale: SpectrumScale::Relative,
+                slice: None,
+                bins: Vec::new(),
+            }),
+        }
+    }
+
+    /// Is an RF scope pane on screen, reading the RF slot — has it asked within
+    /// [`Self::RF_REQ_TTL`]? The radio loop reads this every tick: in a data mode the Icom CI-V
+    /// scope streams only while it is true (`tempo_audio::service`), because the stream shares the
+    /// CAT link with the PTT of every over.
+    pub fn rf_wanted(&self) -> bool {
+        self.rows
+            .lock()
+            .ok()
+            .and_then(|g| g.rf_req)
+            .is_some_and(|at| at.elapsed() < Self::RF_REQ_TTL)
+    }
+
+    /// Test-only: age the RF scope pane's request to simulate a pane that stopped polling.
+    #[cfg(test)]
+    pub fn backdate_rf_req_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            if let Some(at) = g.rf_req.as_mut() {
+                *at = Instant::now() - by;
+            }
+        }
+    }
+
+    /// Test-only: age the RF slot to simulate a radio that stopped sweeping.
+    #[cfg(test)]
+    pub fn backdate_rf_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            if let Some((_, at)) = g.rf.as_mut() {
+                *at = Instant::now() - by;
+            }
+        }
     }
 
     /// Test-only: age the standing scope request to simulate a scope that stopped polling.
@@ -9078,6 +9175,14 @@ impl Engine {
         std::mem::take(&mut self.cw_abort)
     }
 
+    /// The radio refused the key for the CW word the loop just took from [`Self::poll_cw_one`]
+    /// (the soundcard keyer), so that word was not played: every word still queued behind it is
+    /// DROPPED with it, never held, as a refused send is above, so the send cannot resume
+    /// mid-message on a later word the radio does key. Arms no abort: nothing was keyed.
+    pub fn cw_key_refused(&mut self) {
+        self.cw_queue.clear();
+    }
+
     /// Current CW keyer speed (WPM) — for the radio loop's `set_keyspd` + the snapshot.
     pub fn cw_wpm(&self) -> u32 {
         self.settings.cw_wpm
@@ -10037,6 +10142,12 @@ impl Engine {
     /// Drain a pending filter-width request for the radio loop.
     pub fn take_passband_request(&mut self) -> Option<u32> {
         self.pending_passband.take()
+    }
+
+    /// Is a filter width waiting for the radio loop? Asked without draining, so the loop can
+    /// owe the mode read the width's apply rides on.
+    pub fn passband_request_pending(&self) -> bool {
+        self.pending_passband.is_some()
     }
 
     /// Queue a native-scope SPAN change (Hz, ± half-width) from the UI. Native Icom CI-V only;
@@ -44861,6 +44972,136 @@ mod tests {
             assert!(quiet.bins.is_empty());
             assert_eq!((quiet.seq, quiet.hi_hz), (live.seq, 4000.0));
         }
+    }
+
+    /// A CI-V sweep as the scope assembler publishes it: 475 points over ±25 kHz.
+    fn civ_sweep(feed: &SpectrumFeed, v: f32) {
+        let mut s = spec(144_149_000.0, 144_199_000.0, "civ");
+        s.row = vec![v; 475];
+        feed.publish_rf_frame(s, SpectrumScale::Relative, Some(0));
+    }
+
+    /// THE RF SCOPE PANE READS THE RF SLOT AND NOTHING ELSE, and the FT waterfall's read never sees
+    /// what it reads. With no panadapter the pane gets an EMPTY frame, never the audio FFT (a second
+    /// copy of the waterfall beside it); with one, the waterfall still gets the passband.
+    #[test]
+    fn the_rf_pane_reads_the_rf_slot_and_the_waterfall_never_does() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let none = feed.rf_frame_after(0).expect("an answer every poll");
+        assert!(
+            none.bins.is_empty() && none.source.is_empty(),
+            "no panadapter: the pane is told so, and is not handed the audio row ({:?})",
+            none.source
+        );
+
+        civ_sweep(&feed, 0.5);
+        let rf = feed.rf_frame_after(0).expect("the sweep");
+        assert_eq!((rf.source.as_str(), rf.bins.len()), ("civ", 475));
+        assert_eq!((rf.scale, rf.slice), (SpectrumScale::Relative, Some(0)));
+        let wf = feed.audio_row().expect("the waterfall's row");
+        assert_eq!(
+            (wf.source.as_str(), wf.lo_hz, wf.hi_hz),
+            ("audio", 0.0, 4000.0),
+            "the FT waterfall's read is the passband with the sweep sitting right there"
+        );
+    }
+
+    /// The pane polls every 50 ms and a CI-V scope sweeps a few times a second: each sweep is
+    /// answered once, and a re-read is "nothing new".
+    #[test]
+    fn the_rf_pane_answers_each_sweep_once() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.25);
+        let first = feed.rf_frame_after(0).expect("a new sweep");
+        for _ in 0..5 {
+            assert_eq!(
+                feed.rf_frame_after(first.seq),
+                None,
+                "the same sweep is not new"
+            );
+        }
+        civ_sweep(&feed, 0.75);
+        let second = feed.rf_frame_after(first.seq).expect("the next sweep");
+        assert_eq!((second.seq, second.bins[0]), (first.seq + 1, 0.75));
+        // The audio slot moving on is not a new sweep for this pane.
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        assert_eq!(feed.rf_frame_after(second.seq), None);
+    }
+
+    /// THE REQUEST RIDES THE READ AND LAPSES ON ITS OWN — what the radio loop gates the Icom
+    /// stream on in a data mode. Only the pane's read places it: the rig scope's, the waterfall's
+    /// and the row read do not, so Phone's scope can never keep the stream on in a data mode.
+    #[test]
+    fn the_rf_pane_request_rides_its_read_and_lapses() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.5);
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        let _ = feed.row();
+        let _ = feed.audio_row();
+        let _ = feed.scope_row(300.0, 1100.0, spectrum::WindowN::Balanced);
+        let _ = scope_poll(&feed, 0);
+        let _ = feed.peek_scope_row();
+        assert!(
+            !feed.rf_wanted(),
+            "no other read asks for the radio's scope"
+        );
+
+        let _ = feed.rf_frame_after(0);
+        assert!(feed.rf_wanted(), "the pane's read is its request");
+        feed.backdate_rf_req_for_test(Duration::from_millis(1900));
+        assert!(feed.rf_wanted(), "still standing inside the TTL");
+        feed.backdate_rf_req_for_test(Duration::from_millis(2100));
+        assert!(
+            !feed.rf_wanted(),
+            "a pane that stopped polling stops asking"
+        );
+        let _ = feed.rf_frame_after(0);
+        assert!(feed.rf_wanted(), "and the next read renews it");
+    }
+
+    /// A radio that stopped sweeping reads as no scope — but an over does not: the CI-V stream is
+    /// paused while keyed, and under a young transmit hold the last sweep stays the picture.
+    #[test]
+    fn a_stopped_scope_reads_as_none_but_an_over_keeps_the_last_sweep() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.5);
+        let drawn = feed.rf_frame_after(0).expect("the sweep");
+        feed.backdate_rf_for_test(Duration::from_millis(2500));
+        assert_eq!(
+            feed.rf_frame_after(drawn.seq),
+            None,
+            "a slow scope between sweeps is still there"
+        );
+        feed.backdate_rf_for_test(Duration::from_secs(4));
+        assert!(
+            feed.rf_frame_after(drawn.seq)
+                .expect("said")
+                .bins
+                .is_empty(),
+            "a stream that stopped is said to have stopped"
+        );
+
+        feed.set_tx_hold(true);
+        assert_eq!(
+            feed.rf_frame_after(drawn.seq),
+            None,
+            "keyed: the last sweep is still the picture, nothing new"
+        );
+        feed.backdate_tx_hold_for_test(SpectrumFeed::TX_HOLD_MAX + Duration::from_secs(1));
+        assert!(
+            feed.rf_frame_after(drawn.seq)
+                .expect("said")
+                .bins
+                .is_empty(),
+            "a hold stuck past its ceiling no longer props up a stale sweep"
+        );
+        feed.set_tx_hold(false);
+        civ_sweep(&feed, 0.5);
+        assert!(
+            feed.rf_frame_after(drawn.seq).is_some(),
+            "key-up: the next sweep"
+        );
     }
 
     #[test]

@@ -204,7 +204,8 @@ it('includes the browser credit round trip in freshness and falls back to the ol
 // One busy station sample must not blank the panel. The station's radio loop holds its Engine
 // across blocking CAT, so a busy miss is routine; the browser used to answer it by deleting the
 // snapshot it was showing, which made age() Infinity, disabled every station control at once and
-// cancelled a wheel tune in flight. The read that was waiting still fails; the value stays.
+// cancelled a wheel tune in flight. The value stays, and the read that was waiting is asked again
+// (the operator's pick "Retry like the page", 2026-10-04).
 it('keeps a known-good value through a station error, aged, and applies the next delta to it', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   const sent: Record<string, unknown>[] = [], client = new ApplicationClient(m => sent.push(JSON.parse(m)), vi.fn(), 2)
@@ -219,7 +220,6 @@ it('keeps a known-good value through a station error, aged, and applies the next
   const busy = client.invoke('get_snapshot').catch(e => (e as Error).message)
   const second = sent[sent.length - 1].nextRequestId as string
   client.receive({ type: 'applicationFrame', requestId: second, updates: [{ type: 'applicationError', requestId: second, command: 'get_snapshot', error: 'applicationBusy' }] })
-  expect(await busy).toBe('applicationBusy')
   expect(client.age('get_snapshot')).toBeGreaterThanOrEqual(600)
   expect(client.age('get_snapshot'), 'the held value is aged, never gone').toBeLessThan(APPLICATION_TIMEOUT_MS)
   // The kept value is still the delta base the station believes the browser holds.
@@ -229,6 +229,49 @@ it('keeps a known-good value through a station error, aged, and applies the next
   client.receive({ type: 'applicationFrame', requestId: third, updates: [delta] })
   expect(await read).toEqual({ mycall: 'TEST', radio: { dialMhz: 14.074 } })
   expect(client.age('get_snapshot')).toBeLessThan(100)
+  // The read the station answered busy is asked again 250 ms later, and gets that sample.
+  await vi.advanceTimersByTimeAsync(250)
+  expect(await busy, 'the busy read, asked again').toEqual({ mycall: 'TEST', radio: { dialMhz: 14.074 } })
+  client.disconnected()
+})
+
+// A sample the station answers busy is read again from a later frame, as the page's collection reads are asked
+// again (the operator's pick "Retry like the page", 2026-10-04): three attempts at most, 250 ms apart. The first
+// sample of a topic finds nothing cached at the station, so a busy Engine refuses it, and the panel was left blank.
+it('reads a busy sample again from a later frame, three times at most and 250 ms apart, and nothing but busy', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  const sent: Record<string, unknown>[] = [], client = new ApplicationClient(m => sent.push(JSON.parse(m)), vi.fn(), 2)
+  client.open(); client.receive({ type: 'applicationCapabilities', version: 2, commands: STREAM_TOPICS })
+  // The credit the next frame answers: the last ACK's next one, or the subscription's own.
+  const credit = () => (sent[sent.length - 1].nextRequestId ?? sent[sent.length - 1].requestId) as string
+  const refused = (command: StreamTopic, error = 'applicationBusy') => {
+    const requestId = credit()
+    client.receive({ type: 'applicationFrame', requestId, updates: [{ type: 'applicationError', requestId, command, error }] })
+  }
+  const settings = client.invoke('get_settings').catch(e => (e as Error).message)
+  await vi.advanceTimersByTimeAsync(1)
+  refused('get_settings')
+  await vi.advanceTimersByTimeAsync(250)
+  const answer = credit()
+  client.receive({ type: 'applicationFrame', requestId: answer, updates: [sample(answer, 'get_settings')] })
+  expect(await settings, 'busy once, then the next frame\'s sample').toHaveProperty('mycall', 'TEST')
+  // Busy three times: the third answer is the caller's.
+  let settled = false
+  const plan = client.invoke('get_band_plan').catch(e => (e as Error).message)
+  void plan.then(() => { settled = true })
+  await vi.advanceTimersByTimeAsync(1)
+  refused('get_band_plan')
+  await vi.advanceTimersByTimeAsync(250)
+  refused('get_band_plan')
+  await vi.advanceTimersByTimeAsync(250)
+  expect(settled, 'still asking after two').toBe(false)
+  refused('get_band_plan')
+  expect(await plan).toBe('applicationBusy')
+  // Any other refusal is the caller's at once.
+  const meters = client.invoke('get_meters').catch(e => (e as Error).message)
+  await vi.advanceTimersByTimeAsync(1)
+  refused('get_meters', 'applicationUnavailable')
+  expect(await meters).toBe('applicationUnavailable')
   client.disconnected()
 })
 

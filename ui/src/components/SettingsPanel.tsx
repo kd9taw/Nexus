@@ -7,6 +7,7 @@ import { useRemotePreferences } from '../remote-web/useRemotePreferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
+import { LanStation } from '../remote-native/LanStation'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
@@ -187,6 +188,7 @@ import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
+import { SettingsLicenses } from './SettingsLicenses'
 import { resolveTarget } from '../settings/registry'
 import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -3460,6 +3462,8 @@ export function SettingsPanel({
         >
           {t('settings.panel.update.label')}
         </button>
+        {/* The hosted Remote page links its own license file, so this is the desktop's. */}
+        {!remote && <SettingsLicenses />}
       </div>
 
       <form className="settings-form" onSubmit={handleSubmit}>
@@ -4510,6 +4514,16 @@ export function SettingsPanel({
               </div>
             )}
             {remote ? <p className="settings-note">{t('remote.configurationLocal')}</p> : <RemoteStation />}
+            {/* Remote over this network (the operator, 2026-10-04): this station's own listener, for Nexus on
+                another computer on the same network with no internet. Windows only, as the stream it
+                serves is; never on the Remote page, and every press on it is the shack's own. */}
+            {!remote && IS_WINDOWS && <LanStation />}
+            {!remote && !IS_WINDOWS && (
+              <div className="settings-field">
+                <span className="settings-label">{t('remote.lan.switch')}</span>
+                <span className="settings-hint">{t('remote.lan.unavailable')}</span>
+              </div>
+            )}
             {/* The other end of the stream (the operator, 2026-10-04, "Stream client window"): this PC
                 opens the Remote page in a Nexus window of its own. Last in the card, after this
                 station's own Remote, which the operator ordered first. Windows only, where the

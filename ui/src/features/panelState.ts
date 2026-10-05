@@ -793,6 +793,9 @@ export function usePanelLayout<P extends string>(
  *  in the merged QSO strip, where no ⊞ id can reach them. That is the rule holding. */
 export const OPERATE_PANEL_IDS = [
   'waterfall',
+  // The RF scope pane (RF_SCOPE_PANEL_ID, below): beside the waterfall in its strip, and hidden
+  // until ticked.
+  'rfScope',
   'bandActivity',
   'callRoster',
   'rxfreq',
@@ -808,6 +811,7 @@ export type OperatePanelId = (typeof OPERATE_PANEL_IDS)[number]
 export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
   view: 'operate',
   panelIds: OPERATE_PANEL_IDS,
+  defaultRemoved: ['rfScope'],
 }
 
 /**
@@ -846,6 +850,26 @@ export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
  */
 const SCOPE_PANEL_ID = 'scope'
 
+/**
+ * THE RF SCOPE PANE'S ID, shared by the five digital cockpits — FT (Operate), JS8, RTTY, PSK and
+ * SSTV — and listed in each one's `defaultRemoved`: it SHIPS HIDDEN. The operator's pick
+ * (2026-10-03, "Yes, opt-in pane"): an RF scope pane, off by default, with the audio waterfall
+ * staying the default, so nobody's screen changes on the update that adds it.
+ *
+ * It is the radio's own panadapter (components/RfScopePane — PhoneScope with `feed="rf"`), a
+ * different thing from SCOPE_PANEL_ID's audio waterfall in the same cockpits, so it has a name of
+ * its own. ONE id across the five for SCOPE_PANEL_ID's reason: one thing wherever it renders.
+ *
+ * Under THE STOP LINE it is the plainest kind of entry. Its whole surface is display — G and Z, the
+ * ⚙ strip, 3D, pause, the scroll direction — with no click-to-tune at all, so it hosts no control
+ * that stops a transmission and none that starts one, and its hide ends nothing in flight (the
+ * radio's scope stream stopping two seconds after it is hidden is not a transmission), so it
+ * carries no ⊞ note. That last property is also what lets it ship hidden: ⊞ Reset hides it again
+ * with no warning. The sweeps in components/stop-line.test.tsx and OperateCockpit.structure.test.tsx
+ * hide it with every other id, because they are driven off these arrays.
+ */
+const RF_SCOPE_PANEL_ID = 'rfScope'
+
 /** SSTV view's removable panels (Phase 3). The RX image stage and the TX bar
  *  (mode/Send/Stop/progress) and all header chrome are NOT panels — so SSTV's two stop
  *  controls, the TX bar's Stop and the TX strip's TX-enable latch, are outside every
@@ -857,12 +881,13 @@ const SCOPE_PANEL_ID = 'scope'
  *  it (SstvView's `inFlight` branch). The tick hides the band half; an arriving picture
  *  still takes the stage whatever the box says, because that is the decode itself and not a
  *  panel. See the gate at the render site. */
-export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, 'txcompose', 'gallery'] as const
+export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'txcompose', 'gallery'] as const
 export type SstvPanelId = (typeof SSTV_PANEL_IDS)[number]
 
 export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
   view: 'sstv',
   panelIds: SSTV_PANEL_IDS,
+  defaultRemoved: [RF_SCOPE_PANEL_ID],
 }
 
 /** Phone cockpit's removable panels (Phase 3) — the scope strip plus the panes under it.
@@ -1034,12 +1059,13 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  and the sequencer's Abort are in the dock, none of them with an id. Its hide ENDS nothing
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
  *  that falsified the FOURTH wording a second time — see the header. */
-export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, 'stream'] as const
+export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream'] as const
 export type RttyPanelId = (typeof RTTY_PANEL_IDS)[number]
 
 export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
   view: 'rtty',
   panelIds: RTTY_PANEL_IDS,
+  defaultRemoved: [RF_SCOPE_PANEL_ID],
 }
 
 /** PSK cockpit's removable panels (Keyboard Modes; TX since Phase 2).
@@ -1060,12 +1086,13 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
  *  with no control pressed: the engine's per-tick gate re-check (`poll_psk_stream`),
  *  which unkeys within one tick on a section change, a QSY out of privileges, a tune,
  *  or a radio handoff. */
-export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, 'stream'] as const
+export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream'] as const
 export type PskPanelId = (typeof PSK_PANEL_IDS)[number]
 
 export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
   view: 'psk',
   panelIds: PSK_PANEL_IDS,
+  defaultRemoved: [RF_SCOPE_PANEL_ID],
 }
 
 /** JS8 cockpit's removable panels (the JS8 programme, 2026-09). CW's region shape:
@@ -1089,20 +1116,23 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
  *  completes), so it is not on the sweep list. The dock's "Drop queue" is a SENDER-class
  *  control (it empties the queue; a frame already keyed finishes) and must never be added to
  *  stopControls. Swept in stop-line.test.tsx's JS8 case, rendered with App's props. */
-export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log'] as const
+export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log'] as const
 export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   view: 'js8',
   panelIds: JS8_PANEL_IDS,
+  defaultRemoved: [RF_SCOPE_PANEL_ID],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as Js8Cockpit renders it — the two
   // decode surfaces lead, Stations and the inbox in the middle, the log alone in the last column.
+  // The RF scope pane, once ticked, heads the leading column: the first pane under the TX strip, as
+  // in RTTY, PSK and SSTV.
   // JS8'S LOG HAS AN ID (it is ⊞-hideable), so it is listed, and it is PINNED (D9): the log form
   // holds a half-typed contact, which a change of column would remount and lose. It moves up and
   // down in its column only.
   arrange: {
     columns: {
-      a: ['activity', 'offsets'],
+      a: [RF_SCOPE_PANEL_ID, 'activity', 'offsets'],
       b: ['stations', 'inbox'],
       log: ['log'],
     },

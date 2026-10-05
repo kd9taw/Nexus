@@ -17,8 +17,9 @@ The tabs, in the order they appear:
 [Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
-took) and a **Check for updates** button, both at the right-hand end of the same
-row as the search box.
+took), a **Check for updates** button and a **Licenses** button (the license
+texts of the packages built into the interface), all at the right-hand end of
+the same row as the search box.
 
 ![The Settings header: a Find a setting box, and under it the ten tab names in a row with Station first and Radio selected.](../img/manual/settings-tabs.webp)
 
@@ -155,15 +156,63 @@ disconnects the station and removes its Remote pairing; pair again to reconnect.
 computer's password store with the pairing; a station paired by an earlier Nexus gets one the
 first time this Nexus starts. The station signs every stream it answers with it, and the
 Remote service records it the first time the station connects. A browser takes only a stream
-this key signed, so nothing between the two can pass itself off as your station. If the key is
-lost (the password store was cleared, say) or you want a new one, use **Revoke station access**
-and pair again: a new pairing makes a new key. Until you do, the card says the Remote service
-holds a different key for this station, and browsers refuse its stream.
+this key signed, so nothing between the two can pass itself off as your station. The card shows
+the key as **This station's key**, eight groups of four characters. Each browser keeps the key
+the Remote service lists for this station the first time it sees one, and shows it on the
+station's card the same way: compare the two, group by group. If the service later lists a
+different key for this station, the browser says so, shows both keys, and connects nothing until
+you press **Accept the new key** there. Accept it only if the new key matches the one shown here.
+If the key is lost (the password store was cleared, say) or you want a new one, use **Revoke
+station access** and pair again: a new pairing makes a new key, which each browser keeps the
+first time it sees it, so compare it then. Until you do, the card says the Remote service holds a
+different key for this station, and browsers refuse its stream.
 
-Each browser has a key too, which you compare when you approve it. Taking control, keeping it,
+Each browser has a key too, which you compare when you approve it, in the same eight groups the
+browser shows. An older Nexus at the shack shows only four groups: they are the browser's first
+four. Taking control, keeping it,
 **Listen** and every command from a browser carry that browser's key, and Nexus takes them
 only from the key you approved; **Stop TX** never needs it. A browser approved before browser
 keys existed is asked for again, here, before it can take control.
+
+**Remote over this network** lets Nexus on another computer on the same network operate this
+station with no internet at all: no Remote service and no sign-in. It is off by default, and on
+Windows only for now. Turned on, the station listens on one private address of this computer (a
+home or club network: 10.x, 172.16–31.x or 192.168.x), and the card says where, or why it is not
+listening. Only computers paired here can connect, and only from that network.
+
+Virtual adapters and VPNs are never used: not WSL's or Hyper-V's virtual switch, not VirtualBox's
+or VMware's, and not a VPN's tunnel, even one that carries all of this computer's traffic. When
+more than one network is left, choose which one under **Network**; **Automatic** takes the one
+this computer reaches the internet by. A picked address that goes away for a while (sleep, a new
+address from the router, a cable out) is waited for, and the station listens there again when it
+is back.
+
+While it listens, other computers on that network can find the station by name ("Nexus" and the
+first characters of its key, never this computer's name) through Windows' own name service.
+Where Windows will not do that, the card says so: type the address the card shows on the other
+computer instead, which always works. The first time it listens, Windows asks whether Nexus may
+use networks: allow **Private networks** only. Nexus adds no firewall rule of its own. It reads
+what the firewall says of the network it listens on, and the card says what stands in the way: a
+network Windows calls Public, a question that was cancelled (which leaves Nexus blocked there), a
+firewall set to block every incoming connection, or one an administrator's policy sets. What it
+cannot see from here is a network that keeps its devices apart, as guest Wi-Fi often does: on
+one of those, other computers cannot reach this one at all.
+
+To pair one, choose **Pair a computer**. The card shows a code, which the other computer's Nexus
+asks for when you pair it with this station. Choosing **Pair a computer** is the approval:
+whoever types the code within ten minutes is paired at once, with no second step here, so keep it
+to yourself. A code pairs one computer, three wrong tries end it, and **Cancel pairing** ends it
+sooner. Up to eight computers can be paired. Each keeps access until you **Remove** it here,
+which disconnects it at once and stops anything it was keeping on the air. A paired computer
+holding control uses this station as you would, transmit included, under the same rules as a
+streaming browser: one controller at a time, and every transmission stops if its connection drops.
+
+The station's network key and its paired computers are kept in this computer's password store,
+apart from the Remote pairing, so **Revoke station access** leaves them alone. **Reset network
+identity** (under **Network identity**) makes a new key and removes every paired computer; pair
+them again afterwards. **End remote control and clear permissions** turns this off too. Turning
+it on or off, pairing, removing and resetting work only at the station itself, never through a
+stream.
 
 **Remote stations…** is the other end of the stream. On a Windows computer you operate from,
 it opens the Remote page in a Nexus window of its own, for a station you have paired. You sign
@@ -175,6 +224,25 @@ they go on to the station like any other key. Links to other sites open in your 
 window reopens where you left it, fitted to the screens attached at the time, and a window
 closed in full screen reopens at its last size. The page in this window can reach nothing in
 Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
+
+**Stations on this network…** is the other end of **Remote over this network**. On a Windows
+computer you operate from, it opens a Nexus window of its own for the stations this computer is
+paired with over your own network, with no internet at all. To add one, choose **Pair with a
+station…**: the window looks for stations by name on your network and offers each one it finds
+("Nexus" and the first characters of its key, as the station's card shows it). Press one to use
+its address, or type the address the station shows, then the code it shows under **Pair a
+computer** (capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
+it in this computer's password store, with the station's key, the station's address and nothing
+else. **Stream** connects and opens the station's stream as the Remote page does, with the same
+**Stop TX**, **Esc** and **F11**. It tries the address that worked last first; if the station is
+not there any more (a new address from the router, say), the window looks for it by name and
+connects where it is found. If the station's key ever changes (Nexus reinstalled there, or
+its network identity reset), this computer refuses it and says so: pair it again. If the two
+copies of Nexus are different versions, the window says which one to update. **Forget** deletes
+this computer's key for that station; remove this computer at the station too. If the station
+turns its hosted Remote on or off while you stream, control comes back to the station for a
+moment, and the window takes it again by itself. The page in this window reaches nothing in
+Nexus.
 
 ---
 
@@ -419,8 +487,8 @@ Baud continue across to the right.*
   baud set on **both** the radio and Nexus, plus "CI-V USB Port = Unlink from
   [REMOTE]" on the rig; below that the rig refuses to stream the scope (CAT still
   works, the panadapter just stays off).
-- **Flex native panadapter (early access)** and **Flex native DAX audio (early
-  access)** — appear on a network Flex. Stream the real SmartSDR panadapter
+- **Flex native panadapter (early access)** and **Flex native DAX audio (Beta)** —
+  appear on a network Flex. Stream the real SmartSDR panadapter
   (VITA-49 FFT) into the cockpit scope, and carry the radio's audio over the
   network instead of the "DAX Audio RX" / "DAX TX" sound devices, **which are
   invisible under Remote Desktop**. Native DAX audio works only through the

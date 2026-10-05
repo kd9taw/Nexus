@@ -87,6 +87,15 @@ const MIGRATED = [
   // The Remote stations window's entry in Settings (2026-10-04) — born migrated: its label, button,
   // hint and failure line.
   'remote-native/RemoteStationsWindow.tsx',
+  // Remote over this network's card (2026-10-04) — born migrated: the switch, the status line, the
+  // pairing window, the paired computers and the reset.
+  'remote-native/LanStation.tsx',
+  // Its other end's sentences (2026-10-04) — born migrated: a station not reached, or not found by
+  // name, and a typed address that is not one.
+  'remote-native/lanReach.ts',
+  // The Stations on this network window's page (2026-10-04) — born migrated: its list, its pairing
+  // dialog and every reason this computer's Nexus gives, each a sentence.
+  'lan/LanApp.tsx',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
@@ -98,6 +107,9 @@ const MIGRATED = [
   // and the looks table whose `labelKey` entries name each look.
   'components/SettingsLooks.tsx',
   'features/looks.ts',
+  // Settings ▸ Licenses (2026-10-05) — born migrated: the header button, its dialog and the two
+  // lines shown while the texts load or when a build does not carry them.
+  'components/SettingsLicenses.tsx',
   // The RTTY F-key surface (2026-09-17): the macro buttons, their editor and the set switch,
   // and the set model's caption keys. Migrated as they were written. RttyCockpit.tsx stays on
   // PARTIAL for its stop controls; nothing here stops a transmission.
@@ -177,6 +189,7 @@ const MIGRATED = [
   'components/MapLegend.tsx',
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
+  'components/globeWebgl.tsx',
   'components/StreetMap.tsx',
   'components/StreetDownloadSheet.tsx',
   'components/SettingsStreetMaps.tsx',
@@ -507,6 +520,7 @@ const MIGRATED = [
   'components/FrequencyReadout.tsx',
   'components/TuningStrip.tsx',
   'components/PhoneScope.tsx',
+  'components/RfScopePane.tsx',
   'components/Waterfall.tsx',
   // The scope's ⚙ strip, migrated from birth: its only literals are the window widths and the
   // averaging times, measurements held as named constants.

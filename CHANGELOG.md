@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have been sent what you typed on the picture and your microphone. A stream from a station that
   cannot sign is refused, and the page says to update Nexus at the shack. If the station's key is
   ever lost, revoke station access and pair again.
+- **Remote: your browser keeps your station's key, and both ends show more of every key.** The
+  Remote page now keeps your station's key the first time it sees it and shows it on the station's
+  card as **This station's key**; Nexus at the shack shows its own the same way (Settings →
+  Station → Remote access), so you can compare the two. If the Remote service ever lists a
+  different key for your station, the page says so, shows both keys, and connects nothing until you
+  press **Accept the new key**. Accept it only if the new key matches the one at the shack. Before,
+  the page took the service's word for your station's key every time, so anyone able to change the
+  service's records could have stood in for your station. Every key is now shown as eight groups
+  of four characters instead of four, at both ends, including the browser key you compare when you
+  approve a browser. An older Nexus at the shack still shows four groups: they are the first four
+  the page shows. Revoking the station, or removing a browser's approval, on the page lets that
+  browser forget the station's key.
 - **Remote: control, Listen and commands carry the browser's own key.** Taking control, keeping
   it, releasing it, **Listen**, and every command and log entry from the Remote page now carry
   the signature of that browser's key, the one you compare when you approve it at the shack, and
@@ -34,6 +46,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
+  answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
+  radio is still letting go of the last transmission), Nexus played the over anyway: the Tune
+  carrier, an APRS packet, a voice-keyer message, an SSTV picture, soundcard CW, an RTTY or PSK
+  over, or your voice from the Remote stream all went into a radio that was still receiving.
+  Nothing went on the air, and for Tune and APRS nothing said why. Now none of them is played.
+  Tune ends and its button comes back up. Tune, the voice keyer, SSTV and the Remote stream show
+  **RADIO STOPPED** in the status bar with "The rig didn't accept PTT — check your PTT method and
+  CAT/port.". CW, RTTY and PSK show their keyer warning. APRS says "APRS not sent: the radio did
+  not accept the key". What was refused is dropped, never sent later: the rest of a CW send goes
+  with it, and continuous RTTY or PSK turns off. The diagnostic log notes each one. A radio that
+  is only slow to answer is not refusing: some radios on a slow serial link key, but answer after
+  Nexus has stopped waiting, or so late that Hamlib reports the radio did not answer. Their over
+  still goes out, as it did before, and shows the warning above (an APRS packet goes without one,
+  as it always did). A soundcard CW macro still plays every word on a radio that refuses a second
+  key while the first is held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot
+  modes are unchanged.
+- **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
+  radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
+  background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
+  may still be transmitting"), or the client found an earlier Nexus session still holding the
+  transmitter, the alarm went only to the diagnostic log. It now appears in the transmitter-alarm
+  banner, named for that radio and not the one you switched to. A Flex client is also read one
+  last time before Nexus closes or reopens it.
 - **Cloudlog / Wavelog: a refused QSO says why.** Wavelog answers a QSO it will not file with its
   reason in a field Nexus did not read, so the connection log said only "refused the upload, and
   said no more", even though Wavelog had named the reason, such as a duplicate or a station location
@@ -46,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line to `nexus-diag.log`: the service, the kind of failure, the HTTP status and the contact's
   call. The line never includes the service's own words or your key, and it lets a support request
   show what went wrong.
+- **CW scope: the frequency scale no longer reads the CW pitch off** (600 Hz by default). It also ran
+  backwards on reverse CW (CW-R) and with the soundcard keyer below 10 MHz. The numbers now match the
+  spot tags and where a click tunes. In AM and FM the Phone scope's audio picture shows no numbers,
+  since a click there does not tune.
+- **CW scope: the frequency scale reads to 100 Hz on CW's narrow window.** It showed the same kHz under
+  every tick (`7.030` five times by default); now `7.0296 7.0298 7.0300 7.0302 7.0304`. Any scale with
+  ticks under 1 kHz apart does the same, including the Phone scope at a 2.4 kHz width. Wider scales are
+  unchanged.
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
@@ -69,6 +113,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still end the over, and the station still decides whether to key. Pressing PTT while it is greyed
   out now does nothing, as the button shows; a press that lands in one of those few milliseconds needs
   pressing again.
+- **Remote streaming: Space works on the Remote PTT after a brief connection hiccup.** If you had
+  tabbed to the stream page's PTT, Space and Enter stopped working on it after the next brief hiccup
+  in the page's link to the station (a few milliseconds, every few seconds), until you clicked or
+  tabbed to it again: the browser took the focus off the greyed-out button. The PTT now keeps the
+  focus while it is greyed out, and Space works on it again the moment it is lit. A press while it is
+  greyed out still does nothing, and a screen reader still announces it as unavailable.
+- **Remote: panels no longer blank on a busy station.** When Nexus at the shack was busy with the
+  radio just as the Remote page first asked for a panel's reading, the shack answered that it was
+  busy and the panel stayed blank until it asked again. The page now asks again up to three times, a
+  quarter of a second apart, as it already did for the log and the other lists. Only readings are
+  asked again, never anything that transmits.
 - **Remote streaming: leaving full screen sends Stop TX in Chrome and Edge too.** In Firefox and
   Safari, leaving full screen any way but **Exit full screen** already sent Stop TX. Chrome and Edge
   skipped that Stop, trusting Esc to reach the page and stop first, so a browser that reported
@@ -107,6 +162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lettered too dim for small text (down to 4.2:1, under the 4.5:1 it needs). They now take the
   same lighter shade of the accent as HUNT, wherever the board shows: the POTA / SOTA screen, its
   pop-out, a Connect or dashboard-rail box and the Remote page.
+- **Remote over this network: a key or paired list the station cannot read points to Reset network
+  identity.** When the station's network key or its list of paired computers could not be read, the
+  card only said to unlock the credential store. It now says to unlock a locked store first, and
+  otherwise to press **Reset network identity** under **Network identity** on the same card, then
+  pair your computers again.
 - **Remote: the Repeaters channel list no longer scrolls sideways.** On the Remote page each FM
   channel carries a Tune button the desktop does not, and in a medium-width window, or on a phone,
   the rows ran past the list under a sideways scrollbar. A row whose buttons do not fit beside its
@@ -182,6 +242,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM
   repeater or a digital channel. Star birds in **Satellites** to see just those, or pick **All** for
   the whole catalog.
+- **The 3-D globes let go of the graphics card when they close.** Each switch from 3D back to Flat on
+  Connect, and each time the Logbook's globe was closed, left that globe's drawing surface and its
+  32 MB picture of the map in memory for as long as Nexus ran. After about fifteen switches the
+  browser started taking the oldest drawing surfaces away to make room, and one of those could be the
+  waterfall's or the scope's. A closed globe now hands everything back at once.
+- **A 3-D globe the graphics card drops comes back, or says so.** A globe whose drawing surface was
+  taken away while it was shown (after sleep, a graphics driver reset, or too many surfaces at once)
+  went blank and stayed blank. Nexus now asks for it back and draws the globe again as soon as it
+  returns. If it has not come back within 10 seconds, the globe shows **3D view paused** with a
+  **Reload** button that brings it back.
+- **The Logbook's globe shows your QSOs again.** When the globe took on the flat map's lighter look,
+  the dots for your worked squares went pale. They were added to the map as light, which only shows
+  on a dark globe, so on the new map each one faded to a white speck without its band colour, and
+  the coast, border and state lines ran across them. Each square is now a dot in its band's colour
+  with a dark edge, as on the flat map, drawn over the lines.
+- **The Logbook's globe shows day and night again, every time it opens.** It often opened lit evenly
+  all round, pale and washed out, with no night side. The globe's built-in lights could come on after
+  the Logbook had set up its sun, and then stayed on beside it. The Logbook's globe now sets its
+  lights the way Connect's globe does, so the sun lights the day side and the night side stays in
+  shade.
+- **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
+  a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
+  an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
+  in every theme.
+- **Nexus now carries the license texts of the packages its interface is built with.** NOTICE named
+  them, but their MIT, ISC and Apache-2.0 licenses ask for the license text itself to travel with
+  every copy, and the installers did not carry it. Every installer now has them, with the CQ-zone
+  data's notice, in `resources/ui/THIRD-PARTY.txt` beside COPYING and NOTICE, and the new
+  **Licenses** button in the Settings header, beside **Check for updates**, shows them.
 
 ### Changed
 
@@ -286,6 +375,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes: the dial, tuning, Tune, PTT and Stop TX work as before, and the banner never covers
   Stop TX.
 
+- **FT8, JS8, RTTY, PSK and SSTV: the radio's own scope as a pane.** ⊞ Panels has a new **RF
+  scope** entry in the five digital cockpits, off until you tick it, so nobody's screen changes on
+  the update. It draws the radio's panadapter, an Icom's scope over CI-V at 115200 baud or a
+  FlexRadio's with the native panadapter on, and the audio waterfall stays where it was. In FT8 it
+  stands beside the waterfall and shares its height; in JS8 it heads the first column; in RTTY, PSK
+  and SSTV it is the first pane under the Stop TX strip. It only shows the band: a click on it does
+  not tune the radio. An Icom in a data mode streams its scope over CAT only while the pane is on
+  screen, and stops two seconds after you hide it; it still pauses while you transmit. Not yet
+  checked on a radio.
+- **The scopes: spot tags, your licence-class edges, and FT8 decodes on the RF scope.** The Phone
+  and CW scopes tag the spots Band Activity shows for your band (SSB on Phone, CW on CW) at their
+  frequencies, in Band Activity's colours, fading over half an hour; where too many crowd together
+  the freshest are shown and the rest counted. Click a tag to work the station, as a click in Band
+  Activity does; while you transmit, on the Remote page or with CAT down a tag is only a label,
+  and a filter edge you can drag keeps the click. Every scope also tints the frequencies your
+  licence class (Settings ▸ Station) may not transmit the current mode on, from the same table
+  as the transmit lock. It only shows the lock: 🔒 TX LOCKED still decides, judging your whole
+  signal, and an Open class has no tint. In FT8 and FT4 the RF scope pane tags the last slot's
+  decodes at the dial plus their offset and draws the RX and TX offsets; it still tunes nothing.
+  The tags and tint draw on a layer of their own, so a new spot never redraws the waterfall. The
+  tint is not on the Remote page yet. Not yet checked on a radio.
 - **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
   a new place, **Left side**: a column from under the header down to the dock, beside the scope,
   so the band map and the two boards get the whole height of the window instead of what is left
@@ -338,6 +448,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the screens attached. You sign in there and approve the window at the station once, like a new
   browser. The page in it can reach nothing in Nexus, exactly as in a browser. Linux and macOS
   keep using Remote in a browser for now.
+- **Phone and CW scope: the filter you are listening through, with a handle on it.** Where the radio
+  reports its filter width, the scope shades the passband at the dial. On SSB its far edge, and on CW
+  both edges, can be dragged to set the width, in the same range and steps as the BW − and + buttons;
+  the radio follows within a second or two. The edge is not offered in FM, in a DATA mode, on the Remote
+  page, or while anything is transmitting, and no width is ever sent to a keyed radio. A manual notch
+  the radio reports on draws as a red line through the scope. With the scope focused, keys do what
+  the mouse does: ← and → tune (Shift for bigger steps), Enter tunes onto the signal in the passband,
+  [ and ] narrow and widen the filter, and ↑ and ↓ scroll back while paused. On an IC-7300, IC-705,
+  IC-905, IC-7610 or IC-9700 on Nexus's own CI-V connection, the filter width is now read from the
+  radio and set on it; before, BW showed a width it had never sent there. Not yet checked on a radio.
 
 ## [1.16.0] — 2026-10-03
 

@@ -567,6 +567,21 @@
   margin: 0;
 }
 
+/* THE RF SCOPE PANE BESIDE FT'S WATERFALL (the operator's pick, 2026-10-03: "Yes, opt-in pane" — an
+   RF scope pane, off by default, in the FT, JS8, RTTY, PSK and SSTV cockpits). Operate's waterfall
+   strip (`.cockpit-waterfall`, a `.panel`, so a COLUMN) becomes a ROW while the pane is ticked: the
+   pane takes half the strip's width and none of the decode lists' height, and the QSO strip with Stop
+   TX directly under the strip stays where it was. The strip's divider sizes both. The cockpit adds
+   this class only then, so the stock strip — the waterfall alone — is exactly what it was, and the
+   waterfall is never re-parented: ticking the pane adds a sibling, it does not remount the waterfall.
+   The pane is a fill frame, whose inline flex shares the row with the waterfall's `flex: 1`
+   (styles.css `.cockpit-waterfall > :first-child`). The other four cockpits put the pane in their
+   pane area, first under the TX strip, and need nothing here. */
+.cockpit-rfbeside {
+  flex-direction: row;
+  gap: var(--space-2);
+}
+
 /* Action cluster in a pane head (pop-out / remove / pane-supplied buttons). The head is
    `justify-content: space-between`, so grouping the buttons keeps them together at the
    right edge instead of spreading across the title row. */

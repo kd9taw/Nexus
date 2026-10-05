@@ -48,6 +48,7 @@ import {
 } from '../txMessages'
 import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
+import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
@@ -59,6 +60,7 @@ import { RotorStrip } from './RotorStrip'
 import { pointedTo } from './rotorPointAt'
 import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
+import { RfScopePane } from './RfScopePane'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { PaneSeam } from './PaneSeam'
 import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
@@ -72,7 +74,7 @@ import { RecallPanel } from './RecallPanel'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
-import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
+import { OPERATE_PANELS, WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
   CLASSIC_FLOOR,
@@ -291,6 +293,7 @@ const NO_CALLS: string[] = []
  *  menu is BUILT — a module constant would freeze the first locale loaded. */
 const panelLabels = (): Record<OperatePanelId, string> => ({
   waterfall: t('operate.panel.waterfall'),
+  rfScope: t('rfScope.title'),
   bandActivity: t('operate.panel.bandActivity'),
   callRoster: t('operate.panel.callRoster'),
   rxfreq: t('operate.panel.rxfreq'),
@@ -303,8 +306,8 @@ const panelLabels = (): Record<OperatePanelId, string> => ({
 /** What each layout actually renders — the menu lists only these, so a panel the
  *  current layout has no place for can't be ticked into nowhere. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'recall', 'txmeters'],
-  roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq', 'recall', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'recall', 'txmeters'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'recall', 'txmeters'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -455,6 +458,11 @@ export function OperateCockpit({
   // mid-session (operator report 2026-07-21).
   const bandHistRef = useRef(new DecodeHistory())
   const rxHistRef = useRef(new DecodeHistory())
+  // The RF scope pane's FT overlay: the newest slot's decodes and the RX/TX offsets, at dial ± offset.
+  const rfFt = useMemo(
+    () => ftOverlay(snap.recentDecodes ?? [], snap.radio.rxOffsetHz, snap.radio.txOffsetHz, snap.radio.sideband),
+    [snap.recentDecodes, snap.radio.rxOffsetHz, snap.radio.txOffsetHz, snap.radio.sideband],
+  )
   const slotBase = useRef({ ms: snap.radio.nextSlotMs, at: Date.now() })
   useEffect(() => {
     slotBase.current = { ms: snap.radio.nextSlotMs, at: Date.now() }
@@ -660,6 +668,7 @@ export function OperateCockpit({
     // readings dimmed between overs, so the entry says WHEN it is populated rather than
     // leaving an operator to guess mid-menu (the same words the strip shows when idle).
     notes: { txmeters: TX_METERS_WHEN },
+    shipsHidden: OPERATE_PANELS.defaultRemoved,
     ...(layoutMode === 'classic' ? { columns: classicColumns } : {}),
   }
   const { shown, sideShown, dataCols, menuItems, closeProps } = panelHost(panels, panelSpec)
@@ -1418,10 +1427,18 @@ export function OperateCockpit({
             {t('operate.waterfall.redock.label')}
           </button>
         )}
-        {wfState === 'docked' && (
+        {/* THE RF SCOPE PANE (RF_SCOPE_PANEL_ID), hidden until ticked, stands BESIDE the waterfall
+            in its strip: the strip is a row, so the pane takes half its width and none of the decode
+            lists' height, and the QSO strip with Stop TX below it stays exactly where it was. The
+            strip's divider sizes both. With the waterfall hidden or popped out, the pane has the
+            strip to itself. Display only: it hosts no stop control and no sender (THE STOP LINE). */}
+        {(wfState === 'docked' || shown('rfScope')) && (
           <>
-            <section className="cockpit-waterfall panel" ref={wfRef}>
-              {tier === 'MSK144' ? (
+            <section
+              className={`cockpit-waterfall panel${wfState === 'docked' && shown('rfScope') ? ' cockpit-rfbeside' : ''}`}
+              ref={wfRef}
+            >
+              {wfState !== 'docked' ? null : tier === 'MSK144' ? (
                 /* MSK144 is a TIME display, not a frequency one — every signal sits at
                  * 1500 Hz and lives for milliseconds, so the waterfall shows one unmoving
                  * stripe while the actual event (the ping) is invisible. WSJT-X hides its
@@ -1455,6 +1472,17 @@ export function OperateCockpit({
                   // default is OFF — the shared Waterfall also draws RTTY's and SSTV's band,
                   // where an over runs minutes and a black band reads as a dead display.
                   txBlanks
+                />
+              )}
+              {shown('rfScope') && (
+                <RfScopePane
+                  closeProps={closeProps('rfScope')}
+                  dialMhz={snap.radio.dialMhz}
+                  keyed={snap.radio.transmitting || snap.radio.tuning}
+                  theme={theme}
+                  active={active}
+                  privilegeMode={snap.radio.operatingMode}
+                  ft={rfFt}
                 />
               )}
             </section>

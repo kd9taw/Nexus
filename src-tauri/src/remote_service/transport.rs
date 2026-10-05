@@ -834,14 +834,14 @@ where
 /// a slow link, a stalled one - and the session ends (`serviceUnavailable`) to be rebuilt, as a
 /// 2 s stall ended it before. Nothing is ever dropped here: every message queued is one the
 /// relay or a browser is waiting for.
-struct Outbound {
+pub(super) struct Outbound {
     queue: tokio::sync::mpsc::Sender<Message>,
     /// Messages handed over and not yet on the wire, the one being written included.
     outstanding: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Outbound {
     const CAPACITY: usize = 64;
-    fn spawn<S>(
+    pub(super) fn spawn<S>(
         mut sink: futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, Message>,
     ) -> (Self, tokio::task::JoinHandle<Result<(), &'static str>>)
     where
@@ -869,7 +869,7 @@ impl Outbound {
     }
     /// Hand a message to the writer without waiting. A full queue is the stalled relay
     /// described above, and the caller's `?` ends the session.
-    fn send(&self, message: Message) -> Result<(), &'static str> {
+    pub(super) fn send(&self, message: Message) -> Result<(), &'static str> {
         self.outstanding
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.queue.try_send(message).map_err(|_| {

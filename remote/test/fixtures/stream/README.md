@@ -88,9 +88,12 @@ the station pinned when the operator approved that browser at the radio.
   `3059301306072a8648ce3d020106082a8648ce3d030107034200` then `04` and the 64-byte point.
 - **The pin.** The station pins `SHA-256(SPKI DER)` for that browser when the operator approves it
   at the radio, and both ends show the same short form of it beside the browser's name: its first
-  8 bytes as four groups of four uppercase hex digits (`3F2A 9C1B 77E0 4D12`). That comparison is
-  the human check that the key the station pins is the browser's own and not one the service
-  substituted.
+  16 bytes (128 bits) as eight groups of four uppercase hex digits
+  (`3F2A 9C1B 77E0 4D12 8A5B 06C3 E19F 2D74`), the form the station's own key is shown in too. That
+  comparison is the human check that the key the station pins is the browser's own and not one the
+  service substituted. It needs the 128 bits: the service knows the browser's key and can bring up
+  the question when it likes, so a shorter form could be matched by a key made to fit it. A Nexus
+  from before showed the first 8 bytes, four groups, which are the first four groups here.
 - **The signature.** `signature` is ECDSA P-256 with SHA-256 over these 160 bytes, as the IEEE
   P1363 `r‖s` WebCrypto produces (64 bytes), in lowercase hex (**128** characters):
 
@@ -165,6 +168,16 @@ the browser's ICE checks at any address it names.
   another session or offer, or another station's) and `stationNotSigned` (no signature, or no key
   listed: a station from before the key, which an update at the shack fixes). The DTLS handshake
   then holds the browser to the certificate the signed answer names.
+- **What the page keeps** (S3-L1). The page keeps the first key the service lists for each station
+  it has a device on, in IndexedDB by station id (a database of its own, `nexus-remote-station-keys`,
+  beside the device keys'). While the service lists any other key, it refuses the stream before it
+  checks the answer, with a third reason it gives itself, `stationKeyChanged`: nothing reaches the
+  browser. It shows both keys' fingerprints in the pin's form above, and keeps the new key only when
+  the operator accepts it there; revoking the station or removing this browser's approval on the
+  page forgets the kept key. The shack shows its own key the same way ("This station's key"), so
+  the operator can compare the two. This holds against the service's records changing after the
+  page first saw the key. What it saw first rests on that comparison, and a service that serves a
+  page of its own is beyond anything the page keeps.
 - **Not the fix**: a page-side filter on private candidates. It would end streaming on the shack's
   own network (the station advertises its LAN address, above).
 

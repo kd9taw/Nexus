@@ -15,11 +15,16 @@
 //!    These go back to back: the radio processes commands in order and nothing here depends on an
 //!    earlier reply.
 //!
-//! The UDP registration's one-byte datagram to the radio's port 4992 is sent by whoever owns the
-//! UDP socket, before this sequence starts. A `client udpport` reply of [`UDP_PORT_IN_USE`] means
-//! that port and address are taken: rebind to an ephemeral port and register again
-//! ([`should_retry_lan_udp_port_registration`]). Some firmware answers [`NOT_SUPPORTED`], which is
-//! harmless once the datagram has gone.
+//! The UDP registration's one-byte datagram, from the socket `client udpport` registers to the
+//! radio's port 4992, goes in step 3, after `mic list` and just before `client udpport`: where
+//! upstream sends it (port plan §4.5, step 7). The radio learns the client's UDP endpoint from
+//! the datagram's source, which firmware that answers `client udpport` with [`NOT_SUPPORTED`]
+//! needs, and by then the client it comes from is registered. Sent before the session connected,
+//! it reached a radio that had no client of ours yet. The session has no I/O of its own, so the
+//! socket's owner gives it the sender ([`super::session::UdpRegistration`]). A `client udpport`
+//! reply of [`UDP_PORT_IN_USE`] means that port and address are taken: rebind to an ephemeral
+//! port and register again ([`should_retry_lan_udp_port_registration`]). Some firmware answers
+//! [`NOT_SUPPORTED`], which is harmless once the datagram has gone.
 //!
 //! Not taken from upstream: subscribing to `radio` and `client` before `client gui` to detect a
 //! live client already using our id. The plan's sequence does not need it; it is a candidate for

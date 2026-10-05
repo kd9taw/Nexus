@@ -275,6 +275,8 @@ const SHARED = [
   // The spectrum renderer's hidden backend setting (spectrum/choose.ts): WebGL2 or canvas-2D on THIS
   // machine, whatever the automatic choice says. A fact about the machine's graphics, not a window.
   'nexus.spectrum.backend',
+  // The RF scope pane's, one record for the pane in all five digital cockpits (the same picture).
+  'nexus.scope.rfpan',
   'nexus.watchlist',
   'nexus.workspace',
   'tempo-onboarded',

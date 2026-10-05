@@ -1873,6 +1873,29 @@ button.nb-chip:hover {
   color: var(--text-dim);
   font-size: 0.9rem;
 }
+/* "3D view paused" and its Reload, over a 3-D globe (Connect's or the Logbook's) whose WebGL context
+   was lost and has not come back (components/globeWebgl.tsx). A card in the middle of the blank
+   scene, in the theme's own text on its own panel, so it reads on whatever backdrop the host paints
+   (the Logbook band's is a dark gradient in both themes); under the globe's own controls (z-index 2
+   to 4), which stay usable around it. */
+.globe-paused {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.9rem;
+  text-align: center;
+}
 /* Spin on/off, overlaid on the globe (top-right). */
 .globe3d-spin {
   position: absolute;
@@ -10903,6 +10926,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex: 1;
   min-height: 0;
 }
+/* THE RF SCOPE PANE's content (components/RfScopePane, the digital cockpits' opt-in pane): the rig
+   scope filling its frame's body, the CW decode's way (`.pane-body > .cw-decode`). `height: 100%`
+   takes the body's definite height wherever the frame has one, and `.ph-scope` above fills this
+   column. The floor is the readable minimum for the place where the body is content height (the
+   stacking flow); it is legal here because `.pane-body` scrolls, and nowhere else. */
+.pane-body > .rf-scope {
+  height: 100%;
+  min-height: 6em;
+  display: flex;
+  flex-direction: column;
+}
 .ph-scope-smeter {
   display: flex;
   align-items: center;
@@ -11012,6 +11046,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
+/* The overlays (spectrum/overlays.ts): spot tags, the licence-class band edges and the FT offsets, on
+   a transparent canvas over the picture and, by document order, under the marks canvas below. Out of
+   flow like the picture, and it takes no pointer event: every gesture lands on the marks canvas. It
+   carries `.well` for the dark palette's inks only (a well is the dark theme, not a dark background:
+   DISPLAY WELLS), so the well's background is taken off here, or it would cover the picture. */
+.ph-scope-overlays {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  background-color: transparent;
+  border-radius: var(--radius-sm);
+}
 /* The overlay: the dial and carrier lines, their plates, the frequency scale and the pitch marker,
    on a transparent canvas that also takes every pointer gesture. POSITIONED, so it paints over the
    absolutely positioned picture under it (an unpositioned box would paint beneath it). */
@@ -11025,6 +11074,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .ph-scope-canvas.tunable {
   cursor: crosshair;
+}
+/* The focused scope takes the tuning keys; its ring is drawn inside the box, so the panel around
+   it cannot clip it (the .pane-splitter pattern). */
+.ph-scope-canvas:focus-visible {
+  outline-offset: -2px;
 }
 /* The Flex-style passband box while press-dragging: shows exactly where the rig will be
    listening. Imperatively positioned; display:block only during a drag. */
@@ -12815,6 +12869,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .settings-update-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Settings ▸ Licenses (SettingsLicenses.tsx): license texts are written to about 80 columns, so
+   the dialog is wider than the 640px default; the box scrolls the text (.ui-dialog's max-height). */
+.ui-dialog.licenses-dialog {
+  width: min(760px, calc(100vw - 2 * var(--space-4)));
+}
+.licenses-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
 }
 .settings-form {
   flex: 1;
@@ -15125,8 +15192,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 700;
 }
 /* Need-tagged rows in the band-activity feed — same vocabulary + palette as the
-   Needed panel so the two views read as one system. (dxped/pota/sota are icon-only and
-   never colour a row; the award tier keeps the colour.) */
+   Needed panel so the two views read as one system. (The DXPED/POTA/SOTA activity badges are
+   icon-only and never colour a row; the award tier keeps the colour. A park still to be worked is
+   a need, and its row takes the needed-park green the band strip and the map give it.) */
 .decode-row.need-watch {
   border-left: 3px solid var(--need-watch);
   background: color-mix(in srgb, var(--need-watch) 24%, transparent);
@@ -15159,6 +15227,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
 }
+/* A needed park calling CQ outranks the CQ's green for the row (operator, 2026-10-04: "Give it the
+   needed-park colour"); without this the row lost the CQ tint and read plainer than an ordinary CQ.
+   OperateDecodes.needPark.test.tsx holds it in every theme. */
+.decode-row.need-pota {
+  border-left: 3px solid var(--need-pota);
+  background: color-mix(in srgb, var(--need-pota) 22%, transparent);
+}
 /* THE LEAD CHIP ON ITS OWN ROW (operator, 2026-09-30: "Chip drops its tint there"). A row tinted in a need's colour
    leads with that need's chip. With the word in the ink, the chip's own tint stacked on the row's, and in the night
    modes, whose ink is dimmer than the bright need colours, WATCH on a watched station's row read 3.12:1 in Chrome. So
@@ -15171,7 +15246,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-row.need-mode .need-chip.need-mode,
 .decode-row.need-grid .need-chip.need-grid,
 .decode-row.need-state .need-chip.need-state,
-.decode-row.need-confirm .need-chip.need-confirm {
+.decode-row.need-confirm .need-chip.need-confirm,
+.decode-row.need-pota .need-chip.need-pota {
   background: transparent;
 }
 /* Need micro-icon cluster trailing the message text. */

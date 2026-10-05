@@ -45,6 +45,8 @@ vi.mock('react-globe.gl', async () => {
     })(),
     postProcessingComposer: () => ({ addPass() {}, passes: [] }),
     controls: () => controls,
+    // What globeWebgl.tsx hands back when the globe goes (globeWebgl.test.tsx tests that part).
+    renderer: () => renderer,
     // globe.gl's getter: where the camera is (its setter form is the same call with arguments).
     pointOfView: () => ({ lat: 0, lng: 0, altitude: 2.2 }),
     // globe.gl's render loop, reduced to the one fact the tests read: is it running?
@@ -63,7 +65,15 @@ vi.mock('react-globe.gl', async () => {
   const controls = Object.assign(new THREE.EventDispatcher<Record<string, object>>(), {
     autoRotate: false,
     autoRotateSpeed: 0,
+    connect() {},
+    disconnect() {},
   })
+  const renderer = {
+    domElement: document.createElement('canvas'),
+    getContext: () => ({ isContextLost: () => false }),
+    dispose() {},
+    forceContextLoss() {},
+  }
   // three-globe's HTML-elements layer, reduced to the two rules that decide whether a spot's
   // `div` SURVIVES an update. Both are read off the shipped source, and §4 below leans on them:
   //   • data-bind-mapper `digest()` joins on DATUM IDENTITY (its id accessor is `d => d`): an
@@ -173,8 +183,9 @@ beforeEach(() => {
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   // `webglOk()` asks for a context; jsdom has none. And the globe only mounts once its box has
   // a real size, which jsdom never lays out — give every element a 600×400 box.
-  // Any context method is a no-op that returns a gradient-shaped object (the sprite canvases).
-  const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+  // Any context method is a no-op that returns a gradient-shaped object (the sprite canvases);
+  // the probe's context has no extensions to hand it back with.
+  const ctx = new Proxy({ getExtension: () => null } as Record<string | symbol, unknown>, {
     get: (t, k) => (k in t ? t[k] : () => ({ addColorStop() {} })),
   })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(

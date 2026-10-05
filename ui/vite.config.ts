@@ -4,7 +4,9 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { failuresReporter } from './vitest-failures-reporter'
+import { bundledLicenses } from './remote-licenses'
 
 // A build stamp (commit hash + build time) baked in at build time, so the app can SHOW which
 // build is running — the product version string is always "0.2.0", which made it impossible
@@ -52,7 +54,25 @@ function buildId(): string {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    // The license texts of the npm packages in the desktop bundle. The hosted browser's generator
+    // (remote-licenses.ts) reads them for the modules the chunks actually contain, and a package
+    // that ships without its text stops the build. Settings ▸ Licenses shows this file. The
+    // installers carry the same text as resources/ui/THIRD-PARTY.txt (licenses/ui/ in the
+    // repository), and CI's `ui` job fails when that committed copy differs from what this emits.
+    name: 'desktop-license-texts',
+    generateBundle(_options, bundle) {
+      const modules = new Set(Object.values(bundle).flatMap(chunk => chunk.type === 'chunk' ? Object.keys(chunk.modules) : []))
+      this.emitFile({ type: 'asset', fileName: 'THIRD-PARTY.txt', source:
+        'Nexus — third-party notices for the app\'s interface\n\n' +
+        'The interface bundles the npm packages below. Each is followed by the license files its\n' +
+        'published package carries or, where a package publishes none, by the reviewed upstream text\n' +
+        'that NOTICE names for it. The CQ-zone data the interface also bundles comes first.\n' +
+        'These notices supplement Nexus COPYING and NOTICE.\n\n' +
+        'CQ zone boundaries (cqzones.geojson), from HB9HIL hamradio-zones-geojson\n' +
+        readFileSync(new URL('./src/data/cqzones.LICENSE.txt', import.meta.url), 'utf8') + '\n' + bundledLicenses(modules) })
+    },
+  }],
   define: {
     __BUILD_ID__: JSON.stringify(buildId()),
     // The street map's renderer (components/StreetMap, MapLibre) is part of the desktop build; the
@@ -76,13 +96,20 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    // Never a script inlined as a data: URL, whatever its size: the Stations on this network page's
+    // `script-src 'self'` refuses one, and its receive-audio worklet is a file of its own origin
+    // for that reason (the hosted page's rule, vite.remote.config.ts).
+    assetsInlineLimit: file => file.endsWith('.js') ? false : undefined,
     rollupOptions: {
-      // Two entries: the desktop app, and the TV page the LAN server hands to a
-      // browser (connect_web.rs serves `connect-tv.html` at `/`). Same components,
-      // same chunks — a Connect improvement reaches the TV in the same build.
+      // Three entries: the desktop app; the TV page the LAN server hands to a browser
+      // (connect_web.rs serves `connect-tv.html` at `/`), same components, same chunks, so a
+      // Connect improvement reaches the TV in the same build; and the Stations on this network
+      // window's page (`lan.html`), which this computer's own loopback origin serves
+      // (src-tauri/src/lan_client/origin.rs).
       input: {
         main: 'index.html',
         tv: 'connect-tv.html',
+        lan: 'lan.html',
       },
     },
   },

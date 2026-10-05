@@ -212,6 +212,37 @@ pub fn tx_allowed(class: LicenseClass, emission_mhz: f64, mode: OperatingMode) -
         .any(|seg| emission_mhz >= seg.lo && emission_mhz < seg.hi && allows(seg, mode))
 }
 
+/// Where `class` may transmit `mode`: the [`segments`] that allow it, as `[lo, hi)` MHz spans,
+/// ascending and merged where they touch or overlap — the licence-class band edges the scope
+/// draws. `None` for `Open`, which [`tx_allowed`] allows everywhere, so it has no edge to draw.
+///
+/// DISPLAY ONLY, AND THE GATE'S OWN DATA. Nothing reads this to decide a transmission:
+/// [`tx_allowed`] stays the gate, and the test
+/// `allowed_spans_agree_with_tx_allowed_for_every_class_and_mode` holds the two to one answer at
+/// every segment edge and across every band, so the overlay cannot show a privilege the gate
+/// refuses or hide one it grants. Like the gate, it judges an EMISSION frequency, not a dial.
+pub fn allowed_spans(class: LicenseClass, mode: OperatingMode) -> Option<Vec<(f64, f64)>> {
+    if matches!(class, LicenseClass::Open) {
+        return None;
+    }
+    let mut segs: Vec<(f64, f64)> = segments(class)
+        .iter()
+        .filter(|seg| allows(seg, mode))
+        .map(|seg| (seg.lo, seg.hi))
+        .collect();
+    segs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(segs.len());
+    for (lo, hi) in segs {
+        match out.last_mut() {
+            // Touching or overlapping: one span. Both ends are half-open like the gate's, so the
+            // merged span holds exactly the frequencies its parts held.
+            Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+            _ => out.push((lo, hi)),
+        }
+    }
+    Some(out)
+}
+
 /// The lowest frequency (MHz) at which `class` may use `mode` on `band` — where a band
 /// dropdown should park the VFO. `None` = the operator has no privilege for that band+mode
 /// (so the band is omitted from the dropdown). 60 m is excluded (channelized; tune manually).
@@ -295,7 +326,7 @@ pub fn phone_segment(class: LicenseClass, band: &str) -> Option<(f64, f64)> {
 mod tests {
     use super::*;
     use crate::settings::LicenseClass::*;
-    use crate::settings::OperatingMode::{Cw, Digital, Phone};
+    use crate::settings::OperatingMode::{Cw, Digital, Keyboard, Phone, Rtty};
 
     /// The exact case that leaked onto the Needed board: LU6HL spotted on 7.140 SSB. 7.140 sits
     /// in the 40 m phone segment a GENERAL may not use (their phone starts at 7.175) but an EXTRA
@@ -501,6 +532,106 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every frequency the agreement test asks about: each segment edge of every class (on it and
+    /// a hair either side), each segment's middle, and sweeps across every band — 1 kHz through
+    /// HF and 6 m, 100 Hz across 60 m's 2.8 kHz channels, 50 kHz from 4 m up.
+    fn privilege_samples() -> Vec<f64> {
+        let mut f = Vec::new();
+        for class in [Technician, General, Extra, Open] {
+            for seg in segments(class) {
+                for edge in [seg.lo, seg.hi] {
+                    f.extend([edge, edge - 1e-6, edge + 1e-6]);
+                }
+                f.push((seg.lo + seg.hi) / 2.0);
+            }
+        }
+        f.extend((1_700..=54_100).map(|k| k as f64 / 1_000.0));
+        f.extend((53_000..=54_100).map(|k| k as f64 / 10_000.0));
+        for (lo, hi) in [
+            (69.0, 71.0),
+            (143.0, 149.0),
+            (221.0, 226.0),
+            (419.0, 451.0),
+            (901.0, 929.0),
+            (1_239.0, 1_301.0),
+            (2_299.0, 2_451.0),
+            (3_299.0, 3_501.0),
+            (5_649.0, 5_926.0),
+            (9_999.0, 10_501.0),
+            (23_999.0, 24_251.0),
+        ] {
+            let n = ((hi - lo) / 0.05_f64).round() as usize;
+            f.extend((0..=n).map(|i| lo + i as f64 * 0.05));
+        }
+        f.extend([0.0, 0.5, 60.0, 100.0, 30_000.0]);
+        f
+    }
+
+    /// THE BAND-EDGE OVERLAY SHOWS THE GATE, never a copy of it: for every class and every section,
+    /// a frequency sits inside one of `allowed_spans` exactly where `tx_allowed` lets that class key
+    /// that emission there. `Open` has no spans, and its gate allows everything.
+    #[test]
+    fn allowed_spans_agree_with_tx_allowed_for_every_class_and_mode() {
+        let samples = privilege_samples();
+        for class in [Technician, General, Extra, Open] {
+            for mode in [Digital, Phone, Cw, Rtty, Keyboard] {
+                let spans = allowed_spans(class, mode);
+                if matches!(class, Open) {
+                    assert_eq!(spans, None, "Open has no edges");
+                    assert!(samples.iter().all(|&f| tx_allowed(class, f, mode)));
+                    continue;
+                }
+                let spans = spans.expect("a US class has spans");
+                for &f in &samples {
+                    let inside = spans.iter().any(|&(lo, hi)| f >= lo && f < hi);
+                    assert_eq!(
+                        inside,
+                        tx_allowed(class, f, mode),
+                        "{class:?} {mode:?} at {f} MHz: the overlay and the gate disagree"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn allowed_spans_merge_touching_segments_and_keep_the_gaps() {
+        let extra_cw = allowed_spans(Extra, Cw).unwrap();
+        // 80 m: CW/data 3.500–3.600 and phone 3.600–4.000 both carry CW, so one span.
+        assert!(extra_cw.contains(&(3.500, 4.000)), "{extra_cw:?}");
+        assert!(extra_cw.contains(&(14.000, 14.350)));
+        // 6 m: the CW-only slice and the all-mode segment touch at 50.1.
+        assert!(extra_cw.contains(&(50.0, 54.0)));
+        let general_phone = allowed_spans(General, Phone).unwrap();
+        assert!(
+            general_phone.contains(&(14.225, 14.350)),
+            "{general_phone:?}"
+        );
+        assert!(general_phone.contains(&(7.175, 7.300)));
+        // 60 m's channels stay apart: the gaps between them are no privilege.
+        assert!(general_phone.contains(&(5.3306, 5.3334)));
+        let tech_data = allowed_spans(Technician, Digital).unwrap();
+        // Data on HF only on 10 m, and band-wide from 6 m up.
+        assert!(tech_data.contains(&(28.000, 28.300)), "{tech_data:?}");
+        assert!(tech_data.contains(&(50.1, 54.0)));
+        assert!(tech_data.iter().all(|&(lo, _)| lo >= 28.0));
+        for spans in [extra_cw, general_phone, tech_data] {
+            assert!(
+                spans.windows(2).all(|w| w[0].1 < w[1].0),
+                "ascending, with a gap between each: {spans:?}"
+            );
+        }
+        // RTTY and the keyboard modes ride the data segments, as the gate judges them.
+        assert_eq!(
+            allowed_spans(General, Rtty),
+            allowed_spans(General, Digital)
+        );
+        assert_eq!(
+            allowed_spans(General, Keyboard),
+            allowed_spans(General, Digital)
+        );
     }
 
     #[test]

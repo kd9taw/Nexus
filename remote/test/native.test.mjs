@@ -361,6 +361,45 @@ async function queryPage(socket, args) {
   }
 }
 
+/** One v1 sample, asked as the page's own v1 client asks it (`ApplicationClient.invoke`): every answer is
+ *  acknowledged at once, and `applicationBusy` is asked again, three times at most and 250 ms apart. The station
+ *  answers busy for a sample it holds no fresh copy of while another thread holds the Engine. Every other answer goes
+ *  back to the caller. */
+async function applicationRead(socket, command) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID()
+    socket.send({ type: 'applicationRead', requestId, command, revision: null })
+    const result = await socket.take(value => value.requestId === requestId)
+    socket.send({ type: 'applicationAck', requestId })
+    if (attempt === 3 || result.type !== 'applicationError' || result.error !== 'applicationBusy') return result
+    await delay(250)
+  }
+}
+
+/** The first sample of each topic, read as the page's stream reads it (`ApplicationClient.invoke` on v2 and later):
+ *  a frame is acknowledged with the next credit as it lands, and a topic the station answered `applicationBusy` is
+ *  read again from a later frame, three times at most and 250 ms apart. Every other answer goes back to the caller.
+ *  Returns each topic's update and the credit of the last frame taken, which the caller acknowledges. */
+async function frameSamples(socket, requestId, topics) {
+  const samples = new Map(), attempts = new Map()
+  for (let credit = requestId; ;) {
+    const frame = await socket.take(value => value.type === 'applicationFrame')
+    assert.equal(frame.requestId, credit)
+    for (const update of frame.updates) {
+      if (!topics.includes(update.command) || samples.has(update.command)) continue
+      const attempt = (attempts.get(update.command) ?? 0) + 1
+      attempts.set(update.command, attempt)
+      if (attempt < 3 && update.type === 'applicationError' && update.error === 'applicationBusy') continue
+      samples.set(update.command, update)
+    }
+    if (topics.every(topic => samples.has(topic))) return { samples, requestId: credit }
+    const next = crypto.randomUUID()
+    socket.send({ type: 'applicationFrameAck', requestId: credit, nextRequestId: next })
+    credit = next
+    await delay(250)
+  }
+}
+
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
@@ -465,10 +504,8 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual(capabilities.commands, ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters'])
     let originalTier
     for (const command of capabilities.commands) {
-      const requestId = crypto.randomUUID()
-      socket.send({ type: 'applicationRead', requestId, command, revision: null })
-      const result = await socket.take(value => value.requestId === requestId)
-      assert.equal(result.type, 'applicationResult', `${command} must return the actual native DTO`)
+      const result = await applicationRead(socket, command)
+      assert.equal(result.type, 'applicationResult', `${command} must return the actual native DTO (${result.error ?? result.type})`)
       assert.equal(result.command, command)
       assert.equal(result.baseRevision, null)
       assert.ok(result.ageMs < 3000)
@@ -486,7 +523,6 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       } else if (command === 'get_band_plan') assert.ok(result.data.length > 0)
       else if (command === 'get_meters') assert.deepEqual(Object.keys(result.data).sort(), ['cwToneHz','rxLevel','smeterDb'])
       else assert.deepEqual(Object.keys(result.data).sort(), ['hiHz','loHz','row','source'])
-      socket.send({ type: 'applicationAck', requestId })
     }
     for (const tier of ['TempoFast','TempoDeep']) {
       const native = await probe.send({type:'seedTempo',tier,conversations:tempoConversations(tier)})
@@ -723,12 +759,12 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok(js8Caps.commands.includes('get_js8_state'))
     const js8Request=crypto.randomUUID()
     js8.send({type:'applicationSubscribe',topics:['get_js8_state'],requestId:js8Request})
-    const js8Frame=await js8.take(value=>value.type==='applicationFrame')
-    const js8Sample=js8Frame.updates.find(update=>update.command==='get_js8_state')
-    assert.equal(js8Sample.type,'applicationResult')
+    const js8Frame=await frameSamples(js8,js8Request,['get_js8_state'])
+    const js8Sample=js8Frame.samples.get('get_js8_state')
+    assert.equal(js8Sample.type,'applicationResult',`the JS8 sample: ${js8Sample.error}`)
     assert.deepEqual(js8Sample.data.state,nativeJs8.state,'the station read is the unchanged native JS8 DTO')
     assert.deepEqual(statsReference.parseJs8Sample(js8Sample.data,0,js8Sample.data.capturedAtMs),nativeJs8.state)
-    js8.send({type:'applicationFrameAck',requestId:js8Request,nextRequestId:crypto.randomUUID()})
+    js8.send({type:'applicationFrameAck',requestId:js8Frame.requestId,nextRequestId:crypto.randomUUID()})
     js8.send({type:'applicationSubscribe',topics:[],requestId:null})
     const js8Page=await queryPage(js8,{collection:'js8Context',cursor:null,search:'',unconfirmed:false,after:null})
     assert.equal(js8Page.type,'applicationPage')
@@ -755,10 +791,10 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok(modesCapabilities.commands.includes('get_remote_rotator'))
     const modesRequest=crypto.randomUUID()
     modes.send({type:'applicationSubscribe',topics:['get_sstv_state','get_remote_aprs_state'],requestId:modesRequest})
-    const modesFrame=await modes.take(value=>value.type==='applicationFrame')
-    const sstvSample=modesFrame.updates.find(u=>u.command==='get_sstv_state')
-    const aprsSample=modesFrame.updates.find(u=>u.command==='get_remote_aprs_state')
-    assert.equal(sstvSample.type,'applicationResult');assert.equal(aprsSample.type,'applicationResult')
+    const modesFrame=await frameSamples(modes,modesRequest,['get_sstv_state','get_remote_aprs_state'])
+    const sstvSample=modesFrame.samples.get('get_sstv_state')
+    const aprsSample=modesFrame.samples.get('get_remote_aprs_state')
+    assert.equal(sstvSample.type,'applicationResult',`the SSTV sample: ${sstvSample.error}`);assert.equal(aprsSample.type,'applicationResult',`the APRS sample: ${aprsSample.error}`)
     const sstvState=statsReference.parseSstvSample(sstvSample.data,0)
     assert.deepEqual({...sstvState,gallery:sstvState.gallery.map((g,i)=>({...g,path:nativeModes.sstv.gallery[i].path}))},nativeModes.sstv)
     assert.ok(sstvState.gallery.every(g=>/^[a-f0-9-]{36}\.(png|bmp)$/.test(g.path)))
@@ -766,7 +802,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual(liveAprs.health,nativeModes.aprs.health)
     assert.deepEqual(liveAprs.isStatus,nativeModes.aprs.isStatus)
     assert.deepEqual(liveAprs.settings,nativeModes.aprs.settings)
-    modes.send({type:'applicationFrameAck',requestId:modesRequest,nextRequestId:crypto.randomUUID()})
+    modes.send({type:'applicationFrameAck',requestId:modesFrame.requestId,nextRequestId:crypto.randomUUID()})
     modes.send({type:'applicationSubscribe',topics:[],requestId:null})
     const collectionSource={page:async args=>{
       await delay(140)
@@ -791,14 +827,14 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const navigation=modes
     const navigationRequest=crypto.randomUUID()
     navigation.send({type:'applicationSubscribe',topics:['get_remote_satellite_state'],requestId:navigationRequest})
-    const navigationFrame=await navigation.take(value=>value.type==='applicationFrame')
-    const navigationLive=navigationFrame.updates.find(u=>u.command==='get_remote_satellite_state')
-    assert.equal(navigationLive.type,'applicationResult')
+    const navigationFrame=await frameSamples(navigation,navigationRequest,['get_remote_satellite_state'])
+    const navigationLive=navigationFrame.samples.get('get_remote_satellite_state')
+    assert.equal(navigationLive.type,'applicationResult',`the live satellite sample: ${navigationLive.error}`)
     console.log('Navigation probe: live sample')
     const liveState=statsReference.parseSatelliteLive(navigationLive.data,0)
     assert.deepEqual(liveState.settings,nativeNavigation.live.settings)
     assert.deepEqual(liveState.held,nativeNavigation.live.held)
-    navigation.send({type:'applicationFrameAck',requestId:navigationRequest,nextRequestId:crypto.randomUUID()})
+    navigation.send({type:'applicationFrameAck',requestId:navigationFrame.requestId,nextRequestId:crypto.randomUUID()})
     navigation.send({type:'applicationSubscribe',topics:[],requestId:null})
     const navigationSource={page:async args=>{
       for(let attempt=0;attempt<50;attempt++){
@@ -961,7 +997,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const target=row=>({call:row.call,whenUnix:row.whenUnix,key:createHash('sha256').update(canon(row),'utf8').digest('hex')})
    // One page socket for the whole block: any browser leaving ends the shared logging lease.
    const {value:pageTicket}=await browser.post(`stations/${stationId}/ticket`);const pages=await browser.open(stationId,pageTicket.ticket);pages.ackObservations();observing(pages,(await labeled(pages,'page session',v=>v.type==='session')).sessionId);pages.send({type:'applicationHello',version:3});await labeled(pages,'page capabilities',v=>v.type==='applicationCapabilities')
-   const logRows=async()=>{const requestId=crypto.randomUUID();pages.send({type:'applicationQuery',requestId,collection:'log',cursor:null,search:'',unconfirmed:false,after:null});const page=await labeled(pages,'log page',v=>v.requestId===requestId);assert.equal(page.type,'applicationPage');pages.send({type:'applicationQueryAck',requestId});return page.rows}
+   const logRows=async()=>{const page=await queryPage({send:m=>pages.send(m),take:p=>labeled(pages,'log page',p)},{collection:'log',cursor:null,search:'',unconfirmed:false,after:null});assert.equal(page.type,'applicationPage',JSON.stringify({type:page.type,error:page.error}));return page.rows}
    // The station shares a page-zero capture for a few seconds, so read until the page shows the change.
    // A real page heartbeats every second whatever it is showing; without that the 5 s lease lapses mid-poll.
    const rowFor=async(call,accept)=>{for(let i=0;i<40;i++){const row=(await logRows()).find(r=>r.call===call);if(row&&accept(row))return row;await heartbeat();await delay(250)}throw new Error(`the log page never showed ${call} as expected`)}

@@ -513,6 +513,16 @@ pub(crate) mod tests_support {
         /// Fault injection — swallow the next N by-name dial/mode READ replies (`25`/`26`
         /// above): a lost CI-V reply, so the read times out while the rig's state stands.
         pub drop_dial_reads: u32,
+        /// THE IF FILTER WIDTH (`1A 03`) per band — THE RAW WIRE BYTE, like [`Self::att_raw`], so
+        /// a test reads the encoding itself: code 22 (1.8 kHz) is `0x22`, and a binary encoder's
+        /// `0x16` would sit here as exactly that. Main defaults to `0x28` (code 28, 2.4 kHz SSB).
+        /// Refused (NAK) while the band's mode is FM: no CI-V reference this daemon drives has an
+        /// FM row in its width table (IC-9700 A7508-3EX-4 p. 16). That the radio NAKs rather than
+        /// ignoring it is this fixture's MODEL, not a measurement — NEEDS-BENCH.
+        pub filter_raw: u8,
+        pub sub_filter_raw: u8,
+        /// Fault injection — NAK the next N `1A 03` commands, read or write.
+        pub nak_filter_width: u32,
         /// Which band each command ACTED on, in arrival order: `(on_sub, cmd, data)`. A
         /// `29`-wrapped command is recorded UNWRAPPED, under the band it named; every other
         /// command under the selection at the moment it arrived. This is the witness for
@@ -723,6 +733,27 @@ pub(crate) mod tests_support {
                 }
                 None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
             },
+            // IF FILTER WIDTH (`1A 03`): a bare sub-command reads, one BCD byte writes — on the
+            // band the command acts on, and never in FM (see [`Regs::filter_raw`]).
+            (0x1A, Some(0x03)) => {
+                let fm = (if on_sub { r.sub_mode } else { r.main_mode }) == 0x05;
+                if fm || r.nak_filter_width > 0 {
+                    r.nak_filter_width = r.nak_filter_width.saturating_sub(1);
+                    return Some((0xFA, Vec::new()));
+                }
+                let reg = if on_sub {
+                    &mut r.sub_filter_raw
+                } else {
+                    &mut r.filter_raw
+                };
+                match data.get(1) {
+                    Some(&v) => {
+                        *reg = v;
+                        None // ack
+                    }
+                    None => Some((0x1A, vec![0x03, *reg])),
+                }
+            }
             // S-meter, from the band the command acts on (Main S9 by default — see
             // [`Regs::smeter_raw`]).
             (0x15, Some(0x02)) => {
@@ -946,6 +977,9 @@ pub(crate) mod tests_support {
                         cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
                         dial_by_band: addr == 0x98, // `25`/`26` name MAIN/SUB on the IC-7610 only
                         drop_dial_reads: 0,
+                        filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
+                        sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
+                        nak_filter_width: 0,
                         acted: Vec::new(),
                         wire: Vec::new(),
                         log: Vec::new(),

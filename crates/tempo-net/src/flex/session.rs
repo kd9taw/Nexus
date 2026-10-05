@@ -15,7 +15,8 @@
 //!   repeated or malformed `V` or `H`, or handle zero, makes it receive-only for its lifetime,
 //!   and never takes away an unkey.
 //! - *The connect sequence* ([`super::handshake`]), then registration's verdict: a refusal ends the
-//!   session for good ([`Event::RegistrationRejected`]).
+//!   session for good ([`Event::RegistrationRejected`]). The one datagram the sequence needs, the
+//!   UDP registration's, goes out through the sender its owner gives it ([`UdpRegistration`]).
 //! - *Replies matched by sequence number*: every command gets a number and every reply is matched
 //!   by it, never by arrival order.
 //! - *Status*: decoded ([`super::status`]) and folded into the model ([`super::model`]).
@@ -147,6 +148,9 @@ pub struct Config {
     pub teardown_timeout_ms: u64,
     /// Our recent sessions' handles on this radio, newest first ([`super::reconnect::Ladder`]).
     pub previous_handles: Vec<u32>,
+    /// The UDP registration's datagram, sent after registration, just before `client udpport`;
+    /// `None` sends none.
+    pub udp_registration: Option<UdpRegistration>,
 }
 
 impl Config {
@@ -165,9 +169,42 @@ impl Config {
             registration_timeout_ms: 10_000,
             teardown_timeout_ms: 2_000,
             previous_handles: Vec::new(),
+            udp_registration: None,
         }
     }
 }
+
+/// What sends the UDP registration's one-byte datagram, from the socket `client udpport`
+/// registers to the radio's port 4992. The socket's owner supplies it, because the session has no
+/// I/O of its own, and the session calls it once, where [`super::handshake`] places the datagram:
+/// after registration, just before `client udpport`.
+#[derive(Clone)]
+pub struct UdpRegistration(Arc<dyn Fn() + Send + Sync>);
+
+impl UdpRegistration {
+    pub fn new(send: impl Fn() + Send + Sync + 'static) -> UdpRegistration {
+        UdpRegistration(Arc::new(send))
+    }
+
+    fn send(&self) {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for UdpRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UdpRegistration")
+    }
+}
+
+/// A registration is equal to itself and its clones: one sender.
+impl PartialEq for UdpRegistration {
+    fn eq(&self, other: &UdpRegistration) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for UdpRegistration {}
 
 /// Where the session is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -933,6 +970,13 @@ impl Session {
                         .unwrap_or_default(),
                 ),
             };
+            // The UDP registration's datagram goes here: after registration, just before
+            // `client udpport` (see `handshake`). Once: the sender goes with it.
+            if matches!(command, Command::ClientUdpPort(_)) {
+                if let Some(registration) = self.config.udp_registration.take() {
+                    registration.send();
+                }
+            }
             if self.send_internal(out, &command, pending, now).is_none() {
                 return;
             }

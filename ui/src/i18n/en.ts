@@ -230,6 +230,11 @@ export const EN = {
   "remote.thisBrowserRenewsUntil": "This browser is approved until {{until}} UTC. Using the station from here keeps it approved, up to {{limit}} UTC.",
   "remote.thisBrowserApprovalEnding": "This browser’s approval ends {{until}} UTC. To keep using it, approve it again in Nexus at the shack.",
   "remote.thisBrowserKey": "This browser’s key: {{key}}",
+  "remote.thisStationKey": "This station’s key: {{key}}",
+  "remote.stationKey.changed": "This station’s key has changed: the Remote service now lists a different key for it than the one this browser kept. Nothing connects until you accept the new key. Compare it with “This station’s key” in Nexus at the shack, and accept it only if they match.",
+  "remote.stationKey.kept": "Key this browser kept: {{key}}",
+  "remote.stationKey.new": "New key: {{key}}",
+  "remote.stationKey.accept": "Accept the new key",
   "remote.stationAccess": "Station access",
   "remote.revokeHint": "Revoking access disconnects this station and removes the approval of every browser that used it. To use it again, pair it again at the shack and approve your browsers there again.",
   "remote.revokeStation": "Revoke station access",
@@ -457,6 +462,7 @@ export const EN = {
   "remote.stream.ended.keyChanged": "This browser’s key has changed, so Nexus at the shack asks you to approve it again. Approve it there if it shows this browser’s key, below, then start the stream again.",
   "remote.stream.ended.stationKey": "This reply was not signed with your station's key, so it may not have come from your station. Nothing was connected.",
   "remote.stream.ended.stationUnsigned": "Nexus at the shack did not sign its reply, so this browser can't tell it came from your station. Update Nexus at the shack, then start the stream again.",
+  "remote.stream.ended.stationKeyChanged": "This station’s key has changed, so nothing was connected. Return to your stations to compare the new key with “This station’s key” in Nexus at the shack.",
   "remote.stream.offline": "The station isn't online. Check that Nexus is running at the shack with Remote turned on, and that the computer is awake.",
   // The station card (the operator, 2026-10-02: "Each station card has one big "Stream" button and a
   // small "Listen" for audio only"): one sentence for where this browser stands, then the next step.
@@ -566,6 +572,119 @@ export const EN = {
   "remote.approval.body": "A browser signed in to your Remote account asks to stream this station and operate it as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
   "remote.approval.bodyAgain": "This browser was approved before, but it can’t stream until you approve it again here. When it streams, it can operate this station as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
   "remote.approval.deny": "Deny",
+  // Remote over this network (Settings ▸ Station ▸ Remote access): this station's own listener, for
+  // Nexus on another computer on the same network, with no internet. Pairing is one press at the shack
+  // (the operator's ruling, 2026-10-04): making the code is the approval, it works once within ten
+  // minutes, and a paired computer keeps access until removed there. The address and the key's
+  // fingerprint arrive as values. `Nexus` and `Remote` are tokens.
+  "remote.lan.switch": "Remote over this network",
+  "remote.lan.intro": "Lets Nexus on another computer on this network operate this station, with no internet needed. Pair each computer here once; it keeps access until you remove it.",
+  "remote.lan.off": "Off.",
+  "remote.lan.starting": "Starting…",
+  "remote.lan.listening": "Listening at {{address}}. Only computers paired here can connect.",
+  // noKey and vaultFailed: the station cannot tell a store that would not answer from a record this
+  // Nexus cannot read (a newer Nexus's), so both give the two ways out, unlocking first, since a reset
+  // removes every paired computer. The reset is named as the card shows it: the button, under its section.
+  "remote.lan.reason.noKey": "Off: this station has no network key it can read. If your operating system’s credential store is locked, unlock it, then turn this on again. If it is not, press Reset network identity under Network identity below, and pair your computers again.",
+  "remote.lan.reason.endedAtShack": "Off: remote control was ended here. Turn this on again when you want it.",
+  "remote.lan.reason.addressGone": "Not listening: {{address}} is not this computer’s address right now. Nexus listens there again when it is back, or choose another network.",
+  "remote.lan.reason.chooseAddress": "Not listening: choose which of this computer’s networks to listen on.",
+  "remote.lan.reason.portInUse": "Not listening: another program is using its port.",
+  "remote.lan.reason.noNetwork": "Not listening: this computer is not on a private network.",
+  "remote.lan.reason.unavailable": "Not listening: it could not start on this computer.",
+  "remote.lan.pair": "Pair a computer",
+  "remote.lan.codeHint": "Type this code in Nexus on the other computer. It works once, within ten minutes.",
+  "remote.lan.codeWarning": "Whoever types it in time can operate this station, transmit included, so keep it to yourself.",
+  "remote.lan.thisStation": "This station: {{address}}, key {{key}}",
+  "remote.lan.computers": "Paired computers",
+  "remote.lan.noComputers": "No computer is paired yet.",
+  "remote.lan.atShackOnly": "Only at the station itself: this can’t be done through a stream.",
+  "remote.lan.full": "Eight computers are paired already. Remove one to pair another.",
+  "remote.lan.vaultFailed": "Nexus could not read or keep this station’s network key and paired computers in your operating system’s credential store. If the store is locked, unlock it and try again. If it is not, press Reset network identity under Network identity below, and pair your computers again.",
+  "remote.lan.failed": "Nexus could not do that. Try again.",
+  "remote.lan.resetTitle": "Network identity",
+  "remote.lan.resetHint": "Resetting makes a new network key and removes every paired computer. Use it if this computer’s key may have been copied, then pair your computers again.",
+  "remote.lan.reset": "Reset network identity",
+  "remote.lan.unavailable": "This station and the other computer both need Windows, for now.",
+  "remote.lan.firewallFirst": "The first time this is turned on, Windows asks whether Nexus may use networks. Allow Private networks only.",
+  "remote.lan.network": "Network",
+  "remote.lan.networkAuto": "Automatic",
+  "remote.lan.networkChoice": "{{name}}, {{address}}",
+  "remote.lan.networkGone": "{{address}} (not on this computer now)",
+  "remote.lan.networkHint": "Virtual adapters and VPNs are not offered: other computers on this network can’t reach this one through them.",
+  "remote.lan.notNamed": "Windows won’t let other computers find this station by name here, so type its address on the other computer.",
+  "remote.lan.guest": "A guest network, or one that keeps its devices apart, stops other computers reaching this one, and Nexus can’t tell that from here.",
+  "remote.lan.firewall.ask": "When Windows asks whether Nexus may use this network, allow Private networks only.",
+  "remote.lan.firewall.public": "Windows calls this network Public, so its firewall keeps other computers out. If this is your own network, make it Private in Windows Settings ▸ Network & internet.",
+  "remote.lan.firewall.blocked": "Windows Firewall blocks Nexus on this network, as it does after its question is cancelled. Allow Nexus on Private networks in Windows Security ▸ Firewall & network protection ▸ Allow an app through firewall.",
+  "remote.lan.firewall.blocksAll": "Windows Firewall blocks every incoming connection on this network, so no other computer can reach this station.",
+  "remote.lan.firewall.managed": "This computer’s firewall is set by an administrator’s policy, which may keep other computers out. Ask whoever manages it to allow Nexus.",
+  "remote.lan.firewall.silent": "Windows Firewall blocks new programs on this network without asking. Allow Nexus on Private networks in Windows Security ▸ Firewall & network protection ▸ Allow an app through firewall.",
+  "remote.lan.reach.otherNetwork": "That address isn’t on this computer’s network. Join the station’s network, or check the address the station shows.",
+  "remote.lan.reach.refused": "The station’s computer answered, but nothing listens at that port: Remote over this network is off there, or on another port. Check the address the station shows.",
+  "remote.lan.reach.noAnswer": "No answer from the station. Remote over this network may be off there, its firewall may be blocking Nexus (allow it on Private networks at the station), the network may keep its devices apart (guest Wi-Fi often does), or the station may be asleep. Nexus can’t tell which from here.",
+  "remote.lan.find.unavailable": "Finding stations by name doesn’t work on this computer. Type the address the station shows.",
+  "remote.lan.find.none": "No station answered by name on this network. Type the address the station shows.",
+  "remote.lan.typed.invalid": "Type the address the station shows, like {{address}} or {{withPort}}.",
+
+  // The Stations on this network window's page (lan.html). `Nexus`, `Remote over this network`, `Pair a
+  // computer` (the shack's own card and button) and `Stream` are names on screen; {{address}}, {{key}}
+  // and {{example}} are a station's address, its key's fingerprint and an address, and {{name}} the
+  // name a station advertises (`Nexus` and the start of its key), all invariant.
+  "lanWindow.title": "Stations on this network",
+  "lanWindow.intro": "Operate a station on this computer’s network with no internet. Pair this computer with it once, with the code it shows, then stream it here.",
+  "lanWindow.opening": "Starting…",
+  "lanWindow.lost": "This window lost touch with Nexus. Close it, then open it again from Settings.",
+  "lanWindow.paired": "Paired stations",
+  "lanWindow.none": "No station is paired with this computer yet.",
+  "lanWindow.stationAt": "Station at {{address}}",
+  "lanWindow.stationKey": "Key {{key}}",
+  "lanWindow.stream": "Stream",
+  "lanWindow.connecting": "Connecting…",
+  "lanWindow.forget": "Forget",
+  "lanWindow.forgetConfirm": "Forget this station? This computer’s key for it is deleted, and pairing again needs a new code from the station. Remove this computer at the station too.",
+  "lanWindow.forgetYes": "Forget it",
+  "lanWindow.keep": "Keep it",
+  "lanWindow.otherAddress": "The station’s address now",
+  "lanWindow.pair": "Pair with a station…",
+  "lanWindow.pairTitle": "Pair with a station on this network",
+  "lanWindow.pairHint": "At the station, press Pair a computer under Remote over this network. It shows its address and a code that works once, within ten minutes.",
+  "lanWindow.address": "Station address",
+  "lanWindow.addressHint": "As the station shows it, like {{example}}.",
+  "lanWindow.finding": "Looking for stations on this network…",
+  "lanWindow.found": "Found by name on this network. Press one to use its address.",
+  "lanWindow.foundAt": "{{name}} at {{address}}",
+  "lanWindow.findAgain": "Look again",
+  "lanWindow.code": "Pairing code",
+  "lanWindow.codeHint": "The sixteen characters the station shows. Capitals or not, spaces or not.",
+  "lanWindow.name": "This computer’s name",
+  "lanWindow.nameHint": "The station shows it beside this computer’s key.",
+  "lanWindow.pairSubmit": "Pair",
+  "lanWindow.pairing": "Pairing…",
+  "lanWindow.cancel": "Cancel",
+  "lanWindow.pairedNow": "Paired. Press Stream to operate the station.",
+  "lanWindow.disconnected": "Disconnected from the station.",
+  "lanWindow.reason.badAddress": "That is not a station’s address. Type it as the station shows it, on this network.",
+  "lanWindow.reason.badCode": "The code is sixteen characters, 0 to 9 and a to f. Check it against the station’s screen.",
+  "lanWindow.reason.badName": "Give this computer a name of 1 to 32 characters.",
+  "lanWindow.reason.unreachable": "Nothing answered. Check that the station is on, that Remote over this network is on there, and that this computer is on the same network.",
+  "lanWindow.reason.pairingClosed": "The station is not pairing now. Press Pair a computer at the station, then type the new code within ten minutes.",
+  "lanWindow.reason.wrongCode": "The station refused the code. Check it against the station’s screen. After three wrong codes the station needs a new one.",
+  "lanWindow.reason.stationProofFailed": "The code does not match the station’s. Check the code and the address. If both are right, something else on this network may be answering in the station’s place.",
+  "lanWindow.reason.pairingFull": "The station has eight computers paired already. Remove one there, then try again.",
+  "lanWindow.reason.stationUnavailable": "The station could not keep the pairing. Check its credential store, then pair again with a new code.",
+  "lanWindow.reason.updateStation": "This computer’s Nexus is newer than the station’s. Update Nexus at the station, then try again.",
+  "lanWindow.reason.updateComputer": "The station’s Nexus is newer than this computer’s. Update Nexus on this computer, then try again.",
+  "lanWindow.reason.stationsFull": "This computer is paired with eight stations already. Forget one, then try again.",
+  "lanWindow.reason.storeUnavailable": "This computer’s credential store did not answer. Unlock it, then try again.",
+  "lanWindow.reason.notStation": "Something answered there that is not a Nexus station. Check the address.",
+  "lanWindow.reason.unavailable": "Nexus could not do that on this computer. Try again.",
+  "lanWindow.reason.keyChanged": "This station’s key has changed. If Nexus was reinstalled at the station, or its network identity reset, pair this computer again.",
+  "lanWindow.reason.notThisStation": "A station answered by name, but it is not the one this computer paired with, so Nexus did not connect to it. Check that the station is on and that Remote over this network is on there, or type the address it shows.",
+  "lanWindow.reason.notPaired": "The station no longer knows this computer. It may have been removed there: pair it again.",
+  "lanWindow.reason.unknownStation": "This computer is no longer paired with that station.",
+  "lanWindow.reason.stationLeft": "The station ended the connection. Remote over this network may have been turned off there, or this computer removed.",
+  "lanWindow.reason.connectionLost": "The connection to the station was lost.",
 
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',
@@ -2470,6 +2589,12 @@ export const EN = {
   // Beside the map picker while Globe stands in for a stored 3D pick (ConnectView).
   'connect.globe3d.standIn':
     "The 3-D globe can't draw on this computer right now, so the map shows Globe. Your 3D pick is kept.",
+  // Over a 3-D globe whose WebGL context was lost and has not come back (components/globeWebgl.tsx,
+  // both globes): Reload mounts the globe again.
+  'globe.paused.text': '3D view paused',
+  'globe.paused.reload': 'Reload',
+  'globe.paused.reload.title':
+    'The graphics card dropped this 3D view and has not handed it back. Reload draws it again.',
   'globe.spin.stop.title': 'Stop the globe spinning',
   'globe.spin.start.title': 'Spin the globe',
   'globe.spin.pause': '⏸ Spin',
@@ -5267,6 +5392,13 @@ export const EN = {
     "This install's build stamp — confirm a fresh install actually took",
   'settings.panel.update.label': 'Check for updates',
   'settings.panel.update.title': 'Check for a newer Nexus release',
+  // Settings ▸ Licenses (SettingsLicenses.tsx). "Nexus" names the product and
+  // resources/ui/THIRD-PARTY.txt is a path, so both stay as they are in every language.
+  'settings.licenses.button': 'Licenses',
+  'settings.licenses.title': 'Third-party licenses',
+  'settings.licenses.loading': 'Loading the license texts…',
+  'settings.licenses.unavailable':
+    'This build does not carry the license texts. An installed Nexus has them in resources/ui/THIRD-PARTY.txt.',
   'settings.panel.tabs.aria': 'Settings sections',
   'settings.panel.save': 'Save',
   'settings.panel.saving': 'Saving…',
@@ -5778,7 +5910,7 @@ export const EN = {
     "Read the FT-710's own spectrum over its internal USB-SPI bridge instead of the sound card",
   'settings.rigControl.yaesuScope.hint':
     "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
-  'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
+  'settings.rigControl.flexAudio.label': 'Flex native DAX audio (Beta)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices, which are <b>invisible under Remote Desktop</b>. <b>Needs Flex native client (Beta) on.</b> With SmartSDR CAT this does nothing: audio stays on the sound devices, and the setting is kept for the client. On the client, the decoders read receive audio straight from the radio, and <b>digital modes</b> and the Remote stream\'s voice transmit over DAX. Phone at the shack keeps the radio\'s own mic, so the voice keyer can\'t play there. Turning this off or disconnecting puts your own DAX setting back, and Nexus never changes it while SmartSDR\'s DAX is connected. <b>Beta, unverified on hardware:</b> if decodes or transmit stop, turn it back off. Save to apply.',
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
@@ -6302,6 +6434,13 @@ export const EN = {
     'Nexus could not open the Remote stations window. Check this computer’s internet connection, then try again.',
   'settings.remoteStations.unavailable':
     'Available on Windows only, for now. Elsewhere, open Remote in your browser.',
+  // The Stations on this network window's entry, beside the one above: the same kind of window for a
+  // station paired over the operator's own network. `Nexus`, `Remote over this network` (the shack's
+  // card), `F11` and `Esc` are tokens.
+  "settings.lanStations.label": "Operate a station on this network from this computer",
+  "settings.lanStations.open": "Stations on this network…",
+  "settings.lanStations.hint": "Opens a Nexus window for stations you pair with over your own network, with no internet needed. Pair each station once with the code it shows under Remote over this network. F11 switches the window to full screen and back, and Esc over the picture still stops transmitting.",
+  "settings.lanStations.failed": "Nexus could not open the Stations on this network window. Try again.",
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
@@ -10451,7 +10590,15 @@ export const EN = {
   'scope.flow.up.title':
     'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.',
   'scope.canvas.title': 'Click a signal to tune it · press and drag to slide the passband',
+  'scope.canvas.edges.title':
+    'Click a signal to tune it · press and drag to slide the passband · drag a filter edge to change the width',
+  'scope.canvas.keys.aria':
+    'Scope: ← and → tune, with Shift in bigger steps; Enter tunes onto the signal in the passband; [ and ] narrow and widen the filter; ↑ and ↓ scroll back while paused',
   'scope.paused.badge': '⏸ paused · wheel to rewind',
+  // The RF scope pane (components/RfScopePane): its title in all five digital cockpits and ⊞ menus, and
+  // the chip it shows while the radio sends it no panadapter.
+  'rfScope.title': 'RF scope',
+  'scope.rf.none': 'No scope data from the radio',
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',

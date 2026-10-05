@@ -19,7 +19,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // reading, split offset, filter and scope width, reference level, percentage, band and mode
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
-import { Fragment, useEffect, useState, useRef } from 'react'
+import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, PHONE_PANELS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
@@ -101,7 +101,9 @@ import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
-import { useScopeTune } from '../useScopeTune'
+import { useScopePassband, useScopeTune } from '../useScopeTune'
+import { PASSBAND_LIMITS } from '../spectrum/markers'
+import { scopeSpots } from '../spectrum/scopeSpots'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
 import { SplitControl } from './SplitControl'
@@ -165,7 +167,7 @@ function phoneAdifMode(mode: string): 'SSB' | 'FM' | 'AM' | null {
 }
 /** The nudges the two steppers take, as their tooltips print them — figures, so they are
  *  supplied to the message rather than written in it. */
-const FILTER_STEP_HZ = 100
+const FILTER_STEP_HZ = PASSBAND_LIMITS.phone.stepHz
 
 /** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
  *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
@@ -817,6 +819,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The scope's spot tags: Band Activity's set (SSB spots on this band), each with its mark.
+  const scopeTags = useMemo(
+    () => scopeSpots(spots ?? [], 'Phone', snap.radio.band, needByCall, typeByCall),
+    [spots, snap.radio.band, needByCall, typeByCall],
+  )
   // The FT-710 is the one native scope whose SPAN this app can command over plain CAT, so its
   // control row is the rig's own ladder rather than a client-side crop. Icom/Flex keep the crop:
   // their hardware span already has its own row (RIG_SPANS / FLEX_SPANS) further down.
@@ -956,7 +963,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const bumpFilter = (deltaHz: number) => {
     if (!filterControl.allowed) return
     const base = filterHz ?? 2400
-    const next = Math.min(4000, Math.max(300, base + deltaHz))
+    const next = Math.min(PASSBAND_LIMITS.phone.maxHz, Math.max(PASSBAND_LIMITS.phone.minHz, base + deltaHz))
     // Never let the clamp invert the direction ("wider" must not narrow at the rails).
     if ((deltaHz > 0 && next <= base) || (deltaHz < 0 && next >= base)) return
     void filterControl.setWidth(next)
@@ -1502,6 +1509,20 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
    *  observer, a lease that is not ours) stays with `levels.can(…)` at each control. */
   const dead = (id: string) => causeFor(control_(id), chainState) !== null
   const show = (id: string) => rendersRow(control_(id), chainState)
+  // THE SCOPE'S FILTER EDGE: the ± stepper's own write and range, grabbable only where it is
+  // honest — the rig REPORTS its width (the edge starts from the radio's number, never the 2.4 kHz
+  // fallback), BW is drivable now (CAT up, never FM), the rig is not in a DATA mode (that filter is
+  // FT8's), and this window is the station's own (the Remote page's scope is click-only). Held, like
+  // tuning, while anything transmits — the rig's own PTT included.
+  const passbandEditable =
+    control && filterControl.allowed && !dead('BW') && (filterHz ?? 0) > 0 && !rigMode.startsWith('PKT')
+  const onScopePassband = useScopePassband({
+    enabled: passbandEditable && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.rigKeyed !== true,
+    limits: PASSBAND_LIMITS.phone,
+    send: filterControl.setWidth,
+    onSnap,
+    onError: () => pushToast(t('phone.filter.failed'), 'error'),
+  })
   /** One id per pane, so a row can point `aria-describedby` at the banner that explains it
    *  rather than repeating one sentence thirteen times. */
   const NOCAT = { rx: 'ph-nocat-rx', tx: 'ph-nocat-tx' } as const
@@ -2727,7 +2748,15 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onTune={onScopeTune}
           onBeginClick={control ? undefined : scopeClick.begin}
             filterWidthHz={filterHz ?? 2400}
+            passbandHz={filterHz}
+            onPassband={passbandEditable ? onScopePassband : undefined}
+            notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
             interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            spots={scopeTags}
+            // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote
+            // page's scope is click-only, so its tags are display only.
+            onSpot={control ? onWorkSpot : undefined}
+            privilegeMode={snap.radio.operatingMode}
           />
         </div>
       </section>

@@ -15,7 +15,7 @@ import { useEscStop } from '../useEscStop'
 // transmit path and move exactly as PTT Method did. WPM, pitch and filter width in Hz, the
 // scope spans and reference levels, the macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH}
 // tokens and every <select> value are invariant tokens and stay in the code.
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
@@ -89,7 +89,9 @@ import { rotorPointAt } from './rotorPointAt'
 import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
 import { subRowShown } from '../features/rigControls'
 import { useWheelTune } from '../useWheelTune'
-import { useScopeTune } from '../useScopeTune'
+import { useScopePassband, useScopeTune } from '../useScopeTune'
+import { PASSBAND_LIMITS } from '../spectrum/markers'
+import { scopeSpots } from '../spectrum/scopeSpots'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeSideSign, cwScopeWindow, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
@@ -121,7 +123,7 @@ const REC = 'REC'
  *  invariant across locales, so translating it would be wrong, and hiding it in the catalog would
  *  invite exactly that. PhoneCockpit writes it inline only because that file is still PARTIAL. */
 const HZ = 'Hz'
-const FILTER_STEP_HZ = 50
+const FILTER_STEP_HZ = PASSBAND_LIMITS.cw.stepHz
 const AI_WINDOW_HZ = '400–1200'
 
 /** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
@@ -519,7 +521,7 @@ export function CwCockpit({
   const bumpFilter = (deltaHz: number) => {
     if (!filterControl.allowed) return
     const base = filterHz ?? 500
-    const next = Math.min(2000, Math.max(50, base + deltaHz))
+    const next = Math.min(PASSBAND_LIMITS.cw.maxHz, Math.max(PASSBAND_LIMITS.cw.minHz, base + deltaHz))
     // Never let the clamp invert the direction — "wider" must not narrow (e.g. a stale Phone
     // width above CW's 2 kHz cap right after switching modes, before the next `m` re-read).
     if ((deltaHz > 0 && next <= base) || (deltaHz < 0 && next >= base)) return
@@ -573,6 +575,11 @@ export function CwCockpit({
     null,
   )
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The scope's spot tags: Band Activity's set (CW spots on this band), each with its mark.
+  const scopeTags = useMemo(
+    () => scopeSpots(spots ?? [], 'CW', snap.radio.band, needByCall, typeByCall),
+    [spots, snap.radio.band, needByCall, typeByCall],
+  )
   // The FT-710's span is commandable over plain CAT, so its row is the rig's own ladder rather
   // than a client-side crop — the app then shows exactly what the radio sweeps. Mirror of Phone.
   // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
@@ -871,6 +878,22 @@ export function CwCockpit({
   // of carrier-snapping and the box centres on the dial — with the SIGN of the side the rig is
   // really on: for the soundcard keyer, the band rule (see `cwScopeSideSign`).
   const scopeMode = cwScopeSideSign(keyer, snap.radio.dialMhz, snap.radio.sideband || 'USB') < 0 ? 'CW-L' : 'CW'
+  // THE SCOPE'S FILTER EDGE: the ± stepper's own write and range, grabbable only where the rig
+  // REPORTS its width, CAT is up, and this window is the station's own (the Remote page's scope is
+  // click-only). Never on the soundcard keyer: the rig is then in a DATA mode, whose filter is
+  // FT8's — and its passband is an SSB one, so the scope draws none rather than a CW-shaped lie.
+  // Held, like tuning, while anything transmits — the rig's own PTT included.
+  const soundcardKeyer = keyer === 'soundcard'
+  const passbandEditable =
+    control && filterControl.allowed && catOk && (filterHz ?? 0) > 0 && !soundcardKeyer &&
+    !(snap.radio.rigMode ?? '').toUpperCase().startsWith('PKT')
+  const onScopePassband = useScopePassband({
+    enabled: passbandEditable && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.rigKeyed !== true,
+    limits: PASSBAND_LIMITS.cw,
+    send: filterControl.setWidth,
+    onSnap,
+    onError: () => pushToast(t('cw.filter.failed'), 'error'),
+  })
   // Keep it in sync if the backend value changes (or arrives after first render).
   useEffect(() => {
     if (snap.radio.cwKeyer) setKeyer(snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer' | 'serial')
@@ -1991,10 +2014,18 @@ export function CwCockpit({
           onTune={onScopeTune}
           onBeginClick={control ? undefined : scopeClick.begin}
           filterWidthHz={filterHz ?? 500}
+          passbandHz={soundcardKeyer ? null : filterHz}
+          onPassband={passbandEditable ? onScopePassband : undefined}
+          notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
           pitchHz={pitch}
           cwPitchRefDial={keyer !== 'soundcard'}
           traceHoldMs={TRACE_HOLD_MS.fast}
           interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+          spots={scopeTags}
+          // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote
+          // page's scope is click-only, so its tags are display only.
+          onSpot={control ? onWorkSpot : undefined}
+          privilegeMode={snap.radio.operatingMode}
         />
       </section>
       {details && <PaneSeam

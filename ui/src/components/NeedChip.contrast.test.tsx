@@ -151,7 +151,7 @@ const DECODES: DecodeRow[] = [
   decode('JA1ABC', { freqHz: 600 }), // a band need's row (and, selected, the selection's)
   decode('K7ABC', { freqHz: 800, isCq: false, message: 'W9XYZ K7ABC EN52' }), // a state need's row
   decode('W1AW', { freqHz: 1000, isCq: false, message: 'K1XX W1AW R-12' }), // a confirmation's row
-  decode('K4PRK', { freqHz: 1190 }), // a CQ: POTA is icon-only and never colours a row
+  decode('K4PRK', { freqHz: 1190 }), // a needed park's CQ: the park colours the row (the POTA badge alone never would)
   decode('W7SUM', { freqHz: 1210, isCq: false, message: 'K1XX W7SUM -10' }), // a plain new row
   decode('3Y0J', { freqHz: 1400, isCq: false, directedToMe: true, message: 'W9XYZ 3Y0J -05' }), // calling me
   decode('K1GRD', { freqHz: 1600, newGrid: true }), // the decode's own new-grid flag
@@ -788,7 +788,7 @@ describe('a need chip reads in every theme, wherever it sits', () => {
     }
     expect(wrong).toEqual([])
     expect(TINTED_ROWS.filter((n) => !chips.some((w) => isLead(w) && rowNeedOf(w) === n)), 'tinted rows with no lead chip').toEqual([])
-    expect(TINTED_ROWS, 'the tinted rows').toEqual(['need-band', 'need-confirm', 'need-entity', 'need-grid', 'need-mode', 'need-state', 'need-watch', 'need-zone'])
+    expect(TINTED_ROWS, 'the tinted rows').toEqual(['need-band', 'need-confirm', 'need-entity', 'need-grid', 'need-mode', 'need-pota', 'need-state', 'need-watch', 'need-zone'])
   }, 240_000)
 
   // POTA AND SOTA (operator, 2026-09-30: "SOTA/POTA's fixed colours give way"): a fixed green and purple, set for the

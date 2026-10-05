@@ -1002,6 +1002,9 @@ principal third-party components, not a substitute for that gate:
   page) — MIT, and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both
   are already in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the
   webview Tauri uses.
+- **tokio-rustls** (Remote over this network: the shack's own listener, TLS 1.3 with raw keys pinned at
+  pairing) — MIT OR Apache-2.0 (© 2017 quininer kel). Not a new crate: already in the tree at the same
+  version (0.26) as a dependency of reqwest, hyper-rustls and tokio-tungstenite.
 - **io-kit-sys**, **core-foundation-sys**, **coreaudio-sys** (macOS only: reading USB
   topology from the IO registry, so the pickers can say WHICH RADIO a serial port or a sound
   card belongs to — two rigs with the same bridge and codec chips are otherwise identical
@@ -1085,7 +1088,7 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   operator chooses to download, read from the operator's own disk (see *Redistributed
   OpenStreetMap data (street maps)* below).
 - **us-atlas** (ISC) — the `states-10m` TopoJSON is bundled in the UI to draw the
-  Connect map's US state borders, and is also the build-time source for
+  repeater map's US state borders, and is also the build-time source for
   `grid_state.bin`. Its geometry derives from **US Census Bureau** cartographic
   boundary files (**public domain**); see the WAS grid-state note above.
 - **three.js** and **react-globe.gl** / **globe.gl** — **MIT** (© Mikola Lysenko /
@@ -1124,6 +1127,15 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
   and `-tooltip` — **MIT** (© WorkOS / Radix).
 - **@tanstack/react-virtual** — **MIT** (© Tanner Linsley). Row virtualisation for the
   logbook table, so a log of tens of thousands of QSOs scrolls without mounting every row.
+
+The license texts of every package in the desktop app's bundle, those above and the packages
+they depend on, travel in every installer as `resources/ui/THIRD-PARTY.txt`
+(`licenses/ui/THIRD-PARTY.txt` in this repository), after the CQ-zone data's MIT notice, and
+Settings ▸ Licenses shows them. The desktop build derives them from the modules present in its
+bundle, as the hosted browser's build does, and stops when a package has none; CI fails when the
+installed copy falls behind the bundle. One of them, **h3-js** (a dependency of three-globe), is
+**Apache-2.0**, © 2017-2021 Uber Technologies, Inc.; its NOTICE file is reproduced there with its
+license.
 
 Test-only tooling (**vitest**, **jsdom**, **@testing-library/react** and `/dom`, all MIT) is
 a dev dependency and is **not** part of any shipped bundle. As on the Rust side, the

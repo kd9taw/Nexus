@@ -585,6 +585,50 @@ fn read_should_retry(kind: std::io::ErrorKind) -> bool {
     )
 }
 
+/// What a command's `TimedOut` error carries when its deadline passed before a whole reply came
+/// back, in the error's own words. The line went out, so the radio may be acting on it right now
+/// and answer late: no answer in time, which is not a refusal ([`no_answer_in_time`]). A PTT line
+/// that rigctld answered with Hamlib's own "the rig did not answer" carries it too ([`ptt_reply`]).
+#[derive(Debug)]
+struct NoAnswerInTime(String);
+
+impl std::fmt::Display for NoAnswerInTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NoAnswerInTime {}
+
+/// Whether `e` is a command's deadline passing with its line sent and no whole reply back, or a PTT
+/// line Hamlib could not get the radio to answer (`NoAnswerInTime`), rather than an answer that
+/// said no or any other failure. For a key it is the difference between a radio that may be keying
+/// and one that is not: a slow radio behind rigctld (a Xiegu, a vintage Kenwood, any rig at 19200
+/// baud or less) keys, and answers after `PTT_DEADLINE_MS`, or after Hamlib's own timeout.
+pub fn no_answer_in_time(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .is_some_and(|inner| inner.is::<NoAnswerInTime>())
+}
+
+/// What rigctld's answer to a PTT line (`T 1`, `T 3`, `T 0`) says. `RPRT 0`, or an empty reply, is
+/// done. Any other code is the rig, or Hamlib, refusing it, except Hamlib's own "the rig did not
+/// answer" ([`rprt_is_link_fault`]): rigctld sent the line on and heard nothing back, so the radio
+/// may be acting on it, as when the PTT deadline passes. That is no answer in time
+/// ([`no_answer_in_time`]), and `TimedOut`, as [`rprt_error`] makes it for every other command;
+/// for a key, the radio loop plays the over with its warning. Both keep a PTT error's words.
+fn ptt_reply(reply: &str) -> std::io::Result<()> {
+    if reply_ok(reply) || reply.is_empty() {
+        return Ok(());
+    }
+    let words = format!("rigctld PTT error: {reply:?}");
+    Err(match rprt_code(reply) {
+        Some(code) if rprt_is_link_fault(code) => {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, NoAnswerInTime(words))
+        }
+        _ => std::io::Error::other(words),
+    })
+}
+
 impl Rig {
     /// General constructor: an optional CAT control channel + a PTT method. This is
     /// the seam that decouples control from keying — pass `Some(addr)` for a CAT rig
@@ -890,10 +934,10 @@ impl Rig {
             if std::time::Instant::now() >= deadline {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    format!(
+                    NoAnswerInTime(format!(
                         "rig reply incomplete after {deadline_ms} ms (got {:?})",
                         String::from_utf8_lossy(&out)
-                    ),
+                    )),
                 ));
             }
         };
@@ -1054,14 +1098,11 @@ impl Rig {
                         ptt_line(on)
                     };
                     // PTT is time-critical: a fixed 700 ms deadline (not the slow-transport
-                    // 2.5 s read window) so the un-key can't hang the radio loop.
-                    match self.command_with_deadline(&line, Some(PTT_DEADLINE_MS)) {
-                        Ok(reply) if reply_ok(&reply) || reply.is_empty() => Ok(()),
-                        Ok(reply) => Err(std::io::Error::other(format!(
-                            "rigctld PTT error: {reply:?}"
-                        ))),
-                        Err(e) => Err(e),
-                    }
+                    // 2.5 s read window) so the un-key can't hang the radio loop. Missing it is
+                    // not a refusal ([`no_answer_in_time`]): a slow radio keys and answers late.
+                    // Nor is Hamlib's own "the rig did not answer" ([`ptt_reply`]).
+                    self.command_with_deadline(&line, Some(PTT_DEADLINE_MS))
+                        .and_then(|reply| ptt_reply(&reply))
                 }
             }
         };
@@ -3075,6 +3116,59 @@ mod tests {
         // stopped holding at Hamlib 4.6.5 (the dummy now accepts PTT), so the assertion moved
         // here, where it needs no daemon and cannot rot with a Hamlib release.
         assert!(rig.keyed, "a FAILED key-down must still leave keyed=true");
+    }
+
+    #[test]
+    fn a_key_with_no_answer_in_time_is_told_apart_from_a_refusal() {
+        // ⭐ A KEY CAN FAIL TWO WAYS, AND THE RADIO LOOP MUST TELL THEM APART. A slow radio
+        // behind rigctld keys and answers after the PTT deadline; a refusal is an answer that
+        // says no. The loop plays the first over, as it always has, and drops the second
+        // (`service::KeyUp`), so the error must say which it was.
+        let (addr, _log) = mock_rigctld(|_l| {
+            std::thread::sleep(std::time::Duration::from_millis(1_500));
+            "RPRT 0\n".to_string()
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let late = rig.ptt(true).expect_err("premise: the deadline passed");
+        assert!(super::no_answer_in_time(&late), "{late}");
+        // In the deadline's own words, as before.
+        assert!(
+            late.to_string()
+                .starts_with("rig reply incomplete after 700 ms"),
+            "{late}"
+        );
+        assert!(rig.keyed, "a key with no answer may have keyed the rig");
+
+        let (addr, _log) = mock_rigctld(|_l| "RPRT -1\n".to_string());
+        let refused = Rig::rigctld(&addr).ptt(true).expect_err("premise: refused");
+        assert!(!super::no_answer_in_time(&refused), "{refused}");
+
+        // Nothing listening: the key never went out.
+        let unsent = Rig::rigctld("127.0.0.1:1")
+            .ptt(true)
+            .expect_err("premise: no rigctld");
+        assert!(!super::no_answer_in_time(&unsent), "{unsent}");
+    }
+
+    #[test]
+    fn hamlibs_no_answer_to_a_key_is_no_answer_in_time_not_a_refusal() {
+        // ⭐ rigctld answers a key it sent on and heard nothing back about with Hamlib's own "the
+        // rig did not answer" (`rprt_is_link_fault`). That is the deadline's case one hop further
+        // down the line: the radio may be keying, so the radio loop plays the over, with its
+        // warning (`service::KeyUp::NoAnswer`). An answer that says no is a refusal, and the loop
+        // drops the over.
+        for code in [-5, -6, -13, -14] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert!(super::no_answer_in_time(&e), "RPRT {code}: {e}");
+        }
+        for code in [-9, -1] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert!(
+                !super::no_answer_in_time(&e),
+                "RPRT {code} is a refusal: {e}"
+            );
+        }
+        assert!(super::ptt_reply("RPRT 0\n").is_ok(), "RPRT 0 keyed it");
     }
 
     #[test]

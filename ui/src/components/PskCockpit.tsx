@@ -14,12 +14,13 @@ import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
-import { PSK_PANEL_IDS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
+import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
+import { RfScopePane } from './RfScopePane'
 import {
   atuTune,
   getLicensedBandPlan,
@@ -117,6 +118,7 @@ const STREAM_LOG_SPLIT = 1.25
 const pskPanelLabels = (): Record<PskPanelId, string> => ({
   // Same id, cockpit-local label — the RTTY/SSTV convention (see SCOPE_PANEL_ID).
   scope: t('psk.panel.waterfall'),
+  rfScope: t('rfScope.title'),
   stream: t('psk.panel.stream'),
 })
 
@@ -153,9 +155,11 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
   const host = panels
-    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels() })
+    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
     : null
-  const shown = (id: PskPanelId) => (host ? host.shown(id) : true)
+  // No panel record (a render without a host): every pane at its vocabulary's default — shown,
+  // except the RF scope pane, which ships hidden (`defaultRemoved`).
+  const shown = (id: PskPanelId) => (host ? host.shown(id) : !PSK_PANELS.defaultRemoved?.includes(id))
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
   const closeProps = (id: PskPanelId) => (host ? host.closeProps(id) : {})
   // THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6) — RTTY's, for the same shell:
@@ -759,6 +763,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         <div className="cw-keyer-warn" role="alert">
           ⚠ {psk.keyerError}
         </div>
+      )}
+
+      {/* THE RF SCOPE PANE — RTTY's placement and reasons: the radio's own panadapter, hidden until
+          ticked, a bare fill frame first under the TX strip, display only (THE STOP LINE). */}
+      {shown('rfScope') && (
+        <RfScopePane
+          closeProps={closeProps('rfScope')}
+          dialMhz={snap?.radio.dialMhz ?? 0}
+          keyed={sending || latched || (snap?.radio.tuning ?? false)}
+          theme={theme}
+          active={active}
+          privilegeMode={snap?.radio.operatingMode}
+        />
       )}
 
       {/* THE DECODED STREAM — RTTY's region-less shape: a bare CockpitPaneFrame as a shell

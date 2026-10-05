@@ -26,6 +26,9 @@
    colour too, with the ▲ glyph beside it. */
 .remote-button.remote-stream-ptt[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
 .remote-button.remote-stream-ptt[aria-pressed='true'][data-voice='keyed'] { color: var(--bg); background: var(--tx); border-color: var(--tx); }
+/* Greyed out, the PTT is aria-disabled and never disabled, so it keeps the keyboard's focus through a lapse of the
+   state (the operator's pick "Stay focusable while greyed", 2026-10-04). It looks as a disabled button does. */
+.remote-button.remote-stream-ptt[aria-disabled='true'] { opacity: 0.55; cursor: default; }
 .remote-stream-tx { padding: 2px 8px; border: 1px solid var(--tx); border-radius: var(--radius-sm); color: var(--tx); font-weight: 800; font-size: var(--fs-body); }
 /* The microphone, on: the accent, never the transmit colour - a microphone that is on is not on the
    air (PTT arms, the voice keys). The typing box's Keyboard, open, looks the same way. */

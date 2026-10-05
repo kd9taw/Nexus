@@ -2123,6 +2123,43 @@ impl MonitorConn {
     }
 }
 
+/// Put on screen, naming `radio`, what the Flex client in `daemon` has said about the transmitter
+/// since it was last read ([`crate::flex::FlexDaemon::take_new_alarm`]): each alarm once. A session
+/// that has ended is read up to its last event first, as the radio loop reads its own client after
+/// a death, so an alarm raised as it ended is not left behind.
+///
+/// ⭐ EVERY LIVE FLEX CLIENT IS READ UNTIL IT IS TORN DOWN, NOT ONLY THE ACTIVE ONE. The radio loop
+/// reads the active radio's client every tick; the monitor pool holds the others (the radio a
+/// switch left, and the radios the monitor opened). Read only while active, a pooled client's
+/// alarms reached the log and nothing else: a switch made mid-over hands the outgoing client to the
+/// pool before the radio has confirmed its unkey, and "it may still be transmitting" was said
+/// where nobody looked. So the monitor reads every pooled client on each pass, and each place that
+/// lets a client go reads it first ([`drop_pooled`]).
+fn raise_flex_alarm(daemon: Option<&CatDaemon>, radio: u32, engine: &Arc<Mutex<Engine>>) {
+    let Some(flex) = daemon.and_then(CatDaemon::flex) else {
+        return;
+    };
+    if !flex.is_alive() {
+        let _ = flex.alarm();
+    }
+    if let Some(text) = flex.take_new_alarm() {
+        engine_lock(engine).raise_tx_alarm(radio, text, now_unix_ms() as u64);
+    }
+}
+
+/// Let the pooled connections `gone` go, each one's Flex client read for its alarms first
+/// ([`raise_flex_alarm`]). Dropping a connection unkeys and closes its daemon.
+fn drop_pooled(
+    p: &mut Vec<MonitorConn>,
+    engine: &Arc<Mutex<Engine>>,
+    gone: impl Fn(&MonitorConn) -> bool,
+) {
+    for c in p.iter().filter(|c| gone(c)) {
+        raise_flex_alarm(c.rigctld_proc.as_ref(), c.id, engine);
+    }
+    p.retain(|c| !gone(c));
+}
+
 impl Transport {
     /// Build a transport from a SPECIFIC radio profile (not the flat active mirror) — to open a
     /// monitor connection to a non-active radio. Audio/monitor fields are zeroed (monitors are
@@ -2314,6 +2351,10 @@ fn reconcile_pool_with_open(
 ) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+        // Every pooled Flex client's transmitter alarms, on every pass (see `raise_flex_alarm`).
+        for c in p.iter() {
+            raise_flex_alarm(c.rigctld_proc.as_ref(), c.id, engine);
+        }
         let mut to_open = Vec::new();
         for (id, t) in want {
             if pool.claims.contains(*id) {
@@ -2358,7 +2399,7 @@ fn reconcile_pool_with_open(
             .into_iter()
             .filter(|id| !pool.claims.contains(*id))
             .collect();
-        p.retain(|c| !to_close.contains(&c.id)); // drop kills each daemon
+        drop_pooled(&mut p, engine, |c| to_close.contains(&c.id)); // drop kills each daemon
         {
             let mut e = engine_lock(engine);
             for id in &to_close {
@@ -2384,7 +2425,7 @@ fn reconcile_pool_with_open(
                 .iter()
                 .find(|c| c.id == id && !c.transport.rig_differs(&t))
                 .map_or(0, |c| c.open_failures);
-            p.retain(|c| c.id != id); // finish old daemon teardown before opening
+            drop_pooled(&mut p, engine, |c| c.id == id); // finish old daemon teardown before opening
             engine_lock(engine).forget_radio_live(id);
             (claim, failures)
         };
@@ -2698,7 +2739,7 @@ fn handoff_if_switched(
         // the OLD active safely). The old active is not kept monitored in this edge — steady state
         // (both radios configured) always ADOPTS above. An in-flight monitor open holds its claim
         // until its result reaches the pool; the deferral above prevents a competing fallback open.
-        p.retain(|c| c.id != active);
+        drop_pooled(&mut p, engine, |c| c.id == active);
         // step() opens the incoming radio, so it is the loop's from here. The outgoing radio's
         // port stays the loop's until that rebuild drops its daemon; the next tick without a
         // switch in flight lets its claim go (`RadioLoop::settle_port_claims`).
@@ -2901,6 +2942,51 @@ enum ErrOwner {
     /// deaf with every health check reading "capture alive". Its own owner so a real
     /// device error outranks it and only its own writer clears it.
     SilentCapture,
+}
+
+/// What came of a key for one of the loop's own overs ([`RadioLoop::key_over`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum KeyUp {
+    /// The radio accepted the key.
+    Keyed,
+    /// The radio refused this key (or did not answer it in time) while the loop already held the
+    /// transmitter for an over in progress (`tx_until_ms`, or the operator's own PTT): the over
+    /// goes out on that key, as it always did, and its warning still reports the refusal. Nexus's
+    /// Flex client refuses every key after the first while one of ours is held (`AlreadyKeyed`), so
+    /// each word of a soundcard CW macro after the first meets this.
+    Held,
+    /// No answer to the key came back in time: the PTT deadline passed with the key on the wire,
+    /// or rigctld answered it with Hamlib's own "the rig did not answer"
+    /// ([`crate::rig::no_answer_in_time`]). Not a refusal: a slow radio behind rigctld (a Xiegu,
+    /// a vintage Kenwood, any rig at 19200 baud or less) keys and answers late, so the over goes
+    /// out, with its warning, as it always did.
+    NoAnswer,
+    /// The radio refused the key, or the key failed in any way but no answer in time
+    /// ([`KeyUp::NoAnswer`]), and nothing of the loop's holds the transmitter: nothing may be
+    /// played or sent. Carries the refusal, for the log.
+    Refused(String),
+}
+
+impl KeyUp {
+    /// Whether the over may go out: anything but a refusal.
+    fn sends(&self) -> bool {
+        !matches!(self, KeyUp::Refused(_))
+    }
+
+    /// Whether the over's warning shows: for anything but a key the radio accepted (refused,
+    /// held, or not answered in time). Not whether the over goes out: see [`Self::sends`].
+    fn warns(&self) -> bool {
+        *self != KeyUp::Keyed
+    }
+}
+
+/// The log's line for an over a refused key dropped ([`KeyUp::Refused`]), in the words the voice
+/// keyer's and APRS's refusals use: `<what>: the radio did not accept the key (<why>) (dropped)`.
+fn note_refused_key(what: &str, why: &str) {
+    tempo_core::applog::info(
+        "tx",
+        &format!("{what}: the radio did not accept the key ({why}) (dropped)"),
+    );
 }
 
 /// How long native DAX RX may deliver NOTHING before we call it broken, fall back to the
@@ -4980,18 +5066,20 @@ impl RadioLoop {
     }
 
     /// Surface (or clear) a "the rig didn't accept PTT" status on the shared audio-error
-    /// banner. A keyed-but-NAK'd rig plays modem audio into a receiver = silent dead air
-    /// with no warning, so `keying` calls that swallowed the `ptt()` result now route it
-    /// here. Uses the err-owner arbitration so a PTT status never clobbers a device/mic
-    /// error, and clears only its OWN status when keying succeeds again.
+    /// banner: the words the voice keyer, SSTV, the Remote microphone, the tune and the
+    /// operator's own PTT give a key the rig refused. A refused key used to be played into a
+    /// receiving rig with no warning ("silent dead air"); now the over is not played at all
+    /// ([`Self::key_over`]), and this says why. A key with no answer in time still plays, as it
+    /// always did, and this says the key was not confirmed. Uses the err-owner arbitration so a
+    /// PTT status never clobbers a device/mic error, and clears only its OWN status when keying
+    /// succeeds again.
     fn report_ptt(&mut self, engine: &Arc<Mutex<Engine>>, failed: bool) {
         if failed {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_audio_error(Some(
-                        "The rig didn't accept PTT — check your PTT method and CAT/port. \
-                         Modem audio may be going out while the radio is still receiving."
+                        "The rig didn't accept PTT — check your PTT method and CAT/port."
                             .to_string(),
                     ));
                 }
@@ -5003,6 +5091,47 @@ impl RadioLoop {
                 eng.set_audio_error(None);
             }
             self.err_owner = ErrOwner::None;
+        }
+    }
+
+    /// Key the transmitter for an over whose audio (or, `plain`, FSK keyline) this loop sends,
+    /// and say what came of it: keyed, refused, or no answer in time.
+    ///
+    /// ⛔ A KEY THE RADIO REFUSED SENDS NOTHING ([`KeyUp::Refused`]). Every over here used to go
+    /// out whatever the key's answer: the voice keyer, SSTV, RTTY, PSK, the soundcard CW keyer
+    /// and the Remote microphone reported a refusal and played anyway, into a receiving radio,
+    /// and the tune and APRS did not look at it. Nexus's Flex client refuses a key while the radio
+    /// is still letting go of the last over, so an APRS frame keyed into that half second was
+    /// played unkeyed and lost without a word. On a refusal the caller plays and sends nothing,
+    /// drops the over (never held for later, as every refused send is), says so on its own line,
+    /// and logs it ([`note_refused_key`]). A refusal while the loop already holds the transmitter
+    /// is not one: see [`KeyUp::Held`].
+    ///
+    /// ⚠️ NO ANSWER IN TIME IS NOT A REFUSAL ([`KeyUp::NoAnswer`]). The PTT deadline can pass
+    /// with the key on the wire and the radio keying: through rigctld, a slow radio (a Xiegu, a
+    /// vintage Kenwood, any rig at 19200 baud or less) answers after it, or so late that Hamlib
+    /// itself gives up and rigctld answers "the rig did not answer" (`RPRT -5`). Such an over
+    /// always went out, with its warning, and still does: dropping it cut those radios' voice,
+    /// data, CW and Tune overs. Only the deadline and Hamlib's own "did not answer" codes
+    /// ([`crate::rig::rprt_is_link_fault`]) are this; every other failure of the key is a refusal,
+    /// a rejection (`RPRT -9`) included.
+    ///
+    /// It only ever ADDS a refusal: the key itself, the hold, the unkey and every gate before
+    /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
+    /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
+    /// all, and an over that goes out unkeys at its end as any over does.
+    fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
+        let held = self.tx_until_ms.is_some() || self.manual_ptt_applied;
+        let key = if plain {
+            rig.ptt_plain(true)
+        } else {
+            rig.ptt(true)
+        };
+        match key {
+            Ok(()) => KeyUp::Keyed,
+            Err(_) if held => KeyUp::Held,
+            Err(e) if crate::rig::no_answer_in_time(&e) => KeyUp::NoAnswer,
+            Err(e) => KeyUp::Refused(e.to_string()),
         }
     }
 
@@ -6059,6 +6188,8 @@ impl RadioLoop {
                         eng.halt_tx_for_context_change("CAT probe hold");
                         eng.remote_close_radio();
                     }
+                    let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
+                    raise_flex_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
                     self.rig_asserted = false;
@@ -6096,6 +6227,10 @@ impl RadioLoop {
                     self.applied.rigctld_port,
                     want.rigctld_port,
                 );
+                // The outgoing client is read until it goes (`raise_flex_alarm`): about the radio
+                // it served, which `remote_radio_id` still names.
+                let served = self.remote_radio_id.unwrap_or(remote_want_radio);
+                raise_flex_alarm(self.rigctld_proc.as_ref(), served, engine);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                                           // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
@@ -6622,17 +6757,21 @@ impl RadioLoop {
                     || self.tx_until_ms.is_some()
                     || self.tuning_keyed
                     || self.manual_ptt_applied;
-                // In FT8/FT4 (a DATA mode) the Operate waterfall shows the AUDIO FFT (0–4000 Hz),
-                // not the RF panadapter — so keep the native scope OFF here and never feed its
-                // absolute-RF row into the shared spectrum. Otherwise spectrum_row() prefers the
-                // fresh "civ" MHz-span row and the source-unaware FT8 waterfall maps it onto a
-                // 0–4000 Hz view → every bin clamps to the floor → a flat "purple" field (while FT8
-                // still decodes, since the decoder reads raw audio). Phone/CW keep the scope — their
-                // PhoneScope is source-aware and renders the civ row correctly, and CW keeps it
-                // even on the soundcard keyer, whose mode word is now a DATA submode too (see
-                // `RadioLoop::scope_yields_to_audio_waterfall`).
-                let data_mode = self.scope_yields_to_audio_waterfall();
-                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !data_mode);
+                // In a DATA mode (FT8/FT4 and the keyboard modes) the cockpit's waterfall is the
+                // AUDIO FFT (0–4000 Hz), not the RF panadapter, so the native scope stays OFF and
+                // its absolute-RF row stays out of the shared spectrum — UNLESS an RF scope pane is
+                // on screen (operator's pick, 2026-10-03: an opt-in pane in the FT, JS8, RTTY, PSK
+                // and SSTV cockpits). The pane reads the RF slot and the waterfall the audio slot
+                // (`SpectrumFeed::rf_frame_after` / `audio_row`), so the row no longer has to be
+                // kept off the waterfall by clearing it here; what stays is that the stream shares
+                // the CAT link with the PTT of every over, so it runs only while somebody looks at
+                // it. The pane's request rides its read and lapses two seconds after the last one.
+                // Phone/CW keep the scope — their PhoneScope is source-aware and renders the civ
+                // row correctly, and CW keeps it even on the soundcard keyer, whose mode word is
+                // now a DATA submode too (see `RadioLoop::scope_yields_to_audio_waterfall`).
+                let stand_down =
+                    self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted();
+                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !stand_down);
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
@@ -6725,14 +6864,15 @@ impl RadioLoop {
                 // Publish straight to the spectrum feed. This used to go through the engine
                 // mutex, so the Icom panadapter was starved by the very hold that starved the
                 // audio row (the boundary CAT block downstream of this loop's engine.lock()).
-                if !data_mode {
+                if !stand_down {
                     // TAKEN, so a sweep is published once: one sweep, one frame.
                     if let Some(sweep) = d.take_scope_row() {
                         crate::civ::scope::publish_sweep(&self.spectrum_feed, sweep);
                     }
                 } else {
-                    // DATA mode (FT8/FT4): drop any stale native row so the audio FFT takes over
-                    // immediately (no ~1 s window where the last civ row still wins).
+                    // DATA mode (FT8/FT4) with no RF scope pane: drop any stale native row so the
+                    // audio FFT takes over immediately (no ~1 s window where the last civ row still
+                    // wins).
                     self.spectrum_feed.clear_rf();
                 }
             }
@@ -7652,37 +7792,130 @@ impl RadioLoop {
                         // apply nested inside it, which is correct — `take_passband_request` is
                         // never called, so the operator's click stays QUEUED for the next poll
                         // rather than being drained against a mode we did not read.
-                        if self.rig_poll_ticks.is_multiple_of(4) {
+                        //
+                        // …EXCEPT while a filter width is waiting. Its apply is nested in this
+                        // read, so a width dragged on the scope would reach the radio up to three
+                        // polls late; owed now, the radio follows the edge on the next poll. Still
+                        // one read and at most one width per poll, and still budgeted.
+                        if self.rig_poll_ticks.is_multiple_of(4)
+                            || engine_lock(engine).passband_request_pending()
+                        {
                             self.read_turns.owe(HeavyRead::Mode);
                         }
                         if self.read_turns.take_owed(HeavyRead::Mode, have_budget()) {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
+                            // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
+                            // passband: `m` answers 0 there on purpose, because the FT8 arm's width
+                            // check reads it and `M PKTUSB 3000` must not start rewriting the
+                            // operator's DATA filter (see `CivBackend`'s filter-width note). Asked
+                            // in the mode `m` just named; FM has no width.
+                            use crate::civ::broker::FilterWidthReading;
+                            let native = self.rigctld_proc.as_ref().and_then(CatDaemon::native);
+                            let native_pb = match (native, m.as_deref()) {
+                                (Some(d), Some(mode)) => Some(d.filter_width(mode)),
+                                _ => None,
+                            };
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.remote_observe_mode(remote_mode.as_ref(), m.as_deref());
                                 if let Some(ref mm) = m {
                                     eng.observe_rig_mode(mm.clone());
                                 }
-                                eng.observe_rig_passband(pb); // None (a split read) keeps the last width
+                                match native_pb {
+                                    Some(FilterWidthReading::Width(w)) => {
+                                        eng.observe_rig_passband(Some(w))
+                                    }
+                                    // A mode with no width: unknown, never the last mode's width.
+                                    Some(FilterWidthReading::Fixed) => eng.clear_rig_passband(),
+                                    Some(FilterWidthReading::Unread) => {} // keeps the last width
+                                    None => eng.observe_rig_passband(pb), // None (a split read) keeps the last width
+                                }
                             }
                             // Apply a pending RX filter-width change (Hamlib carries width as the
                             // 2nd arg of set_mode). Only drain the request when we KNOW the mode to
                             // set it against, and re-queue on a failed/rejected set — so a CAT
                             // hiccup or a split `m` read never silently swallows the operator's click.
+                            // This whole block is receive-time work (see the guard above it), so
+                            // no width is ever written to a keyed radio.
                             if let Some(ref mode) = m {
                                 let width_req = engine_lock(engine).take_passband_request();
-                                if let Some(hz) = width_req {
-                                    if rig.set_passband(mode, hz).is_ok() {
-                                        {
+                                match (width_req, native) {
+                                    (None, _) => {}
+                                    // The native daemon: `1A 03` on Main, clamped to the radio's
+                                    // table by construction; the answer is the width it now has.
+                                    (Some(hz), Some(d)) => {
+                                        use crate::civ::broker::FilterWidthRefusal as Refusal;
+                                        // ⛔ NEVER WITH A DATA MODE COMMANDED (FT8, and the
+                                        // soundcard CW keyer's PKTUSB): that filter is the one FT8
+                                        // decodes through, and the FT8 arm on this daemon never
+                                        // sets a width, so nothing would ever put it back.
+                                        let set = if mode_is_data(&self.last_mode) {
+                                            Err(Refusal::DataMode)
+                                        } else {
+                                            d.set_filter_width(hz)
+                                        };
+                                        match set {
+                                            Ok(w) => {
+                                                engine_lock(engine).observe_rig_passband(Some(w))
+                                            }
+                                            // Nothing answered: the same re-queue as the Hamlib path.
+                                            Err(Refusal::NoAnswer) => {
+                                                engine_lock(engine).request_filter_width(hz)
+                                            }
+                                            // A REFUSAL IS FINAL — FM, DATA, an NG. Re-queued, it
+                                            // would be re-sent every cycle forever. Drop it, say why
+                                            // in the log, and put the radio's real width back where
+                                            // the optimistic one stands.
+                                            Err(why) => {
+                                                tempo_core::applog::info(
+                                                    "cat",
+                                                    &format!(
+                                                        "the radio kept its filter width: a {hz} Hz \
+                                                         width was not set ({why:?})"
+                                                    ),
+                                                );
+                                                // Read first: no CAT round trip under the engine lock.
+                                                let now = d.filter_width(mode);
+                                                let mut eng = engine_lock(engine);
+                                                match now {
+                                                    FilterWidthReading::Width(w) => {
+                                                        eng.observe_rig_passband(Some(w))
+                                                    }
+                                                    FilterWidthReading::Fixed => {
+                                                        eng.clear_rig_passband()
+                                                    }
+                                                    FilterWidthReading::Unread => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    (Some(hz), None) => match rig.set_passband(mode, hz) {
+                                        Ok(()) => {
                                             let mut eng = engine_lock(engine);
                                             eng.observe_rig_passband(Some(hz)); // optimistic; next read confirms
                                         }
-                                    } else {
-                                        let mut eng = engine_lock(engine);
-                                        eng.request_filter_width(hz); // re-queue for the next cycle
-                                    }
+                                        // THE RIG SAID NO (Hamlib answered with an RPRT that is
+                                        // not a link fault, `rprt_error`): final, as on the native
+                                        // path. Re-queued, the same width went out every cycle for
+                                        // good — and a waiting width now owes every poll's mode
+                                        // read. The `m` read just above already put the radio's
+                                        // own width back on screen.
+                                        Err(e) if e.kind() == std::io::ErrorKind::Other => {
+                                            tempo_core::applog::info(
+                                                "cat",
+                                                &format!(
+                                                    "the radio kept its filter width: a {hz} Hz \
+                                                     width was refused ({e})"
+                                                ),
+                                            );
+                                        }
+                                        Err(_) => {
+                                            let mut eng = engine_lock(engine);
+                                            eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                        }
+                                    },
                                 }
                             }
                         }
@@ -8734,20 +8967,31 @@ impl RadioLoop {
                             tempo_fast::SAMPLE_RATE as u32,
                         );
                         if !buf.is_empty() {
-                            // Capture PTT: if the rig won't key, the tone still plays locally so
-                            // it LOOKS like it sent while nothing reaches the air — surface that
-                            // instead of the silent false-positive. (Audio-routing problems can't
-                            // be detected here — see the Soundcard control's caveat.)
+                            // Capture PTT: a word the rig would not key is not played (it LOOKED
+                            // sent while nothing reached the air), and the warning says why
+                            // ([`Self::key_over`]). (Audio-routing problems can't be detected
+                            // here — see the Soundcard control's caveat.)
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
-                            let ptt_err = rig.ptt(true).is_err();
-                            backend.play(&buf);
-                            let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            let key = self.key_over(rig, false);
+                            if key.sends() {
+                                backend.play(&buf);
+                                let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            } else {
+                                // Nothing keyed, so nothing to wait out: a new send keys at once.
+                                self.cw_busy_until = 0.0;
+                            }
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_cw_keyer_error(ptt_err.then(|| {
+                                if let KeyUp::Refused(why) = &key {
+                                    note_refused_key("CW not keyed", why);
+                                    // …and the rest of the send with it, so it cannot resume
+                                    // mid-message on a later word the radio does key.
+                                    eng.cw_key_refused();
+                                }
+                                eng.set_cw_keyer_error(key.warns().then(|| {
                                     "Soundcard keyer: the rig didn't accept PTT. Check your PTT \
                                      method + that Nexus's audio output is routed to the rig \
                                      (like FT8). If in doubt, use the WinKeyer or CAT keyer."
@@ -9112,7 +9356,7 @@ impl RadioLoop {
                                 }
                             }
                             let open_err = self.rtty_keyer.is_none();
-                            let mut ptt_err = false;
+                            let mut key = KeyUp::Keyed;
                             if !open_err && need_key {
                                 self.ensure_commanded(rig); // assert dial/mode before the key
                             }
@@ -9121,26 +9365,33 @@ impl RadioLoop {
                                     // Keyed with `ptt_plain`: FSK's tones are the keyed line, not
                                     // audio, so a Rear/Data radio (#381) keys it as it always has.
                                     self.publish_tx_intent_now(); // before keying
-                                    ptt_err = rig.ptt_plain(true).is_err();
+                                    key = self.key_over(rig, true);
                                 }
-                                k.send(bits.clone(), baud);
-                                self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
-                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                // A stream the rig would not key sends nothing (`key_over`).
+                                if key.sends() {
+                                    k.send(bits.clone(), baud);
+                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                    self.tx_until_ms =
+                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                }
                             }
                             {
                                 let mut eng = engine_lock(engine);
-                                if open_err {
-                                    // Nothing can key on this backend, so the latch is
-                                    // a lie — drop it rather than leave the operator
-                                    // looking at a lit TX button that transmits nothing.
+                                if let KeyUp::Refused(why) = &key {
+                                    note_refused_key("RTTY not keyed", why);
+                                }
+                                if open_err || !key.sends() {
+                                    // Nothing can key on this backend (or the rig refused the
+                                    // key), so the latch is a lie — drop it rather than leave
+                                    // the operator looking at a lit TX button that transmits
+                                    // nothing.
                                     eng.drop_rtty_latch();
                                     self.rtty_stream = None;
                                 }
                                 eng.set_rtty_keyer_error(if open_err {
                                     open_err_msg
-                                } else if ptt_err {
+                                } else if key.warns() {
                                     Some(
                                         "FSK keyer: the rig didn't accept PTT. Check your PTT \
                                          method (CAT, or the separate PTT line) — the FSK data \
@@ -9158,18 +9409,29 @@ impl RadioLoop {
                             // modem and the one-shot RTTY path use, so the operator's
                             // tx_level / drive / ALC discipline applies unchanged.
                             if !buf.is_empty() {
-                                let mut ptt_err = false;
+                                let mut key = KeyUp::Keyed;
                                 if need_key {
                                     self.ensure_commanded(rig); // assert before key
                                     self.publish_tx_intent_now(); // before keying
-                                    ptt_err = rig.ptt(true).is_err();
+                                    key = self.key_over(rig, false);
                                 }
-                                backend.play(&buf);
-                                self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
-                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                                if ptt_err {
+                                // A stream the rig would not key is not played (`key_over`):
+                                // the latch goes, as on the FSK backend above.
+                                if key.sends() {
+                                    backend.play(&buf);
+                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                    self.tx_until_ms =
+                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                } else {
+                                    let mut eng = engine_lock(engine);
+                                    eng.drop_rtty_latch();
+                                    self.rtty_stream = None;
+                                }
+                                if let KeyUp::Refused(why) = &key {
+                                    note_refused_key("RTTY not keyed", why);
+                                }
+                                if key.warns() {
                                     let mut eng = engine_lock(engine);
                                     eng.set_rtty_keyer_error(Some(
                                         "AFSK keyer: the rig didn't accept PTT. Check your PTT \
@@ -9231,7 +9493,7 @@ impl RadioLoop {
                             }
                         }
                         let open_err = self.rtty_keyer.is_none();
-                        let mut ptt_err = false;
+                        let mut key = KeyUp::Keyed;
                         if !open_err {
                             // Hoisted out of the keyer borrow below (read-only launch):
                             // assert dial/mode BEFORE the key, same as every other site.
@@ -9243,28 +9505,36 @@ impl RadioLoop {
                             // unkeys the moment the final stop bit ends (+ tail).
                             // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
                             self.publish_tx_intent_now(); // before keying
-                            ptt_err = rig.ptt_plain(true).is_err();
-                            k.send(bits.clone(), baud);
-                            let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            key = self.key_over(rig, true);
+                            // An over the rig would not key sends nothing (`key_over`).
+                            if key.sends() {
+                                k.send(bits.clone(), baud);
+                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            }
                         }
-                        if open_err {
+                        let sent = !open_err && key.sends();
+                        if !sent {
                             // Nothing keyed — don't sit "busy" for a send that never started.
                             self.rtty_busy_until = 0.0;
                         }
+                        if let KeyUp::Refused(why) = &key {
+                            note_refused_key("RTTY not keyed", why);
+                        }
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_rtty_sending(!open_err);
+                            eng.set_rtty_sending(sent);
                             // #379: the keyline has the over — the transcript echo and the TX
-                            // line start from here. A port that would not open keyed nothing,
-                            // so nothing is echoed and the TX line does not claim it.
-                            if !open_err {
+                            // line start from here. A port that would not open, or a key the rig
+                            // refused, keyed nothing, so nothing is echoed and the TX line does
+                            // not claim it.
+                            if sent {
                                 eng.rtty_over_keyed(&text, baud, now);
                             }
                             eng.set_rtty_keyer_error(if open_err {
                                 open_err_msg
-                            } else if ptt_err {
+                            } else if key.warns() {
                                 Some(
                                     "FSK keyer: the rig didn't accept PTT. Check your PTT \
                                      method (CAT, or the separate PTT line) — the FSK data \
@@ -9298,17 +9568,29 @@ impl RadioLoop {
                         if !buf.is_empty() {
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
-                            let ptt_err = rig.ptt(true).is_err();
-                            backend.play(&buf);
-                            let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            let key = self.key_over(rig, false);
+                            // An over the rig would not key is not played (`key_over`).
+                            if key.sends() {
+                                backend.play(&buf);
+                                let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
+                                self.tx_until_ms =
+                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            } else {
+                                // Nothing keyed — don't sit "busy" for a send that never started.
+                                self.rtty_busy_until = 0.0;
+                            }
+                            if let KeyUp::Refused(why) = &key {
+                                note_refused_key("RTTY not keyed", why);
+                            }
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_rtty_sending(true);
-                                // #379: the audio ring has the over — the echo starts here.
-                                eng.rtty_over_keyed(&text, baud, now);
-                                eng.set_rtty_keyer_error(ptt_err.then(|| {
+                                eng.set_rtty_sending(key.sends());
+                                // #379: the audio ring has the over — the echo starts here, and
+                                // only for an over that keyed.
+                                if key.sends() {
+                                    eng.rtty_over_keyed(&text, baud, now);
+                                }
+                                eng.set_rtty_keyer_error(key.warns().then(|| {
                                     "AFSK keyer: the rig didn't accept PTT. Check your PTT \
                                      method + that Nexus's audio output is routed to the rig \
                                      (like FT8)."
@@ -9458,20 +9740,31 @@ impl RadioLoop {
                     // unkey instead of sticking (the RTTY bound, PSK's numbers).
                     let chunk_ms = buf.len() as f64 / 12.0;
                     if chunk_ms > 0.0 {
-                        let mut ptt_err = false;
+                        let mut key = KeyUp::Keyed;
                         if need_key {
                             self.ensure_commanded(rig); // assert dial/mode before the key
                             self.publish_tx_intent_now(); // before keying
-                            ptt_err = rig.ptt(true).is_err();
+                            key = self.key_over(rig, false);
                         }
-                        backend.play(&buf);
-                        self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
-                        let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                        if let Some(st) = self.psk_stream.as_mut() {
-                            st.keyed = true;
+                        // A stream the rig would not key is not played (`key_over`): its latch
+                        // goes, as RTTY's does.
+                        if key.sends() {
+                            backend.play(&buf);
+                            self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
+                            let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            if let Some(st) = self.psk_stream.as_mut() {
+                                st.keyed = true;
+                            }
+                        } else {
+                            engine_lock(engine).drop_psk_latch();
+                            self.psk_stream = None;
                         }
-                        if ptt_err {
+                        if let KeyUp::Refused(why) = &key {
+                            note_refused_key("PSK not keyed", why);
+                        }
+                        if key.warns() {
                             let mut eng = engine_lock(engine);
                             eng.set_psk_keyer_error(Some(
                                 "PSK keyer: the rig didn't accept PTT. Check your PTT method + \
@@ -9510,14 +9803,23 @@ impl RadioLoop {
                     self.psk_busy_until = now + total_ms + keyboard::PSK31.char_ms(psk_baud);
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying
-                    let ptt_err = rig.ptt(true).is_err();
-                    backend.play(&buf);
-                    let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    let key = self.key_over(rig, false);
+                    // An over the rig would not key is not played (`key_over`).
+                    if key.sends() {
+                        backend.play(&buf);
+                        let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    } else {
+                        // Nothing keyed — don't sit "busy" for a send that never started.
+                        self.psk_busy_until = 0.0;
+                    }
+                    if let KeyUp::Refused(why) = &key {
+                        note_refused_key("PSK not keyed", why);
+                    }
                     {
                         let mut eng = engine_lock(engine);
-                        eng.set_psk_sending(true);
-                        eng.set_psk_keyer_error(ptt_err.then(|| {
+                        eng.set_psk_sending(key.sends());
+                        eng.set_psk_keyer_error(key.warns().then(|| {
                             "PSK keyer: the rig didn't accept PTT. Check your PTT method + \
                              that Nexus's audio output is routed to the rig (like FT8)."
                                 .to_string()
@@ -9540,16 +9842,18 @@ impl RadioLoop {
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now();
-                let key = rig.ptt(true);
-                backend.play(&buf);
-                let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
-                self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
-                // A key the radio refused sent nothing (Nexus's Flex client refuses one while the
-                // radio is still letting go of the last over): say so, and never send the frame
-                // again into the same refusal. Everything else runs as it always has:
-                // `tx_until_ms` still drops PTT.
-                if let Err(e) = key {
-                    engine_lock(engine).aprs_key_refused(&e.to_string());
+                // A key the radio refused sends nothing (Nexus's Flex client refuses one while the
+                // radio is still letting go of the last over), so the frame is not played into the
+                // receiving radio (`key_over`): say so, and never send the frame again into the
+                // same refusal. The engine's line says which frame went, and logs it.
+                let key = self.key_over(rig, false);
+                if key.sends() {
+                    backend.play(&buf);
+                    let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
+                    self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
+                }
+                if let KeyUp::Refused(why) = &key {
+                    engine_lock(engine).aprs_key_refused(why);
                 }
             }
         }
@@ -9660,13 +9964,18 @@ impl RadioLoop {
                     let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                    let ptt_err = rig.ptt(true).is_err();
-                    backend.play(&buf);
-                    let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                    // A NAK here means the modem audio above went out while the rig stayed in
-                    // RX — surface it instead of silent dead air.
-                    self.report_ptt(engine, ptt_err);
+                                                  // A NAK here used to play the message into a receiving rig: it is not played
+                                                  // (`key_over`), and the line says why instead of silent dead air.
+                    let key = self.key_over(rig, false);
+                    if key.sends() {
+                        backend.play(&buf);
+                        let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    if let KeyUp::Refused(why) = &key {
+                        note_refused_key("voice-keyer message not played", why);
+                    }
+                    self.report_ptt(engine, key.warns());
                 }
             }
             // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
@@ -9822,23 +10131,29 @@ impl RadioLoop {
                 if let Some(job) = job {
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                    let ptt_err = rig.ptt(true).is_err();
-                    // Hold PTT for the WHOLE image via the precomputed duration; the
-                    // tx_until_ms expiry below drops it even if every other mechanism fails.
-                    let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                    {
-                        let mut eng = engine_lock(engine);
-                        eng.set_sstv_sending(true);
+                                                  // A NAK here would send the picture into a receiving rig: it is not sent
+                                                  // (`key_over`, a dropped picture, never held), and the line says why.
+                    let key = self.key_over(rig, false);
+                    if key.sends() {
+                        // Hold PTT for the WHOLE image via the precomputed duration; the
+                        // tx_until_ms expiry below drops it even if every other mechanism fails.
+                        let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.set_sstv_sending(true);
+                        }
+                        self.sstv_feed = Some(SstvFeed {
+                            samples: job.samples,
+                            cursor: 0,
+                            started_ms: now,
+                            total_ms: job.duration_ms,
+                        });
                     }
-                    // A NAK here means modem audio would go out into a receiving rig — surface it.
-                    self.report_ptt(engine, ptt_err);
-                    self.sstv_feed = Some(SstvFeed {
-                        samples: job.samples,
-                        cursor: 0,
-                        started_ms: now,
-                        total_ms: job.duration_ms,
-                    });
+                    if let KeyUp::Refused(why) = &key {
+                        note_refused_key("SSTV not keyed", why);
+                    }
+                    self.report_ptt(engine, key.warns());
                 }
             }
             // Chunked look-ahead feed + progress + completion.
@@ -9929,15 +10244,24 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
-                        let ptt_err = rig.ptt(true).is_err();
-                        self.report_ptt(engine, ptt_err);
-                        self.mic_keyed = true;
-                        self.mic_busy_until = now;
-                        // The lead-in and the silent pre-roll come before any audio is queued:
-                        // hold PTT across them, and no further.
-                        let until =
-                            now + (MIC.lead_in_ms + MIC.ahead_ms) as f64 + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        let key = self.key_over(rig, false);
+                        self.report_ptt(engine, key.warns());
+                        if let KeyUp::Refused(why) = &key {
+                            // The rig did not key, so none of the operator's voice may be played
+                            // (`key_over`): the over ends here, through its one kill path.
+                            note_refused_key("Remote microphone over not keyed", why);
+                            engine_lock(engine).drop_mic_latch();
+                        } else {
+                            self.mic_keyed = true;
+                            self.mic_busy_until = now;
+                            // The lead-in and the silent pre-roll come before any audio is
+                            // queued: hold PTT across them, and no further.
+                            let until = now
+                                + (MIC.lead_in_ms + MIC.ahead_ms) as f64
+                                + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
                     }
                     MicTick::Samples(buf) => {
                         backend.play(&buf);
@@ -10811,7 +11135,9 @@ impl RadioLoop {
                 }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                let _ = rig.ptt(true);
+                let key = self.key_over(rig, false);
+                // The tune's line, in the words the voice keyer gives a refused key.
+                self.report_ptt(engine, key.warns());
                 self.tuning_keyed = true;
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
@@ -10819,6 +11145,15 @@ impl RadioLoop {
                 self.tune_queued_ms = 0.0;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
+                if let KeyUp::Refused(why) = &key {
+                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`). The tune
+                    // ends here, through the same call its auto-release makes, and the next
+                    // tick's release below unkeys and puts the DATA mode and the power back, as
+                    // it does for every tune.
+                    note_refused_key("tune not keyed", why);
+                    engine_lock(engine).set_tune(false);
+                    return Ok(());
+                }
             }
             // TOP THE CARRIER'S LEAD UP TOWARD [`TUNE_LEAD_MS`] — never add to it.
             //
@@ -14050,9 +14385,12 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod filter_width;
     mod flex_audio;
     mod receive_source;
+    mod refused_key;
     mod remote_radio;
+    mod rf_pane;
     use super::should_command_rf_power;
 
     #[test]
