@@ -882,44 +882,51 @@ mod tests {
         }
     }
 
-    /// ⛔ The page in the Stations on this network window calls no command: not one any
-    /// permission grants (Tauri's own decision over this build's access list, as for the Remote
-    /// stations window), and not the radio's own by name. CONTROL: the main window's own page
-    /// can `plugin:event|listen`, so a "no" is an answer.
+    /// ⛔ The page in the Stations on this network window calls no command the app's own page can
+    /// call: each one any permission grants that the main window's own page may call (Tauri's own
+    /// decision over this build's access list, as for the Remote stations window) is refused to
+    /// the LAN page, in this window or any other. The app's own commands, the radio's among them,
+    /// are not compared: with no app ACL manifest the list holds none of them, so the same
+    /// question refuses them to the app's own page too and its "no" proves nothing. Their refusal
+    /// to this page rests on Tauri counting it remote (`the_lan_page_is_not_the_apps_own_to_tauri`),
+    /// and the tripwire below fails if the app ever declares a manifest. CONTROL, command by
+    /// command: the main window's own page may call each one compared, `plugin:event|listen`
+    /// among them.
     #[test]
     fn no_page_in_the_lan_window_can_call_a_command() {
         let mut context = context();
         let authority = context.runtime_authority_mut();
-        let mut commands = every_command();
+        let commands = every_command();
         assert!(
             commands.len() > 100,
             "only {} commands read",
             commands.len()
         );
+        let own = tauri::ipc::Origin::Local;
+        let callable: Vec<&String> = commands
+            .iter()
+            .filter(|command| {
+                authority
+                    .resolve_access(command, "main", "main", &own)
+                    .is_some()
+            })
+            .collect();
         assert!(
-            authority
-                .resolve_access(
-                    "plugin:event|listen",
-                    "main",
-                    "main",
-                    &tauri::ipc::Origin::Local
-                )
-                .is_some(),
+            callable
+                .iter()
+                .any(|command| *command == "plugin:event|listen"),
             "the main window's own page must be able to listen, or this test asks nothing"
         );
-        commands.extend(
-            [
-                "set_ptt",
-                "halt_tx",
-                "set_tune",
-                "stop_voice",
-                "open_lan_stations_window",
-                "open_remote_stations_window",
-            ]
-            .map(String::from),
-        );
+        for radio in ["set_ptt", "halt_tx", "set_tune", "stop_voice"] {
+            assert!(
+                authority
+                    .resolve_access(radio, "main", "main", &own)
+                    .is_none(),
+                "the app now declares an ACL manifest: compare {radio} and its kind here too"
+            );
+        }
         let origin = tauri::ipc::Origin::Remote { url: lan_page() };
-        let reached: Vec<String> = commands
+        let reached: Vec<String> = callable
             .iter()
             .filter(|command| {
                 [LAN_LABEL, "main", "panel-connect"].iter().any(|label| {
@@ -928,7 +935,7 @@ mod tests {
                         .is_some()
                 })
             })
-            .cloned()
+            .map(|command| command.to_string())
             .collect();
         assert!(
             reached.is_empty(),
