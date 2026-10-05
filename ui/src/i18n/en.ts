@@ -576,7 +576,10 @@ export const EN = {
   "remote.lan.off": "Off.",
   "remote.lan.starting": "Starting…",
   "remote.lan.listening": "Listening at {{address}}. Only computers paired here can connect.",
-  "remote.lan.reason.noKey": "Off: this station has no network key. Unlock your operating system’s credential store, then turn this on again.",
+  // noKey and vaultFailed: the station cannot tell a store that would not answer from a record this
+  // Nexus cannot read (a newer Nexus's), so both give the two ways out, unlocking first, since a reset
+  // removes every paired computer. The reset is named as the card shows it: the button, under its section.
+  "remote.lan.reason.noKey": "Off: this station has no network key it can read. If your operating system’s credential store is locked, unlock it, then turn this on again. If it is not, press Reset network identity under Network identity below, and pair your computers again.",
   "remote.lan.reason.endedAtShack": "Off: remote control was ended here. Turn this on again when you want it.",
   "remote.lan.reason.addressGone": "Not listening: {{address}} is not this computer’s address right now. Nexus listens there again when it is back, or choose another network.",
   "remote.lan.reason.chooseAddress": "Not listening: choose which of this computer’s networks to listen on.",
@@ -591,7 +594,7 @@ export const EN = {
   "remote.lan.noComputers": "No computer is paired yet.",
   "remote.lan.atShackOnly": "Only at the station itself: this can’t be done through a stream.",
   "remote.lan.full": "Eight computers are paired already. Remove one to pair another.",
-  "remote.lan.vaultFailed": "Unlock your operating system’s credential store and try again. This station’s network key and its paired computers are kept there.",
+  "remote.lan.vaultFailed": "Nexus could not read or keep this station’s network key and paired computers in your operating system’s credential store. If the store is locked, unlock it and try again. If it is not, press Reset network identity under Network identity below, and pair your computers again.",
   "remote.lan.failed": "Nexus could not do that. Try again.",
   "remote.lan.resetTitle": "Network identity",
   "remote.lan.resetHint": "Resetting makes a new network key and removes every paired computer. Use it if this computer’s key may have been copied, then pair your computers again.",
