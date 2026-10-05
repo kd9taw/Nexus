@@ -972,6 +972,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             const fills=upright?[412,412*360/860]:[915-120,(915-120)*360/860]
             assert.ok(Math.abs(laid.picture[0]-fills[0])<=2&&Math.abs(laid.picture[1]-fills[1])<=2,`the picture is ${laid.picture.join(' x ')}, against ${fills.map(n=>n.toFixed(1)).join(' x ')}`)
             assert.equal(laid.turn,upright?'Turn the phone on its side for a bigger picture.':null,'upright, a phone is told it can turn for a bigger picture')
+            // KEYBOARD, in the thumbs' bar upright and on the rail on its side (the operator's pick, 2026-10-05): whole, on screen,
+            // its label on one line, and taking its own taps.
+            const keys=await evaluate(`(()=>{const e=${button('Keyboard')};if(!e)return null;const r=e.getBoundingClientRect(),rail=document.querySelector('.remote-stream-header').getBoundingClientRect();return {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,onRail:r.left>=rail.left&&r.right<=rail.right,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
+            assert.ok(keys&&keys.inside&&keys.hit&&(upright||(keys.onRail&&keys.h<=45)),`Keyboard, whole and on screen ${upright?'in the thumbs\' bar':'on the rail'}: ${JSON.stringify(keys)}`)
             const centre={x:at.stage.x+at.stage.w/2,y:at.stage.y+at.stage.h/2}
             // A TAP: a press and a release at the shack, where the finger was.
             let mark=(await record()).pointers.length
@@ -1030,13 +1034,30 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await settledView()
             if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`phone-${w}x${h}.png`),Buffer.from(shot.data,'base64'))}
           }
-          // MORE, on its side: End the stream, Disconnect, Sign out and the beta line, over the picture beside the rail, every one
-          // reachable and Stop TX still uncovered. A tap on the picture closes it and reaches nothing at the shack: the cover
-          // under it takes the tap, so a tap meant to close a menu is never a click at the shack.
+          // A SMALL TABLET ON ITS SIDE, in a browser tab: 960 x 480 is under the rail's 500 px, so it has the rail, Keyboard on it,
+          // and every control whole, on screen and taking its own taps. (A tablet 500 px tall or more has the header row.)
+          {
+            await browser.call('Emulation.setDeviceMetricsOverride',{width:960,height:480,deviceScaleFactor:2,mobile:true},session)
+            await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+            await until(`getComputedStyle(document.documentElement).getPropertyValue('--vw-eff')==='960px'`,3000)
+            await settledLayout()
+            const tablet=await evaluate(`(()=>{const app=document.querySelector('.remote-stream-app'),rail=app.querySelector('.remote-stream-header'),buttons=[...app.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {layout:app.dataset.layout,railFits:rail.scrollHeight<=rail.clientHeight+1,first:buttons[0]===${button('Stop TX')},order:[...buttons].sort((a,b)=>a.getBoundingClientRect().y-b.getBoundingClientRect().y).map(e=>e.textContent),whole:buttons.filter(e=>{const r=e.getBoundingClientRect();return !(r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth&&hit(e))}).map(e=>e.textContent)}})()`)
+            console.log('Phone layout 960x480, a small tablet: '+JSON.stringify(tablet))
+            assert.deepEqual(tablet,{layout:'rail',railFits:true,first:true,order:['Stop TX','Hold PTT','Mic off','Listen','Keyboard','More'],whole:[]},'a small tablet on its side has the rail, with Keyboard on it and nothing cut off')
+            if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'tablet-960x480.png'),Buffer.from(shot.data,'base64'))}
+            await browser.call('Emulation.setDeviceMetricsOverride',{width:915,height:412,deviceScaleFactor:3,mobile:true},session)
+            await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+            await until(`getComputedStyle(document.documentElement).getPropertyValue('--vw-eff')==='915px'`,3000)
+            await settledLayout()
+          }
+          // MORE, on its side: End the stream, Full screen (moved here to make room for Keyboard on the rail, 2026-10-05, as it is
+          // upright), Disconnect, Sign out and the beta line, over the picture beside the rail, every one reachable and Stop TX
+          // still uncovered. A tap on the picture closes it and reaches nothing at the shack: the cover under it takes the tap, so
+          // a tap meant to close a menu is never a click at the shack.
           await tap(await centreOf(button('More')))
           await until(`!!document.querySelector('.remote-stream-more-panel')`,3000)
           const opened=await evaluate(`(()=>{const p=document.querySelector('.remote-stream-more-panel'),r=p.getBoundingClientRect(),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {items:[...p.querySelectorAll('button')].map(b=>b.textContent),beta:p.querySelector('.remote-beta')?.textContent??null,reachable:[...p.querySelectorAll('button')].every(hit),stop:hit(${button('Stop TX')}),inside:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight}})()`)
-          assert.deepEqual(opened,{items:['End the stream','Disconnect and return to stations','Sign out'],beta:'Beta Remote streaming is a beta feature. Access could be revoked at any time.',reachable:true,stop:true,inside:true},'More, on its side')
+          assert.deepEqual(opened,{items:['End the stream','Full screen','Disconnect and return to stations','Sign out'],beta:'Beta Remote streaming is a beta feature. Access could be revoked at any time.',reachable:true,stop:true,inside:true},'More, on its side')
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-915x412-more.png'),Buffer.from(shot.data,'base64'))}
           {
             const stage=(await page()).stage,before=(await record()).pointers.length
@@ -1049,8 +1070,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await untilShack(`__shack.received.control.filter(m=>m.type==='pointer').length>=${before+2}`)
           }
           // FULL SCREEN, a phone's rule: the whole page, turned to landscape where the browser can (this emulation cannot,
-          // and says NotSupportedError), no Esc to keep, and the back gesture leaving it sends no Stop.
+          // and says NotSupportedError), no Esc to keep, and the back gesture leaving it sends no Stop. Under More.
           await evaluate(`window.__locks=[];const o=screen.orientation.lock.bind(screen.orientation);screen.orientation.lock=k=>{__locks.push('orientation '+k);return o(k)};const l=navigator.keyboard.lock.bind(navigator.keyboard);navigator.keyboard.lock=k=>{__locks.push('keyboard '+k);return l(k)};true`)
+          const underMore=async()=>{await tap(await centreOf(button('More')));await until(`!!document.querySelector('.remote-stream-more-panel')`,3000)}
+          await underMore()
           await tap(await centreOf(button('Full screen')))
           await until(`document.fullscreenElement===document.documentElement`,5000)
           assert.deepEqual(await evaluate('window.__locks'),['orientation landscape'],'a phone turns to landscape, and has no Esc to lock')
@@ -1059,7 +1082,32 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await until('!document.fullscreenElement',5000)
           await sleep(600)
           assert.deepEqual([await atShack(`__shack.received.control.filter(m=>m.type==='stopTransmit').length`),stopRequests.length],stopsBefore,'on a phone, leaving full screen by the back gesture sends no Stop')
+          await underMore()
           assert.equal(await evaluate(`!!${button('Full screen')}`),true,'and Full screen is offered again')
+          await tap(await centreOf(button('More')))
+          await until(`!document.querySelector('.remote-stream-more-panel')`,3000)
+          // THE TYPING BOX, on its side (the operator's pick, 2026-10-05): Keyboard on the rail opens the same field under it,
+          // focused by the tap, whole and on screen with Stop TX still uncovered, and what is typed goes to the shack as it does
+          // upright. Keyboard again closes it.
+          await tap(await centreOf(button('Keyboard')))
+          await until(`document.activeElement?.classList.contains('remote-stream-typing-field')`,3000)
+          {
+            const placed=await evaluate(`(()=>{const f=document.querySelector('.remote-stream-typing-field'),rail=document.querySelector('.remote-stream-header'),r=f.getBoundingClientRect(),q=rail.getBoundingClientRect(),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {layout:document.querySelector('.remote-stream-app').dataset.layout,onRail:rail.contains(f)&&r.left>=q.left&&r.right<=q.right,inside:r.top>=0&&r.bottom<=innerHeight,field:hit(f),stop:hit(${button('Stop TX')}),w:Math.round(r.width),h:Math.round(r.height)}})()`)
+            console.log('Phone typing on its side: '+JSON.stringify(placed))
+            assert.ok(placed.layout==='rail'&&placed.onRail&&placed.inside&&placed.field&&placed.stop,`the typing box on the rail, whole and on screen, and Stop TX uncovered: ${JSON.stringify(placed)}`)
+            const from=await atShack('__shack.received.control.length')
+            await browser.call('Input.insertText',{text:'W1AW'},session)
+            await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'},session)
+            await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+            await untilShack(`__shack.received.control.slice(${from}).some(m=>m.type==='key'&&m.key==='Enter'&&m.action==='up')`)
+            await sleep(300)
+            const sent=await atShack(`__shack.received.control.slice(${from}).filter(m=>['text','key','pointer','wheel'].includes(m.type)).map(m=>m.type==='text'?'text '+m.text:m.type+' '+(m.action??'')+' '+(m.key??''))`)
+            assert.deepEqual(sent,['text W1AW','key down Enter','key up Enter'],'on its side, exactly the committed text, then Enter')
+            if(artifacts){await browser.call('Input.insertText',{text:'CQ'},session);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-915x412-typing.png'),Buffer.from(shot.data,'base64'))}
+            phoneRecord.push({typingOnItsSide:{placed,sent}})
+            await tap(await centreOf(button('Keyboard')))
+            await until(`!document.querySelector('.remote-stream-typing-field')`,3000)
+          }
           // THE TYPING BOX, upright: Keyboard opens a one-line field, focused by the tap so a phone raises its keyboard. What the
           // keyboard commits goes to the field focused at the shack as the contract's `text`, a word still being composed goes
           // when it is finished, and Enter goes as Enter: exactly that, and nothing through the picture's own input.

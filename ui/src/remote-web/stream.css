@@ -141,7 +141,7 @@
 /* The rail's buttons keep their labels on one line in its 107 px, so the rail holds them all on a phone on its side. */
 .remote-stream-app[data-layout='rail'] .remote-stream-header .remote-button { padding-inline: 8px; }
 /* Then the PTT, a square of 96 px and never wider than Stop TX, and the rest in the operator's order: Mic with its
-   level, Listen. */
+   level, Listen, and Keyboard with the typing box it opens under it (the operator's pick, 2026-10-05). */
 .remote-stream-app[data-layout='rail'] .remote-stream-ptt { order: 1; align-self: center; width: min(96px, 100%); min-height: 96px; }
 .remote-stream-app[data-layout='rail'] .remote-audio-toggle { display: inline-flex; align-items: center; justify-content: center; gap: .35em; }
 .remote-stream-app[data-layout='rail'] .remote-stream-mic { order: 2; }
@@ -152,6 +152,8 @@
 .remote-stream-app[data-layout='rail'] .remote-audio { order: 4; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
 .remote-stream-app[data-layout='rail'] .remote-audio-volume { display: flex; flex-direction: column; align-items: stretch; }
 .remote-stream-app[data-layout='rail'] .remote-audio-volume input { width: auto; }
+.remote-stream-app[data-layout='rail'] .remote-stream-keyboard { order: 5; }
+.remote-stream-app[data-layout='rail'] .remote-stream-typing { order: 6; }
 /* The chip over the picture's top-left corner: the beta mark and the stream's state, taking no press from the
    picture under it. The stalled notice moves down out of its way. */
 .remote-stream-app[data-layout='rail'] .remote-stream-state {

@@ -182,7 +182,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   const phone = layout !== 'header', rail = layout === 'rail', bars = layout === 'bars'
   const more = useMore(phone)
   const typingField = useRef<HTMLInputElement>(null)
-  useEffect(() => { if (!bars || !running) { setTypingOpen(false); setTypingFocus(false) } }, [bars, running])
+  useEffect(() => { if (!phone || !running) { setTypingOpen(false); setTypingFocus(false) } }, [phone, running])
   const keyboard = () => {
     if (typingOpen) { setTypingOpen(false); setTypingFocus(false); return }
     // Opened and focused inside the press itself: a phone raises its keyboard only for a focus a press made.
@@ -243,14 +243,14 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
           onClick={() => void link.setMic(stream.mic !== 'on')}>
           {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
         {stream.control && stream.mic === 'on' && <MicLevel link={link} />}
-        {bars && stream.control && <button type="button" className="remote-button remote-stream-keyboard" aria-pressed={typingOpen}
+        {phone && stream.control && <button type="button" className="remote-button remote-stream-keyboard" aria-pressed={typingOpen}
           disabled={stream.phase !== 'live'} onClick={keyboard}>{t('remote.stream.keyboard')}</button>}
-        {bars && typingOpen && running && <TypingBox link={link} live={stream.phase === 'live'} field={typingField} focused={setTypingFocus} />}
+        {phone && typingOpen && running && <TypingBox link={link} live={stream.phase === 'live'} field={typingField} focused={setTypingFocus} />}
         </div>
         <div className="remote-stream-session">
         {!phone && running && endButton}
         {listen && audioOn && <button type="button" className="remote-button" onClick={() => relayAudio.release()}>{t('remote.audio.stop')}</button>}
-        {!bars && fullScreenButton}
+        {!phone && fullScreenButton}
         {!phone && leave}
         {phone && <button type="button" ref={more.button} className="remote-button remote-stream-more" aria-expanded={more.open}
           aria-controls={more.open ? more.id : undefined} onClick={more.toggle}>{t('remote.stream.more')}</button>}
@@ -314,7 +314,7 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
     {more.open && <div id={more.id} ref={more.panel} className="remote-stream-more-panel" role="group" aria-label={t('remote.stream.more')}
       onClick={more.close}>
       {running && endButton}
-      {bars && fullScreenButton}
+      {phone && fullScreenButton}
       {leave}
       {rail && <BetaNote className="remote-stream-beta" />}
     </div>}

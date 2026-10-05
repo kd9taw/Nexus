@@ -439,17 +439,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote streaming on a phone: a layout made for it.** Held upright, the stream page has Stop TX
   and the stream's state in a bar over the picture, and big thumb buttons under it: Hold PTT, Mic,
   Listen and Keyboard. Turned on its side, the picture gets the screen's whole height beside a rail
-  with Stop TX at the top, a 96-pixel Hold PTT, Mic with its level, Listen, Full screen and More: an
+  with Stop TX at the top, a 96-pixel Hold PTT, Mic with its level, Listen, Keyboard and More: an
   ultrawide shack window on a 915×412 phone is shown at 795×333 instead of 569×238. More holds End
-  the stream, Disconnect, Sign out and the beta note, and a tap on the picture closes it without
-  clicking anything at the shack. Stop TX is the first and the largest control either way, and
-  turning the phone keeps a held PTT held and Listen playing. On a computer the page is as it was.
-  It needs the Remote page's update.
-- **Remote streaming: type into Nexus from a phone.** **Keyboard**, on a phone held upright, opens a
-  one-line box with the phone's own keyboard. What you type goes into the field you last tapped in
-  Nexus at the shack as you type it, a word the keyboard corrects or one you delete included. Enter
-  in the box is Enter in Nexus, and Backspace in the empty box deletes there. Nothing is sent while
-  the picture is frozen. It needs the Remote page's update.
+  the stream, Full screen, Disconnect, Sign out and the beta note, and a tap on the picture closes
+  it without clicking anything at the shack. Stop TX is the first and the largest control either
+  way, and turning the phone keeps a held PTT held and Listen playing (and the typing box open). On
+  a computer the page is as it was. It needs the Remote page's update.
+- **Remote streaming: type into Nexus from a phone.** **Keyboard**, on a phone held upright or on its
+  side, opens a one-line box with the phone's own keyboard. What you type goes into the field you
+  last tapped in Nexus at the shack as you type it, a word the keyboard corrects or one you delete
+  included. Enter in the box is Enter in Nexus, and Backspace in the empty box deletes there.
+  Nothing is sent while the picture is frozen. It needs the Remote page's update.
 - **Remote: put the page on your phone's home screen.** The Remote page can be installed: Add to
   Home Screen on an iPhone or iPad, or install it from Chrome or Edge. Opened from there it has no
   browser bars, which on an iPhone is the only way to a full-screen stream. It needs the Remote

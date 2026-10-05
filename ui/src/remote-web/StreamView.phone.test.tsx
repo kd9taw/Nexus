@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 // The stream page on a phone (the operator's pick, 2026-10-03): on its side, a rail beside the picture with Stop TX
-// first, a PTT of 96 px, Mic and its level, Listen, Full screen and More; upright, a bar over the picture for Stop TX
-// and the state and a bar of thumb controls under it, with a typing box; anywhere else, the header as it was. These
-// are measured on the cascade WINNER of the page's own sheets (entry.tsx, then this view) against the rendered tree,
-// never by matching text in the stylesheet. jsdom lays nothing out: the real-browser half is the `phone` scenario of
-// remote/test/browser.test.mjs.
+// first, a PTT of 96 px, Mic and its level, Listen, Keyboard and More (Keyboard on its side since 2026-10-05, with Full
+// screen moved under More to make room, as it is upright); upright, a bar over the picture for Stop TX and the state and
+// a bar of thumb controls under it; a typing box in both; anywhere else, the header as it was. These are measured on the cascade WINNER of the page's own sheets (entry.tsx, then this view)
+// against the rendered tree, never by matching text in the stylesheet. jsdom lays nothing out: the real-browser half
+// is the `phone` scenario of remote/test/browser.test.mjs.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -166,13 +166,47 @@ describe('on its side: the rail', () => {
     expect(px(computed(ptt, 'min-height'))!, 'no taller than Stop TX').toBeLessThanOrEqual(px(computed(stop, 'min-height'))!)
   })
 
-  it('in the operator\'s order: the PTT, then Mic, then Listen, then Full screen and More; End, Disconnect and Sign out under More', async () => {
+  it('in the operator\'s order: the PTT, then Mic, then Listen, then Keyboard, then More; End, Disconnect and Sign out under More', async () => {
     const v = await streaming(915, 412)
     const order = (selector: string) => Number(computed(v.app.querySelector(selector)!, 'order') ?? 0)
-    expect([order('.remote-stream-ptt'), order('.remote-stream-mic')]).toEqual([1, 2])
+    // Listen is not offered by this station: the cascade at its place in the rail says where it would sit.
+    const listen = winnerAt(PAGE_RULES, 'dark', [...chainOf(v.app.querySelector('.remote-stream-operate')!), { tag: 'span', classes: ['remote-audio'], attrs: {} }], 'order')
+    expect([order('.remote-stream-ptt'), order('.remote-stream-mic'), Number(listen?.value), order('.remote-stream-keyboard')]).toEqual([1, 2, 4, 5])
     const rail = v.app.querySelector('.remote-stream-header')!
-    expect(buttonsIn(rail)).toEqual(['Stop TX', 'Hold PTT', 'Mic off', 'More'])
+    expect(buttonsIn(rail)).toEqual(['Stop TX', 'Hold PTT', 'Mic off', 'Keyboard', 'More'])
     expect(rail.querySelector('.remote-beta'), 'the beta line is under More').toBeNull()
+  })
+
+  it('Full screen is under More, as it is upright, which leaves the rail its room for Keyboard', async () => {
+    const v = await streaming(915, 412)
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true })
+    try {
+      await windowSize(915, 411)
+      expect(buttonsIn(v.app.querySelector('.remote-stream-header')!)).toEqual(['Stop TX', 'Hold PTT', 'Mic off', 'Keyboard', 'More'])
+      fireEvent.click(button('More'))
+      expect(buttonsIn(screen.getByRole('group', { name: 'More' }))).toEqual(['End the stream', 'Full screen', 'Disconnect and return to stations', 'Sign out'])
+    } finally { delete (document as { fullscreenEnabled?: unknown }).fullscreenEnabled }
+  })
+
+  it('Keyboard: the upright\'s own control, in the rail, opening the typing box under it, focused by the press; what is typed goes as it does upright', async () => {
+    const v = await streaming(915, 412)
+    const rail = v.app.querySelector('.remote-stream-header')!
+    const keyboard = button('Keyboard')
+    expect(rail.contains(keyboard) && keyboard.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(keyboard)
+    const field = screen.getByRole('textbox', { name: 'Type here for the field selected at the shack' }) as HTMLInputElement
+    expect(document.activeElement, 'focused by the press, so the phone raises its keyboard').toBe(field)
+    expect(keyboard.getAttribute('aria-pressed')).toBe('true')
+    // In the rail's column under Keyboard, the column's width: no wider than the rail, so nothing is cut off.
+    expect(rail.contains(field.form!) && field.form!.parentElement!.className).toBe('remote-stream-operate')
+    expect([computed(field.form!, 'order'), computed(field.parentElement!.parentElement!, 'align-items')]).toEqual(['6', 'stretch'])
+    expect([computed(field, 'min-width'), computed(field, 'flex')]).toEqual(['0', '1 1 auto'])
+    field.value = 'CQ'
+    fireEvent.input(field, { isComposing: false })
+    fireEvent.submit(field.form!)
+    expect(v.input().map(m => m.type === 'text' ? `text ${m.text}` : `${m.type} ${m.action} ${m.key}`)).toEqual(['text CQ', 'key down Enter', 'key up Enter'])
+    fireEvent.click(keyboard)
+    expect(screen.queryByRole('textbox'), 'Keyboard again closes it').toBeNull()
   })
 
   it('a chip over the picture says the state with the beta mark, and takes no press from the picture under it', async () => {
@@ -409,17 +443,24 @@ describe('the typing box', () => {
     expect(v.sent()).toEqual(['text CQ', 'text  DX'])
   })
 
-  it('Keyboard again closes the box, and the box is the upright layout\'s own: turning the phone closes it', async () => {
+  it('Keyboard again closes the box; turning the phone keeps it, the same field, focused, with its text; a window in the header layout has neither', async () => {
     const v = await typing()
-    fireEvent.click(button('Keyboard'))
+    const keyboard = button('Keyboard')
+    fireEvent.click(keyboard)
     expect(screen.queryByRole('textbox')).toBeNull()
-    fireEvent.click(button('Keyboard'))
-    expect(screen.getByRole('textbox')).toBeTruthy()
-    fireEvent.blur(screen.getByRole('textbox'))
+    fireEvent.click(keyboard)
+    const field = screen.getByRole('textbox') as HTMLInputElement
+    field.value = 'CQ'
+    fireEvent.input(field, { isComposing: false })
     await windowSize(915, 412)
     expect(v.app.dataset.layout).toBe('rail')
+    expect(screen.getByRole('textbox'), 'the same field').toBe(field)
+    expect([document.activeElement === field, field.value]).toEqual([true, 'CQ'])
+    expect([button('Keyboard'), keyboard.getAttribute('aria-pressed')], 'the same Keyboard, still pressed, now in the rail').toEqual([keyboard, 'true'])
+    await windowSize(1280, 800)
+    expect(v.app.dataset.layout).toBe('header')
     expect(screen.queryByRole('textbox')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Keyboard' }), 'no Keyboard in the rail').toBeNull()
+    expect(screen.queryByRole('button', { name: 'Keyboard' }), 'no Keyboard in the header').toBeNull()
   })
 
   it('the layout holds while the operator types: the keyboard takes height and never width; CONTROL: once the box lets go, the layout follows the window', async () => {
