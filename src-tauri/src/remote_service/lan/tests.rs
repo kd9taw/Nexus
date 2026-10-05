@@ -768,6 +768,181 @@ async fn an_unpaired_key_is_refused_in_the_handshake() {
     );
 }
 
+/// What the window writes straight after its side of the handshake: its WebSocket upgrade.
+const UPGRADE: &[u8] = b"GET / HTTP/1.1\r\nHost: nexus-station\r\nConnection: Upgrade\r\n\
+    Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+
+/// TLS with `key`, pinning `s`'s key: done on the computer's side once it has sent its own key,
+/// which in TLS 1.3 is before the shack judges that key.
+async fn tls_with(
+    s: &Shack,
+    stream: tokio::net::TcpStream,
+    key: &str,
+) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+    let connector =
+        tokio_rustls::TlsConnector::from(tls::client::config(key, &s.public_key).unwrap());
+    let name = rustls::pki_types::ServerName::try_from("nexus-station").unwrap();
+    connector
+        .connect(name, stream)
+        .await
+        .expect("the computer's side of TLS 1.3 ends before the shack judges its key")
+}
+
+/// ★ A computer whose key is refused (not paired, and no pairing window open) reads the refusal
+/// and then the end of the stream, in that order and never a reset, though it wrote its upgrade
+/// straight after its side of the handshake as the window does: the shack reads what came behind
+/// the key and throws it away before it closes. Closed with that unread, the connection ended in a
+/// reset, and Windows drops a refusal that a reset overtakes, so the window said nothing answered.
+/// Each refusal still counts against its address. CONTROL: the refusal is AccessDenied, which the
+/// window reads as `notPaired`, and after five the paired key is not heard from that address.
+#[tokio::test]
+async fn a_refused_key_reads_its_refusal_and_then_an_orderly_close() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let s = shack(home());
+    let stranger = Computer::new();
+    let (_stop, stop) = watch::channel(false);
+    for n in 0..FAILURES_BEFORE_IGNORED {
+        let (station, computer) = pair().await;
+        let task = tokio::spawn(channel::connection(
+            station,
+            PEER.parse().unwrap(),
+            s.shared.clone(),
+            stop.clone(),
+        ));
+        let mut tls = tls_with(&s, computer, &stranger.key).await;
+        tls.write_all(UPGRADE).await.unwrap();
+        tls.flush().await.unwrap();
+        let mut read = [0; 512];
+        let refusal = tls
+            .read(&mut read)
+            .await
+            .expect_err("a refused key was answered");
+        assert!(
+            refusal.to_string().contains("AccessDenied"),
+            "try {n}: {refusal}"
+        );
+        // Promptly: the shack ends its side at once, never at the end of its one second.
+        let (mut raw, _) = tls.into_inner();
+        let after = tokio::time::timeout(Duration::from_millis(500), raw.read(&mut read)).await;
+        assert!(
+            matches!(after, Ok(Ok(0))),
+            "try {n}: after the refusal, {after:?}"
+        );
+        drop(raw);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("held past the computer's own close")
+            .unwrap();
+    }
+    let (task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    assert!(socket.is_err(), "the refusals were not counted");
+    task.await.unwrap();
+}
+
+/// ★ What comes behind a refused key is read for one second in all, never a second per read: a
+/// computer dripping a byte every 200 ms is let go about a second after its refusal, though it
+/// would drip for four; one that sends 64 KiB at once is let go as soon as 16 KiB of it is read.
+/// Each is let go inside the handshake's deadline, and each counts against its address. CONTROL:
+/// each was still connected, the first still sending, when it was let go.
+#[tokio::test]
+async fn a_refused_key_is_let_go_within_a_second_however_it_sends() {
+    use tokio::io::AsyncWriteExt;
+    let s = shack(home());
+    let stranger = Computer::new();
+    let (_stop, stop) = watch::channel(false);
+
+    let (station, computer) = pair().await;
+    let task = tokio::spawn(channel::connection(
+        station,
+        PEER.parse().unwrap(),
+        s.shared.clone(),
+        stop.clone(),
+    ));
+    let (mut raw, _) = tls_with(&s, computer, &stranger.key).await.into_inner();
+    let started = Instant::now();
+    let drip = tokio::spawn(async move {
+        for _ in 0..20 {
+            if raw.write_all(b"x").await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    });
+    tokio::time::timeout(channel::HANDSHAKE, task)
+        .await
+        .expect("a dripping computer was held past the handshake's deadline")
+        .unwrap();
+    let held = started.elapsed();
+    assert!(
+        held < Duration::from_millis(1800),
+        "a dripping computer was held {held:?}"
+    );
+    assert!(!drip.is_finished(), "the control: it stopped dripping");
+    drip.abort();
+
+    let (station, computer) = pair().await;
+    let task = tokio::spawn(channel::connection(
+        station,
+        PEER.parse().unwrap(),
+        s.shared.clone(),
+        stop.clone(),
+    ));
+    let (mut raw, _) = tls_with(&s, computer, &stranger.key).await.into_inner();
+    let started = Instant::now();
+    let _ = raw.write_all(&[0x17; 64 * 1024]).await;
+    tokio::time::timeout(channel::HANDSHAKE, task)
+        .await
+        .expect("64 KiB behind a refused key was read past the handshake's deadline")
+        .unwrap();
+    let held = started.elapsed();
+    assert!(
+        held < Duration::from_millis(800),
+        "64 KiB behind a refused key was read for {held:?}"
+    );
+    drop(raw);
+
+    for _ in 2..FAILURES_BEFORE_IGNORED {
+        let (task, socket) = dial(&s, &stranger.key, PEER, stop.clone()).await;
+        assert!(socket.is_err(), "a stranger got through TLS");
+        task.await.unwrap();
+    }
+    let (task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    assert!(
+        socket.is_err(),
+        "a refused key let go early was not counted"
+    );
+    task.await.unwrap();
+}
+
+/// ★ Only a refused key's connection is read before its close: a handshake that fails any other
+/// way, here bytes that are no TLS at all, is closed as it arrives, though the computer keeps its
+/// end open. CONTROL: the shack did not wait for that computer to close.
+#[tokio::test]
+async fn every_other_failed_handshake_is_closed_as_it_arrives() {
+    use tokio::io::AsyncWriteExt;
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let (station, mut computer) = pair().await;
+    let started = Instant::now();
+    let task = tokio::spawn(channel::connection(
+        station,
+        PEER.parse().unwrap(),
+        s.shared.clone(),
+        stop,
+    ));
+    computer.write_all(UPGRADE).await.unwrap();
+    tokio::time::timeout(channel::HANDSHAKE, task)
+        .await
+        .expect("plain HTTP was held past the handshake's deadline")
+        .unwrap();
+    let held = started.elapsed();
+    assert!(
+        held < Duration::from_millis(400),
+        "plain HTTP was held {held:?}"
+    );
+    drop(computer);
+}
+
 /// ★ Step 1, the subnet check: a source off the station's subnet, loopback and a public address
 /// included, is dropped as it arrives, before TLS. CONTROL: the same computer on the subnet.
 #[tokio::test]

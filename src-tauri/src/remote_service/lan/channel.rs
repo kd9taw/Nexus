@@ -6,7 +6,8 @@
 //!    or over the caps ([`super::gate`]), is dropped as it arrives.
 //! 2. **The handshake, inside one deadline** ([`HANDSHAKE`]): TLS 1.3 with the computer's key held
 //!    to the paired keys ([`super::tls`]), the WebSocket upgrade, and the hello. A computer that
-//!    does not finish in time, or proves no paired key, counts against its address at the gate.
+//!    does not finish in time, or proves no paired key, counts against its address at the gate. A
+//!    refused key reads its refusal and then an orderly close ([`drain`]).
 //! 3. **The hello.** The LAN protocol, stream and operation versions must be the shack's own; a
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
 //!    stamps the session: a session id of its own making, and the device the key belongs to.
@@ -48,6 +49,10 @@ pub const PROTOCOL_VERSION: u8 = 1;
 pub const OPERATION_VERSION: u8 = 4;
 /// TLS, the upgrade and the hello must all be done within this.
 pub(super) const HANDSHAKE: Duration = Duration::from_secs(5);
+/// What comes behind a refused key is read for this long in all ([`drain`]), and no more than
+/// [`DRAIN_BYTES`] of it: a window sends about 200 bytes there.
+const DRAIN_FOR: Duration = Duration::from_secs(1);
+const DRAIN_BYTES: usize = 16 * 1024;
 /// A computer that says nothing for this long is gone. Its own pings every 5 s keep it.
 pub(super) const SILENCE: Duration = Duration::from_secs(15);
 /// The largest message either way, the relay's own bound.
@@ -226,10 +231,20 @@ async fn handshake<S>(stream: S, shared: &Shared) -> Result<Opened<S>, ()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let tls = tokio_rustls::TlsAcceptor::from(shared.tls.clone())
+    let tls = match tokio_rustls::TlsAcceptor::from(shared.tls.clone())
         .accept(stream)
+        .into_fallible()
         .await
-        .map_err(|_| ())?;
+    {
+        Ok(tls) => tls,
+        Err((error, io)) => {
+            // Every other failure closes at once.
+            if refused_key(&error) {
+                drain(io).await;
+            }
+            return Err(());
+        }
+    };
     let key = tls
         .get_ref()
         .1
@@ -285,6 +300,43 @@ where
         },
         _ => Err(()),
     }
+}
+
+/// Did the handshake fail on the computer's key: one no paired computer holds, outside the pairing
+/// window, or one that is not a P-256 key (`tls::PinnedClients`)?
+fn refused_key(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .is_some_and(|tls| matches!(tls, rustls::Error::InvalidCertificate(_)))
+}
+
+/// The close after a refused key, in order: the refusal TLS has already written, then the end of
+/// the stream, never a reset. In TLS 1.3 the computer writes its upgrade straight after its side of
+/// the handshake, before its key is judged, so those bytes are here unread, or on their way, when
+/// it is refused. Closed with them unread, or answered after the close, the connection ends in a
+/// reset, and Windows drops the refusal its computer has not read yet: the window then says that
+/// nothing answered, where the truth is that this computer is not paired. So the write side is shut
+/// first, and what comes is read and thrown away until the computer closes, for [`DRAIN_FOR`] in
+/// all (one deadline, never one per read, so a computer that drips bytes is let go in time), or
+/// [`DRAIN_BYTES`], whichever comes first. Nothing read here reaches TLS or the WebSocket. Inside
+/// the handshake's own deadline, and counted against the address as any failed handshake is.
+async fn drain<S>(mut io: S)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _ = tokio::time::timeout(DRAIN_FOR, async {
+        let _ = io.shutdown().await;
+        let (mut discard, mut read) = ([0; 4096], 0);
+        while read < DRAIN_BYTES {
+            match io.read(&mut discard).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => read += n,
+            }
+        }
+    })
+    .await;
 }
 
 /// Refused for its versions, saying which side to update (as ruled on 2026-10-04), and closed.
