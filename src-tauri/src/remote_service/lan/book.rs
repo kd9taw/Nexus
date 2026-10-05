@@ -462,17 +462,28 @@ impl Book {
         Checked::Wrong
     }
 
-    /// Pair the key with this pin as `name`: kept in the store first, then admitted. Pairing a key
-    /// already paired replaces its record. `pairingFull` with [`MAX_PAIRED`] paired already, or a
-    /// list that would not fit; `unavailable` when the store will not keep it; `invalidRequest`
-    /// for a name out of shape, which the pairing has already refused.
-    pub(super) fn add(&self, pin: [u8; 32], name: &str) -> Result<String, &'static str> {
+    /// Pair the key with this pin as `name`, for a pairing proved under the LAN station id `under`:
+    /// kept in the store first, then admitted. Pairing a key already paired replaces its record.
+    /// `pairingClosed` when the key has been reset since that proof, which was made for an
+    /// identity that is gone; `pairingFull` with [`MAX_PAIRED`] paired already, or a list that
+    /// would not fit; `unavailable` when the store will not keep it; `invalidRequest` for a name
+    /// out of shape, which the pairing has already refused.
+    pub(super) fn add(
+        &self,
+        pin: [u8; 32],
+        name: &str,
+        under: &str,
+    ) -> Result<String, &'static str> {
         let _writing = self.writing.lock().map_err(|_| "unavailable")?;
         let (station_id, mut devices) = {
             let kept = self.kept.lock().map_err(|_| "unavailable")?;
             let Key::Kept { key, .. } = &kept.key else {
                 return Err("unavailable");
             };
+            // Asked under the store's lock, which a reset takes too, so no reset lands between.
+            if key.station_id != under {
+                return Err("pairingClosed");
+            }
             (
                 key.station_id.clone(),
                 kept.devices.clone().ok_or("unavailable")?,

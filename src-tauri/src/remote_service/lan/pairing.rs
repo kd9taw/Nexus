@@ -297,8 +297,9 @@ where
         Checked::Wrong => refuse(socket, "wrongCode", Outcome::Failed).await,
         Checked::Right => {
             let (book, pin, name) = (desk.book.clone(), tls::pin(&asked.key), asked.name);
+            let under = desk.station_id.clone();
             // The store can block: off this connection's thread.
-            match tokio::task::spawn_blocking(move || book.add(pin, &name)).await {
+            match tokio::task::spawn_blocking(move || book.add(pin, &name, &under)).await {
                 Ok(Ok(device)) => {
                     say(
                         socket,

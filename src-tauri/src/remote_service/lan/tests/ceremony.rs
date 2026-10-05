@@ -418,6 +418,50 @@ fn the_window_keeps_its_rules() {
     assert!(!book.pairing(now));
 }
 
+/// ★ A pairing whose proof held just before a reset is refused when it comes to be kept: its proof
+/// was made under the station id the reset retired, and the list after a reset admits nobody, nor
+/// after a restart. CONTROL: with no reset between, the same pairing is kept, under the new id.
+#[test]
+fn a_pairing_proved_before_a_reset_pairs_nobody() {
+    let store = LanStore::default();
+    let book = book_on(&store);
+    let (identity, _) = book.identity().unwrap();
+    let computer = Computer::new();
+    let (now, t) = (Instant::now(), [9; 32]);
+    let proved = |book: &Book| {
+        book.open(now, 0).unwrap();
+        let k = proofs::code_key(&shown_code(book)).unwrap();
+        let (serial, _) = book.proof_key(now).unwrap();
+        book.check(serial, &t, &proofs::proof(&k, Side::Computer, &t), now)
+    };
+    assert_eq!(proved(&book), Checked::Right);
+    book.forget_all();
+    book.renew().unwrap();
+    assert_eq!(
+        book.add(computer.pin, "Den PC", &identity.station_id),
+        Err("pairingClosed")
+    );
+    assert_eq!(book.paired(&computer.pin), None);
+    assert_eq!(
+        book_on(&store).paired(&computer.pin),
+        None,
+        "paired after a restart"
+    );
+
+    let (renewed, _) = book.identity().unwrap();
+    assert_ne!(renewed.station_id, identity.station_id);
+    assert_eq!(proved(&book), Checked::Right);
+    assert_eq!(
+        book.add(computer.pin, "Den PC", &renewed.station_id),
+        Ok(computer.device.clone()),
+        "the control"
+    );
+    assert_eq!(
+        book_on(&store).paired(&computer.pin),
+        Some(computer.device.clone())
+    );
+}
+
 /// ★ A man in the middle, holding a key of its own, shows each end a different key, and each TLS
 /// session it runs has its own exporter. The proofs are bound to both, each on its own: with the
 /// keys alike they fail on the exporters, and with the exporters alike they fail on the keys, though
@@ -624,14 +668,14 @@ fn the_key_is_made_once_and_kept() {
 fn eight_computers_fit_the_credential_store_and_round_trip() {
     let store = LanStore::default();
     let book = book_on(&store);
-    book.identity().unwrap();
+    let (identity, _) = book.identity().unwrap();
     let widest = ["\u{1F4E1}".repeat(32), "\"".repeat(32), "\\".repeat(32)];
     let mut paired = Vec::new();
     for n in 0..MAX_PAIRED {
         let computer = Computer::new();
         let name = widest[n % widest.len()].clone();
         assert_eq!(
-            book.add(computer.pin, &name),
+            book.add(computer.pin, &name, &identity.station_id),
             Ok(computer.device.clone()),
             "computer {n}"
         );
@@ -649,7 +693,10 @@ fn eight_computers_fit_the_credential_store_and_round_trip() {
             .iter()
             .any(|d| d.id == computer.device && &d.name == name && d.key == hex(&computer.pin)));
     }
-    assert_eq!(book.add(Computer::new().pin, "Ninth"), Err("pairingFull"));
+    assert_eq!(
+        book.add(Computer::new().pin, "Ninth", &identity.station_id),
+        Err("pairingFull")
+    );
     assert_eq!(book.open(Instant::now(), 0), Err("lanFull"));
 
     let over = LanDevices {
@@ -725,7 +772,11 @@ async fn removing_a_computer_ends_it_at_once() {
     let scratch = Scratch::new();
     let lan = lan_on(&s, &scratch);
     let other = Computer::new();
-    s.shared.desk.book.add(other.pin, "Other").unwrap();
+    s.shared
+        .desk
+        .book
+        .add(other.pin, "Other", &s.shared.desk.station_id)
+        .unwrap();
     let (_stop, stop) = watch::channel(false);
     let (mut socket, session, acquired) =
         acquire_as_paired(&s, &s.computer, PEER, stop.clone()).await;
@@ -823,7 +874,12 @@ async fn paired_computers_come_back_after_a_restart() {
     let scratch = Scratch::new();
     let lan = lan_on(&first, &scratch);
     let removed = Computer::new();
-    first.shared.desk.book.add(removed.pin, "Removed").unwrap();
+    first
+        .shared
+        .desk
+        .book
+        .add(removed.pin, "Removed", &first.shared.desk.station_id)
+        .unwrap();
     lan.revoke(&removed.device).unwrap();
     drop(lan);
 
