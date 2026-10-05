@@ -468,6 +468,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
   and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
+- **Street maps** (optional download) — map data © **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
+  contributors (ODbL), from the **[Protomaps basemap](https://github.com/protomaps/basemaps)**;
+  drawn with **[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js)** (BSD-3-Clause) and
+  **[PMTiles](https://github.com/protomaps/PMTiles)** (BSD-3-Clause), with Noto Sans labels (SIL
+  OFL 1.1). The map data is downloaded only when you ask for it and is never part of Nexus itself
+  (see **[NOTICE](NOTICE)**).
 - **[Opus](https://opus-codec.org/)** (BSD-3-Clause) — the **Xiph.Org Foundation** and
   contributors. Nexus Remote compresses station receive audio with **libopus**, linked
   statically through the [`opus`](https://github.com/SpaceManiac/opus-rs) (MIT/Apache-2.0) and
