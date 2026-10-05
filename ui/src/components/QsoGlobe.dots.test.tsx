@@ -67,6 +67,7 @@ vi.mock('react-globe.gl', () => ({
       }
       return {
         scene: () => scene,
+        lights: () => [],
         renderer: () => renderer,
         controls: () => controls,
         camera: () => new THREE.PerspectiveCamera(),

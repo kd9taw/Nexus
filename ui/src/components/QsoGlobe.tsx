@@ -208,15 +208,12 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
     const p = g.getCoords(ss.lat, ss.lon, 2)
     sun.position.set(p.x, p.y, p.z)
     const ambient = new THREE.AmbientLight(GLOBE_AMBIENT.color, GLOBE_AMBIENT.intensity)
-    const scene = g.scene()
-    // Replace globe.gl's default camera-chasing lights so the terminator is real.
-    const defaults = scene.children.filter((c) => c.type.endsWith('Light'))
-    defaults.forEach((l) => scene.remove(l))
-    scene.add(sun)
-    scene.add(ambient)
+    // globe.gl's own lights, set as Connect's globe sets them: they REPLACE its default camera-chasing
+    // pair, so the terminator is real. Never by taking the scene's lights out here: globe.gl puts its
+    // defaults in the scene from a timer of its own, which the browser may run after this effect, and
+    // then they stayed on beside these (lit all round, washed out, no night side).
+    g.lights([sun, ambient])
     return () => {
-      scene.remove(sun)
-      scene.remove(ambient)
       sun.dispose()
       ambient.dispose()
     }

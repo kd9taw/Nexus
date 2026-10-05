@@ -257,6 +257,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a dark globe, so on the new map each one faded to a white speck without its band colour, and
   the coast, border and state lines ran across them. Each square is now a dot in its band's colour
   with a dark edge, as on the flat map, drawn over the lines.
+- **The Logbook's globe shows day and night again, every time it opens.** It often opened lit evenly
+  all round, pale and washed out, with no night side. The globe's built-in lights could come on after
+  the Logbook had set up its sun, and then stayed on beside it. The Logbook's globe now sets its
+  lights the way Connect's globe does, so the sun lights the day side and the night side stays in
+  shade.
 - **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
   a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
   an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
