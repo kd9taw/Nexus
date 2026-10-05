@@ -1013,6 +1013,8 @@ export const DE: PartialCatalog = {
   "settings.confirmations.cloudlog.stations.busy": "Abfrage läuft…",
   "settings.confirmations.cloudlog.stations.title": "Das eigene Cloudlog/Wavelog nach seinen Stationsstandorten fragen und die Nummer eintragen. Dabei geht der API-Schlüssel an die eigene Instanz — nur auf diesen Klick.",
   "settings.confirmations.cloudlog.stations.none": "Diese Instanz meldet keine Stationsstandorte — zuerst einen in Cloudlog/Wavelog anlegen.",
+  "settings.confirmations.cloudlog.stations.callMismatch": "Das Rufzeichen dieses Standorts ist {{location}}, Nexus loggt aber als {{call}}: Wavelog wird diese QSOs ablehnen. Einen Standort mit Ihrem Rufzeichen wählen oder diesen in Wavelog ändern.",
+  "settings.confirmations.cloudlog.stations.gridMismatch": "Der Locator dieses Standorts ist {{location}}, Ihr Locator aber {{grid}}: Wavelog legt diese QSOs unter {{location}} ab und lehnt jedes ab, das Ihren Locator trägt. Einen Standort mit Ihrem Locator wählen oder diesen in Wavelog ändern.",
   "settings.confirmations.cloudlog.apiKey.label": "API-Schlüssel",
   "settings.confirmations.cloudlog.apiKey.placeholder": "API-Schlüssel Ihrer Instanz",
   "settings.confirmations.cloudlog.apiKey.forget.title": "Den gespeicherten Cloudlog-Schlüssel aus dem System-Schlüsselbund entfernen",
