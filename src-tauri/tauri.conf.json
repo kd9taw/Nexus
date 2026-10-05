@@ -71,6 +71,7 @@
       "../licenses/remote/*": "resources/remote/",
       "../licenses/stream/*": "resources/stream/",
       "../licenses/openssl/*": "resources/openssl/",
+      "../licenses/ui/*": "resources/ui/",
       "../COPYING": "COPYING",
       "../NOTICE": "NOTICE"
     },

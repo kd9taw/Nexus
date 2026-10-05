@@ -17,8 +17,9 @@ The tabs, in the order they appear:
 [Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
-took) and a **Check for updates** button, both at the right-hand end of the same
-row as the search box.
+took), a **Check for updates** button and a **Licenses** button (the license
+texts of the packages built into the interface), all at the right-hand end of
+the same row as the search box.
 
 ![The Settings header: a Find a setting box, and under it the ten tab names in a row with Station first and Radio selected.](../img/manual/settings-tabs.webp)
 

@@ -187,6 +187,7 @@ import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
+import { SettingsLicenses } from './SettingsLicenses'
 import { resolveTarget } from '../settings/registry'
 import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -3460,6 +3461,8 @@ export function SettingsPanel({
         >
           {t('settings.panel.update.label')}
         </button>
+        {/* The hosted Remote page links its own license file, so this is the desktop's. */}
+        {!remote && <SettingsLicenses />}
       </div>
 
       <form className="settings-form" onSubmit={handleSubmit}>

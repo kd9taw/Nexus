@@ -1097,6 +1097,15 @@ The web UI (`ui/`, Vite + React + TypeScript) depends on:
 - **@tanstack/react-virtual** — **MIT** (© Tanner Linsley). Row virtualisation for the
   logbook table, so a log of tens of thousands of QSOs scrolls without mounting every row.
 
+The license texts of every package in the desktop app's bundle, those above and the packages
+they depend on, travel in every installer as `resources/ui/THIRD-PARTY.txt`
+(`licenses/ui/THIRD-PARTY.txt` in this repository), after the CQ-zone data's MIT notice, and
+Settings ▸ Licenses shows them. The desktop build derives them from the modules present in its
+bundle, as the hosted browser's build does, and stops when a package has none; CI fails when the
+installed copy falls behind the bundle. One of them, **h3-js** (a dependency of three-globe), is
+**Apache-2.0**, © 2017-2021 Uber Technologies, Inc.; its NOTICE file is reproduced there with its
+license.
+
 Test-only tooling (**vitest**, **jsdom**, **@testing-library/react** and `/dom`, all MIT) is
 a dev dependency and is **not** part of any shipped bundle. As on the Rust side, the
 authoritative machine-checked set is the lockfile — `ui/package-lock.json` — not this list.
