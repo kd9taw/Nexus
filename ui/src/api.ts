@@ -2366,6 +2366,14 @@ export async function haltTx(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('halt_tx')
 }
 
+/** Repair clock: run the repair the clock check found, once, through Windows' administrator
+ *  prompt. Resolves `true` when it took and `false` when it did not (the prompt was declined, or
+ *  a step failed). Rejects with `onAir` while anything is transmitting, `repairRunning` while a
+ *  repair is already running, and `nothingToRepair` when none is on offer. */
+export async function repairClock(): Promise<boolean> {
+  return invoke<boolean>('repair_clock')
+}
+
 /** Dismiss one transmitter alarm: exactly the one with this id, never one raised since. */
 export async function dismissTxAlarm(id: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('dismiss_tx_alarm', { id })

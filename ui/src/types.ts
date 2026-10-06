@@ -1650,6 +1650,10 @@ export interface RadioStatus {
    *  "NetTime is managing this clock" are different facts and the operator needs
    *  both to know whether anything is theirs to do. */
   clockOwnerNote?: string
+  /** The clock check found a repair Windows can make (never on Linux or macOS), and it has not
+   *  been run. The top bar then shows Repair clock beside the clock chip; nothing runs the repair
+   *  unless the operator presses it, because it asks Windows for administrator rights. */
+  clockRepairAvailable?: boolean
   /** Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion. */
   source: SourceKind
   /** Human-readable source label, e.g. "Native (FT8)" or "WSJT-X UDP". */

@@ -6993,6 +6993,45 @@ select optgroup {
 .timesync.warn .dot {
   background: #e0b020;
 }
+/* Repair clock (Windows, only when the clock check found something to fix): stacked under the
+   chip, the button over a short line saying Windows will ask for administrator rights, so the
+   bar gains height but no width. Beside the chip it was 204 px wider, which at 1920×1080 pushed
+   the Tx cycle onto a second row. The face, ink and border are all the theme's, never the OS's
+   button. */
+.clock-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.clock-repair {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  line-height: 1.05;
+}
+.clock-repair-btn {
+  padding: 1px var(--space-2);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+.clock-repair-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.clock-repair-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.clock-repair-note {
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-faint);
+}
 /* DT readout turns red when decodes land far off the slot boundary. */
 .dt-readout.bad {
   color: var(--state-weak);
@@ -15135,7 +15174,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* The top bar at the small size (operator, 2026-10-01): four lines on the screens without
    FT, two with the FT-only items out. Every screen but Operate and Tempo (`.topbar--ft`) drops
-   the mode pills, the Tx cycle, the slot countdown, Sync and DT. Operate and Tempo keep them,
+   the mode pills, the Tx cycle, the slot countdown, Sync (and Repair clock beside it) and DT.
+   Operate and Tempo keep them,
    the eleven pills folded into one mode button (`.tier-menu-btn`, never drawn above sm) and
    the Tx cycle's small captions dropped. Larger windows are unchanged.
    ⚠️ NOTHING HERE MAY REACH THE TX CLUSTER (`.op-controls`): on Field Day and every other
@@ -15144,8 +15184,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .tier-menu-btn {
   display: none;
 }
-[data-viewport='sm'] .topbar:not(.topbar--ft) :is(.tier-toggle, .slot-clock, .timesync, .dt-readout),
-[data-viewport='xs'] .topbar:not(.topbar--ft) :is(.tier-toggle, .slot-clock, .timesync, .dt-readout),
+[data-viewport='sm'] .topbar:not(.topbar--ft) :is(.tier-toggle, .slot-clock, .timesync, .clock-repair, .dt-readout),
+[data-viewport='xs'] .topbar:not(.topbar--ft) :is(.tier-toggle, .slot-clock, .timesync, .clock-repair, .dt-readout),
 [data-viewport='sm'] .topbar--ft .tier-toggle:not(.tx-period) > .tier-btn:not(.tier-menu-btn),
 [data-viewport='xs'] .topbar--ft .tier-toggle:not(.tx-period) > .tier-btn:not(.tier-menu-btn),
 [data-viewport='sm'] .topbar--ft .tx-period small,

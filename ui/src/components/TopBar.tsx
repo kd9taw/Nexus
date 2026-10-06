@@ -9,7 +9,7 @@ import { useStationControl, useStationTierControl, useStationCapability } from '
 // The units rule lands on the BAR: every tier and mode name, the DT and clock readouts, the
 // slot countdown, the callsign and grid, and the four plates below are tokens and measurements
 // and stay in the code.
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
 import { isOnAir, isRxOnly } from '../types'
@@ -18,7 +18,8 @@ import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
 import { LiveLevelMeter } from './LiveMeters'
 import { RadioSwitcher } from './RadioSwitcher'
-import { appVersion } from '../api'
+import { appVersion, repairClock } from '../api'
+import { pushToast } from '../toast'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -290,6 +291,60 @@ function ClockChip({ radio }: { radio: RadioStatus }) {
     >
       <span className="dot" />
       {radio.timeSyncOk ? t('topbar.sync.ok.label') : t('topbar.sync.bad.label')}
+    </span>
+  )
+}
+
+/** What a refused Repair clock press says. The backend's codes, each its own sentence. */
+function clockRepairRefused(code: unknown): string {
+  if (code === 'onAir') return t('topbar.clock.repair.onAir')
+  if (code === 'repairRunning') return t('topbar.clock.repair.running')
+  if (code === 'nothingToRepair') return t('topbar.clock.repair.nothing')
+  return t('topbar.clock.repair.failed')
+}
+
+/** Repair clock, under the chip: the clock check found something Windows can fix (its time
+ *  service stopped, a service that has not synchronised, a clock that just jumped, a poll far
+ *  longer than it could be), and the fix needs administrator rights. Nexus never asks for them
+ *  on its own (operator, 2026-10-06: "Only when you press Repair"), so the fix waits here for
+ *  the press, and the line under the button says the prompt is coming before it comes. It is
+ *  stacked under the chip because the bar has no width to spare (see `.clock-stack`).
+ *
+ *  The bar draws it only for the station's own window: a Remote browser could not answer a
+ *  prompt on the station's screen, and the command is not in the Remote vocabulary either. It
+ *  is disabled while anything is on the air, because a repair can move the clock mid-over; the
+ *  backend refuses that too, and this only says so first. */
+function ClockRepair({ radio, keyed }: { radio: RadioStatus; keyed: boolean }) {
+  const [busy, setBusy] = useState(false)
+  const noteId = useId()
+  const note = radio.clockOwnerNote?.trim() ? ` (${radio.clockOwnerNote.trim()})` : ''
+  const press = () => {
+    setBusy(true)
+    repairClock()
+      .then((took) =>
+        took
+          ? pushToast(t('topbar.clock.repair.done'), 'success')
+          : pushToast(t('topbar.clock.repair.failed'), 'error'),
+      )
+      .catch((e) => pushToast(clockRepairRefused(e), 'error'))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <span className="clock-repair">
+      <button
+        type="button"
+        className="clock-repair-btn"
+        disabled={busy || keyed}
+        aria-busy={busy}
+        aria-describedby={noteId}
+        onClick={press}
+        title={(keyed ? t('topbar.clock.repair.onAir') : t('topbar.clock.repair.title')) + note}
+      >
+        {busy ? t('topbar.clock.repair.busy') : t('topbar.clock.repair.label')}
+      </button>
+      <small id={noteId} className="clock-repair-note">
+        {t('topbar.clock.repair.note')}
+      </small>
     </span>
   )
 }
@@ -585,7 +640,14 @@ export function TopBar({
         {showLocalClock && <UtcClock local />}
         {!hideDigitalChrome && (
           <>
-            <ClockChip radio={radio} />
+            {control && radio.clockRepairAvailable ? (
+              <span className="clock-stack">
+                <ClockChip radio={radio} />
+                <ClockRepair radio={radio} keyed={onAir || radio.tuning} />
+              </span>
+            ) : (
+              <ClockChip radio={radio} />
+            )}
             <span
               className={`dt-readout${Math.abs(link.dtSec) > 0.5 ? ' bad' : ''}`}
               title={t('topbar.dt.title')}

@@ -11089,6 +11089,27 @@ export const EN = {
   'topbar.clock.gross.label': 'clock {{offset}} ✗',
   'topbar.clock.gross.title':
     'Your PC clock is {{offset}} off UTC — too far for Nexus to correct, and your logged QSO times would be wrong by the same amount. Set the clock on the machine itself (off-grid: GPS).',
+  // Repair clock, under the chip (Windows only), shown when the clock check found something
+  // Windows can fix. It is the ONE place Nexus asks for administrator rights, and only on this
+  // press, so `note` says the prompt is coming before it comes, and `title` says it in full.
+  // ⚠️ KEEP `note` NO WIDER THAN THE CHIP: it sits in the chip's column, and a line wider than
+  // the chip widens the bar (the whole sentence pushed the Tx cycle onto a second row at
+  // 1920×1080). The toasts say what happened: `onAir`, `running` and `nothing` are the three
+  // refusals, and nothing ran for any of them.
+  'topbar.clock.repair.label': 'Repair clock',
+  'topbar.clock.repair.busy': 'Repairing…',
+  'topbar.clock.repair.note': 'asks for admin rights',
+  'topbar.clock.repair.title':
+    'Fix what the clock check found. Windows asks for administrator rights first, and Nexus runs the fix only when you press this.',
+  'topbar.clock.repair.onAir':
+    'Not while transmitting: a clock repair can move the clock in the middle of an over. Try again when the transmitter is idle.',
+  'topbar.clock.repair.running':
+    'A clock repair is already running. Answer the Windows prompt, or wait for it to finish.',
+  'topbar.clock.repair.nothing':
+    'There is nothing to repair now: the latest clock check found nothing to fix.',
+  'topbar.clock.repair.done': 'Clock repaired. Hover the clock readout to see what changed.',
+  'topbar.clock.repair.failed':
+    'The clock was not repaired: the administrator prompt was declined, or Windows refused a step.',
   'topbar.sync.ok.label': 'Sync',
   'topbar.sync.bad.label': 'No Sync',
   'topbar.sync.ok.title': 'Time sync OK (from decode timing)',
