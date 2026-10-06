@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scope: a frequency label no longer prints over the one beside it on a narrow scope.** On a phone,
   the Remote page's CW scope drew its right-edge label on top of its neighbour at 20 m and 2 m. A label
   with no room is now left off and its tick stays; wider scopes draw every label as before.
+- **Light theme: the spot tags' colours on the Phone and CW scopes are readable again.** The scope stays
+  dark in the light theme, but its spot tags took the light theme's need colours, which are made for a
+  white page: on the dark scope the new zone, SOTA and watch list marks read 2.7:1, under the 3:1 a mark
+  needs. The scope now marks its tags in the dark theme's need colours in every theme, like everything
+  else drawn on it; every need colour reads at least 3:1 there. Elsewhere the light theme is unchanged.
 - **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
   as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
   wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
