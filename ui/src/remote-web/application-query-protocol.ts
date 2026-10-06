@@ -30,6 +30,10 @@ export const APRS_COMMAND = 'get_remote_aprs'
 export const JS8_CONTEXT_COMMAND = 'get_remote_js8_context'
 export const FIELD_DAY_COMMAND = 'get_remote_field_day'
 export const OTA_COMMAND = 'get_remote_ota'
+/** From this query version the relay tells the station which version a session agreed (`queryVersion`
+ * on the query it forwards), and a station told it adds each activator's state to the POTA/SOTA board's
+ * spots. Never told to an older station, which refuses a query with any key it does not know. */
+export const OTA_STATES_VERSION = 18
 export const MEMORIES_COMMAND = 'get_remote_memories'
 export const DXPEDITIONS_COMMAND = 'get_remote_dxpeditions'
 export const COLLECTIONS = ['decodes', 'needs', 'spots', 'log', 'entities', 'health'] as const
@@ -45,9 +49,9 @@ export type QueryPage = { type: 'applicationPage'; requestId: string; collection
   offset: number; total: number; retained: number; nextCursor: string | null; ageMs: number; rows: Json[]; meta: Json }
 export const insightCollection = (v: unknown): v is InsightCollection => v === 'awards' || v === 'statistics'
 export const collection = (v: unknown, version = 3): v is Collection => COLLECTIONS.includes(v as typeof COLLECTIONS[number]) ||
-  ([4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(version) && v === 'memories') || ([9, 10, 11, 12, 13, 14, 15, 16, 17].includes(version) && v === 'ota') || ([10, 11, 12, 13, 14, 15, 16, 17].includes(version) && v === 'fieldDay') || ([11, 12, 13, 14, 15, 16, 17].includes(version) && v === 'js8Context') || ([12, 13, 14, 15, 16, 17].includes(version) && (v === 'sstvImage' || v === 'aprs')) || ([13, 14, 15, 16, 17].includes(version) && navigationCollection(v)) || ([14, 15, 16, 17].includes(version) && configurationCollection(v)) ||
-  ([15, 16, 17].includes(version) && (v === 'parks' || v === 'confirmations')) || ([16, 17].includes(version) && v === 'pounce') ||
-  (version === 17 && v === 'rotator')
+  ([4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(version) && v === 'memories') || ([9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(version) && v === 'ota') || ([10, 11, 12, 13, 14, 15, 16, 17, 18].includes(version) && v === 'fieldDay') || ([11, 12, 13, 14, 15, 16, 17, 18].includes(version) && v === 'js8Context') || ([12, 13, 14, 15, 16, 17, 18].includes(version) && (v === 'sstvImage' || v === 'aprs')) || ([13, 14, 15, 16, 17, 18].includes(version) && navigationCollection(v)) || ([14, 15, 16, 17, 18].includes(version) && configurationCollection(v)) ||
+  ([15, 16, 17, 18].includes(version) && (v === 'parks' || v === 'confirmations')) || ([16, 17, 18].includes(version) && v === 'pounce') ||
+  ([17, 18].includes(version) && v === 'rotator')
 export const sstvImageId = (v: unknown): v is string => typeof v === 'string' && /\.(png|bmp)$/.test(v) && streamId(v.slice(0,-4))
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 export function queryCursor(v: unknown): v is string {

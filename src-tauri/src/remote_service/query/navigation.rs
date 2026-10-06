@@ -854,6 +854,7 @@ mod tests {
             search: search.into(),
             unconfirmed: false,
             after: None,
+            query_version: None,
         }
     }
     fn emit(name: &str, raw: &Value) {

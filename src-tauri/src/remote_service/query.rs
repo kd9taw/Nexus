@@ -87,6 +87,10 @@ pub struct Request {
     pub search: String,
     pub unconfirmed: bool,
     pub after: Option<u64>,
+    /// The query version the relay agreed for this browser's session. A relay names it only from
+    /// [`ota::STATES_VERSION`] up and only to a station that advertised that rung; an older relay
+    /// never names it. It changes what one collection carries: see [`ota::STATES_VERSION`].
+    pub query_version: Option<u8>,
 }
 impl Request {
     pub fn valid(&self) -> bool {
@@ -131,6 +135,7 @@ impl Request {
                 .cursor
                 .as_deref()
                 .is_none_or(|c| parse_cursor(c).is_some())
+            && self.query_version.is_none_or(|v| v == ota::STATES_VERSION)
     }
 }
 fn parse_cursor(cursor: &str) -> Option<(&str, usize)> {
@@ -522,7 +527,11 @@ impl Publisher {
                 return Ok((
                     Vec::new(),
                     0,
-                    ota::read_engine(engine, sources.ok_or("applicationUnavailable")?)?,
+                    ota::read_engine(
+                        engine,
+                        sources.ok_or("applicationUnavailable")?,
+                        request.query_version,
+                    )?,
                 ));
             }
             Collection::Memories => {
@@ -721,6 +730,7 @@ mod tests {
             search: String::new(),
             unconfirmed: false,
             after: None,
+            query_version: None,
         }
     }
     fn engine() -> crate::SharedEngine {
@@ -907,6 +917,29 @@ mod tests {
                 .all(|r| !r["tags"].as_array().unwrap().contains(&json!("Wanted"))),
             "{unwatched:?}"
         );
+    }
+
+    /// What a relay may say of a session's query version: nothing (an older relay, or a session
+    /// below 18), or the one version this station shapes an answer to. Anything else is refused
+    /// like any other malformed query.
+    #[test]
+    fn a_relay_may_name_only_the_query_version_this_station_answers() {
+        let query = |version: Option<Value>| {
+            let mut v = json!({"requestId": ID, "collection": "ota", "cursor": null, "search": "",
+                "unconfirmed": false, "after": null});
+            if let Some(version) = version {
+                v["queryVersion"] = version;
+            }
+            serde_json::from_value::<Request>(v)
+        };
+        assert!(query(None).unwrap().valid());
+        assert!(query(Some(json!(18))).unwrap().valid());
+        for refused in [0, 1, 9, 17, 19, 255] {
+            assert!(!query(Some(json!(refused))).unwrap().valid(), "{refused}");
+        }
+        for malformed in [json!(-1), json!(256), json!("18"), json!(18.5)] {
+            assert!(query(Some(malformed.clone())).is_err(), "{malformed}");
+        }
     }
 
     // ── the Log collection from the store, held to the code before C18 ───────────────────

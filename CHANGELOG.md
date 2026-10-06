@@ -466,7 +466,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows none). A US state your log does not yet hold on that spot's band is lit in the New State
   colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
   a park on a state line, a reminder that the contact counts for the state the activator is
-  actually in. Screen readers read the name. The Remote page's board does not show states yet.
+  actually in. Screen readers read the name. The Remote page's board shows them too, lit the same
+  way; it needs the Remote page's update.
 - **Needed board: an activator in a state you still need shows as a new state**, as on the
   POTA/SOTA board: per band, a park on a state line when either state is needed, and in the park's
   or summit's state, not the activator's home state, whether the board heard them from the

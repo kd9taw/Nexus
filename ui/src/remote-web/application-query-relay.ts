@@ -1,11 +1,11 @@
 import type { Peer } from '../remote-monitor/relay'
 import { APPLICATION_TIMEOUT_MS, APPLICATION_REQUEST_BYTES } from './application-protocol'
-import { QUERY_ERRORS, QUERY_MAX_BYTES, queryPage, queryRequest } from './application-query-protocol'
+import { OTA_STATES_VERSION, QUERY_ERRORS, QUERY_MAX_BYTES, queryPage, queryRequest } from './application-query-protocol'
 import type { Collection } from './application-query-protocol'
 import { streamId } from './application-stream-protocol'
 
 type Pending = { id: string; forwardId: string; collection: Collection; at: number; delivered: boolean }
-export type QueryCheckpoint = { pending: Pending | null; windowAt: number; count: number; version?: 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 }
+export type QueryCheckpoint = { pending: Pending | null; windowAt: number; count: number; version?: 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 }
 type Browser = QueryCheckpoint & { peer: Peer }
 // Only the room's already approved/entitled peers enter here. Attachments contain
 // routing credits only: no query text, contacts, history, rows or credentials.
@@ -25,7 +25,7 @@ export class ApplicationQueryRelay {
     for (const id of this.browsers.keys()) if (!this.peers.has(id)) this.browsers.delete(id)
     this.expire(now)
   }
-  add(id: string, now: number, version: 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 = 3): void {
+  add(id: string, now: number, version: 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 = 3): void {
     const peer = this.peers.get(id)
     if (peer) this.browsers.set(id, { peer, pending: null, count: 0, windowAt: now, version })
   }
@@ -35,7 +35,7 @@ export class ApplicationQueryRelay {
   }
   restore(id: string, saved: QueryCheckpoint): void {
     const peer = this.peers.get(id)
-    if (!peer || (saved.version !== undefined && ![3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(saved.version)) || !Number.isSafeInteger(saved.count) || saved.count < 0 || saved.count > 16 ||
+    if (!peer || (saved.version !== undefined && ![3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(saved.version)) || !Number.isSafeInteger(saved.count) || saved.count < 0 || saved.count > 16 ||
       !Number.isFinite(saved.windowAt) || (saved.pending && (!streamId(saved.pending.id) || !streamId(saved.pending.forwardId) || !Number.isFinite(saved.pending.at)))) throw new Error('invalidQueryCheckpoint')
     this.browsers.set(id, { ...saved, peer })
   }
@@ -48,7 +48,8 @@ export class ApplicationQueryRelay {
         if (b.pending?.delivered && b.pending.id === message.requestId) b.pending = null
         return
       }
-      const request = queryRequest(message, Math.min(b.version ?? 3, this.stationVersion))
+      const version = Math.min(b.version ?? 3, this.stationVersion)
+      const request = queryRequest(message, version)
       if (now - b.windowAt >= 1000) { b.windowAt = now; b.count = 0 }
       if (++b.count > 16 || b.pending) throw new Error('applicationLimit')
       const pending = { id: request.requestId, forwardId: this.id(), collection: request.collection, at: now, delivered: false }
@@ -57,7 +58,7 @@ export class ApplicationQueryRelay {
       if (!this.station || count > 32) {
         pending.delivered = true
         b.peer.send(JSON.stringify({ type: 'applicationQueryError', requestId: pending.id, error: this.station ? 'applicationBusy' : 'applicationUnavailable' }))
-      } else this.station.send(JSON.stringify({ ...request, requestId: pending.forwardId }))
+      } else this.station.send(JSON.stringify({ ...request, requestId: pending.forwardId, ...(version >= OTA_STATES_VERSION ? { queryVersion: version } : {}) }))
     } catch { this.close(b, 'invalidApplicationQuery') }
   }
   receiveStation(message: Record<string, unknown>, now: number): void {

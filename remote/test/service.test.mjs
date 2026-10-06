@@ -56,7 +56,7 @@ test('a retired service announces where Remote moved, then refuses new pairings,
 
 test('station lookups require all extensions, preserve v14 refusal and survive hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 17)
+  assert.equal(config.applicationVersion, 18)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1' }
@@ -135,6 +135,41 @@ test('the rotator heading requires all extensions and leaves a v16 station untou
       assert.equal(page.requestId, requestId); assert.equal(page.meta.source.azimuthDeg, 212.5)
       live.browser.send({ type: 'applicationQueryAck', requestId })
     } else await live.browser.take(type('closed'))
+    live.browser.close(); live.station.close()
+  }
+})
+test('a station is asked for activator states only when it and the page both agreed v18', async () => {
+  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
+    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
+    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1', 'x-nexus-application-alerts-version':'1', 'x-nexus-application-rotator-version':'1', 'x-nexus-application-ota-states-version':'1' }
+  const asked = ['after', 'collection', 'cursor', 'requestId', 'search', 'type', 'unconfirmed']
+  // A new station with a new page; an old page (v17) with a new station; a new page with an old station.
+  for (const [missing, hello, expected] of [[null, 18, 18], [null, 17, 17], ['ota-states', 18, 17]]) {
+    const advertisement = { ...headers }
+    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
+    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
+    live.browser.send({ type: 'applicationHello', version: hello })
+    const capabilities = await live.browser.take(type('applicationCapabilities'))
+    assert.equal(capabilities.version, expected)
+    assert.ok(capabilities.commands.includes('get_remote_ota'))
+    const requestId = crypto.randomUUID()
+    live.browser.send({ type: 'applicationQuery', requestId, collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
+    const request = await live.station.take(type('applicationQuery'))
+    // A station before v18 refuses a query carrying any key it does not know; a page before v18 refuses
+    // a spot carrying one. So only the pair that both agreed v18 is told, and only it gets states.
+    assert.deepEqual(Object.keys(request).sort(), expected === 18 ? [...asked.slice(0, 3), 'queryVersion', ...asked.slice(3)] : asked)
+    if (expected === 18) assert.equal(request.queryVersion, 18)
+    const spot = { program: 'POTA', reference: 'US-0823', name: 'Fort Union Trading Post', activator: 'K0ND', freqKhz: 14285, mode: 'SSB',
+      spotter: null, comment: null, grid: null, lat: null, lon: null, spotTimeUnix: 1000, newPark: true, bandOpen: false,
+      ...(expected === 18 ? { states: ['US-MT', 'US-ND'], neededStates: ['US-ND'] } : {}) }
+    live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'ota', snapshotId: crypto.randomUUID(),
+      offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { capturedAgeMs: 0, source: {
+        feeds: [{ program: 'POTA', status: 'ready', sourceAgeMs: 0, spots: [spot] }, { program: 'SOTA', status: 'unavailable', sourceAgeMs: null, spots: [] }],
+        activation: { program: null, reference: null, qsoCount: 0 }, hunt: null, parkCount: 0, huntedCount: 0 } } })
+    const page = await live.browser.take(type('applicationPage'))
+    assert.equal(page.requestId, requestId)
+    assert.deepEqual(page.meta.source.feeds[0].spots[0], spot)
+    live.browser.send({ type: 'applicationQueryAck', requestId })
     live.browser.close(); live.station.close()
   }
 })
@@ -476,7 +511,7 @@ test('v2 subscriptions share native samples across approved browsers and recover
 
 test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 17)
+  assert.equal(config.applicationVersion, 18)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1' }
   for (const [missing, expected] of [[null, 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {

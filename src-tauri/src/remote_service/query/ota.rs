@@ -14,6 +14,13 @@ const FEED_TEXT_BYTES: usize = 128 * 1024;
 const PAGE_BYTES: usize = 192 * 1024;
 const SOURCE_TTL_MS: u64 = 15 * 60 * 1000;
 const LOG_ROWS: usize = 1_000_000;
+/// The query version from which every spot also says where the activator is (`states`) and which
+/// of those states Worked All States still needs on the spot's band (`neededStates`): the desktop
+/// board's own two answers. A page before it refuses a spot carrying any key it does not list, so
+/// a read whose session did not agree it gets exactly the board it always did.
+pub(super) const STATES_VERSION: u8 = 18;
+/// The most places a spot can be in: the 50 states, DC and the 13 provinces and territories.
+const STATES: usize = 64;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +29,16 @@ struct Spot {
     source: OtaSpot,
     new_park: bool,
     band_open: bool,
+    /// Only for a read whose session agreed [`STATES_VERSION`], and then always both keys.
+    #[serde(flatten)]
+    place: Option<Place>,
+}
+/// The desktop board's two answers for a row (`OtaSpotDto::states` / `needed_states`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Place {
+    states: Vec<String>,
+    needed_states: Vec<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +77,12 @@ fn valid_spot(s: &OtaSpot, program: &str) -> Option<usize> {
             .is_none_or(|n| (0..=9_007_199_254_740_991).contains(&n)))
     .then_some(bytes)
 }
-fn feed(sources: &Sources, program: &'static str, now: i64) -> Result<Feed, &'static str> {
+fn feed(
+    sources: &Sources,
+    program: &'static str,
+    now: i64,
+    states: bool,
+) -> Result<Feed, &'static str> {
     let mut result = Feed {
         program,
         status: "unavailable",
@@ -91,7 +113,7 @@ fn feed(sources: &Sources, program: &'static str, now: i64) -> Result<Feed, &'st
     let mut bytes = 0;
     for row in rows {
         bytes += valid_spot(row, program).ok_or("applicationTooLarge")?;
-        if bytes > FEED_TEXT_BYTES {
+        if bytes > FEED_TEXT_BYTES || (states && row.states.len() > STATES) {
             return Err("applicationTooLarge");
         }
     }
@@ -101,28 +123,37 @@ fn feed(sources: &Sources, program: &'static str, now: i64) -> Result<Feed, &'st
             source: s.clone(),
             new_park: false,
             band_open: false,
+            place: None,
         })
         .collect();
     result.status = "ready";
     Ok(result)
 }
 
+/// `version`: the query version the relay agreed for the reading browser's session, if it named
+/// one ([`STATES_VERSION`]).
 pub(super) fn read_engine(
     engine: &crate::SharedEngine,
     sources: &Sources,
+    version: Option<u8>,
 ) -> Result<Value, &'static str> {
     // The native hunter feed is deliberately separate from the cluster/RBN
     // unassisted switch (get_ota_spots and assist.why.notCovered). Preserve it.
-    read_at(engine, sources, crate::now_unix())
+    read_at(engine, sources, crate::now_unix(), version)
 }
 
 fn read_at(
     engine: &crate::SharedEngine,
     sources: &Sources,
     now: i64,
+    version: Option<u8>,
 ) -> Result<Value, &'static str> {
+    let states = version >= Some(STATES_VERSION);
     let deadline = Instant::now() + Duration::from_secs(2);
-    let mut feeds = [feed(sources, "POTA", now)?, feed(sources, "SOTA", now)?];
+    let mut feeds = [
+        feed(sources, "POTA", now, states)?,
+        feed(sources, "SOTA", now, states)?,
+    ];
     let park_count = sources
         .parks
         .try_lock()
@@ -138,7 +169,7 @@ fn read_at(
             Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
         }
     };
-    let (rows, my_call, my_grid, activation, hunt, hunted_count, qso_count) = {
+    let (rows, my_call, my_grid, activation, hunt, hunted_count, qso_count, needs) = {
         let e = lock()?;
         if e.settings().mycall.len() > TEXT || e.settings().mygrid.len() > TEXT {
             return Err("applicationTooLarge");
@@ -169,11 +200,32 @@ fn read_at(
             // The activation's contacts, from the hot index — the rows whose `MY_SIG_INFO`
             // is this reference — rather than a pass over the log. 0 with no activation.
             e.activation_qso_count(),
+            // The needs model the desktop's readers share, for the states a spot would add to
+            // WAS: the kept model, or the log's rows to fold once the lock is released.
+            states.then(|| crate::log_folds::needs_capture(&e, &sources.needs)),
         )
     };
     // The bound on the log's size this read has always kept.
     if super::picture::read(&rows, |log| log.count())? > LOG_ROWS {
         return Err("applicationTooLarge");
+    }
+    if let Some(needs) = needs {
+        // The desktop board's own rule, row for row (`ota_needed_states`).
+        let needs = crate::log_folds::needs_finish(needs, &sources.needs)
+            .map_err(|_| "applicationUnavailable")?;
+        for feed in &mut feeds {
+            let spots: Vec<OtaSpot> = feed.spots.iter().map(|s| s.source.clone()).collect();
+            for (spot, needed_states) in feed
+                .spots
+                .iter_mut()
+                .zip(crate::ota_needed_states(&needs, &spots))
+            {
+                spot.place = Some(Place {
+                    states: spot.source.states.clone(),
+                    needed_states,
+                });
+            }
+        }
     }
     // Same own-call/15-minute PSKR evidence as get_ota_spots, without copying
     // every receiver/grid from the path cache or holding the engine lock.
@@ -347,7 +399,7 @@ mod tests {
                 );
                 seen.borrow_mut().push(seam);
             },
-            || read_at(&engine, &sources, 1001),
+            || read_at(&engine, &sources, 1001, None),
         )
         .unwrap();
         assert_eq!(*seams.borrow(), [super::super::picture::Seam::Count]);
@@ -380,7 +432,7 @@ mod tests {
                 });
             }
         }
-        let without_own_evidence = read_at(&engine, &sources, 1001).unwrap();
+        let without_own_evidence = read_at(&engine, &sources, 1001, None).unwrap();
         for spot in without_own_evidence["feeds"][0]["spots"]
             .as_array()
             .unwrap()
@@ -397,23 +449,23 @@ mod tests {
             .lock()
             .unwrap()
             .insert("POTA".into(), (1000, vec![spot("POTA", "US-0004")]));
-        let value = read_at(&engine, &sources, 1001).unwrap();
+        let value = read_at(&engine, &sources, 1001, None).unwrap();
         assert_eq!(value["feeds"][0]["status"], "ready");
         assert_eq!(value["feeds"][1]["status"], "unavailable");
-        let expired = read_at(&engine, &sources, 1900).unwrap();
+        let expired = read_at(&engine, &sources, 1900, None).unwrap();
         assert_eq!(expired["feeds"][0]["status"], "expired");
         assert_eq!(expired["feeds"][0]["spots"], json!([]));
         assert_eq!(
-            read_at(&engine, &sources, 999).unwrap()["feeds"][0]["status"],
+            read_at(&engine, &sources, 999, None).unwrap()["feeds"][0]["status"],
             "unavailable"
         );
         let guard = sources.ota.lock().unwrap();
         assert_eq!(
-            read_at(&engine, &sources, 1001).unwrap_err(),
+            read_at(&engine, &sources, 1001, None).unwrap_err(),
             "applicationBusy"
         );
         drop(guard);
-        assert!(read_at(&engine, &sources, 1001).is_ok());
+        assert!(read_at(&engine, &sources, 1001, None).is_ok());
     }
     /// An activation changed while the board is read refuses it — the count would be another
     /// reference's. A logged change does not: the count is the log's as the read took it, and the
@@ -435,16 +487,16 @@ mod tests {
                         assert!(e.update_qso(q.id.unwrap(), q));
                     }
                 },
-                || read_at(&engine, &sources, 1000),
+                || read_at(&engine, &sources, 1000, None),
             );
             if activation {
                 assert_eq!(value.unwrap_err(), "applicationBusy");
-                let next = read_at(&engine, &sources, 1000).unwrap();
+                let next = read_at(&engine, &sources, 1000, None).unwrap();
                 assert_eq!(next["activation"]["reference"], "US-0005");
                 assert_eq!(next["activation"]["qsoCount"], 0);
             } else {
                 assert_eq!(value.unwrap()["activation"]["qsoCount"], 270);
-                let next = read_at(&engine, &sources, 1000).unwrap();
+                let next = read_at(&engine, &sources, 1000, None).unwrap();
                 assert_eq!(next["activation"]["qsoCount"], 269);
             }
         }
@@ -464,7 +516,7 @@ mod tests {
             .map(|i| spot("POTA", &format!("US-{i:04}")))
             .collect());
         assert_eq!(
-            read_at(&engine, &sources, 1000).unwrap()["feeds"][0]["spots"]
+            read_at(&engine, &sources, 1000, None).unwrap()["feeds"][0]["spots"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -472,25 +524,234 @@ mod tests {
         );
         set(vec![spot("POTA", "US-0001"); 513]);
         assert_eq!(
-            read_at(&engine, &sources, 1000).unwrap_err(),
+            read_at(&engine, &sources, 1000, None).unwrap_err(),
             "applicationTooLarge"
         );
         let mut rich = spot("POTA", "US-0001");
         rich.name = "x".repeat(1024);
         rich.comment = Some("n".repeat(1024));
         set(vec![rich.clone(); 60]);
-        assert!(read_at(&engine, &sources, 1000).is_ok());
+        assert!(read_at(&engine, &sources, 1000, None).is_ok());
         set(vec![rich.clone(); 70]);
         assert_eq!(
-            read_at(&engine, &sources, 1000).unwrap_err(),
+            read_at(&engine, &sources, 1000, None).unwrap_err(),
             "applicationTooLarge"
         );
         rich.name.push('x');
         set(vec![rich]);
         assert_eq!(
-            read_at(&engine, &sources, 1000).unwrap_err(),
+            read_at(&engine, &sources, 1000, None).unwrap_err(),
             "applicationTooLarge"
         );
+    }
+
+    // ── each activator's state, for a session that agreed v18 ────────────────────────────
+
+    /// The keys a page before v18 lists for a spot (`ui/src/remote-web/ota.ts` as 1.16 shipped
+    /// it), refusing any other: the whole board goes blank over one extra key.
+    const OLDER_PAGE_KEYS: [&str; 14] = [
+        "activator",
+        "bandOpen",
+        "comment",
+        "freqKhz",
+        "grid",
+        "lat",
+        "lon",
+        "mode",
+        "name",
+        "newPark",
+        "program",
+        "reference",
+        "spotTimeUnix",
+        "spotter",
+    ];
+    fn keys(spot: &Value) -> Vec<String> {
+        let mut keys: Vec<_> = spot.as_object().unwrap().keys().cloned().collect();
+        keys.sort_unstable();
+        keys
+    }
+    fn placed(
+        program: &str,
+        reference: &str,
+        freq_khz: f64,
+        activator: &str,
+        states: &[&str],
+    ) -> OtaSpot {
+        OtaSpot {
+            freq_khz,
+            activator: activator.into(),
+            states: states.iter().map(|s| s.to_string()).collect(),
+            ..spot(program, reference)
+        }
+    }
+    #[test]
+    fn a_read_that_names_no_v18_gets_exactly_the_keys_an_older_page_lists() {
+        let engine = engine(0);
+        let sources = sources();
+        let line = placed("POTA", "US-0823", 14285.0, "K0ND", &["US-MT", "US-ND"]);
+        let summit = placed("SOTA", "W7M/MT-001", 14062.0, "K7ABC", &["US-MT"]);
+        sources
+            .ota
+            .lock()
+            .unwrap()
+            .insert("POTA".into(), (1000, vec![line]));
+        sources
+            .ota
+            .lock()
+            .unwrap()
+            .insert("SOTA".into(), (1000, vec![summit]));
+        for version in [None, Some(9), Some(17)] {
+            let value = read_at(&engine, &sources, 1001, version).unwrap();
+            for feed in 0..2 {
+                assert_eq!(
+                    keys(&value["feeds"][feed]["spots"][0]),
+                    OLDER_PAGE_KEYS,
+                    "{version:?}"
+                );
+            }
+        }
+        // The control: the same cache read at v18 says more, so the keys are not merely absent from it.
+        let value = read_at(&engine, &sources, 1001, Some(STATES_VERSION)).unwrap();
+        assert_eq!(
+            value["feeds"][0]["spots"][0]["states"],
+            json!(["US-MT", "US-ND"])
+        );
+        assert_eq!(value["feeds"][1]["spots"][0]["states"], json!(["US-MT"]));
+    }
+    /// At v18 each spot says the states it is in and, of those, the ones a contact would add to
+    /// Worked All States on its band: the desktop board's rule (`ota_needed_states`), asked of the
+    /// needs model the station's other readers share. By value, against a log that holds North
+    /// Dakota on 20 m and nothing else.
+    #[test]
+    fn at_v18_each_spot_says_its_states_and_the_ones_worked_all_states_still_needs_on_its_band() {
+        let mut e = tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "W1AW".into(),
+            mygrid: "FN31".into(),
+            ..Default::default()
+        });
+        e.import_adif("<CALL:4>K0ND<BAND:3>20m<MODE:3>SSB<STATE:2>ND<QSO_DATE:8>20260909<TIME_ON:6>120000<EOR>\n");
+        assert_eq!(e.stored_log().len(), 1);
+        let engine = Arc::new(Mutex::new(e));
+        let sources = sources();
+        sources.ota.lock().unwrap().insert(
+            "POTA".into(),
+            (
+                1000,
+                vec![
+                    // A park on the MT/ND line from 20 m, where the log holds ND and not MT.
+                    placed("POTA", "US-0823", 14285.0, "K0ND", &["US-MT", "US-ND"]),
+                    // The same park from 40 m: a state counts per band, so both are needed there.
+                    placed("POTA", "US-0823", 7185.0, "K0ND", &["US-MT", "US-ND"]),
+                    // An activator whose call is not a US entity's is no WAS contact, wherever he is.
+                    placed("POTA", "US-0065", 14250.0, "VE4ABC", &["US-ND"]),
+                    // A province is no US state.
+                    placed("POTA", "CA-0001", 14062.0, "VE3ABC", &["CA-ON"]),
+                    // A park the feed places nowhere.
+                    placed("POTA", "FR-11086", 3573.0, "F4ABC", &[]),
+                ],
+            ),
+        );
+        let summit = placed("SOTA", "W7M/MT-001", 14062.0, "K7ABC", &["US-MT"]);
+        sources
+            .ota
+            .lock()
+            .unwrap()
+            .insert("SOTA".into(), (1000, vec![summit]));
+        let value = read_at(&engine, &sources, 1001, Some(STATES_VERSION)).unwrap();
+        let said = |feed: usize| {
+            value["feeds"][feed]["spots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| (s["states"].clone(), s["neededStates"].clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            said(0),
+            [
+                (json!(["US-MT", "US-ND"]), json!(["US-MT"])),
+                (json!(["US-MT", "US-ND"]), json!(["US-MT", "US-ND"])),
+                (json!(["US-ND"]), json!([])),
+                (json!(["CA-ON"]), json!([])),
+                (json!([]), json!([])),
+            ]
+        );
+        assert_eq!(said(1), [(json!(["US-MT"]), json!(["US-MT"]))]);
+        let mut placed_keys: Vec<String> = OLDER_PAGE_KEYS.iter().map(|k| k.to_string()).collect();
+        placed_keys.extend(["neededStates".into(), "states".into()]);
+        placed_keys.sort_unstable();
+        for spot in value["feeds"][0]["spots"].as_array().unwrap() {
+            assert_eq!(keys(spot), placed_keys);
+        }
+    }
+    /// A spot's states are bounded where they are sent (64: every state, DC and every province),
+    /// and a board too large with them is refused whole, never cut. A read that did not agree v18
+    /// is not refused over keys it would never receive.
+    #[test]
+    fn states_are_bounded_only_where_they_are_sent() {
+        let engine = engine(0);
+        let sources = sources();
+        let set = |states: usize, count: usize| {
+            let row = OtaSpot {
+                states: vec!["US-ND".into(); states],
+                ..spot("POTA", "US-0001")
+            };
+            sources
+                .ota
+                .lock()
+                .unwrap()
+                .insert("POTA".into(), (1000, vec![row; count]));
+        };
+        set(64, 1);
+        assert!(read_at(&engine, &sources, 1000, Some(STATES_VERSION)).is_ok());
+        set(65, 1);
+        assert_eq!(
+            read_at(&engine, &sources, 1000, Some(STATES_VERSION)).unwrap_err(),
+            "applicationTooLarge"
+        );
+        assert!(read_at(&engine, &sources, 1000, None).is_ok());
+        set(64, 512);
+        assert_eq!(
+            read_at(&engine, &sources, 1000, Some(STATES_VERSION)).unwrap_err(),
+            "applicationTooLarge"
+        );
+        assert_eq!(
+            read_at(&engine, &sources, 1000, None).unwrap()["feeds"][0]["spots"]
+                .as_array()
+                .unwrap()
+                .len(),
+            512
+        );
+    }
+    /// The station shapes each read to the version it names, and a board taken for a v18 session is
+    /// never handed to a read that named none, though they share one publisher.
+    #[test]
+    fn a_v18_board_is_never_handed_to_a_read_that_did_not_agree_it() {
+        let engine = engine(0);
+        let sources = sources();
+        let row = placed("POTA", "US-0065", 14250.0, "K0ND", &["US-ND"]);
+        sources
+            .ota
+            .lock()
+            .unwrap()
+            .insert("POTA".into(), (crate::now_unix(), vec![row]));
+        let mut publisher = super::super::Publisher::default();
+        let mut read = |version: Option<u8>| {
+            let mut query = json!({"requestId": "10000000-0000-4000-8000-000000000001", "collection": "ota",
+                "cursor": null, "search": "", "unconfirmed": false, "after": null});
+            if let Some(version) = version {
+                query["queryVersion"] = json!(version);
+            }
+            let request: super::super::Request = serde_json::from_value(query).unwrap();
+            let page = publisher
+                .read(&request, &engine, Some(&sources), Instant::now())
+                .unwrap();
+            serde_json::from_str::<Value>(&page).unwrap()["meta"]["source"]["feeds"][0]["spots"][0]
+                .clone()
+        };
+        assert_eq!(read(Some(STATES_VERSION))["states"], json!(["US-ND"]));
+        assert_eq!(keys(&read(None)), OLDER_PAGE_KEYS);
+        assert_eq!(read(Some(STATES_VERSION))["neededStates"], json!(["US-ND"]));
     }
 
     // ── the board from the store and the hot index, held to the code before C18 ──────────
@@ -506,7 +767,10 @@ mod tests {
         mut after_chunk: impl FnMut(usize),
     ) -> Result<Value, &'static str> {
         let deadline = Instant::now() + Duration::from_secs(2);
-        let mut feeds = [feed(sources, "POTA", now)?, feed(sources, "SOTA", now)?];
+        let mut feeds = [
+            feed(sources, "POTA", now, false)?,
+            feed(sources, "SOTA", now, false)?,
+        ];
         let park_count = sources
             .parks
             .try_lock()
@@ -656,7 +920,7 @@ mod tests {
                 None => e.lock().unwrap().clear_activation(),
             }
             let old = old_read_chunks(e, sources, 1001, |_| {}).map(|v| v.to_string());
-            let new = read_at(e, sources, 1001).map(|v| v.to_string());
+            let new = read_at(e, sources, 1001, None).map(|v| v.to_string());
             assert!(
                 new == old,
                 "{what}: the board for {activation:?} differs\nnew: {new:.400?}\nold: {old:.400?}"
@@ -696,7 +960,8 @@ mod tests {
             .unwrap()
             .set_activation("POTA", "US-0001", Vec::new())
             .unwrap();
-        let count = read_at(&store, &board_sources(), 1001).unwrap()["activation"]["qsoCount"]
+        let count = read_at(&store, &board_sources(), 1001, None).unwrap()["activation"]
+            ["qsoCount"]
             .as_u64()
             .unwrap();
         assert!(count > 20, "premise: contacts of the activation: {count}");

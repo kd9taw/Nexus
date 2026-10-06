@@ -52,7 +52,7 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'v4'. The names are built in
                         the test() title in remote/test/browser.test.mjs, next to
-                        the SCENARIOS table: 'v4'..'v17' for the application
+                        the SCENARIOS table: 'v4'..'v18' for the application
                         versions, and 'operations', 'FT operating', 'quick layout',
                         'session layout', 'contact continuity', 'DX work',
                         'radio selection', 'routed decoder', 'routed workspace',

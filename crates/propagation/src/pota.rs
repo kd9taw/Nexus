@@ -49,7 +49,8 @@ pub struct OtaSpot {
     ///
     /// ⚠️ NEVER SERIALIZED. Two consumers flatten this struct beside fields of their own: the
     /// desktop board's row, which writes these codes under a key of its own, and Remote's
-    /// hunter-feed projection, whose page refuses any spot carrying a key it does not list. A
+    /// hunter-feed projection, which writes them under its own key only for a page that agreed to
+    /// read them, because an older page refuses any spot carrying a key it does not list. A
     /// serialized field here would empty the Remote board for every station that updated
     /// before the page did.
     #[serde(skip)]

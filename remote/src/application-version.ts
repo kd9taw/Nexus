@@ -15,7 +15,7 @@
 // against one exact string, and anything else - a different digit, a malformed value, no header -
 // reads as absent and stops the prefix there. So a pinned header carries exactly one bit (sent /
 // not sent) and the digit it sends is decoration: the rung comes from the row's POSITION, not from
-// the number. All seventeen earn their place - each is the only signal for its rung, and an older
+// the number. All eighteen earn their place - each is the only signal for its rung, and an older
 // station that stops at any rung still negotiates that rung exactly - but only the first accepts a
 // value other than the one the current desktop sends.
 //
@@ -37,6 +37,7 @@
 //    15  x-nexus-application-lookups-version         1     no - '1' only (parks, confirmations)
 //    16  x-nexus-application-alerts-version          1     no - '1' only (Pounce)
 //    17  x-nexus-application-rotator-version         1     no - '1' only
+//    18  x-nexus-application-ota-states-version      1     no - '1' only (activator states on OTA spots)
 //
 // Version 1 has no row: it is the legacy `x-nexus-application-version` header itself, which
 // predates the ladder and is the one place a station's own number is believed ('2' there is an
@@ -60,6 +61,7 @@ export const APPLICATION_EXTENSIONS: readonly (readonly [header: string, pinned:
   ['x-nexus-application-lookups-version', '1'],
   ['x-nexus-application-alerts-version', '1'],
   ['x-nexus-application-rotator-version', '1'],
+  ['x-nexus-application-ota-states-version', '1'],
 ]
 
 /** The newest application version this build speaks: the legacy base plus every rung above it. */

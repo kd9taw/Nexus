@@ -527,6 +527,19 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     dxpeditions.asOf = Math.floor(Date.now()/1000)
     const bank = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/memories.json', import.meta.url), 'utf8'))
     const ota = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/ota.json', import.meta.url), 'utf8'))
+    // From v18 the board's spots may say where each activator is. This stand-in speaks the ladder only
+    // to v14, so the states go on its board directly: what only a real browser can check is that rows
+    // carrying them keep the board's geometry (a row's hidden screen-reader text once lengthened the
+    // whole page). Which pages are SENT states is the relay's and station's rule, tested in
+    // service.test.mjs and native.test.mjs. One trail spans sixteen states, the longest label a row shows.
+    if (applicationVersion >= 18) {
+      const trail = ['US-IL', 'US-MO', 'US-KS', 'US-NE', 'US-IA', 'US-SD', 'US-ND', 'US-MT', 'US-ID', 'US-OR', 'US-WA', 'US-KY', 'US-IN', 'US-OH', 'US-PA', 'US-WV']
+      const placed = { 'US-0002': [['US-ND'], ['US-ND']], 'US-0003': [['US-MT', 'US-ND'], []], 'US-0004': [trail, ['US-ND', 'US-MT']], 'W7A/MN-001': [['US-AZ'], ['US-AZ']] }
+      for (const spot of ota.feeds.flatMap(feed => feed.spots)) {
+        const [states, neededStates] = placed[spot.reference] ?? [[], []]
+        Object.assign(spot, { states, neededStates })
+      }
+    }
     const otaQueries = []
     collections.ota = { rows: [], meta: ota }
     const memoryQueries = []
@@ -3963,6 +3976,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     if (applicationVersion >= 9) {
       await click(button('POTA/SOTA'))
       await until(`document.querySelector('.pota-view')?.textContent.includes('Logged park')`)
+      // Each row's state as the board shows it: the label, and whether it is lit as still needed.
+      const stateLabels = `[...document.querySelectorAll('.pota-spot-list .pota-spot')].map(r=>[r.querySelector('.pota-spot-name')?.title,r.querySelector('.pota-spot-state [aria-hidden]')?.textContent??null,!!r.querySelector('.pota-spot-state.need-state')]).sort()`
+      assert.deepEqual(await evaluate(stateLabels), applicationVersion >= 18
+        ? [['Imported park', 'MT·ND', false], ['Logged park', 'ND', true], ['New park', 'ND·MT +14', true]]
+        : [['Imported park', null, false], ['Logged park', null, false], ['New park', null, false]])
       assert.equal(await evaluate(`document.querySelectorAll('.pota-hunt-btn,.pota-hunt-clear,.pota-act-start,.pota-popout,.pota-view input[type=file]').length`),0)
       const reads=otaQueries.length
       await click(`[...document.querySelectorAll('.pota-controls [role=tab]')].find(b=>b.textContent==='Both')`)
