@@ -38,6 +38,7 @@ import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
+import { fmtKmTokens, useUnits } from '../units'
 
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
 function chipFor(tag: NeedTag): { label: string; cls: string; title: string } {
@@ -345,6 +346,8 @@ export function NeededPanel({
   pane,
 }: NeededPanelProps) {
   const control = useStationControl()
+  // An evidence line's distances ("heard by K9LC (EN52, 26 km)") in the operator's units.
+  const units = useUnits()
   // The rotator is steerable from a browser only while the station advertises it.
   const rotatorCapability = useStationCapability('rotator')
   const rotatorControl = control || rotatorCapability
@@ -711,9 +714,8 @@ export function NeededPanel({
             // so its rows fall back to the QSY-only branch below.
             const workable = (control || !!canWork?.(a)) && !!onWork
             const age = ageLabel(a.admittedAt)
-            const evidenceLine = a.evidence
-              ? (age ? `${a.evidence} · ${age}` : a.evidence)
-              : null
+            const evidence = a.evidence ? fmtKmTokens(a.evidence, units) : null
+            const evidenceLine = evidence ? (age ? `${evidence} · ${age}` : evidence) : null
             // A whole sentence per state, never a stem plus a tail: the dial frequency lands
             // in a different place in different languages. `toFixed(3)` is the invariant
             // frequency formatter — the string it makes is passed through untouched.

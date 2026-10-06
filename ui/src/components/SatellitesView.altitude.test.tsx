@@ -255,6 +255,9 @@ describe('the sky-dome readout carries the bird’s altitude beside its range', 
 // app; they printed kilometres whatever the setting said. 1234.4 km is 767 mi, 629.6 km 391 mi,
 // 1234.6 km 767 mi and 812 km 505 mi.
 describe('altitude and range follow the units setting', () => {
+  // The OS-locale spy below is a vi.spyOn, which only a restore puts back.
+  afterEach(() => vi.restoreAllMocks())
+
   it('Imperial: the Birds list states each altitude in miles', async () => {
     setUnitsMirror('imperial')
     render(<SatellitesView />)
@@ -263,18 +266,33 @@ describe('altitude and range follow the units setting', () => {
     expect((await birdRow('RS-44')).textContent).not.toMatch(/km/)
   })
 
-  it('Imperial: the sky-dome readout states range and altitude in miles', async () => {
-    setUnitsMirror('imperial')
+  /** The sky-dome readout's rows, label → value, with the setting and the OS locale given. */
+  async function domeRows(
+    setting: 'imperial' | 'metric',
+    locale: string,
+  ): Promise<Record<string, string | null | undefined>> {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue(locale)
+    setUnitsMirror(setting)
     api.getSatDetail.mockImplementation(() => Promise.resolve(detail()))
     api.getSatTrackStatus.mockImplementation(() => Promise.resolve(status({ altKm: 1234.6 })))
     render(<SatellitesView focusSat="RS-44" />)
     await screen.findByTestId('sat-ghost')
     const readout = (await screen.findByRole('img')).closest('.sat-sky')?.querySelector('.sat-dome-readout')
-    const rows = Object.fromEntries(
+    return Object.fromEntries(
       [...(readout?.querySelectorAll('dt') ?? [])].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]),
     )
-    // The range-rate beside the range is a speed, not a distance, and keeps its km/s.
-    expect(rows.Range).toBe('505 mi · -5.42 km/s closing')
+  }
+
+  it('Imperial beats a British locale: range, range-rate and altitude in miles', async () => {
+    const rows = await domeRows('imperial', 'en-GB')
+    // The range-rate reads with the range beside it: 5.42 km/s is 3.37 mi/s.
+    expect(rows.Range).toBe('505 mi · -3.37 mi/s closing')
     expect(rows.Altitude).toBe('767 mi')
+  })
+
+  it('Metric beats a US locale: range, range-rate and altitude in kilometres', async () => {
+    const rows = await domeRows('metric', 'en-US')
+    expect(rows.Range).toBe('812 km · -5.42 km/s closing')
+    expect(rows.Altitude).toBe('1235 km')
   })
 })

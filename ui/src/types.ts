@@ -174,6 +174,7 @@ export interface Insight {
   kind: InsightKind
   level: InsightLevel
   plain: string
+  /** May carry a km token (the sporadic-E watch's hop span) — render through `fmtKmTokens`. */
   technical: string
   band?: string
 }
@@ -2394,6 +2395,8 @@ export interface JourneyFirst {
   unlocked: boolean
   /** When it happened (Unix s), once unlocked. */
   whenUnix: number | null
+  /** The call/entity/distance that earned it. A distance is a km token: render through
+   *  `fmtKmTokens`. */
   detail: string | null
 }
 
@@ -2440,6 +2443,7 @@ export interface JourneyCollection {
 export interface JourneyFeat {
   id: string
   title: string
+  /** May carry a km token (a feat's distance threshold) — render through `fmtKmTokens`. */
   meaning: string
   heritage: string
   tier: JourneyTier
@@ -2549,7 +2553,8 @@ export interface NeedAlert {
   freqMhz: number | null
   /** Unix seconds of the most recent admitting evidence — drives "N min ago". */
   admittedAt?: number | null
-  /** The board shows its work: "heard by K9LC (EN52, 26 km) + N9CO (62 km)". */
+  /** The board shows its work: "heard by K9LC (EN52, 26 km) + N9CO (62 km)". Each distance in it
+   *  arrives as a km token (`{km:26.4}`), written in the operator's units by `fmtKmTokens`. */
   evidence?: string | null
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */

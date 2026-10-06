@@ -2483,7 +2483,7 @@ export const EN = {
   'map.path.long.title': 'Long path',
   // A bearing and a distance — the unit rides with its number so the two can never be
   // separated by a translation.
-  'map.path.figure': '{{brg}}° · {{km}} km',
+  'map.path.figure': '{{brg}}° · {{dist}}',
 
   'map.emptyHint':
     'No located stations yet — decoded stations with a grid appear here, centered on {{grid}}, colored by what you still need.',
@@ -2666,7 +2666,6 @@ export const EN = {
   // cannot see. `El`/`Az`/`LOS` are the standard satellite abbreviations.
   'globe.pass.aria': 'Tracked pass: {{name}}',
   'globe.pass.elAz': 'El {{el}}° · Az {{az}}°',
-  'globe.pass.range': '{{km}} km',
   'globe.pass.losIn': 'LOS in {{mmss}}',
 
   // The Logbook's world-of-contacts globe (components/QsoGlobe.tsx) — `logbook.globe.*`
@@ -2743,7 +2742,7 @@ export const EN = {
 
   // The satellite tooltip. `{{star}}` is ★/☆, `{{alt}}` the live altitude clause.
   'prop.satTooltip': '{{name}} {{star}}{{alt}} · {{when}}{{click}} · dbl-click: favorite',
-  'prop.satTooltip.alt': ' · alt {{km}} km',
+  'prop.satTooltip.alt': ' · alt {{dist}}',
   'prop.satTooltip.noPass': 'no pass over you in 24 h',
   'prop.satTooltip.inPass': 'IN PASS now · max {{maxEl}}°',
   'prop.satTooltip.nextPass': 'next pass {{at}} (in {{mins}} min) · max {{maxEl}}°',
@@ -4355,7 +4354,7 @@ export const EN = {
   'sat.dome.readout.satellite': 'Satellite',
   'sat.dome.readout.range': 'Range',
   'sat.dome.readout.range.title': 'Slant range — how far the bird is FROM YOU.',
-  'sat.dome.readout.rangeRate': ' · {{rate}} km/s {{trend}}',
+  'sat.dome.readout.rangeRate': ' · {{speed}} {{trend}}',
   'sat.dome.readout.closing': 'closing',
   'sat.dome.readout.opening': 'opening',
   'sat.dome.readout.altitude': 'Altitude',

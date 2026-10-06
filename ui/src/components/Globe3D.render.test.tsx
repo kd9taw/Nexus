@@ -16,7 +16,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
-import type { MapSpot, PropagationSnapshot, Station } from '../types'
+import type { MapSpot, PropagationSnapshot, SatTrackStatus, Station } from '../types'
+import { setUnitsMirror } from '../units'
 
 vi.mock('../api', () => ({
   getAurora: vi.fn(async () => []),
@@ -144,6 +145,7 @@ vi.mock('react-globe.gl', async () => {
 })
 
 import Globe3D from './Globe3D'
+import { getSatTrackStatus } from '../api'
 import * as ReactGlobe from 'react-globe.gl'
 
 type FakeGlobe = {
@@ -639,5 +641,46 @@ describe('Globe3D hands globe.gl the same layer accessors across a snapshot', ()
         first[k],
       )
     }
+  })
+})
+
+// THE PASS READOUT'S RANGE FOLLOWS THE UNITS SETTING. With Units on Imperial the globe's pass
+// readout still gave the bird's slant range in km. The setting and the OS locale disagree in both
+// cases, so a readout that read only one of them cannot pass. 812 km is 505 mi; under 1000 km, so
+// Metric reads the same with or without the thousands separator the old line used.
+describe("the pass readout gives the bird's range in the operator's units", () => {
+  const PASS = {
+    name: 'RS-44',
+    state: 'tracking',
+    satAzDeg: 143,
+    satElDeg: 47,
+    rangeKm: 812,
+    rangeRateKmS: -5.42,
+    aosUnix: Math.floor(Date.now() / 1000) - 60,
+    losUnix: Math.floor(Date.now() / 1000) + 600,
+  } as unknown as SatTrackStatus
+  afterEach(() => vi.mocked(getSatTrackStatus).mockImplementation(async () => null))
+
+  async function range(setting: 'imperial' | 'metric', locale: string): Promise<string> {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue(locale)
+    setUnitsMirror(setting)
+    vi.mocked(getSatTrackStatus).mockImplementation(async () => PASS)
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<Globe3D {...props(snapshot([]), [])} />)
+    })
+    await act(async () => {})
+    const readout = r.container.querySelector('.globe3d-pass')
+    expect(readout, 'the live pass is read out').toBeTruthy()
+    // name, el/az, range, LOS countdown
+    return readout!.querySelectorAll('span')[1]?.textContent ?? ''
+  }
+
+  it('Imperial beats a British locale: miles', async () => {
+    expect(await range('imperial', 'en-GB')).toBe('505 mi')
+  })
+
+  it('Metric beats a US locale: kilometres', async () => {
+    expect(await range('metric', 'en-US')).toBe('812 km')
   })
 })

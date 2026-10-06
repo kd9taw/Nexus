@@ -10,6 +10,7 @@ import { useChaseSplit } from './chaseSplit'
 import { buildChaseTargets, type ChaseTarget } from '../../features/chase'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
 import { t } from '../../i18n'
+import { fmtKmTokens } from '../../units'
 
 function ageLabel(secs: number | null): string {
   if (secs == null) return ''
@@ -95,7 +96,10 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                   {target.ageSecs != null && <span className="chase-age">{ageLabel(target.ageSecs)}</span>}
                 </div>
                 <div className={`chase-open o-${op.cls}`}>{op.text}</div>
-                {target.evidence && <div className="chase-evi">{target.evidence}</div>}
+                {/* "heard by K9LC (EN52, 26 km)": its distances in the operator's units. */}
+                {target.evidence && (
+                  <div className="chase-evi">{fmtKmTokens(target.evidence, ctx.units)}</div>
+                )}
               </div>
               {ctx.onWorkSpot && (
                 <button

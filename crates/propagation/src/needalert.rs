@@ -8,7 +8,7 @@
 
 use crate::dxcc;
 use crate::dxped::{NeedKind, OperatorNeeds};
-use crate::geo::{haversine_km, maidenhead_to_latlon};
+use crate::geo::{haversine_km, km_token, maidenhead_to_latlon};
 use crate::model::{Band, ModeClass, PathSpot, Side};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -183,7 +183,8 @@ pub struct NeedAlert {
     pub freq_mhz: Option<f64>,
     /// Unix seconds of the most recent admitting evidence.
     pub admitted_at: Option<i64>,
-    /// "heard by K9LC (EN52, 26 km) + N9CO (62 km)" / "spotted by K9IMM via RBN".
+    /// "heard by K9LC (EN52, {km:26.4}) + N9CO ({km:61.8})" / "spotted by K9IMM via RBN". A
+    /// distance in it is a [`km_token`], which the UI writes in the operator's units.
     pub evidence: Option<String>,
     /// Geography-based rarity of the heard station's grid, when the source
     /// carried one — drives the board's gem + a NewGrid priority boost.
@@ -1054,7 +1055,7 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
         band: Band,
         rx_calls: HashSet<String>,
         /// (call, grid, km-from-me) per distinct receiver — the evidence line.
-        rx_detail: Vec<(String, String, u32)>,
+        rx_detail: Vec<(String, String, f64)>,
         latest: i64,
         /// The DX's own grid (tx_grid), when the report carried one — for the NewGrid need.
         tx_grid: Option<String>,
@@ -1102,7 +1103,7 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
             e.rx_detail.push((
                 p.rx_call.to_ascii_uppercase(),
                 p.rx_grid.clone().unwrap_or_default(),
-                haversine_km(me, rx).round() as u32,
+                haversine_km(me, rx),
             ));
         }
         e.latest = e.latest.max(p.time);
@@ -1121,17 +1122,18 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
         let corroborated = !e.band.is_vhf() || e.rx_calls.len() >= 2;
         if corroborated {
             // "heard by K9LC (EN52, 26 km) + N9CO (EN52, 62 km)" — nearest first,
-            // capped at 3 so the line stays readable in the panel.
+            // capped at 3 so the line stays readable in the panel. Each distance is a km
+            // token, written in the operator's units by the UI.
             let mut detail = e.rx_detail;
-            detail.sort_by_key(|(_, _, km)| *km);
+            detail.sort_by(|a, b| a.2.total_cmp(&b.2));
             let shown: Vec<String> = detail
                 .iter()
                 .take(3)
                 .map(|(c, g, km)| {
                     if g.is_empty() {
-                        format!("{c} ({km} km)")
+                        format!("{c} ({})", km_token(*km))
                     } else {
-                        format!("{c} ({g}, {km} km)")
+                        format!("{c} ({g}, {})", km_token(*km))
                     }
                 })
                 .collect();
@@ -1446,6 +1448,43 @@ mod tests {
         assert!(
             calls.contains(&"W0HF"),
             "same distance on 20m kept (band-aware)"
+        );
+    }
+
+    /// The "heard by" line says how far each receiver is from the operator as a `{km:N}` token,
+    /// nearest first, which the UI writes in the operator's units. It was composed here as
+    /// "26 km", so an operator on Imperial read the Chase line in kilometres.
+    #[test]
+    fn heard_by_line_carries_each_receivers_distance_as_a_km_token() {
+        let me = maidenhead_to_latlon("EN61").unwrap();
+        let report = |rx: &str, rx_grid: &str| PathSpot {
+            time: 0,
+            tx_call: "EA1ABC".into(),
+            tx_grid: None,
+            rx_call: rx.into(),
+            rx_grid: Some(rx_grid.into()),
+            band: Band::B20,
+            mode: Some("FT8".into()),
+            snr: None,
+            freq_mhz: None,
+        };
+        let km = |g: &str| haversine_km(me, maidenhead_to_latlon(g).unwrap());
+        assert!(
+            km("EN62") < km("EN52"),
+            "fixture: K9LC is the nearer receiver"
+        );
+        // The farther receiver first, so nearest-first is the code's doing.
+        let out = heard_near_me(&[report("N9CO", "EN52"), report("K9LC", "EN62")], me);
+        assert_eq!(
+            out[0].evidence.as_deref(),
+            Some(
+                format!(
+                    "heard by K9LC (EN62, {{km:{}}}) + N9CO (EN52, {{km:{}}})",
+                    km("EN62"),
+                    km("EN52")
+                )
+                .as_str()
+            ),
         );
     }
 

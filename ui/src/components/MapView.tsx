@@ -102,6 +102,7 @@ import {
   type MapView3,
 } from '../mapGeo'
 import { needMeta, satTooltip, spotTooltip } from '../propViz'
+import { fmtDistanceKm, useUnits } from '../units'
 import { modeClassOf } from '../features/needs'
 import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
@@ -842,6 +843,9 @@ export function MapView({
     () => initialSetup?.colorBy ?? (intent ? INTENT_PRESETS[intent].colorBy : 'need'),
   )
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
+  // The station hover line, the satellite hover and the path figure give their distances in
+  // the operator's units.
+  const units = useUnits()
   const [layers, setLayers] = useState(() =>
     embedded
       ? embedded.aprs
@@ -1223,9 +1227,10 @@ export function MapView({
     if (!sll) return null
     const spKm = haversineKm(me, sll)
     const spBrg = bearingDeg(me, sll)
+    // The km unrounded: the figure rounds once, into the operator's units.
     return {
-      sp: { brg: Math.round(spBrg), km: Math.round(spKm) },
-      lp: { brg: Math.round((spBrg + 180) % 360), km: Math.round(EARTH_CIRC_KM - spKm) },
+      sp: { brg: Math.round(spBrg), km: spKm },
+      lp: { brg: Math.round((spBrg + 180) % 360), km: EARTH_CIRC_KM - spKm },
     }
   }, [me, selStation])
 
@@ -3167,7 +3172,7 @@ export function MapView({
       const s = hit.s
       const brg = bearingDeg(me, hit.ll)
       const mag = magneticDeg(brg, declination)
-      return `${s.call} · ${s.country ? s.country + ' · ' : ''}${s.grid} · ${s.snr} dB · ${brg}°T${mag != null ? ` (${mag}°M)` : ''} ${Math.round(haversineKm(me, hit.ll)).toLocaleString()} km`
+      return `${s.call} · ${s.country ? s.country + ' · ' : ''}${s.grid} · ${s.snr} dB · ${brg}°T${mag != null ? ` (${mag}°M)` : ''} ${fmtDistanceKm(haversineKm(me, hit.ll), units)}`
     }
     if (hit.kind === 'dxped') {
       const c = hit.card
@@ -3239,7 +3244,7 @@ export function MapView({
       })
     }
     if (hit.kind === 'sat') {
-      return satTooltip(hit.name, hit.chased, sats, Date.now() / 1000, !!onSelectSat)
+      return satTooltip(hit.name, hit.chased, sats, Date.now() / 1000, !!onSelectSat, units)
     }
     return `${spotTooltip(hit.sp)}${workHint}`
   }
@@ -3639,7 +3644,7 @@ export function MapView({
               <span className="map-path-fig">
                 {t('map.path.figure', {
                   brg: (pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).brg,
-                  km: (pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).km.toLocaleString(),
+                  dist: fmtDistanceKm((pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).km, units),
                 })}
               </span>
               <div className="map-proj map-path-toggle" role="group" aria-label={t('map.path.aria')}>

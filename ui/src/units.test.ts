@@ -6,6 +6,8 @@ import {
   fmtTempF,
   fmtSpeedMph,
   fmtRainIn,
+  fmtKmTokens,
+  fmtSpeedKmS,
 } from './units'
 
 describe('units — display-only conversion (F4MQS)', () => {
@@ -90,5 +92,48 @@ describe('the locale that crashed Operate', () => {
     // catching the throw without normalising would quietly give a US operator kilometres.
     expect(new Intl.Locale(norm('en_US')).maximize().region).toBe('US')
     expect(new Intl.Locale(norm('en_GB')).maximize().region).toBe('GB')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Distances inside sentences the backend writes (2026-10-06)
+// ---------------------------------------------------------------------------
+//
+// The Chase line ("heard by K9LC (EN52, 26 km)"), Journey's distance firsts and feats and the
+// sporadic-E watch were composed in Rust with the unit already in them, so they read in km or
+// miles whatever Units said. The backend now writes each distance as a km token (`km_token`,
+// crates/propagation/src/geo.rs) and the screen writes the figure. The token texts below are the
+// backend's own shapes, full precision and all.
+describe('distances inside backend sentences', () => {
+  it('writes each km token in the units it is given', () => {
+    const line = 'heard by K9LC (EN62, {km:111.19492664455873}) + N9CO (EN52, {km:166.9})'
+    expect(fmtKmTokens(line, 'imperial')).toBe('heard by K9LC (EN62, 69 mi) + N9CO (EN52, 104 mi)')
+    expect(fmtKmTokens(line, 'metric')).toBe('heard by K9LC (EN62, 111 km) + N9CO (EN52, 167 km)')
+  })
+
+  it('writes a span with one unit', () => {
+    const watch = 'Es is minutes-long, {km:500-2500}'
+    expect(fmtKmTokens(watch, 'metric')).toBe('Es is minutes-long, 500–2500 km')
+    expect(fmtKmTokens(watch, 'imperial')).toBe('Es is minutes-long, 311–1553 mi')
+  })
+
+  it('rounds once, from the full kilometres', () => {
+    // 41.4 km is 25.7 mi. Rounded to 41 km first, it would read 25 mi.
+    expect(fmtKmTokens('{km:41.4}', 'imperial')).toBe('26 mi')
+  })
+
+  it('leaves a sentence without a token as it came', () => {
+    // Every other evidence line, and anything an older backend wrote with its own "26 km".
+    expect(fmtKmTokens('spotted by K9IMM via RBN', 'imperial')).toBe('spotted by K9IMM via RBN')
+    expect(fmtKmTokens('heard by K9LC (EN52, 26 km)', 'imperial')).toBe('heard by K9LC (EN52, 26 km)')
+  })
+})
+
+describe('a satellite range-rate', () => {
+  it('reads in mi/s on Imperial and km/s on Metric, sign and all', () => {
+    expect(fmtSpeedKmS(1.234, 'metric')).toBe('1.23 km/s')
+    expect(fmtSpeedKmS(1.234, 'imperial')).toBe('0.77 mi/s')
+    expect(fmtSpeedKmS(-6.5, 'metric')).toBe('-6.50 km/s')
+    expect(fmtSpeedKmS(-6.5, 'imperial')).toBe('-4.04 mi/s')
   })
 })

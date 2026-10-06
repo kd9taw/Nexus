@@ -98,7 +98,7 @@ import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { useTheme } from '../useTheme'
-import { fmtDistanceKm, useUnits } from '../units'
+import { fmtDistanceKm, fmtSpeedKmS, useUnits } from '../units'
 
 interface Props {
   /** Bird to select (map click hand-off). The section follows changes. */
@@ -1143,7 +1143,8 @@ function SkyDome({
               {fmtDistanceKm(rotor.rangeKm, units)}
               {rotor.rangeRateKmS != null &&
                 t('sat.dome.readout.rangeRate', {
-                  rate: `${rotor.rangeRateKmS >= 0 ? '+' : ''}${rotor.rangeRateKmS.toFixed(2)}`,
+                  // In mi/s on Imperial, so it reads with the range beside it.
+                  speed: (rotor.rangeRateKmS >= 0 ? '+' : '') + fmtSpeedKmS(rotor.rangeRateKmS, units),
                   trend:
                     rotor.rangeRateKmS < 0
                       ? t('sat.dome.readout.closing')
