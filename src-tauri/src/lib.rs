@@ -7726,6 +7726,17 @@ fn rbn_comment_grid(comment: &str) -> Option<&str> {
 /// It says which of them answered, for the Needed board's STATE chip; a caller that wants only the
 /// state drops that.
 fn us_state_hint(call: &str, grid: Option<&str>) -> Option<(String, propagation::StateSource)> {
+    us_state_hint_from(call, grid, fcc_state_for_call)
+}
+
+/// [`us_state_hint`], given the FCC index's answer for a call: [`fcc_state_for_call`] in the app, a
+/// test's own in a test. The Needed board's heard rows are placed by it too ([`place_heards`]), so
+/// a station the cluster or PSK Reporter hears is in the state the radio's own decode of it is in.
+fn us_state_hint_from(
+    call: &str,
+    grid: Option<&str>,
+    fcc: impl Fn(&str) -> Option<&'static str>,
+) -> Option<(String, propagation::StateSource)> {
     use propagation::StateSource::{Grid, License};
     // ⚠️ THE ENTITY OUTRANKS BOTH RESOLVERS BELOW, AND NEITHER OF THEM KNOWS THE COUNTRY (#171).
     //
@@ -7753,7 +7764,7 @@ fn us_state_hint(call: &str, grid: Option<&str>) -> Option<(String, propagation:
             return None;
         }
     }
-    if let Some(st) = fcc_state_for_call(call) {
+    if let Some(st) = fcc(call) {
         return Some((st.to_string(), License));
     }
     grid.map(str::trim)
@@ -20523,9 +20534,11 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
 /// its grid says, chosen on a state line as the feed's own row chooses
 /// ([`propagation::activator_state`]), from every place it is live at. An activator at a park
 /// nothing places, and every other station, keeps a state its source gave (an own decode's grid)
-/// or takes its call's from the FCC callsign index. That fill is the whole point of the index: a
-/// needed New State lights up across the grid-less firehose (cluster / CW / SSB spots, near-me and
-/// getting-out reception reports).
+/// or takes its licence's, by the resolver the radio's own decodes use ([`us_state_hint_from`]):
+/// an Alaskan or a Hawaiian is in AK or HI whatever the address on its licence, a station of an
+/// entity with no US state is in none, and any other is where the FCC callsign index puts it. That
+/// fill is the whole point of the index: a needed New State lights up across the grid-less
+/// firehose (cluster / CW / SSB spots, near-me and getting-out reception reports).
 ///
 /// Each state is recorded with where it came from, for the board's STATE chip. `fcc` is that
 /// index's answer for a call: [`fcc_state_for_call`] on the board, a test's own in a test, since
@@ -20536,7 +20549,7 @@ fn place_heards(
     needs: &propagation::LogNeeds,
     fcc: impl Fn(&str) -> Option<&'static str>,
 ) {
-    use propagation::StateSource::{License, Park};
+    use propagation::StateSource::Park;
     let mut places = std::collections::HashMap::<String, Vec<String>>::new();
     for sp in live.iter().filter(|sp| !sp.states.is_empty()) {
         places
@@ -20550,7 +20563,8 @@ fn place_heards(
             h.us_state = propagation::activator_state(&h.call, &h.band, at, needs, &slots)
                 .map(|st| (st.to_string(), Park));
         } else if h.us_state.is_none() {
-            h.us_state = fcc(&h.call).map(|st| (st.to_string(), License));
+            // Its licence's, so no grid: the entity first, then the FCC index.
+            h.us_state = us_state_hint_from(&h.call, None, &fcc);
         }
     }
 }
@@ -42927,6 +42941,82 @@ mod tests {
                 Some(("OH", Grid)),
                 Some(("OH", License)),
             ]
+        );
+    }
+
+    /// ⭐ A HEARD ALASKAN OR HAWAIIAN IS IN AK OR HI, WHEREVER ITS LICENCE IS ADDRESSED. A cluster or
+    /// PSK Reporter row arrives with no state and took the FCC index's, which is the licensee's
+    /// mailing address, so a KL7 with a California address lit a New State for California where the
+    /// radio's own decode of it says Alaska. The fill asks the own decodes' resolver now, which asks
+    /// the entity first. Every FCC answer here disagrees with the right one: the Alaskan and the
+    /// Hawaiian are in their own states, a Guam call is in none, a station in the lower 48 keeps its
+    /// licence's, and an Alaskan activating a Washington park is in Washington.
+    #[test]
+    fn a_heard_alaskan_or_hawaiian_is_in_its_own_state_whatever_its_fcc_address() {
+        use propagation::StateSource::{License, Park};
+        let heard = |call: &str| propagation::Heard {
+            call: call.into(),
+            band: "20m".into(),
+            mode: "CW".into(),
+            freq_mhz: None,
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: None,
+        };
+        let mut park = ota_spot("KL7ACT", "US-0001");
+        park.states = codes(&["US-WA"]);
+        let mut heards = [
+            heard("KL7AA"),
+            heard("KH6ABC"),
+            heard("KH2XX"),
+            heard("W8LIC"),
+            heard("KL7ACT"),
+        ];
+        // Every licence here is addressed in the lower 48.
+        let fcc = |call: &str| match call {
+            "KL7AA" | "KH2XX" => Some("CA"),
+            "KH6ABC" => Some("TX"),
+            "W8LIC" => Some("OH"),
+            "KL7ACT" => Some("OR"),
+            _ => None,
+        };
+        crate::place_heards(&mut heards, &[park], &propagation::LogNeeds::new(), fcc);
+        let states: Vec<Option<(&str, propagation::StateSource)>> = heards
+            .iter()
+            .map(|h| h.us_state.as_ref().map(|(st, from)| (st.as_str(), *from)))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                Some(("AK", License)),
+                Some(("HI", License)),
+                None,
+                Some(("OH", License)),
+                Some(("WA", Park)),
+            ]
+        );
+    }
+
+    /// …and on the board as it is read: an Alaskan the cluster spots is a New State in Alaska. No FCC
+    /// index is loaded in a test, so before the fill asked the entity the row had no state and, with
+    /// Alaska and its zone worked and confirmed on 20 m CW, no award to show.
+    #[test]
+    fn an_alaskan_spotted_on_the_cluster_is_a_new_state_in_alaska() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        let mut r = pass_qso("KL7XYZ", "BP51", "20m", 14.025);
+        r.mode = "CW".into();
+        r.award_confirmed = true;
+        e.log_qso(r);
+        let alerts = needed_board_for(e, &["KL7AA"], &[]);
+        let row = board_row(&alerts, "KL7AA", "CW");
+        assert_eq!(
+            (row.tags.as_slice(), row.headline.as_str(), row.state_from),
+            (
+                &[propagation::NeedTag::NewState][..],
+                "New state — AK on 20m (Alaska)",
+                Some(propagation::StateSource::License)
+            )
         );
     }
 
