@@ -749,30 +749,6 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       }
     }
     ota.close()
-    // The page 1.16 shipped (v17) and the page that reads states (v18), on this same new station.
-    for (const hello of [17, 18]) {
-      const { value: boardTicket } = await browser.post(`stations/${stationId}/ticket`)
-      const board = await browser.open(stationId, boardTicket.ticket)
-      await board.take(value => value.type === 'session')
-      board.send({ type: 'applicationHello', version: hello })
-      assert.equal((await board.take(value => value.type === 'applicationCapabilities')).version, hello)
-      assert.equal((await probe.send({ type: 'seedOta', age: 0, missing: null, states: otaStates })).seeded, true)
-      const page = await queryPage(board, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
-      assert.equal(page.type, 'applicationPage')
-      const value = statsReference.parseOta(page)
-      if (hello === 17) {
-        for (const spot of page.meta.source.feeds.flatMap(feed => feed.spots)) assert.deepEqual(Object.keys(spot).sort(), olderSpotKeys, 'a v17 page is never sent a key it does not list')
-      } else {
-        // The station's own rule: per band, US states only. CA is in the log on 20 m, not on 40 m.
-        assert.deepEqual(value.feeds.flatMap(feed => feed.spots).map(s => [s.reference, s.states, s.neededStates]), [
-          ['US-0002', ['US-CA', 'US-ND'], ['US-ND']],
-          ['US-0003', ['US-CA'], ['US-CA']],
-          ['US-0004', [], []],
-          ['W7A/MN-001', ['US-AZ'], ['US-AZ']],
-        ])
-      }
-      board.close()
-    }
     const { value: fdTicket } = await browser.post(`stations/${stationId}/ticket`)
     const fd = await browser.open(stationId, fdTicket.ticket)
     await fd.take(value => value.type === 'session')
@@ -836,6 +812,18 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok(modesCapabilities.commands.includes('get_remote_parks'))
     assert.ok(modesCapabilities.commands.includes('get_remote_pounce'))
     assert.ok(modesCapabilities.commands.includes('get_remote_rotator'))
+    // The newest page's POTA/SOTA board, on this session (a new socket would cross the ticket rate cap).
+    // The station's cache still holds the spots seeded above, each with its states; the v9 page above
+    // was sent none of them.
+    const placedPage = await queryPage(modes, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
+    assert.equal(placedPage.type, 'applicationPage')
+    // The station's own rule: per band, US states only. CA is in the log on 20 m, not on 40 m.
+    assert.deepEqual(statsReference.parseOta(placedPage).feeds.flatMap(feed => feed.spots).map(s => [s.reference, s.states, s.neededStates]), [
+      ['US-0002', ['US-CA', 'US-ND'], ['US-ND']],
+      ['US-0003', ['US-CA'], ['US-CA']],
+      ['US-0004', [], []],
+      ['W7A/MN-001', ['US-AZ'], ['US-AZ']],
+    ])
     const modesRequest=crypto.randomUUID()
     modes.send({type:'applicationSubscribe',topics:['get_sstv_state','get_remote_aprs_state'],requestId:modesRequest})
     const modesFrame=await frameSamples(modes,modesRequest,['get_sstv_state','get_remote_aprs_state'])
