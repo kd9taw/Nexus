@@ -12,6 +12,7 @@ import {
   openPanelWindow,
   setHuntTarget,
   setActivation,
+  setActivationState,
   clearActivation,
   getActivation,
   parksCount,
@@ -25,7 +26,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
-import { placeLabel, placeName } from '../features/otaStates'
+import { placeCode, placeLabel, placeName } from '../features/otaStates'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -430,6 +431,11 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       )
     }
   }
+  // The state you are activating from, of a park on a state line: never guessed, so asked.
+  const handlePickState = async (code: string) => {
+    const a = await withErrorToast(() => setActivationState(code), t('ota.activation.state.failed'))
+    if (a) setAct(a)
+  }
   const handleStopActivation = async () => {
     if (observed) {
       remote?.stopActivation?.()
@@ -630,6 +636,30 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 }}
               />
             </span>
+            {/* The state your contacts carry as MY_STATE: the park's own, or, on a state line,
+                the one you pick here. Never guessed. LoTW credits the state of the TQSL Station
+                Location you sign with, which the tooltip says. */}
+            {!observed && act?.myState && (
+              <span className="pota-act-state" title={t('ota.activation.state.lotw')}>
+                {t('ota.activation.state.mine', { state: act.myState })}
+              </span>
+            )}
+            {!observed && !act?.myState && (act?.states?.length ?? 0) > 1 && (
+              <span className="pota-act-state ask" role="group" aria-label={t('ota.activation.state.ask')}>
+                <span>{t('ota.activation.state.ask')}</span>
+                {act?.states?.map((place) => (
+                  <button
+                    key={place}
+                    type="button"
+                    className="pota-act-state-pick"
+                    title={placeName(place)}
+                    onClick={() => void handlePickState(placeCode(place))}
+                  >
+                    {placeCode(place)}
+                  </button>
+                ))}
+              </span>
+            )}
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
             {(!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
               {t('ota.selfSpot.button')}

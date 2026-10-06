@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Getting Out shows its distances in your units.** With **Units** (Settings → Station) on
+  Imperial, the Getting Out box still gave the furthest station, each receiver's distance, the
+  compass tooltips and the direction line in km, and restarting Nexus changed nothing. They now
+  read in miles on Imperial and in km on Metric, and Automatic follows your computer's region. The
+  same fix reaches the other places that printed km whatever the setting said: the opening strip,
+  the Openings Log, the opening alerts, the Openings and Es lines, the DXpedition cards, the APRS
+  station list, and the Satellites section's altitude, range and sked distances. These distances
+  are now written without a thousands separator (8047 km, not 8,047 km).
 - **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
   answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
   radio is still letting go of the last transmission), Nexus played the over anyway: the Tune
@@ -316,6 +324,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unicode and MPL-2.0 among them, ask for the text itself to travel with every copy. Every
   installer now has the texts of all of them in `resources/rust/THIRD-PARTY.txt`, and the
   **Licenses** button shows them after the interface's.
+- **POTA/SOTA: a contact with an activator logs the park's state, not the activator's home
+  state.** A contact you hunted, from the POTA/SOTA board, the map, the Needed board, Band Activity
+  or the Remote page, took its state from the activator's callsign: the address on their FCC
+  licence, or their callbook entry. So an Ohio ham at a North Dakota park was logged as Ohio, and
+  your exports, your uploads and your Worked All States count all said Ohio. Now the contact takes
+  the state the park or summit is in: a park's from pota.app's own spot, or from the park list once
+  you have downloaded it, and a summit's from its SOTA association or region. The log form puts
+  that state in the State box, so you see it before you log. A state you type yourself still wins,
+  and a park you type into the log form is placed the same way. A park outside the US and Canada,
+  or one Nexus cannot place, logs its state as before. Contacts already in your log are not
+  changed.
+- **POTA: a park on a state line asks which state, and is never guessed.** A park in more than
+  one state cannot say which one the activator is in, and the activator's home state is no answer.
+  While the log form holds such a park, it shows the park's states to pick from: pick the one the
+  activator says they are in. A contact logged without a pick has no state, and the Logbook marks
+  it with a **?** before the park so you can set it later. The mark shows on any park or summit
+  contact in the US or Canada that has no state, and Nexus no longer fills such a contact's state
+  from the activator's callsign, when you log it, import it, or when it fills in contacts in the
+  background.
+- **Logbook: Check park states, for the park and summit contacts already in your log.** Before
+  this release a hunted contact took the activator's home state, and an import kept whatever state
+  it carried. **Check park states** in the Logbook lists every park or summit contact whose park is
+  in one state and which holds another state, or none, with the old state beside the park's. Tick
+  the ones to change and press the button: only those change, and only if they still hold the
+  state shown. A confirmed contact starts unticked, because its confirmation came with the state
+  the other station signed. Nothing is uploaded again, and nothing happens until you open the
+  check and press the button. Parks on a state line are not listed (pick their state in the
+  contact), and nor are parks Nexus cannot place.
 
 ### Changed
 
@@ -422,6 +458,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
   a park on a state line, a reminder that the contact counts for the state the activator is
   actually in. Screen readers read the name. The Remote page's board does not show states yet.
+- **Needed board: an activator in a state you still need shows as a new state**, as on the
+  POTA/SOTA board: per band, a park on a state line when either state is needed, and in the park's
+  or summit's state, not the activator's home state, whether the board heard them from the
+  POTA/SOTA feed, the cluster or your own radio. A park Nexus cannot place is judged as before.
+- **POTA/SOTA activations: your contacts say which state you activated from.** Start an
+  activation at a park in one state, or on a summit SOTA places in one, and every contact you log
+  carries that state as `MY_STATE`, in your log, your exports and your uploads. At a park on a
+  state line the activation strip asks which state you are in, and uses the one you pick; until you
+  pick, no `MY_STATE` is written. A park Nexus cannot place writes none. LoTW credits the state of
+  the TQSL Station Location you sign with, so sign an activation's contacts with a location in that
+  state, as the strip's tooltip says. An activation started from the Remote page is placed the same
+  way, but a state line has to be picked at the station.
 
 - **Street map (not yet visible): a street-level map of your area as a fifth map choice.** Built
   and tested, and hidden until Nexus's street maps are hosted. **Street** joins Globe, 3D, Flat

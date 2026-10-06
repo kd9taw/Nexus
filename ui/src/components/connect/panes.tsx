@@ -47,6 +47,7 @@ import { ContestCalendarPane } from '../ContestCalendarPane'
 import { getContests } from '../../api'
 import { GetoutCompass } from '../prop/GetoutCompass'
 import { getoutSummary } from '../../features/getout'
+import { fmtDistanceKm } from '../../units'
 import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
 import { MeasuredMuf } from '../prop/MeasuredMuf'
@@ -98,11 +99,11 @@ const ENGINE_P533 = 'P.533'
  *  them — tokens, never a catalog entry. */
 const OTA_BOX_TITLE = 'POTA / SOTA'
 
-/** Unit symbols printed beside a reading. A unit is a token — MHz is MHz, dB is dB and km is
- * km in every language — and the guard is told so by these constants. */
+/** Unit symbols printed beside a reading. A unit is a token — MHz is MHz and dB is dB in every
+ * language — and the guard is told so by these constants. A distance carries its unit from
+ * `fmtDistanceKm`, in the units the operator chose. */
 const MHZ_UNIT = 'MHz'
 const DB_UNIT = 'dB'
-const KM_UNIT = 'km'
 
 export interface PaneDef {
   id: PaneId
@@ -352,13 +353,13 @@ function renderGetout(c: PaneContext): ReactNode {
           <p className="getout-summary">
             <T
               k="connect.getout.summary"
-              vals={{ count: g.count, km: g.maxKm.toLocaleString() }}
+              vals={{ count: g.count, dist: fmtDistanceKm(g.maxKm, c.units) }}
               tags={{ b: <strong /> }}
             />
           </p>
           <div className="getout-rose-wrap">
-            <GetoutCompass reports={g.reports} maxKm={g.maxKm} />
-            <p className="getout-dir">{getoutSummary(g.reports)}</p>
+            <GetoutCompass reports={g.reports} maxKm={g.maxKm} units={c.units} />
+            <p className="getout-dir">{getoutSummary(g.reports, c.units)}</p>
           </div>
           {/* THE FULL LIST: every receiver the station reports (`propagation::getting_out` — the
               latest report per receiver over its window, most distant first), not the first six.
@@ -373,7 +374,7 @@ function renderGetout(c: PaneContext): ReactNode {
               >
                 <span className="go-call">{r.call}</span>
                 <span className="go-where">
-                  {r.octant} {r.km.toLocaleString()} {KM_UNIT}
+                  {r.octant} {fmtDistanceKm(r.km, c.units)}
                 </span>
                 <span className="go-band">{r.band}</span>
                 <span className="go-snr">{r.snr != null ? `${r.snr} ${DB_UNIT}` : ''}</span>

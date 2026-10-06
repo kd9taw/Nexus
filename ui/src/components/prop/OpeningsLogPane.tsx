@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { OpeningEpisode } from '../../types'
 import { getOpeningsLog } from '../../api'
 import { t } from '../../i18n'
+import { fmtDistanceKm, useUnits } from '../../units'
 
 /** Compact duration: 47m / 2h05. */
 function durLabel(secs: number): string {
@@ -43,6 +44,7 @@ export function modeClass(mode: string): string {
 const FILTERS = ['All', '6m', '2m'] as const
 
 export function OpeningsLogPane() {
+  const units = useUnits()
   const [episodes, setEpisodes] = useState<OpeningEpisode[]>([])
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('All')
   useEffect(() => {
@@ -157,7 +159,7 @@ export function OpeningsLogPane() {
                 {e.onsetKnown ? '' : '+'}
               </span>
               <span className="openings-log-dx" title={t('prop.openingsLog.dx.title')}>
-                {t('prop.openingsLog.dx', { km: Math.round(e.maxKm), octant: e.octant })}
+                {t('prop.openingsLog.dx', { dist: fmtDistanceKm(e.maxKm, units), octant: e.octant })}
               </span>
               <span className="openings-log-stns" title={t('prop.openingsLog.stations.title')}>
                 {t('prop.openingsLog.stations', { count: e.peakStations })}

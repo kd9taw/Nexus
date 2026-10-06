@@ -117,6 +117,11 @@ pub struct HuntDto {
     pub program: String,
     pub reference: String,
     pub call: String,
+    /// Where the park or summit is, as the hunter feed writes it ("US-ND"; two or more for a park
+    /// on a state line), so the log form can show the state the contact will take. Absent when
+    /// the hunt could not place it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
 }
 
 /// One UDP-driven callsign highlight (JTAlert paints wanted/B4 calls).

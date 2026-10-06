@@ -9,6 +9,7 @@ import { needMeta, workabilityVar, bandTiming } from '../../propViz'
 import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
 import { t } from '../../i18n'
+import { fmtDistanceKm, useUnits } from '../../units'
 
 /** The ITU recommendation's number — a citation, not a word. */
 const ENGINE_P533 = 'P.533'
@@ -32,6 +33,7 @@ export function WorkNowCard({
 }) {
   const need = needMeta(card.need)
   const az = backendAzimuth(card.bearingDeg, card.distanceKm)
+  const units = useUnits()
   const [details, setDetails] = useState(false)
   // Headline this card with ITS OWN band. `win.best`/`win.outlook[0]` rank every HF band
   // on the PATH, so they are a cross-band answer on a per-band card: a 20m card read
@@ -82,7 +84,7 @@ export function WorkNowCard({
           {t('dxped.card.geo', {
             octant: card.octant,
             az: az ? ` ${azimuthLabel(az)}` : '',
-            km: Math.round(card.distanceKm).toLocaleString(),
+            dist: fmtDistanceKm(card.distanceKm, units),
           })}
         </span>
       </div>

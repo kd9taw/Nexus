@@ -860,6 +860,107 @@ fn a_remote_hunt_tags_the_next_logged_contact_and_never_keys_or_tunes() {
     assert!(f.engine.lock().unwrap().hunt_target().is_none());
 }
 
+/// The station places the park a browser hunts, from its own hunter feed and before any lock is
+/// taken: the contact the hunt tags takes the park's state, not the activator's licence's.
+#[test]
+fn a_remote_hunt_carries_where_the_park_is() {
+    let mut f = Fixture::new();
+    let spot = propagation::OtaSpot {
+        program: "POTA".into(),
+        reference: "US-0002".into(),
+        name: String::new(),
+        activator: "W1AW".into(),
+        freq_khz: 14_285.0,
+        mode: "SSB".into(),
+        spotter: None,
+        comment: None,
+        grid: None,
+        lat: None,
+        lon: None,
+        spot_time_unix: None,
+        states: vec!["US-ND".into()],
+    };
+    let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::from([(
+        "POTA".to_string(),
+        (0, vec![spot]),
+    )])));
+    f.authority.places = Some((ota, crate::SharedParks::default()));
+    f.engine
+        .lock()
+        .unwrap()
+        .set_state_resolver(|_, _| Some("CT".to_string()));
+    acquire(&f);
+    let hunt = change(
+        &f,
+        json!({"kind":"hunt","call":"W1AW","program":"POTA","reference":"US-0002"}),
+    );
+    assert_eq!(run(&f, &hunt).unwrap()["outcome"], "applied");
+    assert_eq!(
+        f.engine.lock().unwrap().snapshot().hunt.map(|h| h.states),
+        Some(vec!["US-ND".to_string()])
+    );
+    // The contact the sequencer then logs, with no state of its own.
+    let mut e = f.engine.lock().unwrap();
+    let mut rec: tempo_core::logbook::QsoRecord =
+        serde_json::from_value::<tempo_app::dto::LoggedQso>(json!({
+            "call":"W1AW","grid":"FN31","band":"20m","freqMhz":14.074,"mode":"FT8",
+            "rstSent":"-05","rstRcvd":"-07","whenUnix":crate::remote_service::now_ms()/1000,
+            "confirmed":false
+        }))
+        .unwrap()
+        .into();
+    rec.state = None;
+    e.log_qso(rec);
+    let contact = e
+        .stored_log()
+        .into_iter()
+        .find(|r| r.call == "W1AW")
+        .unwrap();
+    assert_eq!(contact.ota.their_ref.as_deref(), Some("US-0002"));
+    assert_eq!(
+        contact.state.as_deref(),
+        Some("ND"),
+        "the park's, not the licence's CT"
+    );
+}
+
+/// An activation a browser starts is placed by the station as the desktop's is: a park in one
+/// state names the MY_STATE its contacts carry. A browser cannot pick one on a state line; the
+/// desktop's panel does.
+#[test]
+fn a_remote_activation_carries_where_its_park_is() {
+    let mut f = Fixture::new();
+    let spot = propagation::OtaSpot {
+        program: "POTA".into(),
+        reference: "US-0001".into(),
+        name: String::new(),
+        activator: "W9XYZ".into(),
+        freq_khz: 14_285.0,
+        mode: "SSB".into(),
+        spotter: None,
+        comment: None,
+        grid: None,
+        lat: None,
+        lon: None,
+        spot_time_unix: None,
+        states: vec!["US-ND".into()],
+    };
+    let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::from([(
+        "POTA".to_string(),
+        (0, vec![spot]),
+    )])));
+    f.authority.places = Some((ota, crate::SharedParks::default()));
+    acquire(&f);
+    let activation = change(
+        &f,
+        json!({"kind":"activation","program":"POTA","reference":"US-0001"}),
+    );
+    assert_eq!(run(&f, &activation).unwrap()["outcome"], "applied");
+    let e = f.engine.lock().unwrap();
+    assert_eq!(e.activation_places(), ["US-ND"]);
+    assert_eq!(e.activation_state().as_deref(), Some("ND"));
+}
+
 #[test]
 fn a_hunt_the_station_cannot_normalize_is_refused_and_leaves_no_pend() {
     let f = Fixture::new();
@@ -1019,7 +1120,7 @@ fn self_spot_is_on_and_its_switch_still_refuses_before_anything_is_consumed() {
     f.engine
         .lock()
         .unwrap()
-        .set_activation("POTA", "US-0001")
+        .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     let offered = |f: &Fixture| {
         control_state_version(f, Instant::now(), 4)["controls"]["capabilities"]
@@ -1047,7 +1148,7 @@ fn a_self_spot_posts_both_targets_the_station_call_dial_park_and_mode_exactly_on
     f.engine
         .lock()
         .unwrap()
-        .set_activation("POTA", "US-0001")
+        .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     assert!(
         control_state_version(&f, Instant::now(), 4)["controls"]["capabilities"]
@@ -1101,7 +1202,7 @@ fn a_self_spot_whose_context_moved_or_has_no_activation_posts_nothing() {
     f.engine
         .lock()
         .unwrap()
-        .set_activation("POTA", "US-0001")
+        .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     // The confirm showed another reference, or a dial that has since moved.
     let other = run(&f, &spot(&f, "US-0002")).unwrap();
@@ -1132,7 +1233,7 @@ fn activating(f: &Fixture) {
     f.engine
         .lock()
         .unwrap()
-        .set_activation("POTA", "US-0001")
+        .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
 }
 
@@ -1229,7 +1330,7 @@ fn a_self_spot_needs_logging_permission_and_current_control() {
     f.engine
         .lock()
         .unwrap()
-        .set_activation("POTA", "US-0001")
+        .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     // Station control is not the logging grant: not offered, and refused.
     let state = acquire_controls_version(&f, Instant::now(), 4);

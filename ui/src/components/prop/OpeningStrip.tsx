@@ -4,6 +4,7 @@ import { Zap } from 'lucide-react'
 import type { OpeningView } from '../../types'
 import { modeClass } from './OpeningsLogPane'
 import { t } from '../../i18n'
+import { fmtDistanceKm, useUnits } from '../../units'
 
 function agoLabel(secs: number): string {
   if (secs <= 0) return ''
@@ -23,6 +24,7 @@ export function OpeningStrip({
   /** Click an opening → focus its band on the map. Omitted = display-only. */
   onBandClick?: (band: string) => void
 }) {
+  const units = useUnits() // above the bail-out: a hook must run on every render
   if (openings.length === 0) return null
   return (
     <div className="opening-strips">
@@ -45,7 +47,7 @@ export function OpeningStrip({
             <span className="opening-detail">
               {t('prop.opening.detail', {
                 octant: o.octant,
-                km: Math.round(o.maxKm).toLocaleString(),
+                dist: fmtDistanceKm(o.maxKm, units),
                 stations: o.stations,
                 reciprocal:
                   o.reciprocalPairs > 0

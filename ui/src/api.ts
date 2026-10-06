@@ -1015,9 +1015,43 @@ export async function logCurrentQso(context?: { expectedKey?: string | null; exp
   return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', remoteApplicationTransport() ? { ...context } : {})
 }
 
+/** Where a log form's STATE came from: typed or picked by the operator, filled in by a callbook
+ *  lookup, or placed from the park or summit. The station lets a park's own state outrank a
+ *  callbook's, and the operator's outrank both. */
+export type StateSource = 'operator' | 'callbook' | 'park'
+
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
-export async function logQso(record: LoggedQso): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_qso', { record })
+export async function logQso(record: LoggedQso, stateSource?: StateSource): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('log_qso', { record, stateSource })
+}
+
+/** One contact "Check park states" lists: a hunted park or summit in ONE state whose contact
+ *  holds another state (`state`), or none; `parkState` is the park's. */
+export interface ParkStateRow {
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  program: string
+  reference: string
+  state: string | null
+  parkState: string
+  /** Confirmed by any channel: listed unticked, for the operator to decide. */
+  confirmed: boolean
+}
+
+/** The Logbook's "Check park states" list. Reads; writes nothing. */
+export async function parkStateReview(): Promise<ParkStateRow[]> {
+  return invoke<ParkStateRow[]>('park_state_review')
+}
+
+/** Give the ticked contacts their park's state: each only while it still holds the state the
+ *  check listed. Nothing is uploaded again. How many changed. */
+export async function applyParkStates(
+  changes: { id: string; state: string | null; parkState: string }[],
+): Promise<number> {
+  return invoke<number>('apply_park_states', { changes })
 }
 
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
@@ -3369,6 +3403,11 @@ export async function streetMapInstallFile(): Promise<StreetInstalled | null> {
 export async function setActivation(program: string, reference: string): Promise<Activation> {
   return invoke<Activation>('set_activation', { program, reference })
 }
+/** Pick the state you are activating from, of a park on a state line ("ND"): its contacts carry
+ *  it as MY_STATE. The station refuses a state the park is not in. */
+export async function setActivationState(myState: string): Promise<Activation> {
+  return invoke<Activation>('set_activation_state', { myState })
+}
 
 /** End the current activation. */
 export async function clearActivation(): Promise<Activation> {
@@ -3386,6 +3425,9 @@ export interface Park {
   name: string
   grid: string
   location: string
+  /** The US states, DC and Canadian provinces in `location` ("US-ND"; each, for a park on a state
+   *  line), read by the station with the hunter feed's own rule. */
+  states?: string[]
   /** Coordinates — only the live lookup carries these. */
   latitude?: number | null
   longitude?: number | null

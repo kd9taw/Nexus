@@ -10,9 +10,13 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { WorkNowCard } from './WorkNowCard'
+import { setUnitsMirror } from '../../units'
 import type { BandOutlook, DxpedWindow, WorkableCard } from '../../types'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+})
 
 function outlook(band: string, over: Partial<BandOutlook> = {}): BandOutlook {
   return {
@@ -112,5 +116,22 @@ describe('WorkNowCard best-shot line', () => {
   it('shows the plain window hint when there is no window at all', () => {
     render(<WorkNowCard card={card({ windowHint: 'open now' })} />)
     expect(screen.getByText('open now')).toBeTruthy()
+  })
+})
+
+// The card's heading line names how far the expedition is in the units the operator chose. It
+// printed kilometres whatever Settings ▸ Units said. 965 km is 600 mi.
+describe('WorkNowCard distance', () => {
+  const geo = (units: 'metric' | 'imperial') => {
+    setUnitsMirror(units)
+    const { container, unmount } = render(<WorkNowCard card={card({ distanceKm: 965 })} />)
+    const text = container.querySelector('.wn-geo')?.textContent
+    unmount()
+    return text
+  }
+
+  it('reads in miles under Imperial and in km under Metric', () => {
+    expect(geo('imperial')).toBe('SSE 150° · 600 mi')
+    expect(geo('metric')).toBe('SSE 150° · 965 km')
   })
 })

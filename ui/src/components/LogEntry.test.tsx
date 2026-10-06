@@ -235,7 +235,7 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     // The exact UTC instant — NOT a local-zone reading of the inputs, NOT "now".
     const expectedWhen = Math.floor(Date.UTC(2026, 2, 15, 14, 30, 0) / 1000)
     expect(mockedLogQso).toHaveBeenCalledTimes(1)
-    expect(mockedLogQso).toHaveBeenCalledWith(
+    expect(mockedLogQso.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         call: 'K9XYZ',
         band: '2m',

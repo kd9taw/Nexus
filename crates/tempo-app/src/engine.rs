@@ -50,6 +50,42 @@ pub enum LogWriteOutcome {
     Duplicate,
 }
 
+/// Where a contact's STATE came from, as the form that logged it knows. The record cannot say: a
+/// state the operator typed and one a callbook lookup filled in are the same two letters.
+///
+/// It decides one thing, a contact with a park or summit. That contact's state is the PARK's: a
+/// callbook's state is the licensee's address, which says where the activator lives, not where
+/// they are operating. Every other contact logs its state exactly as before.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StateSource {
+    /// Typed or picked by the operator, or sent by a path that cannot say which (the Logbook's
+    /// own form, Remote, a contact the station built itself). A state given this way wins.
+    #[default]
+    Operator,
+    /// Filled in from a callbook lookup. A park's own state outranks it.
+    Callbook,
+    /// Placed by the form from the park or summit, the operator having typed nothing.
+    Park,
+}
+
+impl StateSource {
+    /// The form's word for it: "operator", "callbook" or "park". Anything else, or nothing, is
+    /// [`Self::Operator`], the rule every caller had before the form could say.
+    pub fn from_wire(word: Option<&str>) -> Self {
+        match word {
+            Some("callbook") => Self::Callbook,
+            Some("park") => Self::Park,
+            _ => Self::Operator,
+        }
+    }
+}
+
+/// The state code ADIF writes for a place the hunter feed names: "ND" for "US-ND", "ON" for
+/// "CA-ON". A code with no country part is taken as it is.
+pub fn place_state(place: &str) -> &str {
+    place.split_once('-').map_or(place, |(_, sub)| sub)
+}
+
 use self::remote_logging::{GridSource, HeldQso};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -11941,7 +11977,15 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, rec: QsoRecord) {
-        let _ = self.log_qso_inner(rec, false);
+        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new());
+    }
+
+    /// [`Self::log_qso`] for a contact from a log form, which knows where its state came from
+    /// (`source`) and, for a park or summit the operator typed, where that park is
+    /// (`park_places`, "US-ND"; resolved by the command layer outside the Engine lock). A park
+    /// the record does not carry is ignored, and a hunted park brings its own places.
+    pub fn log_form_qso(&mut self, rec: QsoRecord, source: StateSource, park_places: Vec<String>) {
+        let _ = self.log_qso_inner(rec, false, source, park_places);
     }
 
     /// Changes with native operating/profile changes, including value-identical
@@ -12078,10 +12122,16 @@ impl Engine {
     /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
     /// not change FT sequencing, pending-log semantics or desktop append timing.
     pub fn log_qso_for_sync(&mut self, rec: QsoRecord) -> LogWriteOutcome {
-        self.log_qso_inner(rec, true)
+        self.log_qso_inner(rec, true, StateSource::Operator, Vec::new())
     }
 
-    fn log_qso_inner(&mut self, mut rec: QsoRecord, sync: bool) -> LogWriteOutcome {
+    fn log_qso_inner(
+        &mut self,
+        mut rec: QsoRecord,
+        sync: bool,
+        source: StateSource,
+        park_places: Vec<String>,
+    ) -> LogWriteOutcome {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
@@ -12249,23 +12299,33 @@ impl Engine {
                 rec.country = resolve(&rec.call);
             }
         }
-        // Same treatment for the US state, and for the same reason: it is inferred from the
-        // callsign, never exchanged on the air, and the needs/WAS side can ONLY learn it from
-        // the logged record. Without this the auto-log path wrote `state: None` forever, so a
-        // worked state could never enter `worked_states` and NewState (tier 60 — the lead pill
-        // and the row colour) re-fired on every poll. An operator-supplied state always wins.
-        if rec.state.is_none() {
-            if let Some(resolve) = &self.station.state_resolve {
-                rec.state = resolve(&rec.call, rec.grid.as_deref());
-            }
-        }
+        // The places of a park the record arrived with, as the caller resolved them. Only for a
+        // park it carries: a hunted park below brings its own.
+        let mut park_places = if rec.ota.their_ref.is_some() {
+            park_places
+        } else {
+            Vec::new()
+        };
         // Tag with the current POTA/SOTA activation (your side) if one is set and the
         // record doesn't already carry one — so the contact exports with the right
         // MY_SIG/MY_SOTA_REF and counts toward your activation.
+        //
+        // …and with the state you are activating FROM, as ADIF `MY_STATE`, when the park names
+        // one or you picked one of a state-line park's. Without it every contact of an activation
+        // in North Dakota said nothing of where you were, and a reader of the export could only
+        // assume your home. Never invented: no state known, none written; and a record carrying
+        // its own `MY_STATE` keeps it. It rides in `extra`, where the parser keeps an imported
+        // one, so a round trip through the log writes it exactly once.
         if let Some((program, reference)) = &self.station.activation {
             if rec.ota.my_ref.is_none() {
                 rec.ota.my_program = Some(program.clone());
                 rec.ota.my_ref = Some(reference.clone());
+                if let Some(st) = &self.station.activation_state {
+                    if !rec.extra.iter().any(|(k, _)| k == "MY_STATE") {
+                        let at = rec.extra.partition_point(|(k, _)| k.as_str() < "MY_STATE");
+                        rec.extra.insert(at, ("MY_STATE".to_string(), st.clone()));
+                    }
+                }
             }
         }
         // Hunter side: a pending one-click hunt tags THIS contact with the
@@ -12274,14 +12334,52 @@ impl Engine {
         // consume the pend). Expired pends are dropped, never applied — an
         // activation is over within hours; stamping a park on an unrelated
         // same-call contact tomorrow would be a fabricated hunter credit.
-        if let Some((program, reference, call, at)) = &self.station.pending_hunt {
+        if let Some((program, reference, call, at, places)) = &self.station.pending_hunt {
             if now_unix_secs().saturating_sub(*at) > HUNT_TTL_SECS {
                 self.station.pending_hunt = None;
             } else if tempo_core::message::same_call(&rec.call, call) && rec.ota.their_ref.is_none()
             {
                 rec.ota.their_program = Some(program.clone());
                 rec.ota.their_ref = Some(reference.clone());
+                park_places = places.clone();
                 self.station.pending_hunt = None;
+            }
+        }
+        // THE STATE, after the hunt, because a park places the contact. It is inferred, never
+        // exchanged on the air, and the needs/WAS side can ONLY learn it from the logged record:
+        // without a fill the auto-log path wrote `state: None` forever, so a worked state never
+        // entered `worked_states` and NewState (tier 60, the lead pill and the row colour) re-fired
+        // on every poll.
+        //
+        // ⚠️ A PARK'S CONTACT TAKES THE PARK'S STATE. The resolver answers from the callsign: the
+        // FCC licence's mailing address, or the callbook's. For an activator that is where they
+        // live, so an Ohio ham in a North Dakota park logged OH, every export and upload carried
+        // OH, and WAS credited a state that was never worked. A park in one state names it, and
+        // that outranks the resolver and a callbook's fill alike. A state the operator typed or
+        // picked still wins; so does one the form placed from the park itself.
+        //
+        // ⚠️ A PARK ON A STATE LINE IS NEVER GUESSED. It cannot say which of its states the
+        // activator stood in: not the licence's (where they live, wrong by construction), and not
+        // the grid's (a 4-character square straddles the line, and the park's one coordinate is
+        // not where the activator stands). Its contact logs no state until the operator picks one,
+        // and the Logbook flags it. The same for a contact the form placed from a park it knows
+        // and the station does not, with no state picked: the form's empty box is the park's.
+        let theirs = rec.state.is_some() && source != StateSource::Callbook;
+        if !theirs {
+            let placed = match park_places.as_slice() {
+                [one] => Some(Some(place_state(one).to_string())),
+                [_, _, ..] => Some(None),
+                [] if source == StateSource::Park => Some(None),
+                [] => None,
+            };
+            match placed {
+                Some(state) => rec.state = state,
+                None if rec.state.is_none() => {
+                    if let Some(resolve) = &self.station.state_resolve {
+                        rec.state = resolve(&rec.call, rec.grid.as_deref());
+                    }
+                }
+                None => {}
             }
         }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
@@ -21536,6 +21634,7 @@ contact yourself."
                 program,
                 reference,
                 call,
+                states: self.station.hunt_places(),
             });
         s.harq_rescues = self.harq_rescues;
         s.upload_note = self.station.upload_note.clone();
@@ -24391,8 +24490,10 @@ contact yourself."
         call: &str,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(), String> {
-        self.station.set_hunt_target(call, program, reference)
+        self.station
+            .set_hunt_target(call, program, reference, places)
     }
 
     /// See [`StationCore::clear_hunt_target`].
@@ -24498,8 +24599,24 @@ contact yourself."
         &mut self,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(String, String), String> {
-        self.station.set_activation(program, reference)
+        self.station.set_activation(program, reference, places)
+    }
+
+    /// See [`StationCore::set_activation_state`].
+    pub fn set_activation_state(&mut self, state: &str) -> Result<(), String> {
+        self.station.set_activation_state(state)
+    }
+
+    /// See [`StationCore::activation_places`].
+    pub fn activation_places(&self) -> Vec<String> {
+        self.station.activation_places()
+    }
+
+    /// See [`StationCore::activation_state`].
+    pub fn activation_state(&self) -> Option<String> {
+        self.station.activation_state()
     }
 
     /// See [`StationCore::clear_activation`].
@@ -36466,7 +36583,8 @@ mod tests {
         // SIG/SIG_INFO (hunter credit); other contacts never inherit the park,
         // and the pend clears once used.
         let mut e = Engine::new("W9XYZ", "EN37", 0);
-        e.set_hunt_target("K1ABC", "POTA", "K-1234").unwrap();
+        e.set_hunt_target("K1ABC", "POTA", "K-1234", Vec::new())
+            .unwrap();
         assert!(e.hunt_target().is_some());
         // A DIFFERENT station logged first must not get the park.
         let mut other = e.qso_record("N0OTH".into(), None, Some(-5));
@@ -38165,6 +38283,362 @@ mod tests {
             Some("MA"),
             "an operator-supplied state must win over the resolver"
         );
+    }
+
+    // ── A park's contact takes the park's state ───────────────────────────────────────────
+    //
+    // The resolver answers from the activator's LICENCE (the FCC's mailing address, or a
+    // callbook's), the hunt from the PARK. Every fixture below gives the two different values,
+    // so a test can only pass when the right one wins, and says which by value.
+
+    /// An engine whose resolver places `W8OH` in Ohio, as the FCC index would.
+    fn ohio_licensed() -> Engine {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_state_resolver(|call, _| {
+            tempo_core::message::same_call(call, "W8OH").then(|| "OH".to_string())
+        });
+        e
+    }
+
+    fn places(codes: &[&str]) -> Vec<String> {
+        codes.iter().map(|c| c.to_string()).collect()
+    }
+
+    /// The one-click HUNT on a North Dakota park, the activator licensed in Ohio, logged by the
+    /// sequencer (no state of its own): the contact is North Dakota's.
+    #[test]
+    fn a_hunted_park_logs_its_own_state_not_the_activators_licence() {
+        let mut e = ohio_licensed();
+        e.set_hunt_target("W8OH", "POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        let rec = e.qso_record("W8OH".into(), None, Some(-5));
+        e.log_qso(rec);
+        let r = &e.stored_log()[0];
+        assert_eq!(r.ota.their_ref.as_deref(), Some("US-0001"));
+        assert_eq!(
+            r.state.as_deref(),
+            Some("ND"),
+            "the park's state, not the licence's OH"
+        );
+        // CONTROL: the same contact with no hunt takes the licence's state, so the resolver
+        // really did say OH here, and the park is what moved it.
+        let mut plain = ohio_licensed();
+        let rec = plain.qso_record("W8OH".into(), None, Some(-5));
+        plain.log_qso(rec);
+        assert_eq!(plain.stored_log()[0].state.as_deref(), Some("OH"));
+    }
+
+    /// The log form filled its STATE box from the callbook (the licensee's address): the hunted
+    /// park outranks it. A state the operator TYPED outranks the park, and so does one the form
+    /// placed from the park itself.
+    #[test]
+    fn a_callbook_fill_gives_way_to_the_park_and_a_typed_state_does_not() {
+        let cases = [
+            (StateSource::Callbook, "OH", "ND"),
+            (StateSource::Operator, "MN", "MN"),
+            (StateSource::Park, "ND", "ND"),
+        ];
+        for (source, sent, logged) in cases {
+            let mut e = ohio_licensed();
+            e.set_hunt_target("W8OH", "POTA", "US-0001", places(&["US-ND"]))
+                .unwrap();
+            let mut rec = e.qso_record("W8OH".into(), None, Some(-5));
+            rec.state = Some(sent.into());
+            e.log_form_qso(rec, source, Vec::new());
+            assert_eq!(
+                e.stored_log()[0].state.as_deref(),
+                Some(logged),
+                "{source:?} sent {sent}"
+            );
+        }
+    }
+
+    /// A park the operator typed on the form, with no hunt: placed by what the caller resolved for
+    /// it. Places handed in for a record that carries no park are ignored, and the record's own
+    /// park is the only one they can be about.
+    #[test]
+    fn a_typed_park_is_placed_by_its_callers_places_and_only_a_park_is() {
+        let mut e = ohio_licensed();
+        let mut rec = e.qso_record("W8OH".into(), None, Some(-5));
+        rec.ota.their_program = Some("POTA".into());
+        rec.ota.their_ref = Some("US-0002".into());
+        rec.state = Some("OH".into());
+        e.log_form_qso(rec, StateSource::Callbook, places(&["US-SD"]));
+        assert_eq!(e.stored_log()[0].state.as_deref(), Some("SD"));
+
+        let mut e = ohio_licensed();
+        let rec = e.qso_record("W8OH".into(), None, Some(-5));
+        e.log_form_qso(rec, StateSource::Operator, places(&["US-SD"]));
+        assert_eq!(
+            e.stored_log()[0].state.as_deref(),
+            Some("OH"),
+            "no park on the record: the places are no one's, and the licence answers as before"
+        );
+    }
+
+    /// A summit takes its association's or region's state, a Canadian park its province, as the
+    /// hunt names them ("US-AZ", "CA-QC"), whatever the activator's call says.
+    #[test]
+    fn a_summit_takes_its_state_and_a_canadian_park_its_province() {
+        let mut e = ohio_licensed();
+        e.set_hunt_target("W8OH", "SOTA", "W7A/MN-001", places(&["US-AZ"]))
+            .unwrap();
+        let rec = e.qso_record("W8OH".into(), None, Some(-5));
+        e.log_qso(rec);
+        let r = &e.stored_log()[0];
+        assert_eq!(r.ota.their_ref.as_deref(), Some("W7A/MN-001"));
+        assert_eq!(r.state.as_deref(), Some("AZ"));
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_state_resolver(|_, _| Some("ON".to_string())); // a VE3's licence
+        e.set_hunt_target("VE3XYZ", "POTA", "CA-0001", places(&["CA-QC"]))
+            .unwrap();
+        let rec = e.qso_record("VE3XYZ".into(), None, Some(-5));
+        e.log_qso(rec);
+        assert_eq!(e.stored_log()[0].state.as_deref(), Some("QC"));
+    }
+
+    /// A park the hunt could not place (another country's, or one nothing here knows) changes
+    /// nothing: the contact takes its state exactly as before, so a DL activator in a German park
+    /// logs none, and nothing is invented from the park.
+    #[test]
+    fn a_park_that_names_no_state_leaves_the_contact_as_it_was() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_state_resolver(|_, _| None); // what the resolver says for a DL call
+        e.set_hunt_target("DL1ABC", "POTA", "DE-0001", Vec::new())
+            .unwrap();
+        let rec = e.qso_record("DL1ABC".into(), None, Some(-5));
+        e.log_qso(rec);
+        let r = &e.stored_log()[0];
+        assert_eq!(r.ota.their_ref.as_deref(), Some("DE-0001"));
+        assert_eq!(r.state, None);
+
+        let mut e = ohio_licensed();
+        e.set_hunt_target("W8OH", "POTA", "US-0001", Vec::new())
+            .unwrap();
+        let rec = e.qso_record("W8OH".into(), None, Some(-5));
+        e.log_qso(rec);
+        assert_eq!(e.stored_log()[0].state.as_deref(), Some("OH"), "as before");
+    }
+
+    /// A contact with no hunt, or with a hunt for another station, is logged exactly as before,
+    /// and the other station's hunt is still pending afterwards.
+    #[test]
+    fn a_contact_with_no_hunt_is_unchanged() {
+        let mut e = ohio_licensed();
+        e.set_hunt_target("K0ABC", "POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        let rec = e.qso_record("W8OH".into(), None, Some(-5));
+        e.log_qso(rec);
+        let mut typed = e.qso_record("W8OH".into(), None, Some(-5));
+        typed.band = "40m".into();
+        typed.state = Some("OH".into());
+        e.log_form_qso(typed, StateSource::Callbook, Vec::new());
+        let log = e.stored_log();
+        assert!(log.iter().all(|r| r.ota.their_ref.is_none()));
+        assert!(
+            log.iter().all(|r| r.state.as_deref() == Some("OH")),
+            "{:?}",
+            log.iter().map(|r| &r.state).collect::<Vec<_>>()
+        );
+        assert!(e.hunt_target().is_some(), "K0ABC's hunt still waits");
+    }
+
+    /// ⚠️ A park on a state line is never guessed. Its contact logs no state, whatever the licence
+    /// or a callbook says, until the operator picks one of the park's; then it logs the pick.
+    #[test]
+    fn a_park_on_a_state_line_logs_no_state_until_the_operator_picks_one() {
+        let line = places(&["US-MT", "US-ND"]);
+        let logged = |source: StateSource, sent: Option<&str>| {
+            let mut e = ohio_licensed();
+            e.set_hunt_target("W8OH", "POTA", "US-0003", line.clone())
+                .unwrap();
+            let mut rec = e.qso_record("W8OH".into(), None, Some(-5));
+            rec.state = sent.map(str::to_string);
+            e.log_form_qso(rec, source, Vec::new());
+            let r = e.stored_log().remove(0);
+            assert_eq!(r.ota.their_ref.as_deref(), Some("US-0003"));
+            r.state.clone()
+        };
+        assert_eq!(
+            logged(StateSource::Operator, None),
+            None,
+            "not OH, and no guess"
+        );
+        assert_eq!(
+            logged(StateSource::Callbook, Some("OH")),
+            None,
+            "the callbook's OH"
+        );
+        assert_eq!(
+            logged(StateSource::Park, None),
+            None,
+            "the form's unpicked box"
+        );
+        assert_eq!(
+            logged(StateSource::Operator, Some("ND")).as_deref(),
+            Some("ND")
+        );
+        assert_eq!(
+            logged(StateSource::Operator, Some("MT")).as_deref(),
+            Some("MT")
+        );
+    }
+
+    /// A park the form placed and the station cannot (the form looked it up; nothing here knows
+    /// it) with no state picked logs none: the form's empty box is the park's. The CONTROL is the
+    /// same contact from a form that placed nothing, which the licence answers as before.
+    #[test]
+    fn a_park_the_form_placed_without_a_state_logs_none() {
+        let logged = |source: StateSource| {
+            let mut e = ohio_licensed();
+            let mut rec = e.qso_record("W8OH".into(), None, Some(-5));
+            rec.ota.their_program = Some("POTA".into());
+            rec.ota.their_ref = Some("US-0009".into());
+            e.log_form_qso(rec, source, Vec::new());
+            e.stored_log().remove(0).state.clone()
+        };
+        assert_eq!(logged(StateSource::Park), None);
+        assert_eq!(logged(StateSource::Operator).as_deref(), Some("OH"));
+    }
+
+    /// An imported contact is filled as every insert is, except a hunted one's state: its call
+    /// says where the activator lives, not where the park is. The CONTROL is the same call
+    /// imported without a park, which gains the licence's state as it always did.
+    #[test]
+    fn an_imported_hunted_contact_is_not_given_its_calls_state() {
+        let mut e = ohio_licensed();
+        e.import_adif(
+            "<CALL:4>W8OH<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010101\
+             <SIG:4>POTA<SIG_INFO:7>US-0003<EOR>\n\
+             <CALL:4>W8OH<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>020202<EOR>\n",
+        );
+        let log = e.stored_log();
+        let state_of = |band: &str| log.iter().find(|r| r.band == band).unwrap().state.clone();
+        assert_eq!(state_of("20m"), None, "the hunted contact");
+        assert_eq!(
+            state_of("40m").as_deref(),
+            Some("OH"),
+            "control: the plain one"
+        );
+    }
+
+    // ── Your activation's state: MY_STATE ────────────────────────────────────────────────
+
+    fn my_states(r: &QsoRecord) -> Vec<String> {
+        r.extra
+            .iter()
+            .filter(|(k, _)| k == "MY_STATE")
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    /// An activation's park names the state you are operating from: its contacts carry it as
+    /// `MY_STATE`, written once. Your home state (here the contest QTH setting, Illinois) is no
+    /// part of it.
+    #[test]
+    fn an_activations_contacts_carry_the_parks_state_as_my_state() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        let mut settings = e.settings().clone();
+        settings.op_state = "IL".into();
+        e.apply_settings(settings);
+        e.set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        assert_eq!(e.activation_state().as_deref(), Some("ND"));
+        let rec = e.qso_record("W1ABC".into(), None, Some(-5));
+        e.log_qso(rec);
+        let r = &e.stored_log()[0];
+        assert_eq!(r.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(my_states(r), ["ND"]);
+        let adif = tempo_core::logbook::adif_record(r);
+        assert_eq!(adif.matches("<MY_STATE:").count(), 1, "{adif}");
+        assert!(adif.contains("<MY_STATE:2>ND"), "{adif}");
+        let again = tempo_core::logbook::parse_adif(&tempo_core::logbook::adif_record_own_log(r));
+        assert_eq!(my_states(&again[0]), ["ND"], "a round trip keeps one");
+    }
+
+    /// Never invented. An activation nothing could place carries no `MY_STATE`; one on a state
+    /// line carries none until you pick one of its states, and then the pick. A state the park is
+    /// not in is refused, and so is a pick with no activation.
+    #[test]
+    fn my_state_is_never_invented_and_a_state_line_park_carries_the_pick() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        let log = |e: &mut Engine, call: &str| {
+            let rec = e.qso_record(call.into(), None, Some(-5));
+            e.log_qso(rec);
+            let r = e.stored_log().into_iter().find(|r| r.call == call).unwrap();
+            assert!(r.ota.my_ref.is_some(), "{call} is an activation contact");
+            my_states(&r)
+        };
+        e.set_activation("POTA", "US-9999", Vec::new()).unwrap();
+        assert_eq!(
+            log(&mut e, "W1AAA"),
+            Vec::<String>::new(),
+            "a park nothing placed"
+        );
+        e.set_activation("POTA", "US-0003", places(&["US-MT", "US-ND"]))
+            .unwrap();
+        assert_eq!(e.activation_state(), None);
+        assert_eq!(
+            log(&mut e, "W1BBB"),
+            Vec::<String>::new(),
+            "a state line, unpicked"
+        );
+        assert!(
+            e.set_activation_state("OH").is_err(),
+            "not one of the park's"
+        );
+        e.set_activation_state("nd").unwrap();
+        assert_eq!(log(&mut e, "W1CCC"), ["ND"]);
+        e.clear_activation();
+        assert_eq!(e.activation_state(), None);
+        assert!(e.set_activation_state("ND").is_err(), "no activation");
+    }
+
+    /// A contact that arrives with its own park is not your activation's and is not stamped; one
+    /// that arrives with its own `MY_STATE` keeps that one, and only that one.
+    #[test]
+    fn a_contact_with_its_own_park_or_my_state_keeps_its_own() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        let mut other_park = e.qso_record("W1AAA".into(), None, Some(-5));
+        other_park.ota.my_program = Some("POTA".into());
+        other_park.ota.my_ref = Some("US-0002".into());
+        e.log_qso(other_park);
+        let mut own = e.qso_record("W1BBB".into(), None, Some(-5));
+        own.extra = vec![("MY_STATE".into(), "SD".into())];
+        e.log_qso(own);
+        let log = e.stored_log();
+        let of = |call: &str| log.iter().find(|r| r.call == call).unwrap().clone();
+        assert_eq!(my_states(&of("W1AAA")), Vec::<String>::new());
+        assert_eq!(my_states(&of("W1BBB")), ["SD"]);
+    }
+
+    /// Every connector sends what the log holds: the park's state goes out in the ADIF record the
+    /// QRZ, ClubLog, eQSL, HRDLog.net and Cloudlog pushes send, in the HRD Logbook datagram and in
+    /// WRL's JSON, and the licence's state in none of them.
+    #[test]
+    fn every_connector_payload_carries_the_parks_state() {
+        let mut e = ohio_licensed();
+        e.set_hunt_target("W8OH", "POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        let rec = e.qso_record("W8OH".into(), None, Some(-5));
+        e.log_qso(rec);
+        let queued = e.take_pending_uploads();
+        let rec = &queued
+            .first()
+            .expect("the contact is queued for upload")
+            .rec;
+        let adif = tempo_core::logbook::adif_record(rec);
+        assert!(adif.contains("<STATE:2>ND"), "{adif}");
+        assert!(!adif.contains("<STATE:2>OH"), "{adif}");
+        assert!(adif.contains("<SIG_INFO:7>US-0001"), "{adif}");
+        let datagram = e.hrd_datagram(rec);
+        assert!(datagram.contains("<STATE:2>ND"), "{datagram}");
+        let wrl: serde_json::Value =
+            serde_json::from_str(&tempo_core::wrl::build_contact_json(rec, "K2DEF", None)).unwrap();
+        assert_eq!(wrl["state"], "ND");
     }
 
     #[test]
@@ -59187,7 +59661,8 @@ mod dedup_gate_tests {
         let mut first = contact(&mut g);
         first.call = "K1ABC".into();
         e.log_qso(first.clone());
-        e.set_hunt_target("K1ABC", "POTA", "US-0001").expect("hunt");
+        e.set_hunt_target("K1ABC", "POTA", "US-0001", Vec::new())
+            .expect("hunt");
         let hunt = e.station.pending_hunt.clone();
         assert!(matches!(
             e.log_qso_for_sync(first.clone()),

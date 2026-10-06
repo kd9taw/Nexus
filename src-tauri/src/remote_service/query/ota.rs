@@ -278,9 +278,13 @@ mod tests {
         }).collect();
         engine.import_adif(&adif);
         assert_eq!(engine.stored_log().len(), count);
-        engine.set_activation("POTA", "US-0001").unwrap();
+        engine
+            .set_activation("POTA", "US-0001", Vec::new())
+            .unwrap();
         engine.set_hunted_parks_import(vec!["US-0003".into()]);
-        engine.set_hunt_target("W1AW", "POTA", "US-0004").unwrap();
+        engine
+            .set_hunt_target("W1AW", "POTA", "US-0004", Vec::new())
+            .unwrap();
         Arc::new(Mutex::new(engine))
     }
     #[test]
@@ -424,7 +428,7 @@ mod tests {
                 move |_| {
                     let mut e = hook.lock().unwrap();
                     if activation {
-                        e.set_activation("POTA", "US-0005").unwrap();
+                        e.set_activation("POTA", "US-0005", Vec::new()).unwrap();
                     } else {
                         let mut q = e.stored_log()[0].as_ref().clone();
                         q.ota.my_ref = Some("US-0005".into());
@@ -644,7 +648,10 @@ mod tests {
         ] {
             match activation {
                 Some(r) => {
-                    e.lock().unwrap().set_activation("POTA", r).unwrap();
+                    e.lock()
+                        .unwrap()
+                        .set_activation("POTA", r, Vec::new())
+                        .unwrap();
                 }
                 None => e.lock().unwrap().clear_activation(),
             }
@@ -687,7 +694,7 @@ mod tests {
         store
             .lock()
             .unwrap()
-            .set_activation("POTA", "US-0001")
+            .set_activation("POTA", "US-0001", Vec::new())
             .unwrap();
         let count = read_at(&store, &board_sources(), 1001).unwrap()["activation"]["qsoCount"]
             .as_u64()

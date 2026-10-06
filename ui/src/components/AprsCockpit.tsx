@@ -40,6 +40,7 @@ import {
 import type { Settings } from '../types'
 import { ageFade, CATEGORY_VAR, GLYPH_PATHS, resolveSymbol, symbolCategory } from '../aprsSymbols'
 import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
+import { fmtDistanceKm, useUnits } from '../units'
 // The channel list, the grid→channel derivation and the beaconable symbols — shared with the
 // Settings panel so the two surfaces cannot offer different channels or derive different ones.
 import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
@@ -64,10 +65,9 @@ const APRS_NA_CHANNEL = '144.390'
 /** What a watched-calls entry looks like — callsign-SSIDs, which are wire identifiers. */
 const WATCH_EXAMPLES = 'W9XYZ-9, KD9ABC'
 
-/** Unit symbols printed beside a reading — a unit is a token, and the guard is told so by
- * these constants. */
+/** The unit symbol printed beside a frequency — a unit is a token, and the guard is told so by
+ * this constant. A distance carries its unit from `fmtDistanceKm`, in the operator's units. */
 const MHZ_UNIT = 'MHz'
-const KM_UNIT = 'km'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 function compass(deg: number): string {
@@ -1058,6 +1058,8 @@ export function AprsCockpit({
 
   // The station rows: the backend already collapsed packets into stations and ordered them
   // newest-heard first, so this only decorates them with distance + bearing from the operator.
+  // The distance is shown in Settings ▸ Units, as the station card beside the list shows it.
+  const units = useUnits()
   const rows = useMemo(
     () =>
       visibleStations.map((st) => {
@@ -1505,7 +1507,7 @@ export function AprsCockpit({
                 </td>
                 <td className="aprs-dist">
                   {dist != null
-                    ? `${Math.round(dist)} ${KM_UNIT} ${brg != null ? compass(brg) : ''}`
+                    ? `${fmtDistanceKm(dist, units)} ${brg != null ? compass(brg) : ''}`
                     : ''}
                 </td>
                 <td className="aprs-info">{st.text}</td>
