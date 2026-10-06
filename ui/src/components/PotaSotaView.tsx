@@ -936,23 +936,6 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                     <span className="pota-spot-ref" title={`${s.program} ${s.reference}`}>
                       {s.reference}
                     </span>
-                    {/* The state: its code shown, its name read. Lit in the WAS colour when the
-                        log still needs one of its states on this band. */}
-                    {states.length > 0 && (
-                      <span
-                        className={`pota-spot-state${needed.length > 0 ? ' need-state' : ''}`}
-                        title={stateLines.join('\n')}
-                      >
-                        <span aria-hidden="true">{placeLabel(states, needed)}</span>
-                        <span className="sr-only">
-                          {states
-                            .map((c) =>
-                              needed.includes(c) ? t('ota.spot.state.needed.sr', { state: placeName(c) }) : placeName(c),
-                            )
-                            .join(', ')}
-                        </span>
-                      </span>
-                    )}
                     {/* Badges */}
                     <span className="pota-spot-badges">
                       {s.newPark && (
@@ -985,6 +968,26 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                   </div>
                   <div className="pota-spot-line2">
                     <span className="pota-spot-name" title={fullName}>
+                      {/* The state: its code shown, its name read, lit in the WAS colour when the log
+                          still needs one of its states on this band. It leads the park's name, the
+                          one part of a row that already gives way (an ellipsis inside its capped
+                          width), so it never widens a row or wraps a line, however narrow the box;
+                          and the states of a long list line up in one column. */}
+                      {states.length > 0 && (
+                        <span
+                          className={`pota-spot-state${needed.length > 0 ? ' need-state' : ''}`}
+                          title={stateLines.join('\n')}
+                        >
+                          <span aria-hidden="true">{placeLabel(states, needed)}</span>
+                          <span className="sr-only">
+                            {states
+                              .map((c) =>
+                                needed.includes(c) ? t('ota.spot.state.needed.sr', { state: placeName(c) }) : placeName(c),
+                              )
+                              .join(', ')}
+                          </span>
+                        </span>
+                      )}
                       {truncName(fullName)}
                     </span>
                     <span className="pota-spot-meta">

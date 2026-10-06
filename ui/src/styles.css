@@ -20620,25 +20620,25 @@ button.cq-skiptx1.on {
   color: var(--accent);
   font-family: var(--font-mono);
 }
-/* THE STATE AN ACTIVATOR IS IN (operator, 2026-10-05: "State on rows, needed lit"). Its code after the
-   park reference ("ND"; "MT·ND" for a park on a state line) in the dim ink; its name is in the row's
-   tooltip and is what a screen reader reads. A state the log still needs for Worked All States wears
-   a need chip's look in the WAS colour: the theme's ink on the colour's tint, the colour on its border
-   at full strength (a 10 % tint at night, as the chips have it), so a needed state is a pill and not
-   a colour alone. No vertical padding: the pill sits inside the line the call already sets. */
+/* THE STATE AN ACTIVATOR IS IN (operator, 2026-10-05: "State on rows, needed lit"). Its code leads the park's
+   name ("ND"; "MT·ND" for a park on a state line), in the bold ink; its name is in the row's tooltip and is
+   what a screen reader reads. It sits INSIDE the name, the one part of a row that already gives way (an
+   ellipsis in a capped width), so it cannot widen a row or wrap a line in the narrowest box; and an inline
+   box's border and padding do not lift the line. A state the log still needs for Worked All States wears a
+   need chip's look in the WAS colour: the theme's ink on the colour's tint, the colour on its border at full
+   strength (a 10 % tint at night, as the chips have it), so a needed state is a pill and not a colour alone. */
 .pota-spot-state {
-  font-size: var(--fs-label);
   font-weight: 700;
   font-family: var(--font-mono);
-  color: var(--text-dim);
+  color: var(--text);
   white-space: nowrap;
+  margin-right: 0.6em;
 }
 .pota-spot-state.need-state {
-  color: var(--text);
   background: color-mix(in srgb, var(--need-color) 24%, transparent);
   border: 1px solid var(--need-color);
   border-radius: 999px;
-  padding: 0 6px;
+  padding: 0 5px;
 }
 [data-night='1'] .pota-spot-state.need-state {
   background: color-mix(in srgb, var(--need-color) 10%, transparent);

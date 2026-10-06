@@ -559,12 +559,12 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
     for (const w of stateWords()) for (const mode of EVERY) low.push(...stateFaults(RULES, mode, w))
     expect(low).toEqual([])
   }, 120_000)
-  it('FIRES: a lit state without its rule is caught, as the need colour lettered on nothing', () => {
+  it('FIRES: a lit state without its rule is caught, its WAS colour gone from its border', () => {
     expect(NO_LIT_STATE.length, 'the lit rules were found and removed').toBe(RULES.length - 2)
     const caught = stateWords().filter(lit).flatMap((w) => stateFaults(NO_LIT_STATE, 'light', w))
-    // Every lit label in every host: lettered in the dim ink, with no border at all.
-    expect(caught.length).toBe(2 * stateWords().filter(lit).length)
-    expect(caught.every((m) => m.endsWith('not the ink') || m.endsWith('its border is "", not the WAS colour'))).toBe(true)
+    // Every lit label in every host loses exactly its mark: no border in the WAS colour.
+    expect(caught.length).toBe(stateWords().filter(lit).length)
+    expect(caught.every((m) => m.endsWith('its border is "", not the WAS colour'))).toBe(true)
   })
 
   // The look as it was before 2026-10-03, in dark (the resolver's ratios; Blue at night on the selected row is the 3.93:1 the

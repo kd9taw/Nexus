@@ -414,8 +414,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **POTA/SOTA: each activator's state on the board, lit when you still need it for WAS.** Every row
-  now shows the US state or Canadian province the activator is in, after the park or summit
-  reference: for a park, from pota.app's own spot (a park on a state line shows each state, as
+  now shows the US state or Canadian province the activator is in, ahead of the park or summit
+  name: for a park, from pota.app's own spot (a park on a state line shows each state, as
   **MT·ND**, and a long trail shows two and how many more); for a summit, from its SOTA association,
   per SOTA's own list of associations and regions (a summit that list does not place in one state
   shows none). A US state your log does not yet hold on that spot's band is lit in the New State
