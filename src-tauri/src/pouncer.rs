@@ -128,10 +128,12 @@ fn threshold_of(engine: &Arc<Mutex<Engine>>) -> PounceThreshold {
 
 /// Run the detector. `on_fire` is called for each alert that clears the gate — the caller wires
 /// that to the UI (a Tauri event). The same alert is first appended to `recent`, so a Remote
-/// browser reads exactly what the desktop was told. Blocks; spawn it.
+/// browser reads exactly what the desktop was told. `ota` is the hunter feed's cache, which puts
+/// a live activator in its park's state. Blocks; spawn it.
 pub fn run(
     engine: Arc<Mutex<Engine>>,
     needs_kept: crate::NeedsKept,
+    ota: crate::SharedOtaSpots,
     rx: Receiver<SpotHint>,
     recent: SharedRecent,
     mut on_fire: impl FnMut(Pounce),
@@ -160,11 +162,25 @@ pub fn run(
         let Some(ref n) = needs else {
             continue;
         };
-        let Some(heard) =
+        let Some(mut heard) =
             propagation::needalert::heard_from_freq(&hint.call, hint.freq_mhz, &hint.mode)
         else {
             continue; // off-band frequency — not workable, not news
         };
+        // A spot names no state, so the row is placed as the Needed board places the same
+        // station: a live activator in its park's state, any other station by the radio's own
+        // decodes' resolver. Unplaced, "…or a new US state" never fired on a state. The hunter
+        // feed is read per spot, as the board reads it per poll, so the two agree on an activator.
+        let live: Vec<propagation::OtaSpot> = ota
+            .lock()
+            .map(|cache| crate::live_ota_spots(&cache, now).cloned().collect())
+            .unwrap_or_default();
+        crate::place_heards(
+            std::slice::from_mut(&mut heard),
+            &live,
+            n,
+            crate::fcc_state_for_call,
+        );
         let alerts = propagation::rank_needs(std::slice::from_ref(&heard), &**n, &n.slots());
         let Some(alert) = alerts.into_iter().next() else {
             continue;
@@ -277,5 +293,113 @@ mod tests {
         );
         assert_eq!(crate::LOG_TALLIES.with(|c| c.get()), 1, "folded once");
         assert_eq!(pounce.worked_entities(), 1, "premise: the contact is in it");
+    }
+
+    /// What the detector raises for `calls`, each spotted just now on 20 m CW, run through the
+    /// detector itself: the log is `adif`, Pounce is set to `threshold`, and the hunter feed has
+    /// `feed` live. Each alert as its call, its reasons and its entity.
+    fn raised(
+        adif: &str,
+        threshold: SettingThreshold,
+        feed: &[propagation::OtaSpot],
+        calls: &[&str],
+    ) -> Vec<(String, Vec<propagation::NeedTag>, String)> {
+        let mut engine = Engine::new("KD9TAW", "EN52", 0);
+        engine.import_adif(adif);
+        let mut settings = engine.settings().clone();
+        settings.pounce_threshold = threshold;
+        engine.apply_settings(settings);
+        let ota: crate::SharedOtaSpots = Default::default();
+        ota.lock()
+            .unwrap()
+            .insert("POTA".into(), (crate::now_unix(), feed.to_vec()));
+        let (tx, rx) = channel();
+        for call in calls {
+            tx.offer(SpotHint {
+                call: (*call).into(),
+                freq_mhz: 14.025,
+                mode: "CW".into(),
+                spotted_unix: crate::now_unix(),
+            });
+        }
+        drop(tx);
+        let mut fired = Vec::new();
+        run(
+            Arc::new(Mutex::new(engine)),
+            Default::default(),
+            ota,
+            rx,
+            Default::default(),
+            |p| fired.push((p.call, p.tags, p.entity)),
+        );
+        fired
+    }
+
+    /// ⭐ "NEW ENTITY, ZONE, OR US STATE" FIRES ON A NEEDED STATE, AND ON NOTHING ELSE. A spot
+    /// carries a call and a frequency but no state, and the detector scored its row as it came, so
+    /// this threshold could never fire on a state; the gate's own test passed on a New State alert
+    /// made by hand. The row is placed now as the Needed board places the same station.
+    ///
+    /// Alaska, the United States and their zones are worked and confirmed on 20 m CW, so a station
+    /// heard there is news only for its state. An Alaskan is in AK, so it fires until AK is worked
+    /// on 20 m. An activator is in its park's state, so W1ABC at a Maine park fires and W1XYZ at a
+    /// Connecticut park, a state already worked, does not. The zone threshold fires on none of
+    /// them. No FCC index is loaded in a test, so no station here has a licence state. 3Y0J, an
+    /// all-time new one, fires in every run: the detector scored each spot it stayed quiet on.
+    #[test]
+    fn the_state_threshold_fires_on_a_needed_state_and_on_nothing_else() {
+        use propagation::NeedTag::{NewEntity, NewState, NewZone};
+        use SettingThreshold::{AtnoOrZone, AtnoZoneOrState};
+        let log = |alaska: &str| {
+            format!(
+                "<CALL:6>KL7XYZ<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20260101<TIME_ON:6>010000{alaska}\
+                 <LOTW_QSL_RCVD:1>Y<EOR>\n\
+                 <CALL:4>W1AA<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20260101<TIME_ON:6>020000<STATE:2>CT\
+                 <LOTW_QSL_RCVD:1>Y<EOR>\n"
+            )
+        };
+        let activation = |call: &str, reference: &str, state: &str| propagation::OtaSpot {
+            program: "POTA".into(),
+            reference: reference.into(),
+            name: String::new(),
+            activator: call.into(),
+            freq_khz: 14_025.0,
+            mode: "CW".into(),
+            spotter: None,
+            comment: None,
+            grid: None,
+            lat: None,
+            lon: None,
+            spot_time_unix: None,
+            states: vec![state.into()],
+        };
+        let feed = [
+            activation("W1ABC", "US-0001", "US-ME"),
+            activation("W1XYZ", "US-0002", "US-CT"),
+        ];
+        let heard = ["3Y0J", "KL7AA", "W1ABC", "W1XYZ"];
+        let new_one = (
+            "3Y0J".to_string(),
+            vec![NewEntity, NewZone],
+            "Bouvet".to_string(),
+        );
+        let new_state =
+            |call: &str, entity: &str| (call.to_string(), vec![NewState], entity.to_string());
+        assert_eq!(
+            [
+                raised(&log(""), AtnoZoneOrState, &feed, &heard),
+                raised(&log("<STATE:2>AK"), AtnoZoneOrState, &feed, &heard),
+                raised(&log(""), AtnoOrZone, &feed, &heard),
+            ],
+            [
+                vec![
+                    new_one.clone(),
+                    new_state("KL7AA", "Alaska"),
+                    new_state("W1ABC", "United States")
+                ],
+                vec![new_one.clone(), new_state("W1ABC", "United States")],
+                vec![new_one],
+            ]
+        );
     }
 }

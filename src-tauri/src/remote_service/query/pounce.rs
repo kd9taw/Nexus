@@ -89,6 +89,7 @@ mod tests {
         run(
             engine.clone(),
             Default::default(),
+            Default::default(),
             rx,
             recent.clone(),
             |p| fired.push(p),
@@ -122,6 +123,7 @@ mod tests {
         drop(tx);
         run(
             engine.clone(),
+            Default::default(),
             Default::default(),
             rx,
             recent.clone(),

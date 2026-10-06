@@ -364,6 +364,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Needed board: an Alaska or Hawaii station is in AK or HI on cluster and PSK Reporter rows too.**
   Those rows used the mailing address on the station's FCC licence, so an Alaskan with an address in
   another state could show New State for that state. Your own radio's decodes already placed it right.
+- **Pounce: "New entity, zone, or US state" now alerts for a US state you still need.** It never
+  did, because a spot names no state; Pounce now finds the state as the Needed board does.
 
 ### Changed
 

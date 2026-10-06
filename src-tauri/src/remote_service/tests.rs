@@ -881,6 +881,7 @@ fn cloud_runtime_probe() {
             crate::pouncer::run(
                 engine.clone(),
                 Default::default(),
+                ota_cache.clone(),
                 rx,
                 pounce_recent.clone(),
                 |p| fired.push(p),
