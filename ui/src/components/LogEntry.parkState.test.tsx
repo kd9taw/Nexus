@@ -9,7 +9,7 @@
 // Every fixture gives the callbook and the park DIFFERENT states, so a test can only pass when the
 // right one wins.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import { logQso, lookupPark, qrzLookup } from '../api'
 import type { AppSnapshot } from '../types'
@@ -151,5 +151,62 @@ describe('a park the operator types', () => {
     await waitFor(() => expect(stateBox().value).toBe('SD'))
     fireEvent.change(parkBox(), { target: { value: '' } })
     await waitFor(() => expect(stateBox().value).toBe(''))
+  })
+})
+
+describe('a park on a state line', () => {
+  const LINE: Hunt = { program: 'POTA', reference: 'US-0003', call: 'W8OH', states: ['US-MT', 'US-ND'] }
+  const pick = () => screen.getByRole('group', { name: /state line/i })
+  const choice = (code: string) => within(pick()).getByRole('button', { name: code })
+
+  it('asks which of its states, empties the callbook’s, and logs no state until one is picked', async () => {
+    callbookSaysOhio()
+    const view = render(strip(null, { call: 'W8OH', ts: 1 }))
+    await waitFor(() => expect(stateBox().value).toBe('OH'))
+    view.rerender(strip(LINE, { call: 'W8OH', ts: 1 }))
+    await waitFor(() => expect(choice('MT')).toBeTruthy())
+    expect(choice('ND')).toBeTruthy()
+    expect(stateBox().value, 'the licence’s Ohio is no pick').toBe('')
+    expect(choice('MT').getAttribute('aria-pressed')).toBe('false')
+    expect(await logged()).toEqual({ state: null, source: 'park' })
+  })
+
+  it('keeps the callbook’s state out when the lookup answers after the park, so the box shows what logs', async () => {
+    // The order a spot click makes: the hunt and the call land together, and the lookup answers
+    // after. The empty box is the park's undecided answer, not a blank for the callbook to fill.
+    callbookSaysOhio()
+    render(strip(LINE, { call: 'W8OH', ts: 1 }))
+    await waitFor(() => expect(choice('MT')).toBeTruthy())
+    await waitFor(() => expect(screen.getByDisplayValue('Olive')).toBeTruthy())
+    await settle()
+    expect(stateBox().value, 'the licence’s Ohio is no pick').toBe('')
+    expect(await logged()).toEqual({ state: null, source: 'park' })
+  })
+
+  it('logs the state the operator picks', async () => {
+    render(strip(LINE, { call: 'W8OH', ts: 1 }))
+    await waitFor(() => expect(choice('ND')).toBeTruthy())
+    fireEvent.click(choice('ND'))
+    expect(stateBox().value).toBe('ND')
+    expect(choice('ND').getAttribute('aria-pressed')).toBe('true')
+    expect(choice('MT').getAttribute('aria-pressed')).toBe('false')
+    expect(await logged()).toEqual({ state: 'ND', source: 'operator' })
+  })
+
+  it('asks for a typed park whose lookup names two states, and not for one in a single state', async () => {
+    mockedPark.mockImplementation(async (ref: string) =>
+      (ref === 'US-0003'
+        ? { reference: 'US-0003', name: 'Line', grid: '', location: 'US-MT,US-ND', states: ['US-MT', 'US-ND'] }
+        : ref === 'US-0004'
+          ? { reference: 'US-0004', name: 'Lake', grid: '', location: 'US-SD', states: ['US-SD'] }
+          : null) as never,
+    )
+    render(strip(null, { call: 'K0ABC', ts: 1 }))
+    await waitFor(() => expect(screen.getByDisplayValue('K0ABC')).toBeTruthy())
+    fireEvent.change(parkBox(), { target: { value: 'US-0003' } })
+    await waitFor(() => expect(choice('MT')).toBeTruthy())
+    fireEvent.change(parkBox(), { target: { value: 'US-0004' } })
+    await waitFor(() => expect(stateBox().value).toBe('SD'))
+    expect(screen.queryByRole('group', { name: /state line/i })).toBeNull()
   })
 })

@@ -239,6 +239,8 @@ pub fn catch_up_records(
 /// what every insert does before it writes (SPEC-2 v3 D2-A), so the store holds exactly what
 /// every screen shows. The record's own values always win, and a resolver that cannot place the
 /// call leaves the field empty. The same rule `Engine::log_qso` applies to a contact it logs.
+///
+/// Never the state of a contact with a hunted park or summit ([`call_places_state`]).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fill_with(
     r: &mut QsoRecord,
@@ -248,9 +250,19 @@ pub(crate) fn fill_with(
     if r.country.is_none() {
         r.country = country.and_then(|resolve| resolve(&r.call));
     }
-    if r.state.is_none() {
+    if r.state.is_none() && call_places_state(r) {
         r.state = state.and_then(|resolve| resolve(&r.call, r.grid.as_deref()));
     }
+}
+
+/// Whether a contact's missing state may be filled from its callsign. Not for one with a hunted
+/// park or summit: the park places that contact, and the call places only where the activator
+/// LIVES (their licence's address). The log funnel gave it the park's state when it was logged;
+/// one without a state is a park on a state line the operator has not picked, or a contact from
+/// before the park's state was known, and filling it from the call is the error the park's state
+/// replaced. The operator picks it, or the Logbook's park-state check offers the park's own.
+pub(crate) fn call_places_state(r: &QsoRecord) -> bool {
+    r.ota.their_ref.is_none()
 }
 
 /// Fill every contact of `log` — a log nothing holds yet — with its country and state from the
@@ -274,9 +286,7 @@ fn fill_loaded(
                 .is_none()
                 .then(|| country.and_then(|f| f(&r.call)))
                 .flatten();
-            let st = r
-                .state
-                .is_none()
+            let st = (r.state.is_none() && call_places_state(r))
                 .then(|| state.and_then(|f| f(&r.call, r.grid.as_deref())))
                 .flatten();
             (c.is_some() || st.is_some()).then_some((i, c, st))

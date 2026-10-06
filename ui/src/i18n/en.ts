@@ -1486,6 +1486,8 @@ export const EN = {
 
   // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
   'logbook.row.park.worked': '{{program}} {{ref}} (worked)',
+  'logbook.row.park.noState':
+    'No state: set the state the activator was in. A park on a state line is logged without one until you pick it.',
   'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
@@ -1644,6 +1646,9 @@ export const EN = {
   'logEntry.qth.placeholder': 'QTH (city)',
   'logEntry.state.placeholder': 'State',
   'logEntry.state.title': 'State / province — auto-filled by the QRZ lookup when available',
+  'logEntry.parkState.ask': 'On a state line. Which state?',
+  'logEntry.parkState.title':
+    'This park is in more than one state, and the contact counts for the one the activator is in. Nexus does not guess it: pick it here, or log without a state and set it later in the Logbook.',
   'logEntry.country.placeholder': 'Country',
   'logEntry.country.title': 'DXCC entity — auto-filled from the callsign when available',
   'logEntry.comment.placeholder': 'Comment (sharable)',

@@ -12344,18 +12344,29 @@ impl Engine {
         // OH, and WAS credited a state that was never worked. A park in one state names it, and
         // that outranks the resolver and a callbook's fill alike. A state the operator typed or
         // picked still wins; so does one the form placed from the park itself.
-        let park_state = match park_places.as_slice() {
-            [one] => Some(place_state(one).to_string()),
-            _ => None,
-        };
+        //
+        // ⚠️ A PARK ON A STATE LINE IS NEVER GUESSED. It cannot say which of its states the
+        // activator stood in: not the licence's (where they live, wrong by construction), and not
+        // the grid's (a 4-character square straddles the line, and the park's one coordinate is
+        // not where the activator stands). Its contact logs no state until the operator picks one,
+        // and the Logbook flags it. The same for a contact the form placed from a park it knows
+        // and the station does not, with no state picked: the form's empty box is the park's.
         let theirs = rec.state.is_some() && source != StateSource::Callbook;
         if !theirs {
-            if park_state.is_some() {
-                rec.state = park_state;
-            } else if rec.state.is_none() {
-                if let Some(resolve) = &self.station.state_resolve {
-                    rec.state = resolve(&rec.call, rec.grid.as_deref());
+            let placed = match park_places.as_slice() {
+                [one] => Some(Some(place_state(one).to_string())),
+                [_, _, ..] => Some(None),
+                [] if source == StateSource::Park => Some(None),
+                [] => None,
+            };
+            match placed {
+                Some(state) => rec.state = state,
+                None if rec.state.is_none() => {
+                    if let Some(resolve) = &self.station.state_resolve {
+                        rec.state = resolve(&rec.call, rec.grid.as_deref());
+                    }
                 }
+                None => {}
             }
         }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
@@ -38402,6 +38413,85 @@ mod tests {
             log.iter().map(|r| &r.state).collect::<Vec<_>>()
         );
         assert!(e.hunt_target().is_some(), "K0ABC's hunt still waits");
+    }
+
+    /// ⚠️ A park on a state line is never guessed. Its contact logs no state, whatever the licence
+    /// or a callbook says, until the operator picks one of the park's; then it logs the pick.
+    #[test]
+    fn a_park_on_a_state_line_logs_no_state_until_the_operator_picks_one() {
+        let line = places(&["US-MT", "US-ND"]);
+        let logged = |source: StateSource, sent: Option<&str>| {
+            let mut e = ohio_licensed();
+            e.set_hunt_target("W8OH", "POTA", "US-0003", line.clone())
+                .unwrap();
+            let mut rec = e.qso_record("W8OH".into(), None, Some(-5));
+            rec.state = sent.map(str::to_string);
+            e.log_form_qso(rec, source, Vec::new());
+            let r = e.stored_log().remove(0);
+            assert_eq!(r.ota.their_ref.as_deref(), Some("US-0003"));
+            r.state.clone()
+        };
+        assert_eq!(
+            logged(StateSource::Operator, None),
+            None,
+            "not OH, and no guess"
+        );
+        assert_eq!(
+            logged(StateSource::Callbook, Some("OH")),
+            None,
+            "the callbook's OH"
+        );
+        assert_eq!(
+            logged(StateSource::Park, None),
+            None,
+            "the form's unpicked box"
+        );
+        assert_eq!(
+            logged(StateSource::Operator, Some("ND")).as_deref(),
+            Some("ND")
+        );
+        assert_eq!(
+            logged(StateSource::Operator, Some("MT")).as_deref(),
+            Some("MT")
+        );
+    }
+
+    /// A park the form placed and the station cannot (the form looked it up; nothing here knows
+    /// it) with no state picked logs none: the form's empty box is the park's. The CONTROL is the
+    /// same contact from a form that placed nothing, which the licence answers as before.
+    #[test]
+    fn a_park_the_form_placed_without_a_state_logs_none() {
+        let logged = |source: StateSource| {
+            let mut e = ohio_licensed();
+            let mut rec = e.qso_record("W8OH".into(), None, Some(-5));
+            rec.ota.their_program = Some("POTA".into());
+            rec.ota.their_ref = Some("US-0009".into());
+            e.log_form_qso(rec, source, Vec::new());
+            e.stored_log().remove(0).state.clone()
+        };
+        assert_eq!(logged(StateSource::Park), None);
+        assert_eq!(logged(StateSource::Operator).as_deref(), Some("OH"));
+    }
+
+    /// An imported contact is filled as every insert is, except a hunted one's state: its call
+    /// says where the activator lives, not where the park is. The CONTROL is the same call
+    /// imported without a park, which gains the licence's state as it always did.
+    #[test]
+    fn an_imported_hunted_contact_is_not_given_its_calls_state() {
+        let mut e = ohio_licensed();
+        e.import_adif(
+            "<CALL:4>W8OH<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010101\
+             <SIG:4>POTA<SIG_INFO:7>US-0003<EOR>\n\
+             <CALL:4>W8OH<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>020202<EOR>\n",
+        );
+        let log = e.stored_log();
+        let state_of = |band: &str| log.iter().find(|r| r.band == band).unwrap().state.clone();
+        assert_eq!(state_of("20m"), None, "the hunted contact");
+        assert_eq!(
+            state_of("40m").as_deref(),
+            Some("OH"),
+            "control: the plain one"
+        );
     }
 
     /// Every connector sends what the log holds: the park's state goes out in the ADIF record the

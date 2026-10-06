@@ -327,6 +327,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a park you type into the log form is placed the same way. A park outside the US and Canada,
   or one Nexus cannot place, logs its state as before. Contacts already in your log are not
   changed.
+- **POTA: a park on a state line asks which state, and is never guessed.** A park in more than
+  one state cannot say which one the activator is in, and the activator's home state is no answer.
+  While the log form holds such a park, it shows the park's states to pick from: pick the one the
+  activator says they are in. A contact logged without a pick has no state, and the Logbook marks
+  it with a **?** before the park so you can set it later. The mark shows on any park or summit
+  contact in the US or Canada that has no state, and Nexus no longer fills such a contact's state
+  from the activator's callsign, when you log it, import it, or when it fills in contacts in the
+  background.
 
 ### Changed
 

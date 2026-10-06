@@ -248,6 +248,17 @@ function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number 
 }
 
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
+/** The entities whose contacts take a US state or Canadian province, as cty.dat (and the
+ *  callbook) name them. */
+const STATE_ENTITIES: ReadonlySet<string> = new Set(['United States', 'Alaska', 'Hawaii', 'Canada'])
+
+/** A contact with a hunted park or summit and no state, where a state applies (or the log cannot
+ *  say whether one does): it counts for no state until the operator sets the one the activator was
+ *  in. A park on a state line is logged this way on purpose, never guessed, until it is picked. */
+function needsParkState(q: LoggedQso): boolean {
+  return !!q.ota?.theirRef && !(q.state ?? '').trim() && (q.country == null || STATE_ENTITIES.has(q.country))
+}
+
 function parseReport(s: string): string | null {
   const t = s.trim()
   return t === '' ? null : t
@@ -2602,6 +2613,16 @@ export function Logbook({
                         : ''
                   }
                 >
+                  {/* Before the reference, so a narrow Park column clips the reference and
+                      never the mark. */}
+                  {needsParkState(q) && (
+                    <span
+                      className="log-park-nostate"
+                      role="img"
+                      aria-label={t('logbook.row.park.noState')}
+                      title={t('logbook.row.park.noState')}
+                    />
+                  )}
                   {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
                 </span>
                 <span className="log-cell">

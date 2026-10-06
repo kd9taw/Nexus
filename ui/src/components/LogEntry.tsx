@@ -32,7 +32,7 @@ import { contestDupe } from '../features/contestDupe'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
-import { placeCode } from '../features/otaStates'
+import { placeCode, placeName } from '../features/otaStates'
 import { RecallPanel } from './RecallPanel'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
@@ -854,11 +854,18 @@ export function LogEntry({
   // contact will log, and can change it. It replaces a callbook's (the activator's home address,
   // which is not where they are operating) and never a state the operator typed. When the park
   // that placed the box goes, its state goes with it.
+  //
+  // A park ON A STATE LINE empties the box instead, and the pick below asks which of its states:
+  // the park decides, and has not decided yet. The callbook's state is not a pick (it says where
+  // the activator lives), so it goes; logged with no pick, the contact has no state and the
+  // Logbook flags it.
   useEffect(() => {
     if (stateSourceRef.current === 'operator' && stateBoxRef.current.trim() !== '') return
     if (parkPlaces.length === 1) {
       const code = placeCode(parkPlaces[0])
       if (stateBoxRef.current !== code || stateSourceRef.current !== 'park') setStateBox(code, 'park')
+    } else if (parkPlaces.length > 1) {
+      if (stateBoxRef.current !== '' || stateSourceRef.current !== 'park') setStateBox('', 'park')
     } else if (stateSourceRef.current === 'park') {
       setStateBox('', 'operator')
     }
@@ -1092,7 +1099,10 @@ export function LogEntry({
     // taking the callbook's answer exactly as they did.
     if (r.grid && (!asksForGrid || isValidLoggedGrid(r.grid)))
       setLogGrid((v) => (v.trim() ? v : r.grid ?? ''))
-    if (r.state && !stateBoxRef.current.trim()) setStateBox(r.state, 'callbook')
+    // Only a blank the OPERATOR owns: a box the park placed holds the park's answer, and on a state
+    // line that answer is an empty box until the operator picks. Filled here, it would show the
+    // licence's state on a contact the station logs with none.
+    if (r.state && !stateBoxRef.current.trim() && stateSourceRef.current !== 'park') setStateBox(r.state, 'callbook')
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
     setCallbookState(r.state ?? '') // the recall card's, beside the callbook's town
@@ -2080,6 +2090,33 @@ export function LogEntry({
               {t('logEntry.park.live.label')}
             </span>
           )}
+        </div>
+      )}
+
+      {/* A PARK ON A STATE LINE: which of its states the activator is in is never guessed. Not
+          the licence's state (where the activator lives) and not the grid's (a square straddles
+          the line). The operator picks one, from what the activator says on the air or the
+          spot's comment; with no pick the contact logs no state and the Logbook flags it. In
+          every exchange, as the hunt chip is: the station places a hunted park by call. */}
+      {parkPlaces.length > 1 && (
+        <div className="le-park-states" role="group" aria-label={t('logEntry.parkState.ask')} title={t('logEntry.parkState.title')}>
+          <span className="le-park-states-ask">{t('logEntry.parkState.ask')}</span>
+          {parkPlaces.map((place) => {
+            const code = placeCode(place)
+            const picked = logState.trim().toUpperCase() === code
+            return (
+              <button
+                key={place}
+                type="button"
+                className={`le-park-state${picked ? ' picked' : ''}`}
+                aria-pressed={picked}
+                title={placeName(place)}
+                onClick={() => setStateBox(code, 'operator')}
+              >
+                {code}
+              </button>
+            )
+          })}
         </div>
       )}
 
