@@ -865,6 +865,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // turns Remote off. While the scenario holds station data back on purpose (`applicationAvailable=false`) it waits
     // for that to end: the scenario reconnects itself where it recovers. Every connection goes through
     // `connectStation`, one at a time, so the scenario's and the stand-in's never cross.
+    // ONE EXCEPTION: a close only a protocol fault produces fails the scenario at once and names the reason. The room
+    // refuses a message it cannot read (`invalidMessage`, remote/src/room.ts), and the relays a station message they
+    // cannot take (`invalidObservation`, `invalidOperation`, `invalidStream`, `invalidAudio`); late answers never
+    // produce these, so a slow runner cannot, and reconnecting would only ride out a broken message. A reason a late
+    // answer also produces (`invalidPublication`, `invalidApplicationResult`, `invalidApplicationPage`) stays a drop.
+    const protocolFaults=['invalidMessage','invalidObservation','invalidOperation','invalidStream','invalidAudio']
     const ownCloses=new WeakSet()
     let connecting=Promise.resolve()
     const connectStation=(dropped=null)=>{const turn=connecting.then(async()=>{
@@ -877,6 +883,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const source=station,started=performance.now()
         while(producing&&station===source&&(!source.closed||ownCloses.has(source)))await sleep(100)
         if(!producing||station!==source)continue
+        if(protocolFaults.includes(source.closeReason))assert.fail(`The service closed the station stand-in's socket for a protocol fault: ${source.closeCode} ${source.closeReason}`)
         if(performance.now()-started>60000)attempts=0
         attempts=Math.min(attempts+1,6)
         const wait=(1000<<attempts)+Math.floor(Math.random()*1000),due=performance.now()+wait
