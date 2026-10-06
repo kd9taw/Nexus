@@ -484,7 +484,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pick, no `MY_STATE` is written. A park Nexus cannot place writes none. LoTW credits the state of
   the TQSL Station Location you sign with, so sign an activation's contacts with a location in that
   state, as the strip's tooltip says. An activation started from the Remote page is placed the same
-  way, but a state line has to be picked at the station.
+  way, but a state line has to be picked at the station. NEEDS-BENCH: how TQSL treats a
+  `MY_STATE` that differs from the Station Location you sign with.
 
 - **Street map (not yet visible): a street-level map of your area as a fifth map choice.** Built
   and tested, and hidden until Nexus's street maps are hosted. **Street** joins Globe, 3D, Flat
