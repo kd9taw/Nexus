@@ -138,7 +138,10 @@ pub fn parse_sota_spots(json: &str) -> Vec<OtaSpot> {
 /// provinces and territories. Everything else is left out rather than shown as what it is not:
 /// another country's ("FR-ARA"), and codes POTA files under the US or Canada that are no state
 /// or province ("US-KI", "CA-SP").
-fn location_states(location: &str) -> Vec<String> {
+///
+/// Public because the park list POTA publishes carries the same field: a park read from the list
+/// is placed by exactly the rule a spot is.
+pub fn location_states(location: &str) -> Vec<String> {
     location.split(',').filter_map(subdivision).collect()
 }
 

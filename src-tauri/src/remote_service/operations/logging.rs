@@ -640,11 +640,13 @@ pub(super) enum ChangeWork {
 /// stamps).
 ///
 /// `found` is a key target's contact as [`find`] found it with the lock released (`None`: no
-/// contact held that row); an id target names its own.
+/// contact held that row); an id target names its own. `places` is where a hunted park or summit
+/// is, read before the Engine lock (`Authority::places_for`).
 pub(super) fn prepare_change(
     engine: &mut Engine,
     change: &Change,
     found: Option<&RowRef>,
+    places: Vec<String>,
 ) -> Result<ChangeWork, ChangeReason> {
     match change {
         // The engine validates and normalizes the reference for its program; a refusal changes nothing.
@@ -654,7 +656,7 @@ pub(super) fn prepare_change(
             reference,
         } => {
             return engine
-                .set_hunt_target(call, program, reference)
+                .set_hunt_target(call, program, reference, places)
                 .map(|()| ChangeWork::State)
                 .map_err(|_| ChangeReason::InvalidChange)
         }

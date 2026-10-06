@@ -115,7 +115,7 @@ fn scripted_station() -> Engine {
 
     // Station intents the snapshot surfaces.
     let _ = eng.set_activation("POTA", "K-1234");
-    let _ = eng.set_hunt_target("N7GHI", "POTA", "K-5678");
+    let _ = eng.set_hunt_target("N7GHI", "POTA", "K-5678", Vec::new());
 
     // One decode so the roster exists and carries the stamped country/rarity/lotw flags —
     // the fields the other fixture leaves null.

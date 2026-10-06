@@ -316,6 +316,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unicode and MPL-2.0 among them, ask for the text itself to travel with every copy. Every
   installer now has the texts of all of them in `resources/rust/THIRD-PARTY.txt`, and the
   **Licenses** button shows them after the interface's.
+- **POTA/SOTA: a contact with an activator logs the park's state, not the activator's home
+  state.** A contact you hunted, from the POTA/SOTA board, the map, the Needed board, Band Activity
+  or the Remote page, took its state from the activator's callsign: the address on their FCC
+  licence, or their callbook entry. So an Ohio ham at a North Dakota park was logged as Ohio, and
+  your exports, your uploads and your Worked All States count all said Ohio. Now the contact takes
+  the state the park or summit is in: a park's from pota.app's own spot, or from the park list once
+  you have downloaded it, and a summit's from its SOTA association or region. The log form puts
+  that state in the State box, so you see it before you log. A state you type yourself still wins,
+  and a park you type into the log form is placed the same way. A park outside the US and Canada,
+  or one Nexus cannot place, logs its state as before. Contacts already in your log are not
+  changed.
 
 ### Changed
 

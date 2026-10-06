@@ -379,6 +379,10 @@ enum Grant {
 #[derive(Default)]
 pub struct Authority {
     spots: Option<crate::SharedSpots>,
+    /// The station's hunter-feed cache and park list, which place the park or summit a browser
+    /// hunts ([`crate::ota_park_places`]). Unset in a service built without them: it places
+    /// nothing, and the contact takes its state as before.
+    places: Option<(crate::SharedOtaSpots, crate::SharedParks)>,
     epoch: AtomicU64,
     connection: AtomicU64,
     lease_epoch: AtomicU64,
@@ -517,6 +521,25 @@ impl Authority {
         Self {
             spots,
             ..Self::default()
+        }
+    }
+    /// The caches that place a hunted park or summit (see `places`).
+    pub fn placing(mut self, places: Option<(crate::SharedOtaSpots, crate::SharedParks)>) -> Self {
+        self.places = places;
+        self
+    }
+    /// Where the park or summit a browser's hunt names is, read with no other lock held: before
+    /// Core and before the Engine. Nothing for any other request.
+    fn places_for(&self, request: &Request) -> Vec<String> {
+        let (Some((ota, parks)), Request::LogChange { change, .. }) = (&self.places, request)
+        else {
+            return Vec::new();
+        };
+        match &**change {
+            logging::Change::Hunt {
+                program, reference, ..
+            } => crate::ota_park_places(ota, parks, program, reference),
+            _ => Vec::new(),
         }
     }
     /// The LAN road's paired computers hold station control while LAN is on, whatever clears
@@ -1261,6 +1284,7 @@ impl Authority {
         if !identifier(session) || !identifier(device) || !identifier(request.id()) {
             return Err("invalidRequest");
         }
+        let places = self.places_for(request);
         let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
         self.reconcile(&mut c, now)?;
         // A permission refusal never depends on Engine contention: a device that
@@ -1566,8 +1590,12 @@ impl Authority {
                     // rolled back by a disconnect, and its receipt answers any replay.
                     self.advance(&mut c)?;
                     c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                    let prepared =
-                        logging::prepare_change(&mut engine, change, found.flatten().as_ref());
+                    let prepared = logging::prepare_change(
+                        &mut engine,
+                        change,
+                        found.flatten().as_ref(),
+                        places,
+                    );
                     drop(engine);
                     // Engine is released, and so is Core: the receipt goes in as in flight first,
                     // so a replay meanwhile is told the station is busy rather than posting twice,

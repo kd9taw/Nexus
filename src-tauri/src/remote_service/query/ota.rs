@@ -280,7 +280,9 @@ mod tests {
         assert_eq!(engine.stored_log().len(), count);
         engine.set_activation("POTA", "US-0001").unwrap();
         engine.set_hunted_parks_import(vec!["US-0003".into()]);
-        engine.set_hunt_target("W1AW", "POTA", "US-0004").unwrap();
+        engine
+            .set_hunt_target("W1AW", "POTA", "US-0004", Vec::new())
+            .unwrap();
         Arc::new(Mutex::new(engine))
     }
     #[test]

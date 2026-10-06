@@ -18945,22 +18945,26 @@ async fn close_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), 
 /// jumps to the correct next Tx — WSJT-X double-click semantics — instead of
 /// restarting at the grid. Returns the refreshed snapshot.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)] // one per managed state it reads
 fn call_station(
     state: State<'_, SharedEngine>,
     ota_cache: State<'_, SharedOtaSpots>,
+    parks: State<'_, SharedParks>,
     call: String,
     grid: Option<String>,
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
 ) -> Result<AppSnapshot, String> {
-    call_station_on(&state, &ota_cache, &call, grid, message, snr, freq)
+    call_station_on(&state, &ota_cache, &parks, &call, grid, message, snr, freq)
 }
 
 /// [`call_station`]'s body, over plain handles so a test drives exactly what the command runs.
+#[allow(clippy::too_many_arguments)]
 fn call_station_on(
     engine: &SharedEngine,
     ota_cache: &SharedOtaSpots,
+    parks: &SharedParks,
     call: &str,
     grid: Option<String>,
     message: Option<String>,
@@ -18972,7 +18976,10 @@ fn call_station_on(
     // share, and none of them set a hunt the way HUNT, the map and the Needed board's Work do,
     // so a contact started here logged with no park. Read BEFORE the engine lock (an in-memory
     // cache, never nested inside it) and applied only after the call has gone through.
-    let park = sole_live_activation(ota_cache, call, now_unix());
+    let park = sole_live_activation(ota_cache, call, now_unix()).map(|(program, reference)| {
+        let places = ota_park_places(ota_cache, parks, &program, &reference);
+        (program, reference, places)
+    });
     let mut eng = engine_lock(engine);
     // Working a station keys a standard structured message (your grid in Tx1) — refuse
     // without a valid callsign + grid so we never emit a grid-less directed call. The
@@ -18990,12 +18997,12 @@ fn call_station_on(
     // the operator picked on the POTA/SOTA board survives. And the tag never costs the call: a
     // reference `set_hunt_target` will not accept leaves this contact untagged, as an
     // ambiguous one does.
-    if let Some((program, reference)) = park {
+    if let Some((program, reference, places)) = park {
         let started = eng
             .qso_dxcall()
             .is_some_and(|c| tempo_core::message::same_call(c, call));
         if started {
-            if let Err(e) = eng.set_hunt_target(call, &program, &reference) {
+            if let Err(e) = eng.set_hunt_target(call, &program, &reference, places) {
                 tempo_core::applog::warn(
                     "hunt",
                     &format!("{call}: {program} {reference} not tagged: {e}"),
@@ -19121,14 +19128,34 @@ fn discard_pending_log(
 
 /// Manually log a contact to the ADIF logbook (the UI "Log QSO" button). Adds in
 /// memory and persists to the log file. Returns the refreshed snapshot.
+///
+/// `state_source` is where the form's STATE came from ("operator", "callbook" or "park"; see
+/// [`tempo_app::engine::StateSource`]); absent is the operator's. A park or summit the record
+/// carries is placed here, before the Engine lock ([`ota_park_places`]).
 #[tauri::command]
-async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+async fn log_qso(
+    state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
+    parks: State<'_, SharedParks>,
+    record: LoggedQso,
+    state_source: Option<String>,
+) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     let call = record.call.clone();
+    let source = tempo_app::engine::StateSource::from_wire(state_source.as_deref());
+    let park_places = record
+        .ota
+        .their_ref
+        .as_deref()
+        .map(|reference| {
+            let program = record.ota.their_program.as_deref().unwrap_or("POTA");
+            ota_park_places(&ota_cache, &parks, program, reference)
+        })
+        .unwrap_or_default();
     let (snap, wav) = durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            eng.log_qso(record.into());
+            eng.log_form_qso(record.into(), source, park_places);
             // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
             // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
             let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
@@ -20266,6 +20293,53 @@ fn sole_live_activation(
     match live_activations(live_ota_spots(&cache, now), call).as_slice() {
         [one] => Some(one.clone()),
         _ => None,
+    }
+}
+
+/// Where a park or summit is: the US states, DC and Canadian provinces it lies in, as the hunter
+/// feed writes them ("US-ND"; a park on a state line names each). Empty where nothing here places
+/// it, and its contact then takes a state as every contact did before.
+///
+/// A summit from SOTA's own association and region tables ([`propagation::pota::sota_state`]),
+/// which need nothing downloaded. A park from a hunter-feed spot of it (pota.app's
+/// `locationDesc`), else from the same field of the downloaded park list. A park's place is a
+/// fact about the park, so any spot of it will do, however old.
+///
+/// Each cache is read on its own and briefly, and NEVER inside the Engine lock: call this before
+/// taking it, as [`sole_live_activation`] is. A poisoned lock reads as nothing known.
+fn ota_park_places(
+    ota_cache: &SharedOtaSpots,
+    parks: &SharedParks,
+    program: &str,
+    reference: &str,
+) -> Vec<String> {
+    let reference = reference.trim();
+    match tempo_core::pota::OtaProgram::from_code(program) {
+        Some(tempo_core::pota::OtaProgram::Sota) => propagation::pota::sota_state(reference)
+            .map(str::to_string)
+            .into_iter()
+            .collect(),
+        Some(tempo_core::pota::OtaProgram::Pota) => {
+            let spotted = ota_cache.lock().ok().and_then(|cache| {
+                cache.get("POTA").and_then(|(_, spots)| {
+                    spots
+                        .iter()
+                        .find(|sp| {
+                            sp.reference.eq_ignore_ascii_case(reference) && !sp.states.is_empty()
+                        })
+                        .map(|sp| sp.states.clone())
+                })
+            });
+            spotted.unwrap_or_else(|| {
+                parks
+                    .lock()
+                    .ok()
+                    .and_then(|idx| idx.lookup(reference))
+                    .map(|park| propagation::pota::location_states(&park.location))
+                    .unwrap_or_default()
+            })
+        }
+        None => Vec::new(),
     }
 }
 
@@ -26497,12 +26571,29 @@ async fn get_ota_map_spots(
 #[tauri::command(async)]
 fn set_hunt_target(
     state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
+    parks: State<'_, SharedParks>,
     call: String,
     program: String,
     reference: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    eng.set_hunt_target(&call, &program, &reference)?;
+    set_hunt_target_on(&state, &ota_cache, &parks, &call, &program, &reference)
+}
+
+/// [`set_hunt_target`]'s body, over plain handles so a test drives exactly what the command
+/// runs. The hunt carries where the park or summit is, read before the Engine lock
+/// ([`ota_park_places`]): the contact it tags takes the park's state, not the activator's.
+fn set_hunt_target_on(
+    engine: &SharedEngine,
+    ota_cache: &SharedOtaSpots,
+    parks: &SharedParks,
+    call: &str,
+    program: &str,
+    reference: &str,
+) -> Result<AppSnapshot, String> {
+    let places = ota_park_places(ota_cache, parks, program, reference);
+    let mut eng = engine_lock(engine);
+    eng.set_hunt_target(call, program, reference, places)?;
     Ok(eng.snapshot())
 }
 
@@ -26853,6 +26944,10 @@ struct ParkDto {
     name: String,
     grid: String,
     location: String,
+    /// The US states, DC and Canadian provinces in `location` ("US-ND"; each of them for a park
+    /// on a state line), read by the hunter feed's own rule: the log form places a park's
+    /// contact by them.
+    states: Vec<String>,
     /// Coordinates — only the LIVE lookup carries these; the local CSV index doesn't.
     latitude: Option<f64>,
     longitude: Option<f64>,
@@ -26864,6 +26959,7 @@ impl From<tempo_core::pota::Park> for ParkDto {
             reference: p.reference,
             name: p.name,
             grid: p.grid,
+            states: propagation::pota::location_states(&p.location),
             location: p.location,
             latitude: None,
             longitude: None,
@@ -26877,6 +26973,7 @@ impl From<propagation::live::pota::LiveParkDetail> for ParkDto {
             reference: p.reference,
             name: p.name,
             grid: p.grid,
+            states: propagation::pota::location_states(&p.location),
             location: p.location,
             latitude: p.latitude,
             longitude: p.longitude,
@@ -41152,6 +41249,182 @@ mod tests {
         );
     }
 
+    // ── Where a park is, and the state its contact logs ──────────────────────────────────
+
+    fn parks_list(csv: &str) -> crate::SharedParks {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_core::pota::ParkIndex::parse_csv(csv),
+        ))
+    }
+
+    /// An engine whose resolver places `W8OH` in Ohio, as the FCC index would.
+    fn ohio_licensed() -> SharedEngine {
+        let engine = fresh_engine();
+        engine_lock(&engine).set_state_resolver(|call, _| {
+            tempo_core::message::same_call(call, "W8OH").then(|| "OH".to_string())
+        });
+        engine
+    }
+
+    /// A park is placed by a spot of it (pota.app's `locationDesc`), else by the same field of the
+    /// downloaded park list; a summit by SOTA's own tables. Another country's park, a summit
+    /// outside the US and Canada, and a park nothing here knows are placed nowhere.
+    #[test]
+    fn a_park_is_placed_by_its_spot_else_the_park_list_and_a_summit_by_its_association() {
+        let mut line = state_spot("N7XYZ", 14_285.0, &["US-MT", "US-ND"]);
+        line.reference = "US-0003".into();
+        let mut german = state_spot("DL1ABC", 14_285.0, &[]);
+        german.reference = "DE-0001".into();
+        let cache = hunter_cache(&[("POTA", &[line, german])]);
+        let parks = parks_list(
+            "reference,name,active,locationDesc,latitude,longitude,grid\n\
+             US-0004,Lake,1,US-SD,44.0,-100.0,EN04\n\
+             CA-0001,Parc,1,CA-QC,46.0,-71.0,FN46\n\
+             DE-0002,Wald,1,DE-BY,48.0,11.0,JN58\n",
+        );
+        let places = |program: &str, reference: &str| {
+            crate::ota_park_places(&cache, &parks, program, reference)
+        };
+        assert_eq!(
+            places("POTA", "US-0003"),
+            codes(&["US-MT", "US-ND"]),
+            "a spot"
+        );
+        assert_eq!(
+            places("POTA", "us-0004"),
+            codes(&["US-SD"]),
+            "the park list"
+        );
+        assert_eq!(places("POTA", "CA-0001"), codes(&["CA-QC"]));
+        assert_eq!(places("SOTA", "W7A/MN-001"), codes(&["US-AZ"]));
+        assert_eq!(
+            places("POTA", "DE-0001"),
+            codes(&[]),
+            "another country's park"
+        );
+        assert_eq!(places("POTA", "DE-0002"), codes(&[]));
+        assert_eq!(
+            places("SOTA", "G/LD-001"),
+            codes(&[]),
+            "a summit in England"
+        );
+        assert_eq!(
+            places("POTA", "US-9999"),
+            codes(&[]),
+            "a park nothing here knows"
+        );
+    }
+
+    /// HUNT on the board: the hunt carries where the park is, the snapshot shows the log form,
+    /// and the contact the hunt tags takes the park's state, not the activator's licence's.
+    #[test]
+    fn the_hunt_carries_where_the_park_is_and_its_contact_takes_that_state() {
+        let engine = ohio_licensed();
+        let spot = state_spot("W8OH", 14_285.0, &["US-ND"]);
+        let snap = crate::set_hunt_target_on(
+            &engine,
+            &hunter_cache(&[("POTA", std::slice::from_ref(&spot))]),
+            &crate::SharedParks::default(),
+            "W8OH",
+            "POTA",
+            "US-0001",
+        )
+        .expect("the hunt is set");
+        assert_eq!(snap.hunt.map(|h| h.states), Some(codes(&["US-ND"])));
+        engine_lock(&engine).log_qso(park_rec("W8OH", None, crate::now_unix()));
+        let log = engine.lock().unwrap().stored_log();
+        assert_eq!(log[0].ota.their_ref.as_deref(), Some("US-0001"));
+        assert_eq!(log[0].state.as_deref(), Some("ND"), "the park's, not OH");
+    }
+
+    /// A call started from the roster on a live activator arms the same hunt, places and all.
+    #[test]
+    fn a_call_from_the_roster_hunts_with_the_parks_places() {
+        let engine = ohio_licensed();
+        let mut sp = live_spot("POTA", "W8OH", "US-0001", 60);
+        sp.states = codes(&["US-ND"]);
+        crate::call_station_on(
+            &engine,
+            &hunter_cache(&[("POTA", &[sp])]),
+            &crate::SharedParks::default(),
+            "W8OH",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the call goes through");
+        assert_eq!(
+            engine_lock(&engine).snapshot().hunt.map(|h| h.states),
+            Some(codes(&["US-ND"]))
+        );
+        engine_lock(&engine).log_qso(park_rec("W8OH", None, crate::now_unix()));
+        assert_eq!(
+            engine.lock().unwrap().stored_log()[0].state.as_deref(),
+            Some("ND")
+        );
+    }
+
+    /// ⭐ End to end, the case this is for: an Ohio-licensed activator in a North Dakota park,
+    /// hunted from the board. Before the contact the board lights ND; after it, Worked All States
+    /// holds ND and not OH, and the board's ND goes dark on that band.
+    #[test]
+    fn logging_a_north_dakota_park_credits_north_dakota_and_darkens_the_boards_nd() {
+        let engine = ohio_licensed();
+        let spot = state_spot("W8OH", 14_285.0, &["US-ND"]);
+        assert_eq!(
+            ota_needed(&engine.lock().unwrap(), std::slice::from_ref(&spot)),
+            [codes(&["US-ND"])],
+            "control: North Dakota is needed before the contact"
+        );
+        crate::set_hunt_target_on(
+            &engine,
+            &hunter_cache(&[("POTA", std::slice::from_ref(&spot))]),
+            &crate::SharedParks::default(),
+            "W8OH",
+            "POTA",
+            "US-0001",
+        )
+        .expect("the hunt is set");
+        engine_lock(&engine).log_qso(park_rec("W8OH", None, crate::now_unix()));
+        let e = engine.lock().unwrap();
+        let tallies = crate::LogTallies::default();
+        let needs = crate::needs_finish(crate::needs_capture(&e, &tallies.needs), &tallies.needs)
+            .expect("the log reads");
+        let worked: Vec<&str> = needs
+            .worked_states()
+            .iter()
+            .map(|(st, _)| st.as_str())
+            .collect();
+        assert!(worked.contains(&"ND"), "{worked:?}");
+        assert!(!worked.contains(&"OH"), "{worked:?}");
+        assert_eq!(
+            ota_needed(&e, std::slice::from_ref(&spot)),
+            [codes(&[])],
+            "the board's ND goes dark"
+        );
+    }
+
+    /// The log form places a typed park by the states its lookup names, read by the hunter feed's
+    /// own rule from the park list's `locationDesc`.
+    #[test]
+    fn a_looked_up_park_names_its_states() {
+        let dto = crate::ParkDto::from(tempo_core::pota::Park {
+            reference: "US-0003".into(),
+            name: "Line".into(),
+            grid: String::new(),
+            location: "US-MT,US-ND".into(),
+        });
+        assert_eq!(dto.states, codes(&["US-MT", "US-ND"]));
+        let abroad = crate::ParkDto::from(tempo_core::pota::Park {
+            reference: "DE-0002".into(),
+            name: "Wald".into(),
+            grid: String::new(),
+            location: "DE-BY".into(),
+        });
+        assert_eq!(abroad.states, codes(&[]));
+    }
+
     /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge
     /// an activation by the spot's own time, not by when the poller last fetched.
     fn live_spot(
@@ -41768,8 +42041,17 @@ mod tests {
         feed: &[(&str, &[propagation::OtaSpot])],
         call: &str,
     ) -> Option<(String, String)> {
-        crate::call_station_on(&engine, &hunter_cache(feed), call, None, None, None, None)
-            .expect("the call itself goes through");
+        crate::call_station_on(
+            &engine,
+            &hunter_cache(feed),
+            &crate::SharedParks::default(),
+            call,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the call itself goes through");
         engine_lock(&engine).log_qso(park_rec(call, None, crate::now_unix()));
         let log = engine.lock().unwrap().stored_log();
         let rec = log
@@ -41892,7 +42174,7 @@ mod tests {
         let sota = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
         let engine = fresh_engine();
         engine_lock(&engine)
-            .set_hunt_target("K1ABC", "SOTA", "W7A/MN-001")
+            .set_hunt_target("K1ABC", "SOTA", "W7A/MN-001", Vec::new())
             .unwrap();
         assert_eq!(
             work_then_log(engine, &[("POTA", &pota), ("SOTA", &sota)], "K1ABC"),
@@ -41911,11 +42193,12 @@ mod tests {
         let mine = [live_spot("POTA", "KD9TAW", "US-0009", 60)];
         let engine = fresh_engine();
         engine_lock(&engine)
-            .set_hunt_target("K1ABC", "POTA", "US-0001")
+            .set_hunt_target("K1ABC", "POTA", "US-0001", Vec::new())
             .unwrap();
         crate::call_station_on(
             &engine,
             &hunter_cache(&[("POTA", &mine)]),
+            &crate::SharedParks::default(),
             "KD9TAW",
             None,
             None,
@@ -41960,8 +42243,17 @@ mod tests {
             ("a poisoned hunter cache", poisoned),
         ] {
             let engine = fresh_engine();
-            let snap = crate::call_station_on(&engine, &cache, "K1ABC", None, None, None, None)
-                .unwrap_or_else(|e| panic!("{what} failed the call: {e}"));
+            let snap = crate::call_station_on(
+                &engine,
+                &cache,
+                &crate::SharedParks::default(),
+                "K1ABC",
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap_or_else(|e| panic!("{what} failed the call: {e}"));
             assert_eq!(
                 snap.qso.and_then(|q| q.dxcall).as_deref(),
                 Some("K1ABC"),
@@ -42021,7 +42313,8 @@ mod tests {
     fn hunt_alone_hides_nothing_until_the_contact_is_logged_and_a_delete_brings_it_back() {
         let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
         let spot = ota_spot("K1ABC", "US-0001");
-        e.set_hunt_target("K1ABC", "POTA", "US-0001").unwrap();
+        e.set_hunt_target("K1ABC", "POTA", "US-0001", Vec::new())
+            .unwrap();
         assert!(
             !hunted_today(&e, &spot, HIDE_NOON),
             "HUNT is intent, not a contact"

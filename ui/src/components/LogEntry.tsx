@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -32,6 +32,7 @@ import { contestDupe } from '../features/contestDupe'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
+import { placeCode } from '../features/otaStates'
 import { RecallPanel } from './RecallPanel'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
@@ -438,6 +439,24 @@ export function LogEntry({
   const [logGrid, setLogGrid] = useState('')
   const [logState, setLogState] = useState('')
   const [logCountry, setLogCountry] = useState('')
+  // The STATE box as it stands, and where its value came from: the operator (who also owns the
+  // untouched empty box), a callbook lookup, or the park or summit in the park box. Every write
+  // goes through `setStateBox`, so both are current before React renders, as `parkBoxRef` is for
+  // the park box. The station reads the source when the contact is logged: a callbook's state is
+  // the licensee's ADDRESS, so a park's own state outranks it, and the operator's outranks both.
+  const stateBoxRef = useRef('')
+  const stateSourceRef = useRef<StateSource>('operator')
+  const [stateSource, setStateSource] = useState<StateSource>('operator')
+  const setStateBox = (value: string, source: StateSource) => {
+    stateBoxRef.current = value
+    stateSourceRef.current = source
+    setStateSource(source)
+    setLogState(value)
+  }
+  // The callbook's own state for this call, kept apart from the box: the recall card pairs a state
+  // with the callbook's town ("Columbus, OH"), and once the park has placed the box its state is
+  // not where that town is.
+  const [callbookState, setCallbookState] = useState('')
   // Callbook profile photo (display-only, not written to the log). Cleared when the call changes.
   const [logImage, setLogImage] = useState<string | null>(null)
   // The callbook's exact coordinates for this call (display-only, like logImage, and
@@ -635,7 +654,8 @@ export function LogEntry({
       setLogName('')
       setLogQth('')
       setLogGrid('')
-      setLogState('')
+      setStateBox('', 'operator')
+      setCallbookState('')
       setLogCountry('')
       setLogImage(null)
       setLogCoords(null)
@@ -813,6 +833,37 @@ export function LogEntry({
       clearTimeout(id)
     }
   }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
+
+  // WHERE THE PARK IN THE BOX IS ("US-ND"), the places its contact takes its state from: a hunted
+  // park's from the hunt, which the station tags by call in every exchange, and a typed POTA
+  // park's from its lookup. Empty with no park in the box, or one nothing here could place.
+  const boxedRef = logParkRef.trim().toUpperCase()
+  const parkPlaces: string[] =
+    boxedRef === ''
+      ? []
+      : snap.hunt &&
+          boxedRef === snap.hunt.reference.trim().toUpperCase() &&
+          logCall.trim() !== '' &&
+          sameCall(snap.hunt.call, logCall)
+        ? (snap.hunt.states ?? [])
+        : asksForPark && logParkProgram === 'POTA' && parkDetail?.reference === boxedRef
+          ? (parkDetail.states ?? [])
+          : []
+  const parkPlacesKey = parkPlaces.join(',')
+  // A park in one state puts that state in the STATE box, so the operator sees the state the
+  // contact will log, and can change it. It replaces a callbook's (the activator's home address,
+  // which is not where they are operating) and never a state the operator typed. When the park
+  // that placed the box goes, its state goes with it.
+  useEffect(() => {
+    if (stateSourceRef.current === 'operator' && stateBoxRef.current.trim() !== '') return
+    if (parkPlaces.length === 1) {
+      const code = placeCode(parkPlaces[0])
+      if (stateBoxRef.current !== code || stateSourceRef.current !== 'park') setStateBox(code, 'park')
+    } else if (stateSourceRef.current === 'park') {
+      setStateBox('', 'operator')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parkPlacesKey])
 
   // Click-to-work prefill: land the call + drop focus on RST so the operator types the report
   // and hits Enter. Keyed on `ts` to refire on re-click of the same call.
@@ -1041,9 +1092,10 @@ export function LogEntry({
     // taking the callbook's answer exactly as they did.
     if (r.grid && (!asksForGrid || isValidLoggedGrid(r.grid)))
       setLogGrid((v) => (v.trim() ? v : r.grid ?? ''))
-    if (r.state) setLogState((v) => (v.trim() ? v : r.state ?? ''))
+    if (r.state && !stateBoxRef.current.trim()) setStateBox(r.state, 'callbook')
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
+    setCallbookState(r.state ?? '') // the recall card's, beside the callbook's town
     // Same: display-only, and only when the callbook vouched for a REAL position (the
     // backend refuses QRZ's grid-derived and DXCC-centroid fallbacks).
     setLogCoords(r.lat != null && r.lon != null ? { lat: r.lat, lon: r.lon } : null)
@@ -1132,7 +1184,8 @@ export function LogEntry({
     setLogComment('')
     setLogNotes('')
     setLogGrid('')
-    setLogState('')
+    setStateBox('', 'operator')
+    setCallbookState('')
     setLogCountry('')
     setLogImage(null)
     setLogCoords(null)
@@ -1337,7 +1390,7 @@ export function LogEntry({
       catch { /* The adapter keeps a visible outcome and the draft. */ }
       return
     }
-    const r = await withErrorToast(() => logQso(rec), t('logEntry.logFailed'))
+    const r = await withErrorToast(() => logQso(rec, stateSourceRef.current), t('logEntry.logFailed'))
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
@@ -1915,7 +1968,7 @@ export function LogEntry({
         <input
           className="settings-input le-state"
           value={logState}
-          onChange={(e) => setLogState(e.target.value)}
+          onChange={(e) => setStateBox(e.target.value, 'operator')}
           onKeyDown={onEnter}
           placeholder={t('logEntry.state.placeholder')}
           autoComplete="off"
@@ -2229,8 +2282,10 @@ export function LogEntry({
         band={snap.radio.band}
         name={logName}
         qth={logQth}
-        // Already filled from the callbook lookup / cty.dat resolve above (#237).
-        state={logState}
+        // Already filled from the callbook lookup / cty.dat resolve above (#237). The callbook's own
+        // state once the park has placed the box: the card says where the station lives, beside its
+        // town, and the box where this contact counts.
+        state={stateSource === 'park' ? callbookState : logState}
         grid={logGrid}
         lat={logCoords?.lat ?? null}
         lon={logCoords?.lon ?? null}

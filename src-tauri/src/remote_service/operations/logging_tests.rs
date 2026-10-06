@@ -860,6 +860,70 @@ fn a_remote_hunt_tags_the_next_logged_contact_and_never_keys_or_tunes() {
     assert!(f.engine.lock().unwrap().hunt_target().is_none());
 }
 
+/// The station places the park a browser hunts, from its own hunter feed and before any lock is
+/// taken: the contact the hunt tags takes the park's state, not the activator's licence's.
+#[test]
+fn a_remote_hunt_carries_where_the_park_is() {
+    let mut f = Fixture::new();
+    let spot = propagation::OtaSpot {
+        program: "POTA".into(),
+        reference: "US-0002".into(),
+        name: String::new(),
+        activator: "W1AW".into(),
+        freq_khz: 14_285.0,
+        mode: "SSB".into(),
+        spotter: None,
+        comment: None,
+        grid: None,
+        lat: None,
+        lon: None,
+        spot_time_unix: None,
+        states: vec!["US-ND".into()],
+    };
+    let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::from([(
+        "POTA".to_string(),
+        (0, vec![spot]),
+    )])));
+    f.authority.places = Some((ota, crate::SharedParks::default()));
+    f.engine
+        .lock()
+        .unwrap()
+        .set_state_resolver(|_, _| Some("CT".to_string()));
+    acquire(&f);
+    let hunt = change(
+        &f,
+        json!({"kind":"hunt","call":"W1AW","program":"POTA","reference":"US-0002"}),
+    );
+    assert_eq!(run(&f, &hunt).unwrap()["outcome"], "applied");
+    assert_eq!(
+        f.engine.lock().unwrap().snapshot().hunt.map(|h| h.states),
+        Some(vec!["US-ND".to_string()])
+    );
+    // The contact the sequencer then logs, with no state of its own.
+    let mut e = f.engine.lock().unwrap();
+    let mut rec: tempo_core::logbook::QsoRecord =
+        serde_json::from_value::<tempo_app::dto::LoggedQso>(json!({
+            "call":"W1AW","grid":"FN31","band":"20m","freqMhz":14.074,"mode":"FT8",
+            "rstSent":"-05","rstRcvd":"-07","whenUnix":crate::remote_service::now_ms()/1000,
+            "confirmed":false
+        }))
+        .unwrap()
+        .into();
+    rec.state = None;
+    e.log_qso(rec);
+    let contact = e
+        .stored_log()
+        .into_iter()
+        .find(|r| r.call == "W1AW")
+        .unwrap();
+    assert_eq!(contact.ota.their_ref.as_deref(), Some("US-0002"));
+    assert_eq!(
+        contact.state.as_deref(),
+        Some("ND"),
+        "the park's, not the licence's CT"
+    );
+}
+
 #[test]
 fn a_hunt_the_station_cannot_normalize_is_refused_and_leaves_no_pend() {
     let f = Fixture::new();

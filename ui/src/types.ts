@@ -4485,7 +4485,9 @@ export interface AppSnapshot {
   /** The last worked spot's callsign — a pop-out window's click prefills the log Call from this. */
   workCall?: string | null
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
-  hunt?: { program: string; reference: string; call: string } | null
+  /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
+   *  line), absent when the hunt could not place it. */
+  hunt?: { program: string; reference: string; call: string; states?: string[] } | null
   /** Coordinated-QSY status — present only while the opt-in feature is enabled. */
   qsy?: QsyStatus | null
   /** Session count of IR-HARQ rescues (decodes recovered by combining

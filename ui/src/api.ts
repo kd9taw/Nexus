@@ -1015,9 +1015,14 @@ export async function logCurrentQso(context?: { expectedKey?: string | null; exp
   return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', remoteApplicationTransport() ? { ...context } : {})
 }
 
+/** Where a log form's STATE came from: typed or picked by the operator, filled in by a callbook
+ *  lookup, or placed from the park or summit. The station lets a park's own state outrank a
+ *  callbook's, and the operator's outrank both. */
+export type StateSource = 'operator' | 'callbook' | 'park'
+
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
-export async function logQso(record: LoggedQso): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_qso', { record })
+export async function logQso(record: LoggedQso, stateSource?: StateSource): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('log_qso', { record, stateSource })
 }
 
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
@@ -3386,6 +3391,9 @@ export interface Park {
   name: string
   grid: string
   location: string
+  /** The US states, DC and Canadian provinces in `location` ("US-ND"; each, for a park on a state
+   *  line), read by the station with the hunter feed's own rule. */
+  states?: string[]
   /** Coordinates — only the live lookup carries these. */
   latitude?: number | null
   longitude?: number | null

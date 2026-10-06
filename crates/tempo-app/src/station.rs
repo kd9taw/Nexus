@@ -1691,11 +1691,15 @@ pub struct StationCore {
     /// as worked. Persisted by the shell; seeded on import + at startup.
     pub(crate) hunted_parks_import: HashSet<String>,
     /// Pending HUNT target (program, normalized ref, activator call, set-at
-    /// unix): set by a one-click hunt; the next QSO logged with that call
-    /// auto-tags SIG/SIG_INFO (their_*) and the pend clears. Expires after
-    /// [`HUNT_TTL_SECS`] — activations end; a forgotten pend must never stamp
-    /// a park on an unrelated contact hours later. Session-only.
-    pub(crate) pending_hunt: Option<(String, String, String, u64)>,
+    /// unix, the places the park or summit is in): set by a one-click hunt; the next QSO logged
+    /// with that call auto-tags SIG/SIG_INFO (their_*), takes its state from those places, and
+    /// the pend clears. Expires after [`HUNT_TTL_SECS`] — activations end; a forgotten pend must
+    /// never stamp a park on an unrelated contact hours later. Session-only.
+    ///
+    /// The places are the codes the hunter feed writes ("US-ND", "CA-ON"): every US state, DC or
+    /// Canadian province the park is in, two or more for a park on a state line, none where the
+    /// caller could not place it. The command layer resolves them, outside the Engine lock.
+    pub(crate) pending_hunt: Option<(String, String, String, u64, Vec<String>)>,
     /// Per-launch salt for the hound pileup spread (stock re-randomizes each
     /// session; a pure callsign hash parked every operator on the same offset
     /// at every event).
@@ -2576,11 +2580,15 @@ impl StationCore {
     /// One-click HUNT: remember the activator + park so the NEXT QSO logged
     /// with that call auto-tags `SIG`/`SIG_INFO` (POTA) / `SOTA_REF` — the
     /// hunter-side ADIF credit. Validates like [`Self::set_activation`].
+    ///
+    /// `places` are where the park or summit is ("US-ND"; see [`Self::pending_hunt`]): the
+    /// contact's state comes from them, never from the activator's licence.
     pub fn set_hunt_target(
         &mut self,
         call: &str,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(), String> {
         let prog = tempo_core::pota::OtaProgram::from_code(program)
             .ok_or_else(|| format!("unknown program {program:?} (POTA/SOTA)"))?;
@@ -2590,7 +2598,13 @@ impl StationCore {
         if c.is_empty() {
             return Err("no activator callsign".into());
         }
-        self.pending_hunt = Some((prog.code().to_string(), normalized, c, now_unix_secs()));
+        self.pending_hunt = Some((
+            prog.code().to_string(),
+            normalized,
+            c,
+            now_unix_secs(),
+            places,
+        ));
         Ok(())
     }
 
@@ -2604,8 +2618,18 @@ impl StationCore {
     pub fn hunt_target(&self) -> Option<(String, String, String)> {
         self.pending_hunt
             .as_ref()
-            .filter(|(_, _, _, at)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
-            .map(|(p, r, c, _)| (p.clone(), r.clone(), c.clone()))
+            .filter(|(_, _, _, at, _)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
+            .map(|(p, r, c, _, _)| (p.clone(), r.clone(), c.clone()))
+    }
+
+    /// The places the pending hunt's park or summit is in ("US-ND"), for the log form; empty
+    /// with no pend, an expired one, or a park the hunt could not place.
+    pub fn hunt_places(&self) -> Vec<String> {
+        self.pending_hunt
+            .as_ref()
+            .filter(|(_, _, _, at, _)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
+            .map(|(_, _, _, _, places)| places.clone())
+            .unwrap_or_default()
     }
 
     /// True when this POTA/SOTA reference is already worked — either in the log
