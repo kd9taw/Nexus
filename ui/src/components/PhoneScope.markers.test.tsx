@@ -4,12 +4,15 @@
 // pointer handlers and the key handler all run; the paint target only records. Every gesture is
 // asserted BY VALUE — the width or the dial it hands the host — and the existing gestures are
 // asserted unchanged beside it: a press that does not move is still the click, a press away from
-// an edge is still the box, and the edge scan's band is still the scan's.
+// an edge is still the box, and in the edge scan's band a press away from an edge is still the
+// scan's. The Sub's marker is display only: a click on it tunes nothing.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 import { t } from '../i18n'
 import type { SpectrumScene } from '../spectrum'
+import { useScopePassband } from '../useScopeTune'
+import { PASSBAND_LIMITS } from '../spectrum/markers'
 
 // One row the test can swap: a native RF panadapter (14.150–14.250 MHz, 512 bins, a carrier just
 // above 14.2020 MHz) or a soundcard audio row (0–4000 Hz).
@@ -284,18 +287,77 @@ describe('the filter edge, by value', () => {
     expect(onTune.mock.calls.map((c) => c[0].kind)).toContain('drag')
   })
 
-  it("the edge scan's band is never an edge: a press there still scans the band", async () => {
+  it("an edge inside the edge scan's band is grabbed and dragged; a press in the band beside it still scans", async () => {
     // A 6.1 kHz view with a 4 kHz USB passband puts the far edge 13 px from the right border,
     // inside the 36 px band where a held drag scrolls the band.
     const { canvas, onPassband, onTune } = scope({ passbandHz: 4000, viewLoHz: -2000, viewHiHz: 4100 })
     await draw()
-    const edgeX = (6000 / 6100) * 800
-    press(canvas, edgeX)
-    move(canvas, edgeX + 8)
+    const x = (hz: number) => ((hz - (DIAL - 2000)) / 6100) * 800
+    const edgeX = x(DIAL + 4000) // 786.9
+    // CONTROL: 8 px outside the edge, still in the band, a held drag scans the band as it always did.
+    press(canvas, edgeX + 8)
+    move(canvas, edgeX + 16)
     await draw(40) // the scan's own frames
-    release(canvas, edgeX + 8)
+    release(canvas, edgeX + 16)
     expect(onPassband).not.toHaveBeenCalled()
     expect(onTune.mock.calls.map((c) => c[0].kind)).toContain('drag')
+    onTune.mockClear()
+    // On the edge: the width follows the hand, and nothing tunes.
+    press(canvas, edgeX)
+    move(canvas, x(DIAL + 3000))
+    move(canvas, x(DIAL + 2500))
+    release(canvas, x(DIAL + 2500))
+    expect(onPassband.mock.calls).toEqual([[3000], [2500], [2500]])
+    expect(onTune, 'no scan, no box, no click').not.toHaveBeenCalled()
+  })
+
+  it.each([
+    // Auto span is the reported width: the axis is [−300, 2400] on USB and the far edge IS the right
+    // border; on LSB the axis is mirrored, [−2400, 300], and the far edge is the left border.
+    ['USB', 798, (hz: number) => ((hz + 300) / 2700) * 800, 840],
+    ['LSB', 2, (hz: number) => ((2400 - hz) / 2700) * 800, -40],
+  ] as const)(
+    "Phone's Auto span, %s: the far edge on the border is grabbed, dragged in to narrow and out past the border to widen",
+    async (sideband, grab, xOfWidth, past) => {
+      ROW.rf = false
+      const { canvas, onPassband, onTune } = scope({ sideband, carrierCentered: true, viewLoHz: 0, viewHiHz: 2400, passbandHz: 2400 })
+      await draw()
+      press(canvas, grab) // 2 px in from the border, on the edge
+      move(canvas, xOfWidth(2000)) // 2.0 kHz
+      // 40 px past the border at 2700 Hz per 800 px: 2400 + 135 → 2535 → the step's 2500. The axis holds
+      // under the hand while the edge is dragged, so past the border it runs on along the same scale.
+      move(canvas, past)
+      release(canvas, past)
+      expect(onPassband.mock.calls).toEqual([[2000], [2500], [2500]])
+      expect(onTune).not.toHaveBeenCalled()
+    },
+  )
+
+  it("a grab in the scan band writes through the cockpit's coalescer: one width a flush, the last", async () => {
+    ROW.rf = false
+    const send = vi.fn(async () => undefined)
+    function Host() {
+      const onPassband = useScopePassband({ enabled: true, limits: PASSBAND_LIMITS.phone, send })
+      return (
+        <PhoneScope transmitting={false} theme="dark" active interactive sideband="USB" dialHz={DIAL} carrierCentered
+          viewLoHz={0} viewHiHz={2400} filterWidthHz={2400} passbandHz={2400} onTune={vi.fn()} onPassband={onPassband} />
+      )
+    }
+    const ui = render(<Host />)
+    const canvas = ui.container.querySelector<HTMLCanvasElement>('canvas.ph-scope-canvas')!
+    await draw()
+    const x = (hz: number) => ((hz + 300) / 2700) * 800
+    press(canvas, 798)
+    move(canvas, x(2000))
+    move(canvas, x(2200))
+    move(canvas, x(1800))
+    expect(send, 'nothing before the flush').not.toHaveBeenCalled()
+    await draw(120)
+    expect(send.mock.calls).toEqual([[1800]])
+    move(canvas, 840) // 2500, past the border
+    release(canvas, 840)
+    await draw(120)
+    expect(send.mock.calls).toEqual([[1800], [2500]])
   })
 
   it('no edge moves for a host that commands no width, a scope that is not interactive, or a click-only one', async () => {

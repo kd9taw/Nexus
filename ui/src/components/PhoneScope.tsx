@@ -26,11 +26,13 @@
 // THE RECEIVER MARKERS (`spectrum/markers.ts`). Where the host passes the rig's REPORTED width, the
 // receiver's passband is drawn over the picture, and where it also passes `onPassband` the edges a
 // width can move are grabbable: dragging one, or [ and ] on the focused scope, commands the filter
-// through the host's coalescing. A press on an edge that does not move is still a click — the snap
-// is untouched, as are the box drag, the edge scan and the wheel. Every gesture has a key on the
-// focused scope (←/→ tune, Shift for bigger steps; Enter snaps onto the signal in the passband; [ ]
-// the width; ↑/↓ scroll back while paused), and none of them is Esc or Space, which belong to the
-// cockpit's stop and its PTT.
+// through the host's coalescing. An edge is grabbable inside the edge scan's band too, where Phone's
+// Auto span puts the far one on the border: dragged out past the border, it widens. A press on an
+// edge that does not move is still a click — the snap is untouched, as are the box drag, the edge
+// scan away from an edge and the wheel. The Sub's marker is display only: a click on it tunes
+// nothing. Every gesture has a key on the focused scope (←/→ tune, Shift for bigger steps; Enter
+// snaps onto the signal in the passband; [ ] the width; ↑/↓ scroll back while paused), and none of
+// them is Esc or Space, which belong to the cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
@@ -112,7 +114,8 @@ const PENDING_WIDTH_MS = 2000
 /** A pause between tuning keys after which the next press starts again from the live dial (ms). */
 const KEY_IDLE_MS = 800
 /** The outer band where a held drag scrolls the band (the edge scan), in CSS px for a scope
- *  `widthPx` wide. A filter edge is never grabbed inside it: that band is the scan's. */
+ *  `widthPx` wide. A filter edge inside it is still grabbed (operator, 2026-10-05: "Allow it"), so a
+ *  press there scans only away from an edge. */
 const scanZonePx = (widthPx: number) => Math.min(36, widthPx / 4)
 /** The focused scope's keys, for `aria-keyshortcuts` (key names, not prose). */
 const SCOPE_KEYS = 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Enter [ ] ArrowUp ArrowDown'
@@ -1307,15 +1310,15 @@ export function PhoneScope({
     return view.mirrored ? -axisHz : axisHz
   }
   /** The AXIS Hz under a client x — the drawn axis, never un-mirrored (`xToHz` answers row Hz),
-   *  which is where the receiver marks are placed. */
+   *  which is where the receiver marks are placed. Past the scope's sides it runs on along the same
+   *  axis (the dragged edge's pointer is captured), so an edge on the border can be pulled outward. */
   const axisAt = (clientX: number): number | null => {
     const canvas = canvasRef.current
     const view = lastViewRef.current
     if (!canvas || !view) return null
     const rect = canvas.getBoundingClientRect()
     if (rect.width < 2 || !(view.hi > view.lo)) return null
-    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return view.lo + frac * (view.hi - view.lo)
+    return view.lo + ((clientX - rect.left) / rect.width) * (view.hi - view.lo)
   }
   /** The grabbable filter edge under a client x, with the passband and axis it was found on and
    *  the width it starts from; null where there is none to grab. */
@@ -1330,8 +1333,6 @@ export function PhoneScope({
     if (!p) return null
     const rect = canvas.getBoundingClientRect()
     const xIn = clientX - rect.left
-    const zone = scanZonePx(rect.width)
-    if (xIn <= zone || xIn >= rect.width - zone) return null // the edge scan's band, as it always was
     const px = (hz: number) => ((hz - view.lo) / (view.hi - view.lo)) * rect.width
     const edge = edgeNear(xIn, px(p.lo), px(p.hi), edgesOnAxis(axis), EDGE_TOL_PX)
     return edge ? { edge, p, axis, hz: width } : null

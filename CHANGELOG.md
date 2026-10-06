@@ -482,13 +482,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phone and CW scope: the filter you are listening through, with a handle on it.** Where the radio
   reports its filter width, the scope shades the passband at the dial. On SSB its far edge, and on CW
   both edges, can be dragged to set the width, in the same range and steps as the BW − and + buttons;
-  the radio follows within a second or two. The edge is not offered in FM, in a DATA mode, on the Remote
-  page, or while anything is transmitting, and no width is ever sent to a keyed radio. A manual notch
-  the radio reports on draws as a red line through the scope. With the scope focused, keys do what
-  the mouse does: ← and → tune (Shift for bigger steps), Enter tunes onto the signal in the passband,
-  [ and ] narrow and widen the filter, and ↑ and ↓ scroll back while paused. On an IC-7300, IC-705,
-  IC-905, IC-7610 or IC-9700 on Nexus's own CI-V connection, the filter width is now read from the
-  radio and set on it; before, BW showed a width it had never sent there. Not yet checked on a radio.
+  the radio follows within a second or two. In the Phone scope's Auto span the far edge sits on the
+  scope's border: grab it there and drag in to narrow, or out past the border to widen. Near an edge,
+  a press at the scope's side takes the edge; elsewhere there it still scrolls the band. The edge is
+  not offered in FM, in a DATA mode, on the Remote page, or while anything is transmitting, and no
+  width is ever sent to a keyed radio. A manual notch the radio reports on draws as a red line through
+  the scope. With the scope focused, keys do what the mouse does: ← and → tune (Shift for bigger
+  steps), Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and
+  ↓ scroll back while paused. On an IC-7300, IC-705, IC-905, IC-7610 or IC-9700 on Nexus's own CI-V
+  connection, the filter width is now read from the radio and set on it; before, BW showed a width it
+  had never sent there. Not yet checked on a radio.
 - **Phone and CW scope: the Sub receiver's frequency beside yours.** On a dual-receiver radio that
   shows a SUB row, the radio's own scope marks the Sub's frequency with a cyan SUB line whenever it
   is in view. It is only a mark: a click on it tunes nothing, neither the Sub nor your main receiver.
