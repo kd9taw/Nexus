@@ -20541,8 +20541,9 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
 /// firehose (cluster / CW / SSB spots, near-me and getting-out reception reports).
 ///
 /// Each state is recorded with where it came from, for the board's STATE chip. `fcc` is that
-/// index's answer for a call: [`fcc_state_for_call`] on the board, a test's own in a test, since
-/// the index is a process global that no test loads.
+/// index's answer for a call: [`fcc_state_for_call`] on the board and in the Pounce detector
+/// ([`pouncer::run`]), a test's own in a test, since the index is a process global that no test
+/// loads.
 fn place_heards(
     heard: &mut [propagation::Heard],
     live: &[propagation::OtaSpot],
@@ -32405,10 +32406,11 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             let needs = handle.state::<LogTallies>().needs.clone();
             let emit_handle = handle.clone();
             let recent = d.pounces.clone();
+            let ota = d.ota_spots.clone();
             std::thread::Builder::new()
                 .name("nexus-pounce".into())
                 .spawn(move || {
-                    pouncer::run(eng, needs, rx, recent, move |p| {
+                    pouncer::run(eng, needs, ota, rx, recent, move |p| {
                         let _ = emit_handle.emit("pounce", &p);
                     });
                 })

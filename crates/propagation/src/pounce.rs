@@ -258,20 +258,13 @@ mod tests {
     #[test]
     fn the_opt_in_tiers_widen_exactly_as_specified() {
         let zone = alert("UA0FZ", "15m", "CW", vec![NeedTag::NewZone]);
-        let state = alert("KL7ABC", "15m", "SSB", vec![NeedTag::NewState]);
 
         assert!(PounceGate::new()
             .admit(&zone, PounceThreshold::AtnoOrZone, 100, 100)
             .is_some());
-        assert!(
-            PounceGate::new()
-                .admit(&state, PounceThreshold::AtnoOrZone, 100, 100)
-                .is_none(),
-            "the zone tier must NOT admit a state"
-        );
-        assert!(PounceGate::new()
-            .admit(&state, PounceThreshold::AtnoZoneOrState, 100, 100)
-            .is_some());
+        // The state tier is pinned from real spots, through the desktop's detector
+        // (`src-tauri/src/pouncer.rs`). A New State alert made by hand here passed while no spot
+        // could ever carry a state.
     }
 
     #[test]
