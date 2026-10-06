@@ -153,12 +153,12 @@ audio bandwidth an SSB over occupies is whatever your SmartSDR profile last set.
 
 ---
 
-## The native SmartSDR path (early access — read this first)
+## The native SmartSDR path (Beta — read this first)
 
 Two toggles in **Settings ▸ Radio ▸ Rig & CAT** talk to the radio's own SmartSDR
 API on port `4992`:
 
-- **Flex native panadapter** — streams the radio's real panadapter (VITA-49 FFT)
+- **Flex native panadapter** (Beta) — streams the radio's real panadapter (VITA-49 FFT)
   into the cockpit scope instead of the audio FFT, alongside the CAT path above.
 - **Flex native DAX audio** (Beta) — carries the radio's audio over the network
   instead of the *DAX Audio RX* / *DAX TX* sound devices, which are invisible
@@ -169,7 +169,7 @@ API on port `4992`:
   audio comes straight from the radio, and the digital modes transmit over DAX
   (see *Phone (SSB) on a Flex* above for what that means for the mic).
 
-Both are **off by default and unverified on hardware** — nobody has run either
+Both are Beta: **off by default and unverified on hardware** — nobody has run either
 against a real Flex. They need **Flex radio IP** filled in (Detect fills it); with
 it empty they do nothing at all. If the scope stays blank or decodes stop, turn
 them back off.

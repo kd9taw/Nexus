@@ -367,6 +367,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serves the radio, and its hint in Settings ▸ Radio ▸ Rig & CAT says so. Native DAX audio is
   Beta and has not been run on a real Flex yet: before you use it for FT8, check your own
   signal's DT on a second receiver.
+- **Settings: Flex native panadapter is labelled Beta.** Its toggle in Settings ▸ Radio ▸ Rig & CAT
+  read "(early access)" and now reads "(Beta)", like Flex native DAX audio and the Flex native client,
+  in every language, and its hint says Beta too. Both native parts are Beta and opt-in, off until you
+  turn them on; the panadapter itself works as before.
 - **Voice keyer, APRS and SSTV: they say so when the radio has the mic.** With Flex native DAX
   audio on, Phone at the shack and APRS in FM use the radio's own mic, so a recorded message, an
   APRS packet or an SSTV picture would not go out and the mic would in its place. The keyer now
