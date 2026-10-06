@@ -887,9 +887,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if(performance.now()-started>60000)attempts=0
         attempts=Math.min(attempts+1,6)
         const wait=(1000<<attempts)+Math.floor(Math.random()*1000),due=performance.now()+wait
+        // Said when the close is seen, so a scenario that fails during the wait still shows it. A close while the
+        // scenario holds station data back on purpose is its own doing: said only if the stand-in reconnects after it.
+        const reconnecting=`Station stand-in: the service closed its socket (${source.closeCode} ${source.closeReason}); connecting again after ${wait} ms, as Nexus does`,said=applicationAvailable
+        if(said)console.log(reconnecting)
         while(producing&&station===source&&(performance.now()<due||!applicationAvailable))await sleep(100)
         if(!producing||station!==source)continue
-        console.log(`Station stand-in: the service closed its socket (${source.closeCode} ${source.closeReason}); connecting again after ${wait} ms, as Nexus does`)
+        if(!said)console.log(reconnecting)
         try{await connectStation(source)}
         catch(error){if(error instanceof assert.AssertionError&&[401,403].includes(error.actual)){console.log(`Station stand-in: refused (${error.actual}), so it stays off, as Nexus does`);return}}
       }
@@ -1713,10 +1717,29 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await click(button('Open Nexus'))
     await until(`!!document.querySelector('.operate-host:not([hidden]) .amp-strip')`)
     await evaluate(`new MutationObserver(records=>{for(const r of records)if(r.attributeName==='data-remote-stale'){window.__availabilityTrace.push({at:performance.now(),previous:r.oldValue,current:r.target.dataset.remoteStale});window.__availabilityTrace=window.__availabilityTrace.slice(-40)}}).observe(document.querySelector('.app'),{attributes:true,attributeOldValue:true,attributeFilter:['data-remote-stale']})`)
-    await until(`document.querySelector('.amp-strip')?.textContent.includes(${JSON.stringify(fixture.station.amplifier.bandLabel)})`)
+    const ampObservation=`document.querySelector('.amp-strip')?.textContent.includes(${JSON.stringify(fixture.station.amplifier.bandLabel)})`
+    await until(ampObservation)
+    const ampShownAt=await evaluate('performance.now()')
     assert.equal(await evaluate(`!!window.__TAURI_INTERNALS__ || !!window.__TAURI__`),false,'the browser must use its explicit adapter')
     assert.equal(await evaluate(`document.querySelectorAll('.app').length`),1,'the real workspace has one app root')
-    assert.ok(await evaluate(`document.querySelector('.amp-strip')?.textContent.includes(${JSON.stringify(fixture.station.amplifier.bandLabel)})`),'the existing amp strip must show the current station observation')
+    // THE STRIP READS A LIVE STATION (2026-10-05). It shows the station's observation only while the page has the
+    // station's current data, and '—' otherwise. A stall of 3 s or more on the runner makes the service close the
+    // stand-in's socket (1008 `stationTooSlow`), and the page loses its station until the stand-in has connected
+    // again, as Nexus does, 2-3 s later. CI run 37405801832 went red here on a cold runner, and one 3.5 s stall of
+    // the stand-in at this step reproduces it. So when the page lost its station after the strip showed the
+    // observation (a socket closed, or no current station data), the strip is read again once it shows the
+    // observation, within 30 s, and the log says so. Never skipped: a strip without the observation while the page
+    // kept its station fails at once.
+    if(!await evaluate(ampObservation)){
+      const session=await sessionDiagnostic(),closures=(session.closures??[]).filter(closure=>closure.at>ampShownAt)
+      const lapse={closures,phase:session.phase,snapshotAge:session.snapshotAge,stationSocket:{closed:station?.closed,code:station?.closeCode,reason:station?.closeReason}}
+      if(closures.length||session.phase!=='ready'||!(session.snapshotAge<3000)){
+        const started=performance.now()
+        await until(ampObservation,30000).catch(()=>{})
+        console.log(`Amp strip: the page lost its station after the strip showed the observation; read again after ${Math.round(performance.now()-started)} ms`,JSON.stringify(lapse))
+      }else console.log('Amp strip without the observation while the page kept its station',JSON.stringify({...lapse,strip:await evaluate(`document.querySelector('.amp-strip')?.textContent`)}))
+    }
+    assert.ok(await evaluate(ampObservation),'the existing amp strip must show the current station observation')
     assert.ok(await evaluate(`[...document.querySelectorAll('.amp-strip button')].every(button=>button.disabled)`),'observer amp controls must visibly refuse operating authority')
     await until(`window.__waterfallDraws > 2`)
     assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-qso button, .tuning-nudge, .cockpit-mode, .tier-btn, .cs-opt, .ph-split button')].every(button=>button.disabled)`),'station controls in the existing workspace must show observer authority')
