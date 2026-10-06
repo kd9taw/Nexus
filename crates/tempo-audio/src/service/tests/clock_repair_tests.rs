@@ -33,16 +33,12 @@ fn stopped_time_service() -> ClockDiagnosis {
     d
 }
 
-/// A default Windows PC: Windows Time running and synchronised, checking the time every 32768 s
-/// (the Windows default) with the `0x1` flag set. The decision table names the poll write for
-/// it, and that is a classification only: the operator's ruling (2026-10-06) offers it nowhere.
+/// A default Windows PC: Windows Time running and synchronised. It checks the time every 32768 s,
+/// the Windows default, which the clock check neither reads nor offers to change (the operator's
+/// ruling, 2026-10-06), so there is nothing to repair.
 fn default_windows() -> ClockDiagnosis {
     let d = decide(&findings_of_default_windows());
-    assert_eq!(
-        d.repair,
-        Repair::SetPollInterval(1_024),
-        "premise: the table's poll write"
-    );
+    assert_eq!(d.repair, Repair::None, "premise: nothing to repair");
     d
 }
 
@@ -76,9 +72,6 @@ fn findings_of_default_windows() -> Findings {
         service_present: true,
         service_running: true,
         synced: true,
-        poll_secs: Some(32_768),
-        special_interval_flag: Some(true),
-        min_poll_secs: Some(1_024),
         probe_reached_network: true,
         measured_offset_ms: Some(40),
         repairs_available: true,
@@ -86,15 +79,12 @@ fn findings_of_default_windows() -> Findings {
     }
 }
 
-/// A machine that needs nothing: its time service is running, synced and polling often.
+/// A machine that needs nothing: its time service running and synchronised.
 fn healthy() -> ClockDiagnosis {
     let d = decide(&Findings {
         service_present: true,
         service_running: true,
         synced: true,
-        poll_secs: Some(1_024),
-        special_interval_flag: Some(true),
-        min_poll_secs: Some(1_024),
         probe_reached_network: true,
         measured_offset_ms: Some(40),
         repairs_available: true,
@@ -318,14 +308,25 @@ fn refused_while_a_repair_is_running() {
 }
 
 /// ⛔ ONLY FOR REAL FAULTS (operator ruling, 2026-10-06). A healthy default Windows PC shows no
-/// button and a press runs nothing: the poll write is no longer offered at all.
+/// button, its hover note says nothing about how often it checks the time, and a press runs
+/// nothing.
 #[test]
 fn a_default_windows_clock_is_offered_nothing() {
     let engine = engine();
     let repair = ClockRepair::new();
     let machine = Machine::new(default_windows());
     clock_diagnose(&engine, &repair, &machine, Some(40), false);
-    assert_eq!(shown(&engine), (default_windows().detail, false));
+    let (note, offered) = shown(&engine);
+    assert_eq!(
+        (note.as_str(), offered),
+        (default_windows().detail.as_str(), false)
+    );
+    assert!(
+        note.ends_with(" is keeping this clock right")
+            && !note.contains("poll")
+            && !note.contains("32768"),
+        "the hover note: {note}"
+    );
     assert_eq!(
         repair_clock_with(&engine, &repair, &machine),
         Err(ClockRepairRefusal::NothingToRepair)
@@ -354,10 +355,11 @@ fn each_real_fault_is_still_offered_and_runs_its_own_repair() {
     }
 }
 
-/// The command runs a real fault's repair and nothing else. Even with the poll write on offer
-/// (planted here: no pass offers it), a press runs nothing and asks Windows for nothing.
+/// The command runs a real fault's repair and nothing else. Even with a diagnosis that found
+/// nothing to repair on offer (planted here: no pass offers one), a press runs nothing and asks
+/// Windows for nothing.
 #[test]
-fn a_press_never_runs_the_poll_write() {
+fn a_press_runs_nothing_but_a_real_faults_repair() {
     let engine = engine();
     let repair = ClockRepair::new();
     let machine = Machine::new(default_windows());

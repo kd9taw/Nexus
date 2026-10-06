@@ -12992,15 +12992,13 @@ impl ClockHost for OsClock {
 /// (2026-10-06): only when you press Repair. `the_background_pass_never_elevates`
 /// counts.
 ///
-/// **The detection is the feature; the poll write is not.** On a healthy,
-/// converged, always-on desktop the registry write improves 27–79 ms of drift to
-/// 0.9–2.5 ms, which is real and cheap and far inside a tolerance that machine
-/// already met. What earns this code its place is the machine whose time service
-/// somebody disabled, the one whose UDP 123 is blocked, the laptop that just
-/// resumed from sleep hours out of date, and the Pi with no RTC that boots
-/// believing it is last Tuesday. `clockdiag::decide` tells those apart, and each
-/// gets a different answer — including "nothing", which is the answer for most
-/// machines and for every machine running somebody else's time client.
+/// **The detection is the feature.** What earns this code its place is the
+/// machine whose time service somebody disabled, the one whose UDP 123 is
+/// blocked, the laptop that just resumed from sleep hours out of date, and the Pi
+/// with no RTC that boots believing it is last Tuesday. `clockdiag::decide` tells
+/// those apart, and each gets a different answer — including "nothing", which is
+/// the answer for most machines and for every machine running somebody else's
+/// time client.
 fn clock_diagnose(
     engine: &Arc<Mutex<Engine>>,
     repair: &ClockRepair,
@@ -13014,7 +13012,7 @@ fn clock_diagnose(
         just_stepped,
     );
     // Only a real fault is offered (the operator's ruling, 2026-10-06): a healthy
-    // default Windows PC, which the table gives the poll write, gets no button.
+    // PC, a default Windows one included, gets no button.
     let available = diag.repair.fixes_a_fault();
     {
         let mut eng = engine_lock(engine);
@@ -13181,10 +13179,6 @@ fn repair_clock_with(
     let ok = host.run_repair_elevated(diag.repair);
     drop(held);
 
-    // GUARD 11: report what the machine ACHIEVED, never what we requested. A
-    // successful write says the registry took the number, not that W32Time is
-    // using it — `SpecialPollInterval` is clamped up to `2^MinPollInterval`, and
-    // without the `0x1` SpecialInterval flag it is ignored outright.
     let mut note = crate::clockdiag::repair_outcome_note(&diag, ok);
     // The hold let go at its bound while the helper was still running: say so,
     // because an over may have started before the repair moved the clock.

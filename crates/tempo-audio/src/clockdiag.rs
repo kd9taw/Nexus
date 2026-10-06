@@ -18,11 +18,9 @@
 //! prompt nobody had asked for.
 //!
 //! **Nexus never calls a clock API.** On Windows the repair goes through
-//! `sc`, `w32tm` and `reg` — the OS's own tools — so W32Time stays the sole
+//! `sc` and `w32tm` — the OS's own tools — so W32Time stays the sole
 //! disciplinarian and there is no second writer to coexist with. On Linux and
-//! macOS there is no repair at all: `systemd-timesyncd` polls at most every
-//! 2048 s and `chrony` at most every 1024 s, both already tighter than anything
-//! we would set, so the Windows problem simply does not exist there.
+//! macOS there is no repair at all ([`detect`] says why).
 //!
 //! ## Parsing is pure; running commands is not
 //!
@@ -65,45 +63,6 @@ const THIRD_PARTY_CLIENTS: [(&str, &str); 5] = [
     // "who last wrote the clock" evidence (the Windows event log), which this module does not read.
     ("timesync.exe", "VOVSOFT Time Sync"),
 ];
-
-/// ⛔ THE REGISTRY VALUE NEXUS WRITES, AND THE ONLY ONE.
-///
-/// `SpecialPollInterval` under `TimeProviders\NtpClient` — how often W32Time
-/// asks its configured server. Nothing else under `W32Time` is ever written.
-const POLL_INTERVAL_KEY: &str =
-    r"HKLM\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient";
-
-/// ⛔ **NEVER WRITTEN.** `Parameters\NtpServer` holds the server W32Time polls,
-/// and repointing it at the NTP Pool is the one change in this whole programme
-/// that would do real harm outside this machine: at a 1024 s poll a host asks
-/// **84 times a day**, and 1000+ installations of a shipped default would be
-/// ~84,000 queries a day against volunteer infrastructure — from a MACHINE-WIDE
-/// setting that outlives the app and survives its uninstall. The pool's vendor
-/// policy is explicit: *"You must absolutely not use the default pool.ntp.org
-/// zone names as the default configuration in your application or appliance."*
-///
-/// It is also not ours to touch for a second reason: whatever is in it, the
-/// operator or their IT department put it there. Read it — the `0x1`
-/// SpecialInterval flag decides whether our write does anything at all — and
-/// never write it. Pinned by `never_writes_the_ntp_server_key`.
-const NTP_SERVER_KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Services\W32Time\Parameters";
-
-/// The poll interval Nexus asks for, in seconds — **the operator's decided
-/// value** (2026-09-08).
-///
-/// 17 minutes. It sits exactly on Microsoft's own documented floor: this machine
-/// reports `MinPollInterval = 0xa` → 2¹⁰ = 1024 s, and `SpecialPollInterval` *"is
-/// contained by the MinPollInterval and MaxPollInterval registry values"*, so a
-/// smaller number would be clamped up to this one anyway. Cross-check: 1024 s is
-/// also chrony's default `maxpoll`.
-///
-/// ⚠️ It is not the feature, and must not be presented as one. On a healthy,
-/// converged, always-on desktop it improves 27–79 ms of drift to 0.9–2.5 ms —
-/// real, cheap, harmless, and far inside a tolerance that machine already met.
-/// What this module is *for* is the machine whose time service is stopped, or
-/// wedged, or which just resumed from sleep hours out of date. Since 2026-10-06
-/// the write is not offered at all ([`Repair::fixes_a_fault`]).
-pub const DESIRED_POLL_SECS: u32 = 1024;
 
 /// Guard 3's ceiling, mirrored here so a diagnosis can say "too far out".
 pub use tempo_app::clocksync::MAX_STEER_MS;
@@ -159,18 +118,13 @@ pub enum Repair {
     /// Diagnoses 2 and 3 — running but not synced, or the clock just stepped.
     /// `w32tm /resync`, with `/rediscover` when the source itself is suspect.
     Resync { rediscover: bool },
-    /// Diagnosis 4 — healthy but polling too rarely. The one registry write.
-    /// Never offered and never run: it fixes no fault ([`Repair::fixes_a_fault`]).
-    SetPollInterval(u32),
 }
 
 impl Repair {
     /// Does this repair fix a real fault: the time service stopped, not
     /// synchronised, or the clock just jumped? Only those are offered, and only
     /// those run when the operator presses **Repair clock** (the operator's
-    /// ruling, 2026-10-06: "Only for real faults"). The poll write is not one. A
-    /// default Windows PC polls every 32768 s and keeps time far inside what it
-    /// needs (see [`DESIRED_POLL_SECS`]), so it gets no button.
+    /// ruling, 2026-10-06: "Only for real faults").
     pub fn fixes_a_fault(self) -> bool {
         matches!(self, Repair::StartService | Repair::Resync { .. })
     }
@@ -181,16 +135,6 @@ impl Repair {
 pub struct ClockDiagnosis {
     pub owner: ClockOwner,
     pub state: ServiceState,
-    /// The poll interval the OS service is actually using, in seconds.
-    pub poll_secs: Option<u32>,
-    /// Whether `NtpServer` carries the `0x1` SpecialInterval flag. **Without it
-    /// the poll write is inert** — W32Time polls adaptively between Min and
-    /// MaxPollInterval instead of honouring `SpecialPollInterval` — so a write
-    /// would silently do nothing. `None` off Windows or when unreadable.
-    pub special_interval_flag: Option<bool>,
-    /// `2^MinPollInterval`, the floor `SpecialPollInterval` is clamped up to.
-    /// Guard 11: if this exceeds what we asked for, we asked for the wrong thing.
-    pub min_poll_secs: Option<u32>,
     /// The clock is **unvouched**: nothing has confirmed it against an external
     /// reference and the OS says so too. A Raspberry Pi has no RTC — a Pi
     /// powered off for a week boots believing it is the moment it last ran, and
@@ -209,9 +153,6 @@ impl ClockDiagnosis {
         Self {
             owner: ClockOwner::Unknown,
             state: ServiceState::Unknown,
-            poll_secs: None,
-            special_interval_flag: None,
-            min_poll_secs: None,
             unvouched: false,
             repair: Repair::None,
             detail: detail.into(),
@@ -228,9 +169,6 @@ pub struct Findings {
     pub service_present: bool,
     pub service_running: bool,
     pub synced: bool,
-    pub poll_secs: Option<u32>,
-    pub special_interval_flag: Option<bool>,
-    pub min_poll_secs: Option<u32>,
     /// Did Nexus's own SNTP probe reach a server this round?
     pub probe_reached_network: bool,
     /// The offset the probe measured, when it has one.
@@ -251,10 +189,9 @@ pub struct Findings {
 /// §3.6's decision table. Pure, so every row is a test rather than a machine.
 ///
 /// The ORDER is the design. Guard 8 comes first because a machine with a
-/// third-party client needs nothing from us whatever else is true of it; "no
+/// third-party client needs nothing from us whatever else is true of it, and "no
 /// network" comes before any repair because a repair without a server to reach
-/// is noise; and the poll write comes last because it is the weakest of the
-/// four and must never shadow a real fault.
+/// is noise.
 pub fn decide(f: &Findings) -> ClockDiagnosis {
     // 7 — a third-party client owns the clock. Report, stand down.
     if let Some(who) = &f.third_party {
@@ -265,9 +202,6 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
             } else {
                 ServiceState::Unknown
             },
-            poll_secs: f.poll_secs,
-            special_interval_flag: f.special_interval_flag,
-            min_poll_secs: f.min_poll_secs,
             unvouched: false,
             repair: Repair::None,
             detail: format!("{who} is managing this clock — Nexus is leaving it alone"),
@@ -293,9 +227,6 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
             } else {
                 ServiceState::NotSynced
             },
-            poll_secs: f.poll_secs,
-            special_interval_flag: f.special_interval_flag,
-            min_poll_secs: f.min_poll_secs,
             unvouched,
             repair: Repair::None,
             detail: if unvouched {
@@ -323,9 +254,6 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
             } else {
                 ServiceState::NotSynced
             },
-            poll_secs: f.poll_secs,
-            special_interval_flag: f.special_interval_flag,
-            min_poll_secs: f.min_poll_secs,
             unvouched: false,
             repair: Repair::Resync { rediscover: false },
             detail: "the system clock jumped — asking the Windows Time service to \
@@ -339,9 +267,6 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
         return ClockDiagnosis {
             owner: ClockOwner::Nobody,
             state: ServiceState::Stopped,
-            poll_secs: f.poll_secs,
-            special_interval_flag: f.special_interval_flag,
-            min_poll_secs: f.min_poll_secs,
             unvouched,
             repair: if f.repairs_available {
                 Repair::StartService
@@ -361,9 +286,6 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
         return ClockDiagnosis {
             owner: ClockOwner::OsService(os_service_name().into()),
             state: ServiceState::NotSynced,
-            poll_secs: f.poll_secs,
-            special_interval_flag: f.special_interval_flag,
-            min_poll_secs: f.min_poll_secs,
             unvouched,
             repair: if f.repairs_available {
                 Repair::Resync { rediscover: true }
@@ -377,56 +299,14 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
         };
     }
 
-    // 5 — no SpecialInterval flag: the write would be INERT, so do not make it.
-    // W32Time is already polling adaptively here, which is the better behaviour
-    // of the two: a drifting machine shortens its own poll, where the `0x1` flag
-    // would pin it at whatever we wrote no matter how badly it drifted.
-    if f.special_interval_flag == Some(false) {
-        return ClockDiagnosis {
-            owner: ClockOwner::OsService(os_service_name().into()),
-            state: ServiceState::Synced,
-            poll_secs: f.poll_secs,
-            special_interval_flag: Some(false),
-            min_poll_secs: f.min_poll_secs,
-            unvouched: false,
-            repair: Repair::None,
-            detail: "this machine's time server is set to adaptive polling, so the \
-                     poll interval is not Nexus's to set — leaving it alone"
-                .into(),
-        };
-    }
-
-    // 4 — healthy, but polling far more rarely than it could. GUARD 11 IS HERE
-    // AND NOT AT THE WRITE: `SpecialPollInterval` is clamped up to
-    // `2^MinPollInterval`, so asking for less than the floor is asking for
-    // something that cannot happen. Ask for the floor and report the floor.
-    let target = f.min_poll_secs.unwrap_or(0).max(DESIRED_POLL_SECS);
-    if f.repairs_available && f.poll_secs.is_some_and(|p| p > target) {
-        return ClockDiagnosis {
-            owner: ClockOwner::OsService(os_service_name().into()),
-            state: ServiceState::Synced,
-            poll_secs: f.poll_secs,
-            special_interval_flag: f.special_interval_flag,
-            min_poll_secs: f.min_poll_secs,
-            unvouched: false,
-            repair: Repair::SetPollInterval(target),
-            detail: format!(
-                "{} is healthy but only checks the time every {} s",
-                os_service_name(),
-                f.poll_secs.unwrap_or(0)
-            ),
-        };
-    }
-
-    // 4' / healthy — nothing to do. This is the common case and it must stay
-    // silent: acting on a machine that is already right is how a feature earns
-    // its reputation for meddling.
+    // Healthy — nothing to do, and nothing to say about how often the service
+    // checks the time: a default Windows PC checks every 32768 s, and that is not a
+    // fault (the operator's ruling, 2026-10-06). This is the common case and it
+    // must stay silent: acting on a machine that is already right is how a
+    // feature earns its reputation for meddling.
     ClockDiagnosis {
         owner: ClockOwner::OsService(os_service_name().into()),
         state: ServiceState::Synced,
-        poll_secs: f.poll_secs,
-        special_interval_flag: f.special_interval_flag,
-        min_poll_secs: f.min_poll_secs,
         unvouched: false,
         repair: Repair::None,
         detail: format!("{} is keeping this clock right", os_service_name()),
@@ -445,21 +325,6 @@ fn os_service_name() -> &'static str {
 }
 
 // ── Parsers: pure, over real captured output ─────────────────────────────────
-
-/// `Poll Interval: 15 (32768s)` from `w32tm /query /status` → 32768.
-///
-/// The parenthesised seconds, not the exponent — Microsoft prints both and the
-/// bare `15` is a log2 that reads like a plausible number of seconds.
-pub fn parse_poll_interval(status: &str) -> Option<u32> {
-    let line = status
-        .lines()
-        .find(|l| l.trim_start().starts_with("Poll Interval:"))?;
-    let inner = line.split('(').nth(1)?;
-    inner
-        .trim_end_matches(|c: char| !c.is_ascii_digit())
-        .parse()
-        .ok()
-}
 
 /// Is W32Time reporting a good synchronisation?
 ///
@@ -512,62 +377,6 @@ pub fn parse_service_present(sc_out: &str) -> bool {
     sc_out.contains("SERVICE_NAME") || sc_out.contains("STATE")
 }
 
-/// The `0x1` SpecialInterval flag on the configured `NtpServer` entry.
-///
-/// `NtpServer    REG_SZ    time.windows.com,0x9` → `0x9 = 0x8 | 0x1` → true.
-/// Several servers may be listed space-separated; the flag matters if ANY entry
-/// carries it, since that entry is one W32Time will poll on our interval.
-///
-/// ⚠️ Reading this is the whole point. **Without the flag the poll write is
-/// inert**, and writing anyway would leave us reporting a change that did not
-/// happen. And the flag is never ADDED to an entry the operator configured —
-/// that would change which behaviour their machine has, not just how often.
-pub fn parse_special_interval_flag(reg_out: &str) -> Option<bool> {
-    let line = reg_out
-        .lines()
-        .find(|l| l.split_whitespace().next() == Some("NtpServer"))?;
-    let value = line
-        .split_whitespace()
-        .skip(2)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if value.is_empty() {
-        return None;
-    }
-    Some(value.split_whitespace().any(|entry| {
-        entry
-            .rsplit_once(',')
-            .and_then(|(_, flags)| {
-                let hex = flags
-                    .trim()
-                    .strip_prefix("0x")
-                    .or_else(|| flags.trim().strip_prefix("0X"))?;
-                u32::from_str_radix(hex, 16).ok()
-            })
-            .is_some_and(|flags| flags & 0x1 != 0)
-    }))
-}
-
-/// A `REG_DWORD` value, e.g. `MinPollInterval    REG_DWORD    0xa` → 10.
-pub fn parse_reg_dword(reg_out: &str, name: &str) -> Option<u32> {
-    let line = reg_out
-        .lines()
-        .find(|l| l.split_whitespace().next() == Some(name))?;
-    let raw = line.split_whitespace().nth(2)?;
-    let hex = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X"))?;
-    u32::from_str_radix(hex, 16).ok()
-}
-
-/// `2^MinPollInterval` in seconds, saturating rather than overflowing on a
-/// nonsense registry value.
-pub fn min_poll_secs(exponent: u32) -> u32 {
-    if exponent >= 31 {
-        u32::MAX
-    } else {
-        1u32 << exponent
-    }
-}
-
 /// `NTPSynchronized=yes` / `NTP=yes` from `timedatectl show`.
 pub fn parse_timedatectl(out: &str) -> (Option<bool>, Option<bool>) {
     let field = |k: &str| {
@@ -610,7 +419,7 @@ pub fn parse_third_party(tasklist_out: &str) -> Option<String> {
 /// trap this tree already documents in `rigctld_proc.rs`.
 ///
 /// ⚠️ **No console window, and 1.12.0 shipped without that.** Every one of these
-/// is a console program, and [`detect`] runs five of them back to back a few
+/// is a console program, and [`detect`] runs three of them back to back a few
 /// seconds after launch and every ten minutes. Spawned with a bare
 /// `Command::new`, each one flashed a command-prompt window on Windows, and
 /// testers saw three or four at a time. [`tempo_core::process::command`] is what
@@ -684,17 +493,6 @@ pub fn detect(
         f.service_running = parse_service_running(&sc);
         let status = capture("w32tm.exe", &["/query", "/status", "/verbose"]).unwrap_or_default();
         f.synced = parse_synced(&status);
-        f.poll_secs = parse_poll_interval(&status);
-        f.special_interval_flag = capture("reg.exe", &["query", NTP_SERVER_KEY])
-            .as_deref()
-            .and_then(parse_special_interval_flag);
-        f.min_poll_secs = capture(
-            "reg.exe",
-            &["query", NTP_SERVER_CONFIG_KEY, "/v", "MinPollInterval"],
-        )
-        .as_deref()
-        .and_then(|o| parse_reg_dword(o, "MinPollInterval"))
-        .map(min_poll_secs);
         f.repairs_available = true;
     } else if cfg!(target_os = "macos") {
         // ⚠️ REPORT ONLY, AND LESS THAN ON THE OTHER TWO. `timed` owns the clock
@@ -716,11 +514,10 @@ pub fn detect(
         f.service_present = !td.is_empty();
         f.service_running = ntp.unwrap_or(false);
         f.synced = synced.unwrap_or(false);
-        // ⛔ NO REPAIR ON LINUX, DELIBERATELY. timesyncd caps its poll at 2048 s
-        // and chrony at 1024 s — both at or tighter than what we would ask
-        // Windows for, so there is nothing to improve. The broken case (neither
-        // daemon installed) is fixed with a package manager, which is not ours
-        // to run on someone's machine.
+        // ⛔ NO REPAIR ON LINUX, DELIBERATELY. A running timesyncd or chrony needs
+        // nothing from us (they poll at most every 2048 s and 1024 s), and the
+        // broken case (neither daemon installed) is fixed with a package manager,
+        // which is not ours to run on someone's machine.
         f.repairs_available = false;
     }
 
@@ -732,19 +529,16 @@ pub fn detect(
     decide(&f)
 }
 
-/// `Config`, where `MinPollInterval` lives — read for guard 11's floor, never
-/// written.
-const NTP_SERVER_CONFIG_KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Services\W32Time\Config";
-
 /// The commands one elevated helper run would execute for `repair`, in order.
 ///
 /// Returned rather than run so the whole repair is **one** UAC prompt and so its
 /// exact content is a unit test rather than a thing that happens on a stranger's
 /// machine. Empty when there is nothing to do.
 ///
-/// ⛔ Every command here targets `w32time`, `w32tm`, or [`POLL_INTERVAL_KEY`].
-/// `NtpServer` never appears — see [`NTP_SERVER_KEY`] — and
-/// `never_writes_the_ntp_server_key` checks that over every possible repair.
+/// ⛔ Every command here targets `w32time` or `w32tm`, and none writes the
+/// registry: the time server W32Time asks (`Parameters\NtpServer`) is never
+/// repointed, which `never_writes_the_ntp_server_key` checks over every possible
+/// repair.
 pub fn repair_commands(repair: Repair) -> Vec<Vec<String>> {
     let s = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
     match repair {
@@ -762,33 +556,7 @@ pub fn repair_commands(repair: Repair) -> Vec<Vec<String>> {
         } else {
             s(&["w32tm.exe", "/resync"])
         }],
-        Repair::SetPollInterval(secs) => vec![
-            vec![
-                "reg.exe".into(),
-                "add".into(),
-                POLL_INTERVAL_KEY.into(),
-                "/v".into(),
-                "SpecialPollInterval".into(),
-                "/t".into(),
-                "REG_DWORD".into(),
-                "/d".into(),
-                secs.to_string(),
-                "/f".into(),
-            ],
-            s(&["w32tm.exe", "/resync"]),
-        ],
     }
-}
-
-/// Guard 11: what the machine ACTUALLY ended up with, read back from
-/// `w32tm /query /status` after a write.
-///
-/// The write returning success says the registry took the number, not that
-/// W32Time is using it — `SpecialPollInterval` is clamped up to
-/// `2^MinPollInterval`, and without the `0x1` flag it is ignored entirely.
-/// Report the achieved value, never the requested one.
-pub fn achieved_poll_secs(status_after: &str) -> Option<u32> {
-    parse_poll_interval(status_after)
 }
 
 /// Run `repair` with the one elevation this programme spends, and report
@@ -852,50 +620,14 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
 }
 
 /// The operator-facing line after a repair attempt.
-///
-/// ⚠️ **GUARD 11 LIVES HERE.** For the poll write this re-reads
-/// `w32tm /query /status` and reports the interval the machine ACTUALLY ended up
-/// with, which can differ from the one requested in two documented ways: it is
-/// clamped up to `2^MinPollInterval`, and without the `0x1` SpecialInterval flag
-/// on the configured `NtpServer` entry it is ignored entirely. Reporting the
-/// requested number would be reporting an intention as a result.
 pub fn repair_outcome_note(diag: &ClockDiagnosis, ok: bool) -> String {
     if !ok {
         return format!("{} — Nexus could not fix it", diag.detail);
     }
     match diag.repair {
-        Repair::SetPollInterval(requested) => poll_write_note(
-            requested,
-            capture("w32tm.exe", &["/query", "/status"])
-                .as_deref()
-                .and_then(achieved_poll_secs),
-        ),
         Repair::StartService => "started the Windows Time service".into(),
         Repair::Resync { .. } => "asked the Windows Time service to re-synchronise".into(),
         Repair::None => diag.detail.clone(),
-    }
-}
-
-/// Guard 11's wording, split from the command that reads it back so the rule is
-/// a unit test rather than a thing that only happens on Windows.
-///
-/// Three outcomes and they are genuinely different: the machine did what we
-/// asked; the machine did something ELSE (clamped by `MinPollInterval`, or the
-/// write ignored for want of the `0x1` flag), which the operator is told
-/// verbatim; or we could not read it back, which is stated as the uncertainty it
-/// is rather than smoothed into a success.
-pub fn poll_write_note(requested: u32, achieved: Option<u32>) -> String {
-    match achieved {
-        Some(a) if a <= requested => {
-            format!("the Windows Time service now checks the time every {a} s")
-        }
-        Some(a) => {
-            format!("asked the Windows Time service for every {requested} s; it is using {a} s")
-        }
-        None => format!(
-            "asked the Windows Time service for every {requested} s \
-             (could not read back what it is using)"
-        ),
     }
 }
 
@@ -937,20 +669,6 @@ SERVICE_NAME: w32time
         WAIT_HINT          : 0x0
 ";
 
-    const REG_PARAMETERS: &str = "\n\
-HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Parameters
-    NtpServer    REG_SZ    time.windows.com,0x9
-    ServiceDll    REG_EXPAND_SZ    %systemroot%\\system32\\w32time.dll
-    ServiceDllUnloadOnStop    REG_DWORD    0x1
-    ServiceMain    REG_SZ    SvchostEntry_W32Time
-    Type    REG_SZ    NTP
-";
-
-    const REG_CONFIG_MINPOLL: &str = "\n\
-HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config
-    MinPollInterval    REG_DWORD    0xa
-";
-
     const TASKLIST_WITH_NETTIME: &str = "\
 Image Name                     PID Session Name        Session#    Mem Usage
 ========================= ======== ================ =========== ============
@@ -958,13 +676,6 @@ NetTimeService.exe            6240 Services                   0      3,960 K
 ";
 
     // ── Parsers, against that real output ─────────────────────────────────────
-
-    #[test]
-    fn the_poll_interval_is_the_seconds_not_the_exponent() {
-        // `Poll Interval: 15 (32768s)` — 15 is a log2 that reads exactly like a
-        // plausible number of seconds, which is the trap.
-        assert_eq!(parse_poll_interval(W32TM_STATUS_VERBOSE), Some(32_768));
-    }
 
     #[test]
     fn a_healthy_machine_parses_as_synced() {
@@ -975,71 +686,19 @@ NetTimeService.exe            6240 Services                   0      3,960 K
 
     /// ⚠️ GUARD 12. The fixture above carries `Phase Offset: 0.0013088s`
     /// alongside `Time since Last Good Sync Time: 27995.9s` — the offset was
-    /// measured 7.8 HOURS before it was read. A machine whose real error has
-    /// since grown to a second must still diagnose as drifting, and reading that
-    /// 1.3 ms as "the current error" is what would stop it.
+    /// measured 7.8 HOURS before it was read. The current error comes from
+    /// Nexus's own probe; reading that 1.3 ms as "the current error" would vouch
+    /// for a clock that has since drifted anywhere at all.
     #[test]
     fn the_diagnosis_never_reads_phase_offset_as_the_current_error() {
-        // Same fixture with a wildly stale Phase Offset and a huge real error:
-        // the parse must be unchanged, because it never looked.
+        // Same fixture with a wildly stale Phase Offset: the parse must be
+        // unchanged, because it never looked.
         let doctored =
             W32TM_STATUS_VERBOSE.replace("Phase Offset: 0.0013088s", "Phase Offset: 0.0000001s");
         assert_eq!(
             parse_synced(&doctored),
             parse_synced(W32TM_STATUS_VERBOSE),
             "Phase Offset must not move the verdict in either direction"
-        );
-        // And the diagnosis of a drifting machine comes from the POLL INTERVAL
-        // plus Nexus's own probe, never from that field.
-        let f = Findings {
-            service_present: true,
-            service_running: true,
-            synced: true,
-            poll_secs: parse_poll_interval(&doctored),
-            special_interval_flag: Some(true),
-            min_poll_secs: Some(1_024),
-            probe_reached_network: true,
-            measured_offset_ms: Some(900), // the REAL error, from our own probe
-            repairs_available: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            decide(&f).repair,
-            Repair::SetPollInterval(1_024),
-            "a stale 0.1 µs Phase Offset must not make a drifting machine look healthy"
-        );
-    }
-
-    #[test]
-    fn the_special_interval_flag_is_read_off_the_real_ntpserver_value() {
-        // `time.windows.com,0x9` = 0x8 (Client) | 0x1 (SpecialInterval).
-        assert_eq!(parse_special_interval_flag(REG_PARAMETERS), Some(true));
-        // 0x8 alone: a Client entry with no SpecialInterval — the write would be
-        // INERT, and this is the read that stops us making it.
-        let no_flag = REG_PARAMETERS.replace("time.windows.com,0x9", "time.windows.com,0x8");
-        assert_eq!(parse_special_interval_flag(&no_flag), Some(false));
-        // Several servers, one flagged.
-        let mixed = REG_PARAMETERS.replace(
-            "time.windows.com,0x9",
-            "ntp1.example.org,0x8 ntp2.example.org,0x9",
-        );
-        assert_eq!(parse_special_interval_flag(&mixed), Some(true));
-        // A key with no NtpServer value at all.
-        assert_eq!(parse_special_interval_flag("HKEY_LOCAL_MACHINE\\x\n"), None);
-    }
-
-    #[test]
-    fn the_min_poll_floor_comes_off_the_registry() {
-        assert_eq!(
-            parse_reg_dword(REG_CONFIG_MINPOLL, "MinPollInterval"),
-            Some(10)
-        );
-        assert_eq!(min_poll_secs(10), 1_024);
-        assert_eq!(min_poll_secs(15), 32_768);
-        assert_eq!(
-            min_poll_secs(99),
-            u32::MAX,
-            "a nonsense exponent must not shift-overflow"
         );
     }
 
@@ -1093,9 +752,6 @@ NetTimeService.exe            6240 Services                   0      3,960 K
             service_present: true,
             service_running: true,
             synced: true,
-            poll_secs: Some(1_024),
-            special_interval_flag: Some(true),
-            min_poll_secs: Some(1_024),
             probe_reached_network: true,
             measured_offset_ms: Some(30),
             repairs_available: true,
@@ -1188,7 +844,6 @@ TimeSync.exe                  9112 Console                    1     12,480 K
         // …and make everything ELSE look like a machine that wants repairing.
         f.service_running = false;
         f.synced = false;
-        f.poll_secs = Some(32_768);
         let d = decide(&f);
         assert_eq!(d.owner, ClockOwner::ThirdParty("NetTime".into()));
         assert_eq!(
@@ -1274,61 +929,23 @@ TimeSync.exe                  9112 Console                    1     12,480 K
         assert_eq!(d.repair, Repair::Resync { rediscover: true });
     }
 
+    /// ⛔ A DEFAULT WINDOWS PC IS HEALTHY, AND ITS NOTE SAYS ONLY THAT (the
+    /// operator's ruling, 2026-10-06). It checks the time every 32768 s, the
+    /// Windows default, and Nexus corrects its own timing whatever the PC clock
+    /// does, so nothing is offered and the hover note says nothing about polling.
+    /// It used to read "…is healthy but only checks the time every 32768 s", as
+    /// if that were a fault. The diagnosis no longer reads the poll interval.
     #[test]
-    fn a_drifting_machine_gets_the_poll_write() {
-        let mut f = healthy_windows();
-        f.poll_secs = Some(32_768); // the observed Windows default
-        assert_eq!(decide(&f).repair, Repair::SetPollInterval(1_024));
-    }
-
-    /// ⚠️ Without the `0x1` SpecialInterval flag the write is INERT — W32Time
-    /// polls adaptively and ignores `SpecialPollInterval` entirely. Detect that
-    /// and report it; writing anyway would have us reporting a change that never
-    /// happened. And the flag is never added to a server entry the operator set.
-    #[test]
-    fn no_special_interval_flag_means_no_write_at_all() {
-        let mut f = healthy_windows();
-        f.poll_secs = Some(32_768);
-        f.special_interval_flag = Some(false);
-        let d = decide(&f);
+    fn a_default_windows_pc_is_healthy_and_its_note_says_nothing_about_polling() {
+        let d = decide(&healthy_windows());
+        assert_eq!(d.repair, Repair::None);
         assert_eq!(
-            d.repair,
-            Repair::None,
-            "the write would do nothing — do not make it"
+            d.detail,
+            format!("{} is keeping this clock right", os_service_name())
         );
-        assert!(
-            d.detail.contains("adaptive"),
-            "and say why nothing happened: {}",
-            d.detail
-        );
-    }
-
-    /// ⚠️ GUARD 11. `SpecialPollInterval` is clamped up to `2^MinPollInterval`,
-    /// so on a machine whose floor is ABOVE our target, asking for 1024 asks for
-    /// something that cannot happen. Ask for the floor.
-    #[test]
-    fn a_higher_min_poll_floor_is_what_gets_requested() {
-        let mut f = healthy_windows();
-        f.poll_secs = Some(32_768);
-        f.min_poll_secs = Some(4_096); // MinPollInterval = 0xc
-        assert_eq!(
-            decide(&f).repair,
-            Repair::SetPollInterval(4_096),
-            "requesting below the floor requests a number the machine cannot use"
-        );
-    }
-
-    #[test]
-    fn a_machine_already_at_or_below_the_target_is_not_written_to() {
-        let mut f = healthy_windows();
-        f.poll_secs = Some(1_024);
-        assert_eq!(decide(&f).repair, Repair::None);
-        f.poll_secs = Some(512);
-        assert_eq!(
-            decide(&f).repair,
-            Repair::None,
-            "faster than we would ask is fine"
-        );
+        for word in ["poll", "checks the time", "32768"] {
+            assert!(!d.detail.contains(word), "{word}: {}", d.detail);
+        }
     }
 
     #[test]
@@ -1376,18 +993,12 @@ TimeSync.exe                  9112 Console                    1     12,480 K
 
     #[test]
     fn a_platform_with_no_repair_path_never_proposes_one() {
-        // Linux and macOS: timesyncd caps at 2048 s and chrony at 1024 s, both
-        // at or tighter than what we would ask Windows for.
-        for (running, synced, poll) in [
-            (false, false, None),
-            (true, false, None),
-            (true, true, Some(32_768)),
-        ] {
+        // Linux and macOS, whatever their time service is doing.
+        for (running, synced) in [(false, false), (true, false), (true, true)] {
             let f = Findings {
                 service_present: true,
                 service_running: running,
                 synced,
-                poll_secs: poll,
                 probe_reached_network: true,
                 repairs_available: false,
                 ..Default::default()
@@ -1404,8 +1015,13 @@ TimeSync.exe                  9112 Console                    1     12,480 K
 
     /// ⛔ GUARD 10, over EVERY repair the decision table can produce. Repointing
     /// `NtpServer` at the NTP Pool from a shipped default would be ~84,000
-    /// queries a day against volunteer infrastructure, from a machine-wide
-    /// setting that survives uninstalling Nexus.
+    /// queries a day against volunteer infrastructure (at a 1024 s poll, across
+    /// 1000+ installations), from a machine-wide setting that survives
+    /// uninstalling Nexus, and the pool's policy is explicit: *"You must
+    /// absolutely not use the default pool.ntp.org zone names as the default
+    /// configuration in your application or appliance."* Whatever server is
+    /// there, the operator or their IT department put it there. No repair writes
+    /// the registry at all.
     #[test]
     fn never_writes_the_ntp_server_key() {
         let every_repair = [
@@ -1413,8 +1029,6 @@ TimeSync.exe                  9112 Console                    1     12,480 K
             Repair::StartService,
             Repair::Resync { rediscover: true },
             Repair::Resync { rediscover: false },
-            Repair::SetPollInterval(1_024),
-            Repair::SetPollInterval(4_096),
         ];
         for r in every_repair {
             for cmd in repair_commands(r) {
@@ -1427,13 +1041,11 @@ TimeSync.exe                  9112 Console                    1     12,480 K
                     !line.to_lowercase().contains("pool.ntp.org"),
                     "{r:?} would point a machine at the NTP Pool: {line}"
                 );
-                // Nothing may write ANY W32Time key but the poll interval.
-                if line.contains("reg.exe") {
-                    assert!(
-                        line.contains(POLL_INTERVAL_KEY) && line.contains("SpecialPollInterval"),
-                        "{r:?} writes an unexpected registry value: {line}"
-                    );
-                }
+                // …nor anything else in the registry.
+                assert!(
+                    !line.contains("reg.exe"),
+                    "{r:?} writes the registry: {line}"
+                );
             }
         }
     }
@@ -1446,71 +1058,21 @@ TimeSync.exe                  9112 Console                    1     12,480 K
         let forbidden = [
             "reg.exe",
             "add",
-            NTP_SERVER_KEY,
+            r"HKLM\SYSTEM\CurrentControlSet\Services\W32Time\Parameters",
             "/v",
             "NtpServer",
             "/d",
             "pool.ntp.org,0x1",
         ];
         let line = forbidden.join(" ");
-        assert!(line.contains("NtpServer") && line.to_lowercase().contains("pool.ntp.org"));
+        assert!(
+            line.contains("reg.exe")
+                && line.contains("NtpServer")
+                && line.to_lowercase().contains("pool.ntp.org")
+        );
         // …and the real repairs are non-empty, so the sweep has something to scan.
-        assert!(!repair_commands(Repair::SetPollInterval(1_024)).is_empty());
         assert!(!repair_commands(Repair::StartService).is_empty());
-    }
-
-    #[test]
-    fn the_poll_write_asks_for_the_decided_value_and_then_resyncs() {
-        let cmds = repair_commands(Repair::SetPollInterval(DESIRED_POLL_SECS));
-        assert_eq!(cmds.len(), 2, "one write, one resync, one UAC prompt");
-        assert_eq!(cmds[0][0], "reg.exe");
-        assert!(cmds[0].contains(&"SpecialPollInterval".to_string()));
-        assert!(
-            cmds[0].contains(&"1024".to_string()),
-            "the operator's decided value"
-        );
-        assert!(cmds[0].contains(&"REG_DWORD".to_string()));
-        assert_eq!(cmds[1], vec!["w32tm.exe", "/resync"]);
-    }
-
-    /// ⚠️ GUARD 11's other half: report what was ACHIEVED, not what was asked.
-    #[test]
-    fn the_achieved_interval_is_read_back_from_the_service() {
-        // A machine whose floor clamped our 1024 up to 4096.
-        let after =
-            W32TM_STATUS_VERBOSE.replace("Poll Interval: 15 (32768s)", "Poll Interval: 12 (4096s)");
-        assert_eq!(achieved_poll_secs(&after), Some(4_096));
-        // A machine that ignored the write entirely (no SpecialInterval flag)
-        // still reports its old value — which is exactly why we read it back.
-        assert_eq!(achieved_poll_secs(W32TM_STATUS_VERBOSE), Some(32_768));
-    }
-
-    /// ⚠️ GUARD 11's WORDING. "I asked for 1024" and "the machine is using 1024"
-    /// are different claims, and the shipped app may only make the second one.
-    #[test]
-    fn the_outcome_reports_what_was_achieved_not_what_was_asked() {
-        assert_eq!(
-            poll_write_note(1_024, Some(1_024)),
-            "the Windows Time service now checks the time every 1024 s"
-        );
-        // Clamped up by a higher `MinPollInterval` — say the real number.
-        let clamped = poll_write_note(1_024, Some(4_096));
-        assert!(
-            clamped.contains("asked") && clamped.contains("4096"),
-            "{clamped}"
-        );
-        // The write was ignored entirely (no `0x1` SpecialInterval flag), so the
-        // service is still on the Windows default. The operator must not be told
-        // this worked.
-        let ignored = poll_write_note(1_024, Some(32_768));
-        assert!(ignored.contains("32768"), "{ignored}");
-        assert!(
-            !ignored.contains("now checks"),
-            "an ignored write is not a success: {ignored}"
-        );
-        // Could not read it back: state the uncertainty rather than smoothing it.
-        let unknown = poll_write_note(1_024, None);
-        assert!(unknown.contains("could not read back"), "{unknown}");
+        assert!(!repair_commands(Repair::Resync { rediscover: true }).is_empty());
     }
 
     #[test]
@@ -1518,9 +1080,6 @@ TimeSync.exe                  9112 Console                    1     12,480 K
         let d = ClockDiagnosis {
             owner: ClockOwner::OsService("the Windows Time service".into()),
             state: ServiceState::Stopped,
-            poll_secs: None,
-            special_interval_flag: None,
-            min_poll_secs: None,
             unvouched: false,
             repair: Repair::StartService,
             detail: "the Windows Time service is not running".into(),
@@ -1544,7 +1103,6 @@ TimeSync.exe                  9112 Console                    1     12,480 K
     fn the_elevated_helper_does_nothing_without_a_repair() {
         assert!(!run_repair_elevated(Repair::None));
         if !cfg!(windows) {
-            assert!(!run_repair_elevated(Repair::SetPollInterval(1_024)));
             assert!(!run_repair_elevated(Repair::StartService));
         }
     }
