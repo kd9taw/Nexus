@@ -354,6 +354,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact), and nor are parks Nexus cannot place.
 - **Needed board: Confirmation opportunities off now holds for POTA/SOTA rows too.** Rows taken from
   the POTA/SOTA feed still showed the LoTW chip, or read "Confirm", with that setting off.
+- **Needed board: the STATE chip says where the state came from.** Its tooltip said "best-guess from
+  the grid" on every row; it now names the park or summit, the station's licence, or its grid.
 
 ### Changed
 

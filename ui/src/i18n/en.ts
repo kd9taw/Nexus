@@ -2174,7 +2174,12 @@ export const EN = {
   'need.chip.newGrid.title': 'New grid square on this band',
   'need.chip.newState.label': 'STATE',
   'need.chip.newState.short': 'ST',
-  'need.chip.newState.title': 'New US state on this band — best-guess from the grid',
+  // The plain title names no source: the legend and the station card use it, and so does a row
+  // that does not say where its state came from. A row that does gets one of the three after it.
+  'need.chip.newState.title': 'New US state on this band',
+  'need.chip.newState.title.park': 'New US state on this band — the state the park or summit is in',
+  'need.chip.newState.title.license': "New US state on this band — from the station's licence",
+  'need.chip.newState.title.grid': "New US state on this band — a best guess from the station's grid square",
   'need.chip.newPark.label': 'NEW PARK',
   'need.chip.newPark.short': 'PARK',
   'need.chip.newPark.title':
