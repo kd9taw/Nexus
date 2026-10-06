@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Getting Out shows its distances in your units.** With **Units** (Settings → Station) on
+  Imperial, the Getting Out box still gave the furthest station, each receiver's distance, the
+  compass tooltips and the direction line in km, and restarting Nexus changed nothing. They now
+  read in miles on Imperial and in km on Metric, and Automatic follows your computer's region. The
+  same fix reaches the other places that printed km whatever the setting said: the opening strip,
+  the Openings Log, the opening alerts, the Openings and Es lines, the DXpedition cards, the APRS
+  station list, and the Satellites section's altitude, range and sked distances. These distances
+  are now written without a thousands separator (8047 km, not 8,047 km).
 - **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
   answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
   radio is still letting go of the last transmission), Nexus played the over anyway: the Tune

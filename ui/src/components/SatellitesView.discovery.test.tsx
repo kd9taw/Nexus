@@ -20,6 +20,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
+import { setUnitsMirror } from '../units'
 import type { SatDetail, SatPass, SatTrackStatus, SatView } from '../types'
 
 const api = vi.hoisted(() => ({
@@ -169,6 +170,31 @@ describe('PIN (a): the discovery band is collapsed by default and renders zero r
     // Collapse again: the rows leave the DOM.
     fireEvent.click(chip)
     await waitFor(() => expect(discRows(container).length).toBe(0))
+  })
+})
+
+// A discovery row's altitude is a distance, so it follows Settings ▸ Units; it printed kilometres
+// whatever the setting said. 500 km is 311 mi.
+describe('a discovery row states its altitude in the units the operator chose', () => {
+  async function altitudes(units: 'metric' | 'imperial'): Promise<(string | null)[]> {
+    setUnitsMirror(units)
+    const { container } = render(<SatellitesView />)
+    await waitFor(() => expect(favRows(container).length).toBe(2))
+    fireEvent.click(screen.getByRole('button', { name: /other birds overhead/i }))
+    await waitFor(() =>
+      expect(container.querySelectorAll('.sats-sched tbody.more tr.sats-disc').length).toBe(2),
+    )
+    return Array.from(
+      container.querySelectorAll('.sats-sched tbody.more tr.sats-disc .sats-disc-note[title="Current altitude"]'),
+    ).map((el) => el.textContent)
+  }
+
+  it('Imperial: miles', async () => {
+    expect(await altitudes('imperial')).toEqual(['311 mi up', '311 mi up'])
+  })
+
+  it('Metric: kilometres', async () => {
+    expect(await altitudes('metric')).toEqual(['500 km up', '500 km up'])
   })
 })
 

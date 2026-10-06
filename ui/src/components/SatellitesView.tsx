@@ -98,6 +98,7 @@ import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { useTheme } from '../useTheme'
+import { fmtDistanceKm, useUnits } from '../units'
 
 interface Props {
   /** Bird to select (map click hand-off). The section follows changes. */
@@ -246,6 +247,11 @@ const SKED_ROW_CAP = 10
  * qualifying it. */
 const SKED_DAYS = 14
 
+/** How far apart two stations can be and still share a low-orbit bird: a 400 km LEO's 5° circle is
+ * ~1660 km across the ground, so past about twice that no schedule can help. The empty answer quotes
+ * it, in the operator's units, so it lives here rather than as a number inside the catalog sentence. */
+const SKED_FOOTPRINT_LIMIT_KM = 3300
+
 /** `2026-09-29` from unix seconds, in the same LOCAL zone `hhmm` prints in.
  * ISO order rather than a locale month name: this is a tick label on a list of
  * times, and an operator agreeing a sked by email writes the date this way. */
@@ -274,6 +280,7 @@ const ymd = (unix: number) => {
  * count in this bounded column (see `.sats-plan`). Closed it is one control
  * strip; open it is a disclosure the operator chose. */
 function SkedBand({ favKey, nowSecs }: { favKey: string; nowSecs: number }) {
+  const units = useUnits()
   const [open, setOpen] = useState(false)
   const [peer, setPeer] = useState('')
   const [busy, setBusy] = useState(false)
@@ -363,7 +370,7 @@ function SkedBand({ favKey, nowSecs }: { favKey: string; nowSecs: number }) {
               <p className="sats-sked-note" data-testid="sat-sked-note">
                 {t('sat.sked.scanned', {
                   grid: sked.theirGrid,
-                  km: Math.round(sked.separationKm),
+                  dist: fmtDistanceKm(sked.separationKm, units),
                   birds: sked.birds.length,
                   days: sked.days,
                   el: sked.minElDeg,
@@ -371,7 +378,11 @@ function SkedBand({ favKey, nowSecs }: { favKey: string; nowSecs: number }) {
               </p>
               {rows.length === 0 ? (
                 <p className="sats-sked-empty" data-testid="sat-sked-empty">
-                  {t('sat.sked.none', { grid: sked.theirGrid, days: sked.days })}
+                  {t('sat.sked.none', {
+                    grid: sked.theirGrid,
+                    days: sked.days,
+                    dist: fmtDistanceKm(SKED_FOOTPRINT_LIMIT_KM, units),
+                  })}
                 </p>
               ) : (
                 <ul className="sats-sked-rows">
@@ -870,6 +881,7 @@ function SkyDome({
   nowSecs: number
 }) {
   const live = nowSecs >= pass.aosUnix && nowSecs <= pass.losUnix
+  const units = useUnits()
   // MOTION MEANS THE PASS IS LIVE. One clock: the shared pulse module is fed
   // LIVE wall time (features/pulse.ts — the frozen-sine bug was a pulse driven
   // off a slow tick, which parks the sine on an arbitrary value), and the 1 s
@@ -1128,7 +1140,7 @@ function SkyDome({
           <div>
             <dt title={t('sat.dome.readout.range.title')}>{t('sat.dome.readout.range')}</dt>
             <dd>
-              {t('sat.dome.readout.km', { km: Math.round(rotor.rangeKm) })}
+              {fmtDistanceKm(rotor.rangeKm, units)}
               {rotor.rangeRateKmS != null &&
                 t('sat.dome.readout.rangeRate', {
                   rate: `${rotor.rangeRateKmS >= 0 ? '+' : ''}${rotor.rangeRateKmS.toFixed(2)}`,
@@ -1152,7 +1164,7 @@ function SkyDome({
             <dt title={t('sat.dome.readout.altitude.title')}>
               {t('sat.dome.readout.altitude')}
             </dt>
-            <dd>{t('sat.dome.readout.km', { km: Math.round(rotor.altKm) })}</dd>
+            <dd>{fmtDistanceKm(rotor.altKm, units)}</dd>
           </div>
         )}
         {ghostText && (
@@ -2227,6 +2239,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
   const [nativeGridSet, setGridSet] = useState(true) // optimistic until settings load
   const [nativeMyGrid, setMyGrid] = useState('') // for the embedded detail globe's center
   const [theme] = useTheme()
+  const units = useUnits()
   const [nativeTrack, setTrack] = useState<SatTrackStatus | null>(null)
   const [search, setSearch] = useState('')
   // The transponder handed to the Doppler engine, and which bird it belongs
@@ -3891,7 +3904,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                                 className="sats-disc-note"
                                 title={t('sat.discovery.altitude.title')}
                               >
-                                {t('sat.discovery.altitude', { km: Math.round(b.altKm) })}
+                                {t('sat.discovery.altitude', { dist: fmtDistanceKm(b.altKm, units) })}
                               </span>
                             )}
                           </td>
@@ -4474,7 +4487,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                       never 0 km. */}
                   {b.altKm != null && (
                     <span className="sat-row-alt" title={t('sat.birds.alt.title')}>
-                      {t('sat.birds.alt', { km: Math.round(b.altKm) })}
+                      {t('sat.birds.alt', { dist: fmtDistanceKm(b.altKm, units) })}
                     </span>
                   )}
                 </li>

@@ -24,7 +24,7 @@ function opening(over: Partial<OpeningView>): OpeningView {
 
 describe('openingToastSpec', () => {
   it('goes loud for a strong Sporadic-E opening', () => {
-    const s = openingToastSpec(opening({}))
+    const s = openingToastSpec(opening({}), 'metric')
     expect(s.prominent).toBe(true)
     expect(s.beepHz).toBe(760)
     expect(s.message).toContain('SPORADIC-E')
@@ -45,6 +45,7 @@ describe('openingToastSpec', () => {
   it('does not shout about a thin-evidence opening', () => {
     const s = openingToastSpec(
       opening({ stations: 2, anomalyZ: 4.2, confidence: 'Likely', confidenceScore: 0.5 }),
+      'metric',
     )
     expect(s.prominent).toBe(false)
     expect(s.beepHz).toBeNull()
@@ -60,7 +61,7 @@ describe('openingToastSpec', () => {
 
   it('hedges F2 and Aurora on thin evidence too, by the same rule', () => {
     for (const mode of ['F2', 'Aurora']) {
-      const s = openingToastSpec(opening({ mode, confidenceScore: 0.4, stations: 2 }))
+      const s = openingToastSpec(opening({ mode, confidenceScore: 0.4, stations: 2 }), 'metric')
       expect(s.prominent, mode).toBe(false)
       expect(s.beepHz, mode).toBeNull()
     }
@@ -70,9 +71,27 @@ describe('openingToastSpec', () => {
     // Tropo is capped at Marginal by the backend (geometry-only v1), so gating
     // its wording on confidence would silence EVERY tropo opening. It is already
     // a quiet, informative toast and must keep its own text.
-    const s = openingToastSpec(opening({ mode: 'Tropo', confidenceScore: 0.5, maxKm: 900 }))
+    const s = openingToastSpec(opening({ mode: 'Tropo', confidenceScore: 0.5, maxKm: 900 }), 'metric')
     expect(s.prominent).toBe(false)
     expect(s.message).toContain('tropo opening')
     expect(s.message).toContain('900 km')
+  })
+
+  // Every tier that names a distance names it in the operator's units. The toasts used to carry
+  // a literal "km" and the raw kilometres whatever Settings ▸ Units said. 900 km is 559 mi.
+  it('states the distance in the units the operator chose, on every tier that names one', () => {
+    const cases: [string, Partial<OpeningView>][] = [
+      ['Sporadic-E', {}],
+      ['F2', { mode: 'F2' }],
+      ['Tropo', { mode: 'Tropo', confidenceScore: 0.5 }],
+      ['thin evidence', { confidenceScore: 0.4, stations: 2 }],
+    ]
+    for (const [name, over] of cases) {
+      const o = opening({ maxKm: 900, ...over })
+      const miles = openingToastSpec(o, 'imperial').message
+      expect(miles, name).toContain('~559 mi')
+      expect(miles, name).not.toContain('km')
+      expect(openingToastSpec(o, 'metric').message, name).toContain('~900 km')
+    }
   })
 })

@@ -20,17 +20,23 @@ describe('octantCoverage', () => {
 
 describe('getoutSummary', () => {
   it('names the strongest direction and the dead ones when lopsided', () => {
-    const s = getoutSummary([heard('NE', 6500), heard('E', 3000)])
+    const s = getoutSummary([heard('NE', 6500), heard('E', 3000)], 'metric')
     expect(s).toContain('strongest toward NE')
-    expect(s).toContain('6,500 km')
+    expect(s).toContain('(~6500 km)')
     expect(s).toContain('little/nothing to the')
   })
+  it('states the strongest direction’s reach in the units the operator chose', () => {
+    // 6500 km is 4039 mi. The sentence used to print kilometres whatever the setting said.
+    const reports = [heard('NE', 6500), heard('E', 3000)]
+    expect(getoutSummary(reports, 'imperial')).toContain('strongest toward NE (~4039 mi)')
+    expect(getoutSummary(reports, 'metric')).toContain('strongest toward NE (~6500 km)')
+  })
   it('omits the dead-direction clause when coverage is all around', () => {
-    const s = getoutSummary(OCTANTS.map((o) => heard(o, 3000)))
+    const s = getoutSummary(OCTANTS.map((o) => heard(o, 3000)), 'metric')
     expect(s).toContain('strongest toward')
     expect(s).not.toContain('little/nothing')
   })
   it('is empty with no reports', () => {
-    expect(getoutSummary([])).toBe('')
+    expect(getoutSummary([], 'imperial')).toBe('')
   })
 })

@@ -402,6 +402,7 @@ const BAND_OUTLOOK = {
 const CTX: PaneContext = {
   myGrid: 'EN52',
   entityCentroids: null,
+  units: 'metric',
   theme: 'dark',
   intent: 'dx',
   prop: PROP,

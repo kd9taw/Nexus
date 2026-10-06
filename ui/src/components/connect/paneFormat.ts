@@ -24,6 +24,7 @@ import {
   backendAzimuth,
   type Azimuth,
 } from '../../grid'
+import { fmtDistanceKm } from '../../units'
 import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
@@ -178,12 +179,12 @@ export function outlookLine(c: PaneContext): string {
 
 export function openingsLine(c: PaneContext): string {
   const o = c.prop?.openings[0]
-  // Round to match the OpeningStrip Expert ("~N km") — same field, same formatting.
+  // Formatted as the OpeningStrip Expert formats it ("~N mi" / "~N km") — same field, same units.
   return o
     ? t('connect.basic.openings', {
         band: o.band,
         octant: o.octant,
-        km: Math.round(o.maxKm).toLocaleString(),
+        dist: fmtDistanceKm(o.maxKm, c.units),
         stations: o.stations,
       })
     : t('connect.basic.openings.none')
@@ -214,12 +215,12 @@ export function spaceWxLine(c: PaneContext): string {
 export function getoutLine(c: PaneContext): string {
   const g = c.getout
   if (!g || g.count === 0) return t('connect.getout.none')
-  const dir = getoutSummary(g.reports)
+  const dir = getoutSummary(g.reports, c.units)
   return dir
     ? t('connect.basic.getout.dir', { count: g.count, dir })
     : t('connect.basic.getout.furthest', {
         count: g.count,
-        km: g.maxKm.toLocaleString(),
+        dist: fmtDistanceKm(g.maxKm, c.units),
       })
 }
 
@@ -348,7 +349,7 @@ export function esNowcastLine(c: PaneContext): string {
     return t('connect.basic.es.open', {
       band: top.band,
       octant: top.octant,
-      km: Math.round(top.maxKm).toLocaleString(),
+      dist: fmtDistanceKm(top.maxKm, c.units),
       mode: top.mode,
       count: top.stations,
     })
