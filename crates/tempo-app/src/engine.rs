@@ -25201,6 +25201,22 @@ contact yourself."
     /// shows none of those, so a CW message between two words read as idle.
     /// Waiting out an over costs at most one T/R period; getting it wrong costs a
     /// transmission.
+    ///
+    /// ⚠️ ONE GAP, KNOWN AND LEFT (the operator's ruling, 2026-10-06: "Leave it, note it"): a
+    /// voice message, an APRS frame or the last word of a CW send that the radio loop is still
+    /// playing. The engine has handed it over (`poll_voice` took the message, `poll_aprs_tx`
+    /// and `poll_cw_one` popped the frame and the word) and keeps nothing of it, and while the
+    /// loop holds the key on its own deadline (`tx_until_ms`) it reads no PTT back from the rig
+    /// and keeps `rig_keyed` down. So this reads idle and a press goes ahead; the hold refuses
+    /// only starts, so the over plays out. (RTTY, PSK and SSTV report their playback to the
+    /// engine, so [`Self::tx_owner`] sees those.) None of the three is timed to the clock, so a
+    /// step under one mistimes nothing; the most a step can do is end the over early. One of
+    /// more than 250 ms trips the loop's clock-jump guard, which expires that deadline: what is
+    /// left to play is flushed and the key dropped at once. A smaller step moves the deadline by
+    /// as much, into the over's 250 ms tail or past it. A word sent through a WinKeyer, a serial
+    /// key line or the rig's own keyer sets no such deadline: the keyer times it, not the PC
+    /// clock. Nothing keys and nothing is left keyed. Seeing these overs would need the loop to
+    /// report its playback to the engine, plumbing on the transmit path that is not added here.
     pub fn on_air(&self) -> bool {
         self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
     }
