@@ -7551,11 +7551,14 @@ select optgroup {
   --need-state: #0f766e; /* teal — new US state (WAS) */
   --need-confirm: #64748b;
   --need-dxped: #0369a1;
-  /* A step darker than the #15803d it was (operator, 2026-10-05: "Add a brightness difference too"), so the
-     dim POTA mark below differs from it in light and not mostly in colour, which is all an operator who cannot
-     tell two greens apart has to go on: 0.094 apart in OKLab L, where they were 0.04. No darker: the Phone
-     scope paints the light theme's need inks on its dark floor too, and this one reads 3.03:1 there. */
-  --need-pota: #006f30;
+  /* Two steps darker than the #15803d it was. The first (operator, 2026-10-05: "Add a brightness difference
+     too") set the dim POTA mark below apart from it in light and not mostly in colour, which is all an operator
+     who cannot tell two greens apart has to go on; but that #006f30 sat 0.011 from FT4's Needed-board badge in
+     OKLab, and a park need's row can carry both. The second (operator, 2026-10-05: "Darken it to #015423") is
+     that pick with a touch more chroma, 0.008 from it, so the dim mark keeps under 60 % of its chroma: 0.179 from
+     the dim mark in OKLab L, 0.091 from FT4's green and 0.072 from WATCH, and 9.19:1 on white. The scope's tags
+     take the dark need colours in every theme (DISPLAY WELLS), so no dark floor bounds it now. */
+  --need-pota: #01541c;
   --need-sota: #6d28d9;
   /* The dim POTA mark: the new-park green reads 4.6 to 4.9:1 on the light tracks, and this one 3.15 to
      3.35:1, a step lighter and with half its chroma. */
