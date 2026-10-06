@@ -50,8 +50,8 @@ pub use store::StreetPack;
 
 /// The host that serves the street map's index, the planet copy, and the fonts and icons.
 ///
-/// A placeholder: the host does not exist yet. Creating it is a separate, approved step, and
-/// this is the one place its name lives.
+/// An R2 bucket behind this custom domain, which .github/workflows/street-maps.yml fills and
+/// prunes. This is the one place its name lives on the Rust side.
 pub const STREET_MAP_HOST: &str = "maps.hamradiotools.io";
 
 /// `https://` and [`STREET_MAP_HOST`]: where the index is fetched from, and the only origin an

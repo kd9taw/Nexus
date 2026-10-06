@@ -74,10 +74,7 @@ whole surface in one tap.
 *The Layers menu in Nexus 1.10.3. Which boxes are ticked is one operator's
 preference, not a recommendation.*
 
-### The street map (not yet available)
-
-> **Not yet available.** The Street choice is built but hidden: it appears once Nexus's street maps
-> are hosted.
+### The street map
 
 **Street** is an optional fifth choice in the map picker: a street-level map of your area,
 downloaded once and kept on your computer, with your Conditions layers drawn on it. Until you

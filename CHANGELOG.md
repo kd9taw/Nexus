@@ -503,10 +503,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way, but a state line has to be picked at the station. NEEDS-BENCH: how TQSL treats a
   `MY_STATE` that differs from the Station Location you sign with.
 
-- **Street map (not yet visible): a street-level map of your area as a fifth map choice.** Built
-  and tested, and hidden until Nexus's street maps are hosted. **Street** joins Globe, 3D, Flat
-  and Beam in the Conditions map picker (main window and pop-out). Until you download an area it
-  carries a download badge, and pressing it opens a sheet: around your station or the map's
+- **Street map: a street-level map of your area as a fifth map choice.** **Street** joins Globe,
+  3D, Flat and Beam in the Conditions map picker (main window and pop-out). Until you download an
+  area it carries a download badge, and pressing it opens a sheet: around your station or the map's
   centre, a square 50, 100, 200 or 400 km across, All streets or Main roads, with the exact size,
   your free disk space and the map data's licence shown before anything downloads. The download
   carries on while you use Nexus, shows its percent on the Street choice, and resumes after a

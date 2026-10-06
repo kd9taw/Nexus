@@ -6,11 +6,11 @@
 // running while the operator uses the app, so its progress lives here, not in a component. Per
 // window: a pop-out learns of a pack another window installed when it is focused.
 //
-// HIDDEN UNTIL HOSTED. The choice is offered only once STREET_MAP_MANIFEST_URL names the hosted
-// index, and that constant is EMPTY: nothing serves street maps yet. One computer can bench the
-// choice anyway with NEXUS_STREET_MAP=1 in its environment (`street_map_info`), which also shows the
-// bench aid that installs a map file the operator already has. Never on the Remote page: a pack
-// lives on the station's disk.
+// OFFERED ONCE HOSTED. The choice is offered to every desktop operator because
+// STREET_MAP_MANIFEST_URL names the hosted index (maps.hamradiotools.io, which
+// .github/workflows/street-maps.yml keeps). NEXUS_STREET_MAP=1 in a computer's environment
+// (`street_map_info`) adds the bench aid that installs a map file the operator already has. Never on
+// the Remote page: a pack lives on the station's disk.
 //
 // NOTHING REACHES THE NETWORK until the operator asks: the sheet's size (it is open), Download, and
 // Check for updates. Listing packs and unfinished downloads reads the maps folder only. The app
@@ -32,11 +32,10 @@ import type { LatLon } from '../grid'
 import { packCovers } from './streetOverlay'
 import type { StreetPack } from './streetPack'
 
-/** The hosted street-map index. EMPTY until the host serves it, and while it is empty the Street
- *  choice is hidden from everyone (a test pins it). The Rust side fetches the index from
- *  `street_map::default_origin()` + `/streetmaps.json`; this must name that same address the day
- *  hosting goes live, and never before. */
-export const STREET_MAP_MANIFEST_URL = ''
+/** The hosted street-map index. While it names the host, the Street choice is offered to every
+ *  desktop operator (a test pins it); an empty string hides it from everyone but a bench. The Rust
+ *  side fetches the same address: `street_map::default_origin()` + `/streetmaps.json`. */
+export const STREET_MAP_MANIFEST_URL: string = 'https://maps.hamradiotools.io/streetmaps.json'
 
 /** The squares offered, in km across (operator ruling 2026-10-04, D2), and the default. */
 export const STREET_KMS = [50, 100, 200, 400] as const
