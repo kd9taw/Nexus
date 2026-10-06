@@ -329,6 +329,8 @@ impl AppState {
                 tx_emission_mhz: None,
                 tuning: false,
                 tx_watchdog: false,
+                slot_key_refused: None,
+                slot_unkey_failed: None,
                 decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,

@@ -1064,6 +1064,28 @@ pub enum StreamMic {
     Keyed,
 }
 
+/// A slot over's key the radio did not accept ([`RadioStatus::slot_key_refused`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotKeyRefused {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// What came back for the key, in the rig link's own words. Data: shown as it is, never
+    /// translated.
+    pub why: String,
+}
+
+/// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotUnkeyFailed {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// What came back for the unkey, in the rig link's own words. Data: shown as it is, never
+    /// translated.
+    pub why: String,
+}
+
 /// Current radio / slot-timing status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1334,6 +1356,18 @@ pub struct RadioStatus {
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]
     pub tx_watchdog: bool,
+    /// The radio did not accept the key for a slot over (FT8, FT4, JS8 and the other timed-slot
+    /// modes), so the over was not sent and transmit was halted, as WSJT-X halts on a rig failure.
+    /// Cleared by re-enabling TX. ABSENT until it happens, so every snapshot before one is
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_key_refused: Option<SlotKeyRefused>,
+    /// The radio did not accept the unkey that ended a slot over (FT8, FT4, JS8 and the other
+    /// timed-slot modes), so transmit was halted, as WSJT-X halts on a rig failure; the radio loop
+    /// keeps sending the unkey until the radio takes it. Cleared by re-enabling TX. ABSENT until it
+    /// happens, so every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_unkey_failed: Option<SlotUnkeyFailed>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]

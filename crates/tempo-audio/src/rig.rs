@@ -588,13 +588,18 @@ fn read_should_retry(kind: std::io::ErrorKind) -> bool {
 /// What a command's `TimedOut` error carries when its deadline passed before a whole reply came
 /// back, in the error's own words. The line went out, so the radio may be acting on it right now
 /// and answer late: no answer in time, which is not a refusal ([`no_answer_in_time`]). A PTT line
-/// that rigctld answered with Hamlib's own "the rig did not answer" carries it too ([`ptt_reply`]).
+/// that rigctld answered with Hamlib's own "the rig did not answer" carries it too ([`ptt_reply`]),
+/// marked as Hamlib's answer ([`deadline_passed`] tells the two apart).
 #[derive(Debug)]
-struct NoAnswerInTime(String);
+struct NoAnswerInTime {
+    words: String,
+    /// rigctld's answer: Hamlib's own "the rig did not answer", not Nexus's deadline passing.
+    hamlib: bool,
+}
 
 impl std::fmt::Display for NoAnswerInTime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.words)
     }
 }
 
@@ -610,6 +615,17 @@ pub fn no_answer_in_time(e: &std::io::Error) -> bool {
         .is_some_and(|inner| inner.is::<NoAnswerInTime>())
 }
 
+/// Whether `e` is Nexus's own deadline passing with the line sent and no whole reply back: of the
+/// two cases [`no_answer_in_time`] counts, the one that is not rigctld's answer. WSJT-X sets no
+/// deadline of its own on a key and waits for Hamlib's answer, so a slot over (FT8, FT4, JS8 and
+/// the other timed-slot modes) still goes out on this one, while Hamlib's own "the rig did not
+/// answer" is a Hamlib error, which WSJT-X halts on (`crate::slot::slot_key_failure`).
+pub fn deadline_passed(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<NoAnswerInTime>())
+        .is_some_and(|mark| !mark.hamlib)
+}
+
 /// What rigctld's answer to a PTT line (`T 1`, `T 3`, `T 0`) says. `RPRT 0`, or an empty reply, is
 /// done. Any other code is the rig, or Hamlib, refusing it, except Hamlib's own "the rig did not
 /// answer" ([`rprt_is_link_fault`]): rigctld sent the line on and heard nothing back, so the radio
@@ -622,9 +638,13 @@ fn ptt_reply(reply: &str) -> std::io::Result<()> {
     }
     let words = format!("rigctld PTT error: {reply:?}");
     Err(match rprt_code(reply) {
-        Some(code) if rprt_is_link_fault(code) => {
-            std::io::Error::new(std::io::ErrorKind::TimedOut, NoAnswerInTime(words))
-        }
+        Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            NoAnswerInTime {
+                words,
+                hamlib: true,
+            },
+        ),
         _ => std::io::Error::other(words),
     })
 }
@@ -934,10 +954,13 @@ impl Rig {
             if std::time::Instant::now() >= deadline {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    NoAnswerInTime(format!(
-                        "rig reply incomplete after {deadline_ms} ms (got {:?})",
-                        String::from_utf8_lossy(&out)
-                    )),
+                    NoAnswerInTime {
+                        words: format!(
+                            "rig reply incomplete after {deadline_ms} ms (got {:?})",
+                            String::from_utf8_lossy(&out)
+                        ),
+                        hamlib: false,
+                    },
                 ));
             }
         };
@@ -3169,6 +3192,40 @@ mod tests {
             );
         }
         assert!(super::ptt_reply("RPRT 0\n").is_ok(), "RPRT 0 keyed it");
+    }
+
+    #[test]
+    fn nexuss_own_deadline_is_told_apart_from_hamlibs_no_answer() {
+        // Both are no answer in time to the other modes. A slot over goes out on the first and
+        // halts on the second, as WSJT-X, which sets no deadline of its own on a key, halts on
+        // every Hamlib error (`crate::slot::slot_key_failure`).
+        let (addr, _log) = mock_rigctld(|_l| {
+            std::thread::sleep(std::time::Duration::from_millis(1_500));
+            "RPRT 0\n".to_string()
+        });
+        let late = Rig::rigctld(&addr)
+            .ptt(true)
+            .expect_err("premise: the deadline passed");
+        assert!(
+            super::no_answer_in_time(&late) && super::deadline_passed(&late),
+            "{late}"
+        );
+        for code in [-5, -6, -13, -14] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert!(super::no_answer_in_time(&e), "RPRT {code}: {e}");
+            assert!(
+                !super::deadline_passed(&e),
+                "RPRT {code} is Hamlib's answer, not the deadline: {e}"
+            );
+        }
+        for code in [-9, -1] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert!(!super::deadline_passed(&e), "RPRT {code}: {e}");
+        }
+        let unsent = Rig::rigctld("127.0.0.1:1")
+            .ptt(true)
+            .expect_err("premise: no rigctld");
+        assert!(!super::deadline_passed(&unsent), "{unsent}");
     }
 
     #[test]

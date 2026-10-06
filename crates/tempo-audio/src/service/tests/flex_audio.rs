@@ -1389,13 +1389,24 @@ fn the_dax_source_is_written_only_at_quiet_points() {
         let pre = 1_500.0;
         let xmits_before = s.log().iter().filter(|(_, e)| command(e, "xmit 1")).count();
         // Run on a second past the boundary: the late toggles land while the over is keyed.
-        let (at, _) = one_over(&mut s, boundary, pre, false, 1_000.0, &mut during);
+        let (at, played) = one_over(&mut s, boundary, pre, false, 1_000.0, &mut during);
         let xmit = s
             .log()
             .iter()
             .filter(|(_, e)| command(e, "xmit 1"))
             .map(|(t, _)| *t)
             .nth(xmits_before);
+        // A toggle to native audio just before the boundary leaves the radio taking its transmit
+        // audio from the mic input until the quiet point writes the DAX source, so the client
+        // refuses that over's key. A refused slot key plays nothing and halts TX, as WSJT-X halts
+        // on a rig failure (`slot::slot_key_failure`); the next trial's CQ arms TX again.
+        if xmit.is_none() {
+            assert!(
+                played.is_none() && !s.engine.lock().unwrap().tx_enabled(),
+                "toggle {offset:+}: the client refused the key, and the over was played or TX \
+                 left on"
+            );
+        }
         overs.push((at, xmit));
         // Let the over run its course before the next period's pre-roll: the unkey, the readback
         // and any quiet-point write all happen here, between overs.
@@ -1472,8 +1483,11 @@ fn the_dax_source_is_written_only_at_quiet_points() {
                 ms(*w, *from)
             );
         }
-        // The guard either side of every boundary, less the session's delivery (≤ one read poll).
-        for (at, _) in &overs {
+        // The guard either side of every boundary an over keyed at, less the session's delivery
+        // (≤ one read poll). After a refused key TX is halted (asserted above), and with no slot
+        // transmission armed the quiet point holds no write off a boundary
+        // (`RadioLoop::tx_routing_quiet`): nothing keys after it.
+        for (at, _) in overs.iter().filter(|(_, xmit)| xmit.is_some()) {
             let off = ms(*w, *at);
             assert!(
                 off.abs() >= ROUTING_GUARD_MS - 50.0,

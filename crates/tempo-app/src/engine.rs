@@ -2398,7 +2398,8 @@ pub struct Engine {
     quiet_periods: u32,
     /// Suppress the per-step transmit log lines while a COMPOSITE operation runs, so the
     /// operation logs once with its cause instead of narrating its own internals. Set only by
-    /// `halt_tx_for_context_change`, and cleared in the same function — never a mode.
+    /// `halt_tx_for_context_change`, `halt_tx_for_refused_key` and `halt_tx_for_failed_unkey`,
+    /// and cleared in the same function — never a mode.
     quiet_tx_log: bool,
     tx_parity: u64,
     /// When true (default), answering a heard station in chat auto-picks the OPPOSITE
@@ -2508,6 +2509,12 @@ pub struct Engine {
     tuning: bool,
     /// Whether the transmit watchdog has tripped (auto-halted TX).
     tx_watchdog: bool,
+    /// The slot over whose key the radio did not accept, which halted TX
+    /// ([`Engine::halt_tx_for_refused_key`]). Kept until the operator turns TX on again.
+    slot_key_refused: Option<crate::dto::SlotKeyRefused>,
+    /// The slot over whose unkey the radio did not accept, which halted TX
+    /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
+    slot_unkey_failed: Option<crate::dto::SlotUnkeyFailed>,
     /// Unix-secs when the current unattended-transmit run began (first TX after the
     /// last operator action), or `None` if not transmitting. The watchdog trips on
     /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
@@ -5118,6 +5125,8 @@ impl Engine {
             skip_tx1: false,
             tuning: false,
             tx_watchdog: false,
+            slot_key_refused: None,
+            slot_unkey_failed: None,
             tx_watchdog_start: None,
             cq_pause_until: None,
             recent_dt: VecDeque::new(),
@@ -14240,6 +14249,79 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.quiet_tx_log = false;
     }
 
+    /// Halt TX because the radio did not accept the key for a slot over (FT8, FT4, JS8 and the
+    /// other timed-slot modes), as WSJT-X halts on a rig failure, and keep the reason on screen
+    /// until the operator turns TX on again ([`Self::set_tx_enabled`]).
+    ///
+    /// WSJT-X 3.0.2: a PTT that Hamlib answers with any error code throws
+    /// (`Transceiver/HamlibTransceiver.cpp:1292`, `:277-284`), the transceiver goes offline
+    /// (`TransceiverBase.cpp:193-206`, `:360-373`), and the main window's rig-failure handler
+    /// presses its own Halt Tx (`widgets/mainwindow.cpp:12556-12564`, `on_stopTxButton_clicked`
+    /// at `:12291`): Enable Tx unticked, the over dropped, then "Rig Control Error".
+    /// [`Self::halt_tx`] is that Halt Tx here, the one Stop TX and UDP HaltTx press. The over was
+    /// planned and recorded before its key, as WSJT-X records its own when it asserts PTT
+    /// (`mainwindow.cpp:8186-8216`); that is not undone.
+    ///
+    /// One event, one line in the log, as [`Self::halt_tx_for_context_change`] logs. And, as
+    /// there, no stop for a voice memory the radio may be playing on its own: nothing here started
+    /// one, and it would be one more CAT command to a radio that just failed one.
+    pub fn halt_tx_for_refused_key(&mut self, why: &str) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over: the radio did not accept the key ({why}) (dropped); transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+            at: now_unix_secs(),
+            why: why.to_string(),
+        });
+    }
+
+    /// Halt TX because the radio did not accept the unkey that ended a slot over (FT8, FT4, JS8
+    /// and the other timed-slot modes), as WSJT-X halts on a rig failure, and keep the reason on
+    /// screen until the operator turns TX on again ([`Self::set_tx_enabled`]).
+    ///
+    /// WSJT-X 3.0.2: a PTT off that Hamlib answers with any error code throws "… while setting
+    /// PTT off" (`Transceiver/HamlibTransceiver.cpp:1303`, `:277-284`), the transceiver goes
+    /// offline (`TransceiverBase.cpp:193-206`, `:360-373`), and the main window's rig-failure
+    /// handler presses its own Halt Tx (`widgets/mainwindow.cpp:12556-12564`): Enable Tx
+    /// unticked, then "Rig Control Error". [`Self::halt_tx`] is that Halt Tx here. It stops the
+    /// sequencer, never the unkey: the radio loop keeps sending that until the radio takes it.
+    ///
+    /// One event, one line in the log, and no stop for a voice memory, as
+    /// [`Self::halt_tx_for_refused_key`]. Nor, unlike every other halt, a CW stop (operator,
+    /// 2026-10-05: "Skip it when an unkey failed"): the radio loop sends `\stop_morse` on its next
+    /// tick, before that tick's unkey, and nothing keys CW while a slot over ends, so all it could
+    /// do is hold the unkey up for a CAT deadline on a radio that has stopped answering. A Stop TX
+    /// pressed before keeps its own, as it keeps its voice-memory stop.
+    pub fn halt_tx_for_failed_unkey(&mut self, why: &str) {
+        let voice_mem_halt = self.voice_mem_halt;
+        let cw_abort = self.cw_abort;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        self.cw_abort = cw_abort;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over: the radio did not accept the unkey ({why}); transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_unkey_failed = Some(crate::dto::SlotUnkeyFailed {
+            at: now_unix_secs(),
+            why: why.to_string(),
+        });
+    }
+
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing and queued frames are dropped — but an
     /// over already in flight completes (operator spec 2026-07-31: "TX Off should
@@ -14442,6 +14524,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
             self.tx_watchdog_start = None;
+            // …and a refused slot key's halt: turning TX on again is the operator's answer to it.
+            self.slot_key_refused = None;
+            // …and a failed slot unkey's, the same way.
+            self.slot_unkey_failed = None;
         } else {
             // A SLOT over already in flight is NOT cut here. Operator (2026-07-31):
             // "TX Off should disable TX for the next cycle, but allow any ongoing
@@ -20908,6 +20994,8 @@ contact yourself."
             .flatten();
         s.radio.hrd_queued = self.hrd_pending.len() as u32;
         s.radio.tx_watchdog = self.tx_watchdog;
+        s.radio.slot_key_refused = self.slot_key_refused.clone();
+        s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
@@ -32777,6 +32865,156 @@ mod tests {
             "stays stopped across slots — the sequencer does NOT re-arm"
         );
         assert!(!e.snapshot().radio.transmitting);
+    }
+
+    #[test]
+    fn a_refused_slot_key_halts_tx_as_stop_tx_does_and_says_why_until_tx_is_on_again() {
+        // WSJT-X's rig-failure handler presses its own Halt Tx (mainwindow.cpp:12556-12564):
+        // Enable Tx unticked, the over dropped, the sequencer not re-armed. Then it says why.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(!e.poll_tx(0).is_empty(), "baseline: the QSO transmits");
+        e.take_slot_tx_abort();
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        assert_eq!(
+            radio(&e).get("slotKeyRefused"),
+            None,
+            "absent until a key is refused, so every earlier snapshot is byte-identical"
+        );
+
+        let why = "rigctld PTT error: \"RPRT -1\\n\"";
+        e.halt_tx_for_refused_key(why);
+        assert!(!e.tx_enabled(), "TX is off, as Halt Tx leaves it");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to cut and unkey, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(2).is_empty() && e.poll_tx(4).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        assert!(
+            !e.take_voice_mem_halt(),
+            "nothing asks the radio to stop a voice memory it may be playing"
+        );
+        let refused = e
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .expect("the reason is kept for the operator");
+        assert_eq!(refused.why, why, "in the rig link's own words");
+        assert!(refused.at > 0, "with the time it happened");
+        assert_eq!(radio(&e)["slotKeyRefused"]["why"], why);
+
+        e.set_tx_enabled(false);
+        assert!(
+            e.snapshot().radio.slot_key_refused.is_some(),
+            "TX Off is not an answer to it"
+        );
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "turning TX on again is, and clears it"
+        );
+    }
+
+    #[test]
+    fn a_failed_slot_unkey_halts_tx_as_stop_tx_does_and_says_why_until_tx_is_on_again() {
+        // WSJT-X's rig-failure handler presses its own Halt Tx on a PTT off Hamlib answers with an
+        // error (HamlibTransceiver.cpp:1303, mainwindow.cpp:12556-12564): Enable Tx unticked, the
+        // sequencer not re-armed. Then it says why.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(!e.poll_tx(0).is_empty(), "baseline: the QSO transmits");
+        e.take_slot_tx_abort();
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        assert_eq!(
+            radio(&e).get("slotUnkeyFailed"),
+            None,
+            "absent until an unkey fails, so every earlier snapshot is byte-identical"
+        );
+
+        let why = "rigctld PTT error: \"RPRT -1\\n\"";
+        e.halt_tx_for_failed_unkey(why);
+        assert!(!e.tx_enabled(), "TX is off, as Halt Tx leaves it");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to cut and unkey, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(2).is_empty() && e.poll_tx(4).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        assert!(
+            !e.take_voice_mem_halt(),
+            "nothing asks the radio to stop a voice memory it may be playing"
+        );
+        let failed = e
+            .snapshot()
+            .radio
+            .slot_unkey_failed
+            .expect("the reason is kept for the operator");
+        assert_eq!(failed.why, why, "in the rig link's own words");
+        assert!(failed.at > 0, "with the time it happened");
+        assert_eq!(radio(&e)["slotUnkeyFailed"]["why"], why);
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "a failed unkey is not a refused key"
+        );
+
+        e.set_tx_enabled(false);
+        assert!(
+            e.snapshot().radio.slot_unkey_failed.is_some(),
+            "TX Off is not an answer to it"
+        );
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_unkey_failed,
+            None,
+            "turning TX on again is, and clears it"
+        );
+
+        // After the operator's own Stop TX, whose unkey then fails: the Stop's request to stop a
+        // voice memory still stands.
+        e.halt_tx();
+        e.halt_tx_for_failed_unkey(why);
+        assert!(
+            e.take_voice_mem_halt(),
+            "the operator's Stop TX lost its voice-memory stop"
+        );
+    }
+
+    #[test]
+    fn a_failed_slot_unkey_asks_for_no_cw_stop_and_every_other_halt_still_does() {
+        // Operator (2026-10-05): "Skip it when an unkey failed". The radio loop answers the CW
+        // abort with `\stop_morse` on its next tick, before that tick's unkey; after a slot over
+        // nothing keys CW, and a radio that has stopped answering held the unkey up behind it.
+        let why = "rigctld PTT error: \"RPRT -1\\n\"";
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.take_cw_abort();
+        e.halt_tx_for_failed_unkey(why);
+        assert!(
+            !e.take_cw_abort(),
+            "the failed unkey's halt asked the radio to stop CW"
+        );
+
+        // The controls: Stop TX and the refused key's halt still ask, as they always did…
+        e.halt_tx();
+        assert!(e.take_cw_abort(), "Stop TX no longer asks for a CW stop");
+        e.halt_tx_for_refused_key(why);
+        assert!(
+            e.take_cw_abort(),
+            "the refused key's halt no longer asks for a CW stop"
+        );
+        // …and a Stop TX pressed before an unkey that then fails keeps its own.
+        e.halt_tx();
+        e.halt_tx_for_failed_unkey(why);
+        assert!(
+            e.take_cw_abort(),
+            "the failed unkey took the operator's Stop TX CW stop away"
+        );
     }
 
     #[test]
