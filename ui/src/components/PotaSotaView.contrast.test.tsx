@@ -74,14 +74,16 @@ const spot = (activator: string, reference: string, over: Partial<OtaSpot> = {})
   program: 'POTA', reference, name: 'Test park', activator, freqKhz: 14_285, mode: 'SSB', spotter: null, comment: null, grid: null,
   newPark: false, bandOpen: false, huntedToday: false, ...over,
 })
-/** A row in every state a row has: plain, the hunted one, a band that is open, a new park (and a summit, the other program). */
+/** A row in every state a row has: plain, the hunted one, a band that is open, a new park (and a summit, the other program).
+ *  Each carries the state it is in (2026-10-05): lit where the log needs it on the plain, new-park and worked rows, a plain
+ *  code on the hunted and open rows, the dim ink's lowest surfaces. */
 const SPOTS: OtaSpot[] = [
-  spot('K1ABC', 'US-0001'),
-  spot('W9XYZ', 'US-0002', { freqKhz: 7_185 }),
-  spot('N0OPN', 'US-0003', { freqKhz: 21_285, bandOpen: true }),
-  spot('K4NEW', 'US-0004', { freqKhz: 18_130, newPark: true }),
+  spot('K1ABC', 'US-0001', { states: ['US-ND'], neededStates: ['US-ND'] }),
+  spot('W9XYZ', 'US-0002', { freqKhz: 7_185, states: ['US-MT'] }),
+  spot('N0OPN', 'US-0003', { freqKhz: 21_285, bandOpen: true, states: ['US-OR'] }),
+  spot('K4NEW', 'US-0004', { freqKhz: 18_130, newPark: true, states: ['US-MT', 'US-ND'], neededStates: ['US-ND'] }),
   // Worked today (its badge shows with Hide worked today switched off, which renderWords does).
-  spot('W8WKD', 'US-0005', { freqKhz: 3_860, huntedToday: true }),
+  spot('W8WKD', 'US-0005', { freqKhz: 3_860, huntedToday: true, states: ['US-OH'], neededStates: ['US-OH'] }),
 ]
 const api = vi.hoisted(() => {
   /** A repeater search with three FM machines (Program's Tune, Save to Memories and Add on each): the second is added below,
@@ -244,6 +246,8 @@ const DARK_MIX = /^\[data-theme='dark'\] (\.pota-hunt-btn|\.pota-view \.pota-(sp
 const SHIPPED = RULES.filter((r) => !OURS.test(r.selector) && !DARK_MIX.test(r.selector))
 /** The look as it was before 2026-10-03: its dark lettering removed. */
 const BEFORE = RULES.filter((r) => !DARK_MIX.test(r.selector))
+/** The sheet without a lit state's two rules (2026-10-05), for the control that proves the state sweep can fire. */
+const NO_LIT_STATE = RULES.filter((r) => !/^(\[data-night='1'\] )?\.pota-spot-state\.need-state$/.test(r.selector))
 /** The colour a kind's own base rule letters it in (the last such rule wins its ties). */
 const baseInk = (selector: string) => [...RULES].reverse().find((r) => r.selector === selector && r.decls.some((d) => d.prop === 'color'))!.decls.find((d) => d.prop === 'color')!.value
 
@@ -271,7 +275,8 @@ function once<T>(key: string, make: () => T): T {
   if (!memo.has(key)) memo.set(key, make())
   return memo.get(key) as T
 }
-const keyOf = (rules: Rule[], mode: Mode, at: El[]) => `${rules === SHIPPED ? 's' : rules === BEFORE ? 'b' : 'r'}|${mode}|${JSON.stringify(at)}`
+const keyOf = (rules: Rule[], mode: Mode, at: El[]) =>
+  `${rules === SHIPPED ? 's' : rules === BEFORE ? 'b' : rules === NO_LIT_STATE ? 'n' : 'r'}|${mode}|${JSON.stringify(at)}`
 /** The compound a rule puts on the element itself, split off its selector the way reachesChain splits it. */
 const SUBJECT = new WeakMap<Rule, string | undefined>()
 function subjectOf(rule: Rule): string | undefined {
@@ -515,6 +520,52 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
     expect(at('dark skin=slate' as Mode, /^the POTA \/ SOTA view pota-spot\.pota-spot-v2\.selected \.pota-hunt-btn "HUNT": #88c4d6 on #3d535f = 4\.20:1$/), 'the hunted HUNT, Slate').toBe(true)
     expect(at('light skin=paper' as Mode, /^the POTA \/ SOTA view pota-spot\.pota-spot-v2\.selected \.pota-spot-meta "7\.1850 MHz": #6a6353 on #d5dfe6 = 4\.4[01]:1$/), 'the hunted frequency line, paper').toBe(true)
   }, 60_000)
+
+  // THE STATE AN ACTIVATOR IS IN (operator, 2026-10-05: "State on rows, needed lit"). The code after each reference, in the
+  // dim ink, and lit where the log still needs it in a need chip's look in the WAS colour: the ink on the colour's tint, the
+  // colour on its border at full strength. Its word is the label's inner span (the code; the name beside it is screen-reader
+  // text, never painted). Held as the HUNT look is: in every theme under every preset, in every host the board shows in.
+  const STATE_KINDS = ['.pota-spot-state span', '.pota-spot-state.need-state span']
+  const stateWords = () => all.filter((w) => STATE_KINDS.includes(w.own))
+  const lit = (w: Word) => w.own === '.pota-spot-state.need-state span'
+  /** What is wrong with a state word in `mode` under `rules`: under 4.5:1, and for a lit one, lettered in anything but the
+   *  ink, or with the WAS colour not on its border at full strength, 3:1 off what the label sits on. */
+  function stateFaults(rules: Rule[], mode: Mode, w: Word): string[] {
+    const out: string[] = []
+    const { fg, bg, ratio, ink } = wordOf(rules, mode, w)
+    if (ratio < 4.5) out.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+    if (!lit(w)) return out
+    if (ink.value !== 'var(--text)') out.push(`${w.what} ${mode}: lettered in ${ink.value}, not the ink`)
+    const label = w.chain.slice(0, -1)
+    const v = win(rules, mode, label, 'border-top-color', 'border-color', 'border')?.value ?? ''
+    if (borderColour(v) !== 'var(--need-color)') return [...out, `${w.what} ${mode}: its border is "${v}", not the WAS colour`]
+    const under = surfaceOf(rules, mode, label.slice(0, -1))
+    const c = colourOf(rules, mode, label, 'var(--need-color)', under)
+    if (contrast(c, under) < 3) out.push(`${w.what} ${mode}: the border ${hex(c)} on ${hex(under)} = ${contrast(c, under).toFixed(2)}:1`)
+    return out
+  }
+  it('finds the state on every row that carries one, lit and plain, in every host the board shows in', () => {
+    const seen = [...new Set(stateWords().map((w) => w.what.replace(/ "[^"]*"$/, '')))].sort()
+    const want = BOARD_HOSTS.flatMap(([h]) => [
+      `${h} pota-spot.pota-spot-v2 .pota-spot-state.need-state span`,
+      `${h} pota-spot.pota-spot-v2.selected .pota-spot-state span`,
+      `${h} pota-spot.pota-spot-v2.pota-spot-open .pota-spot-state span`,
+      `${h} pota-spot.pota-spot-v2.pota-spot-new .pota-spot-state.need-state span`,
+    ]).sort()
+    expect(seen).toEqual(want)
+  })
+  it('the state reads 4.5:1 in every theme under every preset, in every host; a lit one in the ink, the WAS colour on its border 3:1', () => {
+    const low: string[] = []
+    for (const w of stateWords()) for (const mode of EVERY) low.push(...stateFaults(RULES, mode, w))
+    expect(low).toEqual([])
+  }, 120_000)
+  it('FIRES: a lit state without its rule is caught, as the need colour lettered on nothing', () => {
+    expect(NO_LIT_STATE.length, 'the lit rules were found and removed').toBe(RULES.length - 2)
+    const caught = stateWords().filter(lit).flatMap((w) => stateFaults(NO_LIT_STATE, 'light', w))
+    // Every lit label in every host: lettered in the dim ink, with no border at all.
+    expect(caught.length).toBe(2 * stateWords().filter(lit).length)
+    expect(caught.every((m) => m.endsWith('not the ink') || m.endsWith('its border is "", not the WAS colour'))).toBe(true)
+  })
 
   // The look as it was before 2026-10-03, in dark (the resolver's ratios; Blue at night on the selected row is the 3.93:1 the
   // Repeaters page reported): the accent on its tint, caught under the four dim accents. And what the change costs the

@@ -24,6 +24,8 @@ import {
 import { pushToast, withErrorToast } from '../toast'
 import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
+import { bandLabelForMhz } from '../band'
+import { placeLabel, placeName } from '../features/otaStates'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -889,8 +891,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             const band = bandFromKhz(s.freqKhz)
             const displayMode = spotDisplayMode(s.mode)
             const fullName = s.name || '—'
+            // The state the activator is in, and whether Worked All States still needs it: the
+            // station's answers. Said in words here (the tooltip, and so the row's accessible
+            // name) because a lit label is a colour: where the activator is, what a park on a
+            // state line means for the contact, and each state the log still needs on this band.
+            const states = s.states ?? []
+            const needed = (s.neededStates ?? []).filter((c) => states.includes(c))
+            const stateLines: string[] = []
+            if (states.length === 1) stateLines.push(t('ota.spot.state.in', { state: placeName(states[0]) }))
+            else if (states.length > 1)
+              stateLines.push(t('ota.spot.state.spans', { states: states.map(placeName).join(', ') }))
+            for (const c of needed)
+              stateLines.push(
+                t('ota.spot.state.needed', { state: placeName(c), band: bandLabelForMhz(s.freqKhz / 1000) || band }),
+              )
             const tooltipParts: string[] = [
               `${s.program} ${s.reference} — ${fullName}`,
+              ...stateLines,
               `${fmtFreq(s.freqKhz)} · ${displayMode} · ${band}`,
             ]
             if (s.spotter) tooltipParts.push(t('ota.spot.spottedBy', { spotter: s.spotter }))
@@ -919,6 +936,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                     <span className="pota-spot-ref" title={`${s.program} ${s.reference}`}>
                       {s.reference}
                     </span>
+                    {/* The state: its code shown, its name read. Lit in the WAS colour when the
+                        log still needs one of its states on this band. */}
+                    {states.length > 0 && (
+                      <span
+                        className={`pota-spot-state${needed.length > 0 ? ' need-state' : ''}`}
+                        title={stateLines.join('\n')}
+                      >
+                        <span aria-hidden="true">{placeLabel(states, needed)}</span>
+                        <span className="sr-only">
+                          {states
+                            .map((c) =>
+                              needed.includes(c) ? t('ota.spot.state.needed.sr', { state: placeName(c) }) : placeName(c),
+                            )
+                            .join(', ')}
+                        </span>
+                      </span>
+                    )}
                     {/* Badges */}
                     <span className="pota-spot-badges">
                       {s.newPark && (

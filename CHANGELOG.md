@@ -413,6 +413,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **POTA/SOTA: each activator's state on the board, lit when you still need it for WAS.** Every row
+  now shows the US state or Canadian province the activator is in, after the park or summit
+  reference: for a park, from pota.app's own spot (a park on a state line shows each state, as
+  **MT·ND**, and a long trail shows two and how many more); for a summit, from its SOTA association,
+  per SOTA's own list of associations and regions (a summit that list does not place in one state
+  shows none). A US state your log does not yet hold on that spot's band is lit in the New State
+  colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
+  a park on a state line, a reminder that the contact counts for the state the activator is
+  actually in. Screen readers read the name. The Remote page's board does not show states yet.
+
 - **Street map (not yet visible): a street-level map of your area as a fifth map choice.** Built
   and tested, and hidden until Nexus's street maps are hosted. **Street** joins Globe, 3D, Flat
   and Beam in the Conditions map picker (main window and pop-out). Until you download an area it

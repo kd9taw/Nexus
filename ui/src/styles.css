@@ -20620,6 +20620,29 @@ button.cq-skiptx1.on {
   color: var(--accent);
   font-family: var(--font-mono);
 }
+/* THE STATE AN ACTIVATOR IS IN (operator, 2026-10-05: "State on rows, needed lit"). Its code after the
+   park reference ("ND"; "MT·ND" for a park on a state line) in the dim ink; its name is in the row's
+   tooltip and is what a screen reader reads. A state the log still needs for Worked All States wears
+   a need chip's look in the WAS colour: the theme's ink on the colour's tint, the colour on its border
+   at full strength (a 10 % tint at night, as the chips have it), so a needed state is a pill and not
+   a colour alone. No vertical padding: the pill sits inside the line the call already sets. */
+.pota-spot-state {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pota-spot-state.need-state {
+  color: var(--text);
+  background: color-mix(in srgb, var(--need-color) 24%, transparent);
+  border: 1px solid var(--need-color);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+[data-night='1'] .pota-spot-state.need-state {
+  background: color-mix(in srgb, var(--need-color) 10%, transparent);
+}
 .pota-spot-badges {
   display: flex;
   align-items: center;
