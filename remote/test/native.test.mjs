@@ -891,11 +891,14 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual(programmingDoc.value,nativeConfiguration.programming)
     assert.equal(programmingDoc.value.projects[0].channels.length,1200)
     const parkCsv='reference,name,grid,location\n'+Array.from({length:40},(_,i)=>`US-${String(i).padStart(4,'0')},Synthetic Park ${i},FN31,US-CT`).join('\n')+'\nUS-9999,Acadia National Park,FN54,US-ME\n'
+    // The desktop's parks also say where each park is (`states`, which its log form places a contact by). The page lists six
+    // keys and refuses a park with any other, so the station sends the desktop's answer without that one.
+    const pageKeys=park=>{const {states,...rest}=park;assert.deepEqual(states,[park.location],'the desktop answer carries the park\'s state');return rest}
     for(const search of ['US-00','US-0001','ACADIA','ZZ-99']){
       const desktopParks=await probe.send({type:'seedParks',csv:parkCsv,search})
       const parks=statsReference.parseParks(await navigationSource.page({collection:'parks',cursor:null,search,unconfirmed:false,after:null}))
-      assert.deepEqual(parks.parks,desktopParks.parks,`the station answers ${search} exactly as the desktop search does`)
-      assert.deepEqual(parks.exact,desktopParks.exact)
+      assert.deepEqual(parks.parks,desktopParks.parks.map(pageKeys),`the station answers ${search} exactly as the desktop search does, without the key the page does not list`)
+      assert.deepEqual(parks.exact,desktopParks.exact&&pageKeys(desktopParks.exact))
       assert.equal(parks.parkCount,41)
     }
     const desktopConfirmations=await probe.send({type:'confirmationDiagnostics'})

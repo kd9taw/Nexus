@@ -17,6 +17,8 @@ pub(super) mod log_tests;
 pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
+#[cfg(test)]
+mod page_keys;
 mod parks;
 pub(super) mod picture;
 mod pounce;

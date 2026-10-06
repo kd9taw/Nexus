@@ -17,6 +17,10 @@ pub(super) fn valid_search(search: &str) -> bool {
     (2..=32).contains(&search.len()) && search.trim() == search
 }
 
+/// One park as the page's parser takes it: these six keys, and it refuses a row carrying any
+/// other (`ui/src/remote-web/parks.ts`). Cut from the desktop's own answer key by key, never sent
+/// whole, so what the desktop's park gains for itself (`states`, which its log form places a
+/// contact by) stays on the desktop until the page lists it.
 fn row(park: tempo_core::pota::Park) -> Option<Value> {
     let park = crate::ParkDto::from(park);
     (!park.reference.is_empty()
@@ -24,8 +28,10 @@ fn row(park: tempo_core::pota::Park) -> Option<Value> {
         && park.grid.len() <= GRID_BYTES
         && park.name.len() <= TEXT_BYTES
         && park.location.len() <= TEXT_BYTES)
-        .then(|| serde_json::to_value(park).ok())
-        .flatten()
+        .then(|| {
+            json!({ "reference": park.reference, "name": park.name, "grid": park.grid,
+                "location": park.location, "latitude": park.latitude, "longitude": park.longitude })
+        })
 }
 
 /// The same `search` and `lookup` the desktop commands run, on the same index.
@@ -100,12 +106,18 @@ mod tests {
     fn search_matches_the_desktop_index_and_carries_the_exact_reference() {
         let parks = index(CSV);
         let (rows, total, meta) = read(&parks, "US-00").unwrap();
+        // The desktop's own rows, cut to the page's keys: they also say where each park is
+        // (`states`), which the page does not list.
         let desktop: Vec<Value> = parks
             .lock()
             .unwrap()
             .search("US-00", ROWS)
             .into_iter()
-            .map(|p| serde_json::to_value(crate::ParkDto::from(p)).unwrap())
+            .map(|p| {
+                let mut row = serde_json::to_value(crate::ParkDto::from(p)).unwrap();
+                assert!(row.as_object_mut().unwrap().remove("states").is_some());
+                row
+            })
             .collect();
         assert_eq!(rows, desktop);
         assert_eq!(total, 3);
