@@ -29,6 +29,22 @@ for a brand-new operator.
 
 ---
 
+## IC-7760, and Icoms on the network
+
+The IC-7760 works over its **USB cable**, like the rest of the family: in **Settings ▸ Radio ▸ Rig & CAT**, pick
+**Rig Model: Icom IC-7760** and the radio's COM port. If **Detect** doesn't fill it in, choose it yourself.
+
+Nexus can't reach an Icom over its **network port** directly. The programs that find the radio by its IP address speak
+Icom's own network protocol, and Hamlib, which Nexus uses for Icoms, doesn't. So typing the radio's IP address into Nexus
+won't find it. To run over the network anyway, put a bridge in between:
+
+1. Run a program that speaks Icom's network protocol and offers a Hamlib rigctld port. wfview is the usual one; check
+   that your version supports your radio.
+2. Turn on its rigctld server and note the port it listens on.
+3. In Nexus, pick **Rig Model: NET rigctl (remote rigctld)** and set **Network Address** to the bridge's address and
+   that port (for wfview on the same computer, `127.0.0.1:` and the port).
+4. The audio travels through the bridge too: pick the bridge's audio devices in Nexus's audio settings.
+
 ## IC-9700 — VHF/UHF and 23 cm
 
 The **IC-9700** is fully supported, including the **23 cm band**: Nexus knows the
