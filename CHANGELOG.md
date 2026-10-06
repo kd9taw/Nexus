@@ -52,9 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repair whenever it found something Windows could fix: the Windows Time service switched off, a
   time service that had not synchronised, a clock that had just jumped after sleep, or one that
   checks the time only every nine hours. The clock check still runs and still says what it found
-  (hover the clock readout). When there is something to fix, a **Repair clock** button appears
-  beside the clock readout, with a line saying Windows will ask for administrator rights, and the
-  fix runs only when you press it. It does not run while you are transmitting.
+  (hover the clock readout). When it finds a real fault (the Windows Time service switched off,
+  not synchronised, or a clock that just jumped), a **Repair clock** button appears beside the
+  clock readout, with a line saying Windows will ask for administrator rights, and the fix runs
+  only when you press it. Checking the time every nine hours is the Windows default, so Nexus no
+  longer offers to change it. The button does not work while you are transmitting. While a repair
+  runs, Nexus starts no transmission until it finishes, two minutes at most, so the clock cannot
+  move in the middle of an over: TX On, Tune, PTT and sends in every mode are refused, a run that
+  is already on (FT8, JS8, a beacon) skips its overs, and the top bar says why.
 - **Getting Out shows its distances in your units.** With **Units** (Settings → Station) on
   Imperial, the Getting Out box still gave the furthest station, each receiver's distance, the
   compass tooltips and the direction line in km, and restarting Nexus changed nothing. They now

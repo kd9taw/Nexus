@@ -1078,6 +1078,13 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       pushToast(t('phone.tx.locked'), 'info', 3500)
       return
     }
+    // …nor while a clock repair holds transmit (`Engine::hold_tx_for_clock_repair`): the engine
+    // refuses the key until the repair ends, and turning TX back on (below) is refused too. Say
+    // why, and draw no ON AIR over a transmitter nobody keyed.
+    if (on && snapRef.current.radio.clockRepairTxHeld) {
+      pushToast(t('phone.tx.clockRepair'), 'info', 4000)
+      return
+    }
     // TX SWITCHED OFF IS A SECOND, SEPARATE REFUSAL, and until #81 it was a SILENT one.
     // `Engine::set_ptt` is `on && tx_enabled && tx_allowed()` — two conditions — and this
     // cockpit only ever showed the second. With TX off the click went to the wire, the wire

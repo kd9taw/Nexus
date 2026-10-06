@@ -303,12 +303,13 @@ function clockRepairRefused(code: unknown): string {
   return t('topbar.clock.repair.failed')
 }
 
-/** Repair clock, under the chip: the clock check found something Windows can fix (its time
- *  service stopped, a service that has not synchronised, a clock that just jumped, a poll far
- *  longer than it could be), and the fix needs administrator rights. Nexus never asks for them
- *  on its own (operator, 2026-10-06: "Only when you press Repair"), so the fix waits here for
- *  the press, and the line under the button says the prompt is coming before it comes. It is
- *  stacked under the chip because the bar has no width to spare (see `.clock-stack`).
+/** Repair clock, under the chip: the clock check found a real fault Windows can fix (its time
+ *  service stopped, a service that has not synchronised, or a clock that just jumped; operator,
+ *  2026-10-06: "Only for real faults"), and the fix needs administrator rights. Nexus never asks
+ *  for them on its own (operator, 2026-10-06: "Only when you press Repair"), so the fix waits
+ *  here for the press, and the line under the button says the prompt is coming before it comes.
+ *  While it runs, nothing starts transmitting, and the status lane says so. It is stacked under
+ *  the chip because the bar has no width to spare (see `.clock-stack`).
  *
  *  The bar draws it only for the station's own window: a Remote browser could not answer a
  *  prompt on the station's screen, and the command is not in the Remote vocabulary either. It
