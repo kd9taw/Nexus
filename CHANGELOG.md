@@ -489,6 +489,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ and ] narrow and widen the filter, and ↑ and ↓ scroll back while paused. On an IC-7300, IC-705,
   IC-905, IC-7610 or IC-9700 on Nexus's own CI-V connection, the filter width is now read from the
   radio and set on it; before, BW showed a width it had never sent there. Not yet checked on a radio.
+- **Phone and CW scope: the Sub receiver's frequency beside yours.** On a dual-receiver radio that
+  shows a SUB row, the radio's own scope marks the Sub's frequency with a cyan SUB line whenever it
+  is in view. It is only a mark: a click on it tunes nothing, neither the Sub nor your main receiver.
+  Today Nexus knows the Sub's frequency only while a satellite pass transmits on it (an IC-9700 on
+  Nexus's own CI-V connection), and the Sub is then on another band than the scope, so you will not
+  see the mark yet; it appears once the Sub's frequency is read from the radio.
 
 ## [1.16.0] — 2026-10-03
 

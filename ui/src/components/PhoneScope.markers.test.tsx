@@ -162,8 +162,81 @@ describe('the receiver marker', () => {
     rerender({ subReceiver: sub })
     await draw()
     expect(painted).toContain(`text rgba(64, 200, 255, 0.8) SUB ${Math.round(xRf(14_230_000) + 3)}`)
+    expect(painted).toContain(`line rgba(64, 200, 255, 0.8) ${Math.round(xRf(14_230_000))}`)
     expect(painted).toContain(`fill rgba(64, 200, 255, 0.09) ${Math.round(xRf(14_230_000))} ${Math.round(xRf(14_232_400) - xRf(14_230_000))}`)
     expect(painted.some((p) => p.startsWith('line rgba(64, 200, 255, 0.85)')), 'never a handle').toBe(false)
+  })
+
+  it('hides the Sub outside the span, and on an audio row', async () => {
+    const SUB_INK = 'rgba(64, 200, 255'
+    // 14.260 MHz is past the 14.150–14.250 view: no plate, and nothing of it on the 800 px canvas.
+    const { rerender } = scope({ subReceiver: { dialHz: 14_260_000, sideband: 'USB', widthHz: 2400 } })
+    await draw()
+    expect(painted.some((p) => p.includes(' SUB '))).toBe(false)
+    for (const p of painted.filter((p) => p.includes(SUB_INK))) expect(Number(p.split(' ')[5]), p).toBeGreaterThanOrEqual(800)
+    // CONTROL: the same Sub inside the span is drawn.
+    rerender({ subReceiver: { dialHz: 14_240_000, sideband: 'USB', widthHz: null } })
+    await draw()
+    expect(painted).toContain(`line ${SUB_INK}, 0.8) ${Math.round(xRf(14_240_000))}`)
+    // An audio row is Main's own receiver audio: no Sub on it, whatever its dial — and no passband of
+    // the Sub's laid on Main's audio as if it were Main's.
+    cleanup()
+    ROW.rf = false
+    scope({ subReceiver: { dialHz: DIAL + 1000, sideband: 'USB', widthHz: 2400 }, carrierCentered: true, viewLoHz: 0, viewHiHz: 2400 })
+    await draw()
+    expect(painted.some((p) => p.includes(SUB_INK))).toBe(false)
+  })
+})
+
+describe("the Sub's marker is display only", () => {
+  const SUB = { dialHz: 14_230_000, sideband: 'USB', widthHz: null }
+  const at = (c: HTMLElement, x: number, y: number) => {
+    fireEvent.pointerDown(c, { button: 0, clientX: x, clientY: y })
+    fireEvent.pointerUp(c, { button: 0, clientX: x, clientY: y })
+  }
+
+  it('⛔ a click on its line or its SUB plate tunes nothing; beside it the click snaps, and a drag from it still drags', async () => {
+    const { canvas, onTune, onPassband } = scope({ subReceiver: SUB })
+    await draw()
+    const x = xRf(14_230_000)
+    at(canvas, x, 100) // on the line
+    at(canvas, x + 4, 150) // inside its grab tolerance, low in the waterfall
+    at(canvas, x - 4, 20)
+    at(canvas, x + 15, 8) // on the plate ("SUB" from x + 3)
+    expect(onTune).not.toHaveBeenCalled()
+    expect(onPassband).not.toHaveBeenCalled()
+    // CONTROL: 8 px beside the line, under the plate, the click snaps as it does anywhere else.
+    at(canvas, x + 8, 100)
+    expect(onTune).toHaveBeenCalledOnce()
+    expect(onTune.mock.calls[0][0].kind).toBe('click')
+    // A press there that MOVES is the box drag, which tunes by the hand's travel, as everywhere.
+    onTune.mockClear()
+    press(canvas, x)
+    move(canvas, x + 40)
+    release(canvas, x + 40)
+    expect(onTune.mock.calls.map((c) => c[0].kind)).toContain('drag')
+  })
+
+  it('⛔ the Remote page: a click on the marker hands the station nothing; beside it, the click', async () => {
+    const click = vi.fn()
+    const { canvas, onTune } = scope({ subReceiver: SUB, onBeginClick: () => click })
+    await draw()
+    const x = xRf(14_230_000)
+    at(canvas, x, 100)
+    at(canvas, x + 15, 8)
+    expect(click).not.toHaveBeenCalled()
+    at(canvas, x + 8, 100)
+    expect(click).toHaveBeenCalledOnce()
+    expect(onTune).not.toHaveBeenCalled()
+  })
+
+  it('says so under the pointer: no tuning cursor over it', async () => {
+    const { canvas } = scope({ subReceiver: SUB })
+    await draw()
+    move(canvas, xRf(14_230_000))
+    expect(canvas.style.cursor).toBe('default')
+    move(canvas, xRf(14_230_000) + 8)
+    expect(canvas.style.cursor).toBe('')
   })
 })
 

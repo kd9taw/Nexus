@@ -86,7 +86,7 @@ import { latestOnly } from '../remote-web/latest-only'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
-import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
+import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { subRowShown } from '../features/rigControls'
 import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
@@ -2017,6 +2017,7 @@ export function CwCockpit({
           passbandHz={soundcardKeyer ? null : filterHz}
           onPassband={passbandEditable ? onScopePassband : undefined}
           notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
+          subReceiver={subScopeMarker(snap.radio, catOk)}
           pitchHz={pitch}
           cwPitchRefDial={keyer !== 'soundcard'}
           traceHoldMs={TRACE_HOLD_MS.fast}

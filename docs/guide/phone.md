@@ -34,7 +34,9 @@ the passband it is listening through, hung on the dial. Drag the far edge (the o
 the carrier) to set the width, in the same range and 100 Hz steps as the BW buttons; the
 radio follows within a second or two. A manual notch the radio reports on shows as a red
 line. The edge is not offered in FM, in a DATA mode, on the Remote page or while anything is
-transmitting. Tab to the scope and the keys work too: ← and → tune (Shift for bigger steps),
+transmitting. On a dual-receiver radio whose Sub frequency Nexus knows, a cyan **SUB** line
+marks it on the radio's own scope when it is in view; it is only a mark, and a click on it
+tunes nothing. Tab to the scope and the keys work too: ← and → tune (Shift for bigger steps),
 Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and ↓
 scroll back while paused.
 
