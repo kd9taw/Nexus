@@ -26030,6 +26030,28 @@ struct ActivationDto {
     reference: Option<String>,
     /// Logged QSOs carrying this activation's reference so far.
     qso_count: usize,
+    /// Where the park or summit is ("US-ND"; two or more for a park on a state line), so the
+    /// panel can ask which state on a state line. Empty when not activating or not placed.
+    states: Vec<String>,
+    /// The state the activation's contacts carry as `MY_STATE` ("ND"), or null: none known yet.
+    my_state: Option<String>,
+}
+
+impl ActivationDto {
+    /// The engine's activation, as the panel shows it.
+    fn of(eng: &tempo_app::engine::Engine) -> Self {
+        let (program, reference) = match eng.activation() {
+            Some((p, r)) => (Some(p), Some(r)),
+            None => (None, None),
+        };
+        ActivationDto {
+            program,
+            reference,
+            qso_count: eng.activation_qso_count(),
+            states: eng.activation_places(),
+            my_state: eng.activation_state(),
+        }
+    }
 }
 
 /// Activators currently on the air for `program` ("POTA" | "SOTA") — the hunter
@@ -26890,17 +26912,40 @@ fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Stri
 #[tauri::command(async)]
 fn set_activation(
     state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
+    parks: State<'_, SharedParks>,
     program: String,
     reference: String,
 ) -> Result<ActivationDto, String> {
+    set_activation_on(&state, &ota_cache, &parks, &program, &reference)
+}
+
+/// [`set_activation`]'s body, over plain handles so a test drives exactly what the command runs.
+/// The activation carries where its park or summit is, read before the Engine lock
+/// ([`ota_park_places`]): a park in one state names the `MY_STATE` its contacts carry.
+fn set_activation_on(
+    engine: &SharedEngine,
+    ota_cache: &SharedOtaSpots,
+    parks: &SharedParks,
+    program: &str,
+    reference: &str,
+) -> Result<ActivationDto, String> {
+    let places = ota_park_places(ota_cache, parks, program, reference);
+    let mut eng = engine_lock(engine);
+    eng.set_activation(program, reference, places)?;
+    Ok(ActivationDto::of(&eng))
+}
+
+/// Pick the state you are activating from, of a park on a state line: its contacts carry it as
+/// `MY_STATE`. Refused for a state the park is not in, and with no activation.
+#[tauri::command(async)]
+fn set_activation_state(
+    state: State<'_, SharedEngine>,
+    my_state: String,
+) -> Result<ActivationDto, String> {
     let mut eng = engine_lock(&state);
-    let (program, reference) = eng.set_activation(&program, &reference)?;
-    let qso_count = eng.activation_qso_count();
-    Ok(ActivationDto {
-        program: Some(program),
-        reference: Some(reference),
-        qso_count,
-    })
+    eng.set_activation_state(&my_state)?;
+    Ok(ActivationDto::of(&eng))
 }
 
 /// End the current activation (subsequent QSOs untagged).
@@ -26912,6 +26957,8 @@ fn clear_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, Str
         program: None,
         reference: None,
         qso_count: 0,
+        states: Vec::new(),
+        my_state: None,
     })
 }
 
@@ -26919,16 +26966,7 @@ fn clear_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, Str
 #[tauri::command(async)]
 fn get_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
     let eng = engine_lock(&state);
-    let (program, reference) = match eng.activation() {
-        Some((p, r)) => (Some(p), Some(r)),
-        None => (None, None),
-    };
-    let qso_count = eng.activation_qso_count();
-    Ok(ActivationDto {
-        program,
-        reference,
-        qso_count,
-    })
+    Ok(ActivationDto::of(&eng))
 }
 
 /// POTA all-parks export (CSV). Public list of every park's reference/name/location/grid. NOTE:
@@ -32827,6 +32865,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             radioprog_file_notice,
             export_channels,
             set_activation,
+            set_activation_state,
             clear_activation,
             get_activation,
             get_need_alerts,
@@ -41402,6 +41441,36 @@ mod tests {
             ota_needed(&e, std::slice::from_ref(&spot)),
             [codes(&[])],
             "the board's ND goes dark"
+        );
+    }
+
+    /// Your own activation: the park is placed the way a hunted one is, a park in one state names
+    /// the MY_STATE its contacts carry, and one on a state line names none until you pick.
+    #[test]
+    fn an_activation_carries_where_its_park_is() {
+        let engine = fresh_engine();
+        let mut line = state_spot("N7XYZ", 14_285.0, &["US-MT", "US-ND"]);
+        line.reference = "US-0003".into();
+        let cache = hunter_cache(&[("POTA", &[state_spot("K0ABC", 14_285.0, &["US-ND"]), line])]);
+        let parks = crate::SharedParks::default();
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001")
+            .expect("the activation starts");
+        assert_eq!(
+            (dto.states, dto.my_state),
+            (codes(&["US-ND"]), Some("ND".to_string()))
+        );
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
+            .expect("the activation starts");
+        assert_eq!(
+            (dto.states, dto.my_state),
+            (codes(&["US-MT", "US-ND"]), None)
+        );
+        engine_lock(&engine).set_activation_state("MT").unwrap();
+        assert_eq!(
+            crate::ActivationDto::of(&engine_lock(&engine))
+                .my_state
+                .as_deref(),
+            Some("MT")
         );
     }
 

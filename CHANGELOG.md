@@ -441,6 +441,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
   a park on a state line, a reminder that the contact counts for the state the activator is
   actually in. Screen readers read the name. The Remote page's board does not show states yet.
+- **POTA/SOTA activations: your contacts say which state you activated from.** Start an
+  activation at a park in one state, or on a summit SOTA places in one, and every contact you log
+  carries that state as `MY_STATE`, in your log, your exports and your uploads. At a park on a
+  state line the activation strip asks which state you are in, and uses the one you pick; until you
+  pick, no `MY_STATE` is written. A park Nexus cannot place writes none. LoTW credits the state of
+  the TQSL Station Location you sign with, so sign an activation's contacts with a location in that
+  state, as the strip's tooltip says. An activation started from the Remote page is placed the same
+  way, but a state line has to be picked at the station.
 
 - **Street map (not yet visible): a street-level map of your area as a fifth map choice.** Built
   and tested, and hidden until Nexus's street maps are hosted. **Street** joins Globe, 3D, Flat

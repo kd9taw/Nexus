@@ -12309,10 +12309,23 @@ impl Engine {
         // Tag with the current POTA/SOTA activation (your side) if one is set and the
         // record doesn't already carry one — so the contact exports with the right
         // MY_SIG/MY_SOTA_REF and counts toward your activation.
+        //
+        // …and with the state you are activating FROM, as ADIF `MY_STATE`, when the park names
+        // one or you picked one of a state-line park's. Without it every contact of an activation
+        // in North Dakota said nothing of where you were, and a reader of the export could only
+        // assume your home. Never invented: no state known, none written; and a record carrying
+        // its own `MY_STATE` keeps it. It rides in `extra`, where the parser keeps an imported
+        // one, so a round trip through the log writes it exactly once.
         if let Some((program, reference)) = &self.station.activation {
             if rec.ota.my_ref.is_none() {
                 rec.ota.my_program = Some(program.clone());
                 rec.ota.my_ref = Some(reference.clone());
+                if let Some(st) = &self.station.activation_state {
+                    if !rec.extra.iter().any(|(k, _)| k == "MY_STATE") {
+                        let at = rec.extra.partition_point(|(k, _)| k.as_str() < "MY_STATE");
+                        rec.extra.insert(at, ("MY_STATE".to_string(), st.clone()));
+                    }
+                }
             }
         }
         // Hunter side: a pending one-click hunt tags THIS contact with the
@@ -24586,8 +24599,24 @@ contact yourself."
         &mut self,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(String, String), String> {
-        self.station.set_activation(program, reference)
+        self.station.set_activation(program, reference, places)
+    }
+
+    /// See [`StationCore::set_activation_state`].
+    pub fn set_activation_state(&mut self, state: &str) -> Result<(), String> {
+        self.station.set_activation_state(state)
+    }
+
+    /// See [`StationCore::activation_places`].
+    pub fn activation_places(&self) -> Vec<String> {
+        self.station.activation_places()
+    }
+
+    /// See [`StationCore::activation_state`].
+    pub fn activation_state(&self) -> Option<String> {
+        self.station.activation_state()
     }
 
     /// See [`StationCore::clear_activation`].
@@ -38492,6 +38521,98 @@ mod tests {
             Some("OH"),
             "control: the plain one"
         );
+    }
+
+    // ── Your activation's state: MY_STATE ────────────────────────────────────────────────
+
+    fn my_states(r: &QsoRecord) -> Vec<String> {
+        r.extra
+            .iter()
+            .filter(|(k, _)| k == "MY_STATE")
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    /// An activation's park names the state you are operating from: its contacts carry it as
+    /// `MY_STATE`, written once. Your home state (here the contest QTH setting, Illinois) is no
+    /// part of it.
+    #[test]
+    fn an_activations_contacts_carry_the_parks_state_as_my_state() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        let mut settings = e.settings().clone();
+        settings.op_state = "IL".into();
+        e.apply_settings(settings);
+        e.set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        assert_eq!(e.activation_state().as_deref(), Some("ND"));
+        let rec = e.qso_record("W1ABC".into(), None, Some(-5));
+        e.log_qso(rec);
+        let r = &e.stored_log()[0];
+        assert_eq!(r.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(my_states(r), ["ND"]);
+        let adif = tempo_core::logbook::adif_record(r);
+        assert_eq!(adif.matches("<MY_STATE:").count(), 1, "{adif}");
+        assert!(adif.contains("<MY_STATE:2>ND"), "{adif}");
+        let again = tempo_core::logbook::parse_adif(&tempo_core::logbook::adif_record_own_log(r));
+        assert_eq!(my_states(&again[0]), ["ND"], "a round trip keeps one");
+    }
+
+    /// Never invented. An activation nothing could place carries no `MY_STATE`; one on a state
+    /// line carries none until you pick one of its states, and then the pick. A state the park is
+    /// not in is refused, and so is a pick with no activation.
+    #[test]
+    fn my_state_is_never_invented_and_a_state_line_park_carries_the_pick() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        let log = |e: &mut Engine, call: &str| {
+            let rec = e.qso_record(call.into(), None, Some(-5));
+            e.log_qso(rec);
+            let r = e.stored_log().into_iter().find(|r| r.call == call).unwrap();
+            assert!(r.ota.my_ref.is_some(), "{call} is an activation contact");
+            my_states(&r)
+        };
+        e.set_activation("POTA", "US-9999", Vec::new()).unwrap();
+        assert_eq!(
+            log(&mut e, "W1AAA"),
+            Vec::<String>::new(),
+            "a park nothing placed"
+        );
+        e.set_activation("POTA", "US-0003", places(&["US-MT", "US-ND"]))
+            .unwrap();
+        assert_eq!(e.activation_state(), None);
+        assert_eq!(
+            log(&mut e, "W1BBB"),
+            Vec::<String>::new(),
+            "a state line, unpicked"
+        );
+        assert!(
+            e.set_activation_state("OH").is_err(),
+            "not one of the park's"
+        );
+        e.set_activation_state("nd").unwrap();
+        assert_eq!(log(&mut e, "W1CCC"), ["ND"]);
+        e.clear_activation();
+        assert_eq!(e.activation_state(), None);
+        assert!(e.set_activation_state("ND").is_err(), "no activation");
+    }
+
+    /// A contact that arrives with its own park is not your activation's and is not stamped; one
+    /// that arrives with its own `MY_STATE` keeps that one, and only that one.
+    #[test]
+    fn a_contact_with_its_own_park_or_my_state_keeps_its_own() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        let mut other_park = e.qso_record("W1AAA".into(), None, Some(-5));
+        other_park.ota.my_program = Some("POTA".into());
+        other_park.ota.my_ref = Some("US-0002".into());
+        e.log_qso(other_park);
+        let mut own = e.qso_record("W1BBB".into(), None, Some(-5));
+        own.extra = vec![("MY_STATE".into(), "SD".into())];
+        e.log_qso(own);
+        let log = e.stored_log();
+        let of = |call: &str| log.iter().find(|r| r.call == call).unwrap().clone();
+        assert_eq!(my_states(&of("W1AAA")), Vec::<String>::new());
+        assert_eq!(my_states(&of("W1BBB")), ["SD"]);
     }
 
     /// Every connector sends what the log holds: the park's state goes out in the ADIF record the

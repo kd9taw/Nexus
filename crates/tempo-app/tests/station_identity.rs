@@ -114,7 +114,7 @@ fn scripted_station() -> Engine {
     eng.log_qso(qso("G3ABC", "40m", "CW", 1_700_000_100));
 
     // Station intents the snapshot surfaces.
-    let _ = eng.set_activation("POTA", "K-1234");
+    let _ = eng.set_activation("POTA", "K-1234", Vec::new());
     let _ = eng.set_hunt_target("N7GHI", "POTA", "K-5678", Vec::new());
 
     // One decode so the roster exists and carries the stamped country/rarity/lotw flags —

@@ -761,7 +761,7 @@ fn cloud_runtime_probe() {
             drop(cache);
             let mut e = engine.lock().unwrap();
             e.set_hunted_parks_import(vec!["US-0003".into()]);
-            e.set_activation("POTA", "US-0001").unwrap();
+            e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
             e.set_hunt_target("K2ABC", "POTA", "US-0004", Vec::new())
                 .unwrap();
             println!("REMOTE_TEST:{}", json!({ "seeded": true }));

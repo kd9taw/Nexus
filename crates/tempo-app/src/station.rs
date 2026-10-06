@@ -1729,6 +1729,13 @@ pub struct StationCore {
     /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
     /// activation ends), so not persisted. `None` = not activating.
     pub(crate) activation: Option<(String, String)>,
+    /// Where the activation's park or summit is ("US-ND"; two or more for a park on a state line,
+    /// none where the caller could not place it), and the state you are activating from: the
+    /// park's own when it names one, else the one you picked of its states. Its contacts carry
+    /// it as `MY_STATE`. Never invented: no place, no pick, no `MY_STATE`. Cleared with the
+    /// activation.
+    pub(crate) activation_places: Vec<String>,
+    pub(crate) activation_state: Option<String>,
     /// Session gallery of saved SSTV images, newest last. Seeded from the
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
@@ -1830,6 +1837,8 @@ impl StationCore {
             last_eqsl_reconcile: None,
             last_qrz_reconcile: None,
             activation: None,
+            activation_places: Vec::new(),
+            activation_state: None,
             sstv_gallery: Vec::new(),
         }
     }
@@ -3021,22 +3030,62 @@ impl StationCore {
     /// tagged as your activation until [`clear_activation`](Self::clear_activation).
     /// Validates + normalizes the reference; returns the normalized `(program, ref)`
     /// or an error string for an unknown program / malformed reference.
+    ///
+    /// `places` are where the park or summit is ([`Self::activation_places`]): one names the
+    /// state its contacts carry as `MY_STATE`; on a state line the operator picks it
+    /// ([`Self::set_activation_state`]).
     pub fn set_activation(
         &mut self,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(String, String), String> {
         let prog = tempo_core::pota::OtaProgram::from_code(program)
             .ok_or_else(|| format!("Unknown program '{program}' — use POTA or SOTA."))?;
         let normalized = tempo_core::pota::normalize_ref(prog, reference)
             .ok_or_else(|| format!("'{reference}' isn't a valid {} reference.", prog.code()))?;
         self.activation = Some((prog.code().to_string(), normalized.clone()));
+        self.activation_state = match places.as_slice() {
+            [one] => Some(crate::engine::place_state(one).to_string()),
+            _ => None,
+        };
+        self.activation_places = places;
         Ok((prog.code().to_string(), normalized))
+    }
+
+    /// The state you are activating from, picked from the park's own when it is on a state line.
+    /// Refused with no activation, and for a state that is not one of the park's: a state the
+    /// park is not in would be a `MY_STATE` nobody operated from.
+    pub fn set_activation_state(&mut self, state: &str) -> Result<(), String> {
+        if self.activation.is_none() {
+            return Err("Not activating.".into());
+        }
+        let wanted = state.trim().to_ascii_uppercase();
+        let place = self
+            .activation_places
+            .iter()
+            .map(|p| crate::engine::place_state(p))
+            .find(|st| *st == wanted)
+            .ok_or_else(|| format!("'{state}' is not one of this park's states."))?;
+        self.activation_state = Some(place.to_string());
+        Ok(())
+    }
+
+    /// Where the activation's park or summit is ("US-ND"), as the activation was started with.
+    pub fn activation_places(&self) -> Vec<String> {
+        self.activation_places.clone()
+    }
+
+    /// The state the activation's contacts carry as `MY_STATE` ("ND"), if one is known.
+    pub fn activation_state(&self) -> Option<String> {
+        self.activation_state.clone()
     }
 
     /// End the current activation (subsequent QSOs are untagged).
     pub fn clear_activation(&mut self) {
         self.activation = None;
+        self.activation_places = Vec::new();
+        self.activation_state = None;
     }
 
     /// The current activation `(program, reference)`, if any.

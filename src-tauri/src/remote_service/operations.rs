@@ -380,8 +380,8 @@ enum Grant {
 pub struct Authority {
     spots: Option<crate::SharedSpots>,
     /// The station's hunter-feed cache and park list, which place the park or summit a browser
-    /// hunts ([`crate::ota_park_places`]). Unset in a service built without them: it places
-    /// nothing, and the contact takes its state as before.
+    /// hunts or activates ([`crate::ota_park_places`]). Unset in a service built without them: it
+    /// places nothing, and the contact takes its state as before.
     places: Option<(crate::SharedOtaSpots, crate::SharedParks)>,
     epoch: AtomicU64,
     connection: AtomicU64,
@@ -528,8 +528,8 @@ impl Authority {
         self.places = places;
         self
     }
-    /// Where the park or summit a browser's hunt names is, read with no other lock held: before
-    /// Core and before the Engine. Nothing for any other request.
+    /// Where the park or summit a browser's hunt or activation names is, read with no other lock
+    /// held: before Core and before the Engine. Nothing for any other request.
     fn places_for(&self, request: &Request) -> Vec<String> {
         let (Some((ota, parks)), Request::LogChange { change, .. }) = (&self.places, request)
         else {
@@ -538,7 +538,10 @@ impl Authority {
         match &**change {
             logging::Change::Hunt {
                 program, reference, ..
-            } => crate::ota_park_places(ota, parks, program, reference),
+            }
+            | logging::Change::Activation { program, reference } => {
+                crate::ota_park_places(ota, parks, program, reference)
+            }
             _ => Vec::new(),
         }
     }

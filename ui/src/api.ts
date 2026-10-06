@@ -3374,6 +3374,11 @@ export async function streetMapInstallFile(): Promise<StreetInstalled | null> {
 export async function setActivation(program: string, reference: string): Promise<Activation> {
   return invoke<Activation>('set_activation', { program, reference })
 }
+/** Pick the state you are activating from, of a park on a state line ("ND"): its contacts carry
+ *  it as MY_STATE. The station refuses a state the park is not in. */
+export async function setActivationState(myState: string): Promise<Activation> {
+  return invoke<Activation>('set_activation_state', { myState })
+}
 
 /** End the current activation. */
 export async function clearActivation(): Promise<Activation> {

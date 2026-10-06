@@ -3489,6 +3489,11 @@ export const EN = {
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
   'ota.activation.stopFailed': 'Could not stop activation',
+  'ota.activation.state.ask': 'On a state line. Which state are you in?',
+  'ota.activation.state.mine': 'Your state: {{state}}',
+  'ota.activation.state.lotw':
+    'Your contacts carry this state as MY_STATE. LoTW credits the state of the TQSL Station Location you sign with, so sign them with a location in this state.',
+  'ota.activation.state.failed': 'Could not set your state',
   // "Spot me": your own activation, posted to pota.app and the DX cluster in one press, on the
   // desktop's board and the Remote page's. Each target reports on its own unless both took it.
   'ota.selfSpot.button': 'Spot me',

@@ -640,8 +640,8 @@ pub(super) enum ChangeWork {
 /// stamps).
 ///
 /// `found` is a key target's contact as [`find`] found it with the lock released (`None`: no
-/// contact held that row); an id target names its own. `places` is where a hunted park or summit
-/// is, read before the Engine lock (`Authority::places_for`).
+/// contact held that row); an id target names its own. `places` is where a hunted or activated
+/// park or summit is, read before the Engine lock (`Authority::places_for`).
 pub(super) fn prepare_change(
     engine: &mut Engine,
     change: &Change,
@@ -666,7 +666,7 @@ pub(super) fn prepare_change(
         }
         Change::Activation { program, reference } => {
             return engine
-                .set_activation(program, reference)
+                .set_activation(program, reference, places)
                 .map(|_| ChangeWork::State)
                 .map_err(|_| ChangeReason::InvalidChange)
         }

@@ -1035,6 +1035,10 @@ export interface Activation {
   program: string | null
   reference: string | null
   qsoCount: number
+  /** Where the park or summit is ("US-ND"; two or more for a park on a state line). */
+  states?: string[]
+  /** The state the activation's contacts carry as ADIF MY_STATE ("ND"), or null: none known. */
+  myState?: string | null
 }
 
 /** A zero-config auto-detected USB radio (from `detect_rigs`). */
