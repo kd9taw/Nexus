@@ -1192,15 +1192,16 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await evaluate(`document.querySelector('link[rel=manifest]').href='/manifest.webmanifest';true`)
             phoneRecord.push({manifest:{url:manifest.url,errors:manifest.errors,installable}})
           }
-          // AN iPAD-SIZE WINDOW, 1024 x 768, has the header row (the operator's pick, 2026-10-05). With a mouse it is the row as it
-          // was, with no Keyboard. On a touch screen Keyboard follows Mic, and the typing box it opens takes a line of its own after
-          // the buttons, whole and on screen with Stop TX first and uncovered, and what is typed goes to the shack as on a phone.
+          // AN iPAD-SIZE WINDOW, 1024 x 768 and upright 768 x 1024, has the header row (the operator's pick, 2026-10-05). With a mouse
+          // it is the row as it was, with no Keyboard. On a touch screen Keyboard follows Mic, and the typing box it opens takes a line
+          // of its own after the buttons, whole and on screen with Stop TX first and uncovered, and what is typed goes to the shack as
+          // on a phone.
           {
-            const headerAt=async(touch,height)=>{
+            const headerAt=async(touch,height,width=1024)=>{
               await browser.call('Emulation.setTouchEmulationEnabled',touch?{enabled:true,maxTouchPoints:5}:{enabled:false},session)
-              await browser.call('Emulation.setDeviceMetricsOverride',{width:1024,height,deviceScaleFactor:2,mobile:touch},session)
+              await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:2,mobile:touch},session)
               await evaluate(`window.dispatchEvent(new Event('resize'));true`)
-              await until(`getComputedStyle(document.documentElement).getPropertyValue('--vh-eff')==='${height}px'`,3000)
+              await until(`(s=>s.getPropertyValue('--vw-eff')==='${width}px'&&s.getPropertyValue('--vh-eff')==='${height}px')(getComputedStyle(document.documentElement))`,3000)
               await settledLayout()
               return evaluate(`(()=>{const app=document.querySelector('.remote-stream-app'),header=app.querySelector('.remote-stream-header'),buttons=[...header.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {layout:app.dataset.layout,coarse:matchMedia('(pointer: coarse)').matches,names:buttons.map(e=>e.textContent),first:buttons[0]===${button('Stop TX')},cut:buttons.filter(e=>{const r=e.getBoundingClientRect();return !(r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth&&hit(e))}).map(e=>e.textContent),scrolls:header.scrollHeight>header.clientHeight+1}})()`)
             }
@@ -1218,7 +1219,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await shoot('ipad-1024x768-touch.png')
             await tap(await centreOf(button('Keyboard')))
             await until(`document.activeElement?.classList.contains('remote-stream-typing-field')`,3000)
-            const placed=await evaluate(`(()=>{const f=document.querySelector('.remote-stream-typing-field'),form=f.form,controls=document.querySelector('.remote-stream-controls'),r=form.getBoundingClientRect(),c=controls.getBoundingClientRect(),buttons=[...controls.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {after:buttons.every(e=>e.getBoundingClientRect().bottom<=r.top+0.5),line:Math.abs(r.left-c.left)<=1&&Math.abs(r.right-c.right)<=1,inside:r.top>=0&&r.bottom<=innerHeight,field:hit(f),stop:hit(${button('Stop TX')}),scrolls:document.querySelector('.remote-stream-header').scrollHeight>document.querySelector('.remote-stream-header').clientHeight+1,w:Math.round(r.width),h:Math.round(r.height)}})()`)
+            const placedNow=()=>evaluate(`(()=>{const f=document.querySelector('.remote-stream-typing-field'),form=f.form,controls=document.querySelector('.remote-stream-controls'),r=form.getBoundingClientRect(),c=controls.getBoundingClientRect(),buttons=[...controls.querySelectorAll('button')].filter(e=>e.getClientRects().length>0),hit=e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};return {after:buttons.every(e=>e.getBoundingClientRect().bottom<=r.top+0.5),line:Math.abs(r.left-c.left)<=1&&Math.abs(r.right-c.right)<=1,inside:r.top>=0&&r.bottom<=innerHeight,field:hit(f),stop:hit(${button('Stop TX')}),scrolls:document.querySelector('.remote-stream-header').scrollHeight>document.querySelector('.remote-stream-header').clientHeight+1,w:Math.round(r.width),h:Math.round(r.height)}})()`)
+            const placed=await placedNow()
             console.log('iPad-size header, the typing box: '+JSON.stringify(placed))
             assert.deepEqual({...placed,w:undefined,h:undefined},{after:true,line:true,inside:true,field:true,stop:true,scrolls:false,w:undefined,h:undefined},'the typing box on a line of its own after the header\'s buttons, whole and on screen, and Stop TX uncovered')
             const from=await atShack('__shack.received.control.length')
@@ -1246,7 +1248,23 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               raised.push(up)
             }
             assert.deepEqual(raised.map(({height,layout,typing,field,stop})=>({height,layout,typing,field,stop})),[340,250].map(height=>({height,layout:'header',typing:true,field:true,stop:true})),'with the tablet\'s keyboard up the row holds, the field is in view, and Stop TX is on screen and takes its taps: '+JSON.stringify(raised))
-            phoneRecord.push({tablet:{mouse,touch,placed,sent,raised}})
+            // Its keyboard down again, Keyboard closes the box. Then the same tablet upright, 768 x 1024: the header row too (768 is
+            // wider than a phone), Keyboard after Mic, and the box on a line of its own after the buttons.
+            await headerAt(true,768)
+            await tap(await centreOf(button('Keyboard')))
+            await until(`!document.querySelector('.remote-stream-typing-field')`,3000)
+            const upright=await headerAt(true,1024,768)
+            console.log('iPad-size header upright, a touch screen: '+JSON.stringify(upright))
+            assert.deepEqual(upright,{layout:'header',coarse:true,names:[...row.slice(0,4),'Keyboard',...row.slice(4)],first:true,cut:[],scrolls:false},'an iPad upright, a touch screen: Keyboard follows Mic in the header row')
+            await shoot('ipad-768x1024-touch.png')
+            await tap(await centreOf(button('Keyboard')))
+            await until(`document.activeElement?.classList.contains('remote-stream-typing-field')`,3000)
+            const placedUpright=await placedNow()
+            console.log('iPad-size header upright, the typing box: '+JSON.stringify(placedUpright))
+            assert.deepEqual({...placedUpright,w:undefined,h:undefined},{after:true,line:true,inside:true,field:true,stop:true,scrolls:false,w:undefined,h:undefined},'upright too, the typing box on a line of its own after the header\'s buttons, whole and on screen, and Stop TX uncovered')
+            if(artifacts){await browser.call('Input.insertText',{text:'CQ'},session);await settledLayout()}
+            await shoot('ipad-768x1024-touch-typing.png')
+            phoneRecord.push({tablet:{mouse,touch,placed,sent,raised,upright,placedUpright}})
           }
           console.log('Phone input record: '+JSON.stringify(phoneRecord))
           assert.equal(exceptions,0,'the stream view raised no runtime exception')
