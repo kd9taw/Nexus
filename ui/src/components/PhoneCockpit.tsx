@@ -66,7 +66,7 @@ import {
   type RigControl,
 } from '../features/rigControls'
 import { SMeter } from './SMeter'
-import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
+import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
 import {
@@ -2751,6 +2751,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             passbandHz={filterHz}
             onPassband={passbandEditable ? onScopePassband : undefined}
             notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
+            subReceiver={subScopeMarker(snap.radio, catOk)}
             interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
             spots={scopeTags}
             // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote

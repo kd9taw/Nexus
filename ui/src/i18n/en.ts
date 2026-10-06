@@ -5900,9 +5900,9 @@ export const EN = {
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
-  'settings.rigControl.flexPan.label': 'Flex native panadapter (early access)',
+  'settings.rigControl.flexPan.label': 'Flex native panadapter (Beta)',
   'settings.rigControl.flexPan.hint':
-    "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. <b>Unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",
+    "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. Beta and <b>unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",
 
   // The FT-710's own RF panadapter. The hint names BOTH preconditions, because a silent scope has
   // exactly two causes and only one of them is on the radio — the other is a library this
@@ -6395,7 +6395,7 @@ export const EN = {
   // be told "verified" and still have nothing arriving. Names the exact control that starts
   // it, because "it doesn't work" with no cure is what the `.unverified` line already says.
   'settings.transmit.swrStop.noMeterStream':
-    'Nexus is not receiving this Flex\'s own SWR meter, so this cutoff will not stop anything, however high the SWR goes. That meter comes from the radio\'s native stream, and it is off. Turn on "Flex native panadapter (early access)" in Settings \u25b8 Radio \u25b8 Rig & CAT to start it. Until then this setting has no effect.',
+    'Nexus is not receiving this Flex\'s own SWR meter, so this cutoff will not stop anything, however high the SWR goes. That meter comes from the radio\'s native stream, and it is off. Turn on "Flex native panadapter (Beta)" in Settings \u25b8 Radio \u25b8 Rig & CAT to start it. Until then this setting has no effect.',
 
   // Parsec presence mode (operator sign-off 2026-09-27): stop-only, off by default. The hint
   // says what it watches and what it stops, and names what it leaves alone. `Parsec`, `PTT`,

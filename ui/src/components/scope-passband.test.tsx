@@ -4,7 +4,8 @@
 // the edge reports becomes on the wire. PhoneScope is stubbed to a recorder of its props; the hook,
 // the cockpit's gate and the write (`setFilterWidth`, the ± stepper's own) are real. By value:
 // one write per flush, the last width, clamped to that cockpit's range — and none at all where the
-// gate says the edge is not the operator's to move.
+// gate says the edge is not the operator's to move. And the Sub's marker each host hands it: only
+// where the cockpit draws a SUB row, and only with a dial the snapshot knows.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
@@ -47,7 +48,12 @@ vi.mock('./VoiceKeyer', () => ({ VoiceKeyer: () => null }))
 vi.mock('./LogEntry', () => ({ LogEntry: () => null }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 // The scope, as the host sees it: the props it was last handed.
-type ScopeProps = { passbandHz?: number | null; onPassband?: (hz: number) => void; notchHz?: number | null }
+type ScopeProps = {
+  passbandHz?: number | null
+  onPassband?: (hz: number) => void
+  notchHz?: number | null
+  subReceiver?: { dialHz: number; sideband: string; widthHz: number | null } | null
+}
 let scopeProps: ScopeProps = {}
 vi.mock('./PhoneScope', () => ({
   PhoneScope: (p: ScopeProps) => {
@@ -173,4 +179,49 @@ describe('CW hands the scope its own range, and nothing on the soundcard keyer',
     expect(scopeProps.onPassband).toBeUndefined()
     expect(scopeProps.passbandHz).toBeNull()
   })
+})
+
+// An IC-7610's receivers on Nexus's own CI-V path: a Sub it offers and can command, whose dial the
+// snapshot knows (today only an acknowledged split riding the Sub band carries one).
+const OWN = { frontEnd: 'own', dsp: 'own', audio: 'own' }
+const sub = (over: Record<string, unknown> = {}) => ({
+  id: 'sub', stages: { frontEnd: 'own', dsp: 'unknown', audio: 'own' }, dialMhz: 14.23, band: '20m', sideband: 'USB', ...over,
+})
+const receivers = (over: Record<string, unknown> = {}) => ({
+  main: { id: 'main', stages: OWN }, sub: sub(), subCapability: 'present', subCommandable: true, ...over,
+})
+const HOSTS = [
+  ['Phone', phone],
+  ['CW', cw],
+] as const
+
+describe('both hosts mark the Sub on the scope, where a SUB row is drawn and its dial is known', () => {
+  it.each(HOSTS)("%s: the Sub's dial and sideband, and no width the Sub did not report", async (_host, mount) => {
+    await mount({ receivers: receivers() })
+    expect(scopeProps.subReceiver).toEqual({ dialHz: 14_230_000, sideband: 'USB', widthHz: null })
+  })
+
+  it.each(HOSTS)('%s: a width the Sub reports goes with it only beside the side it sits on', async (_host, mount) => {
+    await mount({ receivers: receivers({ sub: sub({ filterWidthHz: 2400 }) }) })
+    expect(scopeProps.subReceiver).toEqual({ dialHz: 14_230_000, sideband: 'USB', widthHz: 2400 })
+    cleanup()
+    await mount({ receivers: receivers({ sub: sub({ filterWidthHz: 2400, sideband: null }) }) })
+    expect(scopeProps.subReceiver).toEqual({ dialHz: 14_230_000, sideband: '', widthHz: null })
+  })
+
+  const NONE: [string, Record<string, unknown>][] = [
+    ['a station older than the receivers field', {}],
+    ['a radio with one receiver', { receivers: receivers({ sub: null, subCapability: 'absent' }) }],
+    ['a radio nobody has read a manual for', { receivers: receivers({ sub: null, subCapability: 'unknown' }) }],
+    ['a Sub on a CAT path that cannot name it ("Hide it")', { receivers: receivers({ subCommandable: false }) }],
+    ['a route the radio loop has not reported yet', { receivers: receivers({ subCommandable: null }) }],
+    ["a Sub whose dial is not known", { receivers: receivers({ sub: sub({ dialMhz: null }) }) }],
+  ]
+  it.each(HOSTS.flatMap(([host, mount]) => NONE.map(([why, radio]) => [host, why, mount, radio] as const)))(
+    '%s, %s: no Sub mark',
+    async (_host, _why, mount, radio) => {
+      await mount(radio)
+      expect(scopeProps.subReceiver ?? null).toBeNull()
+    },
+  )
 })

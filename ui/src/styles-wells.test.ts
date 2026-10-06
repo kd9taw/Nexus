@@ -49,6 +49,7 @@ import {
   type Rgb,
 } from './cssCascade'
 import { SKINS } from './features/skins'
+import { NEED_CHIP } from './features/needVisuals'
 import type { AppSnapshot, RadioStatus } from './types'
 
 vi.mock('./api', () => ({
@@ -112,12 +113,17 @@ const STATUS = [
 ] as const
 /** The inks the labels and values inside a well are drawn in. */
 const TEXT = ['--text', '--text-dim', '--text-faint'] as const
+/** Every colour a spot tag's mark can take on the Phone and CW scopes (`spectrum/scopeSpots.ts`
+ *  `spotInk`): each need's, and the dim POTA colour. Read from the need table, so a need added there
+ *  is measured here the day it lands. */
+const NEED_MARKS = [...new Set(Object.values(NEED_CHIP).map((c) => `--need-${c.cls}`)), '--pota-dim']
 /** Everything a well must carry over from the dark theme: the inks above, and the surfaces,
  *  accent and focus ring the contents paint with (segment faces, the readout's input, a digit's
- *  focus ring, the waterfall's legend chip). */
+ *  focus ring, the waterfall's legend chip), and the need set the scope's spot tags are marked in. */
 const ISLAND = [
   ...STATUS,
   ...TEXT,
+  ...NEED_MARKS,
   '--bg',
   '--bg-elev',
   '--bg-elev-2',
@@ -375,6 +381,43 @@ describe('what an instrument paints is dark, and what it paints on it reads', ()
       const ratio = contrast(c!, face)
       expect(ratio, `${i.name} in ${mode}: fill ${hex(c!)} on ${hex(face)} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3)
     }
+  })
+})
+
+describe("the scope's spot tags: every need mark reads on the scope's own floor", () => {
+  // The Phone and CW scopes draw their spot tags on the overlays canvas, a well that takes the dark
+  // palette's inks and none of its background (the picture under it is the floor). A tag's mark is its
+  // need's colour, read off that canvas (`readOverlayInks`), on the tag's ground, `--well-bg`. In the
+  // light theme the need set once reached it from <html> — the light inks, made for white — and the
+  // zone, SOTA and watch marks read under 3:1 on the dark floor.
+  let chain: El[] | null = null
+  const overlays = (): El[] => {
+    if (chain) return chain
+    const { container } = render(createElement(PhoneScope, { transmitting: false, theme: 'light' }))
+    const el = container.querySelector('.ph-scope-overlays')
+    expect(el, 'the overlays canvas did not render').not.toBeNull()
+    chain = chainOf(el!)
+    cleanup()
+    return chain
+  }
+
+  it('the marks are the need table plus the dim POTA colour (the guard measures something)', () => {
+    expect(NEED_MARKS).toEqual(expect.arrayContaining(['--need-entity', '--need-zone', '--need-pota', '--need-sota', '--need-watch', '--pota-dim']))
+    expect(overlays()[overlays().length - 1].classes).toEqual(expect.arrayContaining(['ph-scope-overlays', 'well']))
+  })
+
+  it.each(MODES)('in %s, every need mark reads 3:1 on the floor', (mode) => {
+    const tokens = tokensOf(mode, overlays())
+    expect(expandWith(tokens, 'var(--well-bg)').trim(), '--well-bg is not declared').not.toBe('')
+    const floor = toRgb(expandWith(tokens, 'var(--well-bg)'), [0, 0, 0])
+    expect(floor, '--well-bg did not compute').not.toBeNull()
+    const low = NEED_MARKS.flatMap((tok) => {
+      const c = toRgb(expandWith(tokens, `var(${tok})`), floor!)
+      if (!c) return [`${tok} did not compute`]
+      const ratio = contrast(c, floor!)
+      return ratio < 3 ? [`${tok} ${hex(c)} on ${hex(floor!)} = ${ratio.toFixed(2)}:1`] : []
+    })
+    expect(low, `in ${mode}`).toEqual([])
   })
 })
 

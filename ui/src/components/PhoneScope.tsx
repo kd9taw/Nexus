@@ -26,11 +26,13 @@
 // THE RECEIVER MARKERS (`spectrum/markers.ts`). Where the host passes the rig's REPORTED width, the
 // receiver's passband is drawn over the picture, and where it also passes `onPassband` the edges a
 // width can move are grabbable: dragging one, or [ and ] on the focused scope, commands the filter
-// through the host's coalescing. A press on an edge that does not move is still a click — the snap
-// is untouched, as are the box drag, the edge scan and the wheel. Every gesture has a key on the
-// focused scope (←/→ tune, Shift for bigger steps; Enter snaps onto the signal in the passband; [ ]
-// the width; ↑/↓ scroll back while paused), and none of them is Esc or Space, which belong to the
-// cockpit's stop and its PTT.
+// through the host's coalescing. An edge is grabbable inside the edge scan's band too, where Phone's
+// Auto span puts the far one on the border: dragged out past the border, it widens. A press on an
+// edge that does not move is still a click — the snap is untouched, as are the box drag, the edge
+// scan away from an edge and the wheel. The Sub's marker is display only: a click on it tunes
+// nothing. Every gesture has a key on the focused scope (←/→ tune, Shift for bigger steps; Enter
+// snaps onto the signal in the passband; [ ] the width; ↑/↓ scroll back while paused), and none of
+// them is Esc or Space, which belong to the cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
@@ -105,14 +107,15 @@ const CIV_RF = 'CI-V RF'
 const DIAL_PLATE = 'DIAL'
 /** The plate on a second receiver's dial line: the rig's own name for it. */
 const SUB_PLATE = 'SUB'
-/** How close (CSS px) a press must land to a filter edge to grab it. */
+/** How close (CSS px) a press must land to a filter edge to grab it, or to the Sub's line to be on it. */
 const EDGE_TOL_PX = 5
 /** How long a width just commanded stands on screen ahead of the rig's read-back (ms). */
 const PENDING_WIDTH_MS = 2000
 /** A pause between tuning keys after which the next press starts again from the live dial (ms). */
 const KEY_IDLE_MS = 800
 /** The outer band where a held drag scrolls the band (the edge scan), in CSS px for a scope
- *  `widthPx` wide. A filter edge is never grabbed inside it: that band is the scan's. */
+ *  `widthPx` wide. A filter edge inside it is still grabbed (operator, 2026-10-05: "Allow it"), so a
+ *  press there scans only away from an edge. */
 const scanZonePx = (widthPx: number) => Math.min(36, widthPx / 4)
 /** The focused scope's keys, for `aria-keyshortcuts` (key names, not prose). */
 const SCOPE_KEYS = 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Enter [ ] ArrowUp ArrowDown'
@@ -223,9 +226,10 @@ interface Props {
    *  a band through the picture. Absent = no notch mark. */
   notchHz?: number | null
   /** A SECOND receiver's marker — the Sub of a dual-receiver radio: its dial, mode and reported
-   *  width (null = unknown), drawn in its own colour on an RF row and never grabbable. ⚠️ PER
-   *  HOST: the dual-receiver ruling of 2026-09-22 puts the Sub's scope per host and no scope host
-   *  has been named, so no host passes it yet — and a host that does not draws what it always did. */
+   *  width (null = unknown), drawn in its own colour on an RF row while its dial is in view, never
+   *  grabbable, and DISPLAY ONLY: a click on it tunes nothing. ⚠️ PER HOST (dual-receiver ruling
+   *  D9): Phone and CW pass it (operator ruling 2026-10-05, "Phone and CW scopes"); a host that
+   *  does not draws what it always did. */
   subReceiver?: { dialHz: number; sideband: string; widthHz: number | null } | null
   /** CW sidetone pitch (Hz) for the click math (zero-beat targets). Distinct from
    * `markerHz`, which is only the audio-row visual hairline. Phone omits. */
@@ -430,6 +434,9 @@ export function PhoneScope({
   const overlaysSyncRef = useRef<(() => void) | null>(null)
   /** The spot labels as last drawn — the click targets — in the overlay canvas's device px. */
   const hitsRef = useRef<{ w: number; h: number; hits: OverlayHit[] }>({ w: 0, h: 0, hits: [] })
+  /** The Sub's marker as last drawn, in the marks canvas's device px: its line's x, and its plate's
+   *  right and bottom edges. null = not drawn (no Sub, not in view, not an RF row). */
+  const subMarkRef = useRef<{ w: number; h: number; x: number; plateR: number; plateB: number } | null>(null)
   /** A width just commanded, shown until the rig's read-back agrees (or PENDING_WIDTH_MS passes):
    *  the flush and the radio loop's apply are both still ahead of it. */
   const pendingWidthRef = useRef<{ hz: number; until: number } | null>(null)
@@ -471,6 +478,8 @@ export function PhoneScope({
     edge?: { edge: Edge; p: AxisPassband; axis: AxisKind; hz: number }
     /** A press on a spot's tag (where no edge was grabbed): released unmoved, it works that spot. */
     spot?: SpotRow
+    /** A press on the Sub's marker: released unmoved, it does nothing at all. */
+    sub?: boolean
   } | null>(null)
   // Edge-scan while dragging: holding the box in the outer edge zone keeps scrolling the
   // band. The BOX stays pinned under the cursor (never repainted from Hz — the view is
@@ -933,6 +942,7 @@ export function PhoneScope({
     /** The marks over the picture: what the operator reads and aims with. Cleared every draw. */
     const drawOverlay = () => {
       ctx.clearRect(0, 0, devW, devH)
+      subMarkRef.current = null
       // 3D maximize: the stack fills the panel and carries no marks, as it never has.
       if (dssRef.current || !newest) return
       const src = newest.src
@@ -965,10 +975,19 @@ export function PhoneScope({
           ctx.lineTo(sx, devH)
           ctx.stroke()
           ctx.fillStyle = `rgba(${MARK_RGB.sub}, 0.8)`
-          ctx.font = `${Math.max(8, Math.round(10 * textPx))}px system-ui, sans-serif`
+          const fontPx = Math.max(8, Math.round(10 * textPx))
+          ctx.font = `${fontPx}px system-ui, sans-serif`
           ctx.textAlign = 'left'
           ctx.textBaseline = 'top'
           ctx.fillText(SUB_PLATE, sx + 3 * textPx, 2 * textPx)
+          // Where it was drawn is where a press is on it (`subUnder`).
+          subMarkRef.current = {
+            w: devW,
+            h: devH,
+            x: sx,
+            plateR: sx + 3 * textPx + ctx.measureText(SUB_PLATE).width,
+            plateB: 2 * textPx + fontPx,
+          }
         }
       }
       const width = shownWidth()
@@ -1291,15 +1310,15 @@ export function PhoneScope({
     return view.mirrored ? -axisHz : axisHz
   }
   /** The AXIS Hz under a client x — the drawn axis, never un-mirrored (`xToHz` answers row Hz),
-   *  which is where the receiver marks are placed. */
+   *  which is where the receiver marks are placed. Past the scope's sides it runs on along the same
+   *  axis (the dragged edge's pointer is captured), so an edge on the border can be pulled outward. */
   const axisAt = (clientX: number): number | null => {
     const canvas = canvasRef.current
     const view = lastViewRef.current
     if (!canvas || !view) return null
     const rect = canvas.getBoundingClientRect()
     if (rect.width < 2 || !(view.hi > view.lo)) return null
-    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return view.lo + frac * (view.hi - view.lo)
+    return view.lo + ((clientX - rect.left) / rect.width) * (view.hi - view.lo)
   }
   /** The grabbable filter edge under a client x, with the passband and axis it was found on and
    *  the width it starts from; null where there is none to grab. */
@@ -1314,11 +1333,21 @@ export function PhoneScope({
     if (!p) return null
     const rect = canvas.getBoundingClientRect()
     const xIn = clientX - rect.left
-    const zone = scanZonePx(rect.width)
-    if (xIn <= zone || xIn >= rect.width - zone) return null // the edge scan's band, as it always was
     const px = (hz: number) => ((hz - view.lo) / (view.hi - view.lo)) * rect.width
     const edge = edgeNear(xIn, px(p.lo), px(p.hi), edgesOnAxis(axis), EDGE_TOL_PX)
     return edge ? { edge, p, axis, hz: width } : null
+  }
+  /** Is a client point on the Sub's marker as last drawn: within EDGE_TOL_PX of its line, top to
+   *  bottom, or on its plate? */
+  const subUnder = (clientX: number, clientY: number): boolean => {
+    const m = subMarkRef.current
+    const canvas = canvasRef.current
+    if (!m || !canvas) return false
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width < 2 || rect.height < 2) return false
+    const x = ((clientX - rect.left) / rect.width) * m.w
+    const y = ((clientY - rect.top) / rect.height) * m.h
+    return Math.abs(x - m.x) <= EDGE_TOL_PX * (m.w / rect.width) || (x >= m.x && x <= m.plateR && y <= m.plateB)
   }
   /** The spot whose tag is under a client point, where a tag can be clicked now; null elsewhere. */
   const tagUnder = (clientX: number, clientY: number): SpotRow | null => {
@@ -1493,14 +1522,22 @@ export function PhoneScope({
       grabDialHz: dialRef.current,
       edge,
       spot: edge ? undefined : (tagUnder(e.clientX, e.clientY) ?? undefined),
+      sub: subUnder(e.clientX, e.clientY),
     }
   }
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = dragRef.current
     if (!g) {
-      // Hovering: say where a filter edge can be grabbed, and where a spot's tag can be clicked.
+      // Hovering: say where a filter edge can be grabbed, that a click on the Sub's marker tunes
+      // nothing, and where a spot's tag can be clicked.
       if (canvasRef.current)
-        canvasRef.current.style.cursor = edgeUnder(e.clientX) ? 'ew-resize' : tagUnder(e.clientX, e.clientY) ? 'pointer' : ''
+        canvasRef.current.style.cursor = edgeUnder(e.clientX)
+          ? 'ew-resize'
+          : subUnder(e.clientX, e.clientY)
+            ? 'default'
+            : tagUnder(e.clientX, e.clientY)
+              ? 'pointer'
+              : ''
       return
     }
     if (g.click && e.pointerId !== g.pointerId) return
@@ -1606,6 +1643,9 @@ export function PhoneScope({
     const centerHz = g.centerHz
     endGesture()
     if (g.click && (g.moved || !interactiveRef.current || g.clickContext !== clickContext())) return
+    // ⛔ THE SUB'S MARKER IS DISPLAY ONLY. A press on it that does not move tunes nothing: not the Sub,
+    // not Main onto the signal under it, and no spot whose tag it crosses. A drag from it is the drag.
+    if (g.sub && !g.moved) return
     if (g.spot && !g.moved) {
       // A tag clicked: work that spot, BandMap's action (the host QSYs to its frequency and prefills
       // the log), rather than snapping to the signal under it. Asked again at release, so a

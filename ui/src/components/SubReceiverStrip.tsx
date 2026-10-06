@@ -11,10 +11,12 @@
 // controls are labelled MAIN (`MainReceiverPlate`) exactly while this row is drawn.
 //
 // ⚠️ A NEW COMPONENT, NOT A WIDENED SHARED ONE. The dual-receiver ruling D9 puts the Sub's
-// meters and scope PER HOST and names no host, so no meter or scope host changes: this is not
-// `SMeter` (one host), `TxMeters` (three) or `PhoneScope` (two) grown a Sub mode. It draws no
-// meter at all: nothing reads the Sub's S-meter in this build, and a second meter that never
-// moves is the one thing this programme set out not to ship.
+// meters and scope PER HOST, so no meter host changes: this is not `SMeter` (one host) or
+// `TxMeters` (three) grown a Sub mode. It draws no meter at all: nothing reads the Sub's S-meter
+// in this build, and a second meter that never moves is the one thing this programme set out not
+// to ship. The scope's hosts were named later (operator ruling 2026-10-05, "Phone and CW
+// scopes"): both hand `PhoneScope` the Sub's marker (`subScopeMarker`, below), drawn exactly
+// while this row is.
 //
 // What it draws, all of it from the snapshot and the controls table:
 //   · the Sub's dial where the engine knows it (the uplink an acknowledged satellite split
@@ -133,6 +135,22 @@ export function SubReceiverStrip({
       )}
     </div>
   )
+}
+
+/** THE SUB ON THE PHONE AND CW SCOPES: its dial, the sideband commanded on it, and the width it
+ *  reports (none is read today), for `PhoneScope`'s `subReceiver`. Null — nothing drawn — wherever
+ *  no SUB row is (`subRowShown`: a Sub Nexus cannot command shows nothing new, the "Hide it" ruling)
+ *  or the Sub's dial is not known. A width goes only with the side it sits on. Display only: the
+ *  scope tunes nothing from it. */
+export function subScopeMarker(
+  radio: RadioStatus,
+  catOk: boolean,
+): { dialHz: number; sideband: string; widthHz: number | null } | null {
+  const sub = radio.receivers?.sub
+  if (!sub || !subRowShown({ catOk, receivers: radio.receivers })) return null
+  const mhz = sub.dialMhz
+  if (mhz == null || !(mhz > 0)) return null
+  return { dialHz: Math.round(mhz * 1e6), sideband: sub.sideband ?? '', widthHz: sub.sideband ? (sub.filterWidthHz ?? null) : null }
 }
 
 /** MAIN, at the head of Main's controls — drawn exactly while a SUB row is (`subRowShown`), so a

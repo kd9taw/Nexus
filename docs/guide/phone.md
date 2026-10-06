@@ -26,17 +26,20 @@ is actually on; logging and TX follow the commanded mode until you match it up.
 
 **The bandscope** is a fast (~30 Hz) colored display split into a panadapter
 trace and a scrolling waterfall, with per-frame AGC so signals stay visible as
-conditions shift. **Span chips** above the scope — Full / Voice / Low / High —
-zoom the view to the part of the passband you care about.
+conditions shift. **Span chips** above the scope — Auto / Full / Voice / 1.5k / 800 —
+zoom the view to the part of the passband you care about; Auto follows the filter width.
 
 **The passband and its edge.** Where your radio reports its filter width, the scope shades
 the passband it is listening through, hung on the dial. Drag the far edge (the one away from
 the carrier) to set the width, in the same range and 100 Hz steps as the BW buttons; the
-radio follows within a second or two. A manual notch the radio reports on shows as a red
-line. The edge is not offered in FM, in a DATA mode, on the Remote page or while anything is
-transmitting. Tab to the scope and the keys work too: ← and → tune (Shift for bigger steps),
-Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and ↓
-scroll back while paused.
+radio follows within a second or two. In the Auto span the far edge sits on the scope's
+border: grab it there and drag in to narrow the filter, or out past the border to widen it. A
+manual notch the radio reports on shows as a red line. The edge is not offered in FM, in a DATA
+mode, on the Remote page or while anything is transmitting. On a dual-receiver radio whose Sub
+frequency Nexus knows, a cyan **SUB** line marks it on the radio's own scope when it is in view;
+it is only a mark, and a click on it tunes nothing. Tab to the scope and the keys work too: ←
+and → tune (Shift for bigger steps), Enter tunes onto the signal in the passband, [ and ] narrow
+and widen the filter, and ↑ and ↓ scroll back while paused.
 
 **Spots and your privileges on the scope.** The SSB spots Band Activity lists for your band are
 tagged on the scope at their frequencies, coloured as Band Activity colours them and fading over

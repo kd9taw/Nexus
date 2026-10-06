@@ -7494,9 +7494,17 @@ select optgroup {
    inks were dead from the day they landed: light mode rendered these
    dark-theme pastels (chosen to glow on near-black) on a white panel, across
    the roster, the decode feed and every needed badge. Default-then-light,
-   declared adjacent, is the sheet's idiom — see the decode swatches above. */
+   declared adjacent, is the sheet's idiom — see the decode swatches above.
+
+   A DISPLAY WELL (DISPLAY WELLS, below) is the dark theme, so `.well` joins the
+   dark block here as it joins the dark palette's: the Phone and CW scopes mark
+   their spot tags in these colours on their dark floor, and in the light theme
+   they reached the scope from <html> — the light inks, made for white — so the
+   zone, SOTA and watch marks read 2.7:1 there. styles-wells.test.ts measures
+   every need mark on the scope's floor in every mode. */
 :root,
-[data-theme='dark'] {
+[data-theme='dark'],
+.well {
   --need-entity: #f23ec0; /* magenta — all-time-new one (ATNO) */
   --need-zone: #c084fc; /* violet — new CQ zone */
   --need-band: #f59e0b; /* orange — new band-slot */
