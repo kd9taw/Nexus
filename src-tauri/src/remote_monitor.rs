@@ -112,8 +112,38 @@ mod tests {
         assert_eq!(next.station.radio.rig_keyed, None);
     }
 
+    /// Runs ALONE, in a child that is this same test binary re-run for this one test. The snapshot
+    /// it compares carries `keptFiles`, which is the whole PROCESS's list of files kept aside
+    /// (`tempo_core::keep_aside::kept()`), not this engine's, and other tests in this binary add to
+    /// it while this one runs: a full run went red when a Remote test keeping an unreadable
+    /// `pending_qso` aside added to it between the two snapshots. No other test runs in the child,
+    /// so nothing else can add to the list there, and the whole snapshot is still compared.
     #[test]
     fn cached_reads_do_not_renew_freshness_and_busy_engine_does_not_queue() {
+        const ALONE: &str = "NEXUS_REMOTE_MONITOR_TEST_ALONE";
+        if std::env::var_os(ALONE).is_none() {
+            let me = format!(
+                "{}::cached_reads_do_not_renew_freshness_and_busy_engine_does_not_queue",
+                module_path!().split_once("::").map_or("", |(_, rest)| rest)
+            );
+            let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([me.as_str(), "--exact", "--test-threads=1"])
+                .env(ALONE, "1")
+                .output()
+                .expect("re-run this test binary");
+            let shown = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(out.status.success(), "run alone, it failed:\n{shown}");
+            // CONTROL: a filter that matches no test passes too, having run nothing.
+            assert!(
+                shown.contains("1 passed"),
+                "control: the child ran no test:\n{shown}"
+            );
+            return;
+        }
         let engine = Arc::new(Mutex::new(Engine::new("N0CALL", "AA00", 0)));
         let publisher = Publisher::default();
         let now = Instant::now();

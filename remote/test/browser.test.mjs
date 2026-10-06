@@ -289,6 +289,31 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // browser state did not appear" in the log, and neither could be read back. The read can never
     // replace the failure.
     async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } if(operating)console.log('Operation diagnostic',expression,operationWire.slice(-30),loggedRequests.map(r=>({call:r.record.call,mode:r.record.mode})),await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,entries:[...document.querySelectorAll('.remote-log-entry')].map(e=>({text:e.textContent,error:e.dataset.operationError}))})`));try{console.log('Browser state diagnostic',JSON.stringify({expression:expression.slice(0,240),page:await evaluate(`({app:document.querySelector('.app')?.className??null,text:document.body.innerText.slice(0,300)})`),session:await sessionDiagnostic(),station:{closed:station?.closed,code:station?.closeCode,reason:station?.closeReason}}))}catch(error){console.log('Browser state diagnostic unavailable:',String(error))}throw new Error('Expected browser state did not appear') }
+    // A WAIT FOR RESTORED STATION DATA OUTLASTS A DROPPED STATION (2026-10-06). A stall of 3 s or more on the runner
+    // drops the station stand-in: 1008 `applicationTimeout` when the local Worker (workerd) stalls, `stationTooSlow`
+    // when the stand-in does. The page then has no station data until the stand-in has connected again (2-3 s, 4-5 s
+    // for a second drop within a minute) and the page after it (its own 1, 2, 4 s ladder), which can outlast a 12 s
+    // wait. CI run 37410816282 went red so in v17: workerd stalled twice about 36 s apart, and the wait for the
+    // restored Conditions data ran out while the page said "Station data unavailable". Stopping only workerd for 4 s
+    // twice, once before that data is withheld and once at the wait, reproduces it (the data was back after 12.2 s);
+    // one such stop alone, at the wait, had it back after 8.4 s. So a wait for data the scenario has just restored,
+    // when it runs out after the page lost its station during it (a socket closed, or no current station data), waits
+    // up to 30 s more for the data, and the log says so. Never skipped: without such a lapse it fails at its own
+    // deadline, exactly as before.
+    async function untilThroughLapse(expression) {
+      const since=await evaluate('performance.now()')
+      try { await until(expression) }
+      catch (error) {
+        const session=error.message==='Expected browser state did not appear'?await sessionDiagnostic().catch(()=>null):null
+        if(!session)throw error
+        const closures=(session.closures??[]).filter(closure=>closure.at>since)
+        const lapse={closures,phase:session.phase,snapshotAge:session.snapshotAge,stationSocket:{closed:station?.closed,code:station?.closeCode,reason:station?.closeReason}}
+        if(!closures.length&&session.phase==='ready'&&session.snapshotAge<3000){console.log('Restored station data missing while the page kept its station',expression.slice(0,160),JSON.stringify(lapse));throw error}
+        const started=performance.now(),back=await until(expression,30000).then(()=>true,next=>{if(next.message!=='Expected browser state did not appear')throw next;return false})
+        console.log(`Restored station data: the page lost its station during the wait; ${back?`read again after ${Math.round(performance.now()-started)} ms`:'not back within 30 s more'}`,expression.slice(0,160),JSON.stringify(lapse))
+        if(!back)throw error
+      }
+    }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
     // At the small size (sm/xs) the top bar folds its eleven tier pills into one mode button with a menu (2026-10-01):
     // there the reachable tier selector is that button, and a tier gesture opens it and picks the item in the pill's place.
@@ -3705,7 +3730,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`), false)
       assert.ok(!await evaluate(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent.includes('CQ W1AW')`))
       unavailableTopics.delete(`get_${mode}_state`); state.armed = true; applicationRevision++
-      try { await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`) }
+      try { await untilThroughLapse(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`) }
       catch (error) {
         console.log('Keyboard observation diagnostic', {applicationVersion,mode,byCommand:applicationTraffic.byCommand},await evaluate(`({body:document.querySelector('.${mode}-cockpit')?.textContent,status:document.querySelector('.remote-application-status')?.textContent,unavailable:document.querySelector('.remote-view-unavailable')?.textContent,closures:window.__socketClosures})`))
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-keyboard-failure.png'),Buffer.from(shot.data,'base64'))}
@@ -3837,7 +3862,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.querySelector('.app').dataset.remoteStale==='true'`), false, 'a summary failure must not mark live station readings stale')
       unavailableCollections.delete('statistics')
       await click(button('Refresh summary'))
-      await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
+      await untilThroughLapse(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
     } else await click(button('FT'))
     await click(button('DXped'))
     if (applicationVersion < 7) {
@@ -3876,7 +3901,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`!document.querySelector('.dxped-view') && document.querySelector('.remote-insights-status > span')?.textContent.includes('Station data unavailable') && !${button('Refresh DXpeditions')}?.disabled`)
       assert.equal(await evaluate(`document.querySelector('.app').dataset.remoteStale==='true'`), false)
       unavailableCollections.delete('dxpeditions'); await click(button('Refresh DXpeditions'))
-      await until(`!!document.querySelector('.dxped-view')`)
+      await untilThroughLapse(`!!document.querySelector('.dxped-view')`)
     }
     await click(button('Memories'))
     if (applicationVersion < 8) {
@@ -3933,7 +3958,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.add('memories'); await click(button('Refresh memories'))
       await until(`!document.querySelector('.remote-memory-bank:not([hidden])')&&document.querySelector('.remote-insights-status > span')?.textContent.includes('Station data unavailable')&&!${button('Refresh memories')}?.disabled`)
       unavailableCollections.delete('memories'); await click(button('Refresh memories'))
-      await until(`[...document.querySelectorAll('.remote-memory-bank:not([hidden]) .mv-grid input')].some(e=>e.value==='Updated station memory')`)
+      await untilThroughLapse(`[...document.querySelectorAll('.remote-memory-bank:not([hidden]) .mv-grid input')].some(e=>e.value==='Updated station memory')`)
     }
     if (applicationVersion >= 9) {
       await click(button('POTA/SOTA'))
@@ -3992,7 +4017,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.add('ota'); await click(button('Refresh station data'))
       await until(`!document.querySelector('.remote-ota-bank:not([hidden])')&&!${button('Refresh station data')}?.disabled`)
       unavailableCollections.delete('ota'); await click(button('Refresh station data'))
-      await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
+      await untilThroughLapse(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
     }
     if (applicationVersion >= 10) {
       await click(button('Field Day'))
@@ -4043,7 +4068,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       if(hiddenDisplay!=='none'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-field-day-unavailable-failure.png'),Buffer.from(shot.data,'base64'))}
       assert.equal(hiddenDisplay, 'none', 'a failed refresh removes the visible score, not only the hidden attribute')
       unavailableCollections.delete('fieldDay');await click(button('Refresh Field Day'))
-      await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
+      await untilThroughLapse(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
     }
     await click(button('JS8'))
     if(applicationVersion<11){
@@ -4103,13 +4128,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableTopics.add('get_js8_state')
       await until(`document.querySelectorAll('.js8-row,.js8-inbox-row,.js8-pending-row').length===0`)
       unavailableTopics.delete('get_js8_state')
-      await until(`document.querySelectorAll('.js8-row').length===80 && document.querySelector('.js8-opcomment')?.textContent==='COMPLETE LOG' && document.querySelector('.js8-history-status button')?.disabled===false`)
+      await untilThroughLapse(`document.querySelectorAll('.js8-row').length===80 && document.querySelector('.js8-opcomment')?.textContent==='COMPLETE LOG' && document.querySelector('.js8-history-status button')?.disabled===false`)
       unavailableCollections.add('js8Context');await click(`document.querySelector('.js8-history-status button')`)
       await until(`document.querySelector('.js8-history-status')?.textContent.includes('unavailable')`)
       assert.equal(await evaluate(`!!document.querySelector('.js8-opcomment')`),false)
       assert.ok(await evaluate(`document.querySelector('.js8-b4')?.textContent==='—'`))
       unavailableCollections.delete('js8Context');await click(`document.querySelector('.js8-history-status button')`)
-      await until(`document.querySelector('.js8-opcomment')?.textContent==='COMPLETE LOG'`)
+      await untilThroughLapse(`document.querySelector('.js8-opcomment')?.textContent==='COMPLETE LOG'`)
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'},session)
       assert.ok(js8Queries.length>0)
     }
@@ -4160,7 +4185,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableTopics.add(topic)
       await until(sstv?`!document.querySelector('.sstv-live-canvas')&&document.querySelectorAll('.sstv-thumb').length===0`:`document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
       unavailableTopics.delete(topic)
-      await until(sstv?`document.querySelectorAll('.sstv-thumb').length===40`:`!document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
+      await untilThroughLapse(sstv?`document.querySelectorAll('.sstv-thumb').length===40`:`!document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
     }
 
     for(const label of ['Conditions','Satellites']){
@@ -4216,7 +4241,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.add(collection)
       await until(connect?`!document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===0`,35000)
       unavailableCollections.delete(collection)
-      await until(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
+      await untilThroughLapse(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
     }
     for(const label of ['Settings','Repeaters']){
       await click(button(label))
@@ -4306,7 +4331,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.add(collection)
       await until(settings?`!document.querySelector('.settings-tabs')`:`document.querySelector('.rp-body')?.hidden===true`,35000)
       unavailableCollections.delete(collection)
-      await until(settings?`!!document.querySelector('.settings-tabs')`:`document.querySelectorAll('.rp-chan-name').length===1200`)
+      await untilThroughLapse(settings?`!!document.querySelector('.settings-tabs')`:`document.querySelectorAll('.rp-chan-name').length===1200`)
     }
     const beforeTempo = structuredClone(applicationData.get_snapshot)
     for (const tier of ['TempoFast','TempoDeep']) {
