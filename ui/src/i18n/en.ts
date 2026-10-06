@@ -1158,6 +1158,30 @@ export const EN = {
     'Synced: {{confirmed}} newly confirmed, {{credited}} credited · {{unmatched}} unmatched',
 
   'logbook.pota.label': 'Import POTA',
+  'logbook.parkStates.button': 'Check park states',
+  'logbook.parkStates.buttonTitle':
+    'List the park and summit contacts whose state is not their park’s, and correct the ones you tick',
+  'logbook.parkStates.title': 'Check park states',
+  'logbook.parkStates.intro':
+    'These park and summit contacts hold a state other than the one their park or summit is in, or none: Nexus used to log the activator’s home state, from their licence or their callbook entry. Tick the ones to change. Nothing changes until you press the button, and nothing is uploaded again. A confirmed contact starts unticked.',
+  'logbook.parkStates.reading': 'Reading your log…',
+  'logbook.parkStates.none':
+    'Every park and summit contact Nexus can place holds its park’s state.',
+  'logbook.parkStates.change': '{{from}} → {{to}}',
+  'logbook.parkStates.noState': 'none',
+  'logbook.parkStates.confirmed': 'confirmed',
+  'logbook.parkStates.confirmedTitle':
+    'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
+  'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.apply': {
+    one: 'Change {{count}} contact',
+    other: 'Change {{count}} contacts',
+  },
+  'logbook.parkStates.done': {
+    one: '{{count}} contact now holds its park’s state',
+    other: '{{count}} contacts now hold their park’s state',
+  },
+  'logbook.parkStates.failed': 'Could not check park states',
   'logbook.pota.title':
     'Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records.',
   'logbook.pota.failed': 'POTA import failed',

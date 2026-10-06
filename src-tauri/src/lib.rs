@@ -20296,6 +20296,161 @@ fn sole_live_activation(
     }
 }
 
+/// One contact the Logbook's "Check park states" lists: a hunted park or summit in ONE state
+/// whose contact holds another state, or none. `state` is what it holds, `park_state` the park's.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParkStateRowDto {
+    id: String,
+    call: String,
+    when_unix: u64,
+    band: String,
+    mode: String,
+    program: String,
+    reference: String,
+    state: Option<String>,
+    park_state: String,
+    /// Confirmed by any channel: the check shows it unticked, for the operator to decide.
+    confirmed: bool,
+}
+
+/// One contact the operator ticked in the check: `id`, which held `state` when the check listed
+/// it, takes the park's `park_state`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParkStateChangeDto {
+    id: String,
+    state: Option<String>,
+    park_state: String,
+}
+
+/// The park-state check's list, newest first: every hunted contact whose park or summit is in
+/// ONE state ([`ota_park_places`]) and which holds another state, or none. A park on a state line
+/// is never listed (the operator picks its state; the Logbook marks it), nor one nothing here can
+/// place. Read with the Engine lock released, and it writes nothing: changing a contact is the
+/// operator's tick and [`apply_park_states`], never this.
+fn park_state_review_on(
+    engine: &SharedEngine,
+    ota_cache: &SharedOtaSpots,
+    parks: &SharedParks,
+) -> Result<Vec<ParkStateRowDto>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+    const HUNTED: Narrow = Narrow {
+        columns: &[
+            "call",
+            "when_unix",
+            "band",
+            "mode",
+            "state",
+            "ota_their_program",
+            "ota_their_ref",
+            "qsl_card_rcvd_raw",
+            "lotw_rcvd_raw",
+            "eqsl_rcvd_raw",
+            "qrz_status_raw",
+        ],
+        uploads: false,
+    };
+    let rows = engine_lock(engine).log_rows();
+    let mut hunted = Vec::new();
+    rows.each(HUNTED, Scope::All, Order::Log, &mut |r| {
+        if r.id.is_some() && r.ota.their_ref.is_some() {
+            hunted.push(r.clone());
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| format!("the logbook could not be read: {e}"))?;
+    let mut placed: std::collections::HashMap<(String, String), Vec<String>> =
+        std::collections::HashMap::new();
+    let mut listed = Vec::new();
+    for r in hunted {
+        let (Some(id), Some(reference)) = (r.id, r.ota.their_ref.clone()) else {
+            continue;
+        };
+        let program = r.ota.their_program.clone().unwrap_or_else(|| "POTA".into());
+        let places = placed
+            .entry((
+                program.to_ascii_uppercase(),
+                reference.trim().to_ascii_uppercase(),
+            ))
+            .or_insert_with(|| ota_park_places(ota_cache, parks, &program, &reference));
+        let [one] = places.as_slice() else {
+            continue;
+        };
+        let park_state = tempo_app::engine::place_state(one).to_string();
+        let held = r.state.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if held.is_some_and(|s| s.eq_ignore_ascii_case(&park_state)) {
+            continue;
+        }
+        listed.push(ParkStateRowDto {
+            id: id.to_string(),
+            state: held.map(str::to_string),
+            call: r.call,
+            when_unix: r.when_unix,
+            band: r.band,
+            mode: r.mode,
+            program,
+            reference,
+            park_state,
+            confirmed: r.confirmed,
+        });
+    }
+    listed.sort_by(|a, b| b.when_unix.cmp(&a.when_unix));
+    Ok(listed)
+}
+
+/// The Logbook's "Check park states": the hunted contacts whose park names one state and which
+/// hold another, or none ([`park_state_review_on`]). It reads; it never writes.
+#[tauri::command]
+async fn park_state_review(
+    state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
+    parks: State<'_, SharedParks>,
+) -> Result<Vec<ParkStateRowDto>, String> {
+    let (engine, ota, parks) = (
+        Arc::clone(&state),
+        Arc::clone(&ota_cache),
+        Arc::clone(&parks),
+    );
+    log_folds::off_the_runtime(move || park_state_review_on(&engine, &ota, &parks)).await
+}
+
+/// Give the contacts the operator ticked in "Check park states" their park's state: only those,
+/// only while each still holds the state the check showed and its park still names the one shown
+/// ([`tempo_app::logwrite::park_states`]), and nothing is uploaded again. How many changed.
+#[tauri::command]
+async fn apply_park_states(
+    state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
+    parks: State<'_, SharedParks>,
+    changes: Vec<ParkStateChangeDto>,
+) -> Result<usize, String> {
+    let changes = changes
+        .into_iter()
+        .map(|c| {
+            Ok(tempo_app::station::ParkStateChange {
+                id: c.id.parse().map_err(|_| LOG_ROW_GONE.to_string())?,
+                from: c.state,
+                to: c.park_state,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let (engine, ota, parks) = (
+        Arc::clone(&state),
+        Arc::clone(&ota_cache),
+        Arc::clone(&parks),
+    );
+    durable_command(move || {
+        let places =
+            |program: &str, reference: &str| ota_park_places(&ota, &parks, program, reference);
+        tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::park_states(&engine, &changes, &places)
+        })
+    })
+    .await
+}
+
 /// Where a park or summit is: the US states, DC and Canadian provinces it lies in, as the hunter
 /// feed writes them ("US-ND"; a park on a state line names each). Empty where nothing here places
 /// it, and its contact then takes a state as every contact did before.
@@ -32868,6 +33023,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_activation_state,
             clear_activation,
             get_activation,
+            park_state_review,
+            apply_park_states,
             get_need_alerts,
             get_all_spots,
             get_propagation,
@@ -41492,6 +41649,96 @@ mod tests {
             location: "DE-BY".into(),
         });
         assert_eq!(abroad.states, codes(&[]));
+    }
+
+    /// ★ "Check park states" lists only the hunted contacts whose park or summit names ONE state
+    /// and which hold another, or none: newest first, the old state beside the park's, and a
+    /// confirmed one marked. A park on a state line, a park nothing places, a contact already
+    /// holding its park's state and a contact with no park are not listed. Reading it writes
+    /// nothing; applying the rows the operator keeps ticked (every one but the confirmed) changes
+    /// those and no other, and queues nothing to a connector.
+    #[test]
+    fn the_park_state_check_lists_only_disagreements_and_changes_only_what_is_applied() {
+        let engine = fresh_engine();
+        engine.lock().unwrap().import_adif(
+            "<CALL:4>K1AA<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010101<STATE:2>OH<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n\
+             <CALL:4>K2BB<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010202<STATE:2>ND<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n\
+             <CALL:4>K3CC<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010303<SIG:4>POTA<SIG_INFO:7>US-0003<EOR>\n\
+             <CALL:4>K4DD<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010404<STATE:2>OH<SIG:4>POTA<SIG_INFO:7>US-9999<EOR>\n\
+             <CALL:4>K5EE<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010505<STATE:2>OH<EOR>\n\
+             <CALL:4>K6FF<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010606<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n\
+             <CALL:4>K7GG<BAND:3>40m<FREQ:5>7.185<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010707<STATE:2>OH<SIG:4>POTA<SIG_INFO:7>US-0001<LOTW_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K8HH<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010808<STATE:2>OH<SOTA_REF:10>W7A/MN-001<EOR>\n",
+        );
+        let nd = state_spot("K0ZZZ", 14_285.0, &["US-ND"]);
+        let mut line = state_spot("N7XYZ", 14_285.0, &["US-MT", "US-ND"]);
+        line.reference = "US-0003".into();
+        let cache = hunter_cache(&[("POTA", &[nd.clone(), line])]);
+        let parks = crate::SharedParks::default();
+        let before = engine.lock().unwrap().stored_log();
+
+        let listed = crate::park_state_review_on(&engine, &cache, &parks).expect("the check reads");
+        let seen: Vec<(&str, Option<&str>, &str, bool)> = listed
+            .iter()
+            .map(|r| {
+                (
+                    r.call.as_str(),
+                    r.state.as_deref(),
+                    r.park_state.as_str(),
+                    r.confirmed,
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("K8HH", Some("OH"), "AZ", false),
+                ("K7GG", Some("OH"), "ND", true),
+                ("K6FF", None, "ND", false),
+                ("K1AA", Some("OH"), "ND", false),
+            ]
+        );
+        assert_eq!(
+            engine.lock().unwrap().stored_log(),
+            before,
+            "reading the check writes nothing"
+        );
+
+        // What the operator keeps ticked: every row but the confirmed one.
+        let ticked: Vec<tempo_app::station::ParkStateChange> = listed
+            .iter()
+            .filter(|r| !r.confirmed)
+            .map(|r| tempo_app::station::ParkStateChange {
+                id: r.id.parse().unwrap(),
+                from: r.state.clone(),
+                to: r.park_state.clone(),
+            })
+            .collect();
+        let queued = engine.lock().unwrap().take_pending_uploads().len();
+        let (made, _) = tempo_app::logwrite::park_states(&engine, &ticked, &|p, r| {
+            crate::ota_park_places(&cache, &parks, p, r)
+        });
+        assert_eq!(made, Ok(3));
+        let after = engine.lock().unwrap().stored_log();
+        let state = |call: &str| after.iter().find(|r| r.call == call).unwrap().state.clone();
+        assert_eq!(
+            ["K1AA", "K2BB", "K3CC", "K4DD", "K5EE", "K6FF", "K7GG", "K8HH"].map(state),
+            [
+                Some("ND".into()),
+                Some("ND".into()),
+                None,
+                Some("OH".into()),
+                Some("OH".into()),
+                Some("ND".into()),
+                Some("OH".into()),
+                Some("AZ".into()),
+            ]
+        );
+        assert_eq!(
+            engine.lock().unwrap().take_pending_uploads().len(),
+            0,
+            "nothing re-uploads (premise: {queued} queued before)"
+        );
     }
 
     /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge

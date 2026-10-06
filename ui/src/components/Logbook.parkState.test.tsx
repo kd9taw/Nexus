@@ -4,9 +4,11 @@
 // state line is logged that way on purpose (Nexus never guesses which state the activator was
 // in), so the Logbook marks every such contact where a state applies, and says why.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, waitFor, cleanup } from '@testing-library/react'
+import { render, waitFor, cleanup, fireEvent, screen } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
+import { parkStateReview } from '../api'
+import { t } from '../i18n'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -31,6 +33,7 @@ vi.mock('../api', () => {
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(), markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
+    parkStateReview: vi.fn(async () => []), applyParkStates: noop(),
   }
 })
 vi.mock('../toast', () => ({
@@ -73,5 +76,18 @@ describe('a park contact with no state is marked in the Logbook', () => {
     const mark = container.querySelector('.log-park-nostate') as HTMLElement
     expect(mark.getAttribute('role')).toBe('img')
     expect(mark.getAttribute('aria-label')).toMatch(/no state/i)
+  })
+})
+
+describe('Check park states', () => {
+  it('opens only from its button, and reading the check is all it does until Apply', async () => {
+    engineLog.mockResolvedValue([contact('W8LINE', 1_700_000_600, { ota: park('US-0003') })])
+    const { container } = render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />)
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
+    expect(screen.queryByRole('dialog', { name: t('logbook.parkStates.title') })).toBeNull()
+    expect(vi.mocked(parkStateReview)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.parkStates.button') }))
+    expect(await screen.findByRole('dialog', { name: t('logbook.parkStates.title') })).toBeTruthy()
+    await waitFor(() => expect(vi.mocked(parkStateReview)).toHaveBeenCalledTimes(1))
   })
 })

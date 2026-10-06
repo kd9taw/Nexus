@@ -335,6 +335,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact in the US or Canada that has no state, and Nexus no longer fills such a contact's state
   from the activator's callsign, when you log it, import it, or when it fills in contacts in the
   background.
+- **Logbook: Check park states, for the park and summit contacts already in your log.** Before
+  this release a hunted contact took the activator's home state, and an import kept whatever state
+  it carried. **Check park states** in the Logbook lists every park or summit contact whose park is
+  in one state and which holds another state, or none, with the old state beside the park's. Tick
+  the ones to change and press the button: only those change, and only if they still hold the
+  state shown. A confirmed contact starts unticked, because its confirmation came with the state
+  the other station signed. Nothing is uploaded again, and nothing happens until you open the
+  check and press the button. Parks on a state line are not listed (pick their state in the
+  contact), and nor are parks Nexus cannot place.
 
 ### Changed
 

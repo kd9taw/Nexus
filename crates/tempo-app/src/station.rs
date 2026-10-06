@@ -752,6 +752,51 @@ pub(crate) fn fill_pairs(
         .collect()
 }
 
+/// One contact the operator ticked in the Logbook's park-state check: `id`, which held the state
+/// `from` when the check listed it, takes its park's own state `to` ([`park_state_pairs`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParkStateChange {
+    pub id: RecordId,
+    pub from: Option<String>,
+    pub to: String,
+}
+
+/// The rows the park-state check's changes make: each contact still holding the state the check
+/// listed (`from`, compared without case or padding), whose park `places` still puts in exactly
+/// the state `to`, given that state. A contact changed since the check listed it, gone, or no
+/// longer placed in `to` is left as it is: the operator ticked the change they were shown, and
+/// only the park, never the caller, can name a park's state.
+pub(crate) fn park_state_pairs(
+    rows: &HashMap<RecordId, Arc<QsoRecord>>,
+    changes: &[ParkStateChange],
+    places: &dyn Fn(&str, &str) -> Vec<String>,
+) -> Vec<MadeRow> {
+    let norm = |s: Option<&str>| {
+        s.map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty())
+    };
+    changes
+        .iter()
+        .filter_map(|c| {
+            let row = rows.get(&c.id)?;
+            let reference = row.ota.their_ref.as_deref()?;
+            if norm(row.state.as_deref()) != norm(c.from.as_deref()) {
+                return None;
+            }
+            let program = row.ota.their_program.as_deref().unwrap_or("POTA");
+            let to = match places(program, reference).as_slice() {
+                [one] if crate::engine::place_state(one).eq_ignore_ascii_case(c.to.trim()) => {
+                    crate::engine::place_state(one).to_ascii_uppercase()
+                }
+                _ => return None,
+            };
+            let mut now = QsoRecord::clone(row);
+            now.state = Some(to);
+            Some((Arc::clone(row), Some(Arc::new(now))))
+        })
+        .collect()
+}
+
 /// The class of a fill change: an upgrade — content a fold reads (a state, an entity's
 /// country), and no row moves — or, for a change that fills nothing and only records that the
 /// job has run, a stamp, which no fold is kept against.

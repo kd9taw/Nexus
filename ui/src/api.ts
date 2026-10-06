@@ -1025,6 +1025,35 @@ export async function logQso(record: LoggedQso, stateSource?: StateSource): Prom
   return invoke<AppSnapshot>('log_qso', { record, stateSource })
 }
 
+/** One contact "Check park states" lists: a hunted park or summit in ONE state whose contact
+ *  holds another state (`state`), or none; `parkState` is the park's. */
+export interface ParkStateRow {
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  program: string
+  reference: string
+  state: string | null
+  parkState: string
+  /** Confirmed by any channel: listed unticked, for the operator to decide. */
+  confirmed: boolean
+}
+
+/** The Logbook's "Check park states" list. Reads; writes nothing. */
+export async function parkStateReview(): Promise<ParkStateRow[]> {
+  return invoke<ParkStateRow[]>('park_state_review')
+}
+
+/** Give the ticked contacts their park's state: each only while it still holds the state the
+ *  check listed. Nothing is uploaded again. How many changed. */
+export async function applyParkStates(
+  changes: { id: string; state: string | null; parkState: string }[],
+): Promise<number> {
+  return invoke<number>('apply_park_states', { changes })
+}
+
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
  * identity the "new one" badge keys on (never the QRZ country string). */
 export async function resolveEntity(call: string): Promise<string | null> {

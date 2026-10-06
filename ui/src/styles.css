@@ -8361,6 +8361,55 @@ select optgroup {
      `.logconfirm` above; only the width differs. */
   width: min(480px, calc(0.94 * var(--vw-eff, 100vw)));
 }
+/* "Check park states": `class="logconfirm park-review"` — the viewport cap and the scroll come
+   from `.logconfirm`; wider, for a row per contact. */
+.park-review {
+  width: min(640px, calc(0.94 * var(--vw-eff, 100vw)));
+}
+.park-review:focus {
+  outline: none;
+}
+.park-review-intro,
+.park-review-note {
+  margin: 0 0 var(--space-3);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--text-dim);
+}
+.park-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border-soft);
+}
+.park-review-row label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.park-review-row.ticked label {
+  color: var(--text);
+}
+.park-review-call {
+  font-weight: 700;
+  min-width: 7ch;
+}
+.park-review-change {
+  font-weight: 700;
+  margin-left: auto;
+}
+.park-review-confirmed {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--state-good);
+  border: 1px solid color-mix(in srgb, var(--state-good) 40%, transparent);
+}
 .logconfirm-sub.danger {
   color: var(--state-weak);
   font-weight: 800;
