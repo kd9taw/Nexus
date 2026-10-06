@@ -2368,8 +2368,9 @@ export async function haltTx(): Promise<AppSnapshot> {
 
 /** Repair clock: run the repair the clock check found, once, through Windows' administrator
  *  prompt. Resolves `true` when it took and `false` when it did not (the prompt was declined, or
- *  a step failed). Rejects with `onAir` while anything is transmitting, `repairRunning` while a
- *  repair is already running, and `nothingToRepair` when none is on offer. */
+ *  a step failed). Rejects with `onAir` while anything is transmitting, `midMessage` while a JS8
+ *  or Tempo message of several overs is part-way through, `repairRunning` while a repair is
+ *  already running, and `nothingToRepair` when none is on offer. */
 export async function repairClock(): Promise<boolean> {
   return invoke<boolean>('repair_clock')
 }

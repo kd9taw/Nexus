@@ -19,6 +19,9 @@ mod by_id_tests;
 /// A clock repair holds transmit: every way to start one refused, nothing keyed or unkeyed.
 #[cfg(test)]
 mod clock_repair_hold_tests;
+/// A message of several overs part-way through, which a clock repair must not pause.
+#[cfg(test)]
+mod clock_repair_message_tests;
 mod field_day_display;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
@@ -25200,6 +25203,42 @@ contact yourself."
     /// transmission.
     pub fn on_air(&self) -> bool {
         self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
+    }
+
+    /// Is a message that takes several overs part-way through: its first over gone, the rest
+    /// still to go?
+    ///
+    /// The clock-repair interlock's other half ([`Self::on_air`] is the first). A press now is
+    /// refused, because the repair's hold ([`Self::hold_tx_for_clock_repair`]) would stop the
+    /// message between two of its overs, and the far end may not put it back together across
+    /// the gap (the operator's ruling, 2026-10-06: a repair never pauses a message). Read off the
+    /// queues the overs go out from:
+    ///
+    /// - JS8: the next frame is not a message's first, so the frames before it have gone. JS8
+    ///   keys every period, so the slot flag [`Self::on_air`] reads is up between them too.
+    /// - Tempo chat, the only wire in Chat mode that splits a message. A directed message goes
+    ///   out as its identify frame and then its chunks, in order, so a chunk at the front of
+    ///   `tx_queue` means the identify frame has gone. A broadcast's chunks go out in order, so
+    ///   a queued chunk whose previous chunk is not queued means that one has gone. The whole
+    ///   broadcast queue is read, not just its front, because a QSY directive is queued ahead of
+    ///   whatever is waiting there.
+    ///
+    /// A message queued but not started is not in progress: the hold makes it wait, whole. A
+    /// structured frame whose first word reads as a chunk header (an acknowledgement to P29YY,
+    /// say) counts too, for the one over it waits.
+    pub fn message_in_progress(&self) -> bool {
+        let js8 = self.js8_station.queue().first().is_some_and(|f| !f.first);
+        let chat = matches!(self.mode, Mode::Chat) && {
+            let part =
+                |f: &String| tempo_core::text::parse_chunk(f).map(|(id, seq, _, _)| (id, seq));
+            let broadcast: Vec<(char, usize)> =
+                self.broadcast_queue.iter().filter_map(part).collect();
+            self.tx_queue.front().and_then(part).is_some()
+                || broadcast
+                    .iter()
+                    .any(|&(id, seq)| seq > 1 && !broadcast.contains(&(id, seq - 1)))
+        };
+        js8 || chat
     }
 
     /// See [`StationCore::take_all_txt_pending`].

@@ -6856,6 +6856,7 @@ export const FR: PartialCatalog = {
   "topbar.clock.repair.note": "demande les droits admin",
   "topbar.clock.repair.title": "Corrige ce que le contrôle de l'horloge a trouvé. Windows demande d'abord les droits d'administrateur, et Nexus n'applique la correction que lorsque vous cliquez ici.",
   "topbar.clock.repair.onAir": "Pas pendant l'émission : une réparation de l'horloge peut la déplacer au milieu d'une émission. Réessayez quand l'émetteur est libre.",
+  "topbar.clock.repair.midMessage": "Pas au milieu d'un message : un message JS8 ou Tempo est encore en cours d'envoi, et une réparation de l'horloge l'interromprait entre deux de ses émissions. Réessayez quand il est terminé.",
   "topbar.clock.repair.running": "Une réparation de l'horloge est déjà en cours. Répondez à la demande de Windows ou attendez qu'elle se termine.",
   "topbar.clock.repair.nothing": "Rien à réparer pour l'instant : le dernier contrôle de l'horloge n'a rien trouvé.",
   "topbar.clock.repair.done": "Horloge réparée. Survolez l'indicateur de l'horloge pour voir ce qui a changé.",

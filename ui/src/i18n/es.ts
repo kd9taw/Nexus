@@ -6856,6 +6856,7 @@ export const ES: PartialCatalog = {
   "topbar.clock.repair.note": "pide permisos de admin",
   "topbar.clock.repair.title": "Corrige lo que encontró la comprobación del reloj. Windows pide antes permisos de administrador, y Nexus solo aplica la corrección cuando pulsas aquí.",
   "topbar.clock.repair.onAir": "No mientras transmites: una reparación del reloj puede moverlo en mitad de una pasada. Inténtalo de nuevo cuando el transmisor esté libre.",
+  "topbar.clock.repair.midMessage": "No en mitad de un mensaje: aún se está enviando un mensaje de JS8 o de Tempo, y una reparación del reloj lo pausaría entre dos de sus pasadas. Inténtalo de nuevo cuando haya terminado.",
   "topbar.clock.repair.running": "Ya hay una reparación del reloj en marcha. Responde al aviso de Windows o espera a que termine.",
   "topbar.clock.repair.nothing": "Ahora no hay nada que reparar: la última comprobación del reloj no encontró nada.",
   "topbar.clock.repair.done": "Reloj reparado. Pasa el ratón por el indicador del reloj para ver qué cambió.",

@@ -5175,6 +5175,7 @@ export const DE: PartialCatalog = {
   "topbar.clock.repair.note": "fragt nach Adminrechten",
   "topbar.clock.repair.title": "Behebt, was die Uhrenprüfung gefunden hat. Windows fragt zuerst nach Administratorrechten, und Nexus führt die Reparatur nur aus, wenn Sie hier klicken.",
   "topbar.clock.repair.onAir": "Nicht während des Sendens: Eine Uhrreparatur kann die Uhr mitten in einem Durchgang verstellen. Versuchen Sie es erneut, wenn der Sender frei ist.",
+  "topbar.clock.repair.midMessage": "Nicht mitten in einer Nachricht: Eine JS8- oder Tempo-Nachricht wird noch gesendet, und eine Uhrreparatur würde sie zwischen zwei ihrer Durchgänge anhalten. Versuchen Sie es erneut, wenn sie fertig gesendet ist.",
   "topbar.clock.repair.running": "Eine Uhrreparatur läuft bereits. Beantworten Sie die Windows-Abfrage oder warten Sie, bis sie fertig ist.",
   "topbar.clock.repair.nothing": "Gerade gibt es nichts zu reparieren: Die letzte Uhrenprüfung hat nichts gefunden.",
   "topbar.clock.repair.done": "Uhr repariert. Fahren Sie über die Uhranzeige, um zu sehen, was sich geändert hat.",

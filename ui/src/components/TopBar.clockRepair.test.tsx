@@ -142,6 +142,7 @@ describe('a press', () => {
 
   it.each([
     ['onAir', 'topbar.clock.repair.onAir'],
+    ['midMessage', 'topbar.clock.repair.midMessage'],
     ['repairRunning', 'topbar.clock.repair.running'],
     ['nothingToRepair', 'topbar.clock.repair.nothing'],
     ['clock repair task failed: cancelled', 'topbar.clock.repair.failed'],

@@ -17352,10 +17352,11 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
 /// The operator pressed **Repair clock** (the top bar, beside the clock readout): run the repair
 /// the clock check found, once, through Windows' own administrator prompt. `true` when it took,
 /// `false` when it did not (the prompt was declined, or a step failed). Refused with `onAir` while
-/// anything is transmitting, `repairRunning` while a repair is already running and
-/// `nothingToRepair` when none is on offer. The prompt waits for an answer, so this runs on the
-/// blocking pool, never on an async worker. Nexus Remote has no road to it: the prompt would wait
-/// on a screen nobody may be sitting at (`remote_service::application::Command` has no variant).
+/// anything is transmitting, `midMessage` while a JS8 or Tempo message of several overs is
+/// part-way through, `repairRunning` while a repair is already running and `nothingToRepair` when
+/// none is on offer. The prompt waits for an answer, so this runs on the blocking pool, never on
+/// an async worker. Nexus Remote has no road to it: the prompt would wait on a screen nobody may
+/// be sitting at (`remote_service::application::Command` has no variant).
 #[tauri::command]
 async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
     #[cfg(feature = "radio")]
@@ -17366,6 +17367,7 @@ async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
             tempo_audio::service::repair_clock(&engine).map_err(|refusal| {
                 match refusal {
                     ClockRepairRefusal::OnAir => "onAir",
+                    ClockRepairRefusal::MidMessage => "midMessage",
                     ClockRepairRefusal::Running => "repairRunning",
                     ClockRepairRefusal::NothingToRepair => "nothingToRepair",
                 }

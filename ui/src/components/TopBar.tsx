@@ -298,6 +298,7 @@ function ClockChip({ radio }: { radio: RadioStatus }) {
 /** What a refused Repair clock press says. The backend's codes, each its own sentence. */
 function clockRepairRefused(code: unknown): string {
   if (code === 'onAir') return t('topbar.clock.repair.onAir')
+  if (code === 'midMessage') return t('topbar.clock.repair.midMessage')
   if (code === 'repairRunning') return t('topbar.clock.repair.running')
   if (code === 'nothingToRepair') return t('topbar.clock.repair.nothing')
   return t('topbar.clock.repair.failed')

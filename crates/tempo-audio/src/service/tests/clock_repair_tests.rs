@@ -153,6 +153,22 @@ fn station() -> Arc<Mutex<Engine>> {
     Arc::new(Mutex::new(e))
 }
 
+/// A Tempo station (TempoFast, chat), TX off until something is sent.
+fn tempo_station() -> Arc<Mutex<Engine>> {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    e.set_tier(Tier::TempoFast);
+    Arc::new(Mutex::new(e))
+}
+
+/// A JS8 station on the 20 m watering hole, TX on.
+fn js8_station() -> Arc<Mutex<Engine>> {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    e.js8_enter();
+    e.set_frequency(14.078, "20m", "USB");
+    e.set_tx_enabled(true);
+    Arc::new(Mutex::new(e))
+}
+
 /// What the top bar reads: the note and whether the button shows.
 fn shown(engine: &Arc<Mutex<Engine>>) -> (String, bool) {
     let radio = engine_lock(engine).snapshot().radio;
@@ -377,6 +393,91 @@ fn refused_while_cw_is_still_sending() {
     assert_eq!(machine.elevations.get(), 0);
 
     engine_lock(&engine).stop_cw();
+    assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
+    assert_eq!(machine.elevations.get(), 1);
+}
+
+/// ⛔ A REPAIR NEVER PAUSES A MESSAGE (the operator's ruling, 2026-10-06: "Refuse the press
+/// mid-message"). A Tempo broadcast that takes several overs, pressed in the slot between two of
+/// them: nothing is on the air then, so the transmit interlock alone let the press through, and
+/// the hold stopped the message half sent. It is refused, Windows is asked nothing, and the offer
+/// survives. The same press once the message has gone runs (the control).
+#[test]
+fn refused_while_a_tempo_message_is_part_way_through() {
+    let engine = tempo_station();
+    let repair = ClockRepair::new();
+    let machine = Machine::new(stopped_time_service());
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+    let mut slot = {
+        let mut e = engine_lock(&engine);
+        e.broadcast("THIS ONE TAKES SEVERAL OVERS TO SAY");
+        let own = u64::from(!e.tx_even());
+        assert!(e.plan_tx(own).is_some(), "premise: its first over");
+        assert!(
+            e.plan_tx(own + 1).is_none(),
+            "premise: the slot between two of its overs"
+        );
+        assert!(!e.on_air(), "premise: nothing on the air between its overs");
+        own + 2
+    };
+    assert_eq!(
+        repair_clock_with(&engine, &repair, &machine),
+        Err(ClockRepairRefusal::MidMessage)
+    );
+    assert_eq!(machine.elevations.get(), 0);
+    assert!(shown(&engine).1, "the offer survives the refusal");
+
+    {
+        let mut e = engine_lock(&engine);
+        while e.plan_tx(slot).is_some() {
+            slot += 2;
+        }
+        assert!(e.plan_tx(slot + 1).is_none());
+        assert!(
+            !e.on_air() && !e.message_in_progress(),
+            "premise: the message has gone"
+        );
+    }
+    assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
+    assert_eq!(machine.elevations.get(), 1);
+}
+
+/// …and a JS8 message of several frames, pressed between two of them. JS8 keys every period, so
+/// the slot flag stays up for the whole message and the transmit interlock already refused this
+/// press, as "on the air". It now says what to wait for: the message. The press once the message
+/// has gone runs (the control).
+#[test]
+fn refused_while_a_js8_message_is_part_way_through() {
+    let engine = js8_station();
+    let repair = ClockRepair::new();
+    let machine = Machine::new(stopped_time_service());
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+    {
+        let mut e = engine_lock(&engine);
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .expect("queues");
+        assert!(e.js8_state().queue.len() > 1, "premise: several frames");
+        assert!(e.plan_tx(0).is_some(), "premise: its first frame");
+    }
+    assert_eq!(
+        repair_clock_with(&engine, &repair, &machine),
+        Err(ClockRepairRefusal::MidMessage)
+    );
+    assert_eq!(machine.elevations.get(), 0);
+
+    {
+        let mut e = engine_lock(&engine);
+        let mut slot = 1;
+        while e.plan_tx(slot).is_some() {
+            slot += 1;
+        }
+        assert!(
+            !e.on_air() && !e.message_in_progress(),
+            "premise: the message has gone"
+        );
+    }
     assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
     assert_eq!(machine.elevations.get(), 1);
 }

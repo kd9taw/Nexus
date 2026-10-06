@@ -11102,8 +11102,9 @@ export const EN = {
   // press, so `note` says the prompt is coming before it comes, and `title` says it in full.
   // ⚠️ KEEP `note` NO WIDER THAN THE CHIP: it sits in the chip's column, and a line wider than
   // the chip widens the bar (the whole sentence pushed the Tx cycle onto a second row at
-  // 1920×1080). The toasts say what happened: `onAir`, `running` and `nothing` are the three
-  // refusals, and nothing ran for any of them.
+  // 1920×1080). The toasts say what happened: `onAir`, `midMessage`, `running` and `nothing` are
+  // the four refusals, and nothing ran for any of them. `midMessage` is a JS8 or Tempo message of
+  // several overs part-way through: a repair would pause it between two of them, so it waits.
   'topbar.clock.repair.label': 'Repair clock',
   'topbar.clock.repair.busy': 'Repairing…',
   'topbar.clock.repair.note': 'asks for admin rights',
@@ -11111,6 +11112,8 @@ export const EN = {
     'Fix what the clock check found. Windows asks for administrator rights first, and Nexus runs the fix only when you press this.',
   'topbar.clock.repair.onAir':
     'Not while transmitting: a clock repair can move the clock in the middle of an over. Try again when the transmitter is idle.',
+  'topbar.clock.repair.midMessage':
+    'Not in the middle of a message: a JS8 or Tempo message is still going out, and a clock repair would pause it between two of its overs. Try again when it has finished.',
   'topbar.clock.repair.running':
     'A clock repair is already running. Answer the Windows prompt, or wait for it to finish.',
   'topbar.clock.repair.nothing':

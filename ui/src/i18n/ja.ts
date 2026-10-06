@@ -6882,6 +6882,7 @@ export const JA: PartialCatalog = {
   "topbar.clock.repair.note": "管理者権限が必要",
   "topbar.clock.repair.title": "時刻チェックで見つかった問題を修正します。先にWindowsが管理者権限を求め、Nexusはこのボタンを押したときだけ修正を実行します。",
   "topbar.clock.repair.onAir": "送信中は実行できません:時計の修復で送信の途中に時計が動くことがあります。送信が終わってからもう一度お試しください。",
+  "topbar.clock.repair.midMessage": "メッセージの途中では実行できません:JS8またはTempoのメッセージをまだ送信中で、時計を修復するとメッセージが送信の合間で止まってしまいます。メッセージの送信が終わってからもう一度お試しください。",
   "topbar.clock.repair.running": "時計の修復はすでに実行中です。Windowsの確認に応答するか、終わるまでお待ちください。",
   "topbar.clock.repair.nothing": "今は修復するものがありません:最新の時刻チェックでは何も見つかりませんでした。",
   "topbar.clock.repair.done": "時計を修復しました。時計の表示にマウスを重ねると変更内容を確認できます。",

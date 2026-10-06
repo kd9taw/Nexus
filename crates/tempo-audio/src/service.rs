@@ -13115,6 +13115,9 @@ impl Drop for TxHeldForRepair<'_> {
 pub enum ClockRepairRefusal {
     /// Something is on the air (the TX interlock in [`repair_clock`]).
     OnAir,
+    /// A JS8 or Tempo message of several overs is part-way through
+    /// ([`Engine::message_in_progress`]): the repair's hold would stop it between two of them.
+    MidMessage,
     /// A repair is already running, and Windows may still be asking about it.
     Running,
     /// No repair is on offer: the last diagnosis found no fault to fix, the clock
@@ -13157,9 +13160,17 @@ fn repair_clock_with(
     // starting while it is up (the operator's ruling, 2026-10-06): raised under
     // the same lock as the check, so nothing can key between the two, and taken
     // off when the helper exits, or at its bound.
+    //
+    // A message of several overs part-way through is refused too: the hold would
+    // stop it between two of them, and a repair never pauses a message (the
+    // operator's ruling, 2026-10-06). Asked first, because JS8 keeps the slot flag
+    // up for a whole message, and "wait for the message" is the answer that helps.
     let hold_until = Instant::now() + repair.tx_hold;
     {
         let mut eng = engine_lock(engine);
+        if eng.message_in_progress() {
+            return Err(ClockRepairRefusal::MidMessage);
+        }
         if eng.on_air() {
             return Err(ClockRepairRefusal::OnAir);
         }
