@@ -28,6 +28,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
+import { setUnitsMirror } from '../units'
 import type { SatPass, SatSked, SatSkedWindow, SatView } from '../types'
 
 const api = vi.hoisted(() => ({
@@ -114,6 +115,9 @@ const theView = (): SatView => ({
 
 beforeEach(() => {
   localStorage.clear()
+  // Metric, explicitly: the separation is read in km here, and jsdom's en-US locale would resolve
+  // Automatic to miles. The units case is its own test below.
+  setUnitsMirror('metric')
   localStorage.setItem('nexus.sats.chasing', JSON.stringify(['RS-44', 'AO-91']))
   for (const m of Object.values(api)) m.mockClear()
   api.getSatellites.mockImplementation(() => Promise.resolve(theView()))
@@ -181,6 +185,26 @@ describe('an empty answer is an answer', () => {
     expect(note).toMatch(/1473 km/)
     expect(note).toMatch(/2 ★ birds/)
     expect(note).toMatch(/5° at BOTH ends/)
+  })
+
+  // Both distances in the empty answer follow Settings ▸ Units: the pair's separation and the
+  // footprint limit the explanation quotes. They printed kilometres whatever the setting said.
+  // 1473 km is 915 mi; 3300 km is 2051 mi.
+  it('states the separation and the footprint limit in the units the operator chose', async () => {
+    setUnitsMirror('imperial')
+    await ask('IO91')
+    const empty = (await screen.findByTestId('sat-sked-empty')).textContent ?? ''
+    const note = screen.getByTestId('sat-sked-note').textContent ?? ''
+    expect(note).toMatch(/FN42, 915 mi away/)
+    expect(empty).toMatch(/past about 2051 mi apart/)
+    expect(note + empty).not.toMatch(/km/)
+  })
+
+  it('…and in kilometres under Metric', async () => {
+    await ask('IO91')
+    const empty = (await screen.findByTestId('sat-sked-empty')).textContent ?? ''
+    expect(screen.getByTestId('sat-sked-note').textContent).toMatch(/FN42, 1473 km away/)
+    expect(empty).toMatch(/past about 3300 km apart/)
   })
 
   it('renders no rows at all — the empty state is not a header over a list', async () => {

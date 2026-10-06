@@ -58,7 +58,7 @@ import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
-import { setUnitsMirror } from './units'
+import { resolveUnits, setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
@@ -882,7 +882,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             const last = openingAlertRef.current.get(key) ?? 0
             if (tnow - last < OPENING_ALERT_COOLDOWN_MS) continue
             openingAlertRef.current.set(key, tnow)
-            const spec = openingToastSpec(o)
+            const spec = openingToastSpec(o, resolveUnits(settingsRef.current?.units))
             if (spec.beepHz != null) doubleBeep(spec.beepHz)
             pushToast(spec.message, spec.kind, spec.ttlMs, spec.prominent ? { alert: true, prominent: true } : { alert: true })
           }

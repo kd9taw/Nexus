@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
+import { setUnitsMirror } from '../units'
 import type { SatDetail, SatPass, SatTrackStatus, SatView } from '../types'
 
 const api = vi.hoisted(() => ({
@@ -150,6 +151,9 @@ const settings = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   localStorage.clear()
+  // Metric, explicitly: these cases pin the labels and the absences, and read their figures in km.
+  // Left on Automatic, jsdom's en-US locale would resolve to miles. The units cases are below.
+  setUnitsMirror('metric')
   api.getSatellites.mockReset()
   api.getSatellites.mockImplementation(() => Promise.resolve(view()))
   api.getSatSchedule.mockReset()
@@ -244,5 +248,33 @@ describe('the sky-dome readout carries the bird’s altitude beside its range', 
     const text = (await sky()).textContent ?? ''
     expect(text).not.toMatch(/Altitude/)
     expect(text).not.toMatch(/km/)
+  })
+})
+
+// Both figures are distances, so both follow Settings ▸ Units like every other distance in the
+// app; they printed kilometres whatever the setting said. 1234.4 km is 767 mi, 629.6 km 391 mi,
+// 1234.6 km 767 mi and 812 km 505 mi.
+describe('altitude and range follow the units setting', () => {
+  it('Imperial: the Birds list states each altitude in miles', async () => {
+    setUnitsMirror('imperial')
+    render(<SatellitesView />)
+    expect((await birdRow('RS-44')).textContent).toMatch(/alt 767 mi/)
+    expect((await birdRow('SO-50')).textContent).toMatch(/alt 391 mi/)
+    expect((await birdRow('RS-44')).textContent).not.toMatch(/km/)
+  })
+
+  it('Imperial: the sky-dome readout states range and altitude in miles', async () => {
+    setUnitsMirror('imperial')
+    api.getSatDetail.mockImplementation(() => Promise.resolve(detail()))
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(status({ altKm: 1234.6 })))
+    render(<SatellitesView focusSat="RS-44" />)
+    await screen.findByTestId('sat-ghost')
+    const readout = (await screen.findByRole('img')).closest('.sat-sky')?.querySelector('.sat-dome-readout')
+    const rows = Object.fromEntries(
+      [...(readout?.querySelectorAll('dt') ?? [])].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]),
+    )
+    // The range-rate beside the range is a speed, not a distance, and keeps its km/s.
+    expect(rows.Range).toBe('505 mi · -5.42 km/s closing')
+    expect(rows.Altitude).toBe('767 mi')
   })
 })
