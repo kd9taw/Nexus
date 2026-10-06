@@ -449,7 +449,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows none). A US state your log does not yet hold on that spot's band is lit in the New State
   colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
   a park on a state line, a reminder that the contact counts for the state the activator is
-  actually in. Screen readers read the name. The Remote page's board does not show states yet.
+  actually in. Screen readers read the name. The Remote page's board shows them too, lit the same
+  way; it needs the Remote page's update.
 - **POTA/SOTA activations: your contacts say which state you activated from.** Start an
   activation at a park in one state, or on a summit SOTA places in one, and every contact you log
   carries that state as `MY_STATE`, in your log, your exports and your uploads. At a park on a

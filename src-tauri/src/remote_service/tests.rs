@@ -751,8 +751,18 @@ fn cloud_runtime_probe() {
                 if value["missing"].as_str() == Some(program) {
                     continue;
                 }
-                let rows: Vec<propagation::OtaSpot> =
+                let mut rows: Vec<propagation::OtaSpot> =
                     serde_json::from_value(feed["spots"].clone()).unwrap();
+                // The states a spot's park or summit is in, by reference, as the feed's parser
+                // sets them (they are never serialized, so the fixture cannot carry them).
+                for row in &mut rows {
+                    if let Some(states) = value["states"][row.reference.as_str()].as_array() {
+                        row.states = states
+                            .iter()
+                            .map(|s| s.as_str().unwrap().to_owned())
+                            .collect();
+                    }
+                }
                 cache.insert(
                     program.into(),
                     (crate::now_unix() - value["age"].as_i64().unwrap_or(0), rows),

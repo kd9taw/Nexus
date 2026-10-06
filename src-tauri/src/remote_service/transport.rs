@@ -371,6 +371,13 @@ pub async fn connected(
         "x-nexus-application-rotator-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Each activator's state on the POTA/SOTA board. A v17 service ignores this header and keeps
+    // the exact v17 contract: it never tells this station a browser agreed v18, so it never asks
+    // for a spot with a state in it, and no page that cannot read one is ever sent one.
+    request.headers_mut().insert(
+        "x-nexus-application-ota-states-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     request.headers_mut().insert(
         "x-nexus-operation-version",
         "2".parse().map_err(|_| "invalidResponse")?,
@@ -1023,7 +1030,7 @@ mod server_message_schema {
             json!({"type":"operationRequest","sessionId":ID,"deviceId":ID,"operationVersion":null,
                 "request":{"type":"state","requestId":ID},"proof":proof()}),
             json!({"type":"applicationQuery","requestId":ID,"collection":"log","cursor":null,
-                "search":"","unconfirmed":false,"after":null}),
+                "search":"","unconfirmed":false,"after":null,"queryVersion":18}),
             json!({"type":"applicationWatch","watchId":ID,"topics":["get_snapshot"],"requestId":null}),
             json!({"type":"applicationCredit","watchId":ID,"previousRequestId":ID,"requestId":ID}),
             json!({"type":"applicationRead","requestId":ID,"command":"get_snapshot","revision":null}),
@@ -1199,6 +1206,7 @@ mod server_message_schema {
         "pub search: String,",
         "pub unconfirmed: bool,",
         "pub after: Option<u64>,",
+        "pub query_version: Option<u8>,",
         "}",
         "#[serde(rename_all = \"camelCase\")]",
         "pub enum Collection {",
@@ -1271,6 +1279,9 @@ mod server_message_schema {
         "applicationQuery.collection statistics: accepted",
         "applicationQuery.collection: required",
         "applicationQuery.cursor: optional",
+        // Named by a relay only to a station that advertised x-nexus-application-ota-states-version,
+        // so no older station is ever sent it.
+        "applicationQuery.queryVersion: optional",
         "applicationQuery.requestId: required",
         "applicationQuery.search: required",
         "applicationQuery.unconfirmed: required",

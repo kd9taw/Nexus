@@ -728,10 +728,16 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     await ota.take(value => value.type === 'session')
     ota.send({ type: 'applicationHello', version: 9 })
     assert.ok((await ota.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_ota'))
+    // Where each fixture spot is, as the feed's parser would say. The log seeded above holds
+    // California on 20 m (K6ABC) and no contact in North Dakota or Arizona on any band.
+    const otaStates = { 'US-0002': ['US-CA', 'US-ND'], 'US-0003': ['US-CA'], 'US-0004': [], 'W7A/MN-001': ['US-AZ'] }
+    // The keys a page before v18 lists for a spot, refusing any other (ota.ts as 1.16 shipped it).
+    const olderSpotKeys = ['activator', 'bandOpen', 'comment', 'freqKhz', 'grid', 'lat', 'lon', 'mode', 'name', 'newPark', 'program', 'reference', 'spotTimeUnix', 'spotter']
     for (const [age, missing] of [[0, null], [900, 'SOTA'], [0, null]]) {
-      assert.equal((await probe.send({ type: 'seedOta', age, missing })).seeded, true)
+      assert.equal((await probe.send({ type: 'seedOta', age, missing, states: otaStates })).seeded, true)
       const page = await queryPage(ota, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
       assert.equal(page.type, 'applicationPage')
+      for (const spot of page.meta.source.feeds.flatMap(feed => feed.spots)) assert.deepEqual(Object.keys(spot).sort(), olderSpotKeys, 'a v9 page is never sent a key it does not list')
       const value = statsReference.parseOta(page)
       assert.equal(value.feeds[0].status, age ? 'expired' : 'ready')
       assert.equal(value.feeds[1].status, missing ? 'unavailable' : 'ready')
@@ -743,6 +749,30 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       }
     }
     ota.close()
+    // The page 1.16 shipped (v17) and the page that reads states (v18), on this same new station.
+    for (const hello of [17, 18]) {
+      const { value: boardTicket } = await browser.post(`stations/${stationId}/ticket`)
+      const board = await browser.open(stationId, boardTicket.ticket)
+      await board.take(value => value.type === 'session')
+      board.send({ type: 'applicationHello', version: hello })
+      assert.equal((await board.take(value => value.type === 'applicationCapabilities')).version, hello)
+      assert.equal((await probe.send({ type: 'seedOta', age: 0, missing: null, states: otaStates })).seeded, true)
+      const page = await queryPage(board, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
+      assert.equal(page.type, 'applicationPage')
+      const value = statsReference.parseOta(page)
+      if (hello === 17) {
+        for (const spot of page.meta.source.feeds.flatMap(feed => feed.spots)) assert.deepEqual(Object.keys(spot).sort(), olderSpotKeys, 'a v17 page is never sent a key it does not list')
+      } else {
+        // The station's own rule: per band, US states only. CA is in the log on 20 m, not on 40 m.
+        assert.deepEqual(value.feeds.flatMap(feed => feed.spots).map(s => [s.reference, s.states, s.neededStates]), [
+          ['US-0002', ['US-CA', 'US-ND'], ['US-ND']],
+          ['US-0003', ['US-CA'], ['US-CA']],
+          ['US-0004', [], []],
+          ['W7A/MN-001', ['US-AZ'], ['US-AZ']],
+        ])
+      }
+      board.close()
+    }
     const { value: fdTicket } = await browser.post(`stations/${stationId}/ticket`)
     const fd = await browser.open(stationId, fdTicket.ticket)
     await fd.take(value => value.type === 'session')
@@ -799,9 +829,9 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const modes=await browser.open(stationId,modesTicket.ticket)
     modes.ackObservations()
     await modes.take(value=>value.type==='session')
-    modes.send({type:'applicationHello',version:17})
+    modes.send({type:'applicationHello',version:18})
     const modesCapabilities=await modes.take(value=>value.type==='applicationCapabilities')
-    assert.equal(modesCapabilities.version,17,'the actual station advertises the lookups, alerts and rotator extensions')
+    assert.equal(modesCapabilities.version,18,'the actual station advertises the lookups, alerts, rotator and activator-state extensions')
     assert.ok(modesCapabilities.commands.includes('get_remote_navigation'))
     assert.ok(modesCapabilities.commands.includes('get_remote_parks'))
     assert.ok(modesCapabilities.commands.includes('get_remote_pounce'))
