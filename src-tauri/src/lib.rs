@@ -17344,6 +17344,39 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
     }
 }
 
+/// The operator pressed **Repair clock** (the top bar, beside the clock readout): run the repair
+/// the clock check found, once, through Windows' own administrator prompt. `true` when it took,
+/// `false` when it did not (the prompt was declined, or a step failed). Refused with `onAir` while
+/// anything is transmitting, `repairRunning` while a repair is already running and
+/// `nothingToRepair` when none is on offer. The prompt waits for an answer, so this runs on the
+/// blocking pool, never on an async worker. Nexus Remote has no road to it: the prompt would wait
+/// on a screen nobody may be sitting at (`remote_service::application::Command` has no variant).
+#[tauri::command]
+async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
+    #[cfg(feature = "radio")]
+    {
+        use tempo_audio::service::ClockRepairRefusal;
+        let engine = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::service::repair_clock(&engine).map_err(|refusal| {
+                match refusal {
+                    ClockRepairRefusal::OnAir => "onAir",
+                    ClockRepairRefusal::Running => "repairRunning",
+                    ClockRepairRefusal::NothingToRepair => "nothingToRepair",
+                }
+                .to_string()
+            })
+        })
+        .await
+        .map_err(|e| format!("clock repair task failed: {e}"))?
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("nothingToRepair".to_string())
+    }
+}
+
 /// Curated Hamlib rig models `(model_number, name)` for the Settings dropdown.
 #[tauri::command]
 fn get_rig_models() -> Vec<(u32, String)> {
@@ -32940,6 +32973,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             halt_tx,
             dismiss_tx_alarm,
             test_cat,
+            repair_clock,
             set_tx_even,
             set_tx_cycle_auto,
             set_beacon,

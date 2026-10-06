@@ -21259,6 +21259,7 @@ contact yourself."
             s.radio.clock_servers = held.map(|o| o.servers);
             s.radio.clock_gross_ms = clock.gross_ms();
             s.radio.clock_owner_note = self.station.clock_owner_note().to_string();
+            s.radio.clock_repair_available = self.station.clock_repair_available();
         }
         s.radio.source = self.source_kind;
         // ⚠️ THE CACHE, NOT THE LOCK. Reading `source_lock(&self.source).label()`
@@ -25044,6 +25045,11 @@ contact yourself."
     /// See [`StationCore::set_clock_owner_note`].
     pub fn set_clock_owner_note(&mut self, note: String) {
         self.station.set_clock_owner_note(note)
+    }
+
+    /// See [`StationCore::set_clock_repair_available`].
+    pub fn set_clock_repair_available(&mut self, available: bool) {
+        self.station.set_clock_repair_available(available)
     }
 
     /// Is anything on the air right now?

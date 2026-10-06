@@ -1639,6 +1639,11 @@ pub struct StationCore {
     /// can run OS commands; the engine only carries it to the UI. Empty until a
     /// detection pass has run.
     pub(crate) clock_owner_note: String,
+    /// The last detection pass found a repair that would help (Windows only), and
+    /// it has not been run. It runs only when the operator presses Repair clock;
+    /// `tempo_audio` keeps the repair itself, and the engine carries the fact to
+    /// the UI so the button shows.
+    pub(crate) clock_repair_available: bool,
     /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
     /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
     /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
@@ -1849,6 +1854,7 @@ impl StationCore {
         Self {
             clock: crate::clocksync::ClockState::default(),
             clock_owner_note: String::new(),
+            clock_repair_available: false,
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             dropped_uploads: Vec::new(),
@@ -4164,6 +4170,16 @@ impl StationCore {
     /// The clock-ownership line, empty until a detection pass has run.
     pub fn clock_owner_note(&self) -> &str {
         &self.clock_owner_note
+    }
+
+    /// Record whether a clock repair is on offer (see [`Self::clock_repair_available`]).
+    pub fn set_clock_repair_available(&mut self, available: bool) {
+        self.clock_repair_available = available;
+    }
+
+    /// Whether a clock repair is on offer, for the Repair clock button.
+    pub fn clock_repair_available(&self) -> bool {
+        self.clock_repair_available
     }
 
     /// Set the offset directly, bypassing the probe. `Some` publishes it as a

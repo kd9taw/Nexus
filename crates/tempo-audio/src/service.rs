@@ -12906,10 +12906,6 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
     // (`clocksync::hold_window`). Dropped whenever a clock jump intervenes: the
     // difference across a step is not a drift rate.
     let mut prev: Option<(i64, Instant)> = None;
-    // Guard 9: at most one repair an hour, and a terminal stop after three
-    // consecutive failures. Lives across the whole thread — a limiter rebuilt
-    // per cycle limits nothing.
-    let mut limiter = crate::clockdiag::RepairLimiter::new();
     // Did the OS step the clock since the last pass? Set by the previous
     // sleep's early wake, which the radio loop's jump detector triggers. This is
     // the resume trigger, and it is why the loop carries a flag across an
@@ -12923,8 +12919,10 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
         if !enabled {
             // Off means off: drop the offset so nothing keeps steering by a
             // measurement the operator has asked us to stop taking. No re-probe
-            // request — this is a settings change, not a broken clock.
+            // request — this is a settings change, not a broken clock. Nor does a
+            // repair stay on offer from a diagnosis nobody is taking any more.
             engine_lock(&engine).clear_clock_offset(false);
+            clock_repair_withdraw(&engine, &CLOCK_REPAIR);
         } else if let Some(m) = clock_measure_confirmed() {
             let now = Instant::now();
             let rate_ppm = prev.and_then(|(ms, at)| {
@@ -12937,7 +12935,7 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
         // No `else` — a round that did not agree publishes NOTHING (B2).
 
         if enabled {
-            clock_diagnose_and_repair(&engine, measured, stepped, &mut limiter);
+            clock_diagnose(&engine, &CLOCK_REPAIR, &OsClock, measured, stepped);
         }
 
         stepped = clock_probe_sleep(&engine, CLOCK_PROBE_INTERVAL);
@@ -12949,8 +12947,50 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
     }
 }
 
-/// Diagnose the machine's clock, publish who owns it, and repair it if — and
-/// only if — the diagnosis says a repair would help.
+/// What the clock code asks of the operating system: an unprivileged diagnosis,
+/// and the one elevated repair. [`OsClock`] is the machine itself; the trait is
+/// there so a test can drive the clock code with a stand-in that COUNTS
+/// elevations, because an administrator prompt nobody asked for is the defect
+/// that has to stay out.
+trait ClockHost {
+    fn detect(
+        &self,
+        probe_reached_network: bool,
+        measured_offset_ms: Option<i64>,
+        just_stepped: bool,
+    ) -> crate::clockdiag::ClockDiagnosis;
+    fn run_repair_elevated(&self, repair: crate::clockdiag::Repair) -> bool;
+}
+
+/// The machine Nexus runs on, through `clockdiag`'s own commands.
+struct OsClock;
+
+impl ClockHost for OsClock {
+    fn detect(
+        &self,
+        probe_reached_network: bool,
+        measured_offset_ms: Option<i64>,
+        just_stepped: bool,
+    ) -> crate::clockdiag::ClockDiagnosis {
+        crate::clockdiag::detect(probe_reached_network, measured_offset_ms, just_stepped)
+    }
+
+    fn run_repair_elevated(&self, repair: crate::clockdiag::Repair) -> bool {
+        crate::clockdiag::run_repair_elevated(repair)
+    }
+}
+
+/// Diagnose the machine's clock and publish what was found: who owns it, and
+/// which repair, if any, would help. The repair itself waits for the operator to
+/// press **Repair clock** ([`repair_clock`]).
+///
+/// ⛔ **THIS NEVER ELEVATES.** It runs on a timer and on resume, with nobody at
+/// the keyboard asking for anything. It used to run the repair itself whenever
+/// the diagnosis said one would help, behind a once-an-hour limiter that lived in
+/// memory and so started over at every launch, and operators met a Windows
+/// administrator prompt nobody had asked for. The operator's ruling
+/// (2026-10-06): only when you press Repair. `the_background_pass_never_elevates`
+/// counts.
 ///
 /// **The detection is the feature; the poll write is not.** On a healthy,
 /// converged, always-on desktop the registry write improves 27–79 ms of drift to
@@ -12961,45 +13001,149 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
 /// believing it is last Tuesday. `clockdiag::decide` tells those apart, and each
 /// gets a different answer — including "nothing", which is the answer for most
 /// machines and for every machine running somebody else's time client.
-fn clock_diagnose_and_repair(
+fn clock_diagnose(
     engine: &Arc<Mutex<Engine>>,
+    repair: &ClockRepair,
+    host: &impl ClockHost,
     measured_offset_ms: Option<i64>,
     just_stepped: bool,
-    limiter: &mut crate::clockdiag::RepairLimiter,
 ) {
-    use crate::clockdiag::{self, Repair};
-
-    let diag = clockdiag::detect(
+    let diag = host.detect(
         measured_offset_ms.is_some(),
         measured_offset_ms,
         just_stepped,
     );
-    engine_lock(engine).set_clock_owner_note(diag.detail.clone());
-
-    if diag.repair == Repair::None {
-        return;
+    let available = diag.repair != crate::clockdiag::Repair::None;
+    {
+        let mut eng = engine_lock(engine);
+        eng.set_clock_owner_note(diag.detail.clone());
+        eng.set_clock_repair_available(available);
     }
-    // ⚠️ TX INTERLOCK (§8.3). Every repair below can move the system clock, and
-    // moving it mid-over changes the timebase the PTT-hold deadline and the slot
+    repair.offer(available.then_some(diag));
+}
+
+/// Take any repair off offer: the clock check was switched off, or the repair
+/// took. The next pass offers one again if the machine still needs it.
+fn clock_repair_withdraw(engine: &Arc<Mutex<Engine>>, repair: &ClockRepair) {
+    engine_lock(engine).set_clock_repair_available(false);
+    repair.offer(None);
+}
+
+/// The clock repair between the pass that finds it and the press that runs it:
+/// the diagnosis whose repair is on offer, and whether one is running.
+///
+/// One for the process ([`CLOCK_REPAIR`]): the clock thread and the desktop's
+/// command are its two ends, and the engine between them cannot name a
+/// `clockdiag` type, so it carries only the fact that a repair is available. The
+/// functions take it as an argument, so a test brings its own.
+struct ClockRepair {
+    offer: Mutex<Option<crate::clockdiag::ClockDiagnosis>>,
+    running: std::sync::atomic::AtomicBool,
+}
+
+static CLOCK_REPAIR: ClockRepair = ClockRepair::new();
+
+impl ClockRepair {
+    const fn new() -> Self {
+        Self {
+            offer: Mutex::new(None),
+            running: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn offer(&self, diag: Option<crate::clockdiag::ClockDiagnosis>) {
+        *self
+            .offer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = diag;
+    }
+
+    fn offered(&self) -> Option<crate::clockdiag::ClockDiagnosis> {
+        self.offer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The one repair that may run at a time, or `None` while another runs. A
+    /// refused claim must not release the running one, which is why the guard
+    /// is built only after the claim is won.
+    fn claim(&self) -> Option<RepairRunning<'_>> {
+        if self.running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return None;
+        }
+        Some(RepairRunning(&self.running))
+    }
+}
+
+/// A repair in progress. Dropping it ends the claim, however the press ends.
+struct RepairRunning<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for RepairRunning<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Why a press of **Repair clock** ran nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockRepairRefusal {
+    /// Something is on the air (the TX interlock in [`repair_clock`]).
+    OnAir,
+    /// A repair is already running, and Windows may still be asking about it.
+    Running,
+    /// No repair is on offer: the last diagnosis found nothing to do, the clock
+    /// check is off, or the repair already took.
+    NothingToRepair,
+}
+
+/// The operator pressed **Repair clock**: run the repair the last diagnosis
+/// offered, once, through the one elevated helper (one administrator prompt),
+/// and publish what it achieved. `Ok(true)` when it took, `Ok(false)` when it
+/// did not (the prompt was declined, or a step failed). Blocks until Windows
+/// has its answer, so a caller keeps it off any thread that must stay live.
+///
+/// Nothing else runs the elevated helper: the background pass only diagnoses.
+pub fn repair_clock(engine: &Arc<Mutex<Engine>>) -> Result<bool, ClockRepairRefusal> {
+    repair_clock_with(engine, &CLOCK_REPAIR, &OsClock)
+}
+
+fn repair_clock_with(
+    engine: &Arc<Mutex<Engine>>,
+    repair: &ClockRepair,
+    host: &impl ClockHost,
+) -> Result<bool, ClockRepairRefusal> {
+    // Claimed before anything else is looked at: a second press while Windows is
+    // still asking about the first is refused, never queued as a second prompt.
+    let _running = repair.claim().ok_or(ClockRepairRefusal::Running)?;
+    let diag = repair
+        .offered()
+        .ok_or(ClockRepairRefusal::NothingToRepair)?;
+    // ⚠️ TX INTERLOCK (§8.3). Every repair can move the system clock, and moving
+    // it mid-over changes the timebase the PTT-hold deadline and the slot
     // boundary were built from. Waiting costs at most one T/R period. This is a
     // transmit-path invariant: it is never the thing to relax to make something
-    // work.
+    // work. It is checked at the press: Windows' prompt holds no lock, so an over
+    // that starts while the prompt is still up is not caught here (the automatic
+    // repair this replaced had the same gap).
     if engine_lock(engine).on_air() {
-        return;
-    }
-    if !limiter.may_attempt(Instant::now()) {
-        return;
+        return Err(ClockRepairRefusal::OnAir);
     }
 
-    let ok = clockdiag::run_repair_elevated(diag.repair);
-    limiter.record(Instant::now(), ok);
+    let ok = host.run_repair_elevated(diag.repair);
 
     // GUARD 11: report what the machine ACHIEVED, never what we requested. A
     // successful write says the registry took the number, not that W32Time is
     // using it — `SpecialPollInterval` is clamped up to `2^MinPollInterval`, and
     // without the `0x1` SpecialInterval flag it is ignored outright.
-    let note = clockdiag::repair_outcome_note(&diag, ok, limiter.is_terminal());
+    let note = crate::clockdiag::repair_outcome_note(&diag, ok);
     engine_lock(engine).set_clock_owner_note(note);
+    // A repair that did not take stays on offer, so the operator can press again
+    // (after a prompt answered No by mistake, say).
+    if ok {
+        clock_repair_withdraw(engine, repair);
+    }
+    Ok(ok)
 }
 
 /// One corroborated measurement, confirmed by a second round (guards 1 and 2).
@@ -14428,6 +14572,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod clock_repair_tests;
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;

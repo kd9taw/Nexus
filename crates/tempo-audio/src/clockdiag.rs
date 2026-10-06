@@ -11,8 +11,10 @@
 //!
 //! **Detection is unprivileged and read-only.** Every query here runs as an
 //! ordinary user; the diagnosis costs nothing and can run on any machine. Only
-//! the repair needs elevation, and it is only offered once a diagnosis says a
-//! repair would actually help.
+//! the repair needs elevation, it is only offered once a diagnosis says a
+//! repair would actually help, and it runs only when the operator presses
+//! **Repair clock** (the operator's ruling, 2026-10-06). It used to run on its
+//! own, and operators met an administrator prompt nobody had asked for.
 //!
 //! **Nexus never calls a clock API.** On Windows the repair goes through
 //! `sc`, `w32tm` and `reg` — the OS's own tools — so W32Time stays the sole
@@ -784,9 +786,12 @@ pub fn achieved_poll_secs(status_after: &str) -> Option<u32> {
 /// deliberate: switching the installer to per-machine to get an always-elevated
 /// process would inherit a documented Tauri defect where the two install paths
 /// can leave a machine carrying a duplicate install. So the elevation is asked
-/// for at the moment it is needed instead, once, and only on a machine a
-/// diagnosis has already said is broken. Every command in the repair goes into
-/// **one** elevated invocation, because two invocations are two prompts.
+/// for at the moment it is needed instead: once for each press of **Repair
+/// clock**, and only on a machine a diagnosis has already offered a repair for.
+/// Nothing calls this on a timer (`service::repair_clock` is the one caller),
+/// which is also why there is no rate limit: every prompt is one the operator
+/// asked for. Every command in the repair goes into **one** elevated
+/// invocation, because two invocations are two prompts.
 ///
 /// ⚠️ There is no zero-prompt route. The technique that appears to offer one is
 /// a catalogued UAC bypass and is deliberately not implemented.
@@ -839,13 +844,7 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
 /// clamped up to `2^MinPollInterval`, and without the `0x1` SpecialInterval flag
 /// on the configured `NtpServer` entry it is ignored entirely. Reporting the
 /// requested number would be reporting an intention as a result.
-pub fn repair_outcome_note(diag: &ClockDiagnosis, ok: bool, terminal: bool) -> String {
-    if terminal {
-        return format!(
-            "{} — Nexus tried to fix it and could not, and has stopped trying",
-            diag.detail
-        );
-    }
+pub fn repair_outcome_note(diag: &ClockDiagnosis, ok: bool) -> String {
     if !ok {
         return format!("{} — Nexus could not fix it", diag.detail);
     }
@@ -885,62 +884,9 @@ pub fn poll_write_note(requested: u32, achieved: Option<u32>) -> String {
     }
 }
 
-// ── Guard 9: the repair rate limit ───────────────────────────────────────────
-
-/// Consecutive repair failures after which we stop trying (guard 9).
-const MAX_CONSECUTIVE_FAILURES: u32 = 3;
-
-/// Minimum interval between repair attempts (guard 9).
-const REPAIR_COOLDOWN: Duration = Duration::from_secs(3_600);
-
-/// Rate limiter for automatic repairs: at most one an hour, and a terminal stop
-/// after three consecutive failures.
-///
-/// A repair that does not work will not work the fourth time either, and a
-/// machine that fails it is exactly the machine where retrying forever means a
-/// UAC prompt forever. Terminal means terminal until the operator acts.
-#[derive(Debug, Default)]
-pub struct RepairLimiter {
-    last_attempt: Option<std::time::Instant>,
-    consecutive_failures: u32,
-}
-
-impl RepairLimiter {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// May a repair be attempted at `now`?
-    pub fn may_attempt(&self, now: std::time::Instant) -> bool {
-        if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-            return false;
-        }
-        match self.last_attempt {
-            None => true,
-            Some(t) => now.saturating_duration_since(t) >= REPAIR_COOLDOWN,
-        }
-    }
-
-    /// Record an attempt and its outcome.
-    pub fn record(&mut self, now: std::time::Instant, succeeded: bool) {
-        self.last_attempt = Some(now);
-        if succeeded {
-            self.consecutive_failures = 0;
-        } else {
-            self.consecutive_failures += 1;
-        }
-    }
-
-    /// Has this machine failed too many times to keep trying?
-    pub fn is_terminal(&self) -> bool {
-        self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     // ── Fixtures: VERBATIM output from a live Windows machine, read-only,
     //    2026-09-09. Not hand-written approximations of what these tools print.
@@ -1553,7 +1499,7 @@ TimeSync.exe                  9112 Console                    1     12,480 K
     }
 
     #[test]
-    fn a_failed_or_terminal_repair_says_so_plainly() {
+    fn a_failed_repair_says_so_plainly() {
         let d = ClockDiagnosis {
             owner: ClockOwner::OsService("the Windows Time service".into()),
             state: ServiceState::Stopped,
@@ -1564,15 +1510,14 @@ TimeSync.exe                  9112 Console                    1     12,480 K
             repair: Repair::StartService,
             detail: "the Windows Time service is not running".into(),
         };
-        assert!(repair_outcome_note(&d, false, false).contains("could not fix it"));
-        let terminal = repair_outcome_note(&d, false, true);
-        assert!(terminal.contains("stopped trying"), "{terminal}");
+        let failed = repair_outcome_note(&d, false);
+        assert!(failed.contains("could not fix it"), "{failed}");
         assert!(
-            terminal.contains("not running"),
-            "and still says what is wrong: {terminal}"
+            failed.contains("not running"),
+            "and still says what is wrong: {failed}"
         );
         assert_eq!(
-            repair_outcome_note(&d, true, false),
+            repair_outcome_note(&d, true),
             "started the Windows Time service"
         );
     }
@@ -1587,51 +1532,5 @@ TimeSync.exe                  9112 Console                    1     12,480 K
             assert!(!run_repair_elevated(Repair::SetPollInterval(1_024)));
             assert!(!run_repair_elevated(Repair::StartService));
         }
-    }
-
-    // ── Guard 9: the rate limit ───────────────────────────────────────────────
-
-    #[test]
-    fn ten_detections_in_ten_minutes_produce_one_repair() {
-        let mut lim = RepairLimiter::new();
-        let t0 = Instant::now();
-        let mut attempts = 0;
-        for i in 0..10 {
-            let now = t0 + Duration::from_secs(i * 60);
-            if lim.may_attempt(now) {
-                attempts += 1;
-                lim.record(now, true);
-            }
-        }
-        assert_eq!(attempts, 1, "at most one repair an hour");
-        // …and an hour later, one more.
-        assert!(lim.may_attempt(t0 + Duration::from_secs(3_600)));
-    }
-
-    #[test]
-    fn three_consecutive_failures_are_terminal() {
-        let mut lim = RepairLimiter::new();
-        let t0 = Instant::now();
-        for i in 0..3 {
-            let now = t0 + Duration::from_secs(i * 3_600);
-            assert!(lim.may_attempt(now), "attempt {i} allowed");
-            lim.record(now, false);
-        }
-        assert!(lim.is_terminal());
-        assert!(
-            !lim.may_attempt(t0 + Duration::from_secs(100 * 3_600)),
-            "no fourth attempt, however long we wait"
-        );
-    }
-
-    #[test]
-    fn a_success_clears_the_failure_count() {
-        let mut lim = RepairLimiter::new();
-        let t0 = Instant::now();
-        lim.record(t0, false);
-        lim.record(t0 + Duration::from_secs(3_600), false);
-        lim.record(t0 + Duration::from_secs(7_200), true);
-        assert!(!lim.is_terminal());
-        assert!(lim.may_attempt(t0 + Duration::from_secs(10_800)));
     }
 }

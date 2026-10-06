@@ -1547,6 +1547,11 @@ pub struct RadioStatus {
     /// until a detection pass has run.
     #[serde(default)]
     pub clock_owner_note: String,
+    /// A repair for this machine's clock is on offer (Windows only): the top bar
+    /// shows **Repair clock**, which runs it through one administrator prompt.
+    /// Nothing runs it unless the operator presses that button.
+    #[serde(default)]
+    pub clock_repair_available: bool,
     /// Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion.
     #[serde(default)]
     pub source: SourceKind,
