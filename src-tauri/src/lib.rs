@@ -20513,6 +20513,38 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
     )
 }
 
+/// The US state each heard station is scored in for Worked All States. An activator live at a
+/// park or summit (`live`, the hunter feed's current rows) is where that is: a contact hunted there
+/// logs the park's state ([`ota_park_places`]), so its need is the park's whatever its licence or
+/// its grid says, chosen on a state line as the feed's own row chooses
+/// ([`propagation::activator_state`]), from every place it is live at. An activator at a park
+/// nothing places, and every other station, keeps a state its source gave (an own decode's grid)
+/// or takes its call's from the FCC callsign index. That fill is the whole point of the index: a
+/// needed New State lights up across the grid-less firehose (cluster / CW / SSB spots, near-me and
+/// getting-out reception reports).
+fn place_heards(
+    heard: &mut [propagation::Heard],
+    live: &[propagation::OtaSpot],
+    needs: &propagation::LogNeeds,
+) {
+    let mut places = std::collections::HashMap::<String, Vec<String>>::new();
+    for sp in live.iter().filter(|sp| !sp.states.is_empty()) {
+        places
+            .entry(tempo_core::message::base_call(&sp.activator))
+            .or_default()
+            .extend(sp.states.iter().cloned());
+    }
+    let slots = needs.slots();
+    for h in heard.iter_mut() {
+        if let Some(at) = places.get(&tempo_core::message::base_call(&h.call)) {
+            h.us_state = propagation::activator_state(&h.call, &h.band, at, needs, &slots)
+                .map(str::to_string);
+        } else if h.us_state.is_none() {
+            h.us_state = fcc_state_for_call(&h.call).map(str::to_string);
+        }
+    }
+}
+
 // Shared calculation, with an immutable engine guard. Remote never invokes the
 // native command's shared-log reconciliation or any logbook write/recovery path.
 fn read_need_alerts(
@@ -20640,15 +20672,13 @@ fn read_need_alerts(
             license_class,
         ));
     }
-    // Fill in the US-state hint from the FCC callsign→state index for every heard call that
-    // doesn't already carry one. This is the whole point of the FCC index: a needed New State
-    // lights up across the grid-less firehose (cluster / CW / SSB spots, near-me + getting-out
-    // reception Heards). A grid-derived state (own decodes) is already set and left untouched.
-    for h in heard.iter_mut() {
-        if h.us_state.is_none() {
-            h.us_state = fcc_state_for_call(&h.call).map(str::to_string);
-        }
-    }
+    // Each heard station's US state, for the New State need: a live activator's park's, any other
+    // station's own (see `place_heards`). Live as the decoration pass below reads it.
+    let live_spots: Vec<propagation::OtaSpot> = ota_cache
+        .lock()
+        .map(|cache| live_ota_spots(&cache, now).cloned().collect())
+        .unwrap_or_default();
+    place_heards(&mut heard, &live_spots, &needs);
     let mut alerts = propagation::rank_needs(&heard, &*needs, &needs.slots());
     // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
     // the ONE seam both surfaces share — the Needed board and the decode/roster chips
@@ -42748,6 +42778,92 @@ mod tests {
         // CONTROL: a cluster row for a station on no hunter feed names no activation, so Work
         // tags nothing onto it.
         assert_eq!(park_of("DL1ABC", "CW"), None);
+    }
+
+    /// ⭐ A LIVE ACTIVATOR IN A STATE THE LOG STILL NEEDS IS A NEW STATE ON BOTH PATHS (operator,
+    /// 2026-10-06). An activator the cluster, the skimmers or the radio also hears is that row, and
+    /// the feed's own row for the same call, band and mode is then dropped as a duplicate. So the
+    /// heard row is scored in the park's state too, as the feed's row is and as the hunted contact
+    /// logs. The activators hold New England calls: where they are is the park's state, not the
+    /// licence's.
+    #[test]
+    fn a_live_activator_is_a_new_state_in_its_parks_state_on_both_paths() {
+        use propagation::NeedTag::{NewPark, NewState, Pota};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        // The United States and zone 5, worked and confirmed on 20 m CW and phone, so a state is the
+        // one award either row can still win. Montana is in the log on 20 m.
+        for (call, mode, state) in [
+            ("W1AW", "CW", None),
+            ("W1AW", "SSB", None),
+            ("K7MT", "SSB", Some("MT")),
+        ] {
+            let mut r = pass_qso(call, "FN31", "20m", 14.025);
+            r.mode = mode.into();
+            r.state = state.map(str::to_string);
+            r.award_confirmed = true;
+            e.log_qso(r);
+        }
+        let placed = |call: &str, reference: &str, state: &str| {
+            let mut sp = live_spot("POTA", call, reference, 60);
+            sp.states = codes(&[state]);
+            sp
+        };
+        let feed = [
+            placed("W1ABC", "US-0065", "US-ND"),
+            placed("W1XYZ", "US-0001", "US-MT"),
+        ];
+        let alerts = needed_board_for(e, &["W1ABC", "W1XYZ"], &[("POTA", &feed)]);
+        // The cluster's 20 m CW row, and the feed's own 20 m phone row.
+        for mode in ["CW", "Phone"] {
+            let row = board_row(&alerts, "W1ABC", mode);
+            assert_eq!(row.tags.first(), Some(&NewState), "{mode}: {row:?}");
+            assert!(
+                row.headline.starts_with("New state — ND on 20m"),
+                "{mode}: {:?}",
+                row.headline
+            );
+        }
+        // CONTROL: Montana is worked on 20 m, so W1XYZ is a park still to be worked and no state.
+        assert_eq!(board_row(&alerts, "W1XYZ", "Phone").tags, [NewPark, Pota]);
+        assert!(
+            !alerts
+                .iter()
+                .any(|a| a.call == "W1XYZ" && a.tags.contains(&NewState)),
+            "{alerts:?}"
+        );
+    }
+
+    /// Which state a heard station is scored in. Every station here arrives in Ohio, as an own
+    /// decode's grid or the FCC licence would place it. An activator live at a North Dakota park
+    /// is scored in North Dakota, its portable call included; one at an Ontario park in no US
+    /// state, as its contact credits none; one at a park nothing places, and a station on no
+    /// hunter feed, stay in Ohio.
+    #[test]
+    fn a_live_activator_is_scored_in_its_parks_state_and_any_other_station_in_its_own() {
+        let heard = |call: &str| propagation::Heard {
+            call: call.into(),
+            band: "20m".into(),
+            mode: "CW".into(),
+            freq_mhz: None,
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: Some("OH".into()),
+        };
+        let live = |call: &str, states: &[&str]| {
+            let mut sp = ota_spot(call, "US-0001");
+            sp.states = codes(states);
+            sp
+        };
+        let feed = [
+            live("W8ND", &["US-ND"]),
+            live("W8ON", &["CA-ON"]),
+            live("W8XX", &[]),
+        ];
+        let mut heards = [heard("W8ND/P"), heard("W8ON"), heard("W8XX"), heard("W8OH")];
+        crate::place_heards(&mut heards, &feed, &propagation::LogNeeds::new());
+        let states: Vec<Option<&str>> = heards.iter().map(|h| h.us_state.as_deref()).collect();
+        assert_eq!(states, [Some("ND"), None, Some("OH"), Some("OH")]);
     }
 
     #[test]

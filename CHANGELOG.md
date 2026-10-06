@@ -450,6 +450,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
   a park on a state line, a reminder that the contact counts for the state the activator is
   actually in. Screen readers read the name. The Remote page's board does not show states yet.
+- **Needed board: an activator in a state you still need shows as a new state**, as on the
+  POTA/SOTA board: per band, a park on a state line when either state is needed, and in the park's
+  or summit's state, not the activator's home state, whether the board heard them from the
+  POTA/SOTA feed, the cluster or your own radio. A park Nexus cannot place is judged as before.
 - **POTA/SOTA activations: your contacts say which state you activated from.** Start an
   activation at a park in one state, or on a summit SOTA places in one, and every contact you log
   carries that state as `MY_STATE`, in your log, your exports and your uploads. At a park on a
