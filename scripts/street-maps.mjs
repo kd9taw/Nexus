@@ -375,6 +375,20 @@ function rcloneCli(args) {
   return execFileSync('rclone', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 << 20 })
 }
 
+/// rclone's arguments for the copy of the publisher's build to `to`. The source is an http remote,
+/// so rclone copies a file over --multi-thread-cutoff (256 MiB by default) in chunks, several at a
+/// time, each read by its own range request and, if the publisher cuts it off, reopened where it
+/// broke (--low-level-retries, 10 opens a chunk by default): a cut costs part of one chunk.
+/// `copyurl` read the build as one download, which the publisher's server reset three times running
+/// on 2026-10-06, 32 to 40 GiB in, each retry from byte 0. The bucket's remote sets the chunk and how
+/// many are in flight (the workflow's RCLONE_CONFIG_R2_CHUNK_SIZE and _UPLOAD_CONCURRENCY).
+/// --ignore-existing never writes over an object already at the key: rclone skips the copy, and
+/// checkStored judges what is there.
+export function copyBuildArgs(upstream, to) {
+  const { origin, pathname } = new URL(upstream)
+  return ['copyto', '--ignore-existing', `:http,url='${origin}':${pathname.slice(1)}`, to]
+}
+
 /// The bucket's objects at its top level, name → size.
 function objectsIn(rclone, dest) {
   const list = JSON.parse(rclone(['lsjson', '--files-only', '--no-mimetype', '--no-modtime', dest]))
@@ -444,8 +458,8 @@ export async function copyToBucket({
     if (objects.has(build.key)) {
       log(`${build.key} is already in the bucket (a run that stopped before publishing); checking it`)
     } else {
-      log(`copying ${build.upstream} to ${build.key} (${build.bytes} bytes) …`)
-      rclone(['copyurl', '--no-clobber', build.upstream, `${dest}/${build.key}`])
+      log(`copying ${build.upstream} to ${build.key} (${build.bytes} bytes) in ranged chunks …`)
+      rclone(copyBuildArgs(build.upstream, `${dest}/${build.key}`))
       objects = objectsIn(rclone, dest)
     }
     checkStored({ rclone, dest, objects, key: build.key, bytes: build.bytes, hash: 'blake3', want: build.b3sum, published: false, log })

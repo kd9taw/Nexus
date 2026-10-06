@@ -56,6 +56,15 @@ jobs:
         with:
           node-version: '20'
 
+      # The tests copy a build with the rclone the bucket job runs, into a local folder.
+      - name: Install rclone 1.75.1, checked against its published SHA-256
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/rclone.zip" https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip
+          echo "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab  $RUNNER_TEMP/rclone.zip" | sha256sum -c -
+          unzip -q -j -d "$RUNNER_TEMP/bin" "$RUNNER_TEMP/rclone.zip" rclone-v1.75.1-linux-amd64/rclone
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/rclone" version
+
       - name: Test the job's rules before they act
         run: node --test scripts/street-maps.test.mjs
 
@@ -101,6 +110,7 @@ jobs:
       # The token is scoped to one bucket and cannot create one.
       RCLONE_CONFIG_R2_NO_CHECK_BUCKET: 'true'
       # About 2,100 parts for the planet (R2 allows 10,000), 8 in flight: 512 MiB of buffers.
+      # Each part is also one range read of the publisher's build (copyBuildArgs in the script).
       RCLONE_CONFIG_R2_CHUNK_SIZE: 64Mi
       RCLONE_CONFIG_R2_UPLOAD_CONCURRENCY: '8'
       RCLONE_STATS: 1m

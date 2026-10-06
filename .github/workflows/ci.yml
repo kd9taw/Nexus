@@ -587,9 +587,18 @@ jobs:
       # Same argument for the street map's host: street-maps.yml copies and deletes unattended,
       # and the index it publishes is what every street-map download reads. Its rules are tested
       # here too, and here, after `npm ci`, the test can also hold the icons the hosting job
-      # generates to the style the UI actually ships.
+      # generates to the style the UI actually ships. Its copy of the build runs the rclone that
+      # workflow pins (the test holds the pins equal), fetched in this step itself because
+      # scripts/gates runs a step with no GITHUB_PATH, and unpacked by python3 because not every
+      # box has unzip.
       - name: Test the street-map hosting job
-        run: node --test scripts/street-maps.test.mjs
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/rclone.zip" https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip
+          echo "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab  $RUNNER_TEMP/rclone.zip" | sha256sum -c -
+          python3 -m zipfile -e "$RUNNER_TEMP/rclone.zip" "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/rclone-v1.75.1-linux-amd64/rclone"
+          PATH="$RUNNER_TEMP/rclone-v1.75.1-linux-amd64:$PATH" node --test scripts/street-maps.test.mjs
 
       # (The fd-rules publish gate used to have a node half here, walking a
       # corpus against a second validator written in JS. There is one validator
