@@ -5,8 +5,19 @@ import { execFile } from 'node:child_process'
 import { readdir, readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { chrome, CHROME_COLD_START_MS } from './browser-runtime.mjs'
 
 const run = promisify(execFile)
+// Chrome's first start on this machine, paid once and before every timed case (CHROME_COLD_START_MS in
+// browser-runtime.mjs): each start after it, here and in browser.test.mjs, finds Chrome already read in.
+test('Chrome starts once before any timed case, within a cold runner\'s budget', { timeout: CHROME_COLD_START_MS + 30_000 }, async () => {
+  const started = performance.now()
+  const browser = await chrome([], CHROME_COLD_START_MS)
+  const seconds = Math.round((performance.now() - started) / 100) / 10
+  await browser.stop()
+  console.log(`Chrome reached its debugging endpoint in ${seconds} s`)
+})
+
 test('browser timeout cleanup completes before the next test, with a failing control', { timeout: 120000 }, async () => {
   const fixture = fileURLToPath(new URL('./fixtures/browser-timeout-owner.mjs', import.meta.url))
   for (const omitHook of [true, false]) {

@@ -18,8 +18,20 @@ export function cleanupAfterTest(context, cleanup) {
   return stop
 }
 
+// THE COLD START (2026-10-05). Chrome's first start on a machine reads Chrome itself: 197 MB of its own
+// files to reach the debugging endpoint, where `google-chrome --version` reads 45 MB (Chrome 140, measured
+// from a copy of its install with the page cache dropped). A cold hosted runner reads them slowly. Over 175
+// CI compiled-browser jobs `google-chrome --version` took 1.8 s at the median, 3.6 s at the 95th percentile
+// and 34.6 s at worst, and on that runner (run 37405801832) the first two starts each ran out of 30 s and
+// the third had its endpoint about 100 s after the first began. At the rate that runner's `--version`
+// read, the other 152 MB take about 120 s. So the suite starts Chrome once, before any timed case
+// (browser-lifecycle.test.mjs), with 240 s, twice that; every later start keeps 30 s. A Chrome that
+// never starts still fails, after 240 s once and 30 s each time after.
+export const CHROME_COLD_START_MS = 240_000
+
 // `switches` are a scenario's own additions to the launch, such as the stream scenario's fake microphone.
-export async function chrome(switches = []) {
+// `startupMs` bounds the wait for the debugging endpoint.
+export async function chrome(switches = [], startupMs = 30_000) {
   const profile = await mkdtemp(join(tmpdir(), 'nexus-remote-browser-'))
   const child = spawn(process.env.CHROME_BIN || 'google-chrome', [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
@@ -37,7 +49,7 @@ export async function chrome(switches = []) {
     let endpoint
     // A cold hosted runner can take longer than five seconds to launch Chrome.
     // Bound process startup separately from the browser's application assertions.
-    const deadline = performance.now() + 30_000
+    const deadline = performance.now() + startupMs
     while (performance.now() < deadline) {
       if (exited) throw new Error('Chrome could not start')
       // Chrome creates this file before it writes it: a read in between finds it empty or half
@@ -45,7 +57,7 @@ export async function chrome(switches = []) {
       try { const [port,path] = (await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n'); if (/^\d+$/.test(port) && path?.startsWith('/')) { endpoint=`ws://127.0.0.1:${port}${path}`; break } } catch {}
       await sleep(50)
     }
-    assert.ok(endpoint, 'Chrome debugging endpoint must start within 30 seconds')
+    assert.ok(endpoint, `Chrome debugging endpoint must start within ${startupMs / 1000} seconds`)
     ws = new WebSocket(endpoint)
     await new Promise((resolve,reject) => { ws.once('open',resolve); ws.once('error',()=>reject(new Error('Chrome debugging connection failed'))) })
     const pending = new Map(), listeners = new Map()
