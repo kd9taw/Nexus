@@ -7530,7 +7530,9 @@ select optgroup {
      a fallback is a DARK value that fires in both themes, which is the whole of
      the bug above. */
   --need-mode-rtty: #f5a524; /* amber — RTTY (an RBN skimmer row) */
-  --need-mode-ft4: #4ade80; /* green — FT4, apart from FT8's cyan */
+  /* Mint (operator, 2026-10-05: "Mint #a7f3d0 for FT4"): FT4 apart from FT8's cyan, and from the park green
+     it was until then, #4ade80 itself, beside which a park need's row could show it. */
+  --need-mode-ft4: #a7f3d0;
   /* Ink for a chip that FILLS itself with a --need-* colour. The palette flips
      value between themes (light pastels on near-black here, dark inks on white
      there), so the ink on top has to flip with it — a hardcoded one is legible
@@ -18707,7 +18709,7 @@ button.cq-skiptx1.on {
   background: var(--need-mode, #22d3ee);
 }
 .np-mode-col.np-mode-ft4 {
-  background: var(--need-mode-ft4, #4ade80);
+  background: var(--need-mode-ft4, #a7f3d0);
 }
 .np-empty {
   padding: 22px 14px;

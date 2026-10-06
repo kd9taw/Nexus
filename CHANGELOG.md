@@ -373,6 +373,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged. In the light
   theme the full new-park green (and the P badge with it) is darker, so the two greens
   differ in brightness and not only in colour, which helps if you find greens hard to tell apart.
+- **Needed board: FT4's badge has its own colour.** In the dark themes it was the very green of a park
+  you still need, and a park need's row can show both; it is now mint. In the light theme the new-park
+  green moved away from FT4's badge instead (above).
 - **A park you still need now comes before a confirmation everywhere.** When an activator is at
   a park or summit you have not worked in this activation and is also a confirmation opportunity
   (worked before, not yet confirmed), the park now leads: Band activity and its band map show the

@@ -348,9 +348,11 @@ function nearPark(rules: Rule[], modes: Mode[]): Near[] {
   }
   return found
 }
-/** The one pair left as found, for the operator to rule on: in the dark themes the Needed board's FT4 badge IS
- *  the new-park green (#4ade80), as it has been since the board named FT4 apart from FT8. */
-const darkFt4AsFound = (n: Near) => n.name === '--need-mode-ft4' && baseTheme(n.mode) === 'dark'
+/** The dark themes' FT4 badge as it was until 2026-10-05: the new-park green itself, #4ade80. */
+const DARK_FT4_AS_WAS = RULES.map((r) => ({
+  ...r,
+  decls: r.decls.map((d) => (d.prop === '--need-mode-ft4' && d.value === '#a7f3d0' ? { ...d, value: '#4ade80' } : d)),
+}))
 
 describe('the new-park colour beside the other need colours, in every theme', () => {
   it('measures every need colour (the census cannot silently empty out)', () => {
@@ -362,13 +364,19 @@ describe('the new-park colour beside the other need colours, in every theme', ()
   })
 
   it(`no other need colour is within ${NEED_APART} of it in OKLab`, () => {
-    const near = nearPark(RULES, MODES).filter((n) => !darkFt4AsFound(n))
+    const near = nearPark(RULES, MODES)
     expect(near.map((n) => `${n.mode}: ${n.name} ${n.value} is ${n.d.toFixed(3)} from --need-pota`)).toEqual([])
   })
 
   it('FIRES: the light green that sat beside FT4 is caught, in every light theme', () => {
-    const found = nearPark(LIGHT_BESIDE_FT4, MODES).filter((n) => !darkFt4AsFound(n))
+    const found = nearPark(LIGHT_BESIDE_FT4, MODES)
     expect(new Set(found.map((n) => n.name))).toEqual(new Set(['--need-mode-ft4']))
     expect(new Set(found.map((n) => n.mode))).toEqual(new Set(LIGHT))
+  })
+
+  it('FIRES: the dark FT4 badge that was the park green is caught, in every dark theme', () => {
+    const found = nearPark(DARK_FT4_AS_WAS, MODES)
+    expect(new Set(found.map((n) => n.name))).toEqual(new Set(['--need-mode-ft4']))
+    expect(new Set(found.map((n) => n.mode))).toEqual(new Set(DARK))
   })
 })
