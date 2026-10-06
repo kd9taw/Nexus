@@ -92,7 +92,7 @@ glossary, not argue.
 
 ## Plurals — a few rows come in pairs
 
-89 strings change with the count, so they appear as two rows, with `::one` and `::other` on the
+91 strings change with the count, so they appear as two rows, with `::one` and `::other` on the
 end of the key:
 
 ```
@@ -111,16 +111,16 @@ you like.
 
 | Tier | Rows | What it covers |
 |---:|---:|---|
-| **1** | **718** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
+| **1** | **741** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 314 | First run — the setup wizard and the Getting Started guide. The first thing a new operator meets. |
-| **3** | 1025 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
-| **4** | 442 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
-| **5** | 2828 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
-| **6** | 1346 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
+| **3** | 1049 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
+| **4** | 472 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
+| **5** | 2972 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
+| **6** | 1466 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 
-**Tier 1 on its own is a real release.** 718 rows, about 30,000 characters — roughly 9% of the
+**Tier 1 on its own is a real release.** 741 rows, about 31,000 characters — roughly 9% of the
 text — and it buys a program whose menus, buttons, status messages and log form are all in
-Portuguese, with the rest quietly falling back to English. Tiers 1 and 2 together (1,032 rows) is
+Portuguese, with the rest quietly falling back to English. Tiers 1 and 2 together (1,055 rows) is
 the point where a new Brazilian operator can install Nexus and never meet an English screen until
 they go looking for one.
 
@@ -202,7 +202,7 @@ row 4 of the table did not take, and the catalog is unguarded.
 
 **⚠️ A partial catalog fails the suite.** `placeholders.test.ts` requires every English key to be
 present, with no allowlist by design. Runtime is happy with a partial catalog — a missing key falls
-back to English — but CI is not. A tier-1-only fill (708 entries) fails with 5876 missing keys.
+back to English — but CI is not. A tier-1-only fill (731 entries) fails with 6192 missing keys.
 Decide before the translator starts whether an incomplete file gets held, gets its gaps filled from
 English, or gets an allowlist; "stop wherever you like" is only true at runtime until then. The
 options and their costs are in `ROUNDTRIP.md`.
