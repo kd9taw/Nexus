@@ -17,6 +17,7 @@
 // for as long as either stood.
 import type { OpeningView } from './types'
 import { t } from './i18n'
+import { fmtDistanceKm, type Units } from './units'
 
 /// The backend's `Confidence::Strong` cut (propagation/src/engine.rs
 /// `confidence_word`). Mirrored rather than re-derived so the toast's tone and
@@ -32,9 +33,10 @@ export interface OpeningToastSpec {
   beepHz: number | null
 }
 
-/** Build the toast spec for a newly-opened band (o.isNew edge). Pure. */
-export function openingToastSpec(o: OpeningView): OpeningToastSpec {
-  const spec = tierSpec(o)
+/** Build the toast spec for a newly-opened band (o.isNew edge). Pure. `units` is
+ * Settings ▸ Units, resolved: the distance the toast names is stated in it. */
+export function openingToastSpec(o: OpeningView, units: Units): OpeningToastSpec {
+  const spec = tierSpec(o, units)
   // HONESTY GATE (operator 2026-08-05: "misfiring on openings where I tune and
   // hear nothing"). Suppressing the openings that were not real is the gate's
   // job and the gate now does it. This is the remaining, separate problem: an
@@ -55,13 +57,12 @@ export function openingToastSpec(o: OpeningView): OpeningToastSpec {
   // at Marginal by the backend (geometry-only v1), so hedging on confidence
   // would silence every tropo opening there has ever been.
   if (spec.prominent && o.confidenceScore < STRONG_CONFIDENCE) {
-    const km = Math.round(o.maxKm)
     return {
       message: t('prop.openingAlert.thin', {
         band: o.band,
         mode: o.mode,
         stations: o.stations,
-        km,
+        dist: fmtDistanceKm(o.maxKm, units),
         octant: o.octant,
       }),
       kind: 'info',
@@ -74,15 +75,15 @@ export function openingToastSpec(o: OpeningView): OpeningToastSpec {
 }
 
 /** The per-mode tier, before the confidence hedge above. */
-function tierSpec(o: OpeningView): OpeningToastSpec {
-  const km = Math.round(o.maxKm)
+function tierSpec(o: OpeningView, units: Units): OpeningToastSpec {
+  const dist = fmtDistanceKm(o.maxKm, units)
   switch (o.mode) {
     case 'Sporadic-E':
       return {
         message: t('prop.openingAlert.sporadicE', {
           band: o.band,
           octant: o.octant,
-          km,
+          dist,
           stations: o.stations,
         }),
         kind: 'success',
@@ -103,7 +104,7 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
         message: t('prop.openingAlert.f2', {
           band: o.band,
           octant: o.octant,
-          km,
+          dist,
           stations: o.stations,
         }),
         kind: 'success',
@@ -115,7 +116,7 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
       return {
         message: t('prop.openingAlert.tropo', {
           band: o.band,
-          km,
+          dist,
           octant: o.octant,
           stations: o.stations,
         }),

@@ -26,6 +26,7 @@ import type { Theme } from '../../useTheme'
 import type { MapIntent } from '../MapView'
 import type { ConnectData } from '../../remote-web/navigation'
 import { latLonToGrid } from '../../grid'
+import { useUnits } from '../../units'
 import { useEntityCentroids } from '../../features/entityCentroids'
 import {
   BAND_OUTLOOK,
@@ -154,6 +155,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
   // Fetched once per window and shared (features/entityCentroids): several boxes render through
   // plain functions that cannot hold the hook themselves.
   const entityCentroids = useEntityCentroids()
+  const units = useUnits()
   const polled = useConnectFeeds(i.remote == null)
   const path = useKeyedFeed(PATH_OUTLOOK, i.remote == null ? i.selection.selGrid : null).value ?? null
   const f = i.remote?.feeds ?? polled
@@ -162,6 +164,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
   const ctx: PaneContext = {
     myGrid: i.myGrid,
     entityCentroids,
+    units,
     theme: i.theme,
     intent: i.intent,
     prop: i.prop,

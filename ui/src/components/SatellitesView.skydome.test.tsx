@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
+import { setUnitsMirror } from '../units'
 import type { SatDetail, SatPass, SatTrackStatus } from '../types'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -132,6 +133,9 @@ const settings = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   localStorage.clear()
+  // Metric, explicitly: the readout's range is read in km here, and jsdom's en-US locale would
+  // resolve Automatic to miles (SatellitesView.altitude.test.tsx pins the Imperial readout).
+  setUnitsMirror('metric')
   api.getSatellites.mockReset()
   api.getSatellites.mockImplementation(() => Promise.resolve(null))
   api.getSatDetail.mockReset()

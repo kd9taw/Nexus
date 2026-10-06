@@ -5097,6 +5097,59 @@ mod tests {
         }
     }
 
+    /// A hunter contact's state rides with its park through the ADIF this log writes and reads
+    /// back: STATE beside SIG/SIG_INFO and the dedicated POTA_REF for a park, beside SOTA_REF for
+    /// a summit. Each record's state and park differ from the other's, so a swap would show.
+    #[test]
+    fn a_parks_state_round_trips_with_its_park_fields() {
+        let mut park = rec("W8OH", "20m", 1_700_000_000);
+        park.state = Some("ND".into());
+        park.ota.their_program = Some("POTA".into());
+        park.ota.their_ref = Some("US-0001".into());
+        let mut summit = rec("W8OH", "40m", 1_700_000_600);
+        summit.state = Some("AZ".into());
+        summit.ota.their_program = Some("SOTA".into());
+        summit.ota.their_ref = Some("W7A/MN-001".into());
+        let text = format!(
+            "{}{}",
+            adif_record_own_log(&park),
+            adif_record_own_log(&summit)
+        );
+        for tag in [
+            "<STATE:2>ND",
+            "<SIG:4>POTA",
+            "<SIG_INFO:7>US-0001",
+            "<POTA_REF:7>US-0001",
+            "<STATE:2>AZ",
+            "<SOTA_REF:10>W7A/MN-001",
+        ] {
+            assert!(text.contains(tag), "{tag}: {text}");
+        }
+        let back = parse_adif(&text);
+        let read = |r: &QsoRecord| {
+            (
+                r.state.clone(),
+                r.ota.their_program.clone(),
+                r.ota.their_ref.clone(),
+            )
+        };
+        assert_eq!(
+            back.iter().map(read).collect::<Vec<_>>(),
+            [
+                (
+                    Some("ND".into()),
+                    Some("POTA".into()),
+                    Some("US-0001".into())
+                ),
+                (
+                    Some("AZ".into()),
+                    Some("SOTA".into()),
+                    Some("W7A/MN-001".into())
+                ),
+            ]
+        );
+    }
+
     /// The BOUNDARY control for the busted-call report: a callsign reaches the wire whole, at
     /// every length an amateur call actually takes — 4 up to a full slash-prefixed DX call
     /// with a portable suffix. Written because the report ("the last character is missing")

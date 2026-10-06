@@ -708,6 +708,31 @@ pub fn add_park_need(tags: &mut Vec<NeedTag>) {
     tags.insert(at, NeedTag::NewPark);
 }
 
+/// The US state to score an activator in, from the places its park or summit lies in
+/// ([`crate::pota::OtaSpot::states`]: `US-ND`, one per state for a park on a state line): one a
+/// contact on `band` would add to Worked All States if there is one, so a park on a state line
+/// counts when either of its states is needed, as on the POTA/SOTA board. The scorer's own answer
+/// ([`score_slots`]) decides, not a second reading of the WAS slots. Of several, the first in
+/// alphabetical order, so the answer never depends on the order the places are listed in. `None`
+/// when they name no US state: a province, or nothing known.
+pub fn activator_state<'a>(
+    call: &str,
+    band: &str,
+    places: &'a [String],
+    needs: &dyn OperatorNeeds,
+    slots: &AwardSlots,
+) -> Option<&'a str> {
+    let states = || places.iter().filter_map(|p| p.strip_prefix("US-"));
+    states()
+        .filter(|s| {
+            // The state axis reads neither the mode nor the grid, so neither is asked.
+            score_slots(call, band, "", None, Some(s), needs, slots)
+                .is_some_and(|a| a.tags.contains(&NeedTag::NewState))
+        })
+        .min()
+        .or_else(|| states().min())
+}
+
 /// Build a Needed-board alert for a LIVE POTA/SOTA activator. Unlike [`score`] (which
 /// returns `None` unless the station advances a DXCC/zone/grid award), an active
 /// park/summit is ITSELF the opportunity a chaser wants — so this ALWAYS yields an alert
@@ -740,13 +765,15 @@ pub fn activation_alert(
     };
     let prog = if is_sota { "SOTA" } else { "POTA" };
 
-    // Any DX award this activator ALSO satisfies (ATNO / new band / zone / grid).
+    // Any award this activator ALSO satisfies (ATNO / new band / zone / grid / state). The state
+    // is the park's or summit's, which is the one a contact hunted there logs.
+    let state = activator_state(&spot.activator, band.label(), &spot.states, needs, slots);
     let award = score_slots(
         &spot.activator,
         band.label(),
         mode.label(),
         spot.grid.as_deref(),
-        None, // an OTA spot carries no US state
+        state,
         needs,
         slots,
     );
@@ -3216,6 +3243,134 @@ mod tests {
             })
             .collect();
         assert_eq!(wrong, Vec::<String>::new());
+    }
+
+    /// ⭐ AN ACTIVATOR IN A STATE THE LOG STILL NEEDS IS A NEW STATE ON THE NEEDED BOARD (operator,
+    /// 2026-10-06), as the POTA/SOTA board already lights it. The feed's row is scored in the state
+    /// its park or summit is in, by the rule Band Activity's rows are scored by: per band, and a park
+    /// on a state line counts when either of its states is needed. The activator holds a New
+    /// England call throughout, because where they are is the park's state, not the licence's.
+    #[test]
+    fn an_activator_in_a_state_the_log_still_needs_is_a_new_state_on_that_band() {
+        use NeedTag::{Confirm, NewPark, NewState, Pota, Sota};
+        let mut n = LogNeeds::new();
+        // The United States and the activator's zone, worked and confirmed on both bands in both
+        // modes, so a state is the one award left to win.
+        for (band, mode) in [("20m", "SSB"), ("40m", "SSB"), ("20m", "CW"), ("40m", "CW")] {
+            n.add("W1AW", band, mode, None, None, true);
+        }
+        n.add("K0ND", "40m", "SSB", None, Some("ND"), true);
+        n.add("K7MT", "20m", "SSB", None, Some("MT"), true);
+        n.add("W7AZ", "40m", "CW", None, Some("AZ"), true);
+        n.add("K7WY", "20m", "SSB", None, Some("WY"), false);
+        let at = |program: &str, reference: &str, khz: f64, mode: &str, states: &[&str]| {
+            let mut spot = ota(program, reference, "W1ABC", khz, mode);
+            spot.states = states.iter().map(|s| s.to_string()).collect();
+            spot
+        };
+        let cases = [
+            (
+                "a park in North Dakota, never worked on 20 m",
+                at("POTA", "US-0065", 14_250.0, "SSB", &["US-ND"]),
+                vec![NewState, NewPark, Pota],
+                60,
+                Some("New state — ND on 20m"),
+            ),
+            (
+                "the same park on 40 m, where North Dakota is worked",
+                at("POTA", "US-0065", 7_250.0, "SSB", &["US-ND"]),
+                vec![NewPark, Pota],
+                20,
+                None,
+            ),
+            (
+                "a summit in Arizona, never worked on 20 m",
+                at("SOTA", "W7A/MN-001", 14_062.0, "CW", &["US-AZ"]),
+                vec![NewState, NewPark, Sota],
+                60,
+                Some("New state — AZ on 20m"),
+            ),
+            (
+                "the same summit on 40 m, where Arizona is worked",
+                at("SOTA", "W7A/MN-001", 7_062.0, "CW", &["US-AZ"]),
+                vec![NewPark, Sota],
+                20,
+                None,
+            ),
+            (
+                "a park on the Montana line on 20 m, where Montana is worked and North Dakota is not",
+                at("POTA", "US-0823", 14_250.0, "SSB", &["US-MT", "US-ND"]),
+                vec![NewState, NewPark, Pota],
+                60,
+                Some("New state — ND on 20m"),
+            ),
+            (
+                "the same park on 40 m, where North Dakota is worked and Montana is not",
+                at("POTA", "US-0823", 7_250.0, "SSB", &["US-MT", "US-ND"]),
+                vec![NewState, NewPark, Pota],
+                60,
+                Some("New state — MT on 40m"),
+            ),
+            (
+                "a park in Ontario, which is no US state",
+                at("POTA", "CA-0001", 14_250.0, "SSB", &["CA-ON"]),
+                vec![NewPark, Pota],
+                20,
+                None,
+            ),
+            (
+                "a park in Wyoming, worked on 20 m and not confirmed",
+                at("POTA", "US-0001", 14_250.0, "SSB", &["US-WY"]),
+                vec![NewPark, Confirm, Pota],
+                20,
+                Some("Confirm — United States"),
+            ),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(name, spot, tags, priority, headline)| {
+                let a = activation_alert(spot, &n, &n.slots(), true).unwrap();
+                let named = headline.is_none_or(|h| a.headline.starts_with(h));
+                (a.tags != *tags || a.priority != *priority || !named).then(|| {
+                    format!(
+                        "{name}: {:?} at {}, {:?}; want {tags:?} at {priority}, {headline:?}",
+                        a.tags, a.priority, a.headline
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+    }
+
+    /// …and the state a row is scored in never depends on the order the places come in, which for
+    /// a station read off several spots is the hunter cache's map order: a park on the line between
+    /// two needed states names the same one whichever the feed lists first, and so does one where
+    /// neither is needed.
+    #[test]
+    fn the_state_an_activator_is_scored_in_does_not_depend_on_the_order_of_its_places() {
+        let mut n = LogNeeds::new();
+        n.add("K0ND", "20m", "SSB", None, Some("ND"), true);
+        n.add("K0SD", "20m", "SSB", None, Some("SD"), true);
+        let state = |n: &LogNeeds, places: &[&str], band: &str| {
+            let places: Vec<String> = places.iter().map(|p| p.to_string()).collect();
+            activator_state("W1ABC", band, &places, n, &n.slots()).map(str::to_string)
+        };
+        // Both needed on 40 m, both worked on 20 m.
+        for band in ["40m", "20m"] {
+            for order in [["US-SD", "US-ND"], ["US-ND", "US-SD"]] {
+                assert_eq!(
+                    state(&n, &order, band),
+                    Some("ND".into()),
+                    "{band} {order:?}"
+                );
+            }
+        }
+        // CONTROL: the one needed state is named even where it sorts last.
+        n.add("K0ND", "40m", "SSB", None, Some("ND"), true);
+        assert_eq!(state(&n, &["US-ND", "US-SD"], "40m"), Some("SD".into()));
+        // No US state among the places: nothing to score.
+        assert_eq!(state(&n, &["CA-ON"], "20m"), None);
+        assert_eq!(state(&n, &[], "20m"), None);
     }
 
     #[test]

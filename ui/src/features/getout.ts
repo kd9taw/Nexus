@@ -4,6 +4,7 @@
 // elite-op question the flat receiver list doesn't: "which way am I getting out, and which
 // way am I deaf?".
 import type { HeardMe } from '../types'
+import { fmtDistanceKm, type Units } from '../units'
 
 /** Compass octants clockwise from North — the vocabulary HeardMe.octant uses. */
 export const OCTANTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
@@ -42,14 +43,15 @@ export function octantCoverage(reports: HeardMe[]): OctantCoverage[] {
   return OCTANTS.map((o) => ({ octant: o, ...acc.get(o)! }))
 }
 
-/** One plain sentence: strongest direction + which way you're deaf. '' when no reports. */
-export function getoutSummary(reports: HeardMe[]): string {
+/** One plain sentence: strongest direction + which way you're deaf. '' when no reports.
+ * The distance is in the operator's units (Settings ▸ Units, resolved). */
+export function getoutSummary(reports: HeardMe[], units: Units): string {
   const live = octantCoverage(reports).filter((c) => c.count > 0)
   if (live.length === 0) return ''
   const top = live.reduce((a, b) => (b.maxKm > a.maxKm ? b : a))
   const covered = new Set(live.map((c) => c.octant))
   const dead = OCTANTS.filter((o) => !covered.has(o))
-  const strong = `strongest toward ${top.octant} (~${Math.round(top.maxKm).toLocaleString()} km)`
+  const strong = `strongest toward ${top.octant} (~${fmtDistanceKm(top.maxKm, units)})`
   // Only call out dead directions when coverage is genuinely lopsided (some, but not all).
   if (dead.length > 0 && dead.length < OCTANTS.length - 1) {
     return `${strong}; little/nothing to the ${dead.join('/')}`

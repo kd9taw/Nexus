@@ -780,7 +780,9 @@ mod tests {
             Context::confirmed(&engine, "US-0001", dial),
             Err(Refusal::NoActivation)
         );
-        engine.set_activation("POTA", "US-0001").unwrap();
+        engine
+            .set_activation("POTA", "US-0001", Vec::new())
+            .unwrap();
         assert_eq!(
             Context::confirmed(&engine, "US-0002", dial),
             Err(Refusal::Moved)

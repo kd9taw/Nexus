@@ -12,8 +12,12 @@ import type { OpeningEpisode } from '../../types'
 vi.mock('../../api', () => ({ getOpeningsLog: vi.fn() }))
 import { getOpeningsLog } from '../../api'
 import { OpeningsLogPane } from './OpeningsLogPane'
+import { setUnitsMirror } from '../../units'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+})
 
 const EPISODE: OpeningEpisode = {
   band: '6m',
@@ -51,5 +55,21 @@ describe('OpeningsLogPane', () => {
     render(<OpeningsLogPane />)
     expect(await screen.findByText(/2 openings/)).toBeTruthy()
     expect(screen.getByText('Tropo')).toBeTruthy()
+  })
+
+  // The DX column names each opening's longest path in the units the operator chose. It printed
+  // kilometres whatever Settings ▸ Units said. 1450 km is 901 mi.
+  it('states the longest path in miles under Imperial and in km under Metric', async () => {
+    vi.mocked(getOpeningsLog).mockResolvedValue([EPISODE])
+    const dx = async (units: 'metric' | 'imperial') => {
+      setUnitsMirror(units)
+      const { container, unmount } = render(<OpeningsLogPane />)
+      await screen.findByText(/1 opening/)
+      const text = container.querySelector('.openings-log-dx')?.textContent
+      unmount()
+      return text
+    }
+    expect(await dx('imperial')).toBe('~901 mi SW')
+    expect(await dx('metric')).toBe('~1450 km SW')
   })
 })

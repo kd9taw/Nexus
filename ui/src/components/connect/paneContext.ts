@@ -3,6 +3,7 @@
 // consume, plus a few forward-compat fields for B2/B3.
 import type { Theme } from '../../useTheme'
 import type { LatLon } from '../../grid'
+import type { Units } from '../../units'
 import type { MapIntent } from '../MapView'
 import type { SpotsPanelProps } from '../SpotsPanel'
 import type { OtaSpotClickArg } from '../PotaSotaView'
@@ -47,6 +48,10 @@ export interface PaneContext {
    * functions (`renderSelection`), which cannot call the hook themselves. Null until
    * the table arrives — panes then show grid-derived headings only. */
   entityCentroids: ReadonlyMap<string, LatLon> | null
+  /** Settings ▸ Units, resolved (Automatic already decided by the OS locale). On the context for
+   * the same reason as `entityCentroids`: the boxes that print a distance render through plain
+   * functions, which cannot call `useUnits()` themselves. */
+  units: Units
   theme: Theme
   intent: MapIntent
   // shared live state

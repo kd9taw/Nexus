@@ -1158,6 +1158,30 @@ export const EN = {
     'Synced: {{confirmed}} newly confirmed, {{credited}} credited · {{unmatched}} unmatched',
 
   'logbook.pota.label': 'Import POTA',
+  'logbook.parkStates.button': 'Check park states',
+  'logbook.parkStates.buttonTitle':
+    'List the park and summit contacts whose state is not their park’s, and correct the ones you tick',
+  'logbook.parkStates.title': 'Check park states',
+  'logbook.parkStates.intro':
+    'These park and summit contacts hold a state other than the one their park or summit is in, or none: Nexus used to log the activator’s home state, from their licence or their callbook entry. Tick the ones to change. Nothing changes until you press the button, and nothing is uploaded again. A confirmed contact starts unticked.',
+  'logbook.parkStates.reading': 'Reading your log…',
+  'logbook.parkStates.none':
+    'Every park and summit contact Nexus can place holds its park’s state.',
+  'logbook.parkStates.change': '{{from}} → {{to}}',
+  'logbook.parkStates.noState': 'none',
+  'logbook.parkStates.confirmed': 'confirmed',
+  'logbook.parkStates.confirmedTitle':
+    'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
+  'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.apply': {
+    one: 'Change {{count}} contact',
+    other: 'Change {{count}} contacts',
+  },
+  'logbook.parkStates.done': {
+    one: '{{count}} contact now holds its park’s state',
+    other: '{{count}} contacts now hold their park’s state',
+  },
+  'logbook.parkStates.failed': 'Could not check park states',
   'logbook.pota.title':
     'Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records.',
   'logbook.pota.failed': 'POTA import failed',
@@ -1486,6 +1510,8 @@ export const EN = {
 
   // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
   'logbook.row.park.worked': '{{program}} {{ref}} (worked)',
+  'logbook.row.park.noState':
+    'No state: set the state the activator was in. A park on a state line is logged without one until you pick it.',
   'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
@@ -1644,6 +1670,9 @@ export const EN = {
   'logEntry.qth.placeholder': 'QTH (city)',
   'logEntry.state.placeholder': 'State',
   'logEntry.state.title': 'State / province — auto-filled by the QRZ lookup when available',
+  'logEntry.parkState.ask': 'On a state line. Which state?',
+  'logEntry.parkState.title':
+    'This park is in more than one state, and the contact counts for the one the activator is in. Nexus does not guess it: pick it here, or log without a state and set it later in the Logbook.',
   'logEntry.country.placeholder': 'Country',
   'logEntry.country.title': 'DXCC entity — auto-filled from the callsign when available',
   'logEntry.comment.placeholder': 'Comment (sharable)',
@@ -2294,12 +2323,14 @@ export const EN = {
   // ⚠️ THE UNITS RULE IS THE WHOLE STORY ON THESE SURFACES, because almost everything they
   // put on screen is a MEASUREMENT. Absent from this file and staying in the code: grid
   // squares, callsigns, DXCC entity and region names, band names, mode names, bearings and
-  // octants, distances in km, MUF/dial frequencies in MHz, signal reports in dB, knots,
+  // octants, distances, MUF/dial frequencies in MHz, signal reports in dB, knots,
   // percentages, SFI/Kp/A/Bz/X-ray index NAMES and values, R/S/G scale letters, satellite
   // names, CQ zone numbers, POTA/SOTA references, the P.533 recommendation number and every
   // layer/projection id. A decimal comma in any of them is an operating fault, not a
-  // wording choice. Unit symbols (MHz, km, dB, min) ride INSIDE the sentence that carries
-  // their number, so the number and its unit can never be separated by a translation.
+  // wording choice. Unit symbols (MHz, dB, min) ride INSIDE the sentence that carries
+  // their number, so the number and its unit can never be separated by a translation. A
+  // distance that follows Settings ▸ Units arrives as `{{dist}}`, its number and unit
+  // together ("600 mi", "965 km"), so the sentence around it names neither unit.
   //
   // ⚠️ ALSO ABSENT, AND DELIBERATELY: the prose the BACKEND writes. Workability words
   // (Excellent/Good/Fair/Marginal), the band advisor's `reason`, each insight's `plain` and
@@ -2762,8 +2793,8 @@ export const EN = {
   // Getting-out compass rose.
   'prop.getout.aria': 'Compass rose of where your signal is reaching',
   'prop.getout.spoke': {
-    one: '{{octant}}: {{count}} station, out to {{km}} km',
-    other: '{{octant}}: {{count}} stations, out to {{km}} km',
+    one: '{{octant}}: {{count}} station, out to {{dist}}',
+    other: '{{octant}}: {{count}} stations, out to {{dist}}',
   },
 
   // The predictive insight feed — both sentences in each row come from the backend.
@@ -2816,7 +2847,7 @@ export const EN = {
   'prop.opening.bandOpen': '{{band}} OPEN',
   'prop.opening.new': 'NEW',
   'prop.opening.detail':
-    'point {{octant}} · ~{{km}} km · {{stations}} stations{{reciprocal}} · {{confidence}}{{opened}}',
+    'point {{octant}} · ~{{dist}} · {{stations}} stations{{reciprocal}} · {{confidence}}{{opened}}',
   'prop.opening.reciprocal': ' ({{count}} 2-way)',
   'prop.opening.opened': ' · opened {{ago}}',
   'prop.opening.ago.justNow': 'just now',
@@ -2838,7 +2869,7 @@ export const EN = {
   'prop.openingsLog.column.stations': 'Stns',
   'prop.openingsLog.duration.partial.title': 'Already open at app start — duration under-counts',
   'prop.openingsLog.dx.title': 'Longest path seen during the opening',
-  'prop.openingsLog.dx': '~{{km}} km {{octant}}',
+  'prop.openingsLog.dx': '~{{dist}} {{octant}}',
   'prop.openingsLog.stations.title': 'Most stations heard in one window',
   'prop.openingsLog.stations': '{{count}} stns',
 
@@ -2846,13 +2877,13 @@ export const EN = {
   // which fires, and a fragment shared between two tiers could not carry their different
   // urgency into another language.
   'prop.openingAlert.sporadicE':
-    '⚡ {{band}} SPORADIC-E — rare & brief, point {{octant}} NOW · DX ~{{km}} km · {{stations}} stns',
+    '⚡ {{band}} SPORADIC-E — rare & brief, point {{octant}} NOW · DX ~{{dist}} · {{stations}} stns',
   'prop.openingAlert.aurora':
     '🌌 {{band}} AURORA — beam NORTH (not at the station); signals sound raspy/buzzy, CW & SSB work best',
   'prop.openingAlert.f2':
-    '⚡ {{band}} F2 opening — real DX, point {{octant}} · ~{{km}} km · {{stations}} stns',
+    '⚡ {{band}} F2 opening — real DX, point {{octant}} · ~{{dist}} · {{stations}} stns',
   'prop.openingAlert.tropo':
-    '📡 {{band}} tropo opening — DX to ~{{km}} km, point {{octant}} · {{stations}} stns',
+    '📡 {{band}} tropo opening — DX to ~{{dist}}, point {{octant}} · {{stations}} stns',
   'prop.openingAlert.generic': '⚡ {{band}} open — point {{octant}} · {{stations}} stns',
   // Geomagnetic storm heads-up (stormAlert.ts). A storm is hours-to-days of degraded
   // HF, unlike a flare's minutes — the copy says what it means for operating, and the
@@ -2860,7 +2891,7 @@ export const EN = {
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   'prop.openingAlert.thin':
-    '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{km}} km {{octant}}; may not be audible by ear',
+    '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{dist}} {{octant}}; may not be audible by ear',
 
   // ── Chasing (the chase panes and the ranked chase feed) ─────────────────────────────
   'chase.row.show.title': 'Show {{call}} on the map',
@@ -2924,7 +2955,7 @@ export const EN = {
   'dxped.engine.modelled': 'modelled',
   'dxped.card.live.title': 'Live PSK Reporter spots confirm this band toward the DX region',
   'dxped.card.live.label': 'live spots',
-  'dxped.card.geo': '{{octant}}{{az}} · {{km}} km',
+  'dxped.card.geo': '{{octant}}{{az}} · {{dist}}',
   'dxped.card.bestShot': 'Best shot: {{band}} {{workability}} {{window}}',
   'dxped.card.details.title': 'The full 24h × band reliability grid for this path',
   'dxped.card.details.show': '▸ details',
@@ -3484,6 +3515,11 @@ export const EN = {
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
   'ota.activation.stopFailed': 'Could not stop activation',
+  'ota.activation.state.ask': 'On a state line. Which state are you in?',
+  'ota.activation.state.mine': 'Your state: {{state}}',
+  'ota.activation.state.lotw':
+    'Your contacts carry this state as MY_STATE. LoTW credits the state of the TQSL Station Location you sign with, so sign them with a location in this state.',
+  'ota.activation.state.failed': 'Could not set your state',
   // "Spot me": your own activation, posted to pota.app and the DX cluster in one press, on the
   // desktop's board and the Remote page's. Each target reports on its own unless both took it.
   'ota.selfSpot.button': 'Spot me',
@@ -4319,7 +4355,6 @@ export const EN = {
   'sat.dome.readout.satellite': 'Satellite',
   'sat.dome.readout.range': 'Range',
   'sat.dome.readout.range.title': 'Slant range — how far the bird is FROM YOU.',
-  'sat.dome.readout.km': '{{km}} km',
   'sat.dome.readout.rangeRate': ' · {{rate}} km/s {{trend}}',
   'sat.dome.readout.closing': 'closing',
   'sat.dome.readout.opening': 'opening',
@@ -4521,9 +4556,9 @@ export const EN = {
   'sat.sked.noFavorites':
     'Star a bird or two first — a sked is searched over your ★ favourites, not the whole catalogue.',
   'sat.sked.scanned':
-    '{{grid}}, {{km}} km away · {{birds}} ★ birds over {{days}} days · a window needs {{el}}° at BOTH ends',
+    '{{grid}}, {{dist}} away · {{birds}} ★ birds over {{days}} days · a window needs {{el}}° at BOTH ends',
   'sat.sked.none':
-    'No window with {{grid}} in the next {{days}} days. For a low-orbit bird both stations have to be inside the same footprint at the same moment — past about 3300 km apart that never happens, whatever the schedule says.',
+    'No window with {{grid}} in the next {{days}} days. For a low-orbit bird both stations have to be inside the same footprint at the same moment — past about {{dist}} apart that never happens, whatever the schedule says.',
   'sat.sked.el.title':
     "The window's shared ceiling: the highest the bird gets for whichever of you has it LOWER. A mutual window is only as good as its worse end.",
   'sat.sked.ends.title':
@@ -4592,7 +4627,7 @@ export const EN = {
   'sat.discovery.workable.title': 'Workable passes (10° peak or better) in the next 24 h',
   'sat.discovery.workable': '{{count}} in 24 h',
   'sat.discovery.altitude.title': 'Current altitude',
-  'sat.discovery.altitude': '{{km}} km up',
+  'sat.discovery.altitude': '{{dist}} up',
   'sat.discovery.clamped.title':
     'Rose before the 6 h scan window — its true rise time is unknown here',
   'sat.discovery.showAll': 'show all {{count}} ▾',
@@ -4670,7 +4705,7 @@ export const EN = {
   'sat.birds.head': 'Birds ({{count}})',
   'sat.birds.search.placeholder': 'search…',
   'sat.birds.star.title': '★ favorites drive the schedule, the map emphasis, and alarms',
-  'sat.birds.alt': 'alt {{km}} km',
+  'sat.birds.alt': 'alt {{dist}}',
   'sat.birds.alt.title':
     'Altitude — how far above the earth the bird is right now. Not range (its distance from you).',
   'sat.birds.empty': 'no elements yet — first fetch needs the network once',
@@ -8048,7 +8083,7 @@ export const EN = {
 
   'connect.getout.heading': 'Am I getting out?',
   'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
-  'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{km}} km</b>',
+  'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{dist}}</b>',
   'connect.getout.select.title': 'Select {{call}} on the map',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
@@ -8077,7 +8112,7 @@ export const EN = {
   'connect.basic.openings.none': 'No band openings right now.',
   // The station count reads `stns` at every count today; a locale that needs a singular
   // supplies one as an overlay. English is left exactly as it shipped.
-  'connect.basic.openings': '{{band}} OPEN {{octant}} — ~{{km}} km, {{stations}} stns.',
+  'connect.basic.openings': '{{band}} OPEN {{octant}} — ~{{dist}}, {{stations}} stns.',
   'connect.basic.spaceWx.unavailable': 'Space weather unavailable.',
   'connect.basic.spaceWx': 'SFI {{sfi}}, Kp {{kp}}: {{impact}}.',
   'connect.basic.spaceWx.flare':
@@ -8087,7 +8122,7 @@ export const EN = {
   'connect.basic.spaceWx.flareBlackout':
     'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
   'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
-  'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{km}} km.',
+  'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
   'connect.basic.activity.offline': 'No live activity data right now.',
@@ -8113,8 +8148,8 @@ export const EN = {
   'connect.basic.muf.noneNearby': 'No ionosonde MUF reported nearby.',
   'connect.basic.muf.nearby': 'Measured MUF nearby: {{mhz}} MHz ({{mins}} min old).',
   'connect.basic.es.open': {
-    one: '{{band}} OPEN {{octant}} — ~{{km}} km {{mode}}, {{count}} stn.',
-    other: '{{band}} OPEN {{octant}} — ~{{km}} km {{mode}}, {{count}} stns.',
+    one: '{{band}} OPEN {{octant}} — ~{{dist}} {{mode}}, {{count}} stn.',
+    other: '{{band}} OPEN {{octant}} — ~{{dist}} {{mode}}, {{count}} stns.',
   },
   // ⚠️ `{{freq}}` is the 6 m Es calling frequency, interpolated rather than written into
   // the sentence: a literal frequency in a catalog is one a translator can reformat.

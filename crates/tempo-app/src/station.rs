@@ -239,6 +239,8 @@ pub fn catch_up_records(
 /// what every insert does before it writes (SPEC-2 v3 D2-A), so the store holds exactly what
 /// every screen shows. The record's own values always win, and a resolver that cannot place the
 /// call leaves the field empty. The same rule `Engine::log_qso` applies to a contact it logs.
+///
+/// Never the state of a contact with a hunted park or summit ([`call_places_state`]).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fill_with(
     r: &mut QsoRecord,
@@ -248,9 +250,19 @@ pub(crate) fn fill_with(
     if r.country.is_none() {
         r.country = country.and_then(|resolve| resolve(&r.call));
     }
-    if r.state.is_none() {
+    if r.state.is_none() && call_places_state(r) {
         r.state = state.and_then(|resolve| resolve(&r.call, r.grid.as_deref()));
     }
+}
+
+/// Whether a contact's missing state may be filled from its callsign. Not for one with a hunted
+/// park or summit: the park places that contact, and the call places only where the activator
+/// LIVES (their licence's address). The log funnel gave it the park's state when it was logged;
+/// one without a state is a park on a state line the operator has not picked, or a contact from
+/// before the park's state was known, and filling it from the call is the error the park's state
+/// replaced. The operator picks it, or the Logbook's park-state check offers the park's own.
+pub(crate) fn call_places_state(r: &QsoRecord) -> bool {
+    r.ota.their_ref.is_none()
 }
 
 /// Fill every contact of `log` — a log nothing holds yet — with its country and state from the
@@ -274,9 +286,7 @@ fn fill_loaded(
                 .is_none()
                 .then(|| country.and_then(|f| f(&r.call)))
                 .flatten();
-            let st = r
-                .state
-                .is_none()
+            let st = (r.state.is_none() && call_places_state(r))
                 .then(|| state.and_then(|f| f(&r.call, r.grid.as_deref())))
                 .flatten();
             (c.is_some() || st.is_some()).then_some((i, c, st))
@@ -737,6 +747,51 @@ pub(crate) fn fill_pairs(
             if state.is_some() {
                 now.state = state;
             }
+            Some((Arc::clone(row), Some(Arc::new(now))))
+        })
+        .collect()
+}
+
+/// One contact the operator ticked in the Logbook's park-state check: `id`, which held the state
+/// `from` when the check listed it, takes its park's own state `to` ([`park_state_pairs`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParkStateChange {
+    pub id: RecordId,
+    pub from: Option<String>,
+    pub to: String,
+}
+
+/// The rows the park-state check's changes make: each contact still holding the state the check
+/// listed (`from`, compared without case or padding), whose park `places` still puts in exactly
+/// the state `to`, given that state. A contact changed since the check listed it, gone, or no
+/// longer placed in `to` is left as it is: the operator ticked the change they were shown, and
+/// only the park, never the caller, can name a park's state.
+pub(crate) fn park_state_pairs(
+    rows: &HashMap<RecordId, Arc<QsoRecord>>,
+    changes: &[ParkStateChange],
+    places: &dyn Fn(&str, &str) -> Vec<String>,
+) -> Vec<MadeRow> {
+    let norm = |s: Option<&str>| {
+        s.map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty())
+    };
+    changes
+        .iter()
+        .filter_map(|c| {
+            let row = rows.get(&c.id)?;
+            let reference = row.ota.their_ref.as_deref()?;
+            if norm(row.state.as_deref()) != norm(c.from.as_deref()) {
+                return None;
+            }
+            let program = row.ota.their_program.as_deref().unwrap_or("POTA");
+            let to = match places(program, reference).as_slice() {
+                [one] if crate::engine::place_state(one).eq_ignore_ascii_case(c.to.trim()) => {
+                    crate::engine::place_state(one).to_ascii_uppercase()
+                }
+                _ => return None,
+            };
+            let mut now = QsoRecord::clone(row);
+            now.state = Some(to);
             Some((Arc::clone(row), Some(Arc::new(now))))
         })
         .collect()
@@ -1691,11 +1746,15 @@ pub struct StationCore {
     /// as worked. Persisted by the shell; seeded on import + at startup.
     pub(crate) hunted_parks_import: HashSet<String>,
     /// Pending HUNT target (program, normalized ref, activator call, set-at
-    /// unix): set by a one-click hunt; the next QSO logged with that call
-    /// auto-tags SIG/SIG_INFO (their_*) and the pend clears. Expires after
-    /// [`HUNT_TTL_SECS`] — activations end; a forgotten pend must never stamp
-    /// a park on an unrelated contact hours later. Session-only.
-    pub(crate) pending_hunt: Option<(String, String, String, u64)>,
+    /// unix, the places the park or summit is in): set by a one-click hunt; the next QSO logged
+    /// with that call auto-tags SIG/SIG_INFO (their_*), takes its state from those places, and
+    /// the pend clears. Expires after [`HUNT_TTL_SECS`] — activations end; a forgotten pend must
+    /// never stamp a park on an unrelated contact hours later. Session-only.
+    ///
+    /// The places are the codes the hunter feed writes ("US-ND", "CA-ON"): every US state, DC or
+    /// Canadian province the park is in, two or more for a park on a state line, none where the
+    /// caller could not place it. The command layer resolves them, outside the Engine lock.
+    pub(crate) pending_hunt: Option<(String, String, String, u64, Vec<String>)>,
     /// Per-launch salt for the hound pileup spread (stock re-randomizes each
     /// session; a pure callsign hash parked every operator on the same offset
     /// at every event).
@@ -1715,6 +1774,13 @@ pub struct StationCore {
     /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
     /// activation ends), so not persisted. `None` = not activating.
     pub(crate) activation: Option<(String, String)>,
+    /// Where the activation's park or summit is ("US-ND"; two or more for a park on a state line,
+    /// none where the caller could not place it), and the state you are activating from: the
+    /// park's own when it names one, else the one you picked of its states. Its contacts carry
+    /// it as `MY_STATE`. Never invented: no place, no pick, no `MY_STATE`. Cleared with the
+    /// activation.
+    pub(crate) activation_places: Vec<String>,
+    pub(crate) activation_state: Option<String>,
     /// Session gallery of saved SSTV images, newest last. Seeded from the
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
@@ -1816,6 +1882,8 @@ impl StationCore {
             last_eqsl_reconcile: None,
             last_qrz_reconcile: None,
             activation: None,
+            activation_places: Vec::new(),
+            activation_state: None,
             sstv_gallery: Vec::new(),
         }
     }
@@ -2576,11 +2644,15 @@ impl StationCore {
     /// One-click HUNT: remember the activator + park so the NEXT QSO logged
     /// with that call auto-tags `SIG`/`SIG_INFO` (POTA) / `SOTA_REF` — the
     /// hunter-side ADIF credit. Validates like [`Self::set_activation`].
+    ///
+    /// `places` are where the park or summit is ("US-ND"; see [`Self::pending_hunt`]): the
+    /// contact's state comes from them, never from the activator's licence.
     pub fn set_hunt_target(
         &mut self,
         call: &str,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(), String> {
         let prog = tempo_core::pota::OtaProgram::from_code(program)
             .ok_or_else(|| format!("unknown program {program:?} (POTA/SOTA)"))?;
@@ -2590,7 +2662,13 @@ impl StationCore {
         if c.is_empty() {
             return Err("no activator callsign".into());
         }
-        self.pending_hunt = Some((prog.code().to_string(), normalized, c, now_unix_secs()));
+        self.pending_hunt = Some((
+            prog.code().to_string(),
+            normalized,
+            c,
+            now_unix_secs(),
+            places,
+        ));
         Ok(())
     }
 
@@ -2604,8 +2682,18 @@ impl StationCore {
     pub fn hunt_target(&self) -> Option<(String, String, String)> {
         self.pending_hunt
             .as_ref()
-            .filter(|(_, _, _, at)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
-            .map(|(p, r, c, _)| (p.clone(), r.clone(), c.clone()))
+            .filter(|(_, _, _, at, _)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
+            .map(|(p, r, c, _, _)| (p.clone(), r.clone(), c.clone()))
+    }
+
+    /// The places the pending hunt's park or summit is in ("US-ND"), for the log form; empty
+    /// with no pend, an expired one, or a park the hunt could not place.
+    pub fn hunt_places(&self) -> Vec<String> {
+        self.pending_hunt
+            .as_ref()
+            .filter(|(_, _, _, at, _)| now_unix_secs().saturating_sub(*at) <= HUNT_TTL_SECS)
+            .map(|(_, _, _, _, places)| places.clone())
+            .unwrap_or_default()
     }
 
     /// True when this POTA/SOTA reference is already worked — either in the log
@@ -2987,22 +3075,62 @@ impl StationCore {
     /// tagged as your activation until [`clear_activation`](Self::clear_activation).
     /// Validates + normalizes the reference; returns the normalized `(program, ref)`
     /// or an error string for an unknown program / malformed reference.
+    ///
+    /// `places` are where the park or summit is ([`Self::activation_places`]): one names the
+    /// state its contacts carry as `MY_STATE`; on a state line the operator picks it
+    /// ([`Self::set_activation_state`]).
     pub fn set_activation(
         &mut self,
         program: &str,
         reference: &str,
+        places: Vec<String>,
     ) -> Result<(String, String), String> {
         let prog = tempo_core::pota::OtaProgram::from_code(program)
             .ok_or_else(|| format!("Unknown program '{program}' — use POTA or SOTA."))?;
         let normalized = tempo_core::pota::normalize_ref(prog, reference)
             .ok_or_else(|| format!("'{reference}' isn't a valid {} reference.", prog.code()))?;
         self.activation = Some((prog.code().to_string(), normalized.clone()));
+        self.activation_state = match places.as_slice() {
+            [one] => Some(crate::engine::place_state(one).to_string()),
+            _ => None,
+        };
+        self.activation_places = places;
         Ok((prog.code().to_string(), normalized))
+    }
+
+    /// The state you are activating from, picked from the park's own when it is on a state line.
+    /// Refused with no activation, and for a state that is not one of the park's: a state the
+    /// park is not in would be a `MY_STATE` nobody operated from.
+    pub fn set_activation_state(&mut self, state: &str) -> Result<(), String> {
+        if self.activation.is_none() {
+            return Err("Not activating.".into());
+        }
+        let wanted = state.trim().to_ascii_uppercase();
+        let place = self
+            .activation_places
+            .iter()
+            .map(|p| crate::engine::place_state(p))
+            .find(|st| *st == wanted)
+            .ok_or_else(|| format!("'{state}' is not one of this park's states."))?;
+        self.activation_state = Some(place.to_string());
+        Ok(())
+    }
+
+    /// Where the activation's park or summit is ("US-ND"), as the activation was started with.
+    pub fn activation_places(&self) -> Vec<String> {
+        self.activation_places.clone()
+    }
+
+    /// The state the activation's contacts carry as `MY_STATE` ("ND"), if one is known.
+    pub fn activation_state(&self) -> Option<String> {
+        self.activation_state.clone()
     }
 
     /// End the current activation (subsequent QSOs are untagged).
     pub fn clear_activation(&mut self) {
         self.activation = None;
+        self.activation_places = Vec::new();
+        self.activation_state = None;
     }
 
     /// The current activation `(program, reference)`, if any.

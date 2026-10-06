@@ -39,6 +39,9 @@
 //! resolver can answer. A contact it rules out is one that resolver never fills, so the job
 //! writes what it always wrote and counts only what could take a field. Counting every contact
 //! without a state had a log of DX contacts report 0 of thousands filled whenever the job ran.
+//!
+//! A contact with a hunted park or summit is never given a state from its call: the park places
+//! it, and its call only where the activator lives (`station::call_places_state`).
 
 use std::ops::ControlFlow;
 use std::sync::Mutex;
@@ -52,10 +55,11 @@ use crate::station::LogFill;
 /// The `log_meta` key naming the resolver data the store's fills come from.
 pub const FILL_VER: &str = "fill_ver";
 
-/// What the job reads of each contact: the call and grid the resolvers place it from, and the
-/// two fields it fills.
+/// What the job reads of each contact: the call and grid the resolvers place it from, the two
+/// fields it fills, and the hunted park, whose contact's state the call never fills
+/// ([`crate::station::call_places_state`]).
 const FILLS: Narrow = Narrow {
-    columns: &["call", "grid", "country", "state"],
+    columns: &["call", "grid", "country", "state", "ota_their_ref"],
     uploads: false,
 };
 
@@ -99,13 +103,14 @@ pub fn fill_log_store(
             }
             let mut lacking = Vec::new();
             db.each_narrow(FILLS, Scope::All, Order::Log, &mut |r| {
-                if let Some(id) = r.id.filter(|_| r.country.is_none() || r.state.is_none()) {
+                let no_state = r.state.is_none() && crate::station::call_places_state(r);
+                if let Some(id) = r.id.filter(|_| r.country.is_none() || no_state) {
                     lacking.push((
                         id,
                         r.call.clone(),
                         r.grid.clone(),
                         r.country.is_none(),
-                        r.state.is_none(),
+                        no_state,
                     ));
                 }
                 ControlFlow::Continue(())

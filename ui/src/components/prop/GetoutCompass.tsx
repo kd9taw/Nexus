@@ -5,12 +5,22 @@
 import { octantCoverage, OCTANT_DEG, type Octant } from '../../features/getout'
 import type { HeardMe } from '../../types'
 import { t } from '../../i18n'
+import { fmtDistanceKm, type Units } from '../../units'
 
 const SIZE = 132
 const C = SIZE / 2
 const R = C - 16 // leave room for the octant labels
 
-export function GetoutCompass({ reports, maxKm }: { reports: HeardMe[]; maxKm: number }) {
+export function GetoutCompass({
+  reports,
+  maxKm,
+  units,
+}: {
+  reports: HeardMe[]
+  maxKm: number
+  /** Settings ▸ Units, resolved — the spokes' tooltips state their reach in it. */
+  units: Units
+}) {
   const cov = octantCoverage(reports)
   const globalMax = Math.max(maxKm, ...cov.map((c) => c.maxKm), 1)
   const maxCount = Math.max(1, ...cov.map((c) => c.count))
@@ -51,7 +61,7 @@ export function GetoutCompass({ reports, maxKm }: { reports: HeardMe[]; maxKm: n
                   {t('prop.getout.spoke', {
                     octant: c.octant,
                     count: c.count,
-                    km: Math.round(c.maxKm).toLocaleString(),
+                    dist: fmtDistanceKm(c.maxKm, units),
                   })}
                 </title>
               </line>
