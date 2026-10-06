@@ -2564,6 +2564,10 @@ export interface NeedAlert {
    *  logged with the reference. Absent/null on every other need: a row that names no activation
    *  must never tag one. */
   park?: { program: string; reference: string } | null
+  /** Where the US state this row was scored in came from, when it had one: the park or summit the
+   *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
+   *  from an older station, and a newer one may send a value this window does not know. */
+  stateFrom?: 'park' | 'license' | 'grid' | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose).

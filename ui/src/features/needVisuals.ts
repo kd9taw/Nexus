@@ -260,3 +260,19 @@ export const NEED_CHIP: Record<import('../types').NeedTag, NeedChip> = {
     titleKey: 'need.chip.wanted.title',
   }),
 }
+
+/** The STATE chip's tooltip on one need row: where THIS state came from, as the station sends it
+ * (`stateFrom`). A row that does not say (a station older than this window) or says something this
+ * window does not know (a newer one) gets the chip's own title, which names no source. */
+export function stateChipTitle(from: import('../types').NeedAlert['stateFrom']): string {
+  switch (from) {
+    case 'park':
+      return t('need.chip.newState.title.park')
+    case 'license':
+      return t('need.chip.newState.title.license')
+    case 'grid':
+      return t('need.chip.newState.title.grid')
+    default:
+      return NEED_CHIP.NewState.title
+  }
+}

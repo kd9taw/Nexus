@@ -114,7 +114,8 @@ impl NeedTag {
 /// the Confirm chip; a station that was ONLY a confirmation opportunity loses its row
 /// entirely. Runs on the ranked list BEFORE the command layer appends the
 /// Dxped/POTA/SOTA chips, which ride award rows and must not keep a row alive that
-/// the operator asked not to see.
+/// the operator asked not to see. The rows the command layer builds after that
+/// ([`activation_alert`], [`watched_alert`]) put their own awards through it.
 pub fn strip_confirm_tier(alerts: &mut Vec<NeedAlert>) {
     for a in alerts.iter_mut() {
         a.tags.retain(|t| *t != NeedTag::Confirm);
@@ -141,10 +142,23 @@ pub struct Heard {
     /// The heard station's Maidenhead grid, when the source carried one (own decodes,
     /// PSK Reporter). `None` for cluster/RBN spots (no grid). Drives the NewGrid need.
     pub grid: Option<String>,
-    /// The heard station's US state (ADIF STATE code), when a callsign lookup resolved
-    /// one (QRZ/HamQTH). `None` for reception geometry / cluster spots. Drives the
-    /// NewState (WAS) need.
-    pub us_state: Option<String>,
+    /// The heard station's US state (ADIF STATE code) and where it came from, when something
+    /// placed it. Drives the NewState (WAS) need.
+    pub us_state: Option<(String, StateSource)>,
+}
+
+/// Where a station's US state came from, so the Needed board's STATE chip can say which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StateSource {
+    /// The park or summit the station is activating ([`crate::pota::OtaSpot::states`]): where
+    /// it is, and the state a contact hunted there logs.
+    Park,
+    /// The station's licence: the FCC callsign index, which holds the licensee's address, or the
+    /// callsign itself for Alaska and Hawaii, which are one state each.
+    License,
+    /// The station's grid square, a best guess: a square can straddle a state line.
+    Grid,
 }
 
 /// The park or summit a need row is an ACTIVATION of. Carried so a Work from the board can set
@@ -200,6 +214,10 @@ pub struct NeedAlert {
     /// need, so a row that names no activation can never tag one onto a contact.
     #[serde(default)]
     pub park: Option<ParkRef>,
+    /// Where the station's US state came from, when something placed it in one — the STATE
+    /// chip's tooltip says which.
+    #[serde(default)]
+    pub state_from: Option<StateSource>,
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -513,6 +531,7 @@ pub fn score_slots(
         grid_rarity: rarity,
         grid: grid.map(str::to_string),
         park: None, // set by activation_alert; a scored award row names no activation
+        state_from: None, // set by rank and activation_alert, which know where the state came from
     })
 }
 
@@ -540,7 +559,7 @@ pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> V
                 &s.band,
                 &s.mode,
                 s.grid.as_deref(),
-                s.us_state.as_deref(),
+                s.us_state.as_ref().map(|(state, _)| state.as_str()),
                 needs,
                 slots,
             )
@@ -548,6 +567,7 @@ pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> V
                 a.freq_mhz = s.freq_mhz;
                 a.admitted_at = s.admitted_at;
                 a.evidence = s.evidence.clone();
+                a.state_from = s.us_state.as_ref().map(|(_, from)| *from);
                 a
             })
         })
@@ -749,11 +769,17 @@ pub fn activator_state<'a>(
 /// park already worked in the activation running now stops competing for attention while the
 /// same park tomorrow is a fresh opportunity. The row is never dropped outright: the activity
 /// badge and the board's own POTA/SOTA filter still have something to show.
+///
+/// The award goes through the [`strip_confirm_tier`] seam when the operator has turned
+/// confirmation opportunities off (`confirm_tier` false), as [`watched_alert`]'s does: the board
+/// builds these rows after it strips the ones it ranked. An activator whose only award was a
+/// confirmation is then the bare activation.
 pub fn activation_alert(
     spot: &crate::pota::OtaSpot,
     needs: &dyn OperatorNeeds,
     slots: &AwardSlots,
     reference_needed: bool,
+    confirm_tier: bool,
 ) -> Option<NeedAlert> {
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
@@ -769,7 +795,7 @@ pub fn activation_alert(
     // Any award this activator ALSO satisfies (ATNO / new band / zone / grid / state). The state
     // is the park's or summit's, which is the one a contact hunted there logs.
     let state = activator_state(&spot.activator, band.label(), &spot.states, needs, slots);
-    let award = score_slots(
+    let mut award: Vec<NeedAlert> = score_slots(
         &spot.activator,
         band.label(),
         mode.label(),
@@ -777,7 +803,13 @@ pub fn activation_alert(
         state,
         needs,
         slots,
-    );
+    )
+    .into_iter()
+    .collect();
+    if !confirm_tier {
+        strip_confirm_tier(&mut award);
+    }
+    let award = award.pop();
     let had_award = award.is_some();
     let info = dxcc::resolve(&spot.activator);
     let mut alert = award.unwrap_or_else(|| NeedAlert {
@@ -801,7 +833,10 @@ pub fn activation_alert(
             .and_then(crate::gridrarity::grid_rarity),
         grid: spot.grid.clone(),
         park: None, // filled in below, on the merged row as well as this one
+        state_from: None,
     });
+    // The row's state, when it has one, is the park's or the summit's, on the merged row as well.
+    alert.state_from = state.map(|_| StateSource::Park);
     // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
     // chip everywhere downstream, and a park still to be worked is a reason, not a decoration.
     if reference_needed && !alert.tags.contains(&NeedTag::NewPark) {
@@ -910,6 +945,7 @@ pub fn watched_alert(
         grid_rarity: grid.and_then(crate::gridrarity::grid_rarity),
         grid: grid.map(str::to_string),
         park: None,
+        state_from: None,
     });
     mark_watched(&mut alert);
     alert
@@ -2004,6 +2040,7 @@ mod tests {
                 &HashSet::new(),
             ),
             true,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -2829,6 +2866,7 @@ mod tests {
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
             true,
+            true,
         )
         .expect("an active park is a row");
         assert_eq!(a.entity, "United States");
@@ -2859,6 +2897,7 @@ mod tests {
             &ota("POTA", "K-1234", "K1ABC", 14_250.0, "SSB"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
             true,
         )
         .unwrap();
@@ -2895,6 +2934,7 @@ mod tests {
             &n,
             &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
             true,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -2921,6 +2961,7 @@ mod tests {
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
             true,
+            true,
         )
         .unwrap();
         assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
@@ -2930,6 +2971,7 @@ mod tests {
             &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
             true,
         )
         .is_none());
@@ -3026,7 +3068,7 @@ mod tests {
         let slots = slots(n.worked_zones(), n.worked_grids(), &no_states);
         let spot = ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB");
 
-        let need = activation_alert(&spot, &n, &slots, true).unwrap();
+        let need = activation_alert(&spot, &n, &slots, true, true).unwrap();
         assert_eq!(
             need.tags,
             vec![NeedTag::NewPark, NeedTag::Pota],
@@ -3034,7 +3076,7 @@ mod tests {
         );
         assert_eq!(need.priority, 20, "the activation floor still applies");
 
-        let worked = activation_alert(&spot, &n, &slots, false).unwrap();
+        let worked = activation_alert(&spot, &n, &slots, false, true).unwrap();
         assert_eq!(
             worked.tags,
             vec![NeedTag::Pota],
@@ -3061,6 +3103,7 @@ mod tests {
             &n,
             &slots,
             false,
+            true,
         )
         .unwrap();
         assert!(a.tags.contains(&NeedTag::NewEntity));
@@ -3084,6 +3127,7 @@ mod tests {
             &n,
             &slots,
             true,
+            true,
         )
         .unwrap();
         assert!(a.tags.contains(&NeedTag::NewPark), "{:?}", a.tags);
@@ -3102,6 +3146,7 @@ mod tests {
             &n,
             &slots,
             true,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -3116,6 +3161,7 @@ mod tests {
             &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
             &n,
             &slots,
+            true,
             true,
         )
         .unwrap();
@@ -3134,6 +3180,7 @@ mod tests {
             &n,
             &slots,
             false,
+            true,
         )
         .unwrap();
         assert!(worked.park.is_some());
@@ -3243,7 +3290,7 @@ mod tests {
         let wrong: Vec<String> = cases
             .iter()
             .filter_map(|(name, needs, spot, park_needed, tags, priority)| {
-                let a = activation_alert(spot, *needs, &needs.slots(), *park_needed).unwrap();
+                let a = activation_alert(spot, *needs, &needs.slots(), *park_needed, true).unwrap();
                 (a.tags != *tags || a.priority != *priority).then(|| {
                     format!(
                         "{name}: {:?} at {}, want {tags:?} at {priority}",
@@ -3368,12 +3415,20 @@ mod tests {
         let wrong: Vec<String> = cases
             .iter()
             .filter_map(|(name, spot, tags, priority, headline)| {
-                let a = activation_alert(spot, &n, &n.slots(), true).unwrap();
+                let a = activation_alert(spot, &n, &n.slots(), true, true).unwrap();
                 let named = headline.is_none_or(|h| a.headline.starts_with(h));
-                (a.tags != *tags || a.priority != *priority || !named).then(|| {
+                // The row is scored in the park's or summit's state whenever it is in a US one.
+                let from = spot
+                    .states
+                    .iter()
+                    .any(|s| s.starts_with("US-"))
+                    .then_some(StateSource::Park);
+                let placed = a.state_from == from;
+                (a.tags != *tags || a.priority != *priority || !named || !placed).then(|| {
                     format!(
-                        "{name}: {:?} at {}, {:?}; want {tags:?} at {priority}, {headline:?}",
-                        a.tags, a.priority, a.headline
+                        "{name}: {:?} at {}, {:?}, state from {:?}; \
+                         want {tags:?} at {priority}, {headline:?}, {from:?}",
+                        a.tags, a.priority, a.headline, a.state_from
                     )
                 })
             })
@@ -3553,7 +3608,8 @@ mod tests {
 
     #[test]
     fn rank_carries_us_state_from_heard_into_a_new_state_need() {
-        // The Heard.us_state field must flow through rank() into a NewState tag.
+        // The Heard.us_state field must flow through rank() into a NewState tag, and where the
+        // state came from onto the row.
         let mut n = LogNeeds::new();
         n.add("W1AW", "20m", "SSB", None, None, true); // entity + zone satisfied → isolate the state
         let worked_states: HashSet<(String, Band)> = HashSet::new();
@@ -3565,7 +3621,7 @@ mod tests {
             admitted_at: None,
             evidence: None,
             grid: None,
-            us_state: Some("VT".into()),
+            us_state: Some(("VT".into(), StateSource::License)),
         }];
         let ranked = rank(
             &spots,
@@ -3579,6 +3635,7 @@ mod tests {
             ranked[0].tags
         );
         assert_eq!(ranked[0].priority, 60);
+        assert_eq!(ranked[0].state_from, Some(StateSource::License));
     }
 
     #[test]
@@ -3614,6 +3671,7 @@ mod tests {
                 grid_rarity: None,
                 grid: None,
                 park: None,
+                state_from: None,
             }
         }
         let mut alerts = vec![

@@ -198,6 +198,7 @@ mod tests {
             grid_rarity: None,
             grid: None,
             park: None,
+            state_from: None,
         }
     }
 

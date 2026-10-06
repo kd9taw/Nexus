@@ -34,7 +34,7 @@ import { T } from '../i18n/T'
 import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
 import { RarityChip } from './RarityChip'
-import { NEED_CHIP } from '../features/needVisuals'
+import { NEED_CHIP, stateChipTitle } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
@@ -782,7 +782,7 @@ export function NeededPanel({
                     <span
                       key={tag}
                       className={`need-chip need-${chipFor(tag).cls}`}
-                      title={chipFor(tag).title}
+                      title={tag === 'NewState' ? stateChipTitle(a.stateFrom) : chipFor(tag).title}
                     >
                       {chipFor(tag).label}
                     </span>

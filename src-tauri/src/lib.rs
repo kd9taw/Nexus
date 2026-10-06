@@ -7722,7 +7722,11 @@ fn rbn_comment_grid(comment: &str) -> Option<&str> {
 /// resolution a home op near a border is indistinguishable from a rover, so any grid override is a
 /// false New-State as often as a real one. Deferred until a 6-char grid→state resolver exists.
 /// Actual WAS credit still comes from the confirmed QSO's logged ADIF STATE; this only hints.)
-fn us_state_hint(call: &str, grid: Option<&str>) -> Option<String> {
+///
+/// It says which of them answered, for the Needed board's STATE chip; a caller that wants only the
+/// state drops that.
+fn us_state_hint(call: &str, grid: Option<&str>) -> Option<(String, propagation::StateSource)> {
+    use propagation::StateSource::{Grid, License};
     // ⚠️ THE ENTITY OUTRANKS BOTH RESOLVERS BELOW, AND NEITHER OF THEM KNOWS THE COUNTRY (#171).
     //
     // The two answers were computed independently and never compared. Country comes from
@@ -7743,19 +7747,19 @@ fn us_state_hint(call: &str, grid: Option<&str>) -> Option<String> {
     // the old behaviour: the entity has said nothing, so it overrules nothing.
     if let Some(entity) = propagation::dxcc::resolve(call).map(|d| d.entity) {
         if let Some(st) = propagation::dxcc::state_for_entity(entity) {
-            return Some(st.to_string());
+            return Some((st.to_string(), License));
         }
         if !propagation::dxcc::is_us_state_entity(entity) {
             return None;
         }
     }
     if let Some(st) = fcc_state_for_call(call) {
-        return Some(st.to_string());
+        return Some((st.to_string(), License));
     }
     grid.map(str::trim)
         .filter(|g| !g.is_empty())
         .and_then(propagation::state_for_grid)
-        .map(str::to_string)
+        .map(|st| (st.to_string(), Grid))
 }
 
 /// The roster / log-record answer to "where is this station" — a US state OR a Canadian
@@ -7780,7 +7784,7 @@ fn subdivision_hint(call: &str, grid: Option<&str>) -> Option<String> {
     if let Some(p) = propagation::province_for_call(call) {
         return Some(p.to_string());
     }
-    us_state_hint(call, grid)
+    us_state_hint(call, grid).map(|(st, _)| st)
 }
 
 /// Whether a state or province can apply to a contact at all: yes where [`subdivision_hint`]
@@ -19953,7 +19957,7 @@ fn read_all_spots(
             // needed → covers this whole cluster/CW/SSB firehose), refined by the roster's cached
             // decode grid for rovers. See us_state_hint.
             let roster_grid = roster_grids.get(&cs.dx_call).map(String::as_str);
-            let state = us_state_hint(&cs.dx_call, roster_grid);
+            let state = us_state_hint(&cs.dx_call, roster_grid).map(|(st, _)| st);
             // Heading source, most-trusted first: our own decode cache, else the skimmer
             // wire's grid token (rbn-gated). Never human free-text.
             let grid = roster_grid
@@ -20522,11 +20526,17 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
 /// or takes its call's from the FCC callsign index. That fill is the whole point of the index: a
 /// needed New State lights up across the grid-less firehose (cluster / CW / SSB spots, near-me and
 /// getting-out reception reports).
+///
+/// Each state is recorded with where it came from, for the board's STATE chip. `fcc` is that
+/// index's answer for a call: [`fcc_state_for_call`] on the board, a test's own in a test, since
+/// the index is a process global that no test loads.
 fn place_heards(
     heard: &mut [propagation::Heard],
     live: &[propagation::OtaSpot],
     needs: &propagation::LogNeeds,
+    fcc: impl Fn(&str) -> Option<&'static str>,
 ) {
+    use propagation::StateSource::{License, Park};
     let mut places = std::collections::HashMap::<String, Vec<String>>::new();
     for sp in live.iter().filter(|sp| !sp.states.is_empty()) {
         places
@@ -20538,9 +20548,9 @@ fn place_heards(
     for h in heard.iter_mut() {
         if let Some(at) = places.get(&tempo_core::message::base_call(&h.call)) {
             h.us_state = propagation::activator_state(&h.call, &h.band, at, needs, &slots)
-                .map(str::to_string);
+                .map(|st| (st.to_string(), Park));
         } else if h.us_state.is_none() {
-            h.us_state = fcc_state_for_call(&h.call).map(str::to_string);
+            h.us_state = fcc(&h.call).map(|st| (st.to_string(), License));
         }
     }
 }
@@ -20678,12 +20688,13 @@ fn read_need_alerts(
         .lock()
         .map(|cache| live_ota_spots(&cache, now).cloned().collect())
         .unwrap_or_default();
-    place_heards(&mut heard, &live_spots, &needs);
+    place_heards(&mut heard, &live_spots, &needs, fcc_state_for_call);
     let mut alerts = propagation::rank_needs(&heard, &*needs, &needs.slots());
     // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
     // the ONE seam both surfaces share — the Needed board and the decode/roster chips
     // are all views over this list — and it runs BEFORE the DXped/POTA/SOTA appends so
-    // an appended chip cannot keep alive a row the operator asked not to see.
+    // an appended chip cannot keep alive a row the operator asked not to see. The rows
+    // built after it (the hunter feed's, the watch list's) take the same seam themselves.
     if !confirm_tier {
         propagation::strip_confirm_tier(&mut alerts);
     }
@@ -20818,9 +20829,13 @@ fn read_need_alerts(
             let reference_needed = live.iter().any(|(_, r)| {
                 hunted.needed(r, &tempo_core::message::base_call(&sp.activator), now)
             });
-            let Some(mut alert) =
-                propagation::activation_alert(sp, &*needs, &needs.slots(), reference_needed)
-            else {
+            let Some(mut alert) = propagation::activation_alert(
+                sp,
+                &*needs,
+                &needs.slots(),
+                reference_needed,
+                confirm_tier,
+            ) else {
                 continue;
             };
             if alert.call == me_up {
@@ -34561,6 +34576,27 @@ mod tests {
         );
     }
 
+    /// The state hint says which source placed the state, for the Needed board's STATE chip. No FCC
+    /// index is loaded in a unit test, so a station in the lower 48 is placed by its grid, while
+    /// Alaska and Hawaii are named by the callsign, which the chip calls the licence, whatever the
+    /// grid says.
+    #[test]
+    fn the_state_hint_says_which_source_placed_the_state() {
+        use propagation::StateSource::{Grid, License};
+        assert_eq!(
+            super::us_state_hint("W9XYZ", Some("EN52")),
+            Some(("WI".to_string(), Grid))
+        );
+        assert_eq!(
+            super::us_state_hint("KL7AA", Some("EN52")),
+            Some(("AK".to_string(), License))
+        );
+        assert_eq!(
+            super::us_state_hint("KH6ABC", None),
+            Some(("HI".to_string(), License))
+        );
+    }
+
     /// #180: a QSL-sent mark could not be undone. Sending is once-only, so a mis-click made
     /// the three send entries vanish with nothing to put the row back — the inbound side has
     /// had `markQslCard(index, false)` all along. The command layer is the middle of that
@@ -42822,6 +42858,12 @@ mod tests {
                 "{mode}: {:?}",
                 row.headline
             );
+            // …and each says the park placed it, for the STATE chip.
+            assert_eq!(
+                row.state_from,
+                Some(propagation::StateSource::Park),
+                "{mode}"
+            );
         }
         // CONTROL: Montana is worked on 20 m, so W1XYZ is a park still to be worked and no state.
         assert_eq!(board_row(&alerts, "W1XYZ", "Phone").tags, [NewPark, Pota]);
@@ -42833,14 +42875,16 @@ mod tests {
         );
     }
 
-    /// Which state a heard station is scored in. Every station here arrives in Ohio, as an own
-    /// decode's grid or the FCC licence would place it. An activator live at a North Dakota park
-    /// is scored in North Dakota, its portable call included; one at an Ontario park in no US
-    /// state, as its contact credits none; one at a park nothing places, and a station on no
-    /// hunter feed, stay in Ohio.
+    /// Which state a heard station is scored in, and where it came from. Every station here but
+    /// the last arrives in Ohio, as an own decode's grid places it. An activator live at a North
+    /// Dakota park is scored in North Dakota, its portable call included; one at an Ontario park in
+    /// no US state, as its contact credits none; one at a park nothing places, and a station on no
+    /// hunter feed, stay in Ohio by the grid. The last arrives in no state and takes its licence's
+    /// from the FCC index.
     #[test]
     fn a_live_activator_is_scored_in_its_parks_state_and_any_other_station_in_its_own() {
-        let heard = |call: &str| propagation::Heard {
+        use propagation::StateSource::{Grid, License, Park};
+        let heard = |call: &str, state: Option<&str>| propagation::Heard {
             call: call.into(),
             band: "20m".into(),
             mode: "CW".into(),
@@ -42848,7 +42892,7 @@ mod tests {
             admitted_at: None,
             evidence: None,
             grid: None,
-            us_state: Some("OH".into()),
+            us_state: state.map(|st| (st.into(), Grid)),
         };
         let live = |call: &str, states: &[&str]| {
             let mut sp = ota_spot(call, "US-0001");
@@ -42860,10 +42904,100 @@ mod tests {
             live("W8ON", &["CA-ON"]),
             live("W8XX", &[]),
         ];
-        let mut heards = [heard("W8ND/P"), heard("W8ON"), heard("W8XX"), heard("W8OH")];
-        crate::place_heards(&mut heards, &feed, &propagation::LogNeeds::new());
-        let states: Vec<Option<&str>> = heards.iter().map(|h| h.us_state.as_deref()).collect();
-        assert_eq!(states, [Some("ND"), None, Some("OH"), Some("OH")]);
+        let ohio = Some("OH");
+        let mut heards = [
+            heard("W8ND/P", ohio),
+            heard("W8ON", ohio),
+            heard("W8XX", ohio),
+            heard("W8OH", ohio),
+            heard("W8LIC", None),
+        ];
+        let fcc = |call: &str| (call == "W8LIC").then_some("OH");
+        crate::place_heards(&mut heards, &feed, &propagation::LogNeeds::new(), fcc);
+        let states: Vec<Option<(&str, propagation::StateSource)>> = heards
+            .iter()
+            .map(|h| h.us_state.as_ref().map(|(st, from)| (st.as_str(), *from)))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                Some(("ND", Park)),
+                None,
+                Some(("OH", Grid)),
+                Some(("OH", Grid)),
+                Some(("OH", License)),
+            ]
+        );
+    }
+
+    /// ⭐ CONFIRMATION OPPORTUNITIES TURNED OFF HOLD FOR THE HUNTER FEED'S ROWS TOO. The board strips
+    /// the Confirm tier from the rows it scores, and the feed's own rows are built after that, so they
+    /// went on carrying it. One activator here has a confirmation as its only award (the park's state
+    /// is worked and not confirmed), the other has one beside a new state (the United States is
+    /// worked and not confirmed on that band). Off, each row is what it would be without it.
+    #[test]
+    fn with_confirmation_opportunities_off_no_hunter_feed_row_carries_confirm() {
+        use propagation::NeedTag::{Confirm, NewPark, NewState, Pota};
+        // The United States confirmed on 20 m phone, North Dakota worked there and not confirmed,
+        // and the United States worked on 40 m phone and not confirmed.
+        let station = |confirm_tier: bool| {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            for (call, band, freq, state, confirmed) in [
+                ("W1AW", "20m", 14.285, None, true),
+                ("K0ND", "20m", 14.285, Some("ND"), false),
+                ("W1AW", "40m", 7.200, None, false),
+            ] {
+                let mut r = pass_qso(call, "FN31", band, freq);
+                r.mode = "SSB".into();
+                r.state = state.map(str::to_string);
+                r.award_confirmed = confirmed;
+                e.log_qso(r);
+            }
+            let mut s = e.settings().clone();
+            s.alert_confirm_tier = confirm_tier;
+            e.apply_restored_settings(s);
+            e
+        };
+        let placed = |call: &str, reference: &str, khz: f64, state: &str| {
+            let mut sp = live_spot("POTA", call, reference, 60);
+            sp.freq_khz = khz;
+            sp.states = codes(&[state]);
+            sp
+        };
+        let feed = [
+            placed("W1ABC", "US-0065", 14_285.0, "US-ND"),
+            placed("K1XYZ", "US-0001", 7_200.0, "US-MT"),
+        ];
+        let board =
+            |confirm_tier: bool| needed_board_for(station(confirm_tier), &[], &[("POTA", &feed)]);
+        // ON, the default: both rows carry the Confirm.
+        let on = board(true);
+        let nd = board_row(&on, "W1ABC", "Phone");
+        assert_eq!(nd.tags, [NewPark, Confirm, Pota]);
+        assert_eq!(nd.headline, "Confirm — United States · POTA US-0065");
+        assert_eq!(
+            board_row(&on, "K1XYZ", "Phone").tags,
+            [NewState, NewPark, Confirm, Pota]
+        );
+        // OFF: neither does. The first is the bare activation, the second keeps its new state.
+        let off = board(false);
+        let nd = board_row(&off, "W1ABC", "Phone");
+        assert_eq!(
+            (nd.tags.as_slice(), nd.headline.as_str(), nd.priority),
+            (&[NewPark, Pota][..], "POTA US-0065", 20)
+        );
+        let mt = board_row(&off, "K1XYZ", "Phone");
+        assert_eq!(
+            (mt.tags.as_slice(), mt.headline.as_str()),
+            (
+                &[NewState, NewPark, Pota][..],
+                "New state — MT on 40m (United States) · POTA US-0001"
+            )
+        );
+        assert!(
+            !off.iter().any(|a| a.tags.contains(&Confirm)),
+            "no row on the board: {off:?}"
+        );
     }
 
     #[test]
