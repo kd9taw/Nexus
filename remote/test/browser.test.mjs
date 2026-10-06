@@ -113,13 +113,13 @@ console.log(`# browser shard ${SHARD} of ${SHARDS}: running ${SHARD_SCENARIOS.le
 
 for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream,phone} of SHARD_SCENARIOS) test(`compiled hosted browser ${phone?'phone':stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, phone?'phone':stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
-  let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
+  let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer, stationSupervisor
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
     producing=false;station?.close()
     // Stop the browser even if a producer rejected; no failed fixture may skip
     // process cleanup and overlap the next compatibility or operating case.
-    try { await Promise.all([producer,applicationProducer]) }
+    try { await Promise.all([producer,applicationProducer,stationSupervisor]) }
     finally { try { await browser?.stop() } finally { await app.mf.dispose() } }
   })
   try {
@@ -856,6 +856,44 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const bytes=Buffer.byteLength(JSON.stringify(response));applicationTraffic.bytes+=bytes;applicationTraffic.maxResponseBytes=Math.max(applicationTraffic.maxResponseBytes,bytes)
       source.send(response)
     }})()
+    // THE STAND-IN RECONNECTS AS NEXUS DOES (`supervise`, src-tauri/src/remote_service/transport.rs). A runner stall
+    // of about 2 s makes the stand-in answer its credit late, and the relay then closes its socket (1008
+    // `applicationTimeout`, or `invalidApplicationResult` for a batch that expired on the way). Nexus connects again,
+    // and a stand-in that did not would leave every later wait for station data to time out. So after a close it did
+    // not make itself, the stand-in waits what Nexus waits, 2^attempts s plus up to 1 s of jitter (attempts 1 to 6,
+    // from 0 again after a connection that lasted over 60 s), and connects again; a 401 or 403 ends it, as Nexus then
+    // turns Remote off. While the scenario holds station data back on purpose (`applicationAvailable=false`) it waits
+    // for that to end: the scenario reconnects itself where it recovers. Every connection goes through
+    // `connectStation`, one at a time, so the scenario's and the stand-in's never cross.
+    // ONE EXCEPTION: a close only a protocol fault produces fails the scenario at once and names the reason. The room
+    // refuses a message it cannot read (`invalidMessage`, remote/src/room.ts), and the relays a station message they
+    // cannot take (`invalidObservation`, `invalidOperation`, `invalidStream`, `invalidAudio`); late answers never
+    // produce these, so a slow runner cannot, and reconnecting would only ride out a broken message. A reason a late
+    // answer also produces (`invalidPublication`, `invalidApplicationResult`, `invalidApplicationPage`) stays a drop.
+    const protocolFaults=['invalidMessage','invalidObservation','invalidOperation','invalidStream','invalidAudio']
+    const ownCloses=new WeakSet()
+    let connecting=Promise.resolve()
+    const connectStation=(dropped=null)=>{const turn=connecting.then(async()=>{
+      if(dropped){if(!producing||station!==dropped)return}else{ownCloses.add(station);station.close()}
+      const next=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
+      if(producing)station=next;else next.close()
+    });connecting=turn.catch(()=>{});return turn}
+    stationSupervisor=(async()=>{let attempts=0
+      while(producing){
+        const source=station,started=performance.now()
+        while(producing&&station===source&&(!source.closed||ownCloses.has(source)))await sleep(100)
+        if(!producing||station!==source)continue
+        if(protocolFaults.includes(source.closeReason))assert.fail(`The service closed the station stand-in's socket for a protocol fault: ${source.closeCode} ${source.closeReason}`)
+        if(performance.now()-started>60000)attempts=0
+        attempts=Math.min(attempts+1,6)
+        const wait=(1000<<attempts)+Math.floor(Math.random()*1000),due=performance.now()+wait
+        while(producing&&station===source&&(performance.now()<due||!applicationAvailable))await sleep(100)
+        if(!producing||station!==source)continue
+        console.log(`Station stand-in: the service closed its socket (${source.closeCode} ${source.closeReason}); connecting again after ${wait} ms, as Nexus does`)
+        try{await connectStation(source)}
+        catch(error){if(error instanceof assert.AssertionError&&[401,403].includes(error.actual)){console.log(`Station stand-in: refused (${error.actual}), so it stays off, as Nexus does`);return}}
+      }
+    })()
     if(stream){
       // REMOTE AS A STREAM, end to end in real Chrome, under the Worker's real CSP and through the real
       // relay lane. The station's WebRTC end is a second Chrome window standing in for str0m: it answers
@@ -2424,7 +2462,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // switches above change the topic union, so refresh() re-issues the watch
       // credit and postpones the station's expiry past the browser's reconnect.
       // Remove a view switch and it would have failed like session layout did.
-      station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
+      await connectStation()
       await until(`document.querySelector('.app').dataset.remoteStale!=='true'`)
       await until(`!!${button('Take station control')}`)
       assert.equal(loggingLease,null,'data recovery must not restore station authority')
@@ -2524,7 +2562,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // Withholding a station credit can legitimately expire BOTH sockets. The
       // fixture must reconnect the native endpoint as the real controller does;
       // restoring an in-memory boolean cannot revive an expired WebSocket.
-      station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
+      await connectStation()
       await until(`document.querySelector('.app')?.dataset.remoteStale!=='true'`)
       assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true)
       assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
@@ -4329,7 +4367,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
     {const retired=await evaluate(retiredReadings('.message-scroll'));assert.ok(isRetired(retired),'stale Tempo messages are retired in place: '+JSON.stringify(retired))}
     applicationAvailable=true;applicationRevision++
-    station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
+    await connectStation()
     await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.querySelector('.bubble-text')?.textContent==='BAND MESSAGE'`)
     Object.assign(applicationData.get_snapshot,beforeTempo);applicationRevision++
     if(applicationVersion>=10){
@@ -4365,8 +4403,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // Withholding a station credit can legitimately expire BOTH sockets. The
     // fixture must reconnect the native endpoint as the real controller does;
     // restoring an in-memory boolean cannot revive an expired WebSocket.
-    station.close()
-    station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
+    await connectStation()
     try { await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.body.textContent.includes('7.074')`) }
     catch (error) { console.log('Station recovery diagnostic',withheld,await evaluate(`({closures:window.__socketClosures,stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent})`));throw error }
     if (applicationVersion === 6) await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)

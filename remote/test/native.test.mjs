@@ -138,6 +138,7 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
       assert.deepEqual((await operation({ type: 'result', operationId: logged.request.requestId })).value, logged.value)
       assert.equal((await probe.send({ type: 'ftQsoEvidence' })).adif, after.adif)
     }
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     socket?.close()
     try { await probe.stop() } finally { await app.mf.dispose() }
@@ -200,6 +201,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     for (let i = 0; i < 50 && !status?.stationId; i++) { status = (await probe.send({ type: 'status' })).status; if (!status.stationId) await delay(100) }
     assert.equal(status.phase, 'disabled', 'Turn off Remote is remembered')
     assert.deepEqual(status.transmitPermissions, [])
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
@@ -243,6 +245,7 @@ test('actual native A5: the station pins the device key it showed, and keeps it 
       if (!status?.pinnedDevices?.includes(requested.deviceId)) await delay(100)
     }
     assert.deepEqual(status.pinnedDevices, [requested.deviceId], 'the pin survived a restart')
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
@@ -278,6 +281,7 @@ test('actual native A5: approving the pairing pins the key the confirming browse
     assert.deepEqual(status.pinnedDevices, [device.id], 'and it is pinned, on first use')
     const { value: session } = await browser.post('session')
     assert.equal(session.stations.find(s => s.id === stationId).device.publicKey, publicKey, 'the page reads its own key back')
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
   }
@@ -339,6 +343,7 @@ test('actual native S1-M1/S3-M1: the station\'s key is recorded for its pages, a
     const stop = await ask(request({ type: 'stopTransmit', stationBootId: held.stationBootId, leaseId: held.leaseId,
       transmitEpoch: held.transmitEpoch }))
     assert.deepEqual(stop.value, { stop: 'accepted' }, JSON.stringify(stop))
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { socket?.close() } catch { /* already closed */ }
     try { await probe.stop() } finally { await app.mf.dispose() }
@@ -364,14 +369,20 @@ async function queryPage(socket, args) {
 /** One v1 sample, asked as the page's own v1 client asks it (`ApplicationClient.invoke`): every answer is
  *  acknowledged at once, and `applicationBusy` is asked again, three times at most and 250 ms apart. The station
  *  answers busy for a sample it holds no fresh copy of while another thread holds the Engine. Every other answer goes
- *  back to the caller. */
-async function applicationRead(socket, command) {
+ *  back to the caller.
+ *  With `since` (a `performance.now()` time) a sample taken before it is asked again the same way: while another
+ *  thread holds the Engine the station serves the sample it already has, with its true age, if that is under a
+ *  second old, so a read just after a change at the shack can get the sample from before the change. A sample counts
+ *  as taken after `since` only when its age is under the time from `since` to the request: that can take a new
+ *  sample for an old one, which is asked again, and never an old one for a new one. */
+async function applicationRead(socket, command, since = null) {
   for (let attempt = 1; ; attempt++) {
-    const requestId = crypto.randomUUID()
+    const requestId = crypto.randomUUID(), asked = performance.now()
     socket.send({ type: 'applicationRead', requestId, command, revision: null })
     const result = await socket.take(value => value.requestId === requestId)
     socket.send({ type: 'applicationAck', requestId })
-    if (attempt === 3 || result.type !== 'applicationError' || result.error !== 'applicationBusy') return result
+    const older = since !== null && result.type === 'applicationResult' && result.ageMs >= asked - since
+    if (attempt === 3 || !(older || result.type === 'applicationError' && result.error === 'applicationBusy')) return result
     await delay(250)
   }
 }
@@ -404,16 +415,20 @@ async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
   const queue = [], waiting = []
-  // Never forward raw probe output: its pipe includes the one-time pairing code.
-  child.stderr.resume()
-  let exited = false
+  // Never forward raw probe output: its pipe includes the one-time pairing code. Only a panic's place is kept,
+  // `panicked at <file>:<line>:<col>`, which names a source line and nothing else.
+  let panic = null
+  createInterface({ input: child.stderr }).on('line', line => { panic ??= line.match(/panicked at (\S+:\d+:\d+)/)?.[1] ?? null })
+  let exited = false, exitCode = null
+  const gone = what => new Error(`native probe exited (code ${exitCode}${panic ? `, panicked at ${panic}` : ''}) before answering ${what}`)
   const exit = new Promise(resolve => {
     const finish = code => {
-      exited = true
-      for (const waiter of waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(new Error('native probe exited')) }
+      exited = true; exitCode = code
+      for (const waiter of waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(gone(waiter.what)) }
       resolve(code)
     }
-    child.once('exit', finish)
+    // `close`, not `exit`: it comes once the pipes are read to the end, the panic's line included.
+    child.once('close', finish)
     child.once('error', () => finish(null))
   })
   const lines = createInterface({ input: child.stdout })
@@ -424,24 +439,27 @@ async function nativeProbe(binary, origin) {
     if (waiter) { clearTimeout(waiter.timer); waiter.resolve(value) } else queue.push(value)
   })
   child.stdin.write(JSON.stringify({ origin, configurationRoot:profile }) + '\n')
-  async function receive() {
+  async function receive(what) {
     if (queue.length) return queue.shift()
-    if (exited) throw new Error('native probe exited')
+    if (exited) throw gone(what)
     return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject, timer: null }
-      waiter.timer = setTimeout(() => { waiting.splice(waiting.indexOf(waiter), 1); reject(new Error('native probe response timed out')) }, 15000)
+      const waiter = { resolve, reject, timer: null, what }
+      waiter.timer = setTimeout(() => { waiting.splice(waiting.indexOf(waiter), 1); reject(new Error(`native probe response to ${what} timed out`)) }, 15000)
       waiting.push(waiter)
     })
   }
   return {
-    ready: receive,
-    async send(action) { child.stdin.write(JSON.stringify(action) + '\n'); return receive() },
+    ready: () => receive('ready'),
+    async send(action) { child.stdin.write(JSON.stringify(action) + '\n'); return receive(action.type) },
+    /** Ends the probe and returns its exit code; a second call returns it again. It asserts nothing: a test
+     *  asserts the code as its body's last step, because an error thrown from its `finally` would replace the
+     *  body's own, and a probe that died mid-test then read as nothing but its exit code. */
     async stop() {
       if (!exited) child.stdin.end('{"type":"exit"}\n')
       const timer = setTimeout(() => child.kill('SIGTERM'), 5000)
       const code = await exit; clearTimeout(timer)
       await rm(profile,{recursive:true,force:true})
-      assert.equal(code, 0, 'native probe must exit successfully')
+      return code
     },
   }
 }
@@ -526,17 +544,16 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     }
     for (const tier of ['TempoFast','TempoDeep']) {
       const native = await probe.send({type:'seedTempo',tier,conversations:tempoConversations(tier)})
+      const seeded = performance.now()
       await delay(550) // The existing snapshot producer shares one sample per 500 ms.
-      const requestId=crypto.randomUUID()
-      socket.send({type:'applicationRead',requestId,command:'get_snapshot',revision:null})
-      const result=await socket.take(value=>value.requestId===requestId)
+      // A sample taken after the seed: one from before it shows the previous tier.
+      const result = await applicationRead(socket, 'get_snapshot', seeded)
       assert.equal(result.type,'applicationResult')
       assert.equal(result.data.link.tier,tier)
       assert.deepEqual(result.data.conversations,native.conversations,'the original v1 stream preserves every native delivery field and legacy message')
       assert.ok(native.conversations.some(c=>c.messages.some(m=>m.delivered)))
       assert.ok(native.conversations.some(c=>c.messages.some(m=>m.confirmed)))
       assert.equal(result.data.radio.txEnabled,false)
-      socket.send({type:'applicationAck',requestId})
     }
     await probe.send({type:'seedTempo',tier:originalTier,conversations:[]})
     const { value: streamTicket } = await browser.post(`stations/${stationId}/ticket`)
@@ -909,6 +926,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const forgotten = await probe.send({ type: 'forget' })
     assert.equal(forgotten.ok, true, JSON.stringify(forgotten)); assert.equal(forgotten.status.stationId, null)
     assert.equal((await app.db.prepare('SELECT enabled FROM stations WHERE id=?').bind(stationId).first()).enabled, 0)
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally { try { await probe.stop() } finally { await app.mf.dispose() } }
 })
 
@@ -965,7 +983,8 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   // stationBusy means the request was refused before anything changed, so an operator clicks again. A request
   // the device is allowed to make retries once; `again` re-reads state first when the request carries a command
   // window. Any other refusal, or a second stationBusy, stands. Refusals this case expects
-  // (localPermissionRequired, staleContext) are never wrapped.
+  // (localPermissionRequired, staleContext) are never asked with a state read afresh, which would answer
+  // something else: the stale FT command is asked again exactly as it was.
   // ⚠️ It does NOT only mean "the native Engine was held", which this comment used to claim. TWO unrelated
   // producers send the same string: `operations.rs` when the Engine `try_lock` fails, and `transport.rs` when
   // another operation is already in flight on this connection, which never touches the Engine. Nothing on the
@@ -1231,7 +1250,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        // The acknowledgement alone is not evidence of the native engine stopping.
        for(let i=0;i<30&&(await probe.send({type:'ftEvidence'})).txEnabled;i++)await delay(50)
        assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:false,owned:false,logCount:1})
-       assert.equal((await action(ft,{action:'ft.cq',expectedTier:tier,direction:null})).response.error,'staleContext')
+       // The Stop retired this state's transmit epoch, so the command is stale on purpose. A busy answer is asked
+       // again with the same command, never through `action`, whose retry builds it from a state read afresh.
+       assert.equal((await allowed(()=>command(ft,{action:'ft.cq',expectedTier:tier,direction:null}))).response.error,'staleContext')
        assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
        const selection = await probe.send({type:'ftCallDecode'})
        assert.match(selection.message,/CQ W1AW FN31/)
@@ -1310,5 +1331,6 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
    const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)
   }
+  assert.equal(await probe.stop(),0,'native probe must exit successfully')
  }finally{for(const timer of renewals.values())clearInterval(timer);socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
 })
