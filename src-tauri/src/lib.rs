@@ -25976,6 +25976,14 @@ struct OtaSpotDto {
     hunted_today: bool,
     /// The operator's own signal is being received on this band right now.
     band_open: bool,
+    /// The US states (and DC) and Canadian provinces this activation is in, as
+    /// country-subdivision codes ("US-ND"): the park's, each of them for a park on a state
+    /// line, or the summit's association's. Written here because the spot's own copy is never
+    /// serialized (see [`propagation::OtaSpot::states`]).
+    states: Vec<String>,
+    /// Those of [`Self::states`] a contact here would add to Worked All States on this spot's
+    /// band. See [`ota_needed_states`].
+    needed_states: Vec<String>,
 }
 
 /// What the LOG decides about one hunter-feed row. See [`ota_log_flags`].
@@ -26032,6 +26040,44 @@ fn ota_log_flags(
         .collect())
 }
 
+/// Which of each hunter-feed row's US states a contact would add to Worked All States: the need
+/// scorer's own NewState answer ([`propagation::needalert::score_slots`], the one Band Activity's
+/// rows carry), asked with the park's or summit's state where Band Activity has the callbook's,
+/// and with the band the dial names for the spot's frequency. So it is per band, as every award
+/// slot the scorer keeps is, and only for an activator whose call is a US entity's, the gate the
+/// log's worked-states fold applies too, so a state lit here goes dark once the log holds a
+/// contact in it on that band.
+fn ota_needed_states(
+    needs: &propagation::LogNeeds,
+    spots: &[propagation::OtaSpot],
+) -> Vec<Vec<String>> {
+    let slots = needs.slots();
+    spots
+        .iter()
+        .map(|sp| {
+            let band = tempo_app::bandplan::band_for_dial(sp.freq_khz / 1000.0).unwrap_or("");
+            sp.states
+                .iter()
+                .filter(|code| {
+                    code.strip_prefix("US-").is_some_and(|state| {
+                        propagation::needalert::score_slots(
+                            &sp.activator,
+                            band,
+                            &sp.mode,
+                            None,
+                            Some(state),
+                            needs,
+                            &slots,
+                        )
+                        .is_some_and(|a| a.tags.contains(&propagation::NeedTag::NewState))
+                    })
+                })
+                .cloned()
+                .collect()
+        })
+        .collect()
+}
+
 /// The hunter feed for `program` as the last fetch left it in the shared cache — the board's own
 /// poll or the background poller, whichever wrote last. `Err` when nothing is cached for it yet.
 ///
@@ -26057,6 +26103,7 @@ async fn get_ota_spots(
     program: String,
     cached: Option<bool>,
     state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
     live_paths: State<'_, SharedLivePaths>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<OtaSpotDto>, String> {
@@ -26088,13 +26135,24 @@ async fn get_ota_spots(
         spots
     };
     let now = now_unix();
-    let (mycall, capture) = {
+    // The needs model every reader shares ([`NeedsKept`]), for the states a row would add to WAS.
+    let kept = tallies.needs.clone();
+    let (mycall, capture, needs) = {
         let eng = engine_lock(&state);
-        (eng.settings().mycall.clone(), ota_log_capture(&eng, &spots))
+        (
+            eng.settings().mycall.clone(),
+            ota_log_capture(&eng, &spots),
+            needs_capture(&eng, &kept),
+        )
     };
-    let flags = {
+    let (flags, needed) = {
         let spots = spots.clone();
-        log_folds::off_the_runtime(move || ota_log_flags(capture, &spots, now)).await?
+        log_folds::off_the_runtime(move || {
+            let needs = needs_finish(needs, &kept)?;
+            let needed = ota_needed_states(&needs, &spots);
+            Ok((ota_log_flags(capture, &spots, now)?, needed))
+        })
+        .await?
     };
     // Bands where MY signal is getting out right now (live PSKR receptions of
     // my call inside the last 15 min) — the "workable now" differentiator.
@@ -26109,15 +26167,18 @@ async fn get_ota_spots(
     Ok(spots
         .into_iter()
         .zip(flags)
-        .map(|(sp, flags)| {
+        .zip(needed)
+        .map(|((sp, flags), needed_states)| {
             let band_open = propagation::Band::from_mhz(sp.freq_khz / 1000.0)
                 .map(|b| open_bands.contains(b.label()))
                 .unwrap_or(false);
             OtaSpotDto {
+                states: sp.states.clone(),
                 spot: sp,
                 new_park: flags.new_park,
                 hunted_today: flags.hunted_today,
                 band_open,
+                needed_states,
             }
         })
         .collect())
@@ -40914,6 +40975,7 @@ mod tests {
             lat: None,
             lon: None,
             spot_time_unix: None,
+            states: Vec::new(),
         };
 
         // Exact coordinates win, and are NOT flagged approximate.
@@ -40977,6 +41039,7 @@ mod tests {
             lat: None,
             lon: None,
             spot_time_unix: None,
+            states: Vec::new(),
         }
     }
 
@@ -41008,6 +41071,85 @@ mod tests {
 
     fn hunted_today(e: &tempo_app::engine::Engine, spot: &propagation::OtaSpot, now: i64) -> bool {
         ota_flags(e, std::slice::from_ref(spot), now)[0].hunted_today
+    }
+
+    // ── The board's states: which ones a contact would add to WAS ─────────────────────────
+
+    /// What the board's rows say about WAS, asked the way the command asks: the kept needs
+    /// model over the engine's log, then the need scorer per row.
+    fn ota_needed(
+        e: &tempo_app::engine::Engine,
+        spots: &[propagation::OtaSpot],
+    ) -> Vec<Vec<String>> {
+        let tallies = crate::LogTallies::default();
+        let needs = crate::needs_finish(crate::needs_capture(e, &tallies.needs), &tallies.needs)
+            .expect("the log reads");
+        crate::ota_needed_states(&needs, spots)
+    }
+
+    fn state_spot(activator: &str, khz: f64, states: &[&str]) -> propagation::OtaSpot {
+        let mut sp = ota_spot(activator, "US-0001");
+        sp.freq_khz = khz;
+        sp.states = codes(states);
+        sp
+    }
+
+    fn codes(states: &[&str]) -> Vec<String> {
+        states.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The log lights a state the way Band Activity lights a NewState: per band, from the
+    /// states it has worked. North Dakota worked on 20 m is no need on 20 m and still one on
+    /// 40 m; Montana, never worked, is one; a park on the line between them names only the
+    /// state still needed.
+    #[test]
+    fn the_board_lights_the_states_the_log_still_needs_on_the_spots_band() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        let mut nd = pass_qso("K0ABC", "EN16", "20m", 14.285);
+        nd.mode = "SSB".into();
+        nd.state = Some("ND".into());
+        e.log_qso(nd);
+        let spots = [
+            state_spot("K0XYZ", 14_285.0, &["US-ND"]),
+            state_spot("K0XYZ", 7_185.0, &["US-ND"]),
+            state_spot("W7XYZ", 14_285.0, &["US-MT"]),
+            state_spot("N7XYZ", 14_285.0, &["US-MT", "US-ND"]),
+        ];
+        assert_eq!(
+            ota_needed(&e, &spots),
+            [
+                codes(&[]),
+                codes(&["US-ND"]),
+                codes(&["US-MT"]),
+                codes(&["US-MT"])
+            ]
+        );
+    }
+
+    /// Never lit where WAS cannot count the contact: a Canadian province, DC, a frequency off
+    /// the ham bands, and a US park activated under a call that is not a US one (the log's
+    /// worked-states fold would not credit that contact, so the state would never go dark).
+    #[test]
+    fn the_board_never_lights_a_state_was_cannot_count() {
+        let e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        let spots = [
+            state_spot("VE3XYZ", 14_285.0, &["CA-ON"]),
+            state_spot("K3XYZ", 14_285.0, &["US-DC"]),
+            state_spot("K0XYZ", 13_000.0, &["US-ND"]),
+            state_spot("VE3XYZ", 14_285.0, &["US-ND"]),
+            // The control: the same park, a US call, an empty log, a ham band: a need.
+            state_spot("K0XYZ", 14_285.0, &["US-ND"]),
+        ];
+        assert_eq!(
+            ota_needed(&e, &spots),
+            [
+                codes(&[]),
+                codes(&[]),
+                codes(&[]),
+                codes(&[]),
+                codes(&["US-ND"])
+            ]
+        );
     }
 
     /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge

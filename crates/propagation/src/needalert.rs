@@ -2742,6 +2742,7 @@ mod tests {
             lat: None,
             lon: None,
             spot_time_unix: Some(1_780_000_000),
+            states: Vec::new(),
         }
     }
 

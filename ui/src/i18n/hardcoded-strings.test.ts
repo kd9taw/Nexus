@@ -264,6 +264,9 @@ const MIGRATED = [
   // migrated and flagged in the file: the Summary and Dupe-sheet EXPORTS, which build a
   // fixed-width document rather than interface prose.
   'components/PotaSotaView.tsx',
+  // The state an activator is in (2026-10-05): born migrated. The 64 place names are catalog keys,
+  // spelled out one by one; the code a row shows ("ND") is the ADIF STATE value, a token.
+  'features/otaStates.ts',
   // "Spot me" (2026-09-14): born migrated — the confirm and every per-target result are catalog
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',

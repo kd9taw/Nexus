@@ -262,6 +262,7 @@ mod tests {
             lat: None,
             lon: None,
             spot_time_unix: Some(1000),
+            states: Vec::new(),
         }
     }
     fn engine(count: usize) -> crate::SharedEngine {

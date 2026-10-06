@@ -965,6 +965,14 @@ export interface OtaSpot {
    *  Absent on a station that does not send it (an observed Remote feed), and the board then
    *  offers no Hide worked chip at all rather than hiding rows it cannot judge. */
   huntedToday?: boolean
+  /** The US states (and DC) and Canadian provinces the activator is in, country first ("US-ND",
+   *  "CA-ON"): a park's, each of them for a park on a state line, or a summit's from its SOTA
+   *  association. Empty anywhere else. Absent on a station that does not send it (an observed
+   *  Remote feed), and the row then shows no state. */
+  states?: string[]
+  /** Those of `states` a contact here would add to Worked All States on this spot's band: the
+   *  station's need scorer, from the log. The row lights its state when any is listed. */
+  neededStates?: string[]
 }
 
 /** One activator placed for the Connect map's parks layer (`get_ota_map_spots`).
