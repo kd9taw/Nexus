@@ -176,6 +176,7 @@ import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
+import { clockRepairHoldLane } from './features/clockRepairHold'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -716,6 +717,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('slotUnkeyFailed', remote ? null : slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
   }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why, remote])
+
+  // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
+  // station starts no transmission, and the lane says so on every screen while it lasts. Not on
+  // the Remote page either: that page is frozen.
+  useEffect(() => {
+    setStatus('clockRepairHold', remote ? null : clockRepairHoldLane(snap?.radio.clockRepairTxHeld))
+  }, [snap?.radio.clockRepairTxHeld, remote])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —

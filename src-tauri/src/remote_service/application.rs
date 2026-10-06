@@ -1034,6 +1034,9 @@ mod tests {
             // nobody is sitting in front of. It is excluded by construction — not a variant here
             // — and this line is what keeps it that way if someone ever widens the vocabulary.
             "pick_data_folder",
+            // Repair clock raises Windows' administrator prompt on the STATION's screen, for the
+            // same reason, and the repair waits on it.
+            "repair_clock",
         ] {
             assert!(serde_json::from_value::<Command>(json!(command)).is_err());
         }

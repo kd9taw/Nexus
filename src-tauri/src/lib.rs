@@ -16816,6 +16816,11 @@ fn b64_encode(data: &[u8]) -> String {
 fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_tx_enabled(enabled);
+    // TX On refused because a clock repair holds transmit: say so, rather than leave a button
+    // that did nothing (`Engine::hold_tx_for_clock_repair`).
+    if enabled && !eng.tx_enabled() && eng.clock_repair_holds_tx() {
+        return Err(tempo_app::engine::CLOCK_REPAIR_HOLDS_TX.to_string());
+    }
     Ok(eng.snapshot())
 }
 
@@ -17341,6 +17346,41 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             detail: "This build has no radio support (built without the `radio` feature)."
                 .to_string(),
         })
+    }
+}
+
+/// The operator pressed **Repair clock** (the top bar, beside the clock readout): run the repair
+/// the clock check found, once, through Windows' own administrator prompt. `true` when it took,
+/// `false` when it did not (the prompt was declined, or a step failed). Refused with `onAir` while
+/// anything is transmitting, `midMessage` while a JS8 or Tempo message of several overs is
+/// part-way through, `repairRunning` while a repair is already running and `nothingToRepair` when
+/// none is on offer. The prompt waits for an answer, so this runs on the blocking pool, never on
+/// an async worker. Nexus Remote has no road to it: the prompt would wait on a screen nobody may
+/// be sitting at (`remote_service::application::Command` has no variant).
+#[tauri::command]
+async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
+    #[cfg(feature = "radio")]
+    {
+        use tempo_audio::service::ClockRepairRefusal;
+        let engine = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::service::repair_clock(&engine).map_err(|refusal| {
+                match refusal {
+                    ClockRepairRefusal::OnAir => "onAir",
+                    ClockRepairRefusal::MidMessage => "midMessage",
+                    ClockRepairRefusal::Running => "repairRunning",
+                    ClockRepairRefusal::NothingToRepair => "nothingToRepair",
+                }
+                .to_string()
+            })
+        })
+        .await
+        .map_err(|e| format!("clock repair task failed: {e}"))?
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("nothingToRepair".to_string())
     }
 }
 
@@ -29162,9 +29202,9 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         // Queue for the radio loop; RPRT 0 = accepted by Nexus, the broker's whole
         // write-surface contract. The RIG transmits the message itself (a front-panel PB
         // press over the wire) and a backend refusal is surfaced on the CAT diagnostics,
-        // exactly like a rejected send_morse.
-        engine_lock(&self.engine).request_voice_mem(ch);
-        Some(true)
+        // exactly like a rejected send_morse. Refused while a clock repair holds transmit:
+        // the playback keys the rig.
+        Some(engine_lock(&self.engine).request_voice_mem(ch))
     }
     fn stop_voice_mem(&self) -> Option<bool> {
         engine_lock(&self.engine).request_voice_mem_stop();
@@ -32940,6 +32980,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             halt_tx,
             dismiss_tx_alarm,
             test_cat,
+            repair_clock,
             set_tx_even,
             set_tx_cycle_auto,
             set_beacon,

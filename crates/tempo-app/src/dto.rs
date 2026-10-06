@@ -1547,6 +1547,17 @@ pub struct RadioStatus {
     /// until a detection pass has run.
     #[serde(default)]
     pub clock_owner_note: String,
+    /// A repair for a real fault in this machine's clock is on offer (Windows
+    /// only: its time service stopped, not synchronised, or the clock just jumped):
+    /// the top bar shows **Repair clock**, which runs it through one administrator
+    /// prompt. Nothing runs it unless the operator presses that button.
+    #[serde(default)]
+    pub clock_repair_available: bool,
+    /// A clock repair is running and holds transmit: nothing starts transmitting
+    /// until it ends, or until its bound passes (`Engine::hold_tx_for_clock_repair`).
+    /// The status lane says so.
+    #[serde(default)]
+    pub clock_repair_tx_held: bool,
     /// Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion.
     #[serde(default)]
     pub source: SourceKind,

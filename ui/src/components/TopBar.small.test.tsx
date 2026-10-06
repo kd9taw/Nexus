@@ -172,7 +172,7 @@ function specificity(sel: string): Spec {
 const RULES = parseRules(read('../styles.css') + '\n' + read('../remote-web/application.css')).filter(
   (r) => r.display || r.visibility,
 )
-const BAR_WORDS = /topbar|tier-|tx-period|op-controls|op-btn|slot-clock|timesync|dt-readout|txrx|theme-chip/
+const BAR_WORDS = /topbar|tier-|tx-period|op-controls|op-btn|slot-clock|timesync|clock-repair|dt-readout|txrx|theme-chip/
 
 /** Selectors a bar class appears in that jsdom could not evaluate. Collected, then asserted empty:
  *  skipping one would let a rule hide the cluster unseen. */
@@ -240,6 +240,8 @@ const radio = {
   catOk: true,
   dtSec: 0,
   clockOffsetMs: 0,
+  // Repair clock is drawn, so it is held to the chip's sizes: it goes and stays where the chip does.
+  clockRepairAvailable: true,
   operatingMode: 'digital',
 } as unknown as RadioStatus
 
@@ -330,6 +332,7 @@ describe('the top bar at the small size', () => {
       cycle: one(container, 'header.topbar > .tx-period'),
       slot: one(container, 'header.topbar .slot-clock'),
       sync: one(container, 'header.topbar .timesync'),
+      repair: one(container, 'header.topbar .clock-repair'),
       dt: one(container, 'header.topbar .dt-readout'),
     }
     const kept = {
@@ -365,6 +368,7 @@ describe('the top bar at the small size', () => {
       const keptAlways = [
         one(container, 'header.topbar .slot-clock'),
         one(container, 'header.topbar .timesync'),
+        one(container, 'header.topbar .clock-repair'),
         one(container, 'header.topbar .dt-readout'),
         one(container, 'header.topbar > .topbar-chips'),
       ]

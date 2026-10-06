@@ -1639,6 +1639,18 @@ pub struct StationCore {
     /// can run OS commands; the engine only carries it to the UI. Empty until a
     /// detection pass has run.
     pub(crate) clock_owner_note: String,
+    /// The last detection pass found a real fault Windows can repair (its time
+    /// service stopped, not synchronised, or the clock just jumped), and the repair
+    /// has not been run. It runs only when the operator presses Repair clock;
+    /// `tempo_audio` keeps the repair itself, and the engine carries the fact to
+    /// the UI so the button shows.
+    pub(crate) clock_repair_available: bool,
+    /// A clock repair is running and holds transmit until this moment at the
+    /// latest: nothing starts transmitting before then, unless the repair ends
+    /// first and takes the hold off ([`crate::engine::Engine::hold_tx_for_clock_repair`]).
+    /// Station-wide, because there is one PC clock. On the monotonic clock,
+    /// because the repair is what may step the wall clock.
+    pub(crate) clock_repair_tx_hold_until: Option<std::time::Instant>,
     /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
     /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
     /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
@@ -1849,6 +1861,8 @@ impl StationCore {
         Self {
             clock: crate::clocksync::ClockState::default(),
             clock_owner_note: String::new(),
+            clock_repair_available: false,
+            clock_repair_tx_hold_until: None,
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             dropped_uploads: Vec::new(),
@@ -4164,6 +4178,33 @@ impl StationCore {
     /// The clock-ownership line, empty until a detection pass has run.
     pub fn clock_owner_note(&self) -> &str {
         &self.clock_owner_note
+    }
+
+    /// Record whether a clock repair is on offer (see [`Self::clock_repair_available`]).
+    pub fn set_clock_repair_available(&mut self, available: bool) {
+        self.clock_repair_available = available;
+    }
+
+    /// Whether a clock repair is on offer, for the Repair clock button.
+    pub fn clock_repair_available(&self) -> bool {
+        self.clock_repair_available
+    }
+
+    /// A clock repair is running: hold transmit until `until` at the latest.
+    pub fn hold_tx_for_clock_repair(&mut self, until: std::time::Instant) {
+        self.clock_repair_tx_hold_until = Some(until);
+    }
+
+    /// The clock repair has ended: take its hold off.
+    pub fn end_clock_repair_hold(&mut self) {
+        self.clock_repair_tx_hold_until = None;
+    }
+
+    /// Whether a clock repair holds transmit at `now`. Past its bound it does
+    /// not, whether or not the repair has ended.
+    pub fn clock_repair_holds_tx(&self, now: std::time::Instant) -> bool {
+        self.clock_repair_tx_hold_until
+            .is_some_and(|until| now < until)
     }
 
     /// Set the offset directly, bypassing the probe. `Some` publishes it as a

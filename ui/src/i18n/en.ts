@@ -9950,6 +9950,8 @@ export const EN = {
   'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
   'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
+  'phone.tx.clockRepair':
+    'Not keyed: a clock repair is running, and nothing starts transmitting until it finishes (two minutes at most).',
 
   // ── Phone ▸ the scope strip, its span chips and its zoom ─────────────────────────────
   // The strip is the rig's real RF panadapter when one streams and the receiver's audio
@@ -10156,6 +10158,12 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
+  // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
+  // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
+  // says so for as long as it lasts.
+  'shell.lane.clockRepairHold.message': 'CLOCK REPAIR — TX HELD',
+  'shell.lane.clockRepairHold.detail':
+    'Nexus is repairing this computer\u2019s clock. Nothing starts transmitting until the repair finishes, two minutes at most, so the clock cannot move in the middle of an over.',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':
     'No live propagation data yet — set your callsign in Settings and check your internet connection.',
@@ -11089,6 +11097,30 @@ export const EN = {
   'topbar.clock.gross.label': 'clock {{offset}} ✗',
   'topbar.clock.gross.title':
     'Your PC clock is {{offset}} off UTC — too far for Nexus to correct, and your logged QSO times would be wrong by the same amount. Set the clock on the machine itself (off-grid: GPS).',
+  // Repair clock, under the chip (Windows only), shown when the clock check found something
+  // Windows can fix. It is the ONE place Nexus asks for administrator rights, and only on this
+  // press, so `note` says the prompt is coming before it comes, and `title` says it in full.
+  // ⚠️ KEEP `note` NO WIDER THAN THE CHIP: it sits in the chip's column, and a line wider than
+  // the chip widens the bar (the whole sentence pushed the Tx cycle onto a second row at
+  // 1920×1080). The toasts say what happened: `onAir`, `midMessage`, `running` and `nothing` are
+  // the four refusals, and nothing ran for any of them. `midMessage` is a JS8 or Tempo message of
+  // several overs part-way through: a repair would pause it between two of them, so it waits.
+  'topbar.clock.repair.label': 'Repair clock',
+  'topbar.clock.repair.busy': 'Repairing…',
+  'topbar.clock.repair.note': 'asks for admin rights',
+  'topbar.clock.repair.title':
+    'Fix what the clock check found. Windows asks for administrator rights first, and Nexus runs the fix only when you press this.',
+  'topbar.clock.repair.onAir':
+    'Not while transmitting: a clock repair can move the clock in the middle of an over. Try again when the transmitter is idle.',
+  'topbar.clock.repair.midMessage':
+    'Not in the middle of a message: a JS8 or Tempo message is still going out, and a clock repair would pause it between two of its overs. Try again when it has finished.',
+  'topbar.clock.repair.running':
+    'A clock repair is already running. Answer the Windows prompt, or wait for it to finish.',
+  'topbar.clock.repair.nothing':
+    'There is nothing to repair now: the latest clock check found nothing to fix.',
+  'topbar.clock.repair.done': 'Clock repaired. Hover the clock readout to see what changed.',
+  'topbar.clock.repair.failed':
+    'The clock was not repaired: the administrator prompt was declined, or Windows refused a step.',
   'topbar.sync.ok.label': 'Sync',
   'topbar.sync.bad.label': 'No Sync',
   'topbar.sync.ok.title': 'Time sync OK (from decode timing)',
