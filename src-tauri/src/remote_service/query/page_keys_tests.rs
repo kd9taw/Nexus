@@ -286,7 +286,7 @@ fn a_spot_the_activation_and_the_hunt_carry_only_the_keys_the_page_takes() {
         .insert("POTA".into(), (now, vec![spot]));
     let engine = engine();
     {
-        let mut e = tempo_app::engine::engine_lock(&engine);
+        let mut e = engine.lock().unwrap();
         e.set_activation("POTA", "US-0823", places.clone()).unwrap();
         e.set_hunt_target("K2ABC", "POTA", "US-0823", places.clone())
             .unwrap();
@@ -436,7 +436,7 @@ fn an_aprs_packet_a_station_and_a_weather_report_carry_only_the_keys_the_page_ta
         "wx",
     ];
     let engine = engine();
-    tempo_app::engine::engine_lock(&engine).push_aprs_heard(AprsHeard {
+    engine.lock().unwrap().push_aprs_heard(AprsHeard {
         source: "W1AW-13".into(),
         dest: "APNEXU".into(),
         path: vec!["WIDE1-1".into()],
