@@ -214,7 +214,7 @@ describe('satTooltip', () => {
 
   it('carries how high the bird is right now, beside its next pass', () => {
     const v = sats({ birds: [bird('RS-44', 1234.4)], passes: [pass('RS-44', NOW + 480)] })
-    const line = satTooltip('RS-44', true, v, NOW, true)
+    const line = satTooltip('RS-44', true, v, NOW, true, 'metric')
     expect(line).toContain('RS-44 ★')
     expect(line).toContain('alt 1234 km')
   })
@@ -224,14 +224,22 @@ describe('satTooltip', () => {
     // away the station is. An unlabelled satellite figure would be read the
     // same way, and range and altitude are wildly different numbers.
     const v = sats({ birds: [bird('RS-44', 1234.4)], passes: [pass('RS-44', NOW + 480)] })
-    const line = satTooltip('RS-44', false, v, NOW, true)
+    const line = satTooltip('RS-44', false, v, NOW, true, 'metric')
     expect(line).toMatch(/alt 1234 km/)
     expect(line.replace('alt 1234 km', '')).not.toMatch(/km/)
   })
 
+  it("gives the altitude in the operator's units", () => {
+    // The map's satellite hover read "alt 1234 km" on Imperial. 1234.4 km is 767 mi.
+    const v = sats({ birds: [bird('RS-44', 1234.4)], passes: [] })
+    expect(satTooltip('RS-44', false, v, NOW, true, 'imperial')).toContain('alt 767 mi')
+    expect(satTooltip('RS-44', false, v, NOW, true, 'imperial')).not.toMatch(/km/)
+    expect(satTooltip('RS-44', false, v, NOW, true, 'metric')).toContain('alt 1234 km')
+  })
+
   it('says nothing about altitude for a bird nothing can place', () => {
     // No elements → no `birds` row → no subpoint. Absent, never 0 km.
-    const line = satTooltip('RS-44', false, sats(), NOW, true)
+    const line = satTooltip('RS-44', false, sats(), NOW, true, 'metric')
     expect(line).not.toMatch(/km/)
     expect(line).not.toMatch(/alt/)
     expect(line).toContain('no pass over you in 24 h')
@@ -239,16 +247,16 @@ describe('satTooltip', () => {
 
   it('keeps the pass wording: in-pass now, or the next rise and its peak', () => {
     const v = (aos: number) => sats({ birds: [], passes: [pass('RS-44', aos)] })
-    expect(satTooltip('RS-44', false, v(NOW - 60), NOW, true)).toContain('IN PASS now · max 62°')
-    expect(satTooltip('RS-44', false, v(NOW + 480), NOW, true)).toMatch(
+    expect(satTooltip('RS-44', false, v(NOW - 60), NOW, true, 'metric')).toContain('IN PASS now · max 62°')
+    expect(satTooltip('RS-44', false, v(NOW + 480), NOW, true, 'metric')).toMatch(
       /next pass \d\d:\d\d \(in 8 min\) · max 62°/,
     )
   })
 
   it('offers the click gesture only where there is one, and always the ☆/★ state', () => {
     const v = sats({ birds: [bird('RS-44', 800)], passes: [] })
-    expect(satTooltip('RS-44', false, v, NOW, true)).toContain('☆')
-    expect(satTooltip('RS-44', true, v, NOW, true)).toContain('— click for passes')
-    expect(satTooltip('RS-44', true, v, NOW, false)).not.toContain('click for passes')
+    expect(satTooltip('RS-44', false, v, NOW, true, 'metric')).toContain('☆')
+    expect(satTooltip('RS-44', true, v, NOW, true, 'metric')).toContain('— click for passes')
+    expect(satTooltip('RS-44', true, v, NOW, false, 'metric')).not.toContain('click for passes')
   })
 })

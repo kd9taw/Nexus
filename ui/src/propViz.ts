@@ -12,6 +12,7 @@
 import { sampleLut } from './colormaps'
 import { t } from './i18n'
 import { STATUS, type StatusMeta } from './statusMeta'
+import { fmtDistanceKm, type Units } from './units'
 import type {
   ActivityTier,
   BandModeled,
@@ -367,23 +368,25 @@ export function spotTooltip(sp: MapSpot): string {
  * `clickable` appends the select-for-passes hint (only the full map has that
  * gesture; the embedded detail globe does not).
  *
- * The altitude carries the word "alt" because this map's OTHER km figure is a
+ * The altitude carries the word "alt" because this map's OTHER distance is a
  * station's distance from the operator: an unlabelled "1234 km" under the
  * cursor would be read as range, and for a satellite those are wildly
  * different numbers. It is the live height off the `birds` row, never a
  * nominal orbit altitude — an elliptical bird's varies by hundreds of km
  * across one orbit, which is exactly what the operator is looking at. A bird
- * nothing carries elements for has no row, so it simply says nothing. */
+ * nothing carries elements for has no row, so it simply says nothing. The
+ * height is written in `units`, the operator's resolved setting. */
 export function satTooltip(
   name: string,
   chased: boolean,
   sats: SatView | null,
   nowSecs: number,
   clickable: boolean,
+  units: Units,
 ): string {
   const star = chased ? '★' : '☆'
   const bird = sats?.birds.find((b) => b.name === name)
-  const alt = bird ? t('prop.satTooltip.alt', { km: Math.round(bird.altKm) }) : ''
+  const alt = bird ? t('prop.satTooltip.alt', { dist: fmtDistanceKm(bird.altKm, units) }) : ''
   const pass = sats?.passes.find((pp) => pp.name === name && pp.losUnix > nowSecs)
   let when = t('prop.satTooltip.noPass')
   if (pass) {

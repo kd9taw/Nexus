@@ -72,6 +72,7 @@ import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
 import { t, type MessageKey } from '../i18n'
+import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
@@ -520,6 +521,8 @@ function Globe3DView({
   // decodes cloud and the render-on-demand wake below all read this, so an unchanged roster
   // rebuilds nothing and wakes nothing.
   const stations = useStableByKey(stationsProp, JSON.stringify(stationsProp ?? null))
+  // The pass readout gives the bird's range in the operator's units.
+  const units = useUnits()
   const spots = useMemo(() => prop?.spots ?? [], [prop])
   const wrapRef = useRef<HTMLDivElement>(null)
   const globeRef = useRef<GlobeMethods | undefined>(undefined)
@@ -1931,7 +1934,7 @@ function Globe3DView({
               az: Math.round(livePass.satAzDeg),
             })}
           </span>
-          <span>{t('globe.pass.range', { km: Math.round(livePass.rangeKm).toLocaleString() })}</span>
+          <span>{fmtDistanceKm(livePass.rangeKm, units)}</span>
           <span>{t('globe.pass.losIn', { mmss: mmss(livePass.losUnix - Date.now() / 1000) })}</span>
         </div>
       )}

@@ -9,7 +9,7 @@
 use serde::Serialize;
 
 use crate::engine::OpeningView;
-use crate::geo::solar_elevation_deg;
+use crate::geo::{km_range_token, solar_elevation_deg};
 use crate::likelihood::is_es_season;
 use crate::model::{flare_haf_mhz, r_scale, Band, SpaceWx};
 use crate::solar_wind::SolarWind;
@@ -69,7 +69,8 @@ pub struct Insight {
     pub level: InsightLevel,
     /// Plain sentence for any operator.
     pub plain: String,
-    /// The numbers/mechanism for a seasoned chaser.
+    /// The numbers/mechanism for a seasoned chaser. A distance in it is a
+    /// [`crate::geo::km_token`], which the UI writes in the operator's units.
     pub technical: String,
     /// The band this is about, if specific (lets the UI link/highlight it).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -403,9 +404,11 @@ pub fn generate_insights(
             kind: InsightKind::EsWatch,
             level: InsightLevel::Info,
             plain: "6m: watch 50.313 for sudden DX (sporadic-E season)".to_string(),
-            technical:
-                "boreal Es season (solar declination > 15°); Es is minutes-long, 500–2500 km"
-                    .to_string(),
+            // One hop's reach, as a km span the UI writes in the operator's units.
+            technical: format!(
+                "boreal Es season (solar declination > 15°); Es is minutes-long, {}",
+                km_range_token(500.0, 2500.0)
+            ),
             band: Some("6m".to_string()),
         });
     }
@@ -602,6 +605,19 @@ mod tests {
         let suppressed =
             generate_insights(JUNE, &wx(120.0, 2.0, 1e-7), None, &[], &[open], None, None);
         assert!(!suppressed.iter().any(|i| i.kind == InsightKind::EsWatch));
+    }
+
+    #[test]
+    fn es_watch_gives_one_hops_reach_as_a_km_token() {
+        // "500–2500 km" was written here, so the watch read in kilometres on an Imperial screen.
+        // The span crosses as a `{km:LO-HI}` token the UI writes in the operator's units.
+        const JUNE: i64 = 1_687_000_000; // Es season
+        let ins = generate_insights(JUNE, &wx(120.0, 2.0, 1e-7), None, &[], &[], None, None);
+        let es = ins.iter().find(|i| i.kind == InsightKind::EsWatch).unwrap();
+        assert_eq!(
+            es.technical,
+            "boreal Es season (solar declination > 15°); Es is minutes-long, {km:500-2500}"
+        );
     }
 
     #[test]

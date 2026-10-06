@@ -18,6 +18,7 @@ import {
 import type { Insight, InsightKind } from '../../types'
 import { sortInsights, insightLevelVar } from '../../propViz'
 import { t } from '../../i18n'
+import { fmtKmTokens, useUnits } from '../../units'
 
 const KIND_ICON: Record<InsightKind, LucideIcon> = {
   mufTrend: TrendingUp,
@@ -64,6 +65,8 @@ function InsightRow({
   // black-screened everything. A generic icon is honest; a dead screen is not.
   const Icon = KIND_ICON[ins.kind] ?? Activity
   const clickable = !!ins.band && !!onBandClick
+  // The technical line's distances (the Es watch's hop span) in the operator's units.
+  const units = useUnits()
   return (
     <div
       className={`insight-row${clickable ? ' is-clickable' : ''}`}
@@ -79,7 +82,7 @@ function InsightRow({
         <span className="if-plain">{ins.plain}</span>
         {/* Always shown: Connect's Basic detail level was removed 2026-07-26, and with it the
             per-row expand control that used to reveal this. */}
-        <span className="if-tech">{ins.technical}</span>
+        <span className="if-tech">{fmtKmTokens(ins.technical, units)}</span>
       </div>
     </div>
   )

@@ -19,7 +19,9 @@
 
 use crate::awards::{valid_state, AWARD_BANDS, WAS_STATES};
 use crate::dxcc;
-use crate::geo::{civil_from_days, haversine_km, maidenhead_to_latlon, solar_elevation_deg};
+use crate::geo::{
+    civil_from_days, haversine_km, km_token, maidenhead_to_latlon, solar_elevation_deg,
+};
 use crate::gridrarity::{grid_rarity, GridRarity};
 use crate::model::{Band, ModeClass};
 use serde::Serialize;
@@ -45,6 +47,10 @@ pub(crate) const CONTINENTS: [&str; 6] = ["NA", "SA", "EU", "AS", "OC", "AF"];
 const GRAYLINE_DEG: f64 = 6.0;
 /// QRP ceiling (watts).
 const QRP_W: f64 = 5.0;
+/// How far the Sporadic-E Summer feat's 6 m contact must reach, km. The feat's meaning states it.
+const ES_SEASON_KM: f64 = 1000.0;
+/// How far the Top-Band Season feat's 160 m contact must reach, km. The feat's meaning states it.
+const TOP_BAND_KM: f64 = 1500.0;
 /// XP needed to advance FROM level L is `XP_BASE * (L + 1)` (a gentle linear ramp).
 const XP_BASE: u64 = 250;
 
@@ -124,7 +130,8 @@ pub struct First {
     pub unlocked: bool,
     /// When it happened (Unix s), once unlocked.
     pub when_unix: Option<i64>,
-    /// The call/entity/distance that earned it.
+    /// The call/entity/distance that earned it. A distance is a [`km_token`], which the UI
+    /// writes in the operator's units.
     pub detail: Option<String>,
 }
 
@@ -185,6 +192,7 @@ pub struct Collection {
 pub struct Feat {
     pub id: String,
     pub title: String,
+    /// A distance threshold in it is a [`km_token`], which the UI writes in the operator's units.
     pub meaning: String,
     pub heritage: String,
     pub tier: Tier,
@@ -747,8 +755,9 @@ fn detail_call(x: &Derived) -> String {
     }
 }
 
+/// "W1AW · {km:13500}": the distance as a km token, which the UI writes in the operator's units.
 fn detail_dist(x: &Derived, km: f64) -> String {
-    format!("{} · {:.0} mi", x.q.call, km / KM_PER_MI)
+    format!("{} · {}", x.q.call, km_token(km))
 }
 
 // ----- ladders -----
@@ -1145,13 +1154,16 @@ fn compute_feats(
     // summer, so either window counts (hemisphere-fair, and permanent once earned).
     let es_hit = d.iter().find(|x| {
         x.q.band == Some(Band::B6)
-            && x.dist_km.map(|km| km >= 1000.0).unwrap_or(false)
+            && x.dist_km.map(|km| km >= ES_SEASON_KM).unwrap_or(false)
             && matches!(month_of(x.q.when_unix), 5..=8 | 11..=12 | 1..=2)
     });
     feats.push(Feat {
         id: "es-season".into(),
         title: "Sporadic-E Summer".into(),
-        meaning: "Work 6 m over 1,000 km during the summer sporadic-E season.".into(),
+        meaning: format!(
+            "Work 6 m over {} during the summer sporadic-E season.",
+            km_token(ES_SEASON_KM)
+        ),
         heritage: "Each summer the E layer thickens into fleeting clouds that hurl 6 m far past \
                    the horizon."
             .into(),
@@ -1170,13 +1182,16 @@ fn compute_feats(
     // it in their May–Aug winter, so either window counts.
     let tb_hit = d.iter().find(|x| {
         x.q.band == Some(Band::B160)
-            && x.dist_km.map(|km| km >= 1500.0).unwrap_or(false)
+            && x.dist_km.map(|km| km >= TOP_BAND_KM).unwrap_or(false)
             && matches!(month_of(x.q.when_unix), 11..=12 | 1..=2 | 5..=8)
     });
     feats.push(Feat {
         id: "top-band-winter".into(),
         title: "Top-Band Season".into(),
-        meaning: "Work 160 m over 1,500 km during the winter top-band DX season.".into(),
+        meaning: format!(
+            "Work 160 m over {} during the winter top-band DX season.",
+            km_token(TOP_BAND_KM)
+        ),
         heritage: "On 160 m the long winter nights and quiet ionosphere open the hardest band on \
                    the dial."
             .into(),
@@ -1557,6 +1572,40 @@ mod tests {
         // Bests that are not a distance carry none.
         let busiest = j.bests.iter().find(|b| b.id == "busiest-day").unwrap();
         assert_eq!(busiest.distance_km, None);
+    }
+
+    #[test]
+    fn journey_distances_cross_as_km_tokens_for_the_units_setting() {
+        // The two distance firsts named the contact as "ZL3ABC · 8388 mi", and the sporadic-E and
+        // top-band feats their thresholds as "over 1,000 km", whatever the Units setting said.
+        // Each distance now crosses as a `{km:N}` token the UI writes in the operator's units.
+        let q = JourneyQso {
+            grid: Some("RE66".into()),
+            ..qso("ZL3ABC", Band::B20, ModeClass::Digital, 1)
+        };
+        let j = compute(&[q], "W9XYZ", Some("EN61"), None, false, 1000);
+        let km = haversine_km(
+            maidenhead_to_latlon("EN61").unwrap(),
+            maidenhead_to_latlon("RE66").unwrap(),
+        );
+        for id in ["first-1000mi", "first-5000mi"] {
+            let first = j.firsts.iter().find(|f| f.id == id).unwrap();
+            assert!(first.unlocked, "{id}");
+            assert_eq!(
+                first.detail.as_deref(),
+                Some(format!("ZL3ABC · {{km:{km}}}").as_str()),
+                "{id}"
+            );
+        }
+        let meaning = |id: &str| j.feats.iter().find(|f| f.id == id).unwrap().meaning.clone();
+        assert_eq!(
+            meaning("es-season"),
+            "Work 6 m over {km:1000} during the summer sporadic-E season."
+        );
+        assert_eq!(
+            meaning("top-band-winter"),
+            "Work 160 m over {km:1500} during the winter top-band DX season."
+        );
     }
 
     #[test]

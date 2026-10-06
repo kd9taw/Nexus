@@ -116,6 +116,21 @@ pub fn grid_distance_km(a: &str, b: &str) -> Option<f64> {
     ))
 }
 
+/// A distance inside a sentence this crate writes for the screen: `{km:26.4}` where the sentence
+/// would have said "26 km". The UI writes it in the operator's units (`fmtKmTokens`,
+/// `ui/src/units.ts`), so the backend never chooses between miles and kilometres and a sentence
+/// cannot disagree with the Units setting every other distance on the screen follows. The full
+/// precision crosses: rounding here and again into miles would put some figures a mile out.
+pub fn km_token(km: f64) -> String {
+    format!("{{km:{km}}}")
+}
+
+/// [`km_token`] for a span of distances, `{km:500-2500}`, which the UI writes "500–2500 km" or
+/// "311–1553 mi".
+pub fn km_range_token(lo_km: f64, hi_km: f64) -> String {
+    format!("{{km:{lo_km}-{hi_km}}}")
+}
+
 /// Whether a string is a Maidenhead square a QSO record could carry — exactly
 /// 4, 6 or 8 characters of the locator alphabet. The Rust twin of
 /// `ui/src/grid.ts`'s `isValidLoggedGrid`, and deliberately that rule rather

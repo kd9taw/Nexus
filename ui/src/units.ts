@@ -118,6 +118,28 @@ export function fmtDistanceKm(km: number, u: Units): string {
   return u === 'imperial' ? `${Math.round(km / KM_PER_MI)} mi` : `${Math.round(km)} km`
 }
 
+/** A sentence the backend writes carries each distance as `{km:26.4}`, or a span as
+ *  `{km:500-2500}`, where it would have said "26 km" (`km_token`,
+ *  crates/propagation/src/geo.rs). */
+const KM_TOKEN = /\{km:(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?))?\}/g
+
+/** A backend sentence with its distances in the operator's units: the backend sends kilometres and
+ *  never picks a unit, so its sentences cannot disagree with the rest of the screen. A span keeps
+ *  one unit ("311–1553 mi"). Text without a token comes back as it was. */
+export function fmtKmTokens(text: string, u: Units): string {
+  return text.replace(KM_TOKEN, (_, lo: string, hi: string | undefined) => {
+    if (hi === undefined) return fmtDistanceKm(Number(lo), u)
+    const k = u === 'imperial' ? KM_PER_MI : 1
+    const unit = u === 'imperial' ? 'mi' : 'km'
+    return `${Math.round(Number(lo) / k)}–${Math.round(Number(hi) / k)} ${unit}`
+  })
+}
+
+/** Speed from km/s (a satellite's range-rate) → the display string ("1.23 km/s" / "0.77 mi/s"). */
+export function fmtSpeedKmS(kms: number, u: Units): string {
+  return u === 'imperial' ? `${(kms / KM_PER_MI).toFixed(2)} mi/s` : `${kms.toFixed(2)} km/s`
+}
+
 /** Temperature from °F (APRS-native) → the display string. */
 export function fmtTempF(f: number, u: Units): string {
   return u === 'metric' ? `${Math.round((f - 32) / 1.8)}°C` : `${Math.round(f)}°F`

@@ -9,6 +9,7 @@ import { t } from './i18n'
 import { pushToast } from './toast'
 import { readSeen, writeSeen } from './seenSet'
 import type { JourneyTier } from './types'
+import { fmtKmTokens, useUnits } from './units'
 
 const STORAGE_KEY = 'nexus-journey-seen'
 /** How often to re-check the Journey for newly-unlocked items (ms). */
@@ -29,6 +30,9 @@ const MAX_BURST = 4
  */
 export function useJourneyUnlocks(enabled = true): void {
   const seenRef = useRef<Set<string> | null>(null)
+  // A distance first's detail carries its distance as a km token, written here in the
+  // operator's units.
+  const units = useUnits()
   useEffect(() => {
     if (!enabled) return
     let live = true
@@ -46,7 +50,8 @@ export function useJourneyUnlocks(enabled = true): void {
       const items: { id: string; msg: string; tier?: JourneyTier }[] = []
       for (const f of j.firsts) {
         if (f.unlocked) {
-          items.push({ id: `first:${f.id}`, msg: `✦ ${f.title}${f.detail ? ` — ${f.detail}` : ''}` })
+          const detail = f.detail ? ` — ${fmtKmTokens(f.detail, units)}` : ''
+          items.push({ id: `first:${f.id}`, msg: `✦ ${f.title}${detail}` })
         }
       }
       for (const ft of j.feats) {
@@ -102,5 +107,5 @@ export function useJourneyUnlocks(enabled = true): void {
       live = false
       window.clearInterval(id)
     }
-  }, [enabled])
+  }, [enabled, units])
 }

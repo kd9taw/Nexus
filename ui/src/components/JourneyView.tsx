@@ -16,7 +16,7 @@ import { getJourney, getSettings } from '../api'
 import { t } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { shareCard } from '../features/shareCard'
-import { fmtDistanceKm, useUnits } from '../units'
+import { fmtDistanceKm, fmtKmTokens, useUnits, type Units } from '../units'
 
 /**
  * Journey — the in-app, beginner-first achievement layer (separate from the
@@ -31,7 +31,8 @@ export function JourneyView() {
   const [err, setErr] = useState<string | null>(null)
   // Operator call for the share cards (best-effort — cards still render without).
   const [myCall, setMyCall] = useState('')
-  // #244: a distance best is formatted here, through Units, like every other distance.
+  // #244: a distance best is formatted here, through Units, like every other distance. So are the
+  // distances the backend writes into a first's detail and a feat's meaning, as km tokens.
   const units = useUnits()
 
   useEffect(() => {
@@ -184,7 +185,7 @@ export function JourneyView() {
         </div>
         <div className="jy-firsts">
           {j.firsts.map((f) => (
-            <FirstChip key={f.id} first={f} />
+            <FirstChip key={f.id} first={f} units={units} />
           ))}
         </div>
       </section>
@@ -221,7 +222,7 @@ export function JourneyView() {
         </div>
         <div className="jy-feats">
           {j.feats.map((f) => (
-            <FeatCard key={f.id} feat={f} myCall={myCall} />
+            <FeatCard key={f.id} feat={f} myCall={myCall} units={units} />
           ))}
         </div>
       </section>
@@ -249,7 +250,7 @@ export function JourneyView() {
   )
 }
 
-function FirstChip({ first }: { first: JourneyFirst }) {
+function FirstChip({ first, units }: { first: JourneyFirst; units: Units }) {
   // Unlocked: the backend's own meaning, with its heritage note under it — no prose of ours.
   const title = first.unlocked
     ? `${first.meaning}${first.heritage ? `\n\n${first.heritage}` : ''}`
@@ -259,7 +260,9 @@ function FirstChip({ first }: { first: JourneyFirst }) {
       <span className="jy-first-mark">{first.unlocked ? '✦' : '○'}</span>
       <span className="jy-first-body">
         <span className="jy-first-title">{first.title}</span>
-        {first.unlocked && first.detail && <span className="jy-first-detail">{first.detail}</span>}
+        {first.unlocked && first.detail && (
+          <span className="jy-first-detail">{fmtKmTokens(first.detail, units)}</span>
+        )}
       </span>
     </div>
   )
@@ -364,8 +367,9 @@ function tierLabel(tier: JourneyTier): string {
   }
 }
 
-function FeatCard({ feat, myCall }: { feat: JourneyFeat; myCall?: string }) {
+function FeatCard({ feat, myCall, units }: { feat: JourneyFeat; myCall?: string; units: Units }) {
   const pct = feat.target > 0 ? Math.min(100, (feat.current / feat.target) * 100) : 0
+  const meaning = fmtKmTokens(feat.meaning, units)
   const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(0))
   return (
     <div
@@ -385,7 +389,7 @@ function FeatCard({ feat, myCall }: { feat: JourneyFeat; myCall?: string }) {
               shareCard({
                 call: myCall || t('journey.share.anonCall'),
                 headline: feat.title,
-                sub: feat.meaning,
+                sub: meaning,
                 footer: t('journey.share.featFooter', { tier: tierLabel(feat.tier) }),
               })
             }
@@ -394,7 +398,7 @@ function FeatCard({ feat, myCall }: { feat: JourneyFeat; myCall?: string }) {
           </button>
         )}
       </div>
-      <p className="jy-feat-meaning">{feat.meaning}</p>
+      <p className="jy-feat-meaning">{meaning}</p>
       {feat.gated ? (
         <p className="jy-feat-gate">{feat.gateHint}</p>
       ) : (

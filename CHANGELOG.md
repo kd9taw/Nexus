@@ -52,8 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read in miles on Imperial and in km on Metric, and Automatic follows your computer's region. The
   same fix reaches the other places that printed km whatever the setting said: the opening strip,
   the Openings Log, the opening alerts, the Openings and Es lines, the DXpedition cards, the APRS
-  station list, and the Satellites section's altitude, range and sked distances. These distances
-  are now written without a thousands separator (8047 km, not 8,047 km).
+  station list, the Satellites section's altitude, range and sked distances, the map's hover lines
+  (a station's distance, a satellite's altitude) and its short/long-path figure, the 3D globe's
+  pass range, the "heard by" lines on the Chase and Needed boxes, Journey's Sporadic-E Summer and
+  Top-Band Season feats, and the 6 m sporadic-E watch in the insights. The sky dome's range-rate
+  reads in mi/s on Imperial. Journey's 1,000- and 5,000-mile firsts gave the contact's distance in
+  miles whatever the setting said; it follows Units now too. These distances are now written
+  without a thousands separator (8047 km, not 8,047 km).
 - **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
   answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
   radio is still letting go of the last transmission), Nexus played the over anyway: the Tune
