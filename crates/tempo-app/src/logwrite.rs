@@ -35,7 +35,8 @@ use tempo_core::logbook::{
 use crate::engine::{engine_lock, Engine};
 use crate::logstore::Durability;
 use crate::station::{
-    self, Decided, LogFill, LotwSigned, LotwStamped, MadeRow, RowRefusal, StationCore, PLANS,
+    self, Decided, LogFill, LotwSigned, LotwStamped, MadeRow, ParkStateChange, RowRefusal,
+    StationCore, PLANS,
 };
 
 /// What a change to one row came to: made (`Some` of what the caller answered), found nothing
@@ -771,6 +772,58 @@ fn fill_in_chunks(
         previous = durability;
     }
     Ok(filled)
+}
+
+/// ★ The Logbook's park-state check, as the operator ticked it: each contact still holding the
+/// state the check listed takes its park's own ([`ParkStateChange`]), in one change, planned with
+/// the Engine lock released and made under it. `places` places a park or summit ("US-ND"), and
+/// is called with the lock released: a row is changed only while its park still names the state
+/// the check showed ([`station::park_state_pairs`]). Nothing else about a contact moves, and
+/// nothing goes to a connector: a corrected state is not a corrected call, and an edit re-uploads
+/// only for a call (the operator's ruling of 2026-09-10). How many contacts took their park's
+/// state: fewer than asked when one changed since the check listed it.
+///
+/// `Key`, not the `Upgrade` a fill is: it REPLACES a state, so the worked states it leaves are not
+/// a superset of the ones before, and a fold kept on an earlier answer would credit the old state.
+///
+/// ⚠️ It reads the store: call it with no lock held.
+pub fn park_states(
+    engine: &Mutex<Engine>,
+    changes: &[ParkStateChange],
+    places: &dyn Fn(&str, &str) -> Vec<String>,
+) -> (Result<usize, String>, Durability) {
+    if changes.is_empty() {
+        return (Ok(0), Durability::default());
+    }
+    let ids: Vec<RecordId> = changes.iter().map(|c| c.id).collect();
+    for _ in 0..PLANS {
+        let plan = crate::engine::log_plan(engine);
+        let rows = match plan.rows(&ids) {
+            Ok(rows) => rows,
+            Err(e) => return (Err(e), Durability::default()),
+        };
+        let pairs = station::park_state_pairs(&rows, changes, places);
+        let n = pairs.len();
+        if n == 0 {
+            return (Ok(0), Durability::default());
+        }
+        let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
+            e.station_mut()
+                .commit_planned(
+                    &plan,
+                    tempo_core::logbook::OpClass::Key,
+                    pairs,
+                    true,
+                    Vec::new(),
+                    "park_states",
+                )
+                .is_ok()
+        });
+        if ok {
+            return (Ok(n), durability);
+        }
+    }
+    (Err(station::LOG_BUSY.into()), Durability::default())
 }
 
 #[cfg(test)]

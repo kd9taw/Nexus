@@ -650,9 +650,15 @@ impl Service {
             .spawn(move || write_remembered(writer_vault, decisions))
             .ok()
             .map(|_| writer);
-        let operations = Arc::new(operations::Authority::with_spots(
-            feeds.sources.as_ref().map(|s| s.spots.clone()),
-        ));
+        let operations = Arc::new(
+            operations::Authority::with_spots(feeds.sources.as_ref().map(|s| s.spots.clone()))
+                .placing(
+                    feeds
+                        .sources
+                        .as_ref()
+                        .map(|s| (s.ota.clone(), s.parks.clone())),
+                ),
+        );
         // A stand-down at the shack retires remote transmit authority. Handing the engine this
         // revocation is what makes `Engine::halt_tx` — the verb every local stop funnels through,
         // including WSJT-X's UDP HaltTx — move the generation a browser carries as its

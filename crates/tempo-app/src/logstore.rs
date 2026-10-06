@@ -2375,6 +2375,166 @@ pub(crate) mod tests {
             .expect("the fill job runs")
     }
 
+    /// ⚠️ A HUNTED CONTACT'S STATE IS NEVER FILLED FROM ITS CALL, and no fill overwrites one.
+    /// The call places only where the activator lives; a hunted contact without a state is a park
+    /// on a state line the operator has not picked, or one logged before its park's state was
+    /// known. Three K calls the resolver places in WI: a plain contact with no state gains WI as it
+    /// always did, a hunted one with no state keeps none, and one holding its park's ND keeps ND.
+    /// On both of the store's homes: the fill job on the database, the load's fill on the 1.13
+    /// path.
+    #[test]
+    fn no_fill_gives_a_hunted_contact_its_calls_state_or_overwrites_a_parks() {
+        let log = "<CALL:4>K1PL<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010101<EOR>\n\
+                   <CALL:4>K2HU<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010202<SIG:4>POTA<SIG_INFO:7>US-0003<EOR>\n\
+                   <CALL:4>K3ND<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010303<STATE:2>ND<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n";
+        for on_file in [false, true] {
+            let d = Dir::new(if on_file {
+                "fill-hunted-file"
+            } else {
+                "fill-hunted"
+            });
+            std::fs::write(d.log(), log).unwrap();
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                flush(&engine_on_store(&d)); // converted by a launch with no resolvers
+                let e = launch_with_resolvers(&d);
+                fill(&e, 7);
+                flush(&e.lock().unwrap());
+                e
+            };
+            let states: std::collections::HashMap<String, Option<String>> = e
+                .stored_log()
+                .into_iter()
+                .map(|r| (r.call.clone(), r.state.clone()))
+                .collect();
+            let home = home(on_file);
+            assert_eq!(states["K1PL"].as_deref(), Some("WI"), "{home}: as always");
+            assert_eq!(states["K2HU"], None, "{home}: not the activator's WI");
+            assert_eq!(
+                states["K3ND"].as_deref(),
+                Some("ND"),
+                "{home}: the park's, kept"
+            );
+            if !on_file {
+                let on_disk: Vec<Option<String>> =
+                    stored(&d).into_iter().map(|r| r.state).collect();
+                assert_eq!(
+                    on_disk,
+                    [Some("WI".into()), None, Some("ND".into())],
+                    "the store"
+                );
+            }
+        }
+    }
+
+    /// The parks of the park-state tests: US-0001 in North Dakota, US-0003 on the Montana line.
+    fn test_places(_program: &str, reference: &str) -> Vec<String> {
+        match reference {
+            "US-0001" => vec!["US-ND".into()],
+            "US-0003" => vec!["US-MT".into(), "US-ND".into()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// ★ THE PARK-STATE CHECK CHANGES ONLY WHAT THE OPERATOR TICKED, AND ONLY WHILE IT HOLDS. Of
+    /// five changes asked for, one is made: A, still holding the OH the check listed, takes its
+    /// park's ND. B was changed to MN since the check listed it; C is not a hunted contact; D's
+    /// park is on a state line; E asks for a state its park is not in. F was never ticked. A keeps
+    /// its LoTW confirmation and everything else, and nothing is queued to a connector. Nothing at
+    /// all is written for no changes. On both of the store's homes.
+    #[test]
+    fn park_states_change_only_ticked_contacts_that_still_hold_what_was_listed() {
+        let log = "<CALL:4>K1AA<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010101<STATE:2>OH<SIG:4>POTA<SIG_INFO:7>US-0001<LOTW_QSL_RCVD:1>Y<EOR>\n\
+                   <CALL:4>K2BB<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010202<STATE:2>MN<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n\
+                   <CALL:4>K3CC<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010303<STATE:2>OH<EOR>\n\
+                   <CALL:4>K4DD<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010404<SIG:4>POTA<SIG_INFO:7>US-0003<EOR>\n\
+                   <CALL:4>K5EE<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010505<STATE:2>OH<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n\
+                   <CALL:4>K6FF<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>010606<STATE:2>OH<SIG:4>POTA<SIG_INFO:7>US-0001<EOR>\n";
+        for on_file in [false, true] {
+            let d = Dir::new(if on_file {
+                "park-states-file"
+            } else {
+                "park-states"
+            });
+            std::fs::write(d.log(), log).unwrap();
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                flush(&engine_on_store(&d));
+                launch_with_resolvers(&d)
+            };
+            let home = home(on_file);
+            let before = e.stored_log();
+            let id = |call: &str| before.iter().find(|r| r.call == call).unwrap().id.unwrap();
+            let change =
+                |call: &str, from: Option<&str>, to: &str| crate::station::ParkStateChange {
+                    id: id(call),
+                    from: from.map(str::to_string),
+                    to: to.into(),
+                };
+            let queued = e.lock().unwrap().take_pending_uploads().len();
+            flush(&e.lock().unwrap()); // the launch's own writes, settled first
+            let unchanged = disk_picture(&d);
+            let (none, _) = crate::logwrite::park_states(&e, &[], &test_places);
+            assert_eq!(none, Ok(0), "{home}");
+            flush(&e.lock().unwrap());
+            assert_eq!(
+                disk_picture(&d),
+                unchanged,
+                "{home}: no change, nothing written"
+            );
+
+            let (made, _) = crate::logwrite::park_states(
+                &e,
+                &[
+                    change("K1AA", Some("oh"), "ND"),
+                    change("K2BB", Some("OH"), "ND"),
+                    change("K3CC", Some("OH"), "ND"),
+                    change("K4DD", None, "ND"),
+                    change("K5EE", Some("OH"), "SD"),
+                ],
+                &test_places,
+            );
+            assert_eq!(made, Ok(1), "{home}");
+            flush(&e.lock().unwrap());
+            let after = e.stored_log();
+            let state = |call: &str| after.iter().find(|r| r.call == call).unwrap().state.clone();
+            assert_eq!(
+                ["K1AA", "K2BB", "K3CC", "K4DD", "K5EE", "K6FF"].map(state),
+                [
+                    Some("ND".into()),
+                    Some("MN".into()),
+                    Some("OH".into()),
+                    None,
+                    Some("OH".into()),
+                    Some("OH".into()),
+                ],
+                "{home}"
+            );
+            let was = before.iter().find(|r| r.call == "K1AA").unwrap();
+            let now = after.iter().find(|r| r.call == "K1AA").unwrap();
+            assert!(
+                now.qsl_rcvd.lotw && now.award_confirmed,
+                "{home}: the confirmation stays"
+            );
+            assert_eq!(
+                (&now.upload, &now.ota, now.when_unix, &now.call),
+                (&was.upload, &was.ota, was.when_unix, &was.call),
+                "{home}: nothing else moves"
+            );
+            assert_eq!(
+                e.lock().unwrap().take_pending_uploads().len(),
+                0,
+                "{home}: nothing goes to a connector (premise: {queued} before)"
+            );
+            if !on_file {
+                let on_disk = stored(&d).into_iter().find(|r| r.call == "K1AA").unwrap();
+                assert_eq!(on_disk.state.as_deref(), Some("ND"), "the store");
+            }
+        }
+    }
+
     /// A log.adi of `legacy_log(n)` plus a contact no resolver can place a country for, and one
     /// it can place a country but no state for.
     fn log_to_fill(n: usize) -> String {

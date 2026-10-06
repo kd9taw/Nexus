@@ -242,6 +242,7 @@ const MIGRATED = [
   // so `BandStrip.tsx` — which this batch does not own — reads them unchanged.
   'components/SpotsPanel.tsx',
   'components/SpotDialog.tsx',
+  'components/ParkStateReview.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/PounceBanner.tsx',

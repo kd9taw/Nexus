@@ -22,6 +22,7 @@ import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
+import { ParkStateReview } from './ParkStateReview'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -248,6 +249,17 @@ function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number 
 }
 
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
+/** The entities whose contacts take a US state or Canadian province, as cty.dat (and the
+ *  callbook) name them. */
+const STATE_ENTITIES: ReadonlySet<string> = new Set(['United States', 'Alaska', 'Hawaii', 'Canada'])
+
+/** A contact with a hunted park or summit and no state, where a state applies (or the log cannot
+ *  say whether one does): it counts for no state until the operator sets the one the activator was
+ *  in. A park on a state line is logged this way on purpose, never guessed, until it is picked. */
+function needsParkState(q: LoggedQso): boolean {
+  return !!q.ota?.theirRef && !(q.state ?? '').trim() && (q.country == null || STATE_ENTITIES.has(q.country))
+}
+
 function parseReport(s: string): string | null {
   const t = s.trim()
   return t === '' ? null : t
@@ -406,6 +418,9 @@ export function Logbook({
   // Remote: one activation's ADIF, built at the station by the same export, when the station offers it.
   const remoteActivations = useRemoteActivations(remoteLog ? operations : null, remoteLog?.total ?? 0)
   useEffect(() => { if (remoteLog) setLog(remoteLog.rows) }, [remoteLog?.rows])
+  // "Check park states": the operator-run review of hunted contacts whose park names another
+  // state (ParkStateReview). Opened only by its button; it changes nothing until Apply.
+  const [showParkStates, setShowParkStates] = useState(false)
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for an irreversible wipe.
   const [showPurge, setShowPurge] = useState(false)
@@ -1816,6 +1831,16 @@ export function Logbook({
           >
             {t('logbook.pota.label')}
           </button>
+          {!remoteLog && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => setShowParkStates(true)}
+              title={t('logbook.parkStates.buttonTitle')}
+            >
+              {t('logbook.parkStates.button')}
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"
@@ -2602,6 +2627,16 @@ export function Logbook({
                         : ''
                   }
                 >
+                  {/* Before the reference, so a narrow Park column clips the reference and
+                      never the mark. */}
+                  {needsParkState(q) && (
+                    <span
+                      className="log-park-nostate"
+                      role="img"
+                      aria-label={t('logbook.row.park.noState')}
+                      title={t('logbook.row.park.noState')}
+                    />
+                  )}
                   {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
                 </span>
                 <span className="log-cell">
@@ -3088,6 +3123,7 @@ export function Logbook({
       {/* Mounted beside SpotDialog at the section root, not inside the virtualised rows:
           the row that opened it can be recycled out from under the view while it is open. */}
       <QsoDetail qso={viewing} onClose={() => setViewing(null)} />
+      <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
     </section>
   )
 }

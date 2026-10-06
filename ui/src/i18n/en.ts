@@ -1158,6 +1158,30 @@ export const EN = {
     'Synced: {{confirmed}} newly confirmed, {{credited}} credited · {{unmatched}} unmatched',
 
   'logbook.pota.label': 'Import POTA',
+  'logbook.parkStates.button': 'Check park states',
+  'logbook.parkStates.buttonTitle':
+    'List the park and summit contacts whose state is not their park’s, and correct the ones you tick',
+  'logbook.parkStates.title': 'Check park states',
+  'logbook.parkStates.intro':
+    'These park and summit contacts hold a state other than the one their park or summit is in, or none: Nexus used to log the activator’s home state, from their licence or their callbook entry. Tick the ones to change. Nothing changes until you press the button, and nothing is uploaded again. A confirmed contact starts unticked.',
+  'logbook.parkStates.reading': 'Reading your log…',
+  'logbook.parkStates.none':
+    'Every park and summit contact Nexus can place holds its park’s state.',
+  'logbook.parkStates.change': '{{from}} → {{to}}',
+  'logbook.parkStates.noState': 'none',
+  'logbook.parkStates.confirmed': 'confirmed',
+  'logbook.parkStates.confirmedTitle':
+    'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
+  'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.apply': {
+    one: 'Change {{count}} contact',
+    other: 'Change {{count}} contacts',
+  },
+  'logbook.parkStates.done': {
+    one: '{{count}} contact now holds its park’s state',
+    other: '{{count}} contacts now hold their park’s state',
+  },
+  'logbook.parkStates.failed': 'Could not check park states',
   'logbook.pota.title':
     'Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records.',
   'logbook.pota.failed': 'POTA import failed',
@@ -1486,6 +1510,8 @@ export const EN = {
 
   // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
   'logbook.row.park.worked': '{{program}} {{ref}} (worked)',
+  'logbook.row.park.noState':
+    'No state: set the state the activator was in. A park on a state line is logged without one until you pick it.',
   'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
@@ -1644,6 +1670,9 @@ export const EN = {
   'logEntry.qth.placeholder': 'QTH (city)',
   'logEntry.state.placeholder': 'State',
   'logEntry.state.title': 'State / province — auto-filled by the QRZ lookup when available',
+  'logEntry.parkState.ask': 'On a state line. Which state?',
+  'logEntry.parkState.title':
+    'This park is in more than one state, and the contact counts for the one the activator is in. Nexus does not guess it: pick it here, or log without a state and set it later in the Logbook.',
   'logEntry.country.placeholder': 'Country',
   'logEntry.country.title': 'DXCC entity — auto-filled from the callsign when available',
   'logEntry.comment.placeholder': 'Comment (sharable)',
@@ -3484,6 +3513,11 @@ export const EN = {
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
   'ota.activation.stopFailed': 'Could not stop activation',
+  'ota.activation.state.ask': 'On a state line. Which state are you in?',
+  'ota.activation.state.mine': 'Your state: {{state}}',
+  'ota.activation.state.lotw':
+    'Your contacts carry this state as MY_STATE. LoTW credits the state of the TQSL Station Location you sign with, so sign them with a location in this state.',
+  'ota.activation.state.failed': 'Could not set your state',
   // "Spot me": your own activation, posted to pota.app and the DX cluster in one press, on the
   // desktop's board and the Remote page's. Each target reports on its own unless both took it.
   'ota.selfSpot.button': 'Spot me',
