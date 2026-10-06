@@ -361,6 +361,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the POTA/SOTA feed still showed the LoTW chip, or read "Confirm", with that setting off.
 - **Needed board: the STATE chip says where the state came from.** Its tooltip said "best-guess from
   the grid" on every row; it now names the park or summit, the station's licence, or its grid.
+- **Needed board: an Alaska or Hawaii station is in AK or HI on cluster and PSK Reporter rows too.**
+  Those rows used the mailing address on the station's FCC licence, so an Alaskan with an address in
+  another state could show New State for that state. Your own radio's decodes already placed it right.
 
 ### Changed
 
