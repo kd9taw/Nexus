@@ -11,10 +11,11 @@
 //!
 //! **Detection is unprivileged and read-only.** Every query here runs as an
 //! ordinary user; the diagnosis costs nothing and can run on any machine. Only
-//! the repair needs elevation, it is only offered once a diagnosis says a
-//! repair would actually help, and it runs only when the operator presses
-//! **Repair clock** (the operator's ruling, 2026-10-06). It used to run on its
-//! own, and operators met an administrator prompt nobody had asked for.
+//! the repair needs elevation, it is only offered for a real fault (the time
+//! service stopped, not synchronised, or the clock just jumped), and it runs
+//! only when the operator presses **Repair clock** (the operator's rulings,
+//! 2026-10-06). It used to run on its own, and operators met an administrator
+//! prompt nobody had asked for.
 //!
 //! **Nexus never calls a clock API.** On Windows the repair goes through
 //! `sc`, `w32tm` and `reg` — the OS's own tools — so W32Time stays the sole
@@ -100,7 +101,8 @@ const NTP_SERVER_KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Services\W32Time\Pa
 /// converged, always-on desktop it improves 27–79 ms of drift to 0.9–2.5 ms —
 /// real, cheap, harmless, and far inside a tolerance that machine already met.
 /// What this module is *for* is the machine whose time service is stopped, or
-/// wedged, or which just resumed from sleep hours out of date.
+/// wedged, or which just resumed from sleep hours out of date. Since 2026-10-06
+/// the write is not offered at all ([`Repair::fixes_a_fault`]).
 pub const DESIRED_POLL_SECS: u32 = 1024;
 
 /// Guard 3's ceiling, mirrored here so a diagnosis can say "too far out".
@@ -158,7 +160,20 @@ pub enum Repair {
     /// `w32tm /resync`, with `/rediscover` when the source itself is suspect.
     Resync { rediscover: bool },
     /// Diagnosis 4 — healthy but polling too rarely. The one registry write.
+    /// Never offered and never run: it fixes no fault ([`Repair::fixes_a_fault`]).
     SetPollInterval(u32),
+}
+
+impl Repair {
+    /// Does this repair fix a real fault: the time service stopped, not
+    /// synchronised, or the clock just jumped? Only those are offered, and only
+    /// those run when the operator presses **Repair clock** (the operator's
+    /// ruling, 2026-10-06: "Only for real faults"). The poll write is not one. A
+    /// default Windows PC polls every 32768 s and keeps time far inside what it
+    /// needs (see [`DESIRED_POLL_SECS`]), so it gets no button.
+    pub fn fixes_a_fault(self) -> bool {
+        matches!(self, Repair::StartService | Repair::Resync { .. })
+    }
 }
 
 /// Everything a detection pass found, and what it concluded.

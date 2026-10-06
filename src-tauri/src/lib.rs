@@ -16816,6 +16816,11 @@ fn b64_encode(data: &[u8]) -> String {
 fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_tx_enabled(enabled);
+    // TX On refused because a clock repair holds transmit: say so, rather than leave a button
+    // that did nothing (`Engine::hold_tx_for_clock_repair`).
+    if enabled && !eng.tx_enabled() && eng.clock_repair_holds_tx() {
+        return Err(tempo_app::engine::CLOCK_REPAIR_HOLDS_TX.to_string());
+    }
     Ok(eng.snapshot())
 }
 
@@ -29195,9 +29200,9 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         // Queue for the radio loop; RPRT 0 = accepted by Nexus, the broker's whole
         // write-surface contract. The RIG transmits the message itself (a front-panel PB
         // press over the wire) and a backend refusal is surfaced on the CAT diagnostics,
-        // exactly like a rejected send_morse.
-        engine_lock(&self.engine).request_voice_mem(ch);
-        Some(true)
+        // exactly like a rejected send_morse. Refused while a clock repair holds transmit:
+        // the playback keys the rig.
+        Some(engine_lock(&self.engine).request_voice_mem(ch))
     }
     fn stop_voice_mem(&self) -> Option<bool> {
         engine_lock(&self.engine).request_voice_mem_stop();

@@ -146,7 +146,7 @@ impl Engine {
         permit: TransmitPermit,
         selection: &FtCallSelection,
     ) -> Result<(), Reason> {
-        self.prepare_remote_ft(&permit)?;
+        self.prepare_remote_ft_start(&permit)?;
         let FtCallSelection {
             call,
             grid,
@@ -267,7 +267,7 @@ impl Engine {
         permit: TransmitPermit,
         direction: Option<&str>,
     ) -> Result<(), Reason> {
-        self.prepare_remote_ft(&permit)?;
+        self.prepare_remote_ft_start(&permit)?;
         self.start_cq(direction)
             .map_err(|_| Reason::InvalidAction)?;
         // Native entry may spend time resetting a decoder. Recheck before any
@@ -291,6 +291,17 @@ impl Engine {
         }
         if !current.same_session(permit) {
             return Err(Reason::ContextChanged);
+        }
+        Ok(())
+    }
+
+    /// [`Self::prepare_remote_ft`] for a verb that starts transmitting. While a clock repair
+    /// holds transmit ([`Engine::hold_tx_for_clock_repair`]) the station would refuse the arm,
+    /// so the browser hears that the station is busy instead of an Ok over a refusal.
+    fn prepare_remote_ft_start(&self, permit: &TransmitPermit) -> Result<(), Reason> {
+        self.prepare_remote_ft(permit)?;
+        if self.clock_repair_holds_tx() {
+            return Err(Reason::StationBusy);
         }
         Ok(())
     }
@@ -331,7 +342,7 @@ impl Engine {
         snr: Option<i32>,
         frequency: Option<f32>,
     ) -> Result<(), Reason> {
-        self.prepare_remote_ft(&permit)?;
+        self.prepare_remote_ft_start(&permit)?;
         // Match the desktop command's entry validation before the native QSO
         // verb can change its target or arm TX. Keying guards remain in place.
         self.structured_tx_ready(true)
@@ -355,7 +366,7 @@ impl Engine {
         on: bool,
     ) -> Result<(), Reason> {
         if on {
-            self.prepare_remote_ft(&permit)?;
+            self.prepare_remote_ft_start(&permit)?;
             self.set_tx_enabled(true);
             self.remote_transmit = Some(permit);
             if self.poll_remote_transmit(Instant::now()) {
@@ -955,5 +966,37 @@ mod tests {
             authority.permit(unexpired_deadline()).unwrap(),
             Instant::now()
         ));
+    }
+
+    /// While a clock repair holds transmit ([`Engine::hold_tx_for_clock_repair`]), every Remote
+    /// FT start is answered busy and changes nothing, rather than Ok over an arm the station
+    /// refuses. Once the repair has ended, TX On goes through (the control).
+    #[test]
+    fn remote_ft_starts_are_busy_while_a_clock_repair_holds_transmit() {
+        let mut engine = station(Tier::Ft8);
+        let authority = TransmitAuthority::default();
+        let permit = || authority.permit(unexpired_deadline()).unwrap();
+        engine.hold_tx_for_clock_repair(Instant::now() + Duration::from_secs(600));
+        assert_eq!(
+            engine.set_remote_ft_tx_enabled(permit(), true),
+            Err(Reason::StationBusy)
+        );
+        assert_eq!(
+            engine.start_remote_ft_cq(permit(), None),
+            Err(Reason::StationBusy)
+        );
+        assert_eq!(
+            engine.call_remote_ft_station(permit(), "K1ABC", Some("FN42"), None, Some(-10), None),
+            Err(Reason::StationBusy)
+        );
+        assert!(!engine.tx_enabled(), "nothing armed");
+        assert!(!engine.remote_ft_tx_owned(), "nothing bound to the browser");
+
+        engine.end_clock_repair_hold();
+        assert_eq!(engine.set_remote_ft_tx_enabled(permit(), true), Ok(()));
+        assert!(
+            engine.tx_enabled(),
+            "control: TX On once the repair has ended"
+        );
     }
 }

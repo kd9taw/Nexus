@@ -33,6 +33,59 @@ fn stopped_time_service() -> ClockDiagnosis {
     d
 }
 
+/// A default Windows PC: Windows Time running and synchronised, checking the time every 32768 s
+/// (the Windows default) with the `0x1` flag set. The decision table names the poll write for
+/// it, and that is a classification only: the operator's ruling (2026-10-06) offers it nowhere.
+fn default_windows() -> ClockDiagnosis {
+    let d = decide(&findings_of_default_windows());
+    assert_eq!(
+        d.repair,
+        Repair::SetPollInterval(1_024),
+        "premise: the table's poll write"
+    );
+    d
+}
+
+/// Windows Time running but never synchronised (its server blocked, say).
+fn not_synchronised() -> ClockDiagnosis {
+    let d = decide(&Findings {
+        service_present: true,
+        service_running: true,
+        probe_reached_network: true,
+        measured_offset_ms: Some(40),
+        repairs_available: true,
+        ..Default::default()
+    });
+    assert_eq!(d.repair, Repair::Resync { rediscover: true }, "premise");
+    d
+}
+
+/// The default Windows PC just after the clock jumped (a resume from sleep).
+fn just_jumped() -> ClockDiagnosis {
+    let d = decide(&Findings {
+        just_stepped: true,
+        ..findings_of_default_windows()
+    });
+    assert_eq!(d.repair, Repair::Resync { rediscover: false }, "premise");
+    d
+}
+
+/// What a default Windows PC's detection finds (see [`default_windows`]).
+fn findings_of_default_windows() -> Findings {
+    Findings {
+        service_present: true,
+        service_running: true,
+        synced: true,
+        poll_secs: Some(32_768),
+        special_interval_flag: Some(true),
+        min_poll_secs: Some(1_024),
+        probe_reached_network: true,
+        measured_offset_ms: Some(40),
+        repairs_available: true,
+        ..Default::default()
+    }
+}
+
 /// A machine that needs nothing: its time service is running, synced and polling often.
 fn healthy() -> ClockDiagnosis {
     let d = decide(&Findings {
@@ -91,6 +144,13 @@ impl ClockHost for Machine<'_> {
 
 fn engine() -> Arc<Mutex<Engine>> {
     Arc::new(Mutex::new(Engine::with_settings(Settings::default())))
+}
+
+/// An FT8 station that can transmit (its callsign and grid set), TX off.
+fn station() -> Arc<Mutex<Engine>> {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    e.set_tier(Tier::Ft8);
+    Arc::new(Mutex::new(e))
 }
 
 /// What the top bar reads: the note and whether the button shows.
@@ -239,6 +299,221 @@ fn refused_while_a_repair_is_running() {
     clock_diagnose(&engine, &repair, &inner, Some(40), false);
     assert_eq!(repair_clock_with(&engine, &repair, &inner), Ok(true));
     assert_eq!(inner.elevations.get(), 1);
+}
+
+/// ⛔ ONLY FOR REAL FAULTS (operator ruling, 2026-10-06). A healthy default Windows PC shows no
+/// button and a press runs nothing: the poll write is no longer offered at all.
+#[test]
+fn a_default_windows_clock_is_offered_nothing() {
+    let engine = engine();
+    let repair = ClockRepair::new();
+    let machine = Machine::new(default_windows());
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+    assert_eq!(shown(&engine), (default_windows().detail, false));
+    assert_eq!(
+        repair_clock_with(&engine, &repair, &machine),
+        Err(ClockRepairRefusal::NothingToRepair)
+    );
+    assert_eq!(machine.elevations.get(), 0);
+}
+
+/// The three real faults are still offered, and a press runs exactly the repair that was found.
+#[test]
+fn each_real_fault_is_still_offered_and_runs_its_own_repair() {
+    for (diag, want) in [
+        (stopped_time_service(), Repair::StartService),
+        (not_synchronised(), Repair::Resync { rediscover: true }),
+        (just_jumped(), Repair::Resync { rediscover: false }),
+    ] {
+        let engine = engine();
+        let repair = ClockRepair::new();
+        let machine = Machine::new(diag);
+        clock_diagnose(&engine, &repair, &machine, Some(40), false);
+        assert!(shown(&engine).1, "{want:?}: on offer");
+        assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
+        assert_eq!(
+            (machine.elevations.get(), machine.ran.get()),
+            (1, Some(want))
+        );
+    }
+}
+
+/// The command runs a real fault's repair and nothing else. Even with the poll write on offer
+/// (planted here: no pass offers it), a press runs nothing and asks Windows for nothing.
+#[test]
+fn a_press_never_runs_the_poll_write() {
+    let engine = engine();
+    let repair = ClockRepair::new();
+    let machine = Machine::new(default_windows());
+    repair.offer(Some(default_windows()));
+    assert_eq!(
+        repair_clock_with(&engine, &repair, &machine),
+        Err(ClockRepairRefusal::NothingToRepair)
+    );
+    assert_eq!((machine.elevations.get(), machine.ran.get()), (0, None));
+}
+
+/// ⚠️ THE TX INTERLOCK SEES EVERY OWNER OF THE TRANSMITTER, not only the slot flag, a tune and
+/// the rig's own PTT: here a CW message still going out word by word, which none of those three
+/// shows. Run then, the repair could move the clock under it. The same press once the words are
+/// gone runs (the control).
+#[test]
+fn refused_while_cw_is_still_sending() {
+    let engine = engine();
+    let repair = ClockRepair::new();
+    let machine = Machine::new(stopped_time_service());
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+    engine_lock(&engine).send_cw("CQ CQ DE KD9TAW K");
+    assert_eq!(
+        engine_lock(&engine).tx_owner(),
+        Some(tempo_app::engine::TxOwner::Cw),
+        "premise: CW owns the transmitter"
+    );
+    assert_eq!(
+        repair_clock_with(&engine, &repair, &machine),
+        Err(ClockRepairRefusal::OnAir)
+    );
+    assert_eq!(machine.elevations.get(), 0);
+
+    engine_lock(&engine).stop_cw();
+    assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
+    assert_eq!(machine.elevations.get(), 1);
+}
+
+/// ⛔ THE HOLD (the operator's ruling, 2026-10-06: "Yes, hold TX until it finishes"). From the
+/// press until the elevated helper exits, nothing starts transmitting: TX On and Tune, tried while
+/// Windows is still asking, are refused, and the station says a repair holds transmit. Once the
+/// helper exits, whether the repair took or not (a failed step and a declined prompt answer
+/// alike), both work again.
+#[test]
+fn nothing_starts_transmitting_while_the_repair_runs() {
+    for took in [true, false] {
+        let engine = station();
+        let repair = ClockRepair::new();
+        let tried = Cell::new(None);
+        let try_to_transmit = || {
+            let mut e = engine_lock(&engine);
+            e.set_tx_enabled(true);
+            e.set_tune(true);
+            let held = e.snapshot().radio.clock_repair_tx_held;
+            tried.set(Some((e.tx_enabled(), e.tuning(), held)));
+        };
+        let machine = Machine {
+            took,
+            during: Some(&try_to_transmit),
+            ..Machine::new(stopped_time_service())
+        };
+        clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+        assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(took));
+        assert_eq!(
+            tried.get(),
+            Some((false, false, true)),
+            "took: {took}: (TX On, Tune, held) while Windows was asking"
+        );
+        let mut e = engine_lock(&engine);
+        assert!(!e.snapshot().radio.clock_repair_tx_held, "took: {took}");
+        e.set_tx_enabled(true);
+        e.set_tune(true);
+        assert_eq!(
+            (e.tx_enabled(), e.tuning()),
+            (true, true),
+            "took: {took}: TX On and Tune once the helper exited"
+        );
+    }
+}
+
+/// An FT8 run armed before the press misses its over while Windows is asking, and is still
+/// armed: the hold refuses a start and disarms nothing. The run's next over plans once the
+/// helper exits.
+#[test]
+fn an_armed_run_misses_its_overs_while_the_repair_runs_and_keeps_its_arm() {
+    let engine = station();
+    let slot = {
+        let mut e = engine_lock(&engine);
+        e.start_cq(None).unwrap();
+        if e.tx_even() {
+            0
+        } else {
+            1
+        }
+    };
+    let repair = ClockRepair::new();
+    let at_the_slot = Cell::new(None);
+    let plan_an_over = || {
+        let mut e = engine_lock(&engine);
+        at_the_slot.set(Some((e.plan_tx(slot).is_some(), e.tx_enabled())));
+    };
+    let machine = Machine {
+        during: Some(&plan_an_over),
+        ..Machine::new(stopped_time_service())
+    };
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+    assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
+    assert_eq!(
+        at_the_slot.get(),
+        Some((false, true)),
+        "(an over planned, still armed) while Windows was asking"
+    );
+    assert!(
+        engine_lock(&engine).plan_tx(slot).is_some(),
+        "the run's next over, once the helper exited"
+    );
+}
+
+/// ★ A hung repair never holds transmit forever: past its bound the hold lets go while the helper
+/// is still running, and the outcome says so. With a bound of zero, TX On arms while Windows is
+/// still asking. (With the real bound the note has no such words: `a_press_runs_the_offered_repair_once`.)
+#[test]
+fn the_hold_lets_go_at_its_bound_and_the_outcome_says_so() {
+    let engine = station();
+    let repair = ClockRepair {
+        tx_hold: Duration::ZERO,
+        ..ClockRepair::new()
+    };
+    let tried = Cell::new(None);
+    let try_tx_on = || {
+        let mut e = engine_lock(&engine);
+        e.set_tx_enabled(true);
+        tried.set(Some(e.tx_enabled()));
+    };
+    let machine = Machine {
+        during: Some(&try_tx_on),
+        ..Machine::new(stopped_time_service())
+    };
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+    assert_eq!(repair_clock_with(&engine, &repair, &machine), Ok(true));
+    assert_eq!(tried.get(), Some(true), "TX On past the bound");
+    assert_eq!(
+        shown(&engine).0,
+        "started the Windows Time service \
+         (transmit was released after 0 s, before the repair finished)"
+    );
+}
+
+/// The hold comes off however the press ends, a helper that panics included: TX On arms after.
+#[test]
+fn the_hold_comes_off_however_the_press_ends() {
+    let engine = station();
+    let repair = ClockRepair::new();
+    let fail = || panic!("the helper failed");
+    let machine = Machine {
+        during: Some(&fail),
+        ..Machine::new(stopped_time_service())
+    };
+    clock_diagnose(&engine, &repair, &machine, Some(40), false);
+
+    let pressed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        repair_clock_with(&engine, &repair, &machine)
+    }));
+    assert!(pressed.is_err(), "premise: the press ended in a panic");
+    let mut e = engine_lock(&engine);
+    assert!(!e.clock_repair_holds_tx(), "the hold is off");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "TX On after a press that panicked");
 }
 
 /// Off means off: with the clock check switched off the loop withdraws the offer, so the button

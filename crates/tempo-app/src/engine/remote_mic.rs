@@ -72,6 +72,7 @@ impl Engine {
             || !self.tx_allowed()
             || self.tuning
             || self.tx_owner().is_some()
+            || self.clock_repair_holds_tx()
         {
             return false;
         }

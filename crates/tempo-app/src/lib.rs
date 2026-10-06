@@ -363,6 +363,7 @@ impl AppState {
                 clock_gross_ms: None,
                 clock_owner_note: String::new(),
                 clock_repair_available: false,
+                clock_repair_tx_held: false,
                 source: crate::dto::SourceKind::Native,
                 source_label: String::new(),
             },

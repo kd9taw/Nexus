@@ -58,6 +58,7 @@
     "clockOffsetMs": null,
     "clockOwnerNote": "",
     "clockRepairAvailable": false,
+    "clockRepairTxHeld": false,
     "clockServers": null,
     "comp": null,
     "compLevel": null,

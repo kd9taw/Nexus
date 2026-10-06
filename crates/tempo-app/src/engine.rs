@@ -16,6 +16,9 @@
 /// SPEC-2's C16: changes to one contact by its id.
 #[cfg(test)]
 mod by_id_tests;
+/// A clock repair holds transmit: every way to start one refused, nothing keyed or unkeyed.
+#[cfg(test)]
+mod clock_repair_hold_tests;
 mod field_day_display;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
@@ -1416,6 +1419,16 @@ const APRS_RADIO_HAS_MIC: &str = "APRS can't send while the radio has the mic: w
 const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: with Flex native \
      DAX audio on, Phone at the shack uses the radio's own mic, so the picture would not go out. \
      Nothing was keyed.";
+
+/// What a refused start says while a clock repair holds transmit
+/// ([`Engine::hold_tx_for_clock_repair`]): the answer of every up-front TX gate, and of TX On on
+/// the desktop. English at the engine, like the gates' other answers.
+pub const CLOCK_REPAIR_HOLDS_TX: &str =
+    "A clock repair is in progress — nothing starts transmitting until it finishes.";
+/// …and the warning line of a cockpit whose queued send the hold dropped: dropped, not held for
+/// later, like every other refused send.
+const CLOCK_REPAIR_DROPPED: &str = "Not sent: a clock repair was in progress, so it was \
+     dropped, not held for later. Send it again when the repair has finished.";
 
 /// What the CW cockpit's warning line says when [`Engine::poll_cw_one`] drops a refused send.
 /// English at the engine, like the keyer's own errors and JS8's refusals, and the same
@@ -8276,9 +8289,19 @@ impl Engine {
         self.split_tx_mhz
     }
 
-    /// Queue a voice-memory playback (`\send_voice_mem ch`, the FT-991A DVS ask).
-    pub fn request_voice_mem(&mut self, ch: u32) {
+    /// Queue a voice-memory playback (`\send_voice_mem ch`, the FT-991A DVS ask). Whether it was
+    /// accepted, which the CAT broker answers the client with: refused while a clock repair holds
+    /// transmit ([`Self::hold_tx_for_clock_repair`]), because the playback keys the rig.
+    pub fn request_voice_mem(&mut self, ch: u32) -> bool {
+        if self.clock_repair_holds_tx() {
+            tempo_core::applog::info(
+                "tx",
+                "voice memory not played: a clock repair is in progress (refused)",
+            );
+            return false;
+        }
         self.pending_voice_mem = Some(VoiceMemCmd::Play(ch));
+        true
     }
 
     /// Queue a voice-memory abort (`\stop_voice_mem`).
@@ -9071,6 +9094,16 @@ impl Engine {
 
     pub fn send_cw(&mut self, text: &str) {
         let expanded = self.expand_cw(text);
+        // A clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]): the send is refused
+        // before it arms or queues anything, and the CW cockpit's warning line says so.
+        if !expanded.trim().is_empty() && self.clock_repair_holds_tx() {
+            tempo_core::applog::info(
+                "tx",
+                "CW not keyed: a clock repair is in progress (dropped)",
+            );
+            self.cw_keyer_error = Some(CLOCK_REPAIR_DROPPED.to_string());
+            return;
+        }
         if !expanded.trim().is_empty() {
             // A deliberate CW send (F-key macro or typed text) IS the transmit action, so RE-ARM
             // TX — exactly like entering a manual mode arms it (`set_operating_mode`). Without this,
@@ -9189,7 +9222,9 @@ impl Engine {
     /// offset from the dial, not the CW: a parting ID goes out after its 73 or not at all, never
     /// at some later moment when it happens to be allowed.
     pub fn poll_cw_one(&mut self) -> Option<String> {
-        let refused = if !self.tx_enabled {
+        let refused = if self.clock_repair_holds_tx() {
+            Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if !self.tx_enabled {
             Some(("transmit is off", CW_REFUSED_TX_OFF))
         } else if !self.tx_allowed() {
             Some((
@@ -9285,6 +9320,11 @@ impl Engine {
     /// Manually key (true) / unkey (false) the rig for live phone. Gated by Monitor:
     /// a key request is ignored while TX is disabled. The radio loop applies it.
     pub fn set_ptt(&mut self, on: bool) {
+        // A clock repair holds transmit: a new key is refused, and one already held is never
+        // dropped by it ([`Self::hold_tx_for_clock_repair`]).
+        if on && !self.manual_ptt && self.clock_repair_holds_tx() {
+            return;
+        }
         self.manual_ptt = on && self.tx_enabled && self.tx_allowed();
     }
 
@@ -9319,11 +9359,14 @@ impl Engine {
         // own mic rides through such a change on purpose (`halt_tx_for_context_change`) because
         // the operator MADE it; a foreign client waits for the next arm, exactly as it did
         // before that restore existed.
+        // …nor while a clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]), except
+        // the re-assert of a key already held, which the hold never drops.
         if !self.settings.cat_broker_ptt
             || !self.tx_enabled
             || self.broker_context_hold
             || !self.tx_allowed()
             || (!re_assert && self.tx_owner().is_some())
+            || (!re_assert && self.clock_repair_holds_tx())
         {
             return false;
         }
@@ -10089,6 +10132,9 @@ impl Engine {
                     .to_string(),
             );
         }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
@@ -10292,6 +10338,13 @@ impl Engine {
             );
             return Err(FLEX_RADIO_HAS_MIC.to_string());
         }
+        if self.clock_repair_holds_tx() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: a clock repair is in progress",
+            );
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             tempo_core::applog::info("tx", "voice-keyer message refused: transmit is off");
             return Err(
@@ -10326,7 +10379,9 @@ impl Engine {
     /// the keyer has no warning line to carry it, its toasts being the answer to the send itself.
     pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
         self.voice_tx.as_ref()?;
-        let refused = if !self.tx_enabled {
+        let refused = if self.clock_repair_holds_tx() {
+            Some("a clock repair is in progress")
+        } else if !self.tx_enabled {
             Some("transmit is off")
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
@@ -14561,6 +14616,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Transitions only (an idempotent re-arm is silent), so this is a handful of lines a
         // session, and the whole point is that the next report arrives with its cause attached.
         let was = self.tx_enabled;
+        // ⛔ A CLOCK REPAIR HOLDS TRANSMIT ([`Self::hold_tx_for_clock_repair`]): TX On is refused
+        // until it ends, through every arm path, which all funnel here. An arm already up stays up
+        // and disarming is always honoured: the hold refuses a start, it never stops anything.
+        if on && !was && self.clock_repair_holds_tx() {
+            if !self.quiet_tx_log {
+                let at = std::panic::Location::caller();
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "transmit ARM refused (a clock repair is in progress) for {}:{}",
+                        at.file(),
+                        at.line()
+                    ),
+                );
+            }
+            return;
+        }
         if was != on && !self.quiet_tx_log {
             let at = std::panic::Location::caller();
             tempo_core::applog::info(
@@ -16433,6 +16505,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
+        // A clock repair holds transmit: a new tune is refused and changes nothing, and a carrier
+        // already up is never dropped by it ([`Self::hold_tx_for_clock_repair`]).
+        if on && !self.tuning && self.clock_repair_holds_tx() {
+            return;
+        }
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
@@ -17120,6 +17197,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.flex_radio_has_mic {
             return Err(APRS_RADIO_HAS_MIC.to_string());
         }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
@@ -17473,7 +17553,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.aprs_tx_queue.is_empty() {
             return None;
         }
-        let refused = if !self.tx_enabled {
+        let refused = if self.clock_repair_holds_tx() {
+            Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if !self.tx_enabled {
             Some(("transmit is off", APRS_REFUSED_TX_OFF))
         } else if !self.tx_allowed() {
             Some((
@@ -17952,6 +18034,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.settings.operating_mode != OperatingMode::Keyboard {
             return Err("Not in the PSK section — enter the PSK cockpit first".to_string());
         }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -18002,7 +18087,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return None;
         }
         let in_section = self.settings.operating_mode == OperatingMode::Keyboard;
-        let refused = if !self.tx_enabled {
+        let refused = if self.clock_repair_holds_tx() {
+            Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if !self.tx_enabled {
             Some(("transmit is off", PSK_REFUSED_TX_OFF))
         } else if in_section && !self.tx_allowed() {
             Some((
@@ -18252,6 +18339,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.settings.operating_mode != OperatingMode::Rtty {
             return Err("Not in the RTTY section — enter the RTTY cockpit first".to_string());
         }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -18366,7 +18456,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return None;
         }
         let in_section = self.settings.operating_mode == OperatingMode::Rtty;
-        let refused = if !self.tx_enabled {
+        let refused = if self.clock_repair_holds_tx() {
+            Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if !self.tx_enabled {
             Some(("transmit is off", RTTY_REFUSED_TX_OFF))
         } else if in_section && !self.tx_allowed() {
             Some((
@@ -19577,6 +19669,9 @@ contact yourself."
         if self.flex_radio_has_mic {
             return Err(SSTV_RADIO_HAS_MIC.to_string());
         }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -19671,7 +19766,9 @@ contact yourself."
         use crate::settings::OperatingMode;
         self.sstv_tx.as_ref()?; // nothing waiting, nothing to judge
         let in_section = self.settings.operating_mode == OperatingMode::Phone;
-        let refused = if !self.tx_enabled {
+        let refused = if self.clock_repair_holds_tx() {
+            Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if !self.tx_enabled {
             Some(("transmit is off", SSTV_REFUSED_TX_OFF))
         } else if in_section && !self.tx_allowed() {
             Some((
@@ -21260,6 +21357,7 @@ contact yourself."
             s.radio.clock_gross_ms = clock.gross_ms();
             s.radio.clock_owner_note = self.station.clock_owner_note().to_string();
             s.radio.clock_repair_available = self.station.clock_repair_available();
+            s.radio.clock_repair_tx_held = self.station.clock_repair_holds_tx(now);
         }
         s.radio.source = self.source_kind;
         // ⚠️ THE CACHE, NOT THE LOCK. Reading `source_lock(&self.source).label()`
@@ -21811,8 +21909,10 @@ contact yourself."
         self.qsy_execute_due(slot);
         // Monitor-off (transmit muted), holding a tune carrier, or outside the operator's
         // license privileges at this dial/mode: no slot TX. The radio loop handles the
-        // steady tune carrier separately (also privilege-gated at set_tune).
-        if !self.tx_enabled || self.tuning || !self.tx_allowed() {
+        // steady tune carrier separately (also privilege-gated at set_tune). Nor while a
+        // clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]): an armed run
+        // misses its overs until the repair ends, and keeps its arm for the ones after.
+        if !self.tx_enabled || self.tuning || !self.tx_allowed() || self.clock_repair_holds_tx() {
             self.app.set_transmitting(false);
             return None;
         }
@@ -25052,18 +25152,54 @@ contact yourself."
         self.station.set_clock_repair_available(available)
     }
 
+    /// ⛔ A CLOCK REPAIR HOLDS TRANSMIT (the operator's ruling, 2026-10-06: "Yes, hold TX until
+    /// it finishes"). The repair can step the system clock, and an over keyed while it runs would
+    /// have its PTT deadline and slot boundary moved under it. So from the press of Repair clock
+    /// until the elevated helper exits, nothing STARTS transmitting: not TX On, a slot over,
+    /// Tune, the ATU, PTT, a voice message, CW, RTTY, PSK, SSTV, APRS, the Remote microphone, or
+    /// a CAT client's key or voice memory. Each is refused at its own gate, with
+    /// [`CLOCK_REPAIR_HOLDS_TX`] or its cockpit's warning line, and the snapshot says that a
+    /// repair holds transmit (`clock_repair_tx_held`), which the status lane shows.
+    ///
+    /// It only ever refuses a start. It keys, unkeys and disarms nothing: the press is refused
+    /// while anything is on the air ([`Self::on_air`]), so no over is under way when the hold
+    /// begins, and an arm that is already up stays up for the overs after it. `until` bounds it:
+    /// from then on it holds nothing, even if the repair never ends, so a hung repair cannot
+    /// hold transmit forever.
+    pub fn hold_tx_for_clock_repair(&mut self, until: std::time::Instant) {
+        self.station.hold_tx_for_clock_repair(until);
+        // What may transmit changed: an over planned before the press must not key
+        // ([`Self::commit_tx`] checks the generation).
+        self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+    }
+
+    /// The clock repair ended (it took, it failed, or the prompt was declined): transmit may
+    /// start again.
+    pub fn end_clock_repair_hold(&mut self) {
+        self.station.end_clock_repair_hold()
+    }
+
+    /// Whether a clock repair holds transmit right now ([`Self::hold_tx_for_clock_repair`]).
+    pub fn clock_repair_holds_tx(&self) -> bool {
+        self.station
+            .clock_repair_holds_tx(std::time::Instant::now())
+    }
+
     /// Is anything on the air right now?
     ///
     /// The TX interlock for the clock-repair path (§8.3): **never step or resync
     /// the system clock while transmitting.** A repair that moves the clock
     /// mid-over changes the timebase every deadline in flight was built on, and
     /// nothing downstream is expecting that. Deliberately generous about what
-    /// counts — Nexus's own over, a tune carrier, and a rig keyed by the mic or a
-    /// straight key at the radio, which Nexus did not start and cannot end.
+    /// counts — Nexus's own over, a tune carrier, a rig keyed by the mic or a
+    /// straight key at the radio, which Nexus did not start and cannot end, and
+    /// every owner [`Self::tx_owner`] knows: a held PTT, the Remote microphone, a
+    /// voice message, CW, RTTY, PSK or SSTV still going out. The slot flag alone
+    /// shows none of those, so a CW message between two words read as idle.
     /// Waiting out an over costs at most one T/R period; getting it wrong costs a
     /// transmission.
     pub fn on_air(&self) -> bool {
-        self.app.transmitting() || self.rig_keyed || self.tuning()
+        self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
     }
 
     /// See [`StationCore::take_all_txt_pending`].
@@ -29367,7 +29503,9 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         let other = e.add_radio();
         e.set_active_radio(0);
-        let play: fn(&mut Engine) = |e| e.request_voice_mem(1);
+        let play: fn(&mut Engine) = |e| {
+            e.request_voice_mem(1);
+        };
         let stop: fn(&mut Engine) = Engine::request_voice_mem_stop;
         for (queue, cmd) in [(play, VoiceMemCmd::Play(1)), (stop, VoiceMemCmd::Stop)] {
             let from = e.settings().active_radio;

@@ -12981,8 +12981,8 @@ impl ClockHost for OsClock {
 }
 
 /// Diagnose the machine's clock and publish what was found: who owns it, and
-/// which repair, if any, would help. The repair itself waits for the operator to
-/// press **Repair clock** ([`repair_clock`]).
+/// which repair, if any, would fix a real fault. The repair itself waits for the
+/// operator to press **Repair clock** ([`repair_clock`]).
 ///
 /// ⛔ **THIS NEVER ELEVATES.** It runs on a timer and on resume, with nobody at
 /// the keyboard asking for anything. It used to run the repair itself whenever
@@ -13013,7 +13013,9 @@ fn clock_diagnose(
         measured_offset_ms,
         just_stepped,
     );
-    let available = diag.repair != crate::clockdiag::Repair::None;
+    // Only a real fault is offered (the operator's ruling, 2026-10-06): a healthy
+    // default Windows PC, which the table gives the poll write, gets no button.
+    let available = diag.repair.fixes_a_fault();
     {
         let mut eng = engine_lock(engine);
         eng.set_clock_owner_note(diag.detail.clone());
@@ -13030,7 +13032,8 @@ fn clock_repair_withdraw(engine: &Arc<Mutex<Engine>>, repair: &ClockRepair) {
 }
 
 /// The clock repair between the pass that finds it and the press that runs it:
-/// the diagnosis whose repair is on offer, and whether one is running.
+/// the diagnosis whose repair is on offer, whether one is running, and how long
+/// a running one may hold transmit.
 ///
 /// One for the process ([`CLOCK_REPAIR`]): the clock thread and the desktop's
 /// command are its two ends, and the engine between them cannot name a
@@ -13039,15 +13042,27 @@ fn clock_repair_withdraw(engine: &Arc<Mutex<Engine>>, repair: &ClockRepair) {
 struct ClockRepair {
     offer: Mutex<Option<crate::clockdiag::ClockDiagnosis>>,
     running: std::sync::atomic::AtomicBool,
+    tx_hold: Duration,
 }
 
 static CLOCK_REPAIR: ClockRepair = ClockRepair::new();
+
+/// The longest a running clock repair holds transmit
+/// ([`Engine::hold_tx_for_clock_repair`]). Generous on purpose: the press raises
+/// Windows' administrator prompt, which waits for the operator, and only then do
+/// `sc` and `w32tm /resync` run, and a resync that reaches its server is done in
+/// seconds. Two minutes is room for both with plenty to spare, and the worst it
+/// costs is four FT8 overs (one period of the 120 s modes). Past it the hold lets
+/// go even if the helper never exits, because a hung repair must never hold
+/// transmit forever, and the outcome says so when the helper does exit.
+const CLOCK_REPAIR_TX_HOLD: Duration = Duration::from_secs(120);
 
 impl ClockRepair {
     const fn new() -> Self {
         Self {
             offer: Mutex::new(None),
             running: std::sync::atomic::AtomicBool::new(false),
+            tx_hold: CLOCK_REPAIR_TX_HOLD,
         }
     }
 
@@ -13085,6 +13100,16 @@ impl Drop for RepairRunning<'_> {
     }
 }
 
+/// The transmit hold of a running repair. Dropping it takes the hold off,
+/// however the press ends.
+struct TxHeldForRepair<'a>(&'a Arc<Mutex<Engine>>);
+
+impl Drop for TxHeldForRepair<'_> {
+    fn drop(&mut self) {
+        engine_lock(self.0).end_clock_repair_hold();
+    }
+}
+
 /// Why a press of **Repair clock** ran nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClockRepairRefusal {
@@ -13092,7 +13117,7 @@ pub enum ClockRepairRefusal {
     OnAir,
     /// A repair is already running, and Windows may still be asking about it.
     Running,
-    /// No repair is on offer: the last diagnosis found nothing to do, the clock
+    /// No repair is on offer: the last diagnosis found no fault to fix, the clock
     /// check is off, or the repair already took.
     NothingToRepair,
 }
@@ -13102,6 +13127,8 @@ pub enum ClockRepairRefusal {
 /// and publish what it achieved. `Ok(true)` when it took, `Ok(false)` when it
 /// did not (the prompt was declined, or a step failed). Blocks until Windows
 /// has its answer, so a caller keeps it off any thread that must stay live.
+/// Meanwhile nothing starts transmitting, for [`CLOCK_REPAIR_TX_HOLD`] at most
+/// ([`Engine::hold_tx_for_clock_repair`]).
 ///
 /// Nothing else runs the elevated helper: the background pass only diagnoses.
 pub fn repair_clock(engine: &Arc<Mutex<Engine>>) -> Result<bool, ClockRepairRefusal> {
@@ -13116,27 +13143,46 @@ fn repair_clock_with(
     // Claimed before anything else is looked at: a second press while Windows is
     // still asking about the first is refused, never queued as a second prompt.
     let _running = repair.claim().ok_or(ClockRepairRefusal::Running)?;
+    // A real fault's repair, and nothing else, whatever is on offer: this is the
+    // one place Nexus asks Windows for administrator rights.
     let diag = repair
         .offered()
+        .filter(|d| d.repair.fixes_a_fault())
         .ok_or(ClockRepairRefusal::NothingToRepair)?;
     // ⚠️ TX INTERLOCK (§8.3). Every repair can move the system clock, and moving
     // it mid-over changes the timebase the PTT-hold deadline and the slot
     // boundary were built from. Waiting costs at most one T/R period. This is a
     // transmit-path invariant: it is never the thing to relax to make something
-    // work. It is checked at the press: Windows' prompt holds no lock, so an over
-    // that starts while the prompt is still up is not caught here (the automatic
-    // repair this replaced had the same gap).
-    if engine_lock(engine).on_air() {
-        return Err(ClockRepairRefusal::OnAir);
+    // work. Windows' prompt holds no lock, so the HOLD is what keeps an over from
+    // starting while it is up (the operator's ruling, 2026-10-06): raised under
+    // the same lock as the check, so nothing can key between the two, and taken
+    // off when the helper exits, or at its bound.
+    let hold_until = Instant::now() + repair.tx_hold;
+    {
+        let mut eng = engine_lock(engine);
+        if eng.on_air() {
+            return Err(ClockRepairRefusal::OnAir);
+        }
+        eng.hold_tx_for_clock_repair(hold_until);
     }
+    let held = TxHeldForRepair(engine);
 
     let ok = host.run_repair_elevated(diag.repair);
+    drop(held);
 
     // GUARD 11: report what the machine ACHIEVED, never what we requested. A
     // successful write says the registry took the number, not that W32Time is
     // using it — `SpecialPollInterval` is clamped up to `2^MinPollInterval`, and
     // without the `0x1` SpecialInterval flag it is ignored outright.
-    let note = crate::clockdiag::repair_outcome_note(&diag, ok);
+    let mut note = crate::clockdiag::repair_outcome_note(&diag, ok);
+    // The hold let go at its bound while the helper was still running: say so,
+    // because an over may have started before the repair moved the clock.
+    if Instant::now() >= hold_until {
+        note.push_str(&format!(
+            " (transmit was released after {} s, before the repair finished)",
+            repair.tx_hold.as_secs()
+        ));
+    }
     engine_lock(engine).set_clock_owner_note(note);
     // A repair that did not take stays on offer, so the operator can press again
     // (after a prompt answered No by mistake, say).
