@@ -62,7 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still goes out, as it did before, and shows the warning above (an APRS packet goes without one,
   as it always did). A soundcard CW macro still plays every word on a radio that refuses a second
   key while the first is held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot
-  modes follow WSJT-X instead (next entry).
+  modes follow WSJT-X instead (next entry). Checked on an FTDX10 through Hamlib and an IC-9700 on
+  Nexus's own CI-V. NEEDS-BENCH on a slow serial CAT rig and a Flex radio.
 - **FT8, FT4, JS8 and the other timed-slot modes: when the radio refuses to key, nothing is sent
   and TX stops, as in WSJT-X.** If the radio answered the key with an error, Nexus played the
   whole over anyway into a radio that was still receiving, and left TX on to try again the next
@@ -72,21 +73,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control error. Like WSJT-X, this includes Hamlib's own "the rig did not answer" (a radio
   switched off, or too slow even for Hamlib); for the other modes that still sends the over with
   its warning. A radio that is only slow to answer, past the time Nexus waits, still sends its
-  over as before: WSJT-X keeps waiting for such a radio and transmits once it keys. NEEDS-BENCH on
-  real radios: one that refuses PTT (a wrong PTT method or port), and a slow serial CAT rig.
+  over as before: WSJT-X keeps waiting for such a radio and transmits once it keys. Checked on an
+  FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V. NEEDS-BENCH on a slow serial CAT rig and
+  a Flex radio.
 - **FT8, FT4, JS8 and the other timed-slot modes: when the radio does not accept PTT off, TX stops
   and the status bar says so, as in WSJT-X.** If the radio answered PTT off with an error, at the
   end of an over or when Stop TX or a logger's HaltTx cut one, TX stayed on and nothing was said.
   Now TX turns off and the status bar shows **PTT OFF FAILED — TX STOPPED** with the time and what
   the radio answered, until you turn TX on again. Nexus keeps sending PTT off until the radio
-  accepts it, as before. NEEDS-BENCH on real radios.
+  accepts it, as before. Checked on an FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V.
+  NEEDS-BENCH with a logger's Halt TX, serial (RTS/DTR) PTT, a Flex radio and a slow serial CAT rig.
 - **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
   radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
   background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
   may still be transmitting"), or the client found an earlier Nexus session still holding the
   transmitter, the alarm went only to the diagnostic log. It now appears in the transmitter-alarm
   banner, named for that radio and not the one you switched to. A Flex client is also read one
-  last time before Nexus closes or reopens it.
+  last time before Nexus closes or reopens it. NEEDS-BENCH on a Flex radio.
 - **Cloudlog / Wavelog: a refused QSO says why.** Wavelog answers a QSO it will not file with its
   reason in a field Nexus did not read, so the connection log said only "refused the upload, and
   said no more", even though Wavelog had named the reason, such as a duplicate or a station location
@@ -368,7 +371,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   see every activation on the band at a glance. A park you still need keeps the full new-park
   green, and a real need such as a new country still shows its own colour first. The dim
   colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged. In the light
-  theme the full new-park green (and the P badge with it) is a shade darker, so the two greens
+  theme the full new-park green (and the P badge with it) is darker, so the two greens
   differ in brightness and not only in colour, which helps if you find greens hard to tell apart.
 - **A park you still need now comes before a confirmation everywhere.** When an activator is at
   a park or summit you have not worked in this activation and is also a confirmation opportunity
@@ -520,7 +523,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   steps), Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and
   ↓ scroll back while paused. On an IC-7300, IC-705, IC-905, IC-7610 or IC-9700 on Nexus's own CI-V
   connection, the filter width is now read from the radio and set on it; before, BW showed a width it
-  had never sent there. Not yet checked on a radio.
+  had never sent there. Checked on an FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V; the
+  width over CI-V is not yet checked on the IC-7300, IC-705, IC-905 or IC-7610.
 - **Phone and CW scope: the Sub receiver's frequency beside yours.** On a dual-receiver radio that
   shows a SUB row, the radio's own scope marks the Sub's frequency with a cyan SUB line whenever it
   is in view. It is only a mark: a click on it tunes nothing, neither the Sub nor your main receiver.
