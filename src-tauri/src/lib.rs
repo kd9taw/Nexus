@@ -20683,7 +20683,8 @@ fn read_need_alerts(
     // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
     // the ONE seam both surfaces share — the Needed board and the decode/roster chips
     // are all views over this list — and it runs BEFORE the DXped/POTA/SOTA appends so
-    // an appended chip cannot keep alive a row the operator asked not to see.
+    // an appended chip cannot keep alive a row the operator asked not to see. The rows
+    // built after it (the hunter feed's, the watch list's) take the same seam themselves.
     if !confirm_tier {
         propagation::strip_confirm_tier(&mut alerts);
     }
@@ -20818,9 +20819,13 @@ fn read_need_alerts(
             let reference_needed = live.iter().any(|(_, r)| {
                 hunted.needed(r, &tempo_core::message::base_call(&sp.activator), now)
             });
-            let Some(mut alert) =
-                propagation::activation_alert(sp, &*needs, &needs.slots(), reference_needed)
-            else {
+            let Some(mut alert) = propagation::activation_alert(
+                sp,
+                &*needs,
+                &needs.slots(),
+                reference_needed,
+                confirm_tier,
+            ) else {
                 continue;
             };
             if alert.call == me_up {
@@ -42864,6 +42869,76 @@ mod tests {
         crate::place_heards(&mut heards, &feed, &propagation::LogNeeds::new());
         let states: Vec<Option<&str>> = heards.iter().map(|h| h.us_state.as_deref()).collect();
         assert_eq!(states, [Some("ND"), None, Some("OH"), Some("OH")]);
+    }
+
+    /// ⭐ CONFIRMATION OPPORTUNITIES TURNED OFF HOLD FOR THE HUNTER FEED'S ROWS TOO. The board strips
+    /// the Confirm tier from the rows it scores, and the feed's own rows are built after that, so they
+    /// went on carrying it. One activator here has a confirmation as its only award (the park's state
+    /// is worked and not confirmed), the other has one beside a new state (the United States is
+    /// worked and not confirmed on that band). Off, each row is what it would be without it.
+    #[test]
+    fn with_confirmation_opportunities_off_no_hunter_feed_row_carries_confirm() {
+        use propagation::NeedTag::{Confirm, NewPark, NewState, Pota};
+        // The United States confirmed on 20 m phone, North Dakota worked there and not confirmed,
+        // and the United States worked on 40 m phone and not confirmed.
+        let station = |confirm_tier: bool| {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            for (call, band, freq, state, confirmed) in [
+                ("W1AW", "20m", 14.285, None, true),
+                ("K0ND", "20m", 14.285, Some("ND"), false),
+                ("W1AW", "40m", 7.200, None, false),
+            ] {
+                let mut r = pass_qso(call, "FN31", band, freq);
+                r.mode = "SSB".into();
+                r.state = state.map(str::to_string);
+                r.award_confirmed = confirmed;
+                e.log_qso(r);
+            }
+            let mut s = e.settings().clone();
+            s.alert_confirm_tier = confirm_tier;
+            e.apply_restored_settings(s);
+            e
+        };
+        let placed = |call: &str, reference: &str, khz: f64, state: &str| {
+            let mut sp = live_spot("POTA", call, reference, 60);
+            sp.freq_khz = khz;
+            sp.states = codes(&[state]);
+            sp
+        };
+        let feed = [
+            placed("W1ABC", "US-0065", 14_285.0, "US-ND"),
+            placed("K1XYZ", "US-0001", 7_200.0, "US-MT"),
+        ];
+        let board =
+            |confirm_tier: bool| needed_board_for(station(confirm_tier), &[], &[("POTA", &feed)]);
+        // ON, the default: both rows carry the Confirm.
+        let on = board(true);
+        let nd = board_row(&on, "W1ABC", "Phone");
+        assert_eq!(nd.tags, [NewPark, Confirm, Pota]);
+        assert_eq!(nd.headline, "Confirm — United States · POTA US-0065");
+        assert_eq!(
+            board_row(&on, "K1XYZ", "Phone").tags,
+            [NewState, NewPark, Confirm, Pota]
+        );
+        // OFF: neither does. The first is the bare activation, the second keeps its new state.
+        let off = board(false);
+        let nd = board_row(&off, "W1ABC", "Phone");
+        assert_eq!(
+            (nd.tags.as_slice(), nd.headline.as_str(), nd.priority),
+            (&[NewPark, Pota][..], "POTA US-0065", 20)
+        );
+        let mt = board_row(&off, "K1XYZ", "Phone");
+        assert_eq!(
+            (mt.tags.as_slice(), mt.headline.as_str()),
+            (
+                &[NewState, NewPark, Pota][..],
+                "New state — MT on 40m (United States) · POTA US-0001"
+            )
+        );
+        assert!(
+            !off.iter().any(|a| a.tags.contains(&Confirm)),
+            "no row on the board: {off:?}"
+        );
     }
 
     #[test]

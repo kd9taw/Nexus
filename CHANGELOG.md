@@ -352,6 +352,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the other station signed. Nothing is uploaded again, and nothing happens until you open the
   check and press the button. Parks on a state line are not listed (pick their state in the
   contact), and nor are parks Nexus cannot place.
+- **Needed board: Confirmation opportunities off now holds for POTA/SOTA rows too.** Rows taken from
+  the POTA/SOTA feed still showed the LoTW chip, or read "Confirm", with that setting off.
 
 ### Changed
 

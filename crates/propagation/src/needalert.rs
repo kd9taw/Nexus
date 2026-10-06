@@ -114,7 +114,8 @@ impl NeedTag {
 /// the Confirm chip; a station that was ONLY a confirmation opportunity loses its row
 /// entirely. Runs on the ranked list BEFORE the command layer appends the
 /// Dxped/POTA/SOTA chips, which ride award rows and must not keep a row alive that
-/// the operator asked not to see.
+/// the operator asked not to see. The rows the command layer builds after that
+/// ([`activation_alert`], [`watched_alert`]) put their own awards through it.
 pub fn strip_confirm_tier(alerts: &mut Vec<NeedAlert>) {
     for a in alerts.iter_mut() {
         a.tags.retain(|t| *t != NeedTag::Confirm);
@@ -748,11 +749,17 @@ pub fn activator_state<'a>(
 /// park already worked in the activation running now stops competing for attention while the
 /// same park tomorrow is a fresh opportunity. The row is never dropped outright: the activity
 /// badge and the board's own POTA/SOTA filter still have something to show.
+///
+/// The award goes through the [`strip_confirm_tier`] seam when the operator has turned
+/// confirmation opportunities off (`confirm_tier` false), as [`watched_alert`]'s does: the board
+/// builds these rows after it strips the ones it ranked. An activator whose only award was a
+/// confirmation is then the bare activation.
 pub fn activation_alert(
     spot: &crate::pota::OtaSpot,
     needs: &dyn OperatorNeeds,
     slots: &AwardSlots,
     reference_needed: bool,
+    confirm_tier: bool,
 ) -> Option<NeedAlert> {
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
@@ -768,7 +775,7 @@ pub fn activation_alert(
     // Any award this activator ALSO satisfies (ATNO / new band / zone / grid / state). The state
     // is the park's or summit's, which is the one a contact hunted there logs.
     let state = activator_state(&spot.activator, band.label(), &spot.states, needs, slots);
-    let award = score_slots(
+    let mut award: Vec<NeedAlert> = score_slots(
         &spot.activator,
         band.label(),
         mode.label(),
@@ -776,7 +783,13 @@ pub fn activation_alert(
         state,
         needs,
         slots,
-    );
+    )
+    .into_iter()
+    .collect();
+    if !confirm_tier {
+        strip_confirm_tier(&mut award);
+    }
+    let award = award.pop();
     let had_award = award.is_some();
     let info = dxcc::resolve(&spot.activator);
     let mut alert = award.unwrap_or_else(|| NeedAlert {
@@ -1965,6 +1978,7 @@ mod tests {
                 &HashSet::new(),
             ),
             true,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -2790,6 +2804,7 @@ mod tests {
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
             true,
+            true,
         )
         .expect("an active park is a row");
         assert_eq!(a.entity, "United States");
@@ -2820,6 +2835,7 @@ mod tests {
             &ota("POTA", "K-1234", "K1ABC", 14_250.0, "SSB"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
             true,
         )
         .unwrap();
@@ -2856,6 +2872,7 @@ mod tests {
             &n,
             &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
             true,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -2882,6 +2899,7 @@ mod tests {
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
             true,
+            true,
         )
         .unwrap();
         assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
@@ -2891,6 +2909,7 @@ mod tests {
             &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
             true,
         )
         .is_none());
@@ -2987,7 +3006,7 @@ mod tests {
         let slots = slots(n.worked_zones(), n.worked_grids(), &no_states);
         let spot = ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB");
 
-        let need = activation_alert(&spot, &n, &slots, true).unwrap();
+        let need = activation_alert(&spot, &n, &slots, true, true).unwrap();
         assert_eq!(
             need.tags,
             vec![NeedTag::NewPark, NeedTag::Pota],
@@ -2995,7 +3014,7 @@ mod tests {
         );
         assert_eq!(need.priority, 20, "the activation floor still applies");
 
-        let worked = activation_alert(&spot, &n, &slots, false).unwrap();
+        let worked = activation_alert(&spot, &n, &slots, false, true).unwrap();
         assert_eq!(
             worked.tags,
             vec![NeedTag::Pota],
@@ -3022,6 +3041,7 @@ mod tests {
             &n,
             &slots,
             false,
+            true,
         )
         .unwrap();
         assert!(a.tags.contains(&NeedTag::NewEntity));
@@ -3045,6 +3065,7 @@ mod tests {
             &n,
             &slots,
             true,
+            true,
         )
         .unwrap();
         assert!(a.tags.contains(&NeedTag::NewPark), "{:?}", a.tags);
@@ -3063,6 +3084,7 @@ mod tests {
             &n,
             &slots,
             true,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -3077,6 +3099,7 @@ mod tests {
             &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
             &n,
             &slots,
+            true,
             true,
         )
         .unwrap();
@@ -3095,6 +3118,7 @@ mod tests {
             &n,
             &slots,
             false,
+            true,
         )
         .unwrap();
         assert!(worked.park.is_some());
@@ -3204,7 +3228,7 @@ mod tests {
         let wrong: Vec<String> = cases
             .iter()
             .filter_map(|(name, needs, spot, park_needed, tags, priority)| {
-                let a = activation_alert(spot, *needs, &needs.slots(), *park_needed).unwrap();
+                let a = activation_alert(spot, *needs, &needs.slots(), *park_needed, true).unwrap();
                 (a.tags != *tags || a.priority != *priority).then(|| {
                     format!(
                         "{name}: {:?} at {}, want {tags:?} at {priority}",
@@ -3329,7 +3353,7 @@ mod tests {
         let wrong: Vec<String> = cases
             .iter()
             .filter_map(|(name, spot, tags, priority, headline)| {
-                let a = activation_alert(spot, &n, &n.slots(), true).unwrap();
+                let a = activation_alert(spot, &n, &n.slots(), true, true).unwrap();
                 let named = headline.is_none_or(|h| a.headline.starts_with(h));
                 (a.tags != *tags || a.priority != *priority || !named).then(|| {
                     format!(
