@@ -4,12 +4,18 @@
 // this computer's Nexus gives is said in a sentence, the pairing dialog sends what the operator
 // typed, a station opens its stream, and control taken back by the station (a decision about the
 // hosted road there) is acquired again once, by the page, when nobody else holds it.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { LanApp, type PageSocket } from './LanApp'
 import { CLOSED_REASONS, CONNECT_REASONS, PAIR_REASONS } from './protocol'
 import { EN } from '../i18n/en'
 import { harness, last } from '../remote-web/stream-link.testkit'
+
+// THE BUDGET (2026-10-05). The stream's lease tests wait on the page's own clocks: a heartbeat, the state
+// reads after a refused one, and then 1.5 s more to show nothing is acquired. On a quiet box the slowest takes
+// 4.5–4.8 s against vitest's 5 s default (CI timed it out at 5.0 s), and the waits it allows itself add up to
+// about 13.5 s. 15 s covers them; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const PAGE = `http://127.0.0.1:42076/${'5e'.repeat(32)}/lan.html?lang=en`
 const STATION = '60000000-0000-4000-8000-000000000001'
