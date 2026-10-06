@@ -20754,6 +20754,10 @@ button.cq-skiptx1.on {
   color: var(--text);
   white-space: nowrap;
   margin-right: 0.6em;
+  /* The containing block for the state's screen-reader text (`.sr-only`, absolutely positioned). With
+     none inside the row it was placed against the page, outside every scroller, and lengthened the
+     page by the whole list: 44 rows made the Remote page at 360×740 4431 px tall. */
+  position: relative;
 }
 .pota-spot-state.need-state {
   background: color-mix(in srgb, var(--need-color) 24%, transparent);
