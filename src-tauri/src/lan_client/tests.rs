@@ -97,6 +97,32 @@ pub(crate) fn record(station: &str, addresses: &[&str]) -> PairedStation {
     }
 }
 
+/// An address on `ip` where nothing listens, for a test that expects a connection there to be
+/// refused. Its port is BELOW the kernel's ephemeral range. A port a `:0` bind took and let go is
+/// free for the next `:0` bind anywhere in the test binary, and another test's listener was once
+/// handed one and answered there. Below the range only a bind that names the port can land
+/// (`freePortOutsideEphemeralRange` in `remote/test/runtime.mjs` makes the same choice).
+pub(crate) fn where_nothing_listens(ip: std::net::Ipv4Addr) -> std::net::SocketAddrV4 {
+    use std::hash::BuildHasher;
+    let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|range| range.split_whitespace().next()?.parse().ok())
+        .unwrap_or(32_768u16);
+    let (floor, ceiling) = (20_000u16, low.min(32_768));
+    assert!(ceiling > floor, "the ephemeral range starts at {low}");
+    let probe = (0..64u8)
+        .map(|attempt| {
+            let r = std::hash::RandomState::new().hash_one(attempt);
+            floor + (r % u64::from(ceiling - floor)) as u16
+        })
+        .find_map(|port| std::net::TcpListener::bind((ip, port)).ok())
+        .expect("a free port below the ephemeral range");
+    let std::net::SocketAddr::V4(at) = probe.local_addr().unwrap() else {
+        unreachable!()
+    };
+    at
+}
+
 /// ★ The code as typed: sixteen hexadecimal characters, either case, spaces anywhere, gives the
 /// eight bytes the shack holds. CONTROL: the shack's own grouping and plain lowercase read the
 /// same; anything that is not sixteen hex characters is refused.
@@ -756,13 +782,7 @@ async fn a_pairing_that_reaches_nobody_says_why() {
     } else {
         ("refused", "noAnswer")
     };
-    let nothing_listens = {
-        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let std::net::SocketAddr::V4(at) = probe.local_addr().unwrap() else {
-            unreachable!()
-        };
-        at
-    };
+    let nothing_listens = where_nothing_listens(std::net::Ipv4Addr::LOCALHOST);
     assert_eq!(
         pairing::pair(nothing_listens, [7; 8], "Den PC", &[])
             .await

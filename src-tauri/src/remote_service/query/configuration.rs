@@ -1156,6 +1156,13 @@ pub(super) fn programming_revision(path: &Path) -> Result<String, &'static str> 
         .ok_or("applicationUnavailable")
 }
 
+/// The `programming` document `build` serves, read from the sidecar at `path`: a test holds the
+/// document to the page's keys without the operator's own `radioprog.json`.
+#[cfg(test)]
+pub(super) fn programming_at(path: &Path, grid: &str) -> Result<Value, &'static str> {
+    programming(path, grid)
+}
+
 fn programming(path: &Path, grid: &str) -> Result<Value, &'static str> {
     // Refuse special files before opening (a FIFO can block in open itself).
     match std::fs::metadata(path) {

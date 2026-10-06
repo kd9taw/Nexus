@@ -6,7 +6,7 @@
 //! in-memory stores.
 use super::*;
 use crate::lan_client::road::{self, check_answer, Ids, ToPage};
-use crate::lan_client::tests::{record, StationStore};
+use crate::lan_client::tests::{record, where_nothing_listens, StationStore};
 use crate::lan_client::{code, pairing, ComputerKey, Origin, Reach, Stations};
 use crate::remote_service::vault::PairedStation;
 use std::net::SocketAddrV4;
@@ -229,13 +229,7 @@ async fn the_remembered_addresses_are_tried_in_order() {
     let s = shack(home());
     let (_stop, stop) = watch::channel(false);
     let live = behind_a_port_on(&s, private, stop).await;
-    let dead = {
-        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
-        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
-            unreachable!()
-        };
-        at
-    };
+    let dead = where_nothing_listens(private);
     // A second port of the same station: either welcomes this computer, so only the order decides.
     let (_stop_too, stop_too) = watch::channel(false);
     let also = behind_a_port_on(&s, private, stop_too).await;
@@ -290,13 +284,7 @@ async fn nothing_answering_is_said_as_the_window_says_it() {
     let s = shack(home());
     let (_stop, stop) = watch::channel(false);
     let live = behind_a_port_on(&s, private, stop).await;
-    let dead = {
-        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
-        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
-            unreachable!()
-        };
-        at
-    };
+    let dead = where_nothing_listens(private);
     let dropping = {
         let listener = tokio::net::TcpListener::bind((private, 0)).await.unwrap();
         let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
@@ -1187,13 +1175,7 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
     let live = behind_a_port_on(&s, private, stop).await;
     let (_stop_too, stop_too) = watch::channel(false);
     let also = behind_a_port_on(&s, private, stop_too).await;
-    let dead = {
-        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
-        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
-            unreachable!()
-        };
-        at
-    };
+    let dead = where_nothing_listens(private);
     let spki = tempo_stream::protocol::hex_bytes(&s.public_key).unwrap();
     let tag = hex(digest(&SHA256, &spki).as_ref())[..16].to_string();
     let advert = |address: SocketAddrV4, key: &str| Found {
@@ -1351,13 +1333,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     );
     assert_eq!(looks.load(Ordering::SeqCst), 2);
 
-    let dead = {
-        let probe = std::net::TcpListener::bind((private, 0)).unwrap();
-        let SocketAddr::V4(at) = probe.local_addr().unwrap() else {
-            unreachable!()
-        };
-        at
-    };
+    let dead = where_nothing_listens(private);
     let spki = tempo_stream::protocol::hex_bytes(&s.public_key).unwrap();
     *adverts.lock().unwrap() = vec![Found {
         name: "Nexus 3F2A 9B1C".into(),
