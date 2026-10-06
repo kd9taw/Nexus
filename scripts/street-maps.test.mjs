@@ -5,18 +5,24 @@
 // pulls a build out from under a download in progress. None of it can run against the bucket from
 // a test, so the rules are tested as functions, the bucket as a stand-in that answers exactly the
 // rclone commands the job sends (and refuses any other), and the host as a local server that
-// answers range reads. Every refusal is paired with a control that passes.
+// answers range reads. The copy of the build itself runs the rclone the workflow pins, into a local
+// folder, from a stand-in publisher that cuts long downloads off. Every refusal is paired with a
+// control that passes.
 //
-// Run: node --test scripts/street-maps.test.mjs
+// Run: node --test scripts/street-maps.test.mjs (the copy's tests need the pinned rclone on PATH;
+// without it they skip, and in CI they fail)
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { Worker } from 'node:worker_threads'
 
 import * as sm from './street-maps.mjs'
 
@@ -284,7 +290,8 @@ const fakeB3 = (b) => createHash('sha256').update('blake3:').update(b).digest('h
 const PLANET = Buffer.concat([Buffer.from('PMTiles'), Buffer.from([3]), Buffer.alloc(4088, 7)])
 const ARCHIVE = Buffer.from('a gzip ustar archive of fonts and icons')
 
-/// rclone, for the commands the job sends and nothing else; `upstream` is what copyurl can fetch.
+/// rclone, for the commands the job sends and nothing else; `upstream` is what the build's copy can
+/// fetch.
 function fakeRclone(store, upstream = new Map()) {
   const calls = []
   const key = (p) => {
@@ -301,10 +308,12 @@ function fakeRclone(store, upstream = new Map()) {
       if (!store.has(key(a[1]))) throw new Error(`rclone cat: ${a[1]}: object not found`)
       return store.get(key(a[1])).toString('utf8')
     }
-    if (a.length === 4 && a[0] === 'copyurl' && a[1] === '--no-clobber') {
-      if (store.has(key(a[3]))) throw new Error('CopyURL failed: file already exist')
-      if (!upstream.has(a[2])) throw new Error(`copyurl: ${a[2]}: 404`)
-      store.set(key(a[3]), upstream.get(a[2]))
+    const http = a.length === 4 && a[0] === 'copyto' && a[1] === '--ignore-existing' ? /^:http,url='([^']+)':(.+)$/.exec(a[2]) : null
+    if (http) {
+      if (store.has(key(a[3]))) return '' // --ignore-existing: what is there stays
+      const url = `${http[1]}/${http[2]}`
+      if (!upstream.has(url)) throw new Error(`copyto: ${url}: 404`)
+      store.set(key(a[3]), upstream.get(url))
       return ''
     }
     if (a.length === 4 && a[0] === 'hashsum' && a[2] === '--download') {
@@ -344,11 +353,13 @@ async function host(store, { ignoreRange = false, index = null } = {}) {
 
 const UPSTREAM = 'https://build.example'
 const NOW = at('2026-10-06T09:00:00Z')
+/// A command that writes the build's key from the publisher.
+const copiesBuild = (c) => c.startsWith('copy') && c.endsWith(`${DEST}/planet-20261004.pmtiles`)
 
 /// The plan job's files for a copy of `planet` (named in the index with `b3` as its b3sum).
-function planFiles(origin, { b3 = fakeB3(PLANET), upstream = `${UPSTREAM}/20261004.pmtiles` } = {}) {
+function planFiles(origin, { planet = PLANET, b3 = fakeB3(planet), upstream = `${UPSTREAM}/20261004.pmtiles` } = {}) {
   const from = scratch()
-  const build = { ...BUILD, bytes: PLANET.length, b3sum: b3, upstream }
+  const build = { ...BUILD, bytes: planet.length, b3sum: b3, upstream }
   const assets = { key: sm.assetsKey(sm.sha256(ARCHIVE)), sha256: sm.sha256(ARCHIVE), bytes: ARCHIVE.length }
   writeFileSync(join(from, 'streetmaps.json'), sm.indexText(sm.buildIndex({ build, assets, published: '2026-10-06T05:30:00Z', origin }), origin))
   writeFileSync(join(from, 'assets.tar.gz'), ARCHIVE)
@@ -383,7 +394,7 @@ test('a first copy copies once, checks it as stored and through the host, and pu
   assert.equal(result.error, undefined, result.error?.message)
   assert.deepEqual(calls, [
     `lsjson --files-only --no-mimetype --no-modtime ${DEST}`,
-    `copyurl --no-clobber ${UPSTREAM}/20261004.pmtiles ${DEST}/planet-20261004.pmtiles`,
+    `copyto --ignore-existing :http,url='${UPSTREAM}':20261004.pmtiles ${DEST}/planet-20261004.pmtiles`,
     `lsjson --files-only --no-mimetype --no-modtime ${DEST}`,
     `hashsum blake3 --download ${DEST}/planet-20261004.pmtiles`,
     calls[4], // the archive's upload, from the plan's folder
@@ -394,6 +405,7 @@ test('a first copy copies once, checks it as stored and through the host, and pu
   ])
   assert.match(calls[4], new RegExp(`^copyto \\S+/assets\\.tar\\.gz ${DEST}/${assets.key}$`))
   assert.match(calls[7], new RegExp(`^copyto --header-upload Cache-Control: no-cache \\S+ ${DEST}/streetmaps\\.json$`))
+  assert.deepEqual(calls.filter(copiesBuild), [calls[1]], 'control for the tests that find no copy')
   const published = sm.parseIndex(store.get('streetmaps.json').toString(), origin)
   assert.equal(published.published, '2026-10-06T09:00:00Z', 'stamped when it goes live, not when it was planned')
   assert.equal(store.get('streetmaps.json').toString(), result.text)
@@ -413,7 +425,7 @@ test('a build already in the bucket is checked, never copied over', async () => 
   const store = new Map([['planet-20261004.pmtiles', PLANET]])
   const { result, calls } = await copy(store)
   assert.equal(result.error, undefined, result.error?.message)
-  assert.ok(!calls.some((c) => c.startsWith('copyurl')), calls.join('\n'))
+  assert.ok(!calls.some(copiesBuild), calls.join('\n'))
   assert.ok(calls.includes(`hashsum blake3 --download ${DEST}/planet-20261004.pmtiles`))
   assert.ok(store.has('streetmaps.json'))
 })
@@ -430,7 +442,7 @@ test('the build the host serves is not copied or read again when only the fonts 
     },
   })
   assert.equal(result.error, undefined, result.error?.message)
-  assert.ok(!calls.some((c) => c.startsWith('copyurl') || c.startsWith('hashsum blake3')), calls.join('\n'))
+  assert.ok(!calls.some((c) => copiesBuild(c) || c.startsWith('hashsum blake3')), calls.join('\n'))
   assert.equal(sm.parseIndex(store.get('streetmaps.json').toString(), origin).assets.sha256, sm.sha256(ARCHIVE))
 })
 
@@ -506,6 +518,182 @@ test('the hosted index: none yet is told apart from could-not-tell', async () =>
   }
   assert.deepEqual(await sm.readHosted({ fetchImpl: failing('ENOTFOUND') }), { index: null, why: 'maps.hamradiotools.io does not resolve' })
   await assert.rejects(sm.readHosted({ fetchImpl: failing('ECONNREFUSED') }), /could not read .* ECONNREFUSED/)
+})
+
+// ---- The build's copy, by the rclone the workflow pins -------------------------------------------
+
+// On 2026-10-06 the publisher's server reset the copy's one long download of the build three times
+// running, 32 to 40 GiB in, and each retry started again at byte 0. These run the real rclone
+// against a stand-in that cuts every long response off, into a local folder (`:local:`) for the
+// bucket.
+
+/// The rclone the workflow pins, found on PATH as the bucket job finds it. Without it these tests
+/// skip here; CI installs it before them (ci.yml, and street-maps.yml's plan job), so there they fail.
+const RCLONE_PIN = WORKFLOW.match(/downloads\.rclone\.org\/v([\d.]+)\//)?.[1]
+const rcloneOnPath = (() => {
+  try {
+    return /^rclone v(\S+)/.exec(execFileSync('rclone', ['version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1] ?? null
+  } catch {
+    return null
+  }
+})()
+function withRclone(t) {
+  if (rcloneOnPath === RCLONE_PIN) return true
+  const why = rcloneOnPath ? `rclone ${rcloneOnPath} is on PATH, not the pinned ${RCLONE_PIN}` : `the pinned rclone ${RCLONE_PIN} is not on PATH`
+  if (process.env.CI) assert.fail(`${why}; CI installs it before this test`)
+  t.skip(why)
+  return false
+}
+
+/// rclone as the bucket job runs it, recording each command, with none of this box's rclone
+/// settings and the copy's chunking scaled to a test-sized build. An RCLONE_<FLAG> variable sets
+/// that flag (rclone's manual, "Environment variables"). In the bucket a chunk is the remote's
+/// chunk size (RCLONE_CONFIG_R2_CHUNK_SIZE) and a planet is far over the 256 MiB cutoff.
+const CHUNK = 2 ** 20
+function realRclone() {
+  const calls = []
+  const config = join(scratch(), 'rclone.conf')
+  writeFileSync(config, '')
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('RCLONE_'))),
+    RCLONE_CONFIG: config,
+    // In bytes: a bare number would be KiB (the manual's "Size options").
+    RCLONE_MULTI_THREAD_CUTOFF: `${CHUNK}B`,
+    RCLONE_MULTI_THREAD_CHUNK_SIZE: `${CHUNK}B`,
+  }
+  const rclone = (args) => {
+    calls.push(args.join(' '))
+    return execFileSync('rclone', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env, maxBuffer: 64 << 20 })
+  }
+  return { rclone, calls }
+}
+
+/// A build of six whole chunks and a part one, starting as a PMTiles v3 archive does.
+const BIG = Buffer.concat([Buffer.from('PMTiles'), Buffer.from([3]), randomBytes(6 * CHUNK + 12_345 - 8)])
+/// Less than a chunk, so the stand-in cuts the first read of every whole chunk.
+const CUT = 768 * 1024
+
+/// The publisher's server as it behaved: it serves `file` as /20261004.pmtiles, answers a range read
+/// with 206, and cuts any response off (closes the connection mid-body) once it has sent `cut` bytes.
+/// Each message is answered with what it was asked for and sent since the last. It runs on a worker
+/// thread, from this function's source, because copyToBucket runs rclone synchronously and a blocked
+/// event loop answers nobody.
+function cuttingPublisher({ file, cut }) {
+  const { createServer } = require('node:http')
+  const { parentPort } = require('node:worker_threads')
+  const build = Buffer.from(file)
+  let seen = { gets: [], cuts: 0, sent: 0 }
+  const server = createServer((req, res) => {
+    if (req.url !== '/20261004.pmtiles') return res.writeHead(404).end()
+    const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '')
+    const [from, to] = m ? [+m[1], m[2] ? Math.min(+m[2], build.length - 1) : build.length - 1] : [0, build.length - 1]
+    const headers = { 'accept-ranges': 'bytes', 'content-length': to - from + 1, 'content-type': 'application/octet-stream' }
+    res.writeHead(m ? 206 : 200, m ? { ...headers, 'content-range': `bytes ${from}-${to}/${build.length}` } : headers)
+    if (req.method === 'HEAD') return res.end()
+    seen.gets.push(req.headers.range ?? null)
+    const body = build.subarray(from, to + 1)
+    if (body.length <= cut) {
+      seen.sent += body.length
+      return res.end(body)
+    }
+    seen.cuts++
+    seen.sent += cut
+    res.write(body.subarray(0, cut), () => res.socket.destroy())
+  })
+  server.listen(0, '127.0.0.1', () => parentPort.postMessage(server.address().port))
+  parentPort.on('message', () => {
+    parentPort.postMessage(seen)
+    seen = { gets: [], cuts: 0, sent: 0 }
+  })
+}
+
+async function publisher() {
+  const worker = new Worker(`(${cuttingPublisher})(require('node:worker_threads').workerData)`, { eval: true, workerData: { file: BIG, cut: CUT } })
+  const [port] = await once(worker, 'message')
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    seen: async () => {
+      worker.postMessage('seen')
+      return (await once(worker, 'message'))[0]
+    },
+    close: () => worker.terminate(),
+  }
+}
+
+/// A local folder as the host serves the bucket.
+const folder = (dir) => ({ get: (name) => (/^[\w.-]+$/.test(name) && existsSync(join(dir, name)) ? readFileSync(join(dir, name)) : undefined) })
+
+test('control: the stand-in cuts off a download of the whole build, as the publisher did, so copyurl fails', async (t) => {
+  if (!withRclone(t)) return
+  const p = await publisher()
+  try {
+    const dir = scratch()
+    const { rclone } = realRclone()
+    assert.throws(
+      () => rclone(['copyurl', '--no-clobber', `${p.origin}/20261004.pmtiles`, `:local:${dir}/planet-20261004.pmtiles`]),
+      (e) => /Failed to copyurl .*unexpected EOF/.test(e.stderr),
+    )
+    const seen = await p.seen()
+    assert.deepEqual(seen.gets, [null, null, null], 'three whole downloads (--retries 3), each from byte 0')
+    assert.equal(seen.cuts, 3)
+    assert.ok(!existsSync(join(dir, 'planet-20261004.pmtiles')))
+  } finally {
+    await p.close()
+  }
+})
+
+test('a copy survives a publisher that cuts long downloads off: the build is read in short ranges and stored whole', async (t) => {
+  if (!withRclone(t)) return
+  const p = await publisher()
+  const dir = scratch()
+  let h
+  try {
+    h = await host(folder(dir))
+    const source = join(scratch(), 'planet.pmtiles')
+    writeFileSync(source, BIG)
+    const b3 = realRclone().rclone(['hashsum', 'blake3', source]).split(/\s+/)[0]
+    const files = planFiles(h.origin, { planet: BIG, b3, upstream: `${p.origin}/20261004.pmtiles` })
+    const { rclone, calls } = realRclone()
+    const result = await sm
+      .copyToBucket({ from: files.from, dest: `:local:${dir}`, rclone, now: () => NOW, origin: h.origin, upstreamOrigin: p.origin, minBytes: 0, wait: async () => {}, log: () => {} })
+      .then((text) => ({ text }), (error) => ({ error }))
+    assert.equal(result.error, undefined, result.error?.stderr || result.error?.message)
+    assert.equal(sm.sha256(readFileSync(join(dir, 'planet-20261004.pmtiles'))), sm.sha256(BIG), 'stored byte for byte')
+    assert.ok(calls.includes(`hashsum blake3 --download :local:${dir}/planet-20261004.pmtiles`), 'and checked as stored')
+    assert.equal(readFileSync(join(dir, 'streetmaps.json'), 'utf8'), result.text, 'then published')
+    const seen = await p.seen()
+    assert.ok(seen.cuts > 0, 'the stand-in cut responses off')
+    for (const range of seen.gets) {
+      const m = /^bytes=(\d+)-(\d+)$/.exec(range ?? '')
+      assert.ok(m && +m[2] - +m[1] + 1 <= CHUNK, `a read of ${range}: no read is longer than a chunk`)
+    }
+    assert.ok(seen.sent <= BIG.length + seen.cuts * CHUNK, `sent ${seen.sent} for ${BIG.length}: a cut costs at most its chunk`)
+  } finally {
+    h?.server.close()
+    await p.close()
+  }
+})
+
+test('the build copy never writes over an object already at its key', async (t) => {
+  if (!withRclone(t)) return
+  const p = await publisher()
+  try {
+    const dir = scratch()
+    const at = join(dir, 'planet-20261004.pmtiles')
+    const left = Buffer.from('what a stopped run left')
+    writeFileSync(at, left)
+    const { rclone } = realRclone()
+    const args = sm.copyBuildArgs(`${p.origin}/20261004.pmtiles`, `:local:${dir}/planet-20261004.pmtiles`)
+    rclone(args)
+    // Compared whole, not as text: a copied build in the diff would be megabytes of noise.
+    assert.ok(readFileSync(at).equals(left), 'what was there is left for checkStored to judge')
+    assert.deepEqual((await p.seen()).gets, [], 'and not a byte read for it')
+    // Control: the same copy without --ignore-existing replaces it, so that flag is what kept it.
+    rclone(args.filter((a) => a !== '--ignore-existing'))
+    assert.equal(sm.sha256(readFileSync(at)), sm.sha256(BIG))
+  } finally {
+    await p.close()
+  }
 })
 
 // ---- The fonts and icons -----------------------------------------------------------------------
@@ -653,8 +841,17 @@ test("the workflow: the bucket's token reaches only the bucket job's rclone step
   assert.doesNotMatch(WORKFLOW, /set -x|toJSON\(secrets\)/)
 })
 
-test('the workflow: rclone is a pinned release, checked against its SHA-256 before it runs', () => {
-  const install = WORKFLOW.match(/- name: Install rclone[^\n]*\n {8}run: \|\n((?: {10}.*\n)+)/)?.[1] ?? ''
-  assert.match(install, /https:\/\/downloads\.rclone\.org\/v1\.75\.1\/rclone-v1\.75\.1-linux-amd64\.zip/)
-  assert.match(install, /echo "[0-9a-f]{64} {2}\$RUNNER_TEMP\/rclone\.zip" \| sha256sum -c -/)
+test('the workflow: rclone is a pinned release, checked against its SHA-256 before it runs, the same one everywhere', () => {
+  const ciWorkflow = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+  // A download, and on the next line the check of the zip it wrote, before anything unpacks it.
+  const pins = (text) =>
+    [...text.matchAll(/https:\/\/downloads\.rclone\.org\/v([\d.]+)\/rclone-v\1-linux-amd64\.zip\n {10}echo "([0-9a-f]{64}) {2}\$RUNNER_TEMP\/rclone\.zip" \| sha256sum -c -\n/g)].map(
+      (m) => `${m[1]} ${m[2]}`,
+    )
+  for (const text of [WORKFLOW, ciWorkflow]) assert.equal((text.match(/downloads\.rclone\.org/g) ?? []).length, pins(text).length, 'every download is checked')
+  assert.equal(pins(WORKFLOW).length, 2, 'the plan job, whose tests run the copy, and the bucket job')
+  assert.equal(pins(ciWorkflow).length, 1, "ci.yml's run of these tests")
+  const all = new Set([...pins(WORKFLOW), ...pins(ciWorkflow)])
+  assert.equal(all.size, 1, [...all].join('\n'))
+  assert.match([...all][0], /^1\.75\.1 /)
 })
