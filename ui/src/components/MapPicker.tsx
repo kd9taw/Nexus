@@ -10,7 +10,7 @@
 // — puts the same component in its own toolbar without the 3D choice.
 //
 // STREET (operator ruling 2026-10-04, D5) joins Connect's row only once the street map is offered
-// (features/streetMaps.ts: hidden until its maps are hosted). Until a pack is installed it carries a
+// (features/streetMaps.ts: on the desktop, its maps hosted). Until a pack is installed it carries a
 // download badge, and a press opens the download sheet instead of picking it; while a download runs
 // it carries the percent instead.
 import { Download } from 'lucide-react'

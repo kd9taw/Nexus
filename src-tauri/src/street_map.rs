@@ -15,10 +15,10 @@
 //! take a short directory or tile without noticing. The webview names a pack by id and an
 //! asset by a checked relative path; it never names a file.
 //!
-//! THE BENCH (`street_map_info`, `street_map_install_file`). The Street choice stays hidden until
-//! the hosted index exists. `NEXUS_STREET_MAP=1` in the environment shows it on one computer
-//! anyway, with a bench aid that installs a map file the operator already has: the OS file picker
-//! names the file, so the webview still never does.
+//! THE BENCH (`street_map_info`, `street_map_install_file`). The Street choice is offered to every
+//! operator now that the index is hosted. `NEXUS_STREET_MAP=1` in the environment adds a bench aid
+//! on one computer that installs a map file the operator already has: the OS file picker names the
+//! file, so the webview still never does.
 
 use std::sync::{Arc, OnceLock};
 

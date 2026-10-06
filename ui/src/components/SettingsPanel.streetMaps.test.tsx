@@ -89,24 +89,25 @@ async function openMapGlobe() {
   return document.getElementById('settings-map-globe')
 }
 
-const offer = (bench: boolean) => {
+/** The street-map store's answers: `shell` false is the Remote page, the one place Street is never offered. */
+const offer = (bench: boolean, shell = true) => {
   __resetStreetMapsForTests()
-  api.get('isTauri').mockImplementation(() => true as never)
+  api.get('isTauri').mockImplementation(() => shell as never)
   api.get('streetMapInfo').mockImplementation(() => Promise.resolve({ folder: '/maps', bench }))
   api.get('streetMapPacks').mockImplementation(() => Promise.resolve([]))
   api.get('streetMapUnfinished').mockImplementation(() => Promise.resolve([]))
 }
 
 describe('Settings ▸ Appearance ▸ Map & globe ▸ Street maps', () => {
-  it('sits in Map & globe beside the Logbook-globe switch while the street map is offered', async () => {
-    offer(true)
+  it('sits in Map & globe beside the Logbook-globe switch, for every desktop operator (no bench)', async () => {
+    offer(false)
     const section = await openMapGlobe()
     const label = await screen.findByText(t('settings.streetMaps.label'))
     expect(section?.contains(label), 'the block is not inside the Map & globe section').toBe(true)
   })
 
-  it('is not there while it is not offered', async () => {
-    offer(false)
+  it('is not there while it is not offered (outside the desktop shell)', async () => {
+    offer(false, false)
     const section = await openMapGlobe()
     expect(section, 'CONTROL: the section rendered').not.toBeNull()
     await act(async () => {})

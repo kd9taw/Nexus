@@ -468,7 +468,7 @@ export function ConnectView({
   const [mapPick, setMapPick] = useState<MapChoice>(() => loadIntentSetup(intent)?.map ?? 'globe')
   const map3d = mapPick === '3d' && gpuOk
   // THE STREET MAP (features/streetMaps.ts; operator rulings 2026-10-04, D5): a fifth choice, offered
-  // only once the street map is (hidden until its maps are hosted) and never on the Remote page. It
+  // on the desktop now that its maps are hosted, and never on the Remote page. It
   // draws the installed pack that holds the station, else the newest. A stored Street pick that cannot
   // draw here (no pack, no WebGL2, not offered) shows Flat and says why, without discarding the pick,
   // as 3D does; while the answer is still being read nothing is said.

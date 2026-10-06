@@ -24,6 +24,7 @@ const PACK: StreetPack = {
   sha256: 'ab'.repeat(32),
 }
 const api = vi.hoisted(() => ({
+  tauri: true,
   bench: true,
   packs: [] as unknown[],
   updates: [] as unknown[],
@@ -32,7 +33,7 @@ const api = vi.hoisted(() => ({
   confirm: true,
 }))
 vi.mock('../api', () => ({
-  isTauri: () => true,
+  isTauri: () => api.tauri,
   streetMapInfo: vi.fn(async () => ({ folder: 'C:\\Users\\op\\AppData\\Local\\Nexus\\maps', bench: api.bench })),
   streetMapPacks: vi.fn(async () => api.packs),
   streetMapUnfinished: vi.fn(async () => []),
@@ -69,7 +70,7 @@ const button = (name: string) => screen.getByRole('button', { name })
 
 beforeEach(() => {
   __resetStreetMapsForTests()
-  Object.assign(api, { bench: true, packs: [PACK], updates: [], downloaded: [], installed: null, confirm: true })
+  Object.assign(api, { tauri: true, bench: true, packs: [PACK], updates: [], downloaded: [], installed: null, confirm: true })
 })
 afterEach(() => {
   cleanup()
@@ -77,8 +78,8 @@ afterEach(() => {
 })
 
 describe('Settings ▸ Street maps', () => {
-  it('is not there at all while the street map is not offered', async () => {
-    api.bench = false
+  it('is not there at all while the street map is not offered (outside the desktop shell)', async () => {
+    api.tauri = false
     const { container } = await mount()
     expect(container.innerHTML).toBe('')
   })

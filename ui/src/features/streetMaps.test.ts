@@ -90,12 +90,14 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks())
 
 describe('whether the Street choice is offered', () => {
-  it('is never offered while the manifest constant is empty, unless a bench asks', async () => {
-    expect(STREET_MAP_MANIFEST_URL).toBe('')
+  it('is offered to every desktop operator once the manifest constant names the host, no bench needed', async () => {
+    expect(STREET_MAP_MANIFEST_URL, 'the address the Rust side fetches the index from').toBe(
+      'https://maps.hamradiotools.io/streetmaps.json',
+    )
+    api.packs = [HOME]
     const { result } = await loaded()
-    expect(result.current.offered).toBe(false)
-    expect(result.current.packs, 'nothing is listed for a choice nobody sees').toBeNull()
-    expect(api.probes, 'no GPU probe either').toBe(0)
+    expect(result.current).toMatchObject({ offered: true, bench: false, folder: '/maps', webgl2: true, packs: [HOME] })
+    expect(api.probes).toBe(1)
   })
 
   it('is offered on a bench run (NEXUS_STREET_MAP=1), with the packs and the GPU answer', async () => {

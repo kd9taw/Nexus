@@ -2,8 +2,8 @@
 //
 // THE STREET CHOICE in Connect's map picker (operator ruling 2026-10-04, D5), driven through the REAL
 // ConnectView and MapView. The street renderer is stood in for (jsdom has no WebGL), and the street-map
-// commands answer at the API boundary. Pinned here: Street is hidden from everyone until its maps are
-// hosted (the manifest constant is empty) and appears only with the bench flag; without a pack it
+// commands answer at the API boundary. Pinned here: Street is offered to every operator once its maps
+// are hosted (the manifest constant names the host), bench flag or not; without a pack it
 // carries a download badge and a press opens the download sheet; with one it draws; a download shows
 // its percent on the choice; and a stored Street pick that cannot draw shows Flat and says why,
 // keeping the pick.
@@ -13,6 +13,7 @@ import type { StreetPack } from '../features/streetPack'
 import type { StreetProgress } from '../features/streetMaps'
 
 const bench = vi.hoisted(() => ({
+  tauri: true,
   on: true,
   packs: [] as unknown[],
   webgl2: true,
@@ -20,7 +21,7 @@ const bench = vi.hoisted(() => ({
 }))
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
-  isTauri: () => true,
+  isTauri: () => bench.tauri,
   getBandOutlook: vi.fn(async () => ({ bands: [], asOf: 0 })),
   getGettingOut: vi.fn(async () => null),
   getPathOutlook: vi.fn(async () => null),
@@ -131,6 +132,7 @@ async function mount() {
 beforeEach(() => {
   localStorage.clear()
   __resetStreetMapsForTests()
+  bench.tauri = true
   bench.on = true
   bench.packs = []
   bench.webgl2 = true
@@ -138,12 +140,13 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-describe('the Street choice — hidden until its maps are hosted', () => {
-  it('is hidden from everyone while the manifest constant is empty and no bench asks for it', async () => {
-    expect(STREET_MAP_MANIFEST_URL, 'a URL here shows Street to every operator').toBe('')
+describe('the Street choice — offered once its maps are hosted', () => {
+  it('appears for every operator, no bench needed, last so the four keep their places', async () => {
+    expect(STREET_MAP_MANIFEST_URL, 'empty would hide Street from everyone').toBe('https://maps.hamradiotools.io/streetmaps.json')
     bench.on = false
     await mount()
-    expect(names()).toEqual(['Globe', '3D', 'Flat', 'Beam'])
+    expect(names()[4]).toMatch(new RegExp(`^${t('map.projection.street.label')}`))
+    expect(names().slice(0, 4)).toEqual(['Globe', '3D', 'Flat', 'Beam'])
   })
 
   it('appears last on a bench run (NEXUS_STREET_MAP=1), so the four keep their places', async () => {
@@ -220,8 +223,8 @@ describe('a stored Street pick that cannot draw shows Flat, says why, and keeps 
     expect(kept()).toBe('street')
   })
 
-  it('no longer offered here (the bench flag is gone)', async () => {
-    bench.on = false
+  it('not offered here (outside the desktop shell, as on the Remote page)', async () => {
+    bench.tauri = false
     bench.packs = [PACK]
     await mount()
     expect(await onScreen()).toBe('2d:world')
