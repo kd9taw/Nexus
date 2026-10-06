@@ -124,3 +124,25 @@ it('retains native Hunt, activation and import behavior as positive controls', a
     await screen.findByText(t('ota.hunted.have', { formatted: '77' }))
   } finally { window.__TAURI_INTERNALS__ = previous }
 })
+it('shows the state each activator is in from a station that sends it, lit while Worked All States still needs it', async () => {
+  const placed = page(), source = (placed.meta as { source: typeof fixture }).source
+  const [logged, imported, fresh] = source.feeds[0].spots
+  Object.assign(logged, { states: ['US-ND'], neededStates: ['US-ND'] })
+  Object.assign(imported, { states: ['US-MT', 'US-ND'], neededStates: [] })
+  for (const s of [fresh, ...source.feeds[1].spots]) Object.assign(s, { states: [], neededStates: [] })
+  const test = setup(vi.fn(async (): Promise<unknown> => placed))
+  await screen.findByText('Logged park')
+  const state = (name: string) => screen.getByText(name).closest('.pota-spot')!.querySelector('.pota-spot-state')
+  expect(state('Logged park')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('ND')
+  expect(state('Logged park')?.classList.contains('need-state')).toBe(true)
+  expect(state('Imported park')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('MT·ND')
+  expect(state('Imported park')?.classList.contains('need-state')).toBe(false)
+  expect(state('New park')).toBeNull()
+  expect(test.container.querySelectorAll('.pota-spot-state')).toHaveLength(2)
+})
+it('shows no state from a station that does not send one, and the board is otherwise the same', async () => {
+  const test = setup()
+  await screen.findByText('Logged park')
+  expect(test.container.querySelector('.pota-spot-state')).toBeNull()
+  expect(test.container.querySelectorAll('.pota-spot')).toHaveLength(3)
+})

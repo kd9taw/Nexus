@@ -44,3 +44,48 @@ it('refuses malformed, oversized, stale and falsely fresh observations', () => {
   }
   expect(() => parseOta({ ...page, meta: { capturedAgeMs: 60_000, source: fixture } })).toThrow()
 })
+/** A v18 station's board: each spot also says where the activator is and which of those states a
+ *  contact would add to Worked All States on the spot's band, as the desktop board's rows do. */
+function placed(states: string[][], needed: string[][]) {
+  const value = structuredClone(fixture)
+  value.feeds.forEach((feed, f) => feed.spots.forEach((s, i) => Object.assign(s, f ? { states: [], neededStates: [] } : { states: states[i] ?? [], neededStates: needed[i] ?? [] })))
+  return value
+}
+const parsePlaced = (value: unknown) => parseOta({ ...otaPage(), meta: { capturedAgeMs: 0, source: value } as QueryPage['meta'] })
+it('accepts each activator\'s states and the needed ones from a v18 station, and the board without them from an older one', () => {
+  const value = placed([['US-ND'], ['US-MT', 'US-ND'], ['CA-ON']], [['US-ND'], ['US-ND'], []])
+  expect(parsePlaced(value)).toEqual({ ...value, capturedAgeMs: 0 })
+  expect(parsePlaced(value).feeds[0].spots.map(s => [s.states, s.neededStates])).toEqual([[['US-ND'], ['US-ND']], [['US-MT', 'US-ND'], ['US-ND']], [['CA-ON'], []]])
+  // A station older than v18 sends neither key, and its board parses exactly as before.
+  expect(parseOta(otaPage())).toEqual({ ...fixture, capturedAgeMs: 0 })
+  expect(parseOta(otaPage()).feeds[0].spots.every(s => !('states' in s) && !('neededStates' in s))).toBe(true)
+})
+it('refuses a malformed state, a need outside the spot\'s states, either key alone, and every other key as before', () => {
+  const ok = () => placed([['US-MT', 'US-ND']], [['US-ND']])
+  expect(() => parsePlaced(ok())).not.toThrow()
+  type Spot = Record<string, unknown>
+  for (const mutate of [
+    (s: Spot) => { delete s.neededStates },
+    (s: Spot) => { delete s.states },
+    // Each with no need named, so the code alone is what is refused.
+    (s: Spot) => { s.states = 'US-ND'; s.neededStates = [] },
+    (s: Spot) => { s.states = null; s.neededStates = [] },
+    (s: Spot) => { s.states = ['ND']; s.neededStates = [] },
+    (s: Spot) => { s.states = ['us-nd']; s.neededStates = [] },
+    (s: Spot) => { s.states = ['US-NDX']; s.neededStates = [] },
+    (s: Spot) => { s.states = ['MX-SON']; s.neededStates = [] },
+    (s: Spot) => { s.states = [1]; s.neededStates = [] },
+    (s: Spot) => { s.states = Array(65).fill('US-ND'); s.neededStates = [] },
+    (s: Spot) => { s.neededStates = 'US-ND' },
+    (s: Spot) => { s.neededStates = ['US-WY'] },
+    (s: Spot) => { s.neededStates = ['US-ND', 'US-ND', 'US-ND'] },
+    (s: Spot) => { s.command = 'set_frequency' },
+    (s: Spot) => { s.statesNeeded = [] },
+  ]) {
+    const value = ok(); mutate(value.feeds[0].spots[0] as unknown as Spot)
+    expect(() => parsePlaced(value), String(mutate)).toThrow()
+  }
+  // The longest list there can be is every state, DC and every province: 64 codes.
+  const most = ok(); Object.assign(most.feeds[0].spots[0], { states: Array(64).fill('US-ND'), neededStates: [] })
+  expect(() => parsePlaced(most)).not.toThrow()
+})

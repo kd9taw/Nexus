@@ -11,14 +11,23 @@ function object(v: unknown, keys: string[]): Record<string, unknown> {
 }
 const program = (v: unknown) => v === 'POTA' || v === 'SOTA'
 const nullableText = (v: unknown) => v === null || text(v)
+/** The most places a spot can be in: the 50 states, DC and the 13 provinces and territories. */
+const MAX_STATES = 64
+const place = (v: unknown) => typeof v === 'string' && /^(US|CA)-[A-Z]{2}$/.test(v)
+const places = (states: unknown, needed: unknown) => Array.isArray(states) && states.length <= MAX_STATES && states.every(place) &&
+  Array.isArray(needed) && needed.length <= states.length && needed.every(c => states.includes(c))
 function spot(v: unknown, p: unknown): void {
-  const s = object(v, ['program', 'reference', 'name', 'activator', 'freqKhz', 'mode', 'spotter', 'comment', 'grid', 'lat', 'lon', 'spotTimeUnix', 'newPark', 'bandOpen'])
+  // A station that agreed v18 also says where the activator is and which of those states Worked All
+  // States still needs on the spot's band, as a pair; an older one sends neither key.
+  const placed = !!v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, 'states')
+  const s = object(v, ['program', 'reference', 'name', 'activator', 'freqKhz', 'mode', 'spotter', 'comment', 'grid', 'lat', 'lon', 'spotTimeUnix', 'newPark', 'bandOpen', ...(placed ? ['states', 'neededStates'] : [])])
   if (s.program !== p || ![s.reference, s.name, s.activator, s.mode].every(text) || !s.reference || !s.activator ||
     typeof s.freqKhz !== 'number' || !Number.isFinite(s.freqKhz) || s.freqKhz <= 0 || s.freqKhz > 1_000_000_000 ||
     ![s.spotter, s.comment, s.grid].every(nullableText) || (s.spotTimeUnix !== null && !integer(s.spotTimeUnix)) ||
     typeof s.newPark !== 'boolean' || typeof s.bandOpen !== 'boolean' ||
     (s.lat !== null && (typeof s.lat !== 'number' || !Number.isFinite(s.lat) || Math.abs(s.lat) > 90)) ||
-    (s.lon !== null && (typeof s.lon !== 'number' || !Number.isFinite(s.lon) || Math.abs(s.lon) > 180))) throw new Error('invalidOta')
+    (s.lon !== null && (typeof s.lon !== 'number' || !Number.isFinite(s.lon) || Math.abs(s.lon) > 180)) ||
+    (placed && !places(s.states, s.neededStates))) throw new Error('invalidOta')
 }
 export function parseOta(page: QueryPage): ObservedOta & { capturedAgeMs: number } {
   const meta = page.meta as Record<string, unknown> | null

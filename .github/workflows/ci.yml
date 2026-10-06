@@ -434,17 +434,17 @@ jobs:
   #
   # It was one step of 47.7 minutes inside a 50-minute job, which made `remote-web` the
   # workflow's second-longest job and, once the Rust job was split, would have been its
-  # critical path. The suite is 29 independent full-browser scenarios — 17 application
+  # critical path. The suite is 30 independent full-browser scenarios — 18 application
   # versions plus 12 feature scenarios, each doing PKCE, local device approval,
   # observation and viewport checks — and node:test runs tests within a file in series.
   #
-  # Nothing is skipped and no scenario was deleted. The shards PARTITION the same 29.
+  # Nothing is skipped and no scenario was deleted. The shards PARTITION the same 30.
   #
   # The count is stated LITERALLY below and must equal the matrix length. `strategy.job-total`
   # would derive it and was tried first, but `scripts/gates` cannot expand a runtime context,
   # so it marked the step BLOCKED and the sweep stopped running locally altogether. A literal
   # keeps it runnable here: gates expands `matrix.shard`, lists all three shards, and together
-  # they still run all 29 scenarios on this box.
+  # they still run all 30 scenarios on this box.
   #
   # Stating it twice is a desync risk, so it is GUARDED, not trusted:
   # `scripts/gates.test.mjs` asserts the matrix length equals the NEXUS_BROWSER_SHARDS this

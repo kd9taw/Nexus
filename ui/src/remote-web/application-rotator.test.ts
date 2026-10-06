@@ -17,7 +17,7 @@ const page = (source: unknown, over: Partial<QueryPage> = {}): QueryPage => ({ t
   rows: [], meta: { capturedAgeMs: 0, source } as QueryPage['meta'], ...over })
 
 it('adds exactly the rotator heading read to v17 while every older collection stays readable', () => {
-  expect(APPLICATION_VERSIONS[APPLICATION_VERSIONS.length - 1]).toBe(17)
+  expect(APPLICATION_VERSIONS).toContain(17)
   expect(applicationCommands(17)).toEqual([...applicationCommands(16), command])
   expect(applicationStreamVersion(17)).toBe(13)
   expect(applicationQueryVersion(17)).toBe(17)
@@ -34,13 +34,13 @@ it('adds exactly the rotator heading read to v17 while every older collection st
 })
 
 it('negotiates every station/browser pair and never sends the heading read to an older station', async () => {
-  for (let stationVersion = 1; stationVersion <= 17; stationVersion++) for (let browserVersion = 1; browserVersion <= 17; browserVersion++) {
+  for (let stationVersion = 1; stationVersion <= 18; stationVersion++) for (let browserVersion = 1; browserVersion <= 18; browserVersion++) {
     const station = peer(), browser = peer(), relay = new ApplicationRelay()
     relay.sync({ peer: station, version: stationVersion }, [{ sessionId: 'one', peer: browser }], 0)
     const client = new ApplicationClient(s => relay.receiveBrowser('one', JSON.parse(s), 0), vi.fn(), browserVersion)
     client.open(); client.receive(last(browser))
     expect(last(browser).version).toBe(Math.min(stationVersion, browserVersion))
-    const supported = stationVersion === 17 && browserVersion === 17
+    const supported = stationVersion >= 17 && browserVersion >= 17
     expect(client.supports(command)).toBe(supported)
     if (!supported) {
       await expect(client.invoke(command, args())).rejects.toThrow()

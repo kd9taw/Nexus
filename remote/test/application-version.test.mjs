@@ -27,6 +27,18 @@ const legacyNegotiated = headers => (
     : headers.get('x-nexus-application-stream-version') === '2' ? 2
     : ['1', '2'].includes(headers.get('x-nexus-application-version') ?? '') ? Number(headers.get('x-nexus-application-version')) : 0)
 const legacyKnown = version => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(version)
+// --- the rows added at the bottom since, each one rung above a complete ladder, as the table says ---
+const LATER = [['x-nexus-application-ota-states-version', '1']]
+const oracleNegotiated = headers => {
+  let version = legacyNegotiated(headers)
+  if (version !== 17) return version
+  for (const [header, pinned] of LATER) {
+    if (headers.get(header) !== pinned) break
+    version++
+  }
+  return version
+}
+const oracleKnown = version => legacyKnown(version) || (Number.isInteger(version) && version > 17 && version <= 17 + LATER.length)
 
 // The ladder as a station sends it, in order. Spelled out rather than read from the table so a
 // reordering or a renamed header is a test failure and not a silently redefined wire.
@@ -47,17 +59,18 @@ const LADDER = [
   ['x-nexus-application-lookups-version', '1'],
   ['x-nexus-application-alerts-version', '1'],
   ['x-nexus-application-rotator-version', '1'],
+  ['x-nexus-application-ota-states-version', '1'],
 ]
 const headersFrom = entries => new Headers(entries.filter(([, value]) => value !== undefined))
 const agree = (entries, expected, label) => {
   const request = headersFrom(entries)
-  assert.equal(legacyNegotiated(request), negotiatedApplicationVersion(request), `oracle disagrees: ${label}`)
+  assert.equal(oracleNegotiated(request), negotiatedApplicationVersion(request), `oracle disagrees: ${label}`)
   if (expected !== undefined) assert.equal(negotiatedApplicationVersion(request), expected, label)
 }
 
 test('the ladder table is the one the desktop sends, in order, and ends where /config says', () => {
   assert.deepEqual(APPLICATION_EXTENSIONS.map(row => [...row]), LADDER)
-  assert.equal(APPLICATION_VERSION, 17)
+  assert.equal(APPLICATION_VERSION, 18)
   assert.equal(APPLICATION_VERSION, LADDER.length + 1)
 })
 
@@ -96,11 +109,11 @@ test('the legacy header is the only value read as a number', () => {
     // The stream capability alone still advertises 2, whatever the legacy header says.
     agree([['x-nexus-application-version', value], LADDER[0]], 2, `legacy ${JSON.stringify(value)} + stream`)
     // ...and a full ladder overrides it entirely.
-    agree([['x-nexus-application-version', value], ...LADDER], 17, `legacy ${JSON.stringify(value)} + full ladder`)
+    agree([['x-nexus-application-version', value], ...LADDER], 18, `legacy ${JSON.stringify(value)} + full ladder`)
   }
 })
 
-test('the whole 3^16 header space agrees with the old ternary on a fixed pseudo-random sample', () => {
+test('the whole 3^17 header space agrees with the old ternary and the rows since on a fixed pseudo-random sample', () => {
   // Deterministic (mulberry32): a failure is reproducible, and a rerun cannot flake green.
   let seed = 0x9e3779b9
   const random = () => {
@@ -123,7 +136,7 @@ test('the whole 3^16 header space agrees with the old ternary on a fixed pseudo-
 
 test('a version carried back from an attachment is known exactly when the old literal said so', () => {
   for (const version of [-1, -0, 0, 0.5, 1, 1.5, 2, 9, 16, 17, 17.0001, 18, 99, NaN, Infinity, -Infinity]) {
-    assert.equal(knownApplicationVersion(version), legacyKnown(version), `knownApplicationVersion(${version})`)
+    assert.equal(knownApplicationVersion(version), oracleKnown(version), `knownApplicationVersion(${version})`)
   }
 })
 
@@ -133,5 +146,6 @@ test('the equivalence check can fail', () => {
   const full = headersFrom(LADDER), partial = headersFrom(LADDER.slice(0, 3))
   assert.notEqual(negotiatedApplicationVersion(full), negotiatedApplicationVersion(partial))
   assert.equal(legacyNegotiated(full), 17)
+  assert.equal(oracleNegotiated(full), 18)
   assert.equal(legacyNegotiated(partial), 4)
 })

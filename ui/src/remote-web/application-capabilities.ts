@@ -2,11 +2,11 @@ import { APPLICATION_COMMANDS } from './application-protocol'
 import { streamVocabulary } from './application-stream-protocol'
 import { ROTATOR_COMMAND, POUNCE_COMMAND, PARKS_COMMAND, CONFIRMATIONS_COMMAND, CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
 
-export const APPLICATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] as const
+export const APPLICATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] as const
 /** Instrument grammar changes only when a new live topic is negotiated. */
 export const applicationStreamVersion = (version: number): 2 | 5 | 11 | 12 | 13 => version >= 13 ? 13 : version >= 12 ? 12 : version >= 11 ? 11 : version >= 5 ? 5 : 2
 /** Query grammar revisions are independent of instrument-stream revisions. */
-export const applicationQueryVersion = (version: number): 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 => version >= 17 ? 17 : version >= 16 ? 16 : version >= 15 ? 15 : version >= 14 ? 14 : version >= 13 ? 13 : version >= 12 ? 12 : version >= 11 ? 11 : version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : version >= 7 ? 7 : version >= 6 ? 6 : version >= 4 ? 4 : 3
+export const applicationQueryVersion = (version: number): 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 => version >= 18 ? 18 : version >= 17 ? 17 : version >= 16 ? 16 : version >= 15 ? 15 : version >= 14 ? 14 : version >= 13 ? 13 : version >= 12 ? 12 : version >= 11 ? 11 : version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : version >= 7 ? 7 : version >= 6 ? 6 : version >= 4 ? 4 : 3
 /** Exact command set for each negotiated application version, shared by both ends. */
 export function applicationCommands(version: number): readonly string[] {
   if (version === 1) return APPLICATION_COMMANDS
@@ -25,5 +25,7 @@ export function applicationCommands(version: number): readonly string[] {
   if (version === 15) return [...applicationCommands(14), PARKS_COMMAND, CONFIRMATIONS_COMMAND]
   if (version === 16) return [...applicationCommands(15), POUNCE_COMMAND]
   if (version === 17) return [...applicationCommands(16), ROTATOR_COMMAND]
+  // No new command: from v18 the POTA/SOTA board's spots may carry each activator's state.
+  if (version === 18) return applicationCommands(17)
   return []
 }
