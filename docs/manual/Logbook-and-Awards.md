@@ -92,7 +92,7 @@ The Awards view includes a per-QSO confirmation diagnostics panel. It lists the 
 
 LoTW confirmation sync uses a two-pull flow that runs when you click Sync in the Awards or Logbook view:
 
-1. **Pull 1 — confirmations** (`qso_qsl=yes`): fetches new QSLs using the stored `APP_LoTW_LASTQSL` high-water timestamp as the `qso_qslsince` cursor, so only records newer than your last sync are downloaded. The cursor advances only after a successful fetch and only if your LoTW username has not changed during the fetch.
+1. **Pull 1 — confirmations** (`qso_qsl=yes`): fetches new QSLs using the stored `APP_LoTW_LASTQSL` high-water timestamp as the `qso_qslsince` cursor, so only records newer than your last sync are downloaded. With no cursor (the first sync, or after the LoTW username changes or the log is cleared) it asks for everything from 1900-01-01; leaving `qso_qslsince` out would make LoTW fall back to the account's last download by any program. The cursor advances only after a successful fetch and only if your LoTW username has not changed during the fetch.
 
 2. **Pull 2 — own-echo** (`qso_qsl=no`): fetches your own uploaded QSOs bounded by the oldest in-flight upload date, promoting Pending uploads to Accepted without scanning your entire logbook.
 
@@ -111,7 +111,7 @@ TQSL is auto-detected from OS default locations before falling back to `PATH`:
 
 You must install TQSL from the ARRL separately. Nexus does not bundle TQSL or manage Callsign Certificates. Upload is blocked until `lotw_station_location` is configured in Settings.
 
-**Confirmation reconciliation** matches LoTW records to your logged QSOs by call (case-insensitive) + band (case-insensitive) + mode class (CW / Phone / Digital — so FT8, MFSK, and TempoFast all match the same Digital slot) + UTC day with ±1 day tolerance for midnight-boundary clock skew between the two operators. Reconcile only ever adds confirmation credit, never revokes it. Unmatched LoTW records are reported as OrphanConfirmation diagnostics.
+**Confirmation reconciliation** matches LoTW records to your logged QSOs by call (case-insensitive) + band (case-insensitive) + mode class (CW / Phone / Digital — so FT8, MFSK, and TempoFast all match the same Digital slot) + time: each record goes on the logged contact nearest its time, and only on one within 30 minutes of it (the window LoTW itself matches in), across midnight too. Two records never go on one contact. A contact imported with no time of day matches by its UTC date (±1 day) instead. Reconcile only ever adds confirmation credit, never revokes it. Unmatched LoTW records, including one more than 30 minutes from every logged contact with that station, are reported as OrphanConfirmation diagnostics.
 
 ---
 
