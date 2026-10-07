@@ -33,7 +33,7 @@ import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailH
 import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
-import type { OtaBoard, SpotsFeed } from './connect/paneContext'
+import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
 import {
   SLOT_IDS,
   addableTo,
@@ -394,6 +394,9 @@ interface Props {
   /** The POTA/SOTA box's wiring: this window's POTA/SOTA board's (paneContext OtaBoard). Omitted ⇒
    *  its one-line state and no HUNT. */
   otaBoard?: OtaBoard
+  /** The Needed box's board: this window's Needed board, lent whole (paneContext NeededBoard). Omitted ⇒
+   *  its one-line state and no Work. */
+  neededBoard?: NeededBoard
   /** AUTO-ROTATE a slot's tabs (⋯ ▸ Rotate the tabs), offered and run only where the host says so:
    *  the dashboard window (DetachedPanel's Connect) and the TV page (ConnectTv), never the main
    *  window's Connect (the operator's pick, 2026-09-29: "Auto-rotating boxes on the dashboard/TV").
@@ -429,6 +432,7 @@ export function ConnectView({
   rigBand,
   spotsFeed,
   otaBoard,
+  neededBoard,
   autoRotate,
   showLocalClock,
   hostBar,
@@ -565,6 +569,7 @@ export function ConnectView({
       : null,
     spotsFeed,
     otaBoard,
+    neededBoard,
   })
   const { pathPred, bandOutlook, muf } = ctx
   // The one flux value the map renders (dev-override > fast lane > snapshot).

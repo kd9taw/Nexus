@@ -28,10 +28,10 @@
 // change to what the rig transmits, made from a display. So the rail's boxes keep a selection of
 // their OWN: it fills the rail's Selection and Outlook boxes and nothing else. ▶ Work stays — an
 // explicit "work this station", the path the boards and the Pounce banner already offer beside a
-// cockpit (it moves the rig and opens a cockpit; it keys nothing). The Spots and POTA/SOTA boxes are
-// the two boards themselves, and a row click on the Spots board is a select AND a Work: the select
-// is the rail's own here too, and the Work is the board's (the cockpit it opens then arms the
-// station it was handed, as after a Work from any board).
+// cockpit (it moves the rig and opens a cockpit; it keys nothing). The Spots, POTA/SOTA and Needed
+// boxes are the boards themselves, and a row click on the Spots or the Needed board is a select AND a
+// Work: the select is the rail's own here too, and the Work is the board's (the cockpit it opens then
+// arms the station it was handed, as after a Work from any board).
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
 import { Fragment, createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -43,7 +43,7 @@ import { t } from '../i18n'
 import { PaneFrame } from './connect/PaneFrame'
 import { paneById } from './connect/panes'
 import { resolveSelection, usePaneContext } from './connect/usePaneContext'
-import type { OtaBoard, PaneContext, SpotsFeed } from './connect/paneContext'
+import type { NeededBoard, OtaBoard, PaneContext, SpotsFeed } from './connect/paneContext'
 import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -86,10 +86,12 @@ export interface DashRailProps {
   rigBand?: string | null
   onWorkSpot?: PaneContext['onWorkSpot']
   onPoint?: (call: string) => void
-  /** The window's Spots board and its feed, and the POTA/SOTA board's hunt wiring, lent to the rail's
-   *  Spots and POTA/SOTA boxes as Connect's are (connect/paneContext). Absent ⇒ their one line. */
+  /** The window's Spots board and its feed, the POTA/SOTA board's hunt wiring and the Needed board, lent
+   *  to the rail's Spots, POTA/SOTA and Needed boxes as Connect's are (connect/paneContext). Absent ⇒
+   *  their one line. */
   spotsFeed?: SpotsFeed
   otaBoard?: OtaBoard
+  neededBoard?: NeededBoard
   /** Turn the rail off for this section: its ✕, and the crash panel's way out. */
   onHide: () => void
   /** The UI scale, so a zoom change re-fits the width (usePaneWidths' reason). */
@@ -205,12 +207,13 @@ function DashRailBody(p: DashRailProps) {
     () => resolveSelection(selectedCall, p.stations, p.prop),
     [selectedCall, p.stations, p.prop],
   )
-  // The Spots board with the rail's selection in place of the app's (see the header): its Work is
-  // the board's own.
+  // The Spots and Needed boards with the rail's selection in place of the app's (see the header):
+  // their Work is the board's own.
   const spotsFeed = p.spotsFeed && {
     rows: p.spotsFeed.rows,
     board: { ...p.spotsFeed.board, selectedCall, onSelect: setSelectedCall },
   }
+  const neededBoard = p.neededBoard && { ...p.neededBoard, selectedCall, onSelect: setSelectedCall }
   const { ctx } = usePaneContext({
     myGrid: p.myGrid,
     theme: p.theme,
@@ -230,6 +233,7 @@ function DashRailBody(p: DashRailProps) {
     remote: null,
     spotsFeed,
     otaBoard: p.otaBoard,
+    neededBoard,
   })
   const frames = useMemo(
     () => Object.fromEntries(DASH_SLOT_IDS.map((s) => [s, createRef<HTMLElement>()])) as Record<DashSlotId, RefObject<HTMLElement>>,

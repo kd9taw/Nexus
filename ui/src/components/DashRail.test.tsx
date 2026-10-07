@@ -7,7 +7,7 @@
 // cockpits (off by default, per section, the doors, the stop line) is App.dashRail.test.tsx.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { AppSnapshot, OtaSpot, PropagationSnapshot, SpotRow } from '../types'
+import type { AppSnapshot, NeedAlert, OtaSpot, PropagationSnapshot, SpotRow } from '../types'
 
 // The boards the window lends the Spots and POTA/SOTA boxes, so the sweep reads their controls too.
 // No call or comment here carries a standalone "CQ" or "TX": a row's accessible name can carry its
@@ -92,6 +92,11 @@ const SPOT = {
   spotter: 'W3LPL', corroborators: [], ageSecs: 30, comment: 'up 1', licensed: true, spotterLocal: true,
 } as unknown as SpotRow
 
+const NEED = {
+  call: 'K1CW', entity: 'United States', band: '20m', zone: 5, tags: ['NewBand'], priority: 50,
+  headline: 'New band — United States 20m', mode: 'CW', freqMhz: 14.025,
+} as unknown as NeedAlert
+
 const props = (over: Partial<Parameters<typeof DashRail>[0]> = {}) => ({
   section: 'operate',
   myGrid: 'EN52',
@@ -101,6 +106,7 @@ const props = (over: Partial<Parameters<typeof DashRail>[0]> = {}) => ({
   needByCall: new Map(),
   spotsFeed: { rows: [SPOT], board: { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: vi.fn(), onWork: vi.fn() } },
   otaBoard: { snap: APP_SNAPSHOT as unknown as AppSnapshot, onHunt: vi.fn(), onSnap: vi.fn() },
+  neededBoard: { alerts: [NEED], bandPlan: [], selectedCall: null, myGrid: 'EN52', onQsy: vi.fn(), onSelect: vi.fn(), onWork: vi.fn() },
   onHide: vi.fn(),
   ...over,
 })
@@ -164,7 +170,7 @@ describe('the rail renders no transmit control, whichever box is in which slot',
   const controls = (name?: RegExp) =>
     ROLES.flatMap((role) => within(rail()).queryAllByRole(role, name ? { name } : undefined))
 
-  // All 28 boxes, four at a time: every one of them sits in the rail once.
+  // Every box, four at a time: each of them sits in the rail once, the boards with their wiring lent.
   const groups: string[][] = []
   for (let i = 0; i < PANE_IDS.length; i += 4) groups.push([...PANE_IDS.slice(i, i + 4)])
 
@@ -192,6 +198,26 @@ describe('the rail renders no transmit control, whichever box is in which slot',
     if (group.includes('rotor')) {
       await waitFor(() => expect(within(rail()).queryAllByRole('button', { name: STOP }).length).toBeGreaterThan(0))
     }
+  })
+})
+
+describe('the Needed box beside a cockpit', () => {
+  it('keeps the rail’s own selection: a row’s select stays in the rail, and its Work is the board’s', async () => {
+    localStorage.setItem(
+      'nexus.dashrail.config',
+      JSON.stringify({ slots: { rail1: 'clock', rail2: 'needed', rail3: 'spacewx', rail4: 'getout' } }),
+    )
+    const p = props()
+    render(<DashRail {...p} />)
+    await act(async () => {})
+    const row = [...rail().querySelectorAll<HTMLElement>('[data-pane="needed"] .np-row')].find((r) =>
+      r.querySelector('.np-call')?.textContent?.includes('K1CW'),
+    )
+    expect(row, 'the rail’s Needed box does not list the need').toBeTruthy()
+    fireEvent.click(row!)
+    expect(p.neededBoard.onSelect, 'the click used the app-wide select, which a CW macro sends').not.toHaveBeenCalled()
+    expect(p.neededBoard.onWork).toHaveBeenCalledWith(NEED)
+    expect(row!.classList.contains('selected'), 'the rail’s own selection marks the row').toBe(true)
   })
 })
 

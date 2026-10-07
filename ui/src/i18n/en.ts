@@ -8046,6 +8046,8 @@ export const EN = {
   'connect.pane.spots.title': 'Spots',
   'connect.pane.spots.basic': "The spot list isn't available on this screen.",
   'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
+  'connect.pane.needed.title': 'Needed',
+  'connect.pane.needed.basic': "The Needed list isn't available on this screen.",
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',

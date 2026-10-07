@@ -2876,9 +2876,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
 
   // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below, by the
-  // Phone and CW cockpits' Spots and Needed panes (#345) and by Connect's Spots box — so a pane or
-  // a box can never be wired differently from its view, and working a row from one is the view's
-  // own act.
+  // Phone and CW cockpits' Spots and Needed panes (#345) and by the Spots and Needed boxes on Connect
+  // and in the rail — so a pane or a box can never be wired differently from its view, and working a
+  // row from one is the view's own act.
   const spotsBoard = {
     bandPlan,
     selectedCall: activePeer,
@@ -3173,12 +3173,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
-          // The Spots and POTA/SOTA boxes are the two boards themselves: the Spots view's own
-          // `spotsBoard` and feed, and the POTA/SOTA view's own hunt wiring, handed over whole so
-          // a Work or a HUNT from a box is the view's act. A browser's POTA/SOTA board is
-          // RemoteOta, a different surface, so a browser's box gets no hunt wiring (its one line).
+          // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
+          // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
+          // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A
+          // browser's POTA/SOTA board is RemoteOta, a different surface, so a browser's box gets no
+          // hunt wiring (its one line); and the Needed box is the desktop's for now (2026-10-07).
           spotsFeed={{ rows: allSpots, board: spotsBoard }}
           otaBoard={remote ? undefined : { snap, onHunt: handleHuntSpot, onSnap: setSnap }}
+          neededBoard={remote ? undefined : neededBoard}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
@@ -3776,10 +3778,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             rigBand={snap.radio.band ?? null}
             onWorkSpot={handleWorkMapSpot}
             onPoint={(settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
-            // The Spots and POTA/SOTA boxes are the two boards themselves, lent as they are to
-            // Connect (the rail never stands on the Remote page, so the hunt wiring is always native).
+            // The Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they are to
+            // Connect (the rail never stands on the Remote page, so their wiring is always native).
             spotsFeed={{ rows: allSpots, board: spotsBoard }}
             otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
+            neededBoard={neededBoard}
             onHide={() => setRailOn(railSection, false)}
             scale={scale}
           />

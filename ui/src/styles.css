@@ -18577,6 +18577,20 @@ button.cq-skiptx1.on {
 .cn-spots[data-fit='s'] [data-col='comment'] {
   display: none;
 }
+/* ── THE NEEDED BOARD AS A CONNECT BOX (components/connect/NeededBox.tsx) ─────────────────
+   The same board as a pane (`.np-board`, above), in a Connect slot or in the dashboard rail, under the
+   Spots box's first rule and for its reason. Measured in Chrome (2026-10-07): with the pane's zero-
+   basis grid, the rail's Needed box was 2 px of list, drawing its count and its Filter button and no
+   row at all. So the board takes its natural height, the pane body scrolls it, and the grid is no
+   scroller of its own (its sticky column headings stick to the pane body). Its columns stay the
+   pane's, so a box narrower than they are scrolls sideways inside its own body. */
+.cn-needed .np-board,
+.cn-needed .np-board > .np-grid {
+  flex: none;
+}
+.cn-needed .np-board > .np-grid {
+  overflow: visible;
+}
 .sp-state {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;

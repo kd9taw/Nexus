@@ -5327,6 +5327,8 @@ export const DE: PartialCatalog = {
   "connect.pane.spots.title": "Spots",
   "connect.pane.spots.basic": "Die Spot-Liste ist auf diesem Bildschirm nicht verfügbar.",
   "connect.pane.pota.basic": "Die POTA/SOTA-Liste ist auf diesem Bildschirm nicht verfügbar.",
+  "connect.pane.needed.title": "Benötigt",
+  "connect.pane.needed.basic": "Die Liste „Benötigt“ ist auf diesem Bildschirm nicht verfügbar.",
   "connect.prov.title": "Datenherkunft",
   "connect.prov.live": "LIVE",
   "connect.prov.partial": "TEILWEISE",

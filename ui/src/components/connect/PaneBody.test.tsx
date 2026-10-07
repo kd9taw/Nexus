@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import type { AppSnapshot, OtaSpot, SpotRow } from '../../types'
+import type { AppSnapshot, NeedAlert, OtaSpot, SpotRow } from '../../types'
 
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -61,7 +61,7 @@ const SPOT = {
   spotter: 'W3LPL', corroborators: [], ageSecs: 30, comment: 'up 1', licensed: true, spotterLocal: true,
 } as unknown as SpotRow
 
-const BOARDS = ['spots', 'pota'] as const satisfies readonly PaneId[]
+const BOARDS = ['spots', 'pota', 'needed'] as const satisfies readonly PaneId[]
 
 /** What `node` draws on its own, settled. */
 async function drawn(node: ReactNode): Promise<string> {
@@ -88,7 +88,7 @@ describe('PaneBody — the body of every shared box', () => {
       }
     }
     // Both halves were read: some boxes fell back (the boards among them, with nothing lent) and some did not.
-    expect(fellBack).toEqual(expect.arrayContaining(['spotsBoard', 'pota']))
+    expect(fellBack).toEqual(expect.arrayContaining(['spotsBoard', 'pota', 'neededBoard']))
     expect(fellBack.length, 'every box fell back: the panel half was never read').toBeLessThan(SHARED_PANES.length)
     // CONTROL: something that is no box draws nothing.
     expect(await drawn(<PaneBody pane={'nothing' as PaneId} ctx={ctx()} />)).toBe('')
@@ -98,6 +98,10 @@ describe('PaneBody — the body of every shared box', () => {
     const lent = ctx({
       spotsFeed: { rows: [SPOT], board: { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: () => {}, onWork: () => {} } },
       otaBoard: { snap: { hunt: null, radio: { dialMhz: 14.285 }, logTick: 1 } as unknown as AppSnapshot, onHunt: () => {}, onSnap: () => {} },
+      neededBoard: {
+        alerts: [{ call: 'K1CW', entity: 'United States', band: '20m', zone: 5, tags: ['NewBand'], priority: 50, headline: 'New band', mode: 'CW', freqMhz: 14.025 } as NeedAlert],
+        bandPlan: [], selectedCall: null, myGrid: 'EN52', onQsy: () => {}, onSelect: () => {}, onWork: () => {},
+      },
     })
     for (const pane of BOARDS) {
       const { container, unmount } = render(<PaneBody pane={pane} ctx={lent} />)

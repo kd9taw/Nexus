@@ -58,6 +58,9 @@ export const PER_SURFACE = [
   'nexus.connect.ota.program',
   'nexus.connect.ota.sortAsc',
   'nexus.connect.ota.sortKey',
+  // …and its Needed box (connect/NeededBox) keeps its own copy of the Needed board's filters, for the same
+  // reason: a chip in the box never moves the Needed view's `neededFilters`, nor a cockpit pane's.
+  'nexus.connect.neededFilters',
   'nexus.connect.map3d',
   // The map's full-screen chrome-hide. Per-surface for the same reason map3d is — it is a
   // statement about ONE window — and the one per-surface key here that is deliberately read
@@ -426,8 +429,14 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.logbook.globe',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
-  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8).
-  'components/NeededPanel.tsx:key': ['neededFilters', 'nexus.phone.neededFilters', 'nexus.cw.neededFilters'],
+  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8, and the
+  // Conditions and rail box's, connect/NeededBox).
+  'components/NeededPanel.tsx:key': [
+    'neededFilters',
+    'nexus.phone.neededFilters',
+    'nexus.cw.neededFilters',
+    'nexus.connect.neededFilters',
+  ],
   // The POTA/SOTA board's filters, read and written through its key table (OTA_KEYS): the view's
   // own six, or the Connect box's six.
   'components/PotaSotaView.tsx:keys': [

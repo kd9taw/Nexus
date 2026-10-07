@@ -206,6 +206,8 @@ const MIGRATED = [
   'features/dxpedAlarm.ts',
   'features/chaseFeed.ts',
   'features/shareCard.ts',
+  // The POTA/SOTA lists' failed-fetch toast, said once a window now that the lists are feeds here.
+  'features/connectFeeds.ts',
   'components/prop/ActivityMatrix.tsx',
   'components/prop/BandAdvisor.tsx',
   'components/prop/BandConditionStrip.tsx',
@@ -377,6 +379,7 @@ const MIGRATED = [
   'components/connect/paneFormat.ts',
   // Connect's Spots box (plan H8), born migrated: its one status line is the Phone pane's own.
   'components/connect/SpotsBox.tsx',
+  'components/connect/NeededBox.tsx',
   'components/Conversation.tsx',
   'components/Composer.tsx',
   'components/MessageBubble.tsx',

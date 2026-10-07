@@ -10,9 +10,9 @@
 // WHAT AN ENTRY CARRIES
 //   · `id` — its name beside a cockpit's own panes: what a box records that it shows. It is its
 //     Conditions id, except where a cockpit already uses that id for a pane of its own: Band Scope
-//     (`scope` is every cockpit's spectrum strip), Activity Matrix (`activity` is JS8's decode window)
-//     and Spots (`spots` is Phone's and CW's own Spots pane). A box recording one of those would read
-//     as that cockpit's pane, so those three have names of their own.
+//     (`scope` is every cockpit's spectrum strip), Activity Matrix (`activity` is JS8's decode window),
+//     and Spots and Needed (`spots` and `needed` are Phone's and CW's own Spots and Needed panes). A box
+//     recording one of those would read as that cockpit's pane, so those four have names of their own.
 //   · `pane` — the Conditions box it is. Its title, its body, its one-line state and its group in a
 //     picker (`category`) are the registry's (components/connect/panes), so there is one grouping.
 //   · `role` — how it shares a column, the cockpit pane frame's two roles: `content` is exactly its own
@@ -80,4 +80,6 @@ export const SHARED_PANES: readonly SharedPane[] = [
   { id: 'clock', pane: 'clock', role: 'content', remote: true },
   { id: 'spotsBoard', pane: 'spots', role: 'fill', weight: 1, remote: true },
   { id: 'pota', pane: 'pota', role: 'fill', weight: 1, remote: false },
+  // The hosted page has the station's needs (its `needs` collection), as Phone's own Needed pane shows.
+  { id: 'neededBoard', pane: 'needed', role: 'fill', weight: 1, remote: true },
 ]

@@ -249,9 +249,9 @@ on a large window, about 1600 px wide at your zoom (a 1366×768 laptop at its us
 qualifies), and the cockpit beside it is never narrower than it is on a 1024×768 screen, so a
 saved width is trimmed to fit. On a smaller window the rail stays hidden, and the ⊞ Panels entry
 keeps your choice and says why. The rail has no transmit control, and clicking a station in it
-selects that station in the rail only, never the station your cockpit is working. A **Spots** or
-**POTA / SOTA** box works a spot there as it does on Conditions: a click on a spot, or on **HUNT**,
-moves the radio to the station and opens its screen. Nothing transmits. The rail reads the
+selects that station in the rail only, never the station your cockpit is working. A **Spots**,
+**Needed** or **POTA / SOTA** box works a station there as it does on Conditions: a click on a spot
+or a need, or on **HUNT**, moves the radio to the station and opens its screen. Nothing transmits. The rail reads the
 same live data Conditions does, and within a window the two share each request, so nothing is
 fetched twice.
 
@@ -287,14 +287,18 @@ The panes you can assign:
 | Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
 | Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |
 | POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
+| Needed | the [Needed](needed-dx.md) board's list of the stations you still need that are on the air now, with its filters; a click works the station exactly as it does there |
 
-The **Spots** and **POTA / SOTA** boxes are those screens' own lists, so a click on a spot or on
-**HUNT** does what it does there, and nothing transmits. In Conditions' own window (**⧉ Pop out**)
-they work the same way, through that window's own Needed and POTA/SOTA boards, and the main
-window follows to the screen the station needs. Each box keeps its own filters, apart from
+The **Spots**, **Needed** and **POTA / SOTA** boxes are those screens' own lists, so a click on a
+spot, a need or **HUNT** does what it does there, and nothing transmits. In Conditions' own window
+(**⧉ Pop out**) they work the same way, through that window's own Needed and POTA/SOTA boards, and
+the main window follows to the screen the station needs. Each box keeps its own filters, apart from
 the screen's. In a narrow box the Spots list shows the call, the frequency and the mode, adds the
 age, the country and the comment as the box widens, and shows every column from about 640 px;
-the list scrolls inside the box. The wall display (the TV page) shows no spot list, and each box says so there.
+the list scrolls inside the box. The Needed list keeps all its columns and, in a box narrower than
+they are (about 315 px), scrolls sideways inside the box. The wall display (the TV page) shows no
+spot or need list, and each box says so there; so does the Needed box on Nexus Remote. However
+many POTA / SOTA lists a window shows, it fetches them once a minute between them.
 
 The default layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,

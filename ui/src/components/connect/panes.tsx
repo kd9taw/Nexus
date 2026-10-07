@@ -14,7 +14,7 @@
 // distances, SNR, CQ zones, grids, the `P.533` recommendation number, and every word the
 // BACKEND sends (the advisory headline and its banners, the workability, the window text).
 // No transmit control renders on any of these panes — ▶ Work moves the rig and opens a
-// cockpit; it keys nothing. The Spots and POTA/SOTA boxes are the two boards themselves, and
+// cockpit; it keys nothing. The Spots, POTA/SOTA and Needed boxes are the boards themselves, and
 // their Work and HUNT are the boards' own (the window lends its wiring through the context).
 import type { ReactNode } from 'react'
 import { t } from '../../i18n'
@@ -54,6 +54,7 @@ import { MeasuredMuf } from '../prop/MeasuredMuf'
 import { PotaSotaView } from '../PotaSotaView'
 import { ageLabel } from '../SpotsPanel'
 import { SpotsBox } from './SpotsBox'
+import { NeededBox } from './NeededBox'
 import {
   NEED_CHIP,
   dxpedWorkMode,
@@ -756,6 +757,17 @@ export const PANES: PaneDef[] = [
       c.otaBoard ? (
         <PotaSotaView snap={c.otaBoard.snap} onHunt={c.otaBoard.onHunt} onSnap={c.otaBoard.onSnap} pane />
       ) : null,
+  },
+  {
+    // THE NEEDED BOX — the Needed board itself, with the window's own Needed wiring (NeededBox). In the
+    // Spots and POTA/SOTA boxes' group. A window with none to lend gets the Basic line, and no Work.
+    id: 'needed',
+    get title() {
+      return t('connect.pane.needed.title')
+    },
+    category: 'activity',
+    basic: () => t('connect.pane.needed.basic'),
+    expert: (c) => (c.neededBoard ? <NeededBox board={c.neededBoard} /> : null),
   },
 ]
 

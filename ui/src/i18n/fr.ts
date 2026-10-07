@@ -1176,6 +1176,8 @@ export const FR: PartialCatalog = {
   "connect.pane.spots.title": "Spots",
   "connect.pane.spots.basic": "La liste des spots n'est pas disponible sur cet écran.",
   "connect.pane.pota.basic": "La liste POTA/SOTA n'est pas disponible sur cet écran.",
+  "connect.pane.needed.title": "Manquants",
+  "connect.pane.needed.basic": "La liste des manquants n'est pas disponible sur cet écran.",
   "connect.pane.contests.title": "Concours",
   "connect.pane.clock.title": "Horloge",
   "connect.pane.esNowcast.title": "E sporadique",

@@ -5,6 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
+  **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
+  its own, and a click works the station as it does on the Needed screen, moving the radio and
+  opening its cockpit. Nothing transmits. Beside a cockpit, a click selects the station in the rail
+  only, never the station your cockpit is working. In a box narrower than its columns the list
+  scrolls sideways inside the box. On Nexus Remote the box says the list is not available there.
+
+### Changed
+
+- **POTA/SOTA: one fetch a minute per window, however many lists show it.** The POTA/SOTA screen, a
+  Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
+  themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
+  of them, and a failed fetch says so once.
+
 ## [1.17.0] — 2026-10-07
 
 ### Added

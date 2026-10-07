@@ -226,7 +226,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function boot(view: 'connect' | 'spots' | 'pota') {
+async function boot(view: 'connect' | 'spots' | 'pota' | 'needed') {
   window.location.hash = `#${view}`
   const r = render(<App />)
   await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull())
@@ -314,6 +314,59 @@ describe('the Spots box works a spot exactly as the Spots screen does', () => {
         expect(keyed(calls), `${box ? 'the box' : 'the board'} working ${call}`).toEqual([])
       }
     }, BUDGET)
+})
+
+describe('the Needed box works a need exactly as the Needed screen does', () => {
+  const K1CW_NEED = {
+    call: 'K1CW', entity: 'United States', band: '20m', zone: 5, tags: ['NewBand'], priority: 50,
+    headline: 'New band — United States 20m', mode: 'CW', freqMhz: 14.025,
+  }
+  async function workNeedRow(box: boolean) {
+    // Connect with the Needed box in the bottom row, in place of the Openings box.
+    localStorage.setItem(
+      'nexus.connect.config',
+      JSON.stringify({
+        slots: { left1: 'spots', left2: 'bandTiles', right1: 'pota', right2: 'outlook', bottom1: 'needed', bottom2: 'spacewx', bottom3: 'getout' },
+        overlays: {},
+      }),
+    )
+    const r = await boot(box ? 'connect' : 'needed')
+    const root = () => (box ? (document.querySelector('.pane-frame[data-pane="needed"]') as HTMLElement | null) : document.body)
+    const row = await waitFor(() => {
+      const x = [...(root()?.querySelectorAll<HTMLElement>('.np-row:not(.np-header)') ?? [])].find((el) =>
+        el.querySelector('.np-call')?.textContent?.startsWith('K1CW'),
+      )
+      if (!x) throw new Error(box ? 'the Needed box does not list the need' : 'the Needed screen does not list the need')
+      return x
+    })
+    clearMocks()
+    fireEvent.click(row)
+    await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
+    await settled()
+    const out = { calls: toEntry(traffic()), view: localStorage.getItem('nexus.view') }
+    r.unmount()
+    cleanup()
+    return out
+  }
+
+  it("reaches the board's own path: the same backend call, the same cockpit, and transmits nothing", async () => {
+    vi.mocked(api.getNeedAlerts).mockResolvedValue([K1CW_NEED] as unknown as Awaited<ReturnType<typeof api.getNeedAlerts>>)
+    try {
+      const fromBox = await workNeedRow(true)
+      const fromBoard = await workNeedRow(false)
+      expect(theWork(fromBox.calls)).toEqual([
+        ['selectPeer', ['K1CW']],
+        ['workSpot', ['cw', 14.025, '20m', 'K1CW', undefined]],
+      ])
+      expect(writes(fromBox.calls), 'the box asked for exactly what the board asks for').toEqual(writes(fromBoard.calls))
+      expect(fromBox.view, 'the box opens the cockpit the board opens').toBe('cw')
+      expect(fromBoard.view).toBe('cw')
+      expect(keyed(fromBox.calls), 'a Work from the box').toEqual([])
+      expect(keyed(fromBoard.calls), 'a Work from the board').toEqual([])
+    } finally {
+      vi.mocked(api.getNeedAlerts).mockImplementation(async () => [])
+    }
+  }, BUDGET)
 })
 
 describe('the POTA/SOTA box hunts exactly as the POTA/SOTA screen does', () => {

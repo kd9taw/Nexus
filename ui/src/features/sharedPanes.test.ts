@@ -55,14 +55,16 @@ describe('the shared list', () => {
     expect(problems(SHARED_PANES)).toEqual([])
   })
 
-  it('keeps its Conditions id, except the three that a cockpit already uses for something of its own', () => {
-    // `scope` is every cockpit's spectrum strip, `activity` JS8's decode window and `spots` Phone's and
-    // CW's own Spots pane: a box recording one of those would read as that cockpit's pane.
+  it('keeps its Conditions id, except the four that a cockpit already uses for something of its own', () => {
+    // `scope` is every cockpit's spectrum strip, `activity` JS8's decode window, and `spots` and `needed`
+    // Phone's and CW's own Spots and Needed panes: a box recording one of those would read as that
+    // cockpit's pane.
     const renamed = SHARED_PANES.filter((e) => e.id !== e.pane).map((e) => [e.pane, e.id])
     expect(renamed).toEqual([
       ['activity', 'activityMatrix'],
       ['scope', 'bandScope'],
       ['spots', 'spotsBoard'],
+      ['needed', 'neededBoard'],
     ])
   })
 

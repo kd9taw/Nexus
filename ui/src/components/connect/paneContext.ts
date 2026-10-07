@@ -6,6 +6,7 @@ import type { LatLon } from '../../grid'
 import type { Units } from '../../units'
 import type { MapIntent } from '../MapView'
 import type { SpotsPanelProps } from '../SpotsPanel'
+import type { NeededPanelProps } from '../NeededPanel'
 import type { OtaSpotClickArg } from '../PotaSotaView'
 import type {
   AlertView,
@@ -32,6 +33,10 @@ export interface SpotsFeed {
   rows: SpotRow[]
   board: Omit<SpotsPanelProps, 'spots' | 'pane'>
 }
+
+/** The Needed board as its window has it: App's `neededBoard`, the object the Needed view and the Phone
+ *  and CW cockpits' Needed panes get (its rows are in it). A box gives it a filter record of its own. */
+export type NeededBoard = Omit<NeededPanelProps, 'pane' | 'onPopOut'>
 
 /** The POTA/SOTA board's wiring as its window has it — what the POTA/SOTA view is given. */
 export interface OtaBoard {
@@ -95,6 +100,9 @@ export interface PaneContext {
   /** The POTA/SOTA box's wiring, exactly the POTA/SOTA board's (OtaBoard). Absent ⇒ its one-line
    *  state and no HUNT, as above. */
   otaBoard?: OtaBoard
+  /** The Needed box's board, exactly the Needed board's (NeededBoard). Absent ⇒ its one-line state and
+   *  no Work: the wall display, and the hosted Remote page (the desktop first, 2026-10-07). */
+  neededBoard?: NeededBoard
   // callbacks
   onSelectCall: (call: string | null) => void
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void

@@ -5052,6 +5052,8 @@ export const JA: PartialCatalog = {
   "connect.pane.spots.title": "スポット",
   "connect.pane.spots.basic": "この画面ではスポット一覧を表示できません。",
   "connect.pane.pota.basic": "この画面ではPOTA/SOTA一覧を表示できません。",
+  "connect.pane.needed.title": "未交信",
+  "connect.pane.needed.basic": "この画面では未交信一覧を表示できません。",
   "connect.prov.title": "データの出所",
   "connect.prov.live": "LIVE",
   "connect.prov.partial": "一部",
