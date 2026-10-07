@@ -64,6 +64,19 @@ const NEVER_IMPORT: readonly string[] = [
   // betas simply stop arriving and nobody finds out. (The backend keeps the same value across a
   // payload that omits the key; this is the other half — a payload that carries a STALE one.)
   'betaUpdates',
+  // The LOGBOOK UPLOAD SWITCHES, every one under Settings ▸ Logging & Connectors ▸ Confirmations
+  // (#396; the operator's ruling: profiles never touch them). Where your contacts are sent is not
+  // part of a station. Left importable, loading a profile saved while QRZ upload was on turned it
+  // back on after the operator had switched it off and forgotten the key, and every contact went
+  // to QRZ before it could be corrected; a profile saved before an upload was set up switched it
+  // off just as quietly. A new connector's upload switch joins this list.
+  'qrzLogbookUpload',
+  'clublogUpload',
+  'eqslUpload',
+  'hrdlogUpload',
+  'wrlUpload',
+  'cloudlogUpload',
+  'lotwAutoUpload',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.

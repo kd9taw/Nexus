@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   within about a second, because Nexus reads the radio's PTT once a second. One gap is left: while
   Nexus plays a recorded voice message or an APRS packet, and during the last word of a CW message,
   the shared address still reads receive.
+- **Loading a profile no longer switches your logbook uploads back on, or off (#396).** A profile
+  (Settings ▸ Radio ▸ Profiles) carried the automatic upload switches for QRZ, ClubLog, eQSL,
+  HRDLog.net, World Radio League, Cloudlog/Wavelog and LoTW. Load one saved while QRZ upload was on
+  and it came back on after you had switched it off, and your contacts went to QRZ before you could
+  correct them; load one saved before you set up an upload and that upload quietly stopped. Loading
+  a profile now leaves every upload switch as you last set it, as it already left your callsign and
+  licence class.
 
 ## [1.17.0] — 2026-10-07
 

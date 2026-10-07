@@ -198,3 +198,38 @@ describe('mergeProfile — the beta-channel opt-in never imports', () => {
     expect(merged.band).toBe('40m')
   })
 })
+
+// #396, and the operator's ruling: a profile never touches a logbook upload switch. A profile is
+// the station (rig, antenna, CAT, bands), and where your contacts are sent is not part of it.
+// Left importable, loading a profile saved while QRZ upload was on turned it back on after the
+// operator had switched it off and forgotten the key, so every contact went to QRZ before it
+// could be corrected. The other direction is as quiet: a profile saved before an upload was set
+// up switched it off again, and contacts stopped arriving with no error.
+describe('mergeProfile — the logbook upload switches never import', () => {
+  it('a profile saved with QRZ upload on leaves the current switch off (#396)', () => {
+    const current = { mycall: 'KD9TAW', qrzLogbookUpload: false, band: '20m' } as unknown as Settings
+    const saved = { qrzLogbookUpload: true, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+    expect(merged.qrzLogbookUpload).toBe(false)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
+  // Every upload switch under Settings ▸ Logging & Connectors ▸ Confirmations, both ways round.
+  it.each([
+    'qrzLogbookUpload',
+    'clublogUpload',
+    'eqslUpload',
+    'hrdlogUpload',
+    'wrlUpload',
+    'cloudlogUpload',
+    'lotwAutoUpload',
+  ])('%s keeps its current value, on or off', (key) => {
+    for (const now of [true, false]) {
+      const current = { mycall: 'KD9TAW', [key]: now, band: '20m' } as unknown as Settings
+      const saved = { [key]: !now, band: '40m' } as unknown as Settings
+      const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+      expect(merged[key]).toBe(now)
+      expect(merged.band).toBe('40m')
+    }
+  })
+})
