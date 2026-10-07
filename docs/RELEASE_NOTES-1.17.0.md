@@ -218,7 +218,7 @@ phone the stream has a layout of its own.
   opens the Remote page in a Nexus window of its own. F11 is full screen, and Esc over the picture
   still stops transmitting.
 - Streaming is still in Beta and off by default (Windows). The older watch-and-control page stays
-  hidden while it is; its POTA/SOTA board shows the states too.
+  hidden while it is.
 
 ## FlexRadio
 
