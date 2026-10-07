@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and it came back on after you had switched it off, and your contacts went to QRZ before you could
   correct them; load one saved before you set up an upload and that upload quietly stopped. Loading
   a profile now leaves every upload switch as you last set it, as it already left your callsign and
-  licence class.
+  licence class. It leaves the switches that send your contacts to another logging program alone
+  too: Ham Radio Deluxe logging, N3FJP's Forward every QSO, N1MM+'s Broadcast every QSO and Let
+  DXKeeper do the uploads.
 - **ClubLog uploads work in the Linux and Raspberry Pi packages (#388).** The .deb, AppImage and
   Raspberry Pi packages were built without the ClubLog application key the Windows and Mac
   installers carry, so ClubLog uploads failed with "This build has no ClubLog application key", and

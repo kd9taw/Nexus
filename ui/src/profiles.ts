@@ -77,6 +77,18 @@ const NEVER_IMPORT: readonly string[] = [
   'wrlUpload',
   'cloudlogUpload',
   'lotwAutoUpload',
+  // The PUSHES TO THE OTHER LOGGING PROGRAMS on your network, the same family (the operator's
+  // ruling: profiles leave them alone too): HRD Logbook forwarding, N3FJP's and N1MM+'s every-QSO
+  // pushes, and DXKeeper's own upload switch. Left importable, a profile saved before HRD
+  // forwarding was set up stopped it with no error; one saved with it on restarted it beside a
+  // JTAlert relay into HRD and every contact was logged twice; and `dxkeeperUploads` turned back
+  // on sent every contact to LoTW, eQSL, ClubLog and QRZ a second time. The hosts and addresses
+  // still travel with a profile, as the upload accounts do (DXKeeper's push has no switch of its
+  // own: an empty host is off). A new local logger's push switch joins this list.
+  'hrdLogging',
+  'dxkeeperUploads',
+  'n3fjpUpload',
+  'n1mmUpload',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.

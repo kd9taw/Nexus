@@ -233,3 +233,24 @@ describe('mergeProfile — the logbook upload switches never import', () => {
     }
   })
 })
+
+// The pushes to the other logging programs on your network are the same family, and the
+// operator's ruling leaves them alone too. A profile saved before HRD Logbook forwarding was set
+// up stopped it with no error; one saved with it on restarted it beside a JTAlert relay into HRD,
+// and every contact was logged there twice. DXKeeper's own upload switch, turned back on, sent
+// every contact to LoTW, eQSL, ClubLog and QRZ a second time.
+describe('mergeProfile — the local logger pushes never import', () => {
+  // Every push switch in the HRD (Integrations & Feeds), DXKeeper, N3FJP and N1MM+ sections.
+  it.each(['hrdLogging', 'dxkeeperUploads', 'n3fjpUpload', 'n1mmUpload'])(
+    '%s keeps its current value, on or off',
+    (key) => {
+      for (const now of [true, false]) {
+        const current = { mycall: 'KD9TAW', [key]: now, band: '20m' } as unknown as Settings
+        const saved = { [key]: !now, band: '40m' } as unknown as Settings
+        const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+        expect(merged[key]).toBe(now)
+        expect(merged.band).toBe('40m')
+      }
+    },
+  )
+})
