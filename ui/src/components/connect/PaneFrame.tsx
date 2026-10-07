@@ -141,7 +141,6 @@ export function PaneFrame<S extends string = SlotId>({
   }, [rotateSecs, tabsKey, paneId, paused])
   const def = paneById(paneId)
   if (!def) return null
-  const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
   const scale = textScale ?? 1
   const helpUrl = paneHelpUrl(paneId)
   const tabbed = tabs && tabs.length > 1 ? tabs : null
@@ -258,8 +257,18 @@ export function PaneFrame<S extends string = SlotId>({
         {...(tabbed ? { role: 'tabpanel', id: panelId, 'aria-labelledby': tabId(paneId) } : {})}
         style={scale === 1 ? undefined : ({ '--box-text-scale': scale } as CSSProperties)}
       >
-        {body ?? <p className="pane-basic">{def.basic(ctx)}</p>}
+        <PaneBody pane={paneId} ctx={ctx} />
       </div>
     </section>
   )
+}
+
+/** A box's body: the pane's full panel, or its one-line state while the panel has nothing to show
+ *  (`expert` returns null → `basic`). The ONE renderer of a box's body, wherever the box stands — this
+ *  frame on Conditions, in the dashboard window and in the rail, and any area that shows an entry of
+ *  the shared list (features/sharedPanes) — so no surface can draw a box differently. */
+export function PaneBody({ pane, ctx }: { pane: PaneId; ctx: PaneContext }) {
+  const def = paneById(pane)
+  if (!def) return null
+  return <>{def.expert(ctx) ?? <p className="pane-basic">{def.basic(ctx)}</p>}</>
 }
