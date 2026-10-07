@@ -88,7 +88,14 @@ COPY . .
 # .deb builds successfully and then the run fails at the signing step (broke the 0.18.0 Pi debs
 # and both CI Pi jobs). Do not "fix" this by handing the container the signing key: a key that
 # does not need to exist in a container should not be in one.
-RUN sed -i 's/--bundles deb,appimage/--bundles deb/' scripts/build-linux.sh \
+#
+# The ClubLog key is the one secret this RUN can see, because option_env! compiles it into the
+# app (#388). The release passes it with `--secret id=clublog_api_key,env=CLUBLOG_API_KEY`, and
+# the mount hands it to this RUN alone, never to a layer or the image's history. A build without
+# the secret (ci.yml's, or yours) skips the mount and makes a package with no key, like any
+# source build.
+RUN --mount=type=secret,id=clublog_api_key,env=CLUBLOG_API_KEY \
+    sed -i 's/--bundles deb,appimage/--bundles deb/' scripts/build-linux.sh \
     && sed -i 's/"createUpdaterArtifacts": true/"createUpdaterArtifacts": false/' src-tauri/tauri.conf.json \
     && ./scripts/build-linux.sh
 RUN mkdir /out && cp src-tauri/target/release/bundle/deb/*.deb /out/

@@ -77,11 +77,13 @@ const SEEN = {
   APPLE_API_KEY_ID: [['macos', BUNDLE]],
   APPLE_API_ISSUER_ID: [['macos', BUNDLE]],
   APPLE_API_KEY_CONTENT: [['macos', BUNDLE]],
-  // Another step that compiles the key in (the Linux build step and the Pi container build, #388)
-  // gets its row here in the change that hands it the key; COMPILED_IN lets that step be third-party.
+  // The step that compiles the key in, one per official build (the Linux and Pi rows since #388);
+  // COMPILED_IN lets such a step be third-party.
   CLUBLOG_API_KEY: [
+    ['linux-x86', 'Build .deb + AppImage'],
     ['windows', 'Cross-build the NSIS installer'],
     ['macos', 'Compile the app'],
+    ['pi', 'Build .deb in a debian:${{ matrix.base }} container'],
   ],
   // `${{ github.token }}`: read-only in the build jobs, contents: write in the two publish jobs.
   GITHUB_TOKEN: [
@@ -888,4 +890,16 @@ test('the reader refuses what it cannot place', () => {
   assert.throws(() => readWorkflow(alias), /a YAML anchor or alias/);
   const flow = plant(TEXT, macos, `${macos}    needs: [linux-x86,\n      pi]\n`);
   assert.throws(() => readWorkflow(flow), /a flow collection that continues/);
+});
+
+// #388. A container build does not pass its environment on to the build inside it: the Pi step's
+// `--secret id=clublog_api_key,env=CLUBLOG_API_KEY` only offers the key to BuildKit, and the RUN
+// that compiles Nexus has to mount it. Without the mount the build stays green and the Pi packages
+// ship with no ClubLog key, as they did before it was wired. The YAML checks above cannot see this.
+test('the Pi container build hands the ClubLog key to the RUN that compiles it in', () => {
+  const step = findStep(WF, 'pi', 'Build .deb in a debian:${{ matrix.base }} container');
+  assert.match(step.run, /--secret id=clublog_api_key,env=CLUBLOG_API_KEY(?:\s|$)/, 'the Pi build step does not offer the ClubLog key to BuildKit');
+  const compile = dockerInstructions(DOCKERFILE, 'Dockerfile.pi').filter((d) => d.op === 'RUN' && /\.\/scripts\/build-linux\.sh\b/.test(d.args));
+  assert.equal(compile.length, 1, 'expected one RUN in Dockerfile.pi to run build-linux.sh');
+  assert.match(compile[0].args, /^(?:--\S+\s+)*--mount=type=secret,id=clublog_api_key,env=CLUBLOG_API_KEY\s/, 'the RUN that compiles Nexus does not mount the ClubLog key');
 });

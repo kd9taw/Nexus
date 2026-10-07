@@ -48,6 +48,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your account's last such download by any program, such as another logger's LoTW sync. Contacts
   uploaded before that went on waiting for LoTW to take them. Nexus now asks for every upload LoTW
   received, back to your oldest contact still waiting.
+- **The shared radio address says the radio is transmitting however it was keyed (#398).** With
+  Share this radio with other programs on, a program asking the shared address whether the radio is
+  transmitting (rigctld's `t`) heard yes only during Nexus's own digital overs, such as FT8. Phone
+  PTT in Nexus, Tune, a CW, RTTY or SSTV over, a program's own key through the shared address and
+  the radio keyed at its own microphone all read as receive, so a script that mutes the computer's
+  audio while you transmit never fired on SSB. All of them now read as transmit; keyed at the radio,
+  within about a second, because Nexus reads the radio's PTT once a second. One gap is left: while
+  Nexus plays a recorded voice message or an APRS packet, and during the last word of a CW message,
+  the shared address still reads receive.
+- **Loading a profile no longer switches your logbook uploads back on, or off (#396).** A profile
+  (Settings ▸ Radio ▸ Profiles) carried the automatic upload switches for QRZ, ClubLog, eQSL,
+  HRDLog.net, World Radio League, Cloudlog/Wavelog and LoTW. Load one saved while QRZ upload was on
+  and it came back on after you had switched it off, and your contacts went to QRZ before you could
+  correct them; load one saved before you set up an upload and that upload quietly stopped. Loading
+  a profile now leaves every upload switch as you last set it, as it already left your callsign and
+  licence class. It leaves the switches that send your contacts to another logging program alone
+  too: Ham Radio Deluxe logging, N3FJP's Forward every QSO, N1MM+'s Broadcast every QSO, Let
+  DXKeeper do the uploads, and the DXKeeper host, which is what turns DXKeeper's push on and off.
+- **ClubLog uploads work in the Linux and Raspberry Pi packages (#388).** The .deb, AppImage and
+  Raspberry Pi packages were built without the ClubLog application key the Windows and Mac
+  installers carry, so ClubLog uploads failed with "This build has no ClubLog application key", and
+  ClubLog's Most Wanted ranking was missing from the DXpedition list's order. They now carry the
+  key too, so your ClubLog email and Application Password are all you need, on every platform.
 
 ## [1.17.0] — 2026-10-07
 

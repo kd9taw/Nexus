@@ -64,6 +64,37 @@ const NEVER_IMPORT: readonly string[] = [
   // betas simply stop arriving and nobody finds out. (The backend keeps the same value across a
   // payload that omits the key; this is the other half — a payload that carries a STALE one.)
   'betaUpdates',
+  // The LOGBOOK UPLOAD SWITCHES, every one under Settings ▸ Logging & Connectors ▸ Confirmations
+  // (#396; the operator's ruling: profiles never touch them). Where your contacts are sent is not
+  // part of a station. Left importable, loading a profile saved while QRZ upload was on turned it
+  // back on after the operator had switched it off and forgotten the key, and every contact went
+  // to QRZ before it could be corrected; a profile saved before an upload was set up switched it
+  // off just as quietly. A new connector's upload switch joins this list.
+  'qrzLogbookUpload',
+  'clublogUpload',
+  'eqslUpload',
+  'hrdlogUpload',
+  'wrlUpload',
+  'cloudlogUpload',
+  'lotwAutoUpload',
+  // The PUSHES TO THE OTHER LOGGING PROGRAMS on your network, the same family (the operator's
+  // ruling: profiles leave them alone too): HRD Logbook forwarding, N3FJP's and N1MM+'s every-QSO
+  // pushes, and DXKeeper's own upload switch. Left importable, a profile saved before HRD
+  // forwarding was set up stopped it with no error; one saved with it on restarted it beside a
+  // JTAlert relay into HRD and every contact was logged twice; and `dxkeeperUploads` turned back
+  // on sent every contact to LoTW, eQSL, ClubLog and QRZ a second time. A new local logger's push
+  // switch joins this list.
+  'hrdLogging',
+  'dxkeeperUploads',
+  'n3fjpUpload',
+  'n1mmUpload',
+  // DXKeeper's push has no switch of its own: an empty host is off, so its host is its on/off and
+  // stays too. A profile saved before DXKeeper was set up blanked it and the push stopped with no
+  // error; one saved with it set started the push again after the operator had cleared it. The
+  // other hosts and addresses still travel with a profile, as the upload accounts do (a Field Day
+  // profile carries the club's master-log address), and so does the WSJT-X UDP API (`wsjtxUdp`),
+  // a feed other programs listen to rather than a push to one logger.
+  'dxkeeperHost',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.

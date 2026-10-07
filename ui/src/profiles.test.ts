@@ -198,3 +198,92 @@ describe('mergeProfile — the beta-channel opt-in never imports', () => {
     expect(merged.band).toBe('40m')
   })
 })
+
+// #396, and the operator's ruling: a profile never touches a logbook upload switch. A profile is
+// the station (rig, antenna, CAT, bands), and where your contacts are sent is not part of it.
+// Left importable, loading a profile saved while QRZ upload was on turned it back on after the
+// operator had switched it off and forgotten the key, so every contact went to QRZ before it
+// could be corrected. The other direction is as quiet: a profile saved before an upload was set
+// up switched it off again, and contacts stopped arriving with no error.
+describe('mergeProfile — the logbook upload switches never import', () => {
+  it('a profile saved with QRZ upload on leaves the current switch off (#396)', () => {
+    const current = { mycall: 'KD9TAW', qrzLogbookUpload: false, band: '20m' } as unknown as Settings
+    const saved = { qrzLogbookUpload: true, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+    expect(merged.qrzLogbookUpload).toBe(false)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
+  // Every upload switch under Settings ▸ Logging & Connectors ▸ Confirmations, both ways round.
+  it.each([
+    'qrzLogbookUpload',
+    'clublogUpload',
+    'eqslUpload',
+    'hrdlogUpload',
+    'wrlUpload',
+    'cloudlogUpload',
+    'lotwAutoUpload',
+  ])('%s keeps its current value, on or off', (key) => {
+    for (const now of [true, false]) {
+      const current = { mycall: 'KD9TAW', [key]: now, band: '20m' } as unknown as Settings
+      const saved = { [key]: !now, band: '40m' } as unknown as Settings
+      const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+      expect(merged[key]).toBe(now)
+      expect(merged.band).toBe('40m')
+    }
+  })
+})
+
+// The pushes to the other logging programs on your network are the same family, and the
+// operator's ruling leaves them alone too. A profile saved before HRD Logbook forwarding was set
+// up stopped it with no error; one saved with it on restarted it beside a JTAlert relay into HRD,
+// and every contact was logged there twice. DXKeeper's own upload switch, turned back on, sent
+// every contact to LoTW, eQSL, ClubLog and QRZ a second time.
+describe('mergeProfile — the local logger pushes never import', () => {
+  // Every push switch in the HRD (Integrations & Feeds), DXKeeper, N3FJP and N1MM+ sections.
+  it.each(['hrdLogging', 'dxkeeperUploads', 'n3fjpUpload', 'n1mmUpload'])(
+    '%s keeps its current value, on or off',
+    (key) => {
+      for (const now of [true, false]) {
+        const current = { mycall: 'KD9TAW', [key]: now, band: '20m' } as unknown as Settings
+        const saved = { [key]: !now, band: '40m' } as unknown as Settings
+        const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+        expect(merged[key]).toBe(now)
+        expect(merged.band).toBe('40m')
+      }
+    },
+  )
+
+  // DXKeeper's push has no switch of its own: an empty host is off, so the host IS its on/off.
+  // A profile saved before DXKeeper was set up blanked it and the push stopped with no error; one
+  // saved with it set started sending every contact to DXKeeper after the operator had cleared it.
+  it("DXKeeper's host keeps its current value, set or blank", () => {
+    for (const [now, saved] of [['127.0.0.1', ''], ['', '127.0.0.1']]) {
+      const current = { mycall: 'KD9TAW', dxkeeperHost: now, band: '20m' } as unknown as Settings
+      const profile = { dxkeeperHost: saved, band: '40m' } as unknown as Settings
+      const merged = mergeProfile(current, profile) as unknown as Record<string, unknown>
+      expect(merged.dxkeeperHost).toBe(now)
+      expect(merged.band).toBe('40m')
+    }
+  })
+
+  // The rest stay with the profile: N3FJP's and N1MM+'s addresses (a Field Day profile carries the
+  // club's master-log address) and the WSJT-X UDP API, a feed other programs listen to.
+  it('the other logger addresses and the WSJT-X UDP API still come from a profile', () => {
+    const current = {
+      mycall: 'KD9TAW',
+      n3fjpHost: '',
+      n1mmAddr: '',
+      wsjtxUdp: false,
+    } as unknown as Settings
+    const saved = {
+      n3fjpHost: '192.168.1.10',
+      n1mmAddr: '127.0.0.1:12060',
+      wsjtxUdp: true,
+    } as unknown as Settings
+    const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+    expect(merged.n3fjpHost).toBe('192.168.1.10')
+    expect(merged.n1mmAddr).toBe('127.0.0.1:12060')
+    expect(merged.wsjtxUdp).toBe(true)
+  })
+})

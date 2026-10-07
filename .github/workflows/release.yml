@@ -213,9 +213,14 @@ jobs:
       # updater signing key. With no key it builds with `--no-sign`; the finished AppImage is
       # uploaded unsigned and signed by the sign-updaters job, on a runner that builds nothing.
       # scripts/release-secrets.test.mjs holds that down.
+      #
+      # The one secret here is the ClubLog key, because it is compiled in (see the Windows job).
+      # Without it the .deb and the AppImage shipped with no key, and ClubLog uploads failed on
+      # every official Linux build (#388).
       - name: Build .deb + AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
+          CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: bash scripts/build-linux.sh
 
       - name: Verify artifacts
@@ -1072,12 +1077,18 @@ jobs:
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
 
+      # The ClubLog key, compiled in as on every other platform (#388). It goes in as a BuildKit
+      # secret, which Dockerfile.pi mounts for the one RUN that compiles Nexus; a build arg would
+      # be recorded in the image's history. No signing secret enters this container.
       - name: Build .deb in a debian:${{ matrix.base }} container
+        env:
+          CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: >
           docker buildx build
           --platform linux/arm64
           -f scripts/Dockerfile.pi
           --build-arg BASE=${{ matrix.base }}
+          --secret id=clublog_api_key,env=CLUBLOG_API_KEY
           --progress=plain
           --target export
           --output type=local,dest=pi-out/${{ matrix.base }}
