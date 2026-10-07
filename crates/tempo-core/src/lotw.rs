@@ -109,7 +109,7 @@ pub fn build_report_url(q: &LotwQuery) -> String {
 }
 
 /// Build the LoTW **own-QSO** download URL (`qso_qsl=no`): the records LoTW holds
-/// from you that the partner hasn't matched yet. Used to promote an in-flight
+/// from your uploads, matched or not. Used to promote an in-flight
 /// upload from "Pending" to "Accepted" — proof your side is on file, so the QSO is
 /// now genuinely "waiting on the other operator" (R2) rather than never-sent (R1).
 ///
@@ -118,6 +118,14 @@ pub fn build_report_url(q: &LotwQuery) -> String {
 /// `YYYY-MM-DD` lower bound, e.g. the oldest in-flight upload's date) keeps the pull
 /// from scanning the whole log every sync. The returned URL carries the password —
 /// never log it.
+///
+/// `qso_qsorxsince` is always [`FULL_HISTORY_SINCE`]. LoTW's developer page documents it as
+/// "Returns QSO records received (uploaded) on or after the specified date", and its default
+/// "when qso_qsorxsince is missing or empty" as the `APP_LoTW_LASTQSORX` returned for a
+/// non-specific `qso_qsl="no"` query: the account's last such download, by any program. Nexus
+/// keeps no cursor for this pull, so leaving it out (as up to 1.17.0) skipped every upload LoTW
+/// received before another program last downloaded them, and those contacts stayed Pending.
+/// `start_date` still bounds the pull.
 pub fn build_own_report_url(q: &LotwQuery, start_date: Option<&str>) -> String {
     let mut url = format!(
         "{LOTW_REPORT_URL}?login={}&password={}&qso_query=1&qso_qsl=no",
@@ -138,6 +146,8 @@ pub fn build_own_report_url(q: &LotwQuery, start_date: Option<&str>) -> String {
             url.push_str(&pct(start));
         }
     }
+    url.push_str("&qso_qsorxsince=");
+    url.push_str(FULL_HISTORY_SINCE);
     url
 }
 
@@ -287,6 +297,23 @@ mod tests {
         assert!(!url.contains("qso_startdate="));
         let url2 = build_own_report_url(&q(), Some("  "));
         assert!(!url2.contains("qso_startdate="));
+    }
+
+    #[test]
+    fn the_own_qso_pull_asks_for_every_upload_lotw_received() {
+        // #399's class, on the second pull. Without `qso_qsorxsince` LoTW does not list every
+        // upload: its default is the `APP_LoTW_LASTQSORX` of the account's last non-specific
+        // `qso_qsl="no"` query, by any program. Nexus keeps no cursor for this pull, so an
+        // upload LoTW received before another program's last such download was never listed,
+        // and its contact stayed Pending.
+        for start in [Some("2026-03-01"), None] {
+            let url = build_own_report_url(&q(), start);
+            assert!(
+                url.contains("&qso_qsorxsince=1900-01-01"),
+                "start {start:?} must ask for uploads received from 1900-01-01"
+            );
+            assert_eq!(url.matches("qso_qsorxsince=").count(), 1);
+        }
     }
 
     #[test]

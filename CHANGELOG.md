@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier one instead. That contact then no longer looked due for upload, so it was never sent to
   LoTW and could never be confirmed. Each upload now marks only the contact nearest its time, and
   only one within 30 minutes of it, the same match a confirmation uses.
+- **A LoTW download recognises every upload LoTW holds.** Besides confirmations, a LoTW download
+  asks LoTW which of your uploads it holds, so those contacts read as waiting on the other
+  operator. Nexus did not say from when, and LoTW then lists only the uploads it received since
+  your account's last such download by any program, such as another logger's LoTW sync. Contacts
+  uploaded before that went on waiting for LoTW to take them. Nexus now asks for every upload LoTW
+  received, back to your oldest contact still waiting.
 
 ## [1.17.0] — 2026-10-07
 
