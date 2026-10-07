@@ -5,6 +5,50 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Download everything again, for LoTW confirmations an earlier download missed (#399).**
+  Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
+  confirmations. It asks first, then downloads your whole confirmation history once, straight away,
+  the way a first download now does; if that download cannot run or fails, your next Download
+  confirmations still asks for all of it. Use it if you set up LoTW in Nexus before this
+  release: that first download asked for too little, and each download after it carried on from
+  there, so older confirmations never arrived. Your logged contacts and the confirmations on them
+  are not changed.
+
+### Fixed
+
+- **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
+  twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
+  put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
+  the contact nearest its time, and only on one within 30 minutes of it, the window LoTW itself
+  matches in. A confirmation more than 30 minutes from every contact you logged with that station
+  on that band is left out and counted as unmatched, as a confirmation of a contact missing from
+  your log always was; a QRZ download adds it to your log as a contact you did not have. Two
+  confirmations never go on one contact. A contact imported with no time of day still takes its
+  confirmation by its date. Confirmations that earlier versions put on the wrong contact stay
+  where they are.
+- **The first LoTW download brings your whole confirmation history (#399).** With no earlier
+  download on record (the first sync, or after you changed the LoTW username or cleared the log),
+  Nexus asked LoTW for confirmations without saying from when, and LoTW then sends only what it
+  matched since your account's last download by any program. The older confirmations never
+  arrived, and the syncs after it carried on from there. Nexus now asks for everything from
+  1900-01-01 in that case.
+- **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
+  the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
+  worked a station twice on one band in a UTC day, the later contact's upload could mark the
+  earlier one instead. That contact then no longer looked due for upload, so it was never sent to
+  LoTW and could never be confirmed. Each upload now marks only the contact nearest its time, and
+  only one within 30 minutes of it, the same match a confirmation uses.
+- **A LoTW download recognises every upload LoTW holds.** Besides confirmations, a LoTW download
+  asks LoTW which of your uploads it holds, so those contacts read as waiting on the other
+  operator. Nexus did not say from when, and LoTW then lists only the uploads it received since
+  your account's last such download by any program, such as another logger's LoTW sync. Contacts
+  uploaded before that went on waiting for LoTW to take them. Nexus now asks for every upload LoTW
+  received, back to your oldest contact still waiting.
+
 ## [1.17.0] — 2026-10-07
 
 ### Added

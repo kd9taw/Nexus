@@ -5659,6 +5659,10 @@ export const EN = {
     one: ' · {{count}} upload now on file',
     other: ' · {{count}} uploads now on file',
   },
+  // Names the Download confirmations button: reword that and this sentence moves with it.
+  'settings.connections.lotw.redownload.pending':
+    'Your whole LoTW history was not downloaded this time. Your next Download confirmations still asks for all of it.',
+  'settings.connections.lotw.redownload.failed': 'Could not reset the LoTW download',
   'settings.connections.eqsl.password.saveFailed': 'Could not save the eQSL password',
   'settings.connections.eqsl.password.saved': 'eQSL password saved — auto-upload to eQSL is ON',
   'settings.connections.eqsl.password.clearFailed': 'Could not clear the eQSL password',
@@ -7479,6 +7483,15 @@ export const EN = {
   'settings.confirmations.lotw.sync.busy': 'Downloading…',
   'settings.confirmations.lotw.sync.hint':
     'This only pulls confirmations <b>down</b>. To send your contacts <em>to</em> LoTW, use <b>Upload to LoTW (N)</b> in the Logbook. Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole history (can be slow); later ones are incremental.',
+  // Download everything again: it clears only the sync cursor, then starts the download, which
+  // is the whole history, once.
+  'settings.confirmations.lotw.redownload.action': 'Download everything again',
+  'settings.confirmations.lotw.redownload.title':
+    'For confirmations an earlier download missed: downloads your whole LoTW history again.',
+  'settings.confirmations.lotw.redownload.confirm.title':
+    'Download your whole LoTW history again?',
+  'settings.confirmations.lotw.redownload.confirm.body':
+    'This asks LoTW for every confirmation on your account, not just the new ones, and starts right away. That is one large download, and it can take several minutes. Your logged contacts and the confirmations on them are not changed.',
   'settings.confirmations.lotw.stationLocation.label': 'LoTW Station Location',
   'settings.confirmations.lotw.stationLocation.placeholder': 'exact TQSL Station Location name',
   'settings.confirmations.lotw.stationLocation.hint':
