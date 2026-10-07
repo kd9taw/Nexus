@@ -5,576 +5,139 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Security
-
-- **Remote: the stream proves it comes from your station.** Nexus at the shack now signs every
-  stream it answers with a key of its own, made when the station is paired (or, for a station
-  paired before, the first time this Nexus starts) and kept in the computer's password store. The
-  Remote service records that key once, and the Remote page takes a stream only if it carries
-  the station's signature for that very request. Before, anything that could answer in the
-  station's place on the Remote service's relay would have been taken for your station, and would
-  have been sent what you typed on the picture and your microphone. A stream from a station that
-  cannot sign is refused, and the page says to update Nexus at the shack. If the station's key is
-  ever lost, revoke station access and pair again.
-- **Remote: your browser keeps your station's key, and both ends show more of every key.** The
-  Remote page now keeps your station's key the first time it sees it and shows it on the station's
-  card as **This station's key**; Nexus at the shack shows its own the same way (Settings →
-  Station → Remote access), so you can compare the two. If the Remote service ever lists a
-  different key for your station, the page says so, shows both keys, and connects nothing until you
-  press **Accept the new key**. Accept it only if the new key matches the one at the shack. Before,
-  the page took the service's word for your station's key every time, so anyone able to change the
-  service's records could have stood in for your station. Every key is now shown as eight groups
-  of four characters instead of four, at both ends, including the browser key you compare when you
-  approve a browser. An older Nexus at the shack still shows four groups: they are the first four
-  the page shows. Revoking the station, or removing a browser's approval, on the page lets that
-  browser forget the station's key.
-- **Remote: control, Listen and commands carry the browser's own key.** Taking control, keeping
-  it, releasing it, **Listen**, and every command and log entry from the Remote page now carry
-  the signature of that browser's key, the one you compare when you approve it at the shack, and
-  Nexus refuses anything without it. Before, Nexus took the Remote service's word for which
-  browser was asking. **Stop TX** needs no signature, so nothing can hold it up. A browser approved
-  before browser keys existed is asked for again at the shack before it can take control.
-- **Remote: the hosted page opens only over https://.** An `http://` address for the Remote page,
-  typed without the `https://` or followed from an old link, loaded the whole page, sign-in
-  included, unencrypted, where anyone on the same network (public Wi-Fi, a hostile router) could
-  read or replace it. Now an `http://` address goes straight to the same `https://` address before
-  the service does anything else, and the page tells your browser to use only `https://` for it
-  from then on. Stations and browsers already on `https://`, which is every one Nexus sets up, see
-  no change.
-
-### Fixed
-
-- **Nexus no longer asks for administrator rights by itself.** On Windows, a prompt to allow
-  "Windows Command Processor" to make changes could appear a few seconds after Nexus started, and
-  again later, with nobody having asked for it. It came from the clock check, which ran its own
-  repair whenever it found something Windows could fix: the Windows Time service switched off, a
-  time service that had not synchronised, a clock that had just jumped after sleep, or one that
-  checks the time only every nine hours. The clock check still runs and still says what it found
-  (hover the clock readout). When it finds a real fault (the Windows Time service switched off,
-  not synchronised, or a clock that just jumped), a **Repair clock** button appears beside the
-  clock readout, with a line saying Windows will ask for administrator rights, and the fix runs
-  only when you press it. Checking the time every nine hours is the Windows default, so Nexus no
-  longer offers to change it, and the clock readout's note no longer mentions it. The button does
-  not work while you are transmitting, nor while a JS8 or Tempo message of several overs is
-  part-way through, so a repair never pauses a message between its overs. While a repair runs,
-  Nexus starts no transmission until it finishes, two minutes at most, so the clock cannot move in
-  the middle of an over: TX On, Tune, PTT and sends in every mode are refused, a run that is
-  already on (FT8, JS8, a beacon) skips its overs, and the top bar says why.
-- **Getting Out shows its distances in your units.** With **Units** (Settings → Station) on
-  Imperial, the Getting Out box still gave the furthest station, each receiver's distance, the
-  compass tooltips and the direction line in km, and restarting Nexus changed nothing. They now
-  read in miles on Imperial and in km on Metric, and Automatic follows your computer's region. The
-  same fix reaches the other places that printed km whatever the setting said: the opening strip,
-  the Openings Log, the opening alerts, the Openings and Es lines, the DXpedition cards, the APRS
-  station list, the Satellites section's altitude, range and sked distances, the map's hover lines
-  (a station's distance, a satellite's altitude) and its short/long-path figure, the 3D globe's
-  pass range, the "heard by" lines on the Chase and Needed boxes, Journey's Sporadic-E Summer and
-  Top-Band Season feats, and the 6 m sporadic-E watch in the insights. The sky dome's range-rate
-  reads in mi/s on Imperial. Journey's 1,000- and 5,000-mile firsts gave the contact's distance in
-  miles whatever the setting said; it follows Units now too. These distances are now written
-  without a thousands separator (8047 km, not 8,047 km).
-- **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
-  answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
-  radio is still letting go of the last transmission), Nexus played the over anyway: the Tune
-  carrier, an APRS packet, a voice-keyer message, an SSTV picture, soundcard CW, an RTTY or PSK
-  over, or your voice from the Remote stream all went into a radio that was still receiving.
-  Nothing went on the air, and for Tune and APRS nothing said why. Now none of them is played.
-  Tune ends and its button comes back up. Tune, the voice keyer, SSTV and the Remote stream show
-  **RADIO STOPPED** in the status bar with "The rig didn't accept PTT — check your PTT method and
-  CAT/port.". CW, RTTY and PSK show their keyer warning. APRS says "APRS not sent: the radio did
-  not accept the key". What was refused is dropped, never sent later: the rest of a CW send goes
-  with it, and continuous RTTY or PSK turns off. The diagnostic log notes each one. A radio that
-  is only slow to answer is not refusing: some radios on a slow serial link key, but answer after
-  Nexus has stopped waiting, or so late that Hamlib reports the radio did not answer. Their over
-  still goes out, as it did before, and shows the warning above (an APRS packet goes without one,
-  as it always did). A soundcard CW macro still plays every word on a radio that refuses a second
-  key while the first is held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot
-  modes follow WSJT-X instead (next entry). Checked on an FTDX10 through Hamlib and an IC-9700 on
-  Nexus's own CI-V. NEEDS-BENCH on a slow serial CAT rig and a Flex radio.
-- **FT8, FT4, JS8 and the other timed-slot modes: when the radio refuses to key, nothing is sent
-  and TX stops, as in WSJT-X.** If the radio answered the key with an error, Nexus played the
-  whole over anyway into a radio that was still receiving, and left TX on to try again the next
-  cycle. Now the over is not played, the radio is unkeyed, TX turns off, and the status bar shows
-  **PTT REFUSED — TX STOPPED** with the time and what the radio answered, until you turn TX on
-  again. That is what WSJT-X does: it stops transmitting, unticks Enable Tx and reports a rig
-  control error. Like WSJT-X, this includes Hamlib's own "the rig did not answer" (a radio
-  switched off, or too slow even for Hamlib); for the other modes that still sends the over with
-  its warning. A radio that is only slow to answer, past the time Nexus waits, still sends its
-  over as before: WSJT-X keeps waiting for such a radio and transmits once it keys. Checked on an
-  FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V. NEEDS-BENCH on a slow serial CAT rig and
-  a Flex radio.
-- **FT8, FT4, JS8 and the other timed-slot modes: when the radio does not accept PTT off, TX stops
-  and the status bar says so, as in WSJT-X.** If the radio answered PTT off with an error, at the
-  end of an over or when Stop TX or a logger's HaltTx cut one, TX stayed on and nothing was said.
-  Now TX turns off and the status bar shows **PTT OFF FAILED — TX STOPPED** with the time and what
-  the radio answered, until you turn TX on again. Nexus keeps sending PTT off until the radio
-  accepts it, as before. Checked on an FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V.
-  NEEDS-BENCH with a logger's Halt TX, serial (RTS/DTR) PTT, a Flex radio and a slow serial CAT rig.
-- **FlexRadio: transmitter alarms reach you from every radio Nexus's Flex client serves.** Switch
-  radios while a Flex radio is transmitting, and Nexus keeps that radio's client connected in the
-  background before the radio has confirmed the unkey. If the radio then never confirmed it ("it
-  may still be transmitting"), or the client found an earlier Nexus session still holding the
-  transmitter, the alarm went only to the diagnostic log. It now appears in the transmitter-alarm
-  banner, named for that radio and not the one you switched to. A Flex client is also read one
-  last time before Nexus closes or reopens it. NEEDS-BENCH on a Flex radio.
-- **Cloudlog / Wavelog: a refused QSO says why.** Wavelog answers a QSO it will not file with its
-  reason in a field Nexus did not read, so the connection log said only "refused the upload, and
-  said no more", even though Wavelog had named the reason, such as a duplicate or a station location
-  whose callsign is not yours ("Differing station callsign … SKIPPED"). Nexus now shows that reason.
-  Settings ▸ Logging & Connectors also warns beside the station profile id when the location you
-  pick, or the one already chosen when you press **Find my station locations**, has a callsign
-  other than the one Nexus logs as (Wavelog refuses every such QSO) or a different grid. A refused
-  upload names that mismatch too. Pick a location with your callsign, or change that location in
-  Wavelog. Every failed upload, for each service Nexus uploads to as you log, now also writes one
-  line to `nexus-diag.log`: the service, the kind of failure, the HTTP status and the contact's
-  call. The line never includes the service's own words or your key, and it lets a support request
-  show what went wrong.
-- **CW scope: the frequency scale no longer reads the CW pitch off** (600 Hz by default). It also ran
-  backwards on reverse CW (CW-R) and with the soundcard keyer below 10 MHz. The numbers now match the
-  spot tags and where a click tunes. In AM and FM the Phone scope's audio picture shows no numbers,
-  since a click there does not tune.
-- **CW scope: the frequency scale reads to 100 Hz on CW's narrow window.** It showed the same kHz under
-  every tick (`7.030` five times by default); now `7.0296 7.0298 7.0300 7.0302 7.0304`. Any scale with
-  ticks under 1 kHz apart does the same, including the Phone scope at a 2.4 kHz width. Wider scales are
-  unchanged.
-- **Scope: a frequency label no longer prints over the one beside it on a narrow scope.** On a phone,
-  the Remote page's CW scope drew its right-edge label on top of its neighbour at 20 m and 2 m. A label
-  with no room is now left off and its tick stays; wider scopes draw every label as before.
-- **Light theme: the spot tags' colours on the Phone and CW scopes are readable again.** The scope stays
-  dark in the light theme, but its spot tags took the light theme's need colours, which are made for a
-  white page: on the dark scope the new zone, SOTA and watch list marks read 2.7:1, under the 3:1 a mark
-  needs. The scope now marks its tags in the dark theme's need colours in every theme, like everything
-  else drawn on it; every need colour reads at least 3:1 there. Elsewhere the light theme is unchanged.
-- **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native path read the radio's FFT bins
-  as levels when they are pixel rows counted down from the top, so the trace was upside down; it never set the pan's height, used a
-  wrong create command, and left the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
-- **Remote: the changed-key warning stays gone once you accept the new key.** If the page happened
-  to be re-reading your stations as you pressed **Accept the new key**, the warning that the
-  station's key had changed came back, with Stream greyed out, for up to five seconds. The key you
-  accepted was kept all the same. The card now shows the accepted key, and Stream, once you accept.
-- **Remote: Stop TX is never refused.** For about a second after any stop at the station (an Esc
-  over the stream's picture, a band change, a Stop TX or a logger's halt at the shack, the high-SWR
-  cutoff, a switch of radio), the browser's Stop TX was refused, and the page said nothing. A
-  transmission started in that second, such as Tune pressed right after a band change, stayed on
-  the air through the first press. Now a Stop from a browser with station control stops whatever
-  is transmitting when it arrives, even one pressed before the last stop, and Stop TX is ready
-  again the moment a Stop is accepted instead of a moment later. Pressed again faster than the
-  Remote service passes Stops on (twice a second), it shows the accepted Stop still under way, not a
-  failure. If the station does refuse a Stop
-  (station control taken back at the radio, for example), the stream page says **Could not stop
-  transmit** beside Stop TX instead of nothing. Who may send a Stop is unchanged.
-- **Remote streaming: a held PTT no longer lets go by itself mid-over in current Chrome.** Every few
-  seconds the stream page's PTT greyed out for a few milliseconds while the page re-read the station's
-  state. Current Chrome took a held PTT that greyed out as let go, so a long over could end while you
-  still held the button; older Chrome kept the over but could miss the key-up of a Space held on PTT,
-  leaving the over held after you let go. A PTT you hold now stays lit until you let go of it. Letting
-  go, Stop TX, leaving the window, the picture freezing, a backed-up connection or the stream ending
-  still end the over, and the station still decides whether to key. Pressing PTT while it is greyed
-  out now does nothing, as the button shows; a press that lands in one of those few milliseconds needs
-  pressing again.
-- **Remote streaming: Space works on the Remote PTT after a brief connection hiccup.** If you had
-  tabbed to the stream page's PTT, Space and Enter stopped working on it after the next brief hiccup
-  in the page's link to the station (a few milliseconds, every few seconds), until you clicked or
-  tabbed to it again: the browser took the focus off the greyed-out button. The PTT now keeps the
-  focus while it is greyed out, and Space works on it again the moment it is lit. A press while it is
-  greyed out still does nothing, and a screen reader still announces it as unavailable.
-- **Remote: panels no longer blank on a busy station.** When Nexus at the shack was busy with the
-  radio just as the Remote page first asked for a panel's reading, the shack answered that it was
-  busy and the panel stayed blank until it asked again. The page now asks again up to three times, a
-  quarter of a second apart, as it already did for the log and the other lists. Only readings are
-  asked again, never anything that transmits.
-- **Remote streaming: leaving full screen sends Stop TX in Chrome and Edge too.** In Firefox and
-  Safari, leaving full screen any way but **Exit full screen** already sent Stop TX. Chrome and Edge
-  skipped that Stop, trusting Esc to reach the page and stop first, so a browser that reported
-  holding Esc without doing it would let Esc leave full screen with nothing stopped. Now leaving full
-  screen any way but **Exit full screen** sends Stop TX in every desktop browser. Esc in full screen
-  still stops as before, so holding it to leave sends a second Stop, which is harmless. Phones and
-  tablets are unchanged: the back gesture leaves full screen without a Stop. It needs the Remote
-  page's update.
-- **Remote streaming: text in the picture is sharp.** A Nexus window larger than 2560×1600, a
-  3440×1440 ultrawide's for one, went out at half its width and height and the browser enlarged it
-  again, so every letter on the stream read soft. Now the Remote page tells Nexus at the shack how
-  many screen pixels it has for the picture, and Nexus scales its window down to exactly that, once
-  and never up, so the page draws it one pixel to one screen pixel. A window smaller than the page
-  is sent whole and enlarged by the browser as before. On the shack's own network a page that has
-  not said gets the whole window (up to 3840×2160); over the internet or the relay the ceiling
-  stays where it was (2560×1600's worth of pixels, 4 Mbit/s). A very large picture gets fewer frames
-  a second rather than more of the shack's processor. It needs the new Nexus at the shack, and the
-  Remote page's update for the picture to follow the browser's size.
-- **Remote streaming: a slow connection keeps a live picture.** Over the internet or the relay,
-  Nexus sent the picture at a fixed rate, up to 4 Mbit/s, whatever the connection could carry. On a
-  slower one (a shack's upload, a phone on cellular) most of it was lost: the browser showed no
-  picture at all, or one frozen for half a minute, and the stream's permission to transmit lapsed
-  with it. Nexus at the shack now measures what the connection carries, all the time, and sends the
-  picture to fit: softer and at fewer frames a second on a slow connection, and sharp again once it
-  widens. On a very slow one it also sends a smaller picture, so a fresh full frame still arrives
-  within about a second. The receive audio's share is kept first, so the picture never crowds out
-  the sound. On the shack's own network the picture follows the connection too, so a weak Wi-Fi
-  link no longer breaks it up. It needs the new Nexus at the shack; the Remote page is unchanged.
-- **Remote streaming: a shack with a public internet address of its own streams.** When the
-  shack's computer holds a public address itself, with no router in front of it, Nexus offered the
-  browser no address to connect to, and a browser behind a router never got the picture. Nexus at
-  the shack now offers that address, the one the internet already sees it at. It needs the new
-  Nexus at the shack.
-- **POTA / SOTA: the park reference, NEW PARK and the Hunting line read clearly in the dark
-  themes.** At night under the Blue and Violet accents, and the Nebula theme's own, they were
-  lettered too dim for small text (down to 4.2:1, under the 4.5:1 it needs). They now take the
-  same lighter shade of the accent as HUNT, wherever the board shows: the POTA / SOTA screen, its
-  pop-out, a Connect or dashboard-rail box and the Remote page.
-- **Remote over this network: a key or paired list the station cannot read points to Reset network
-  identity.** When the station's network key or its list of paired computers could not be read, the
-  card only said to unlock the credential store. It now says to press **Reset network identity**
-  under **Network identity** on the same card, and that a reset means pairing every computer again.
-- **Remote: the Repeaters channel list no longer scrolls sideways.** On the Remote page each FM
-  channel carries a Tune button the desktop does not, and in a medium-width window, or on a phone,
-  the rows ran past the list under a sideways scrollbar. A row whose buttons do not fit beside its
-  name and figures now carries them on a line of their own, at the right.
-- **Remote: Listen no longer breaks into a burst of static every few seconds.** Nexus at the shack
-  dropped a 20 ms piece of the receive audio about every second and a half, so the browser's player
-  kept running dry and filled each gap with its faint hiss for a moment. Nexus at the shack now
-  sends all of it. The page also keeps a little more audio in hand (180 ms instead of 120 ms), and
-  it plays a piece the network lost as a gap of the same length in the same place, so a packet
-  lost on Wi-Fi no longer comes back seconds later as static. The first half needs the new Nexus at
-  the shack.
-- **Remote: Listen plays loud enough to hear, and has a volume control.** The shack's receive audio
-  is set low for the decoders (about 30 on Nexus's level meter), and the page played it just as
-  low, far under anything else on the computer. Listen now raises it by 24 dB to start with, and a
-  **Volume** slider beside Listen sets anything from the station's own level to 42 dB above it;
-  the browser remembers your setting. A strong signal is held just under full scale instead of
-  clipping. The faint hiss that marks a gap in the audio follows the volume, so it stays under the
-  band.
-- **Remote streaming: a Mic level for your voice.** Your voice went to the rig at your microphone's own
-  level, because the stream page keeps the browser's automatic gain off (it pumps the level and
-  fights the rig's ALC), so a quiet microphone, such as a laptop's built-in one, sounded quiet on the
-  air. Nexus at the shack passes the voice on as it arrives, within half a dB, so the fix is on the
-  page: **Mic level**, beside **Mic on**, raises your voice by up to 20 dB or lowers it by up to 12,
-  and your browser remembers it. Its bar shows how loud your voice goes: raise it until your loudest
-  words reach the end. At any setting every peak is held 3 dB under full scale, so your voice never
-  clips on its way to the rig. It starts at your microphone's own level. The rig's own level for USB
-  audio still applies (Icom: USB MOD Level; FTDX10: RPORT GAIN in the SSB menu). It needs the Remote
-  page's update.
-- **Remote streaming: the microphone message names the real cause.** Whatever kept the stream page
-  from your microphone, it said the browser did not allow it and to allow it in the browser's
-  settings for this site, which sent you to the wrong place whenever something else had stopped
-  it. Now it says which one it was and where to fix it: the microphone is blocked for this site
-  (the browser's settings for the site), your computer's privacy settings are blocking it (Settings
-  ▸ Privacy & security ▸ Microphone on Windows, System Settings ▸ Privacy & Security ▸ Microphone on
-  a Mac), the browser's question was closed without an answer, no microphone was found, or the
-  microphone was found but could not start because another program may be using it. Anything else
-  is said with the browser's own name for the error. Pressing PTT still never asks for the
-  microphone: only the Mic button does. It needs the Remote page's update.
-- **Remote streaming: a pinch on a phone no longer presses anything at the shack.** Two fingers on
-  the stream's picture reached Nexus at the shack as two presses and a drag between them, on
-  whatever lay under them: a slider, the waterfall, a button. The page also followed the phone's own
-  zoom and shrank into a corner of the zoomed view. Now two fingers zoom and pan the picture on the
-  phone, and nothing of them is sent. One finger works Nexus as before, its press held back a tenth
-  of a second so that a second finger can make it a pinch; a quick tap still clicks. While zoomed,
-  the page asks Nexus at the shack for that many more pixels, so the picture stays sharp as it grows,
-  within the same limits as before. **Fit** shows the whole picture again. A pinch on the buttons
-  above the picture still zooms the browser, and the page now keeps its size when it does. It needs
-  the Remote page's update; the sharper zoom also needs the new Nexus at the shack.
-- **Remote streaming: a press that starts on the page's own buttons never reaches Nexus at the
-  shack.** Now and then a click on **Keep streaming** ("Still there?") outlasted the question: it went
-  away under the pointer, and moving the mouse before letting go sent that movement to Nexus at the
-  shack, marked as pressed. A mouse or pen press on the picture to close **More** in the phone layout
-  did the same every time, and so did a press that started on the dark bars beside the picture.
-  Nexus at the shack had seen no press, so it only moved its pointer and dragged nothing, but the page
-  should not have sent it. Now the picture sends nothing of a press that started anywhere else, until
-  it is let go. Moving the mouse over the picture, and clicking and dragging on it, work as before.
-  It needs the Remote page's update.
-- **RTTY and PSK macros: a caption that reads as a stop is refused in every language.** The F-key
-  editor refused a caption like Stop, Esc or Abort only in English, so a key that transmits could be
-  saved as "Stopp", "Parar", "Arrêter" or "停止", which looks like the key to press to stop. It now
-  refuses a caption that reads as a stop, halt, abort, cancel or Esc in English, German, Spanish,
-  French or Japanese, whichever language the screen is in, and says why; a language added later is
-  covered by its own words for Stop and Cancel. In English this adds Halt and Cancel. Ordinary
-  captions are not affected. A key captioned that way before keeps its caption until it is edited.
-- **The Conditions pop-out reopens the way you left it.** Reloaded, or closed and opened again, the
-  dashboard window could come back on whatever the main window had moved to since: another intent,
-  and that intent's map as the main window had it the day the pop-out first opened, satellites
-  included, even ones since turned off there. It now keeps its own intent, map and ★ / All, and only
-  a press in it changes them. Its satellites also stopped following the main window's **★ / All**:
-  flipping it there no longer fills the pop-out with every satellite while the pop-out still says ★.
-  And **Frame** ticks **Satellites** only on the map you are looking at: untick it there and it stays
-  off when you switch between the 2-D map and the 3-D globe.
-- **Conditions says when 3D can't draw, and the 2-D map brings your layers with it.** Whether the
-  3-D globe can draw is checked when Conditions opens, so after the computer's graphics fell back to
-  software, or on a remote desktop, a reload or a reopen quietly showed the Globe map instead, with
-  2-D layers nobody had picked in that window, satellites and US state outlines among them. A note
-  beside the map picker now says Globe is standing in and that your 3D pick is kept, and the first
-  time a window shows the 2-D map, its layers start from the ones you picked on that window's 3-D
-  globe.
-- **The satellite layer shows the birds you can work.** With no ★ birds picked, **Satellites** on the
-  map and the 3-D globe drew every satellite in the catalog, about 350, most of them small
-  telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM
-  repeater or a digital channel. Star birds in **Satellites** to see just those, or pick **All** for
-  the whole catalog.
-- **The 3-D globes let go of the graphics card when they close.** Each switch from 3D back to Flat on
-  Connect, and each time the Logbook's globe was closed, left that globe's drawing surface and its
-  32 MB picture of the map in memory for as long as Nexus ran. After about fifteen switches the
-  browser started taking the oldest drawing surfaces away to make room, and one of those could be the
-  waterfall's or the scope's. A closed globe now hands everything back at once.
-- **A 3-D globe the graphics card drops comes back, or says so.** A globe whose drawing surface was
-  taken away while it was shown (after sleep, a graphics driver reset, or too many surfaces at once)
-  went blank and stayed blank. Nexus now asks for it back and draws the globe again as soon as it
-  returns. If it has not come back within 10 seconds, the globe shows **3D view paused** with a
-  **Reload** button that brings it back.
-- **The Logbook's globe shows your QSOs again.** When the globe took on the flat map's lighter look,
-  the dots for your worked squares went pale. They were added to the map as light, which only shows
-  on a dark globe, so on the new map each one faded to a white speck without its band colour, and
-  the coast, border and state lines ran across them. Each square is now a dot in its band's colour
-  with a dark edge, as on the flat map, drawn over the lines.
-- **The Logbook's globe shows day and night again, every time it opens.** It often opened lit evenly
-  all round, pale and washed out, with no night side. The globe's built-in lights could come on after
-  the Logbook had set up its sun, and then stayed on beside it. The Logbook's globe now sets its
-  lights the way Connect's globe does, so the sun lights the day side and the night side stays in
-  shade.
-- **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator at
-  a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer than
-  an ordinary CQ. The row now has the needed-park green the band strip and the map already give it,
-  in every theme.
-- **Nexus now carries the license texts of the packages its interface is built with.** NOTICE named
-  them, but their MIT, ISC and Apache-2.0 licenses ask for the license text itself to travel with
-  every copy, and the installers did not carry it. Every installer now has them, with the CQ-zone
-  data's notice, in `resources/ui/THIRD-PARTY.txt` beside COPYING and NOTICE, and the new
-  **Licenses** button in the Settings header, beside **Check for updates**, shows them.
-- **Nexus now carries the license texts of the Rust crates it is built from, too.** The installers
-  carried the texts of only a few of them, and their licenses, MIT, Apache-2.0, BSD, ISC, Zlib,
-  Unicode and MPL-2.0 among them, ask for the text itself to travel with every copy. Every
-  installer now has the texts of all of them in `resources/rust/THIRD-PARTY.txt`, and the
-  **Licenses** button shows them after the interface's.
-- **POTA/SOTA: a contact with an activator logs the park's state, not the activator's home
-  state.** A contact you hunted, from the POTA/SOTA board, the map, the Needed board, Band Activity
-  or the Remote page, took its state from the activator's callsign: the address on their FCC
-  licence, or their callbook entry. So an Ohio ham at a North Dakota park was logged as Ohio, and
-  your exports, your uploads and your Worked All States count all said Ohio. Now the contact takes
-  the state the park or summit is in: a park's from pota.app's own spot, or from the park list once
-  you have downloaded it, and a summit's from its SOTA association or region. The log form puts
-  that state in the State box, so you see it before you log. A state you type yourself still wins,
-  and a park you type into the log form is placed the same way. A park outside the US and Canada,
-  or one Nexus cannot place, logs its state as before. Contacts already in your log are not
-  changed.
-- **POTA: a park on a state line asks which state, and is never guessed.** A park in more than
-  one state cannot say which one the activator is in, and the activator's home state is no answer.
-  While the log form holds such a park, it shows the park's states to pick from: pick the one the
-  activator says they are in. A contact logged without a pick has no state, and the Logbook marks
-  it with a **?** before the park so you can set it later. The mark shows on any park or summit
-  contact in the US or Canada that has no state, and Nexus no longer fills such a contact's state
-  from the activator's callsign, when you log it, import it, or when it fills in contacts in the
-  background.
-- **Logbook: Check park states, for the park and summit contacts already in your log.** Before
-  this release a hunted contact took the activator's home state, and an import kept whatever state
-  it carried. **Check park states** in the Logbook lists every park or summit contact whose park is
-  in one state and which holds another state, or none, with the old state beside the park's. Tick
-  the ones to change and press the button: only those change, and only if they still hold the
-  state shown. A confirmed contact starts unticked, because its confirmation came with the state
-  the other station signed. Nothing is uploaded again, and nothing happens until you open the
-  check and press the button. Parks on a state line are not listed (pick their state in the
-  contact), and nor are parks Nexus cannot place.
-- **Needed board: Confirmation opportunities off now holds for POTA/SOTA rows too.** Rows taken from
-  the POTA/SOTA feed still showed the LoTW chip, or read "Confirm", with that setting off.
-- **Needed board: the STATE chip says where the state came from.** Its tooltip said "best-guess from
-  the grid" on every row; it now names the park or summit, the station's licence, or its grid.
-- **Needed board: an Alaska or Hawaii station is in AK or HI on cluster and PSK Reporter rows too.**
-  Those rows used the mailing address on the station's FCC licence, so an Alaskan with an address in
-  another state could show New State for that state. Your own radio's decodes already placed it right.
-- **Pounce: "New entity, zone, or US state" now alerts for a US state you still need.** It never
-  did, because a spot names no state; Pounce now finds the state as the Needed board does.
-
-### Changed
-
-- **The map: sharp coastlines, borders and terrain at every zoom, on the flat map and the 3D
-  globe alike.** The map is now drawn from Natural Earth's detailed geography at three levels of
-  detail, picked by how far you are zoomed in, so coastlines, lakes, the major rivers, country
-  borders and US state lines stay crisp from the whole world down to a single state; the old flat
-  map was a blurred picture once you zoomed. The flat map lays shaded relief under the lines, and
-  the 3D globe (and the logbook's globe) draws the same sharp lines over NASA's pictures of the
-  Earth (next entry). A lighter palette makes the
-  greyline's day and night easy to tell apart; the "heard you" and "you heard" paths carry a dark
-  edge so they read on the lighter land, and the grid and range rings are drawn in the map's own
-  line colour. The detailed map is only loaded when you zoom in, so the map opens as quickly as
-  before, and panning and zooming the flat map takes a fraction of the work it did. A built-in
-  dark theme keeps its own map colours.
-- **The 3D globe and the Logbook's globe show the Earth as NASA photographed it.** The day side is
-  NASA's Blue Marble and the night side its Black Marble, the Earth's city lights after dark. The
-  two meet at the greyline where it is right now, so the lights come on wherever the sun has set.
-  The coastlines, borders and US state lines (in your theme's map colours), every layer and the
-  Logbook's QSO dots are drawn over the pictures. The Logbook's globe now moves its day and night
-  with the sun while it stays open; it used to keep them where they were when it opened. With City
-  lights turned off, the night side is dark. The flat map keeps its own look. The two pictures add
-  about 665 KB to the download.
-- **Linux and Raspberry Pi without a graphics card: a shorter pause as the scope and waterfall
-  start.** On Linux, Nexus times its two ways of drawing the scope and waterfall once, just after
-  the window opens, and keeps the faster. Where graphics are drawn in software, the first timed
-  frame already settles it by a wide margin, so the check now stops there: on a slow test machine
-  its pause went from 89–105 ms to 57–70 ms. With a graphics card, or wherever the two ways are
-  close, the check runs in full as before.
-- **Remote access says what a streaming browser can do.** A browser approved for station
-  controls that streams this station operates Nexus as you would at the shack, transmit
-  included, whether or not its FT8/FT4 transmit box is ticked. Settings ▸ Station ▸ Remote
-  access, the streaming switch's hint, the question that pops up when a browser asks to stream,
-  and the guide now say so. The tick reads **Also allow FT8/FT4 transmit from the Remote page**,
-  and the FT8/FT4 switches under each browser say "from the Remote page" too, because that is
-  all they cover. The hints add that revoking a browser's station controls ends its stream. On
-  the Remote page, Settings says that accounts, backups, remote access and the station's own
-  settings change in Nexus at the station, in person or streamed to that browser. Only the words
-  changed: what an approval grants and every transmit rule stay as they were.
-- **Remote streaming: a browser on the shack's own network now streams directly.** Nexus at the
-  shack now gives the browser its address on your home network as well as its internet address,
-  so a browser on the same Wi-Fi or wired network connects straight to it, with no relay. Until
-  now such a browser sat on "Waiting for the station's picture" and then gave up, because most
-  home routers do not pass a connection from your own network back in through their internet
-  address. A browser on any other network connects as before. What Nexus shares is the one
-  address it streams from (such as 192.168.1.20), only when it is a private address (10.x,
-  172.16–31.x or 192.168.x) or the computer's own public one, and only to a browser whose stream
-  it has admitted, through the Remote service: never a VPN's 100.x address, and nothing else about
-  your network. It needs the new Nexus at the shack; the Remote site is unchanged.
-- **Band activity: every POTA activator shows in a dim POTA green.** In the Phone and CW
-  cockpits' Band activity strip and in its pop-out band map, a station activating a park now
-  gets a dim green mark with its P, even when there is nothing new to gain from it, so you can
-  see every activation on the band at a glance. A park you still need keeps the full new-park
-  green, and a real need such as a new country still shows its own colour first. The dim
-  colour comes and goes with the P. SOTA (S) and DXpeditions (✈) are unchanged. In the light
-  theme the full new-park green (and the P badge with it) is darker, so the two greens
-  differ in brightness and not only in colour, which helps if you find greens hard to tell apart.
-- **Needed board: FT4's badge has its own colour.** In the dark themes it was the very green of a park
-  you still need, and a park need's row can show both; it is now mint. In the light theme the new-park
-  green moved away from FT4's badge instead (above).
-- **A park you still need now comes before a confirmation everywhere.** When an activator is at
-  a park or summit you have not worked in this activation and is also a confirmation opportunity
-  (worked before, not yet confirmed), the park now leads: Band activity and its band map show the
-  new-park green instead of the confirmation grey, as the decode list already showed the park,
-  and the Call Roster, the Needed board and Connect put the park first too. A new country or any
-  other award need still comes first. The board's order, alerts, sounds and logging are
-  unchanged.
-- **The spot key names both POTA greens.** The colour key in Band activity and in the band map
-  now shows **New park**, the full green of a park you still need, and beside it **POTA
-  activator**, the dim green of any other activator, between MODE and LoTW. In a narrow pane the
-  key can wrap onto one or two more lines.
-- **FlexRadio: native DAX audio (Beta) now works only through the Flex native client.** With the
-  client on, receive audio comes straight from the radio, the digital modes transmit over DAX,
-  and Phone at the shack keeps the radio's own mic. Nexus changes the radio's DAX transmit
-  setting only between overs, never while SmartSDR's own DAX is connected, and puts yours back
-  when it lets go. On SmartSDR CAT the toggle now does nothing and audio stays on the sound
-  devices (SmartSDR's DAX): the older native audio path there sent transmit audio where the radio
-  does not take it, so an over keyed with no audio. Your setting is kept for when the client
-  serves the radio, and its hint in Settings ▸ Radio ▸ Rig & CAT says so. Native DAX audio is
-  Beta and has not been run on a real Flex yet: before you use it for FT8, check your own
-  signal's DT on a second receiver.
-- **Settings: Flex native panadapter is labelled Beta.** Its toggle in Settings ▸ Radio ▸ Rig & CAT
-  read "(early access)" and now reads "(Beta)", like Flex native DAX audio and the Flex native client,
-  in every language, and its hint says Beta too. Both native parts are Beta and opt-in, off until you
-  turn them on; the panadapter itself works as before.
-- **Voice keyer, APRS and SSTV: they say so when the radio has the mic.** With Flex native DAX
-  audio on, Phone at the shack and APRS in FM use the radio's own mic, so a recorded message, an
-  APRS packet or an SSTV picture would not go out and the mic would in its place. The keyer now
-  says it can't play, APRS and SSTV say they can't send, and none of them keys anything. An
-  automatic APRS ack that can't go out is skipped and noted in the diagnostic log. Everywhere
-  else they work as before.
-- **Remote over this network: the pairing code is hard to miss.** After you press **Pair a
-  computer**, the code shows at the top of the card in large type, with the time it has left
-  counting down, and the card scrolls to it.
+## [1.17.0] — 2026-10-06
 
 ### Added
 
 - **POTA/SOTA: each activator's state on the board, lit when you still need it for WAS.** Every row
-  now shows the US state or Canadian province the activator is in, ahead of the park or summit
-  name: for a park, from pota.app's own spot (a park on a state line shows each state, as
-  **MT·ND**, and a long trail shows two and how many more); for a summit, from its SOTA association,
-  per SOTA's own list of associations and regions (a summit that list does not place in one state
-  shows none). A US state your log does not yet hold on that spot's band is lit in the New State
-  colour, by the same rule Band Activity uses for a new state. Hover the state for its name and, for
-  a park on a state line, a reminder that the contact counts for the state the activator is
-  actually in. Screen readers read the name. The Remote page's board shows them too, lit the same
-  way; it needs the Remote page's update.
-- **Needed board: an activator in a state you still need shows as a new state**, as on the
-  POTA/SOTA board: per band, a park on a state line when either state is needed, and in the park's
-  or summit's state, not the activator's home state, whether the board heard them from the
-  POTA/SOTA feed, the cluster or your own radio. A park Nexus cannot place is judged as before.
-- **POTA/SOTA activations: your contacts say which state you activated from.** Start an
-  activation at a park in one state, or on a summit SOTA places in one, and every contact you log
-  carries that state as `MY_STATE`, in your log, your exports and your uploads. At a park on a
-  state line the activation strip asks which state you are in, and uses the one you pick; until you
-  pick, no `MY_STATE` is written. A park Nexus cannot place writes none. LoTW credits the state of
-  the TQSL Station Location you sign with, so sign an activation's contacts with a location in that
-  state, as the strip's tooltip says. An activation started from the Remote page is placed the same
-  way, but a state line has to be picked at the station. NEEDS-BENCH: how TQSL treats a
-  `MY_STATE` that differs from the Station Location you sign with.
-
-- **Street map: a street-level map of your area as a fifth map choice.** **Street** joins Globe,
-  3D, Flat and Beam in the Conditions map picker (main window and pop-out). Until you download an
-  area it carries a download badge, and pressing it opens a sheet: around your station or the map's
+  now shows the US state or Canadian province the activator is in, ahead of the park or summit name:
+  for a park, from pota.app's own spot (a park on a state line shows each state, as **MT·ND**, and a
+  long trail shows two and how many more); for a summit, from its SOTA association, per SOTA's own
+  list of associations and regions (a summit that list does not place in one state shows none). A US
+  state your log does not yet hold on that spot's band is lit in the New State colour, by the same
+  rule Band Activity uses for a new state. Hover the state for its name and, for a park on a state
+  line, a reminder that the contact counts for the state the activator is actually in. Screen
+  readers read the name.
+- **Needed board: an activator in a state you still need shows as a new state**, as on the POTA/SOTA
+  board: per band, a park on a state line when either state is needed, and in the park's or summit's
+  state, not the activator's home state, whether the board heard them from the POTA/SOTA feed, the
+  cluster or your own radio. A park Nexus cannot place is judged as before. The STATE chip's tooltip
+  now says where the state came from (the park or summit, the station's licence, or its grid)
+  instead of "best-guess from the grid" on every row.
+- **POTA/SOTA activations: your contacts say which state you activated from.** Start an activation
+  at a park in one state, or on a summit SOTA places in one, and every contact you log carries that
+  state as `MY_STATE`, in your log, your exports and your uploads. At a park on a state line the
+  activation strip asks which state you are in, and uses the one you pick; until you pick, no
+  `MY_STATE` is written. A park Nexus cannot place writes none. LoTW credits the state of the TQSL
+  Station Location you sign with, so sign an activation's contacts with a location in that state, as
+  the strip's tooltip says. NEEDS-BENCH: how TQSL treats a `MY_STATE` that differs from the Station
+  Location you sign with.
+- **Logbook: Check park states, for the park and summit contacts already in your log.** Before this
+  release a hunted contact took the activator's home state, and an import kept whatever state it
+  carried. **Check park states** in the Logbook lists every park or summit contact whose park is in
+  one state and which holds another state, or none, with the old state beside the park's. Tick the
+  ones to change and press the button: only those change, and only if they still hold the state
+  shown. A confirmed contact starts unticked, because its confirmation came with the state the other
+  station signed. Nothing is uploaded again, and nothing happens until you open the check and press
+  the button. Parks on a state line are not listed (pick their state in the contact), and nor are
+  parks Nexus cannot place.
+- **Street map: a street-level map of your area as a fifth map choice.** **Street** joins Globe, 3D,
+  Flat and Beam in the Conditions map picker (main window and pop-out). Until you download an area
+  it carries a download badge, and pressing it opens a sheet: around your station or the map's
   centre, a square 50, 100, 200 or 400 km across, All streets or Main roads, with the exact size,
-  your free disk space and the map data's licence shown before anything downloads. The download
+  your free disk space and the map data's licence shown before anything downloads. The area comes
+  from maps.hamradiotools.io, only when you ask for it, and is kept on this computer. The download
   carries on while you use Nexus, shows its percent on the Street choice, and resumes after a
   restart or a dropped connection. Your own layers draw on the street map: paths, the greyline,
-  satellites, grid lines and labels down to 6- and 8-character squares, and from city zoom a
-  station or spot known only by its grid square is drawn as that square, not a pin. **Settings ▸
-  Appearance ▸ Map & globe ▸ Street maps** lists the areas you have, checks for newer map data
-  only when you ask, and removes an area. A Street pick that cannot draw (no area downloaded, or
-  graphics without WebGL2) shows Flat and says why. Map data © OpenStreetMap contributors (ODbL).
-
-- **FlexRadio: a "may still be transmitting" alarm stays on screen until you dismiss it.** When
-  Nexus cannot be sure the radio let go of the transmitter (the radio did not confirm an unkey,
-  the connection was lost or the radio stopped answering during a transmission, an earlier Nexus
-  session still holds the transmitter, or Nexus unkeyed after missed pings), an amber banner under
-  the cockpit header says so, with the radio's name and the UTC time, and stays until you click
-  **Dismiss**. Before, the alarm reached only the CAT status line, and the next CAT message
-  replaced it, so it could scroll off unseen. A second alarm waits behind the first ("1 of 2")
-  rather than replacing it, and Dismiss clears only the one you are reading. A reconnect, a radio
-  switch or a settings save leaves it on screen. It shows in every cockpit, APRS included, and on
-  the Remote page, where it has no Dismiss: clearing it is done at the shack. Nothing else
-  changes: the dial, tuning, Tune, PTT and Stop TX work as before, and the banner never covers
-  Stop TX.
-
-- **FT8, JS8, RTTY, PSK and SSTV: the radio's own scope as a pane.** ⊞ Panels has a new **RF
-  scope** entry in the five digital cockpits, off until you tick it, so nobody's screen changes on
-  the update. It draws the radio's panadapter, an Icom's scope over CI-V at 115200 baud or a
-  FlexRadio's with the native panadapter on, and the audio waterfall stays where it was. In FT8 it
-  stands beside the waterfall and shares its height; in JS8 it heads the first column; in RTTY, PSK
-  and SSTV it is the first pane under the Stop TX strip. It only shows the band: a click on it does
-  not tune the radio. An Icom in a data mode streams its scope over CAT only while the pane is on
-  screen, and stops two seconds after you hide it; it still pauses while you transmit. Not yet
-  checked on a radio.
+  satellites, grid lines and labels down to 6- and 8-character squares, and from city zoom a station
+  or spot known only by its grid square is drawn as that square, not a pin. **Settings ▸
+  Appearance ▸ Map & globe ▸ Street maps** lists the areas you have, checks for newer map data only
+  when you ask, and removes an area. A Street pick that cannot draw (no area downloaded, or graphics
+  without WebGL2) shows Flat and says why. Map data © OpenStreetMap contributors (ODbL).
+- **FT8, JS8, RTTY, PSK and SSTV: the radio's own scope as a pane.** ⊞ Panels has a new **RF scope**
+  entry in the five digital cockpits, off until you tick it, so nobody's screen changes on the
+  update. It draws the radio's panadapter, an Icom's scope over CI-V at 115200 baud or a FlexRadio's
+  with the native panadapter on, and the audio waterfall stays where it was. In FT8 it stands beside
+  the waterfall and shares its height; in JS8 it heads the first column; in RTTY, PSK and SSTV it is
+  the first pane under the Stop TX strip. It only shows the band: a click on it does not tune the
+  radio. An Icom in a data mode streams its scope over CAT only while the pane is on screen, and
+  stops two seconds after you hide it; it still pauses while you transmit. Not yet checked on a
+  radio.
 - **The scopes: spot tags, your licence-class edges, and FT8 decodes on the RF scope.** The Phone
   and CW scopes tag the spots Band Activity shows for your band (SSB on Phone, CW on CW) at their
-  frequencies, in Band Activity's colours, fading over half an hour; where too many crowd together
-  the freshest are shown and the rest counted. Click a tag to work the station, as a click in Band
-  Activity does; while you transmit, on the Remote page or with CAT down a tag is only a label,
-  and a filter edge you can drag keeps the click. Every scope also tints the frequencies your
-  licence class (Settings ▸ Station) may not transmit the current mode on, from the same table
-  as the transmit lock. It only shows the lock: 🔒 TX LOCKED still decides, judging your whole
-  signal, and an Open class has no tint. In FT8 and FT4 the RF scope pane tags the last slot's
-  decodes at the dial plus their offset and draws the RX and TX offsets; it still tunes nothing.
-  The tags and tint draw on a layer of their own, so a new spot never redraws the waterfall. The
-  tint is not on the Remote page yet. Not yet checked on a radio.
-- **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has
-  a new place, **Left side**: a column from under the header down to the dock, beside the scope,
-  so the band map and the two boards get the whole height of the window instead of what is left
-  under the scope. **◀** in Column 1 puts Band Activity, Spots or Needed there and **▶** takes it
-  back. Drag the left side's right edge to set its width; Phone remembers it, and fits it to a
-  smaller window without forgetting it. The left side shows on windows about 1280 px wide or wider;
-  on a narrower one those panes stand in their usual columns and come back when the window is wide
-  enough again. PTT and the dock do not move, Tune and Stop TX stay right under the scope at the
-  same height, and the voice keyer and the log form cannot go there. The arrangement is saved with
-  the rest of the Phone layout, so it comes back with your profile and with a settings backup.
-- **Remote stream: a relay for networks where a direct connection fails.** Where the browser
-  cannot reach the shack directly, as on some mobile and office networks, the stream can now pass
-  through Cloudflare's relay instead. A direct connection is always tried, and preferred: the
-  relay carries the stream only when nothing direct works, and it carries it still encrypted,
-  unable to read it. Whenever the relay cannot be reached, the stream works direct exactly as
-  before.
-- **Remote streaming: Esc stops transmitting anywhere on the stream page, and Full screen.** Esc is
-  Stop TX on the stream page wherever the keyboard is, as it is on every screen of Nexus, and it
-  still goes on to Nexus at the shack when the picture has it. A **Full screen** button fills the
-  screen with the whole stream page, Stop TX included. In Chrome and Edge Esc stays a Stop in full
-  screen: hold Esc for two seconds, or press **Exit full screen**, to leave. In Firefox and Safari,
-  where Esc leaves full screen before the page can see it, leaving full screen any way but **Exit
-  full screen** sends Stop TX. On a phone or tablet full screen turns to landscape where the browser
-  allows it, and the back gesture leaves it without a Stop. An iPhone has no full screen for a web
-  page, so the button is not shown there. It needs the Remote page's update.
+  frequencies, in Band Activity's colours (the dark theme's, in every theme, since the scope stays
+  dark), fading over half an hour; where too many crowd together the freshest are shown and the rest
+  counted. Click a tag to work the station, as a click in Band Activity does; while you transmit, on
+  the Remote page or with CAT down a tag is only a label, and a filter edge you can drag keeps the
+  click. Every scope also tints the frequencies your licence class (Settings ▸ Station) may not
+  transmit the current mode on, from the same table as the transmit lock. It only shows the lock: 🔒
+  TX LOCKED still decides, judging your whole signal, and an Open class has no tint. In FT8 and FT4
+  the RF scope pane tags the last slot's decodes at the dial plus their offset and draws the RX and
+  TX offsets; it still tunes nothing. The tags and tint draw on a layer of their own, so a new spot
+  never redraws the waterfall. The tint is not on the Remote page yet. Not yet checked on a radio.
+- **Phone and CW scope: the filter you are listening through, with a handle on it.** Where the radio
+  reports its filter width, the scope shades the passband at the dial. On SSB its far edge, and on
+  CW both edges, can be dragged to set the width, in the same range and steps as the BW − and +
+  buttons; the radio follows within a second or two. In the Phone scope's Auto span the far edge
+  sits on the scope's border: grab it there and drag in to narrow, or out past the border to widen.
+  Near an edge, a press at the scope's side takes the edge; elsewhere there it still scrolls the
+  band. The edge is not offered in FM, in a DATA mode, on the Remote page, or while anything is
+  transmitting, and no width is ever sent to a keyed radio. A manual notch the radio reports on
+  draws as a red line through the scope. With the scope focused, keys do what the mouse does: ← and
+  → tune (Shift for bigger steps), Enter tunes onto the signal in the passband, [ and ] narrow and
+  widen the filter, and ↑ and ↓ scroll back while paused. On an IC-7300, IC-705, IC-905, IC-7610 or
+  IC-9700 on Nexus's own CI-V connection, the filter width is now read from the radio and set on it;
+  before, BW showed a width it had never sent there. Checked on an FTDX10 through Hamlib and an
+  IC-9700 on Nexus's own CI-V; the width over CI-V is not yet checked on the IC-7300, IC-705, IC-905
+  or IC-7610.
+- **Phone and CW scope: display settings under ⚙.** The ⚙ on the Phone and CW scope, and on the RF
+  scope pane, opens a strip of display settings, kept for each cockpit: **Resolution** (Fast,
+  Balanced or Sharp: a shorter window resolves keying and speech onsets, a longer one draws a
+  carrier narrower; Balanced is the default), **Smooth**, which averages each frequency over
+  anything from Off to 2 seconds, the **Detector** (Peak keeps a narrow carrier's level where one
+  pixel covers several frequencies; Avg draws a smoother noise floor), and, for a radio's scope that
+  sweeps slower than the waterfall moves, **Smooth scroll** (the default, which repeats the newest
+  sweep until the next one arrives) or **Row per sweep**. Out of the box the Phone scope now smooths
+  over 250 ms and the CW scope not at all; set Smooth to Off to draw every sweep as it arrives. The
+  RF scope pane has no Resolution setting, since its rows are the radio's own sweeps.
+- **Phone: a full-height left side for Band Activity, Spots and Needed.** ⊞ Panels ▸ Arrange has a
+  new place, **Left side**: a column from under the header down to the dock, beside the scope, so
+  the band map and the two boards get the whole height of the window instead of what is left under
+  the scope. **◀** in Column 1 puts Band Activity, Spots or Needed there and **▶** takes it back.
+  Drag the left side's right edge to set its width; Phone remembers it, and fits it to a smaller
+  window without forgetting it. The left side shows on windows about 1280 px wide or wider; on a
+  narrower one those panes stand in their usual columns and come back when the window is wide enough
+  again. PTT and the dock do not move, Tune and Stop TX stay right under the scope at the same
+  height, and the voice keyer and the log form cannot go there. The arrangement is saved with the
+  rest of the Phone layout, so it comes back with your profile and with a settings backup.
+- **Remote over this network (Windows): operate the station from Nexus on another computer, with no
+  internet.** At the station, turn on **Remote over this network** in Settings ▸ Station ▸ Remote
+  access and press **Pair a computer**: the card shows the station's address and a code in large
+  type, with the time it has left counting down. On the other computer, **Stations on this
+  network…** in the same place opens a Nexus window that finds the station by name, or takes its
+  address, and pairs with that code. The code works once, within ten minutes, and whoever types it
+  in time can operate the station, transmit included, so keep it to yourself. The paired computer
+  then streams the station in that window, as the Remote stations window does (F11 for full screen;
+  Esc over the picture still stops transmitting), and keeps access until you remove it at the
+  station; up to eight computers can be paired. The station listens only on a private network, only
+  computers paired with it can connect, and turning it on and pairing are done only at the station
+  itself. If the station cannot read its network key or its list of paired computers, the card says
+  to press **Reset network identity** under **Network identity**, and that a reset means pairing
+  every computer again. Both computers need Windows for now.
+- **Remote stations window (Windows).** On the computer you operate from, Settings ▸ Station ▸
+  Remote access ▸ **Remote stations…** opens the Remote page in a Nexus window of its own instead of
+  a browser tab. **F11** puts the window in full screen and back; it is the window's own full
+  screen, so **Esc** over the picture still stops transmitting. The browser's own shortcuts (reload,
+  print, find and the like) are off in this window, so those keys reach the page and the shack.
+  Links to other sites open in your browser, and the window reopens where you left it, fitted to the
+  screens attached. You sign in there and approve the window at the station once, like a new
+  browser. The page in it can reach nothing in Nexus, exactly as in a browser. Linux and macOS keep
+  using Remote in a browser for now.
+- **Remote stream: a relay for networks where a direct connection fails.** Where the browser cannot
+  reach the shack directly, as on some mobile and office networks, the stream can now pass through
+  Cloudflare's relay instead. A direct connection is always tried, and preferred: the relay carries
+  the stream only when nothing direct works, and it carries it still encrypted, unable to read it.
+  Whenever the relay cannot be reached, the stream works direct exactly as before.
 - **Remote streaming on a phone: a layout made for it.** Held upright, the stream page has Stop TX
   and the stream's state in a bar over the picture, and big thumb buttons under it: Hold PTT, Mic,
   Listen and Keyboard. Turned on its side, the picture gets the screen's whole height beside a rail
@@ -594,35 +157,447 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Home Screen on an iPhone or iPad, or install it from Chrome or Edge. Opened from there it has no
   browser bars, which on an iPhone is the only way to a full-screen stream. It needs the Remote
   page's update.
-- **Remote stations window (Windows).** On the computer you operate from, Settings ▸ Station ▸
-  Remote access ▸ **Remote stations…** opens the Remote page in a Nexus window of its own instead
-  of a browser tab. **F11** puts the window in full screen and back; it is the window's own full
-  screen, so **Esc** over the picture still stops transmitting. The browser's own shortcuts (reload,
-  print, find and the like) are off in this window, so those keys reach the page and the shack.
-  Links to other sites open in your browser, and the window reopens where you left it, fitted to
-  the screens attached. You sign in there and approve the window at the station once, like a new
-  browser. The page in it can reach nothing in Nexus, exactly as in a browser. Linux and macOS
-  keep using Remote in a browser for now.
-- **Phone and CW scope: the filter you are listening through, with a handle on it.** Where the radio
-  reports its filter width, the scope shades the passband at the dial. On SSB its far edge, and on CW
-  both edges, can be dragged to set the width, in the same range and steps as the BW − and + buttons;
-  the radio follows within a second or two. In the Phone scope's Auto span the far edge sits on the
-  scope's border: grab it there and drag in to narrow, or out past the border to widen. Near an edge,
-  a press at the scope's side takes the edge; elsewhere there it still scrolls the band. The edge is
-  not offered in FM, in a DATA mode, on the Remote page, or while anything is transmitting, and no
-  width is ever sent to a keyed radio. A manual notch the radio reports on draws as a red line through
-  the scope. With the scope focused, keys do what the mouse does: ← and → tune (Shift for bigger
-  steps), Enter tunes onto the signal in the passband, [ and ] narrow and widen the filter, and ↑ and
-  ↓ scroll back while paused. On an IC-7300, IC-705, IC-905, IC-7610 or IC-9700 on Nexus's own CI-V
-  connection, the filter width is now read from the radio and set on it; before, BW showed a width it
-  had never sent there. Checked on an FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V; the
-  width over CI-V is not yet checked on the IC-7300, IC-705, IC-905 or IC-7610.
+- **Remote streaming: Esc stops transmitting anywhere on the stream page, and Full screen.** Esc is
+  Stop TX on the stream page wherever the keyboard is, as it is on every screen of Nexus, and it
+  still goes on to Nexus at the shack when the picture has it. A **Full screen** button fills the
+  screen with the whole stream page, Stop TX included. In Chrome and Edge Esc stays a Stop in full
+  screen: hold Esc for two seconds, or press **Exit full screen**, to leave. Leaving full screen any
+  way but **Exit full screen** sends Stop TX in every desktop browser, so in Firefox and Safari,
+  where Esc leaves full screen before the page can see it, Esc still stops transmitting. On a phone
+  or tablet full screen turns to landscape where the browser allows it, and the back gesture leaves
+  it without a Stop. An iPhone has no full screen for a web page, so the button is not shown there.
+  It needs the Remote page's update.
+- **FlexRadio: Nexus's own Flex client (Beta).** With **Flex native client (Beta)** on, in
+  Settings ▸ Radio ▸ Rig & CAT for a FlexRadio on a network connection, Nexus connects to the radio
+  itself, at the **Flex radio IP**, as one of its SmartSDR clients, and runs CAT and PTT on a slice
+  of its own. It is off until you turn it on for that radio, SmartSDR CAT stays the default, and if
+  Nexus cannot connect it falls back to SmartSDR CAT. Flex native DAX audio now works through it
+  (see Changed). The client's protocol code is ported from AetherSDR. Not yet checked on a real Flex
+  radio: try transmit into a dummy load first.
+- **FlexRadio: a "may still be transmitting" alarm stays on screen until you dismiss it.** When
+  Nexus cannot be sure the radio let go of the transmitter (the radio did not confirm an unkey, the
+  connection was lost or the radio stopped answering during a transmission, an earlier Nexus session
+  still holds the transmitter, or Nexus unkeyed after missed pings), an amber banner under the
+  cockpit header says so, with the radio's name and the UTC time, and stays until you click
+  **Dismiss**. That includes a Flex radio you switched away from while it was transmitting, which
+  Nexus keeps connected in the background until the radio confirms the unkey: its alarm is named for
+  that radio, not the one you switched to, and one raised as Nexus closes or reopens a radio's
+  connection still reaches the banner. A second alarm waits behind the first ("1 of 2") rather than
+  replacing it, and Dismiss clears only the one you are reading. A reconnect, a radio switch or a
+  settings save leaves it on screen. It shows in every cockpit, APRS included, and on the Remote
+  page, where it has no Dismiss: clearing it is done at the shack. Nothing else changes: the dial,
+  tuning, Tune, PTT and Stop TX work as before, and the banner never covers Stop TX. NEEDS-BENCH on
+  a Flex radio.
 - **Phone and CW scope: the Sub receiver's frequency beside yours.** On a dual-receiver radio that
   shows a SUB row, the radio's own scope marks the Sub's frequency with a cyan SUB line whenever it
-  is in view. It is only a mark: a click on it tunes nothing, neither the Sub nor your main receiver.
-  Today Nexus knows the Sub's frequency only while a satellite pass transmits on it (an IC-9700 on
-  Nexus's own CI-V connection), and the Sub is then on another band than the scope, so you will not
-  see the mark yet; it appears once the Sub's frequency is read from the radio.
+  is in view. It is only a mark: a click on it tunes nothing, neither the Sub nor your main
+  receiver. Today Nexus knows the Sub's frequency only while a satellite pass transmits on it (an
+  IC-9700 on Nexus's own CI-V connection), and the Sub is then on another band than the scope, so
+  you will not see the mark yet; it appears once the Sub's frequency is read from the radio.
+
+### Changed
+
+- **The map: sharp coastlines, borders and terrain at every zoom, on the flat map and the 3D globe
+  alike.** The map is now drawn from Natural Earth's detailed geography at three levels of detail,
+  picked by how far you are zoomed in, so coastlines, lakes, the major rivers, country borders and
+  US state lines stay crisp from the whole world down to a single state; the old flat map was a
+  blurred picture once you zoomed. The flat map lays shaded relief under the lines, and the 3D globe
+  (and the logbook's globe) draws the same sharp lines over NASA's pictures of the Earth (next
+  entry). A lighter palette makes the greyline's day and night easy to tell apart; the "heard you"
+  and "you heard" paths carry a dark edge so they read on the lighter land, and the grid and range
+  rings are drawn in the map's own line colour. The detailed map is only loaded when you zoom in, so
+  the map opens as quickly as before, and panning and zooming the flat map takes a fraction of the
+  work it did. A built-in dark theme keeps its own map colours.
+- **The 3D globe and the Logbook's globe show the Earth as NASA photographed it.** The day side is
+  NASA's Blue Marble and the night side its Black Marble, the Earth's city lights after dark. The
+  two meet at the greyline where it is right now, so the lights come on wherever the sun has set.
+  The coastlines, borders and US state lines (in your theme's map colours), every layer and the
+  Logbook's QSO dots are drawn over the pictures. The Logbook's globe now moves its day and night
+  with the sun while it stays open; it used to keep them where they were when it opened. With City
+  lights turned off, the night side is dark. The flat map keeps its own look. The two pictures add
+  about 665 KB to the download.
+- **Remote streaming: a browser on the shack's own network now streams directly.** Nexus at the
+  shack now gives the browser its address on your home network as well as its internet address, so a
+  browser on the same Wi-Fi or wired network connects straight to it, with no relay. Until now such
+  a browser sat on "Waiting for the station's picture" and then gave up, because most home routers
+  do not pass a connection from your own network back in through their internet address. A browser
+  on any other network connects as before. What Nexus shares is the one address it streams from
+  (such as 192.168.1.20), only when it is a private address (10.x, 172.16–31.x or 192.168.x) or the
+  computer's own public one, and only to a browser whose stream it has admitted, through the Remote
+  service: never a VPN's 100.x address, and nothing else about your network. It needs the new Nexus
+  at the shack; the Remote site is unchanged.
+- **The satellite layer shows the birds you can work.** With no ★ birds picked, **Satellites** on
+  the map and the 3-D globe drew every satellite in the catalog, about 350, most of them small
+  telemetry satellites that only send a beacon. They now show the ones with a transponder, an FM
+  repeater or a digital channel. Star birds in **Satellites** to see just those, or pick **All** for
+  the whole catalog.
+- **Band activity: every POTA activator shows in a dim POTA green.** In the Phone and CW cockpits'
+  Band activity strip and in its pop-out band map, a station activating a park now gets a dim green
+  mark with its P, even when there is nothing new to gain from it, so you can see every activation
+  on the band at a glance. A park you still need keeps the full new-park green, and a real need such
+  as a new country still shows its own colour first. The dim colour comes and goes with the P. SOTA
+  (S) and DXpeditions (✈) are unchanged. In the light theme the full new-park green (and the P badge
+  with it) is darker, so the two greens differ in brightness and not only in colour, which helps if
+  you find greens hard to tell apart. The colour key in Band activity and in the band map names
+  both: **New park**, the full green of a park you still need, and beside it **POTA activator**, the
+  dim green of any other activator, between MODE and LoTW. In a narrow pane the key can wrap onto
+  one or two more lines.
+- **A park you still need now comes before a confirmation everywhere.** When an activator is at a
+  park or summit you have not worked in this activation and is also a confirmation opportunity
+  (worked before, not yet confirmed), the park now leads: Band activity and its band map show the
+  new-park green instead of the confirmation grey, as the decode list already showed the park, and
+  the Call Roster, the Needed board and Conditions put the park first too. A new country or any
+  other award need still comes first. The board's order, alerts, sounds and logging are unchanged.
+- **Needed board: FT4's badge has its own colour.** In the dark themes it was the very green of a
+  park you still need, and a park need's row can show both; it is now mint. In the light theme the
+  new-park green moved away from FT4's badge instead (above).
+- **FlexRadio: native DAX audio (Beta) now works only through the Flex native client.** With the
+  client on, receive audio comes straight from the radio, the digital modes transmit over DAX, and
+  Phone at the shack keeps the radio's own mic. Nexus changes the radio's DAX transmit setting only
+  between overs, never while SmartSDR's own DAX is connected, and puts yours back when it lets go.
+  Because Phone at the shack and APRS in FM then use the radio's own mic, a recorded message, an
+  APRS packet or an SSTV picture would not go out, so the voice keyer says it can't play, APRS and
+  SSTV say they can't send, and none of them keys anything; an automatic APRS ack that can't go out
+  is skipped and noted in the diagnostic log. On SmartSDR CAT the toggle now does nothing and audio
+  stays on the sound devices (SmartSDR's DAX): the older native audio path there sent transmit audio
+  where the radio does not take it, so an over keyed with no audio. Your setting is kept for when
+  the client serves the radio, and its hint in Settings ▸ Radio ▸ Rig & CAT says so. Native DAX
+  audio is Beta and has not been run on a real Flex yet: before you use it for FT8, check your own
+  signal's DT on a second receiver.
+- **Settings: Flex native panadapter is labelled Beta.** Its toggle in Settings ▸ Radio ▸ Rig & CAT
+  read "(early access)" and now reads "(Beta)", like Flex native DAX audio and the Flex native
+  client, in every language, and its hint says Beta too. Both native parts are Beta and opt-in, off
+  until you turn them on; the panadapter itself works as before.
+- **Remote access says what a streaming browser can do.** A browser approved for station controls
+  that streams this station operates Nexus as you would at the shack, transmit included, whether or
+  not its FT8/FT4 transmit box is ticked. Settings ▸ Station ▸ Remote access, the streaming switch's
+  hint, the question that pops up when a browser asks to stream, and the guide now say so. The tick
+  reads **Also allow FT8/FT4 transmit from the Remote page**, and the FT8/FT4 switches under each
+  browser say "from the Remote page" too, because that is all they cover. The hints add that
+  revoking a browser's station controls ends its stream. On the Remote page, Settings says that
+  accounts, backups, remote access and the station's own settings change in Nexus at the station, in
+  person or streamed to that browser. Only the words changed: what an approval grants and every
+  transmit rule stay as they were.
+
+### Fixed
+
+- **Nexus no longer asks for administrator rights by itself.** On Windows, a prompt to allow
+  "Windows Command Processor" to make changes could appear a few seconds after Nexus started, and
+  again later, with nobody having asked for it. It came from the clock check, which ran its own
+  repair whenever it found something Windows could fix: the Windows Time service switched off, a
+  time service that had not synchronised, a clock that had just jumped after sleep, or one that
+  checks the time only every nine hours. The clock check still runs and still says what it found
+  (hover the clock readout). When it finds a real fault (the Windows Time service switched off, not
+  synchronised, or a clock that just jumped), a **Repair clock** button appears beside the clock
+  readout, with a line saying Windows will ask for administrator rights, and the fix runs only when
+  you press it. Checking the time every nine hours is the Windows default, so Nexus no longer offers
+  to change it, and the clock readout's note no longer mentions it. The button does not work while
+  you are transmitting, nor while a JS8 or Tempo message of several overs is part-way through, so a
+  repair never pauses a message between its overs. While a repair runs, Nexus starts no transmission
+  until it finishes, two minutes at most, so the clock cannot move in the middle of an over: TX On,
+  Tune, PTT and sends in every mode are refused, a run that is already on (FT8, JS8, a beacon) skips
+  its overs, and the top bar says why.
+- **Getting Out shows its distances in your units.** With **Units** (Settings ▸ Station) on
+  Imperial, the Getting Out box still gave the furthest station, each receiver's distance, the
+  compass tooltips and the direction line in km, and restarting Nexus changed nothing. They now read
+  in miles on Imperial and in km on Metric, and Automatic follows your computer's region. The same
+  fix reaches the other places that printed km whatever the setting said: the opening strip, the
+  Openings Log, the opening alerts, the Openings and Es lines, the DXpedition cards, the APRS
+  station list, the Satellites section's altitude, range and sked distances, the map's hover lines
+  (a station's distance, a satellite's altitude) and its short/long-path figure, the 3D globe's pass
+  range, the "heard by" lines on the Chase and Needed boxes, Journey's Sporadic-E Summer and
+  Top-Band Season feats, and the 6 m sporadic-E watch in the insights. The sky dome's range-rate
+  reads in mi/s on Imperial. Journey's 1,000- and 5,000-mile firsts gave the contact's distance in
+  miles whatever the setting said; it follows Units now too. These distances are now written without
+  a thousands separator (8047 km, not 8,047 km).
+- **When the radio refuses to key, nothing is played into it, and Nexus says so.** If the radio
+  answered the key with a refusal (an error back over CAT, or Nexus's own Flex client while the
+  radio is still letting go of the last transmission), Nexus played the over anyway: the Tune
+  carrier, an APRS packet, a voice-keyer message, an SSTV picture, soundcard CW, an RTTY or PSK
+  over, or your voice from the Remote stream all went into a radio that was still receiving. Nothing
+  went on the air, and for Tune and APRS nothing said why. Now none of them is played. Tune ends and
+  its button comes back up. Tune, the voice keyer, SSTV and the Remote stream show **RADIO STOPPED**
+  in the status bar with "The rig didn't accept PTT — check your PTT method and CAT/port.". CW, RTTY
+  and PSK show their keyer warning. APRS says "APRS not sent: the radio did not accept the key".
+  What was refused is dropped, never sent later: the rest of a CW send goes with it, and continuous
+  RTTY or PSK turns off. The diagnostic log notes each one. A radio that is only slow to answer is
+  not refusing: some radios on a slow serial link key, but answer after Nexus has stopped waiting,
+  or so late that Hamlib reports the radio did not answer. Their over still goes out, as it did
+  before, and shows the warning above (an APRS packet goes without one, as it always did). A
+  soundcard CW macro still plays every word on a radio that refuses a second key while the first is
+  held, as Nexus's Flex client does. FT8, FT4 and the other timed-slot modes follow WSJT-X instead
+  (next entry). Checked on an FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V. NEEDS-BENCH
+  on a slow serial CAT rig and a Flex radio.
+- **FT8, FT4, JS8 and the other timed-slot modes: when the radio refuses to key, nothing is sent and
+  TX stops, as in WSJT-X.** If the radio answered the key with an error, Nexus played the whole over
+  anyway into a radio that was still receiving, and left TX on to try again the next cycle. Now the
+  over is not played, the radio is unkeyed, TX turns off, and the status bar shows **PTT REFUSED —
+  TX STOPPED** with the time and what the radio answered, until you turn TX on again. That is what
+  WSJT-X does: it stops transmitting, unticks Enable Tx and reports a rig control error. Like
+  WSJT-X, this includes Hamlib's own "the rig did not answer" (a radio switched off, or too slow
+  even for Hamlib); for the other modes that still sends the over with its warning. A radio that is
+  only slow to answer, past the time Nexus waits, still sends its over as before: WSJT-X keeps
+  waiting for such a radio and transmits once it keys. Checked on an FTDX10 through Hamlib and an
+  IC-9700 on Nexus's own CI-V. NEEDS-BENCH on a slow serial CAT rig and a Flex radio.
+- **FT8, FT4, JS8 and the other timed-slot modes: when the radio does not accept PTT off, TX stops
+  and the status bar says so, as in WSJT-X.** If the radio answered PTT off with an error, at the
+  end of an over or when Stop TX or a logger's HaltTx cut one, TX stayed on and nothing was said.
+  Now TX turns off and the status bar shows **PTT OFF FAILED — TX STOPPED** with the time and what
+  the radio answered, until you turn TX on again. Nexus keeps sending PTT off until the radio
+  accepts it, as before. Checked on an FTDX10 through Hamlib and an IC-9700 on Nexus's own CI-V.
+  NEEDS-BENCH with a logger's Halt TX, serial (RTS/DTR) PTT, a Flex radio and a slow serial CAT rig.
+- **RTTY and PSK macros: a caption that reads as a stop is refused in every language.** The F-key
+  editor refused a caption like Stop, Esc or Abort only in English, so a key that transmits could be
+  saved as "Stopp", "Parar", "Arrêter" or "停止", which looks like the key to press to stop. It now
+  refuses a caption that reads as a stop, halt, abort, cancel or Esc in English, German, Spanish,
+  French or Japanese, whichever language the screen is in, and says why; a language added later is
+  covered by its own words for Stop and Cancel. In English this adds Halt and Cancel. Ordinary
+  captions are not affected. A key captioned that way before keeps its caption until it is edited.
+- **POTA/SOTA: a contact with an activator logs the park's state, not the activator's home state.**
+  A contact you hunted, from the POTA/SOTA board, the map, the Needed board or Band Activity, took
+  its state from the activator's callsign: the address on their FCC licence, or their callbook
+  entry. So an Ohio ham at a North Dakota park was logged as Ohio, and your exports, your uploads
+  and your Worked All States count all said Ohio. Now the contact takes the state the park or summit
+  is in: a park's from pota.app's own spot, or from the park list once you have downloaded it, and a
+  summit's from its SOTA association or region. The log form puts that state in the State box, so
+  you see it before you log. A state you type yourself still wins, and a park you type into the log
+  form is placed the same way. A park outside the US and Canada, or one Nexus cannot place, logs its
+  state as before. Contacts already in your log are not changed.
+- **POTA: a park on a state line asks which state, and is never guessed.** A park in more than one
+  state cannot say which one the activator is in, and the activator's home state is no answer. While
+  the log form holds such a park, it shows the park's states to pick from: pick the one the
+  activator says they are in. A contact logged without a pick has no state, and the Logbook marks it
+  with a **?** before the park so you can set it later. The mark shows on any park or summit contact
+  in the US or Canada that has no state, and Nexus no longer fills such a contact's state from the
+  activator's callsign, when you log it, import it, or when it fills in contacts in the background.
+- **Needed board: Confirmation opportunities off now holds for POTA/SOTA rows too.** Rows taken from
+  the POTA/SOTA feed still showed the LoTW chip, or read "Confirm", with that setting off.
+- **Needed board: an Alaska or Hawaii station is in AK or HI on cluster and PSK Reporter rows too.**
+  Those rows used the mailing address on the station's FCC licence, so an Alaskan with an address in
+  another state could show New State for that state. Your own radio's decodes already placed it
+  right.
+- **Pounce: "New entity, zone, or US state" now alerts for a US state you still need.** It never
+  did, because a spot names no state; Pounce now finds the state as the Needed board does.
+- **A needed park calling CQ has the needed-park colour in Band Activity.** A CQ from an activator
+  at a park you still need lost the green CQ tint and got nothing in its place, so it looked plainer
+  than an ordinary CQ. The row now has the needed-park green the band strip and the map already give
+  it, in every theme.
+- **POTA / SOTA: the park reference, NEW PARK and the Hunting line read clearly in the dark
+  themes.** At night under the Blue and Violet accents, and the Nebula theme's own, they were
+  lettered too dim for small text (down to 4.2:1, under the 4.5:1 it needs). They now take the same
+  lighter shade of the accent as HUNT, wherever the board shows: the POTA / SOTA screen, its pop-out
+  and a Conditions or dashboard-rail box.
+- **Cloudlog / Wavelog: a refused QSO says why.** Wavelog answers a QSO it will not file with its
+  reason in a field Nexus did not read, so the connection log said only "refused the upload, and
+  said no more", even though Wavelog had named the reason, such as a duplicate or a station location
+  whose callsign is not yours ("Differing station callsign … SKIPPED"). Nexus now shows that reason.
+  Settings ▸ Logging & Connectors also warns beside the station profile id when the location you
+  pick, or the one already chosen when you press **Find my station locations**, has a callsign other
+  than the one Nexus logs as (Wavelog refuses every such QSO) or a different grid. A refused upload
+  names that mismatch too. Pick a location with your callsign, or change that location in Wavelog.
+  Every failed upload, for each service Nexus uploads to as you log, now also writes one line to
+  `nexus-diag.log`: the service, the kind of failure, the HTTP status and the contact's call. The
+  line never includes the service's own words or your key, and it lets a support request show what
+  went wrong.
+- **CW scope: the frequency scale no longer reads the CW pitch off** (600 Hz by default). It also
+  ran backwards on reverse CW (CW-R) and with the soundcard keyer below 10 MHz. The numbers now
+  match the spot tags and where a click tunes. In AM and FM the Phone scope's audio picture shows no
+  numbers, since a click there does not tune.
+- **CW scope: the frequency scale reads to 100 Hz on CW's narrow window.** It showed the same kHz
+  under every tick (`7.030` five times by default); now `7.0296 7.0298 7.0300 7.0302 7.0304`. Any
+  scale with ticks under 1 kHz apart does the same, including the Phone scope at a 2.4 kHz width. A
+  label with no room beside the one before it is left off, and its tick stays. Wider scales are
+  unchanged.
+- **Native Flex (opt-in): the panadapter draws the right way up, at its full height.** The native
+  path read the radio's FFT bins as levels when they are pixel rows counted down from the top, so
+  the trace was upside down; it never set the pan's height, used a wrong create command, and left
+  the waterfall on the radio after the pan closed. All four are fixed. Not yet checked on a radio.
+- **The Conditions pop-out reopens the way you left it.** Reloaded, or closed and opened again, the
+  dashboard window could come back on whatever the main window had moved to since: another intent,
+  and that intent's map as the main window had it the day the pop-out first opened, satellites
+  included, even ones since turned off there. It now keeps its own intent, map and ★ / All, and only
+  a press in it changes them. Its satellites also stopped following the main window's **★ / All**:
+  flipping it there no longer fills the pop-out with every satellite while the pop-out still says ★.
+  And **Frame** ticks **Satellites** only on the map you are looking at: untick it there and it
+  stays off when you switch between the 2-D map and the 3-D globe.
+- **Conditions says when 3D can't draw, and the 2-D map brings your layers with it.** Whether the
+  3-D globe can draw is checked when Conditions opens, so after the computer's graphics fell back to
+  software, or on a remote desktop, a reload or a reopen quietly showed the Globe map instead, with
+  2-D layers nobody had picked in that window, satellites and US state outlines among them. A note
+  beside the map picker now says Globe is standing in and that your 3D pick is kept, and the first
+  time a window shows the 2-D map, its layers start from the ones you picked on that window's 3-D
+  globe.
+- **The 3-D globes let go of the graphics card when they close, and come back when it takes them
+  away.** Each switch from 3D back to Flat on Conditions, and each time the Logbook's globe was
+  closed, left that globe's drawing surface and its 32 MB picture of the map in memory for as long
+  as Nexus ran. After about fifteen switches the browser started taking the oldest drawing surfaces
+  away to make room, and one of those could be the waterfall's or the scope's. A closed globe now
+  hands everything back at once. A globe whose drawing surface was taken away while it was shown
+  (after sleep, a graphics driver reset, or too many surfaces at once) went blank and stayed blank.
+  Nexus now asks for it back and draws the globe again as soon as it returns; if it has not come
+  back within 10 seconds, the globe shows **3D view paused** with a **Reload** button that brings it
+  back.
+- **The Logbook's globe shows day and night again, every time it opens.** It often opened lit evenly
+  all round, pale and washed out, with no night side. The globe's built-in lights could come on
+  after the Logbook had set up its sun, and then stayed on beside it. The Logbook's globe now sets
+  its lights the way Conditions' globe does, so the sun lights the day side and the night side stays
+  in shade.
+- **Remote: Stop TX is never refused.** For about a second after any stop at the station (an Esc
+  over the stream's picture, a band change, a Stop TX or a logger's halt at the shack, the high-SWR
+  cutoff, a switch of radio), the browser's Stop TX was refused, and the page said nothing. A
+  transmission started in that second, such as Tune pressed right after a band change, stayed on the
+  air through the first press. Now a Stop from a browser with station control stops whatever is
+  transmitting when it arrives, even one pressed before the last stop, and Stop TX is ready again
+  the moment a Stop is accepted instead of a moment later. Pressed again faster than the Remote
+  service passes Stops on (twice a second), it shows the accepted Stop still under way, not a
+  failure. If the station does refuse a Stop (station control taken back at the radio, for example),
+  the stream page says **Could not stop transmit** beside Stop TX instead of nothing. Who may send a
+  Stop is unchanged.
+- **Remote streaming: the PTT holds, and keeps the keyboard, through a brief connection hiccup.**
+  Every few seconds the stream page's PTT greyed out for a few milliseconds while the page re-read
+  the station's state. Current Chrome took a held PTT that greyed out as let go, so a long over
+  could end while you still held the button; older Chrome kept the over but could miss the key-up of
+  a Space held on PTT, leaving the over held after you let go. And a PTT you had tabbed to lost the
+  keyboard each time, so Space and Enter stopped working on it until you clicked or tabbed to it
+  again. A PTT you hold now stays lit until you let go of it, and a PTT you tabbed to keeps the
+  focus while it is greyed out, so Space works on it again the moment it is lit. Letting go, Stop
+  TX, leaving the window, the picture freezing, a backed-up connection or the stream ending still
+  end the over, and the station still decides whether to key. Pressing PTT while it is greyed out
+  does nothing, as the button shows, so a press that lands in one of those few milliseconds needs
+  pressing again; a screen reader still announces it as unavailable.
+- **Remote streaming: text in the picture is sharp.** A Nexus window larger than 2560×1600, a
+  3440×1440 ultrawide's for one, went out at half its width and height and the browser enlarged it
+  again, so every letter on the stream read soft. Now the Remote page tells Nexus at the shack how
+  many screen pixels it has for the picture, and Nexus scales its window down to exactly that, once
+  and never up, so the page draws it one pixel to one screen pixel. A window smaller than the page
+  is sent whole and enlarged by the browser as before. On the shack's own network a page that has
+  not said gets the whole window (up to 3840×2160); over the internet or the relay the ceiling stays
+  where it was (2560×1600's worth of pixels, 4 Mbit/s). A very large picture gets fewer frames a
+  second rather than more of the shack's processor. It needs the new Nexus at the shack, and the
+  Remote page's update for the picture to follow the browser's size.
+- **Remote streaming: a slow connection keeps a live picture.** Over the internet or the relay,
+  Nexus sent the picture at a fixed rate, up to 4 Mbit/s, whatever the connection could carry. On a
+  slower one (a shack's upload, a phone on cellular) most of it was lost: the browser showed no
+  picture at all, or one frozen for half a minute, and the stream's permission to transmit lapsed
+  with it. Nexus at the shack now measures what the connection carries, all the time, and sends the
+  picture to fit: softer and at fewer frames a second on a slow connection, and sharp again once it
+  widens. On a very slow one it also sends a smaller picture, so a fresh full frame still arrives
+  within about a second. The receive audio's share is kept first, so the picture never crowds out
+  the sound. On the shack's own network the picture follows the connection too, so a weak Wi-Fi link
+  no longer breaks it up. It needs the new Nexus at the shack; the Remote page is unchanged.
+- **Remote streaming: a shack with a public internet address of its own streams.** When the shack's
+  computer holds a public address itself, with no router in front of it, Nexus offered the browser
+  no address to connect to, and a browser behind a router never got the picture. Nexus at the shack
+  now offers that address, the one the internet already sees it at. It needs the new Nexus at the
+  shack.
+- **Remote: Listen plays without bursts of static, loud enough to hear, with a volume control.**
+  Nexus at the shack dropped a 20 ms piece of the receive audio about every second and a half, so
+  the browser's player kept running dry and filled each gap with its faint hiss for a moment. Nexus
+  at the shack now sends all of it. The page also keeps a little more audio in hand (180 ms instead
+  of 120 ms), and it plays a piece the network lost as a gap of the same length in the same place,
+  so a packet lost on Wi-Fi no longer comes back seconds later as static. The shack's receive audio
+  is set low for the decoders (about 30 on Nexus's level meter), and the page played it just as low,
+  far under anything else on the computer. Listen now raises it by 24 dB to start with, and a
+  **Volume** slider beside Listen sets anything from the station's own level to 42 dB above it; the
+  browser remembers your setting. A strong signal is held just under full scale instead of clipping,
+  and the faint hiss that marks a gap in the audio follows the volume, so it stays under the band.
+  Sending all of the audio needs the new Nexus at the shack.
+- **Remote streaming: a Mic level for your voice.** Your voice went to the rig at your microphone's
+  own level, because the stream page keeps the browser's automatic gain off (it pumps the level and
+  fights the rig's ALC), so a quiet microphone, such as a laptop's built-in one, sounded quiet on
+  the air. Nexus at the shack passes the voice on as it arrives, within half a dB, so the fix is on
+  the page: **Mic level**, beside **Mic on**, raises your voice by up to 20 dB or lowers it by up to
+  12, and your browser remembers it. Its bar shows how loud your voice goes: raise it until your
+  loudest words reach the end. At any setting every peak is held 3 dB under full scale, so your
+  voice never clips on its way to the rig. It starts at your microphone's own level. The rig's own
+  level for USB audio still applies (Icom: USB MOD Level; FTDX10: RPORT GAIN in the SSB menu). It
+  needs the Remote page's update.
+- **Remote streaming: the microphone message names the real cause.** Whatever kept the stream page
+  from your microphone, it said the browser did not allow it and to allow it in the browser's
+  settings for this site, which sent you to the wrong place whenever something else had stopped it.
+  Now it says which one it was and where to fix it: the microphone is blocked for this site (the
+  browser's settings for the site), your computer's privacy settings are blocking it (Settings ▸
+  Privacy & security ▸ Microphone on Windows, System Settings ▸ Privacy & Security ▸ Microphone on a
+  Mac), the browser's question was closed without an answer, no microphone was found, or the
+  microphone was found but could not start because another program may be using it. Anything else is
+  said with the browser's own name for the error. Pressing PTT still never asks for the microphone:
+  only the Mic button does. It needs the Remote page's update.
+- **Remote streaming: a pinch on a phone no longer presses anything at the shack.** Two fingers on
+  the stream's picture reached Nexus at the shack as two presses and a drag between them, on
+  whatever lay under them: a slider, the waterfall, a button. The page also followed the phone's own
+  zoom and shrank into a corner of the zoomed view. Now two fingers zoom and pan the picture on the
+  phone, and nothing of them is sent. One finger works Nexus as before, its press held back a tenth
+  of a second so that a second finger can make it a pinch; a quick tap still clicks. While zoomed,
+  the page asks Nexus at the shack for that many more pixels, so the picture stays sharp as it
+  grows, within the same limits as before. **Fit** shows the whole picture again. A pinch on the
+  buttons above the picture still zooms the browser, and the page now keeps its size when it does.
+  It needs the Remote page's update; the sharper zoom also needs the new Nexus at the shack.
+- **Remote streaming: a press that starts on the page's own buttons never reaches Nexus at the
+  shack.** Now and then a click on **Keep streaming** ("Still there?") outlasted the question: it
+  went away under the pointer, and moving the mouse before letting go sent that movement to Nexus at
+  the shack, marked as pressed. So did a press that started on the dark bars beside the picture.
+  Nexus at the shack had seen no press, so it only moved its pointer and dragged nothing, but the
+  page should not have sent it. Now the picture sends nothing of a press that started anywhere else,
+  until it is let go. Moving the mouse over the picture, and clicking and dragging on it, work as
+  before. It needs the Remote page's update.
+- **The older Remote page, still hidden while streaming is in Beta, has its updates too.** Its
+  POTA/SOTA board shows each activator's state, lit the same way as at the station; a contact hunted
+  there logs the park's state, and an activation started there carries `MY_STATE`, though a park on
+  a state line has to be picked at the station. Its panels ask a busy station again, up to three
+  times a quarter of a second apart, instead of staying blank until their next poll; only readings
+  are asked again, never anything that transmits. Its Repeaters channel list no longer scrolls
+  sideways: a row whose buttons do not fit beside its name and figures carries them on a line of
+  their own, at the right.
+- **Nexus now carries the license texts of everything it is built from.** NOTICE named the packages
+  the interface is built with, and the installers carried the texts of only a few of the Rust
+  crates, but their licenses (MIT, ISC, Apache-2.0, BSD, Zlib, Unicode and MPL-2.0 among them) ask
+  for the license text itself to travel with every copy. Every installer now has them beside COPYING
+  and NOTICE: the interface's packages, with the CQ-zone data's notice, in
+  `resources/ui/THIRD-PARTY.txt`, and the Rust crates in `resources/rust/THIRD-PARTY.txt`. The new
+  **Licenses** button in the Settings header, beside **Check for updates**, shows them.
+
+### Security
+
+- **Remote: the stream proves it comes from your station.** Nexus at the shack now signs every
+  stream it answers with a key of its own, made when the station is paired (or, for a station paired
+  before, the first time this Nexus starts) and kept in the computer's password store. The Remote
+  service records that key once, and the Remote page takes a stream only if it carries the station's
+  signature for that very request. Before, anything that could answer in the station's place on the
+  Remote service's relay would have been taken for your station, and would have been sent what you
+  typed on the picture and your microphone. A stream from a station that cannot sign is refused, and
+  the page says to update Nexus at the shack. If the station's key is ever lost, revoke station
+  access and pair again.
+- **Remote: control, Listen and commands carry the browser's own key.** Taking control, keeping it,
+  releasing it, **Listen**, and every command and log entry from the Remote page now carry the
+  signature of that browser's key, the one you compare when you approve it at the shack, and Nexus
+  refuses anything without it. Before, Nexus took the Remote service's word for which browser was
+  asking. **Stop TX** needs no signature, so nothing can hold it up. A browser approved before
+  browser keys existed is asked for again at the shack before it can take control.
+- **Remote: your browser keeps your station's key, and both ends show more of every key.** The
+  Remote page now keeps your station's key the first time it sees it and shows it on the station's
+  card as **This station's key**; Nexus at the shack shows its own the same way (Settings ▸
+  Station ▸ Remote access), so you can compare the two. If the Remote service ever lists a different
+  key for your station, the page says so, shows both keys, and connects nothing until you press
+  **Accept the new key**. Accept it only if the new key matches the one at the shack; the card then
+  shows the accepted key, and Stream, at once. Before, the page took the service's word for your
+  station's key every time, so anyone able to change the service's records could have stood in for
+  your station. Every key is now shown as eight groups of four characters instead of four, at both
+  ends, including the browser key you compare when you approve a browser. An older Nexus at the
+  shack still shows four groups: they are the first four the page shows. Revoking the station, or
+  removing a browser's approval, on the page lets that browser forget the station's key.
+- **Remote: the hosted page opens only over https://.** An `http://` address for the Remote page,
+  typed without the `https://` or followed from an old link, loaded the whole page, sign-in
+  included, unencrypted, where anyone on the same network (public Wi-Fi, a hostile router) could
+  read or replace it. Now an `http://` address goes straight to the same `https://` address before
+  the service does anything else, and the page tells your browser to use only `https://` for it from
+  then on. Stations and browsers already on `https://`, which is every one Nexus sets up, see no
+  change.
+
+### Corrections to 1.16.0
+
+- **1.16.0 said a fix for streaming from the shack's own network was planned for 1.16.1.** There was
+  no 1.16.1. The fix is in 1.17.0 (Changed: a browser on the shack's own network now streams
+  directly), with a relay for networks where a direct connection fails (Added).
 
 ## [1.16.0] — 2026-10-03
 
