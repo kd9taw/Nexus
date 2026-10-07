@@ -29243,8 +29243,23 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         };
         (m, 2700)
     }
+    /// `t`: is the radio transmitting, whoever keyed it (#398).
+    ///
+    /// ⚠️ IT USED TO ANSWER `snapshot().radio.transmitting`, THE SLOT-TX FLAG ALONE. Only an FT
+    /// over raises it, so phone PTT held in Nexus, a client's own `T 1` and the radio keyed at
+    /// its own mic all read 0, and a program sharing the radio was told it was receiving while
+    /// it transmitted. The satellite path's answer to the same blind spot,
+    /// `transmitting || rig_keyed`, is not enough here: the radio loop stops reading the radio's
+    /// PTT back while Nexus holds the key, so `rig_keyed` stays down through Nexus's own PTT.
+    /// [`Engine::on_air`] is the engine's one answer to "is anything on the air": the slot flag,
+    /// the radio keyed at the shack, Tune, and every owner [`Engine::tx_owner`] knows.
+    ///
+    /// Read-only: this answers other programs and keys nothing. It shares `on_air`'s one known
+    /// gap: the engine hands a recorded voice message, an APRS frame and each CW word to the
+    /// radio loop and keeps nothing of it, so the whole of a voice message or a frame, and the
+    /// last word of a CW message, read 0.
     fn ptt(&self) -> bool {
-        engine_lock(&self.engine).snapshot().radio.transmitting
+        engine_lock(&self.engine).on_air()
     }
     fn set_freq(&self, hz: u64) -> bool {
         let mut e = engine_lock(&self.engine);
@@ -38493,6 +38508,77 @@ mod tests {
         engine_lock(&shared).set_frequency(14.105, "20m", "USB");
         let rig = super::EngineRig::new(shared);
         assert_eq!(rig.freq_hz(), 14_105_000);
+    }
+
+    /// #398: the broker's `t` answered the slot-TX flag alone, so a radio keyed any other way
+    /// read 0 to every program sharing it. The reporter mutes the PC's audio while the radio
+    /// transmits; in SSB neither Nexus's own PTT nor the radio's mic moved the answer, and only
+    /// an FT over did. Real rigctld asks the radio, which is keyed whoever keyed it. Each way
+    /// keys a fresh engine, must read 1, lets go, and must read 0 again; every wrong answer is
+    /// collected so one run names all of them.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_reports_ptt_for_every_way_the_radio_is_keyed() {
+        use tempo_audio::rigctld_server::RigBackend;
+        // Armed in Phone on a phone segment, the reporter's case, with "Other programs may key
+        // transmit" on so a client's own `T 1` is granted.
+        let armed = || {
+            let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+                tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+            ));
+            {
+                let mut e = engine_lock(&shared);
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cat_broker_ptt = true;
+                e.apply_settings(s);
+                e.set_frequency(14.290, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                assert!(
+                    e.tx_enabled() && e.tx_allowed() && !e.on_air(),
+                    "premise: transmit is armed and legal on 14.290 USB, and nothing is keyed"
+                );
+            }
+            let rig = super::EngineRig::new(shared.clone());
+            (shared, rig)
+        };
+        type Key = dyn Fn(&SharedEngine, &super::EngineRig, bool);
+        let ways: [(&str, &Key); 4] = [
+            // The one way that already worked, kept as the control for the others.
+            ("an FT over (the slot flag)", &|e, _, on| {
+                engine_lock(e).app.set_transmitting(on)
+            }),
+            ("phone PTT held in Nexus", &|e, _, on| {
+                engine_lock(e).set_ptt(on)
+            }),
+            (
+                "the radio keyed at its own mic, read back over CAT",
+                &|e, _, on| engine_lock(e).observe_rig_ptt(on),
+            ),
+            ("this client's own `T 1`", &|_, rig, on| {
+                assert!(
+                    rig.set_ptt(on),
+                    "premise: the broker grants the key and its release"
+                )
+            }),
+        ];
+        let mut wrong = Vec::new();
+        for (way, key) in ways {
+            let (shared, rig) = armed();
+            key(&shared, &rig, true);
+            if !rig.ptt() {
+                wrong.push(format!("{way}: read 0 while the radio was keyed"));
+            }
+            key(&shared, &rig, false);
+            if rig.ptt() {
+                wrong.push(format!("{way}: read 1 after letting go"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "the share port's `t` was wrong:\n  {}",
+            wrong.join("\n  ")
+        );
     }
 
     /// ⭐ THE PICK TELLS THE ENGINE WHAT THE UPLINK TAKES, and the next pick forgets it.

@@ -5,6 +5,20 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The shared radio address says the radio is transmitting however it was keyed (#398).** With
+  Share this radio with other programs on, a program asking the shared address whether the radio is
+  transmitting (rigctld's `t`) heard yes only during Nexus's own digital overs, such as FT8. Phone
+  PTT in Nexus, Tune, a CW, RTTY or SSTV over, a program's own key through the shared address and
+  the radio keyed at its own microphone all read as receive, so a script that mutes the computer's
+  audio while you transmit never fired on SSB. All of them now read as transmit; keyed at the radio,
+  within about a second, because Nexus reads the radio's PTT once a second. One gap is left: while
+  Nexus plays a recorded voice message or an APRS packet, and during the last word of a CW message,
+  the shared address still reads receive.
+
 ## [1.17.0] — 2026-10-07
 
 ### Added
