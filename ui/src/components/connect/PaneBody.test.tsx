@@ -63,6 +63,10 @@ const SPOT = {
 
 const BOARDS = ['spots', 'pota', 'needed'] as const satisfies readonly PaneId[]
 
+/** The boxes whose panel is a component of its own. The frame never sees that component draw
+ *  nothing, so each one draws its box's one line itself. */
+const SELF_DRAWN = ['openingsLog', 'chase', 'chaseFeed', 'satPasses', 'contests', 'rotor', 'amp'] as const
+
 /** What `node` draws on its own, settled. */
 async function drawn(node: ReactNode): Promise<string> {
   const { container, unmount } = render(<>{node}</>)
@@ -92,6 +96,22 @@ describe('PaneBody — the body of every shared box', () => {
     expect(fellBack.length, 'every box fell back: the panel half was never read').toBeLessThan(SHARED_PANES.length)
     // CONTROL: something that is no box draws nothing.
     expect(await drawn(<PaneBody pane={'nothing' as PaneId} ctx={ctx()} />)).toBe('')
+  })
+
+  it('never draws an empty body: a box with nothing to show says so in its one line', async () => {
+    // CONTROL: the check can see an empty body — something that is no box draws exactly that.
+    expect(await drawn(<PaneBody pane={'nothing' as PaneId} ctx={ctx()} />)).toBe('')
+    const blank: string[] = []
+    for (const e of SHARED_PANES) if ((await drawn(<PaneBody pane={e.pane} ctx={ctx()} />)) === '') blank.push(e.id)
+    expect(blank, 'these boxes drew an empty body').toEqual([])
+    // The same words as the box's one line, from the same keys.
+    for (const id of SELF_DRAWN) {
+      const e = SHARED_PANES.find((x) => x.id === id)!
+      const c = ctx()
+      expect(await drawn(<PaneBody pane={e.pane} ctx={c} />), `"${id}" says its one line`).toBe(
+        await drawn(<p className="pane-basic">{paneById(e.pane)!.basic(c)}</p>),
+      )
+    }
   })
 
   it('draws the boards themselves when the host lends their wiring', async () => {

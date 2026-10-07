@@ -1034,6 +1034,7 @@ export const FR: PartialCatalog = {
   "callbook.resultNoGrid": "QRZ {{call}} : {{detail}} · locator/État nécessitent un abonnement QRZ",
   "chase.age.mins": "il y a {{mins}} min",
   "chase.age.secs": "il y a {{secs}} s",
+  "chase.empty": "Aucune station manquante entendue pour l'instant — lancez CQ ou attendez des spots.",
   "chase.feed.dxped.label": "DXP",
   "chase.feed.dxped.title": "DXpédition",
   "chase.feed.empty": "Rien à chasser en ce moment — des cibles apparaissent dès qu'une station manquante est entendue ou qu'une expédition passe sur l'air.",

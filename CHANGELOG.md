@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
   of them, and a failed fetch says so once.
 
+### Fixed
+
+- **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
+  Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
+  list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
+  what it is waiting for, as the other boxes do: where to set up a rotator or an amplifier, that no
+  needed station is being heard yet, or that the contest calendar appears once Nexus is online.
+
 ## [1.17.0] — 2026-10-07
 
 ### Added

@@ -5,6 +5,10 @@
 // (the honest loading/OFFLINE state — prop-derived panes return null on source==='offline'
 // so modeled defaults never render as if live), or renders its own inline empty state
 // (getout). Never render a modelled snapshot as live data.
+// ⚠️ An `expert` that returns a COMPONENT hands the frame an element, never a null, so the
+// fallback cannot reach it: such a component draws its box's one line itself (`.pane-basic`)
+// when it has nothing — Openings Log, Chase, Chase Feed, Satellite Passes, Rotor, Amplifier and
+// Contests do. PaneBody.test.tsx renders every box with nothing to show and fails on an empty body.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Each pane's NAME
 // resolves through a getter, exactly as `features/needVisuals.ts` does: this registry is a
@@ -494,7 +498,7 @@ export const PANES: PaneDef[] = [
     },
     category: 'bands',
     // Self-fetching pane (get_openings_log) — the Basic line stays a static
-    // honest hint because the history lives inside the component.
+    // honest hint because the history lives inside the component, which draws it.
     basic: () => t('connect.pane.openingsLog.basic'),
     expert: () => <OpeningsLogPane />,
   },
@@ -596,8 +600,8 @@ export const PANES: PaneDef[] = [
     },
     category: 'activity',
     basic: chaseLine,
-    // "Work THIS now": needed stations fused with band openness + window. Returns null
-    // when nothing's needed-and-heard → PaneFrame falls back to the (identical) Basic line.
+    // "Work THIS now": needed stations fused with band openness + window. When nothing's
+    // needed-and-heard the pane draws this Basic line itself (the same sentence).
     expert: (c) => <ChasePane ctx={c} />,
   },
   // ---- B3 Tier-2 no-network panes (pickable; reuse existing snapshot data) ----
@@ -656,7 +660,7 @@ export const PANES: PaneDef[] = [
     basic: chaseFeedLine,
     // The ranked "chase tonight" board: heard needs + on-air expeditions fused and
     // scored (need × openness × rarity × time-remaining). Basic = top-3 plain rows;
-    // Expert = the full table. Null when nothing chase-worthy → the basic() hint.
+    // Expert = the full table. Nothing chase-worthy → the pane draws this basic() line.
     expert: (c) => <ChaseFeedPane ctx={c} />,
   },
   {
@@ -666,7 +670,7 @@ export const PANES: PaneDef[] = [
     },
     category: 'activity',
     // Self-fetching pane (get_satellites) — the Basic line stays a static honest
-    // hint because the data lives inside the component, not PaneContext.
+    // hint because the data lives inside the component, not PaneContext; the component draws it.
     basic: () => t('connect.pane.satPasses.basic'),
     expert: () => <SatPassesPane />,
   },
@@ -677,8 +681,8 @@ export const PANES: PaneDef[] = [
     },
     category: 'station',
     basic: () => t('connect.pane.rotor.basic'),
-    // Self-contained control surface — polls read_rotator while mounted and hides itself
-    // (→ this Basic hint) only when NO rotator is configured. A configured rotator that cannot
+    // Self-contained control surface — polls read_rotator while mounted and draws only this
+    // Basic hint itself when NO rotator is configured. A configured rotator that cannot
     // report its position keeps the pane and its STOP button; the hint used to name the
     // ADVANCED external-rotctld field, which is not where a rotator is set up.
     expert: () => <RotorPane />,
@@ -690,8 +694,8 @@ export const PANES: PaneDef[] = [
     },
     category: 'station',
     // Read-only station-device readout, the rotor's site-for-site shape. The Basic hint is
-    // STATIC and names where the amplifier is configured, because the pane hides itself only
-    // when none is — a configured amplifier that has gone quiet keeps the pane, with '—'.
+    // STATIC and names where the amplifier is configured, because the pane draws it (and no
+    // readout) only when none is — a configured amplifier that has gone quiet keeps the pane, with '—'.
     //
     // ⛔ It renders no control of any kind and stops nothing: an amplifier in standby does not
     // stop an over (the exciter keeps keying and the drive passes straight through). This pane
@@ -720,7 +724,7 @@ export const PANES: PaneDef[] = [
     },
     category: 'activity',
     // Self-fetching (get_contests) — Basic stays a static hint since the data
-    // lives in the component, not PaneContext (same pattern as Satellite Passes).
+    // lives in the component, not PaneContext, which draws it (same pattern as Satellite Passes).
     basic: () => t('connect.pane.contests.basic'),
     expert: () => <ContestCalendarPane load={getContests} />,
   },

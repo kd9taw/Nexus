@@ -2909,6 +2909,8 @@ export const EN = {
   'chase.open.marginal': '{{band}} marginal',
   'chase.open.closed': '{{band}} closed now · best {{window}}',
   'chase.open.best': ' · best {{window}}',
+  // The Chase box's one line when nothing needed is being heard.
+  'chase.empty': 'No needed stations being heard right now — call CQ or wait for spots.',
 
   'chase.feed.dxped.label': 'DXP',
   'chase.feed.dxped.title': 'DXpedition',

@@ -4370,6 +4370,7 @@ export const DE: PartialCatalog = {
   "chase.open.marginal": "{{band}} grenzwertig",
   "chase.open.closed": "{{band}} jetzt zu · am besten {{window}}",
   "chase.open.best": " · am besten {{window}}",
+  "chase.empty": "Derzeit werden keine benötigten Stationen gehört — CQ rufen oder auf Spots warten.",
   "chase.feed.dxped.label": "DXP",
   "chase.feed.dxped.title": "DXpedition",
   "chase.feed.endsSoon.label": "letzte Tage",

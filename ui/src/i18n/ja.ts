@@ -1979,6 +1979,7 @@ export const JA: PartialCatalog = {
   "chase.open.marginal": "{{band}}は微妙",
   "chase.open.closed": "{{band}}は現在クローズ・ベスト {{window}}",
   "chase.open.best": "・ベスト {{window}}",
+  "chase.empty": "現在、必要な局は入感していません — CQを出すか、スポットを待ちましょう。",
   "chase.feed.dxped.label": "DXP",
   "chase.feed.dxped.title": "DXペディション",
   "chase.feed.endsSoon.label": "終了間近",

@@ -48,7 +48,9 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
   // A row whose first line has no room for the entity gives it the line under it (chaseSplit).
   const list = useRef<HTMLUListElement>(null)
   useChaseSplit(list, targets.length > 0)
-  if (targets.length === 0) return null // PaneFrame falls back to the basic() line
+  // Nothing needed and heard: the box's one line, drawn here — the frame never sees a null from
+  // this component, so returning one would leave the box empty.
+  if (targets.length === 0) return <p className="pane-basic">{t('chase.empty')}</p>
 
   return (
     <section className="chase-pane panel">

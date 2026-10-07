@@ -3,7 +3,8 @@
 // (get_openings_log, 60 s cadence while mounted) like Satellite Passes; the
 // backend journals an episode whenever the opening tracker closes one (band,
 // classified mode, start/end, peaks), persisted across sessions. Honesty: no
-// episodes → render nothing so PaneFrame falls back to the Basic hint line.
+// episodes → the box's one line (its Basic hint), drawn here. The frame is handed
+// this component, never a null, so a null from here would leave the box empty.
 import { useEffect, useMemo, useState } from 'react'
 import type { OpeningEpisode } from '../../types'
 import { getOpeningsLog } from '../../api'
@@ -98,7 +99,7 @@ export function OpeningsLogPane() {
     return rows
   }, [episodes, filter, opSort])
 
-  if (episodes.length === 0) return null // PaneFrame falls back to the Basic hint
+  if (episodes.length === 0) return <p className="pane-basic">{t('connect.pane.openingsLog.basic')}</p>
 
   const opTh = (label: string, key: OpSortKey) => (
     <button
