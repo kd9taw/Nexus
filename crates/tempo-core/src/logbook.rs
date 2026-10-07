@@ -509,7 +509,7 @@ fn my_refs(r: &QsoRecord) -> Vec<String> {
 /// (docs.pota.app/docs/activator_reference/ADIF_for_POTA_reference.html, read 2026-09-09), and
 /// that is the precedence — a club activation signs the club call, and the whole group's
 /// contacts belong in ONE file under it, not one file per operator.
-fn worked_under(r: &QsoRecord) -> Option<String> {
+pub(crate) fn worked_under(r: &QsoRecord) -> Option<String> {
     r.station_callsign
         .as_deref()
         .or(r.operator.as_deref())

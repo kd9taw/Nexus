@@ -5,11 +5,15 @@
 //! adapter will download). [`reconcile`] matches each incoming record to a logged
 //! QSO and **monotonically** upgrades its confirmation + credit state, then
 //! reports confirmations that match **no** logged QSO (the "why is this missing?"
-//! diagnostic). Pure: no network, no DXCC resolution, never fabricates or revokes.
+//! diagnostic). Pure: no network, no DXCC resolution, and no merge fabricates or revokes. The
+//! one removal is [`check::uncheck`]: a confirmation an earlier matcher misplaced, taken off only
+//! once a fresh download shows it and the operator ticks it.
 
 use crate::logbook::{datetime_utc, QsoRecord, RecordId, StoredRecord};
 use std::borrow::Borrow;
 use std::collections::HashMap;
+
+pub mod check;
 
 /// A confirmation in the report with no matching logged QSO — a log gap, callsign
 /// typo, or band/time mismatch worth surfacing (never auto-added).
@@ -553,7 +557,7 @@ mod tests {
     use super::*;
     use crate::logbook::{QsoRecord, UploadOutcome, UploadState, UploadStatus};
 
-    fn rec(call: &str, band: &str, mode: &str, day: u64) -> QsoRecord {
+    pub(super) fn rec(call: &str, band: &str, mode: &str, day: u64) -> QsoRecord {
         QsoRecord {
             id: None,
             call: call.into(),
@@ -594,7 +598,7 @@ mod tests {
         }
     }
 
-    fn with_lotw(mut r: QsoRecord, outcome: UploadOutcome) -> QsoRecord {
+    pub(super) fn with_lotw(mut r: QsoRecord, outcome: UploadOutcome) -> QsoRecord {
         r.upload = UploadState {
             lotw: Some(UploadStatus {
                 outcome,
@@ -606,12 +610,12 @@ mod tests {
         r
     }
 
-    fn lotw_outcome(r: &QsoRecord) -> Option<UploadOutcome> {
+    pub(super) fn lotw_outcome(r: &QsoRecord) -> Option<UploadOutcome> {
         r.upload.lotw.as_ref().map(|s| s.outcome)
     }
 
     /// A W1AW 20m FT8 contact, or report row, at `h:m` UTC on `day`.
-    fn w1aw_at(day: u64, h: u64, m: u64) -> QsoRecord {
+    pub(super) fn w1aw_at(day: u64, h: u64, m: u64) -> QsoRecord {
         let mut r = rec("W1AW", "20m", "FT8", day);
         r.when_unix = day * 86_400 + h * 3600 + m * 60;
         r
