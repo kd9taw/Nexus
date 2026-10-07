@@ -22971,30 +22971,53 @@ contact yourself."
     /// passband, fresh AP context) and ingest only the lines the original pass
     /// missed — re-observing an already-ingested message would double-advance
     /// the sequencer and duplicate rows.
+    ///
+    /// This runs the whole decode inside `&mut self`, so a caller holding the
+    /// shared Engine lock holds it for the decode. The local Decode button and F6
+    /// go through [`redecode_shared`], which releases the lock while it decodes.
     pub fn redecode(&mut self) -> usize {
+        match self.redecode_job() {
+            Some(job) => self.apply_redecode(run_decode_job(job)),
+            None => 0,
+        }
+    }
+
+    /// The re-decode's job: the last period's retained audio with the current settings, or
+    /// `None` when there is nothing to re-decode.
+    fn redecode_job(&self) -> Option<DecodeJob> {
         if self.source_kind != SourceKind::Native {
             // Companion decode() DRAINS the live UDP queue — a redecode would
             // steal the boundary's datagrams (same guard as the early pass).
-            return 0;
+            return None;
         }
         // Back to f32 for the job. Transient and on an operator button press, not the
         // hot loop — and `build_decode_job`'s own `capture_to_i16` reverses this
         // exactly, so the decoder sees the identical samples it saw live.
-        let Some(frame) = self.last_rx.as_ref().map(|q| {
+        let frame = self.last_rx.as_ref().map(|q| {
             q.iter()
                 .map(|&v| f32::from(v) / 32767.0)
                 .collect::<Vec<f32>>()
-        }) else {
-            return 0;
-        };
-        let Some(slot) = self.last_decode_slot else {
-            return 0;
-        };
+        })?;
+        let slot = self.last_decode_slot?;
         // Re-run the decode over the retained audio (a7_final = false — review pass,
-        // no a7 save/replay). Synchronous: an operator button press, not the hot loop.
-        let job = self.build_decode_job(frame, slot, DecodePass::Redecode);
-        let decodes = run_decode_job(job).decodes;
-        let fresh: Vec<modes::Decode> = decodes
+        // no a7 save/replay).
+        Some(self.build_decode_job(frame, slot, DecodePass::Redecode))
+    }
+
+    /// Fold a re-decode's result in. A result for a period that is no longer the last one
+    /// decoded is dropped: when [`redecode_shared`] decodes with the lock released, a newer
+    /// period, or a band, mode or tier change, can land before the result does, and the
+    /// operator presses Decode again for the period on screen now.
+    fn apply_redecode(&mut self, result: DecodeResult) -> usize {
+        if result.failed
+            || result.epoch != self.decode_epoch
+            || self.last_decode_slot != Some(result.slot)
+        {
+            return 0;
+        }
+        let slot = result.slot;
+        let fresh: Vec<modes::Decode> = result
+            .decodes
             .into_iter()
             .filter(|d| {
                 !self
@@ -25443,6 +25466,27 @@ pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
         }
     }
     took
+}
+
+/// The Decode button and F6 ([`Engine::redecode`]) with the Engine lock RELEASED while the
+/// decoder runs: the job is built, and its result folded in, under the lock.
+///
+/// The radio loop takes the Engine lock on every 20 ms tick, and it is the only thing that drops
+/// PTT. A decode made under that lock — a full FT8 or FT4 pass over the last period, longer at
+/// a deeper depth, on a crowded band or a slow machine, and longer still when the decoder is
+/// already busy with the boundary pass, since the job waits for it — stopped the loop for as
+/// long as it took: pressed during an over, the unkey waited for the decode. The number of
+/// lines it found.
+pub fn redecode_shared(engine: &std::sync::Mutex<Engine>) -> usize {
+    let job = {
+        let eng = engine_lock(engine);
+        eng.redecode_job()
+    };
+    let Some(job) = job else {
+        return 0;
+    };
+    let result = run_decode_job(job);
+    engine_lock(engine).apply_redecode(result)
 }
 
 /// The plan a change to rows the log holds starts from ([`StationCore::log_plan`] — handles,
@@ -36557,6 +36601,120 @@ mod tests {
             .filter(|(_, d)| d.message == "CQ W1ABC FN42")
             .count();
         assert_eq!(rows_before, rows_after, "no duplicate history rows");
+    }
+
+    /// A decoder for the re-decode tests: says when it starts, then decodes one CQ once `go`
+    /// is sent (or its sender dropped).
+    struct GatedDecoder {
+        started: std::sync::mpsc::Sender<()>,
+        go: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl SignalSource for GatedDecoder {
+        fn label(&self) -> String {
+            "gated".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            let _ = self.started.send(());
+            let _ = self.go.recv();
+            vec![dec_snr("CQ W1ABC FN42", -12)]
+        }
+    }
+
+    /// An engine whose last decoded period is slot 4, with `decoder` installed, shared the way
+    /// the app shares it.
+    fn engine_for_redecode(decoder: GatedDecoder) -> Arc<std::sync::Mutex<Engine>> {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.install_source(Box::new(decoder));
+        e.last_rx = Some(tempo_core::channel::capture_to_i16(&[0.0f32; 1024]));
+        e.last_decode_slot = Some(4);
+        Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// ⛔ The Decode button and F6 must not hold the Engine lock while the decoder runs. The
+    /// radio loop takes that lock on every 20 ms tick and is the only thing that drops PTT, so
+    /// a re-decode under it held the unkey for the length of a decode when pressed near the
+    /// end of an over. The decoder here takes 600 ms; the loop's next tick must not wait for it.
+    #[test]
+    fn redecode_leaves_the_engine_lock_free_while_the_decoder_runs() {
+        use std::time::{Duration, Instant};
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let (go_tx, go) = std::sync::mpsc::channel();
+        let shared = engine_for_redecode(GatedDecoder { started, go });
+        let f6 = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || redecode_shared(&shared))
+        };
+        started_rx
+            .recv()
+            .expect("the re-decode reached the decoder");
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(600));
+            let _ = go_tx.send(());
+        });
+        // The radio loop's next tick, while the decoder is still running.
+        let t0 = Instant::now();
+        drop(engine_lock(&shared));
+        let waited = t0.elapsed();
+        release.join().expect("the decoder was released");
+        assert_eq!(
+            f6.join().expect("the re-decode finished"),
+            1,
+            "the line the re-decode found is still folded in"
+        );
+        assert!(
+            waited < Duration::from_millis(100),
+            "the radio loop waited {waited:?} for the Engine lock while F6 re-decoded"
+        );
+    }
+
+    /// The other half of releasing the lock: a period that lands while the re-decode's decoder
+    /// runs makes its result stale, and a stale result is dropped rather than folded in beside
+    /// the newer period.
+    #[test]
+    fn redecode_overtaken_by_a_newer_period_is_dropped() {
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let (go_tx, go) = std::sync::mpsc::channel();
+        let shared = engine_for_redecode(GatedDecoder { started, go });
+        let f6 = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || redecode_shared(&shared))
+        };
+        started_rx
+            .recv()
+            .expect("the re-decode reached the decoder");
+        // Bounded: were the lock held across the decode, the fold below could not run until
+        // the decoder returned, so this releases it rather than let the test hang.
+        {
+            let go_tx = go_tx.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let _ = go_tx.send(());
+            });
+        }
+        // The radio loop folds in the next period while the re-decode is still decoding.
+        engine_lock(&shared).process_decodes(
+            &[0.0f32; 1024],
+            vec![dec_snr("CQ K1XYZ FN31", -5)],
+            5,
+        );
+        let _ = go_tx.send(());
+        assert_eq!(
+            f6.join().expect("the re-decode finished"),
+            0,
+            "the stale result is dropped"
+        );
+        let eng = engine_lock(&shared);
+        let has = |m: &str| eng.decode_history.iter().any(|(_, d)| d.message == m);
+        assert!(has("CQ K1XYZ FN31"), "the newer period stands");
+        assert!(
+            !has("CQ W1ABC FN42"),
+            "the older period's re-decode is not folded in"
+        );
     }
 
     /// Decode at a specific audio frequency (Hound freq-rule tests).
