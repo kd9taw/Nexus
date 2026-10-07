@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
+  re-runs the decoder over the last period, which takes from a fraction of a second to a few
+  seconds with the band, the decode depth and the computer. Until now the radio loop, the part of
+  Nexus that keys and unkeys the radio, waited for it: pressed near the end of an over, Decode kept
+  the transmitter keyed until the decode finished. The decode now runs while the radio loop carries
+  on. If the next period's decodes land before it finishes, its result is left out; press Decode
+  again for the period on screen.
+
 ## [1.17.0] — 2026-10-07
 
 ### Added

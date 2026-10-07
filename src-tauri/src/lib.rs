@@ -18481,12 +18481,13 @@ fn notify_erase(state: State<'_, SharedEngine>, window: u8) -> Result<(), String
 }
 
 /// WSJT-X "Decode" button / F6: re-run the decoder over the last period's
-/// audio with the current settings; only newly-found lines are ingested.
+/// audio with the current settings; only newly-found lines are ingested. The
+/// decode runs with the Engine lock released (`redecode_shared`), so the radio
+/// loop keeps ticking — and keeps its unkey on time — while it does.
 #[tauri::command(async)]
 fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let _ = eng.redecode();
-    Ok(eng.snapshot())
+    let _ = tempo_app::engine::redecode_shared(&state);
+    Ok(engine_lock(&state).snapshot())
 }
 
 /// Start a CQ run; `dir` = a directed-CQ token ("DX"/"NA"/"POTA"/…) or None
