@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correct them; load one saved before you set up an upload and that upload quietly stopped. Loading
   a profile now leaves every upload switch as you last set it, as it already left your callsign and
   licence class.
+- **ClubLog uploads work in the Linux and Raspberry Pi packages (#388).** The .deb, AppImage and
+  Raspberry Pi packages were built without the ClubLog application key the Windows and Mac
+  installers carry, so ClubLog uploads failed with "This build has no ClubLog application key", and
+  ClubLog's Most Wanted ranking was missing from the DXpedition list's order. They now carry the
+  key too, so your ClubLog email and Application Password are all you need, on every platform.
 
 ## [1.17.0] — 2026-10-07
 
