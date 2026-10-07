@@ -440,6 +440,8 @@ const MIGRATED = [
   'components/panes/ArrangePanes.tsx',
   // Phone's left side (2026-10-03): born migrated; its two names are the caller's.
   'components/panes/LeftSide.tsx',
+  // A box in a cockpit (2026-10-07): born migrated; the entries' names are the Conditions boxes'.
+  'components/panes/CockpitBox.tsx',
   'features/profiles.ts',
   'features/registry.ts',
   // Batch 18 (2026-08-19) — the Operate cockpit: its header, the waterfall strip, the two

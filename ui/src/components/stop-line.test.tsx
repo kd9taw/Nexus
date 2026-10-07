@@ -109,6 +109,7 @@ import { Js8Cockpit } from './Js8Cockpit'
 import { SstvView } from './SstvView'
 import {
   ALL_PANEL_VOCABULARIES,
+  BOX_IDS,
   PHONE_PANEL_IDS,
   CW_PANEL_IDS,
   RTTY_PANEL_IDS,
@@ -117,6 +118,7 @@ import {
   SSTV_PANEL_IDS,
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
+import type { BoxSource } from './panes/CockpitBox'
 import { arrangeIds, coerceLeftSide, coercePlacement, moveArranged, movePane, type Arrangement, type ArrangeSpec, type PaneMove, type PanePlacement } from '../features/panelPlace'
 import type { AppSnapshot, FieldDayStatus, Js8State, PskState, RttyState, SstvState } from '../types'
 
@@ -351,6 +353,10 @@ vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stu
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
+// A BOX's body is a Conditions box, and none of those holds a transmit control (DashRail.test.tsx
+// places every box in the registry and finds none). Stubbed, so each mount measures the cockpit
+// rather than twenty-nine feeds; the boxes' frames, pickers and ✕ are real, and so is where they stand.
+vi.mock('./panes/BoxBody', () => ({ BoxBody: () => <div data-testid="box-body-stub" /> }))
 
 beforeEach(() => {
   globalThis.ResizeObserver = class {
@@ -426,6 +432,8 @@ const fdStatus = {
 /** The Spots and Needed boards as App lends them to Phone and CW (#345, plan H8), empty. */
 const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }
 const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
+/** What App lends the boxes of Phone, CW and JS8 on the desktop (any pane in any area, 2026-10-07). */
+const boxSource: BoxSource = { myGrid: 'EN52', theme: 'dark', stations: [], prop: null, needByCall: new Map() }
 
 /**
  * One cockpit's stop-line case. `stopControls` are accessible-name matchers for the controls
@@ -477,6 +485,7 @@ const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
         fieldDay={fdStatus}
         spotsBoard={spotsBoard}
         neededBoard={neededBoard}
+        boxes={boxSource}
       />,
     ),
 }
@@ -502,6 +511,7 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
         fieldDay={fdStatus}
         spotsBoard={spotsBoard}
         neededBoard={neededBoard}
+        boxes={boxSource}
       />,
     ),
 }
@@ -598,7 +608,7 @@ const js8: Case<(typeof JS8_PANEL_IDS)[number]> = {
     ['Stop TX', /^stop tx$/i],
     ['Tune', /^tune$|^tuning…$/i],
   ],
-  render: (panels) => render(<Js8Cockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
+  render: (panels) => render(<Js8Cockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} boxes={boxSource} />),
 }
 
 const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
@@ -642,6 +652,7 @@ const phoneDual: Case<(typeof PHONE_PANEL_IDS)[number]> = {
         fieldDay={fdStatus}
         spotsBoard={spotsBoard}
         neededBoard={neededBoard}
+        boxes={boxSource}
       />,
     ),
 }
@@ -659,6 +670,7 @@ const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
         fieldDay={fdStatus}
         spotsBoard={spotsBoard}
         neededBoard={neededBoard}
+        boxes={boxSource}
       />,
     ),
 }
@@ -763,6 +775,24 @@ describe('the stop line, computed against the real cockpits', () => {
         expect(c.ids, `${c.cockpit}: "${id}" left the vocabulary`).toContain(id)
         expect(document.querySelector(`[data-pane="${id}"]`), `${c.cockpit}: the ${id} pane is not on screen`).not.toBeNull()
       }
+      cleanup()
+    }
+  })
+
+  it('the six boxes are on screen with nothing hidden in Phone, CW and JS8 — else hiding them would sweep nothing', async () => {
+    // Every box SHIPS HIDDEN (defaultRemoved); with nothing hidden each sweep above starts with all six
+    // on screen, each showing an entry of the shared list, so every hide of one is a real one.
+    for (const c of [phone, cw, js8, phoneDual, cwDual] as Array<Case<any>>) {
+      c.render(panelsWith<string>([]))
+      await settle()
+      for (const b of BOX_IDS) {
+        expect(c.ids, `${c.cockpit}: "${b}" left the vocabulary`).toContain(b)
+        expect(document.querySelector(`.pane-frame[data-pane="${b}"]`), `${c.cockpit}: ${b} is not on screen`).not.toBeNull()
+      }
+      cleanup()
+      c.render(panelsWith<string>([...BOX_IDS]))
+      await settle()
+      expect(document.querySelector('.pane-frame[data-pane^="box"]'), `${c.cockpit}: hidden, a box is still on screen`).toBeNull()
       cleanup()
     }
   })
@@ -898,9 +928,14 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
     expect(ARRANGING.map((c) => c.view)).toContain('phone')
   })
 
-  it.each(ARRANGING.map((c) => [c.cockpit, c] as const))(
-    '%s: 50 random placements, every id hidden singly and all at once, every stop control where it was',
-    async (_name, c) => {
+  // THE FIFTY PLACEMENTS RUN IN FIVE RUNS OF TEN, each its own test with its own budget: the same seed,
+  // so the same placements, hides and assertions as one run of fifty. Six box slots per cockpit
+  // (2026-10-07) made every mount heavier and every placement six hides longer, and one run of fifty
+  // outgrew its budget (below).
+  const RUNS = [0, 1, 2, 3, 4]
+  it.each(ARRANGING.flatMap((c) => RUNS.map((k) => [c.cockpit, k * 10 + 1, k * 10 + 10, c, k] as const)))(
+    '%s: random placements %i–%i of 50, every id hidden singly and all at once, every stop control where it was',
+    async (_name, _from, _to, c, k) => {
       const spec = ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)!.arrange! as ArrangeSpec<string>
       const order = () => [...document.querySelectorAll('.cockpit-panes .pane-frame')].map((f) => f.getAttribute('data-pane'))
       c.render(panelsWith<string>([]))
@@ -912,7 +947,8 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
       let differs = 0
       const placements = randomPlacements(spec, 50, 20260929)
       expect(placements.length).toBe(50)
-      for (const [i, place] of placements.entries()) {
+      for (const [j, place] of placements.slice(k * 10, k * 10 + 10).entries()) {
+        const i = k * 10 + j
         const combos: Array<readonly string[]> = [[], ...c.ids.map((id: string) => [id]), [...c.ids]]
         for (const removed of combos) {
           c.render(panelsWith(removed, place))
@@ -929,13 +965,17 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
         }
       }
       // The placements reached the region: most of them render in an order the stock one does not.
-      expect(differs, `${c.cockpit}: the random placements left the region in its stock order — the sweep is reading nothing`).toBeGreaterThan(20)
+      expect(differs, `${c.cockpit}: the random placements left the region in its stock order — the sweep is reading nothing`).toBeGreaterThan(4)
     },
-    // A budget for real work (2026-10-02): 550 fresh mounts a pass, each followed by one
-    // accessible-name pass over every button, and the time grows in step with the CPU share.
-    // Phone took 15 s alone, 57 s in the full suite, 83 s at a fifth of a CPU and 160 s at a
-    // tenth; CW 17 s alone and 90 s at a fifth. Only one of Phone's 50 placements repeats, so
-    // there is no repeated render left to skip.
+    // A budget for real work, per run of ten placements (2026-10-07): a fresh mount per hide (17 a
+    // placement for Phone, 19 for CW, 15 for JS8), each followed by one accessible-name pass over
+    // every button, and the time grows in step with the CPU share. A run took, alone, 7.7 s for Phone,
+    // 9.5 s for CW and 3.8 s for JS8; at a fifth of a CPU 44 s (Phone) and 51 s (CW); at a tenth 97 s
+    // and 111 s. Run as one test of fifty, CW at a fifth of a CPU ran out of this same 240 s, where it
+    // took 132 s before the boxes. The first budget (2026-10-02, one run of fifty, eleven hides for
+    // Phone): Phone 15 s alone, 57 s in the full suite, 83 s at a fifth and 160 s at a tenth. Only one
+    // of Phone's 50 placements repeats, so there is no repeated render left to skip. At 1 ms every run
+    // times out.
     240_000,
   )
 })
@@ -969,9 +1009,10 @@ describe('THE LEFT SIDE SWEEP (2026-10-03): no arrangement with Phone’s left s
   // id hidden singly and all at once, as the arrangement sweep above does for the columns.
   afterEach(() => document.documentElement.style.removeProperty('--vw-eff'))
 
-  it(
-    'Phone: 30 random arrangements on a wide window, every id hidden singly and all at once, every stop control where it was',
-    async () => {
+  // Thirty arrangements in three runs of ten, each its own test (the arrangement sweep's reason).
+  it.each([0, 1, 2].map((k) => [k * 10 + 1, k * 10 + 10, k] as const))(
+    'Phone: random arrangements %i–%i of 30 on a wide window, every id hidden singly and all at once, every stop control where it was',
+    async (_from, _to, k) => {
       document.documentElement.style.setProperty('--vw-eff', '1600px')
       const spec = ALL_PANEL_VOCABULARIES.find((v) => v.view === 'phone')!.arrange! as ArrangeSpec<string>
       phone.render(panelsWith<(typeof PHONE_PANEL_IDS)[number]>([]))
@@ -980,7 +1021,8 @@ describe('THE LEFT SIDE SWEEP (2026-10-03): no arrangement with Phone’s left s
       const baseline = new Map(phone.stopControls.map(([label]) => [label, shown.get(label)!.some((e) => !e.disabled)]))
       cleanup()
       let sided = 0
-      for (const [i, arr] of randomArrangements(spec, 30, 20261003).entries()) {
+      for (const [j, arr] of randomArrangements(spec, 30, 20261003).slice(k * 10, k * 10 + 10).entries()) {
+        const i = k * 10 + j
         const combos: Array<readonly string[]> = [[], ...phone.ids.map((id: string) => [id]), [...phone.ids]]
         for (const removed of combos) {
           ;(phone.render as (p: PanelLayoutApi<string>) => void)(panelsWith(removed, arr.place, arr.leftSide))
@@ -998,9 +1040,10 @@ describe('THE LEFT SIDE SWEEP (2026-10-03): no arrangement with Phone’s left s
           cleanup()
         }
       }
-      expect(sided, 'the random arrangements never put the side on screen — the sweep is reading nothing').toBeGreaterThan(10)
+      expect(sided, 'the random arrangements never put the side on screen — the sweep is reading nothing').toBeGreaterThan(3)
     },
-    // 330 fresh mounts; the budget of the arrangement sweep above, scaled.
+    // A run of ten, measured with the arrangement sweep: 7.8 s alone, 44 s at a fifth of a CPU and
+    // 97 s at a tenth.
     240_000,
   )
 })

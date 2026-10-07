@@ -92,6 +92,7 @@ import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { isDashRailSection, useDashRailSections, type DashRailSection } from './features/dashRail'
 import { DashRail } from './components/DashRail'
+import type { BoxSource } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
@@ -2917,6 +2918,29 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       : null,
   }
+  // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside Phone,
+  // CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
+  // differently in one place from the other. The amplifier and the band ride the snapshot App already
+  // polls, as on Connect; the Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they
+  // are to Connect. Neither the rail nor a box stands on the hosted Remote page (the desktop first), so
+  // this wiring is always the native one.
+  const boxSource: BoxSource = {
+    myGrid: settings?.mygrid ?? '',
+    theme,
+    stations: snap.stations ?? [],
+    prop,
+    needByCall,
+    needAlerts: visibleAlerts,
+    amp: snap.radio.amp ?? null,
+    rigBand: snap.radio.band ?? null,
+    onWorkSpot: handleWorkMapSpot,
+    onPoint: (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined,
+    spotsFeed: { rows: allSpots, board: spotsBoard },
+    otaBoard: { snap, onHunt: handleHuntSpot, onSnap: setSnap },
+    neededBoard,
+  }
+  // The cockpits' boxes are the desktop's: the Remote page keeps its own panes.
+  const cockpitBoxes = remote ? undefined : boxSource
   const cwWorkspace = (
     <CwCockpit
       active={!remote || (effectiveView === 'cw' && !remote.stale)}
@@ -2939,6 +2963,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       panels={cwPanels}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
+      boxes={cockpitBoxes}
     />
   )
   const phoneWorkspace = (
@@ -2963,6 +2988,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       onOpenSettings={openSettingsAt}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
+      boxes={cockpitBoxes}
     />
   )
 
@@ -3756,6 +3782,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
+                boxes={cockpitBoxes}
               />
             </div>
           )}
@@ -3767,22 +3794,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         {railShown && railSection && (
           <DashRail
             section={railSection}
-            myGrid={settings?.mygrid ?? ''}
-            theme={theme}
-            stations={snap.stations ?? []}
-            prop={prop}
-            needByCall={needByCall}
-            needAlerts={visibleAlerts}
-            // The amplifier and the band ride the snapshot App already polls, as on Connect.
-            amp={snap.radio.amp ?? null}
-            rigBand={snap.radio.band ?? null}
-            onWorkSpot={handleWorkMapSpot}
-            onPoint={(settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
-            // The Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they are to
-            // Connect (the rail never stands on the Remote page, so their wiring is always native).
-            spotsFeed={{ rows: allSpots, board: spotsBoard }}
-            otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
-            neededBoard={neededBoard}
+            // Everything its boxes are lent, exactly as the cockpits' boxes are (`boxSource`, above).
+            {...boxSource}
             onHide={() => setRailOn(railSection, false)}
             scale={scale}
           />

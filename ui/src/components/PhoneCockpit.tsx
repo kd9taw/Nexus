@@ -20,7 +20,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
-import { PHONE_PANEL_IDS, PHONE_PANELS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
+import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
@@ -37,6 +37,7 @@ import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { LeftSide } from './panes/LeftSide'
+import { CockpitBox, boxLabels, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
@@ -231,7 +232,15 @@ interface Props {
   spotsBoard?: Omit<SpotsPanelProps, 'spots' | 'pane'>
   /** The Needed board exactly as App wires the Needed VIEW. Absent ⇒ no Needed pane. */
   neededBoard?: Omit<NeededPanelProps, 'pane' | 'onPopOut'>
+  /** What the window lends this cockpit's BOXES (2026-10-07: any pane in any area) — exactly what it
+   *  lends the dashboard rail. Absent ⇒ no box is drawn or offered, whatever the record says: the hosted
+   *  Remote page keeps its own panes. */
+  boxes?: BoxSource
 }
+
+/** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
+ *  box" and its own ✕, never a tick. */
+const PHONE_MENU = PHONE_PANEL_IDS.filter((id) => !isBoxId(id))
 
 /**
  * Phone (voice) operating cockpit — casual/ragchew. The voice is the signal, so the
@@ -247,7 +256,7 @@ interface Props {
  *  convenience, and PTT / Stop TX / Tune are what hold the guarantee up. THE STOP LINE lives
  *  in features/panelState.ts. */
 /** Resolved when the menu is BUILT — a module constant would freeze the first locale loaded. */
-const phonePanelLabels = (): Record<PhonePanelId, string> => ({
+const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   // The strip itself, in this cockpit's own word for it. NOT "Waterfall": what Phone shows
   // there is a trace + waterfall of the passband (or the rig's RF panadapter when one is
   // streaming), and the header above it already calls the thing a scope. `rigscope` below is
@@ -587,7 +596,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard }: Props) {
+export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard, boxes }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
@@ -1373,12 +1382,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // cannot reach it at all.
   //
   // The notes explain; every box stays the operator's.
+  //
+  // THE BOXES (2026-10-07): what each box on screen shows (features/panelState `boxEntries`) — none at
+  // all where the window lends them nothing (the hosted Remote page). They are named for what they show.
+  const entries = panels && boxes ? boxEntries(PHONE_PANELS, panels.layout, panels.stateOf) : {}
+  const labels = { ...phonePanelLabels(), ...boxLabels(entries) }
   const host = panels
     ? panelHost(panels, {
-        menu: PHONE_PANEL_IDS,
+        menu: PHONE_MENU,
         side: [],
         main: 'bandActivity',
-        labels: phonePanelLabels(),
+        labels,
         notes: {
           rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           txmeters: TX_METERS_WHEN,
@@ -1432,15 +1446,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const place = panels?.layout.place
   const arranged = !isStockPlacement(PHONE_PANELS.arrange!, place)
   const paneShown = (id: PhonePanelId): boolean =>
-    ({
-      bandActivity: hasBandPane,
-      voiceKeyer: hasKeyerPane,
-      spots: hasSpotsPane,
-      needed: hasNeededPane,
-      rigscope: hasRigScopePane,
-      receiver: hasReceiverPane,
-      transmitter: hasTransmitterPane,
-    })[id as string] ?? false
+    isBoxId(id)
+      ? entries[id] != null
+      : (({
+          bandActivity: hasBandPane,
+          voiceKeyer: hasKeyerPane,
+          spots: hasSpotsPane,
+          needed: hasNeededPane,
+          rigscope: hasRigScopePane,
+          receiver: hasReceiverPane,
+          transmitter: hasTransmitterPane,
+        })[id as string] ?? false)
   // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
   // A full-height column beside the scope, the TX strip and the region, between the header and the
   // dock, for the panes the operator put there (the record's `leftSide`: Band Activity, Spots, Needed —
@@ -1457,19 +1473,30 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const sideShows = sideGroup.length > 0
   // The panes IN THE REGION: shown, and not on the left side.
   const inRegion = (id: PhonePanelId) => paneShown(id) && !sideIds.includes(id)
-  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed')
   const placed3 = regionGroups(PHONE_PANELS.arrange!, place, 3, inRegion)
+  // A BOX counts for the column it stands in, as a feed does there: one in column 1 as Band Activity
+  // does, one in column 2 as a rig strip does. Where they stand never makes the grouping "arranged"
+  // (features/panelPlace), so with no box on screen this is exactly the rule it was.
+  const boxInA = placed3[0].ids.some(isBoxId)
+  const boxInB = placed3[1].ids.some(isBoxId)
+  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || boxInA || boxInB
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
-  const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
+  const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
     arranged
       ? placed3[0].ids.length > 0 && placed3[1].ids.length > 0
         ? 3
         : placed3[0].ids.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || inRegion('needed')) && (inRegion('bandActivity') || inRegion('spots')) ? 3 : leadPresent ? 2 : 1,
+      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || boxInA)
+        ? 3
+        : leadPresent
+          ? 2
+          : 1,
   )
+  // The boxes' selection: the cockpit's own, shared by its boxes and never the window's (CockpitBox).
+  const boxSel = useBoxSelection()
   const groups = regionGroups(PHONE_PANELS.arrange!, place, cols, inRegion)
   // The divider between the two feeds measures and repaints their frames (PaneSeam).
   const spotsFrameRef = useRef<HTMLElement>(null)
@@ -2381,6 +2408,29 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     receiver: receiverPane,
     transmitter: transmitterPane,
   }
+  // THE BOXES (2026-10-07): each one on screen, in the cockpit's frame with its entry's role. What is on
+  // screen elsewhere is marked in each picker: the other boxes' entries, and the boards this cockpit
+  // shows as its own panes (PHONE_PANELS `sharedAs`).
+  const onScreen = new Set<string>([
+    ...Object.values(entries),
+    ...(Object.entries(PHONE_PANELS.sharedAs ?? {}) as [PhonePanelId, string][]).filter(([own]) => shown(own)).map(([, e]) => e),
+  ])
+  for (const b of BOX_IDS) {
+    const entry = entries[b]
+    if (entry == null || !boxes || !panels) continue
+    paneEls[b] = (
+      <CockpitBox
+        box={b}
+        entry={entry}
+        source={boxes}
+        selection={boxSel}
+        onScreen={(e) => onScreen.has(e)}
+        onPick={(e) => panels.setBox?.(b, e)}
+        onRemove={() => panels.setPanelState(b, 'removed')}
+        stacked={flow === 'stack' && !sideGroup.includes(b)}
+      />
+    )
+  }
   const placedPane = (id: PhonePanelId) => (
     <Fragment key={id}>
       {paneEls[id]}
@@ -2473,9 +2523,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                     spec={PHONE_PANELS.arrange!}
                     layout={panels.layout}
                     shown={paneShown}
-                    labels={phonePanelLabels()}
+                    labels={labels}
                     sideRoom={sideRoom}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown, sideRoom)}
+                    // "+ Add a box" only where the window lends them (never the hosted Remote page).
+                    onAddBox={boxes && panels.addBox ? panels.addBox : undefined}
+                    boxesFull={BOX_IDS.every((b) => shown(b))}
                   />
                 ) : undefined
               }

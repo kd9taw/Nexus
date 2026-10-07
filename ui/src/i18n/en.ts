@@ -10535,8 +10535,22 @@ export const EN = {
     one: '{{panes}} stands here on a window about 1280 px wide or wider. On this one it is in its usual column.',
     other: '{{panes}} stand here on a window about 1280 px wide or wider. On this one they are in their usual columns.',
   },
+  // The boxes as one item of the list above ("Band Activity, Spots, Needed or a box").
+  'panels.arrange.side.aBox': 'a box',
   'panels.arrange.toSide.aria': 'Move {{pane}} to the left side',
   'panels.arrange.fromSide.aria': 'Move {{pane}} from the left side back to its column',
+  // THE BOXES (any pane in any area): up to six on a cockpit's screen, each showing one Conditions box.
+  // `{{title}}` is that box's own name.
+  'panels.box.add': '+ Add a box',
+  'panels.box.add.a.aria': 'Add a box to column 1',
+  'panels.box.add.b.aria': 'Add a box to column 2',
+  'panels.box.add.log.aria': 'Add a box to the log column',
+  'panels.box.add.side.aria': 'Add a box to the left side',
+  'panels.box.full': 'All six boxes are on this screen.',
+  'panels.box.name': 'Box',
+  'panels.box.pick.aria': 'Choose what the {{title}} box shows',
+  'panels.box.pick.title': 'Choose what this box shows',
+  'panels.box.pick.onScreen': '{{title}} (on screen)',
 
   // ── The cockpit pane frame ──────────────────────────────────────────────────────────
   // `{{title}}` is the pane's own name, supplied by the cockpit.

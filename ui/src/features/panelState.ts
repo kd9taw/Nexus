@@ -245,11 +245,14 @@ import {
   coerceLeftSide,
   coercePlacement,
   moveArranged,
+  placeAtFoot,
+  stockColumn,
   type ArrangeSpec,
   type PaneColumn,
   type PaneMove,
   type PanePlacement,
 } from './panelPlace'
+import { SHARED_PANES } from './sharedPanes'
 
 export type PanelState = 'docked' | 'popped' | 'removed'
 
@@ -292,6 +295,12 @@ export interface PanelLayout<P extends string> {
    *  size — so an older record, and every cockpit's (none writes one), reads exactly as before. An
    *  older build's coercion copies none of it: every box opens at the app's size, nothing else lost. */
   scale?: Partial<Record<P, number>>
+  /** WHAT EACH BOX SHOWS (2026-10-07, ⊞ Panels ▸ Arrange's "+ Add a box"): the shared list's entry
+   *  (features/sharedPanes `id`) for each of the vocabulary's boxes. Whether a box is on screen is its
+   *  `state` (every box ships hidden), where it stands its `place` / `leftSide`, like any pane. Kept
+   *  consistent with the screen on load and after every change (`boxEntries`, THE BOXES at the foot of
+   *  this file). An older build's coercion never reads it, and every box stays hidden there. */
+  boxes?: Partial<Record<P, string>>
 }
 
 /** A grid cockpit's column widths, as its column dividers write them (PanelLayout.cols):
@@ -341,6 +350,10 @@ export interface PanelVocabulary<P extends string> {
   /** The panes ⊞ Panels ▸ Arrange may move, their stock columns and the pinned ones (layout L3).
    *  Only a vocabulary with this may carry a `place` in its record. */
   readonly arrange?: ArrangeSpec<P>
+  /** The cockpit's own panes that ARE an entry of the shared list (Phone's and CW's Spots and Needed
+   *  boards), by that entry's id: while one is on screen, no box shows the same board (once per
+   *  screen, 2026-10-07). */
+  readonly sharedAs?: Partial<Record<P, string>>
 }
 
 export function isPanelState(v: unknown): v is PanelState {
@@ -387,7 +400,7 @@ export function coercePanelLayout<P extends string>(
 ): PanelLayout<P> {
   const out = emptyPanelLayout<P>()
   if (!raw || typeof raw !== 'object') return out
-  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; leftSide?: unknown; scale?: unknown }
+  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; leftSide?: unknown; scale?: unknown; boxes?: unknown }
   if (obj.state && typeof obj.state === 'object') {
     const src = obj.state as Record<string, unknown>
     for (const id of spec.panelIds) {
@@ -439,7 +452,18 @@ export function coercePanelLayout<P extends string>(
     }
     if (Object.keys(scale).length > 0) out.scale = scale
   }
-  return out
+  // What each box shows: only the vocabulary's boxes and the shared list's entries, then made
+  // consistent with the screen (a duplicate repaired, a box on screen with nothing given an entry).
+  if (spec.arrange?.boxes && obj.boxes && typeof obj.boxes === 'object') {
+    const src = obj.boxes as Record<string, unknown>
+    const boxes: Partial<Record<P, string>> = {}
+    for (const b of spec.arrange.boxes) {
+      const v = src[b]
+      if (typeof v === 'string' && SHARED_IDS.has(v)) boxes[b] = v
+    }
+    if (Object.keys(boxes).length > 0) out.boxes = boxes
+  }
+  return withScreenBoxes(spec, out)
 }
 
 export function savePanelLayout<P extends string>(key: string, layout: PanelLayout<P>): void {
@@ -589,6 +613,14 @@ export interface PanelLayoutApi<P extends string> {
    *  placement. `sideShows` (the LEFT SIDE, 2026-10-03): whether the cockpit's left side is on screen
    *  on this window — then ◀ ▶ and ▲ ▼ reach it as well (panelPlace `moveArranged`); absent, false. */
   movePane?: (id: P, move: PaneMove, shown: (id: P) => boolean, sideShows?: boolean) => void
+  /** ⊞ Arrange's "+ Add a box" (2026-10-07): the first hidden box, on screen at the foot of `area` (a
+   *  column, or the left side), showing the first entry of the shared list not on screen (`addBoxTo`).
+   *  ONE undoable step, and none at all when every box is on screen. Optional: only a vocabulary with
+   *  boxes has it. */
+  addBox?: (area: PaneColumn | 'side') => void
+  /** A box's picker: show `entry` in `box` (`showInBox`) — an entry on screen moves here. ONE undoable
+   *  step. Optional, as `addBox`. */
+  setBox?: (box: P, entry: string) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
@@ -643,11 +675,13 @@ export function usePanelLayout<P extends string>(
   const apply = useCallback(
     (next: (cur: PanelLayout<P>) => PanelLayout<P>) =>
       setHist((h) => {
-        const cur = next(h.cur)
+        // Every change keeps what the boxes show consistent with the screen: ticking Phone's own Spots
+        // while a box shows the Spots board gives that box another entry, as a load would.
+        const cur = withScreenBoxes(spec, next(h.cur))
         savePanelLayout(key, cur)
         return { cur, prev: h.cur }
       }),
-    [key],
+    [key, spec],
   )
   const stateOf = useCallback((id: P) => panelStateIn(spec, hist.cur, id), [spec, hist.cur])
   const setPanelState = useCallback(
@@ -731,6 +765,20 @@ export function usePanelLayout<P extends string>(
       }),
     [key, spec],
   )
+  // The boxes' two acts: each one undoable step, and a step that would change nothing is none.
+  const boxStep = useCallback(
+    (make: (cur: PanelLayout<P>) => PanelLayout<P> | null) =>
+      setHist((h) => {
+        const next = make(h.cur)
+        if (!next) return h
+        const cur = withScreenBoxes(spec, next)
+        savePanelLayout(key, cur)
+        return { cur, prev: h.cur }
+      }),
+    [key, spec],
+  )
+  const addBox = useCallback((area: PaneColumn | 'side') => boxStep((cur) => addBoxTo(spec, cur, area)), [boxStep, spec])
+  const setBox = useCallback((box: P, entry: string) => boxStep((cur) => showInBox(spec, cur, box, entry)), [boxStep, spec])
   const reset = useCallback(() => apply(() => emptyPanelLayout<P>()), [apply])
   const setLayout = useCallback(
     (next: PanelLayout<P>) => apply(() => coercePanelLayout(spec, next)),
@@ -772,6 +820,8 @@ export function usePanelLayout<P extends string>(
     setShares,
     setCols,
     movePane: spec.arrange ? movePane : undefined,
+    addBox: spec.arrange?.boxes ? addBox : undefined,
+    setBox: spec.arrange?.boxes ? setBox : undefined,
     undo,
     canUndo: hist.prev != null,
     undoRemoves,
@@ -890,6 +940,33 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
   defaultRemoved: [RF_SCOPE_PANEL_ID],
 }
 
+/**
+ * THE BOXES (2026-10-07: any pane in any area). Phone, CW and JS8 each have six box slots, `box1` to
+ * `box6`: a box shows one entry of the shared list (features/sharedPanes — the Conditions boxes and
+ * Needed) and stands in the cockpit's columns, or on Phone's left side, wherever ⊞ Panels ▸ Arrange
+ * puts it. Six, the operator's pick; slots rather than an id per entry, so each box costs the stop-line
+ * sweeps one hide pass rather than twenty-nine. Which entry a box shows is the record's `boxes`
+ * (`boxEntries`, at the foot of this file); whether it is on screen, its `state` — and every box SHIPS
+ * HIDDEN (`defaultRemoved`), so nobody's screen changes on the update that brings them.
+ *
+ * Under THE STOP LINE they are the plainest entries there are. A box can show only an entry of the
+ * shared list, and none of those hosts a control that stops or starts a transmission (▶ Work and HUNT
+ * move the rig and open a cockpit; they key nothing). A box's hide ends nothing — its body stops its
+ * own polls when it unmounts, and nothing else — so no box carries a note and Reset hides them
+ * silently. `box` is no stop-control word, and the sweeps hide every box with every other id, because
+ * they are driven off these arrays.
+ */
+export const BOX_IDS = ['box1', 'box2', 'box3', 'box4', 'box5', 'box6'] as const
+export type BoxId = (typeof BOX_IDS)[number]
+
+/** Whether a vocabulary id is one of the boxes. */
+export function isBoxId(id: string): id is BoxId {
+  return (BOX_IDS as readonly string[]).includes(id)
+}
+
+/** Every entry a box may show. */
+const SHARED_IDS: ReadonlySet<string> = new Set(SHARED_PANES.map((e) => e.id))
+
 /** Phone cockpit's removable panels (Phase 3) — the scope strip plus the panes under it.
  *  The whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT) and the PTT row
  *  are NOT panels: each hosts a way to STOP a transmission, which is THE RULE. (The header's
@@ -957,13 +1034,14 @@ export const PHONE_PANEL_IDS = [
   'voiceKeyer',
   'spots',
   'needed',
+  ...BOX_IDS,
 ] as const
 export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed'],
+  defaultRemoved: ['spots', 'needed', ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as PhoneCockpit renders it — Band
   // Activity, the voice keyer and Spots lead; the rig strips and Needed in the middle; the log form
   // (no id) alone in the last column. The scope above the region and the meters in the dock are not
@@ -974,16 +1052,21 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   // full-height column beside the scope. Never the voice keyer or the log form: the side comes and
   // goes with the window's width (about 1280 px), and a pane that changes parent is remounted, which
   // would cut off a voice message or a half-typed contact. The rig strips stay in the region.
+  // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere,
+  // the left side included; where they stand is no part of the stock grouping (features/panelPlace).
   arrange: {
     columns: {
-      a: ['bandActivity', 'voiceKeyer', 'spots'],
+      a: ['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS],
       b: ['rigscope', 'receiver', 'transmitter', 'needed'],
       log: [],
     },
     pinned: ['voiceKeyer'],
     stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'],
-    leftSide: ['bandActivity', 'spots', 'needed'],
+    leftSide: ['bandActivity', 'spots', 'needed', ...BOX_IDS],
+    boxes: BOX_IDS,
   },
+  // Its Spots and Needed panes are the shared list's boards: while one shows, no box shows it too.
+  sharedAs: { spots: 'spotsBoard', needed: 'neededBoard' },
 }
 
 /** CW cockpit's removable panels (Phase 3) — the scope strip plus the panes under it. The
@@ -1013,13 +1096,14 @@ export const CW_PANEL_IDS = [
   'sent',
   'spots',
   'needed',
+  ...BOX_IDS,
 ] as const
 export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed'],
+  defaultRemoved: ['spots', 'needed', ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
   // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
   // frame; the log form (no id) alone in the last column. The three rig-control groups (`scopeCtl`,
@@ -1029,15 +1113,20 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   // take Phone's places: Spots at the foot of the leading column, Needed at the foot of the middle,
   // and below three tracks both after every strip (`stockMerged`, Phone's rule), so ticking one never
   // pushes the Rig controls (which CwCockpit keeps ahead of them), Band Activity or the copilot down.
+  // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere
+  // (Phone's rule).
   arrange: {
     columns: {
-      a: ['decode', 'sent', 'spots'],
+      a: ['decode', 'sent', 'spots', ...BOX_IDS],
       b: ['bandActivity', 'copilot', 'needed'],
       log: [],
     },
     pinned: [],
     stockMerged: ['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'],
+    boxes: BOX_IDS,
   },
+  // Phone's: its Spots and Needed panes are the shared list's boards.
+  sharedAs: { spots: 'spotsBoard', needed: 'neededBoard' },
 }
 
 /** RTTY cockpit's removable panels (Phase 3). The CockpitHeader + StopTX + TX-arm, the
@@ -1116,13 +1205,13 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
  *  completes), so it is not on the sweep list. The dock's "Drop queue" is a SENDER-class
  *  control (it empties the queue; a frame already keyed finishes) and must never be added to
  *  stopControls. Swept in stop-line.test.tsx's JS8 case, rendered with App's props. */
-export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log'] as const
+export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log', ...BOX_IDS] as const
 export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   view: 'js8',
   panelIds: JS8_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as Js8Cockpit renders it — the two
   // decode surfaces lead, Stations and the inbox in the middle, the log alone in the last column.
   // The RF scope pane, once ticked, heads the leading column: the first pane under the TX strip, as
@@ -1130,13 +1219,15 @@ export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   // JS8'S LOG HAS AN ID (it is ⊞-hideable), so it is listed, and it is PINNED (D9): the log form
   // holds a half-typed contact, which a change of column would remount and lose. It moves up and
   // down in its column only.
+  // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere.
   arrange: {
     columns: {
-      a: [RF_SCOPE_PANEL_ID, 'activity', 'offsets'],
+      a: [RF_SCOPE_PANEL_ID, 'activity', 'offsets', ...BOX_IDS],
       b: ['stations', 'inbox'],
       log: ['log'],
     },
     pinned: ['log'],
+    boxes: BOX_IDS,
   },
 }
 
@@ -1279,4 +1370,127 @@ export function boxScaleValue(v: unknown): number | null {
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null
   const c = Math.round(Math.min(BOX_SCALE_MAX, Math.max(BOX_SCALE_MIN, v)) * 100) / 100
   return c === 1 ? null : c
+}
+
+// ── THE BOXES: what each one shows (BOX_IDS, above) ──────────────────────────────────────────────
+
+/** The entries the cockpit's own panes show right now (`sharedAs`), by `stateOf` (the record's own
+ *  reading unless a host gives its own). */
+function ownShown<P extends string>(
+  spec: PanelVocabulary<P>,
+  layout: PanelLayout<P>,
+  stateOf: (id: P) => PanelState = (id) => panelStateIn(spec, layout, id),
+): string[] {
+  return (Object.entries(spec.sharedAs ?? {}) as [P, string][])
+    .filter(([own]) => stateOf(own) !== 'removed')
+    .map(([, entry]) => entry)
+}
+
+/**
+ * What each box ON SCREEN shows: the ONE reading of the record's `boxes`, for the cockpits, the picker,
+ * "+ Add a box" and the record's own coercion. ONCE PER SCREEN (the operator's pick): a box keeps its
+ * stored entry unless the list has no such entry, the cockpit already shows it as one of its own panes
+ * (`sharedAs`), or an earlier box holds it; then, as for a box on screen with nothing stored, it shows
+ * the first entry of the shared list that is not on screen — twenty-nine entries and six boxes, so
+ * there always is one. A hidden box shows nothing. Whether a pane is on screen is `stateOf`: the record's
+ * own reading (`panelStateIn`), or the host's — a cockpit passes its panel record's `stateOf`, so its
+ * boxes are on screen exactly when the host says, as every other pane of it is.
+ */
+export function boxEntries<P extends string>(
+  spec: PanelVocabulary<P>,
+  layout: PanelLayout<P>,
+  stateOf: (id: P) => PanelState = (id) => panelStateIn(spec, layout, id),
+): Partial<Record<P, string>> {
+  const ids = spec.arrange?.boxes ?? []
+  const onScreen = (b: P) => stateOf(b) !== 'removed'
+  const taken = new Set(ownShown(spec, layout, stateOf))
+  const out: Partial<Record<P, string>> = {}
+  for (const b of ids) {
+    const e = layout.boxes?.[b]
+    if (onScreen(b) && e != null && SHARED_IDS.has(e) && !taken.has(e)) {
+      out[b] = e
+      taken.add(e)
+    }
+  }
+  for (const b of ids) {
+    if (!onScreen(b) || out[b] != null) continue
+    const free = SHARED_PANES.find((x) => !taken.has(x.id))
+    if (!free) continue
+    out[b] = free.id
+    taken.add(free.id)
+  }
+  return out
+}
+
+/** The record with its boxes made what the screen shows: each box on screen its `boxEntries` entry, and
+ *  a hidden one what it last showed. Every load and every change goes through it, so what is stored is
+ *  what a reload shows. */
+function withScreenBoxes<P extends string>(spec: PanelVocabulary<P>, layout: PanelLayout<P>): PanelLayout<P> {
+  const ids = spec.arrange?.boxes
+  if (!ids) return layout
+  const boxes: Partial<Record<P, string>> = {}
+  for (const b of ids) {
+    const e = layout.boxes?.[b]
+    if (e != null && SHARED_IDS.has(e)) boxes[b] = e
+  }
+  Object.assign(boxes, boxEntries(spec, layout))
+  const { boxes: _was, ...rest } = layout
+  return Object.keys(boxes).length > 0 ? { ...rest, boxes } : rest
+}
+
+/**
+ * "+ Add a box" (⊞ Panels ▸ Arrange): the first hidden box, put on screen at the foot of `area` and
+ * showing the first entry of the shared list not on screen. On the LEFT SIDE it also stands at the foot
+ * of its stock column, which is where it is whenever the side does not show; in a column it leaves the
+ * side. Null when every box is on screen, or for the side of a cockpit that has none. The cockpit's own
+ * panes stay exactly where they were.
+ */
+export function addBoxTo<P extends string>(
+  spec: PanelVocabulary<P>,
+  layout: PanelLayout<P>,
+  area: PaneColumn | 'side',
+): PanelLayout<P> | null {
+  const arrange = spec.arrange
+  if (!arrange?.boxes || (area === 'side' && !arrange.leftSide)) return null
+  const box = arrange.boxes.find((b) => panelStateIn(spec, layout, b) === 'removed')
+  if (box == null) return null
+  const taken = new Set([...ownShown(spec, layout), ...Object.values(boxEntries(spec, layout))])
+  const free = SHARED_PANES.find((e) => !taken.has(e.id))
+  if (!free) return null
+  const state: Partial<Record<P, PanelState>> = { ...layout.state }
+  state[box] = 'docked'
+  const boxes: Partial<Record<P, string>> = { ...layout.boxes }
+  boxes[box] = free.id
+  const col = area === 'side' ? (stockColumn(arrange, box) ?? 'a') : area
+  const side = (layout.leftSide ?? []).filter((x) => x !== box)
+  const { leftSide: _was, ...rest } = layout
+  const next: PanelLayout<P> = { ...rest, v: 2, state, boxes, place: placeAtFoot(arrange, layout.place, box, col) }
+  if (area === 'side') next.leftSide = [...side, box]
+  else if (side.length > 0) next.leftSide = side
+  return next
+}
+
+/**
+ * A box's picker: `box` shows `entry`. An entry already on screen MOVES here (the operator's "Once per
+ * screen"): from another box, which takes this box's entry in exchange (the rail's swap), or from the
+ * cockpit's own pane that is that board (`sharedAs`), which is hidden in the same step — a hide that
+ * ends nothing. Null for what is no entry, what the box already shows, or a `box` that is no box.
+ */
+export function showInBox<P extends string>(spec: PanelVocabulary<P>, layout: PanelLayout<P>, box: P, entry: string): PanelLayout<P> | null {
+  if (!spec.arrange?.boxes?.includes(box) || !SHARED_IDS.has(entry)) return null
+  const shown = boxEntries(spec, layout)
+  const was = shown[box] ?? layout.boxes?.[box]
+  if (was === entry) return null
+  const boxes: Partial<Record<P, string>> = { ...layout.boxes }
+  boxes[box] = entry
+  const other = (Object.keys(shown) as P[]).find((b) => b !== box && shown[b] === entry)
+  if (other != null) {
+    if (was != null) boxes[other] = was
+    else delete boxes[other]
+  }
+  const state: Partial<Record<P, PanelState>> = { ...layout.state }
+  for (const [own, e] of Object.entries(spec.sharedAs ?? {}) as [P, string][]) {
+    if (e === entry && panelStateIn(spec, layout, own) !== 'removed') state[own] = 'removed'
+  }
+  return { ...layout, state, boxes }
 }

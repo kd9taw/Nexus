@@ -255,6 +255,12 @@ or a need, or on **HUNT**, moves the radio to the station and opens its screen. 
 same live data Conditions does, and within a window the two share each request, so nothing is
 fetched twice.
 
+**Inside a cockpit: boxes.** In Phone, CW and JS8 the same panes can also stand among the cockpit's
+own, in up to six boxes: ⊞ Panels ▸ **Arrange** ▸ **+ Add a box** at the foot of a column (and of
+Phone's left side). A box has the same picker, and a pane shows once on a screen: choosing one that
+is already showing moves it. Like the rail, a box selects a station in the boxes only and has no
+transmit control. See [Phone](phone.md) for the details.
+
 The panes you can assign:
 
 | Pane | Shows |

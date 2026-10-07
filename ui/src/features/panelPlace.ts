@@ -34,6 +34,12 @@
 // 1280 px, where the stored choice is kept and never rewritten — and where ▶ takes it back. ◀ from the
 // first column puts a listed pane there. Never the voice keyer, never the log form: a pane that
 // changes parent is remounted, and the side comes and goes with the window's width.
+//
+// THE BOXES (2026-10-07: any pane in any area): a cockpit's six box slots (ArrangeSpec `boxes`), each
+// showing an entry of the shared list. A box is listed in `columns` (its stock column) and moves like
+// a pane, but where boxes stand is no part of the stock grouping: the cockpit's own panes keep their
+// stock tiers whatever the boxes do (`isStockPlacement`), and below three tracks each box stands right
+// after the own pane above it in its column (`regionGroups`), so adding one moves none of them.
 
 /** The columns of a grid cockpit's pane region, in their stock order on screen. */
 export type PaneColumn = 'a' | 'b' | 'log'
@@ -62,6 +68,8 @@ export interface ArrangeSpec<P extends string> {
    *  must be a pane whose remount loses nothing in flight, because the side shows and goes with the
    *  window's width — so never a pinned pane. */
   readonly leftSide?: readonly P[]
+  /** The cockpit's BOXES (see the header), each also listed in `columns`. Absent: it has none. */
+  readonly boxes?: readonly P[]
 }
 
 /** Every pane an ArrangeSpec lists, in stock order (a, then b, then log). */
@@ -155,11 +163,28 @@ export function regionGroups<P extends string>(
   const cols = placedColumns(spec, place)
   const keep = (ids: readonly P[]) => ids.filter(shown)
   if (tracks === 3) return PANE_COLUMNS.map((c) => ({ col: c, ids: keep(cols[c]) }))
-  const merged = spec.stockMerged && isStockPlacement(spec, place) ? spec.stockMerged : [...cols.a, ...cols.b]
+  const merged = spec.stockMerged && isStockPlacement(spec, place) ? mergeBoxes(spec, cols, spec.stockMerged) : [...cols.a, ...cols.b]
   return [
     { col: 'a', ids: keep(merged) },
     { col: 'log', ids: keep(cols.log) },
   ]
+}
+
+/** The stock merged column with the boxes of columns a and b in it: each box right after the own pane
+ *  above it in its column (boxes under the same pane in their order), a box at the top of its column
+ *  before that column's first own pane. The own panes keep the stock order exactly. */
+function mergeBoxes<P extends string>(spec: ArrangeSpec<P>, cols: Record<PaneColumn, P[]>, stock: readonly P[]): P[] {
+  const boxes = spec.boxes ?? []
+  const out = stock.filter((id) => !boxes.includes(id))
+  for (const c of ['a', 'b'] as const) {
+    const first = out.indexOf(cols[c].find((id) => !boxes.includes(id)) as P)
+    let at = first < 0 ? out.length - 1 : first - 1
+    for (const id of cols[c]) {
+      if (boxes.includes(id)) out.splice(++at, 0, id)
+      else at = out.indexOf(id)
+    }
+  }
+  return out
 }
 
 export type PaneMove = 'up' | 'down' | 'left' | 'right'
@@ -227,11 +252,22 @@ export function stockPlacement<P extends string>(spec: ArrangeSpec<P>): PanePlac
   return materialize(placedColumns(spec, undefined))
 }
 
-/** Whether a placement is the stock one (in effect), so the menu can say nothing has been arranged. */
+/** Whether a placement is the stock one (in effect), so the menu can say nothing has been arranged.
+ *  The boxes are no part of it (see the header): only the cockpit's own panes are compared. */
 export function isStockPlacement<P extends string>(spec: ArrangeSpec<P>, place: PanePlacement<P> | undefined): boolean {
   if (place == null) return true
   const now = placedColumns(spec, place)
-  return PANE_COLUMNS.every((c) => now[c].join('\u0000') === spec.columns[c].join('\u0000'))
+  const own = (ids: readonly P[]) => ids.filter((id) => !spec.boxes?.includes(id)).join('\u0000')
+  return PANE_COLUMNS.every((c) => own(now[c]) === own(spec.columns[c]))
+}
+
+/** The placement with `id` at the foot of column `col`, every other pane where it was: where "+ Add a
+ *  box" puts a box. The result names every listed pane. */
+export function placeAtFoot<P extends string>(spec: ArrangeSpec<P>, place: PanePlacement<P> | undefined, id: P, col: PaneColumn): PanePlacement<P> {
+  const cols = placedColumns(spec, place)
+  for (const c of PANE_COLUMNS) cols[c] = cols[c].filter((x) => x !== id)
+  cols[col].push(id)
+  return materialize(cols)
 }
 
 // ── THE LEFT SIDE ────────────────────────────────────────────────────────────────────────────────

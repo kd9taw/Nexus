@@ -23,8 +23,9 @@ import { regionColsStyle } from '../features/paneColumns'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { CockpitBox, boxLabels, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { panelHost } from '../features/panelHost'
-import { JS8_PANEL_IDS, JS8_PANELS, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
+import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
 import { regionGroups } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
@@ -126,10 +127,17 @@ interface Props {
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
    *  opens the Rotator section through it, as it does in the Phone, CW and FT cockpits. */
   onOpenSettings?: (target: string) => void
+  /** What the window lends this cockpit's BOXES (2026-10-07) — exactly what it lends the dashboard
+   *  rail. Absent ⇒ no box is drawn or offered, whatever the record says (Phone's rule). */
+  boxes?: BoxSource
 }
 
+/** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
+ *  box" and its own ✕, never a tick (Phone's rule). */
+const JS8_MENU = JS8_PANEL_IDS.filter((id) => !isBoxId(id))
+
 /** Display labels for the JS8 removable panels — resolved when the menu is BUILT. */
-const js8PanelLabels = (): Record<Js8PanelId, string> => ({
+const js8PanelLabels = (): Record<Exclude<Js8PanelId, BoxId>, string> => ({
   scope: t('js8.panel.scope'),
   rfScope: t('rfScope.title'),
   activity: t('js8.panel.activity'),
@@ -184,17 +192,23 @@ export function Js8Cockpit({
   onOpenLogbook,
   panels,
   onOpenSettings,
+  boxes,
 }: Props) {
   const canControl = useStationControl(), dataAvailable = useStationData()
   const rotatorControl = useStationCapability('rotator')
   const decoderSettings = useDecoderSettings(snap, 'JS8')
   const receiverSettings = useReceiverSettings(snap, 'JS8')
+  // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
+  // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
+  // the Conditions feeds while it is mounted, and a hidden JS8 must not keep them asking.
+  const entries = panels && boxes && active ? boxEntries(JS8_PANELS, panels.layout, panels.stateOf) : {}
+  const labels = { ...js8PanelLabels(), ...boxLabels(entries) }
   const host = panels
     ? panelHost(panels, {
-        menu: JS8_PANEL_IDS,
+        menu: JS8_MENU,
         side: ['stations', 'inbox'],
         main: 'activity',
-        labels: js8PanelLabels(),
+        labels,
         shipsHidden: JS8_PANELS.defaultRemoved,
       })
     : null
@@ -498,10 +512,12 @@ export function Js8Cockpit({
   // or the stock grouping (features/panelPlace), and "has something to hold" is counted on them. The
   // log pane needs a snapshot to render, so that is part of whether it is on screen.
   const place = panels?.layout.place
-  const paneShown = (id: Js8PanelId): boolean => shown(id) && (id !== 'log' || snap != null)
+  const paneShown = (id: Js8PanelId): boolean => (isBoxId(id) ? entries[id] != null : shown(id) && (id !== 'log' || snap != null))
   const placed3 = regionGroups(JS8_PANELS.arrange!, place, 3, paneShown)
   const populated = placed3.filter((g) => g.ids.length > 0).length
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
+  // The boxes' selection: the cockpit's own, shared by its boxes and never the window's (CockpitBox).
+  const boxSel = useBoxSelection()
   // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
   const mainColRef = useRef<HTMLDivElement>(null)
   const auxColRef = useRef<HTMLDivElement>(null)
@@ -1045,6 +1061,26 @@ export function Js8Cockpit({
   // Each placed pane by its id, KEYED by it (layout L3), with a pair's divider right after the pane
   // above it: a move within a column is a React move, not a remount, and the pinned log never
   // changes column.
+  // THE BOXES (2026-10-07), as Phone's: each one on screen, in the cockpit's frame with its entry's role.
+  // JS8 shows no shared board as a pane of its own, so only the other boxes are "on screen elsewhere".
+  const onScreen = new Set<string>(Object.values(entries))
+  const boxEls = {} as Record<BoxId, React.ReactNode>
+  for (const b of BOX_IDS) {
+    const entry = entries[b]
+    boxEls[b] =
+      entry != null && boxes && panels ? (
+        <CockpitBox
+          box={b}
+          entry={entry}
+          source={boxes}
+          selection={boxSel}
+          onScreen={(e) => onScreen.has(e)}
+          onPick={(e) => panels.setBox?.(b, e)}
+          onRemove={() => panels.setPanelState(b, 'removed')}
+          stacked={flow === 'stack'}
+        />
+      ) : null
+  }
   const paneEls: Record<Js8PanelId, React.ReactNode> = {
     scope: null,
     rfScope: rfScopePane,
@@ -1053,6 +1089,7 @@ export function Js8Cockpit({
     stations: stationsPane,
     inbox: inboxPane,
     log: logPane,
+    ...boxEls,
   }
   const slots = (ids: readonly Js8PanelId[]) =>
     ids.flatMap((id, i) => [
@@ -1153,8 +1190,11 @@ export function Js8Cockpit({
                       spec={JS8_PANELS.arrange!}
                       layout={panels.layout}
                       shown={paneShown}
-                      labels={js8PanelLabels()}
+                      labels={labels}
                       onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                      // "+ Add a box" only where the window lends them (never the hosted Remote page).
+                      onAddBox={boxes && panels.addBox ? panels.addBox : undefined}
+                      boxesFull={BOX_IDS.every((b) => shown(b))}
                     />
                   ) : undefined
                 }

@@ -8,8 +8,11 @@ import { useRef } from 'react'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { ArrangePanes } from './ArrangePanes'
-import { PHONE_PANELS, usePanelLayout, type PanelLayoutApi, type PhonePanelId } from '../../features/panelState'
+import { boxLabels } from './CockpitBox'
+import { BOX_IDS, PHONE_PANELS, boxEntries, usePanelLayout, type PanelLayoutApi, type PhonePanelId } from '../../features/panelState'
 import { placedColumns } from '../../features/panelPlace'
+import { SHARED_PANES } from '../../features/sharedPanes'
+import { t } from '../../i18n'
 
 const LABELS: Record<PhonePanelId, string> = {
   scope: 'Scope',
@@ -21,6 +24,7 @@ const LABELS: Record<PhonePanelId, string> = {
   voiceKeyer: 'Voice Keyer',
   spots: 'Spots',
   needed: 'Needed',
+  ...boxLabels({}),
 }
 // Phone's region with Spots, Needed and the rig scope strip hidden, as on a stock screen with no
 // native scope.
@@ -49,6 +53,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 const btn = (name: string) => screen.getByRole('button', { name })
+const last = <T,>(xs: readonly T[]): T | undefined => xs[xs.length - 1]
 const cols = () => placedColumns(PHONE_PANELS.arrange!, api!.layout.place)
 const groups = () => screen.getAllByRole('group').filter((g) => g.className === 'panels-arrange-col')
 const group = (head: string) => groups().find((g) => g.querySelector('.panels-arrange-colhead')!.textContent === head)!
@@ -76,13 +81,14 @@ describe('⊞ Arrange', () => {
   it('a move is stored in the record and shown at once; Undo takes it back; Reset gives the stock grouping', () => {
     render(<Host />)
     fireEvent.click(btn('Move Receiver to the column on the left'))
-    expect(cols().a).toEqual(['bandActivity', 'voiceKeyer', 'spots', 'receiver'])
+    // At the column's foot: after the boxes too, which stand hidden at the foot of column 1.
+    expect(cols().a).toEqual(['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS, 'receiver'])
     expect(within(group('Column 1')).getByText('Receiver')).toBeTruthy()
     fireEvent.click(btn('Undo'))
     expect(api!.layout.place).toBeUndefined()
     fireEvent.click(btn('Move Transmitter up'))
     fireEvent.click(btn('Move Band Activity down'))
-    expect(cols().a).toEqual(['voiceKeyer', 'bandActivity', 'spots'])
+    expect(cols().a).toEqual(['voiceKeyer', 'bandActivity', 'spots', ...BOX_IDS])
     fireEvent.click(btn('Reset'))
     expect(api!.layout.place).toBeUndefined()
   })
@@ -135,7 +141,8 @@ describe('⊞ Arrange', () => {
 describe('⊞ Arrange ▸ Left side (2026-10-03)', () => {
   it('with room for it: ◀ in Column 1 puts a listed pane there, and only a listed one', () => {
     render(<Host sideRoom />)
-    expect(group('Left side').textContent, 'the side says what it takes').toMatch(/Band Activity, Spots,? or Needed/)
+    // Its three feeds by name, and the boxes as one: "Box" six times would be a list of nothing.
+    expect(group('Left side').textContent, 'the side says what it takes').toMatch(/Band Activity, Spots, Needed,? or a box here/)
     const toSide = btn('Move Band Activity to the left side') as HTMLButtonElement
     expect(toSide.disabled).toBe(false)
     // The voice keyer has no ◀ at all (pinned); a rig strip moved into Column 1 has one, disabled.
@@ -205,5 +212,95 @@ describe('⊞ Arrange ▸ Left side (2026-10-03)', () => {
     toSide.focus()
     fireEvent.click(toSide)
     expect(document.activeElement).toBe(btn('Move Band Activity from the left side back to its column'))
+  })
+})
+
+describe('⊞ Arrange ▸ + Add a box (any pane in any area, 2026-10-07)', () => {
+  /** The host a grid cockpit is: the boxes on screen are what the record shows, named for what they show. */
+  function BoxHost({ sideRoom = false }: { sideRoom?: boolean }) {
+    const panels = usePanelLayout(PHONE_PANELS, 'main')
+    api = panels
+    const entries = boxEntries(PHONE_PANELS, panels.layout)
+    const isShown = (id: PhonePanelId) => SHOWN.has(id) || entries[id] != null
+    return (
+      <>
+        <ArrangePanes
+          spec={PHONE_PANELS.arrange!}
+          layout={panels.layout}
+          shown={isShown}
+          labels={{ ...LABELS, ...boxLabels(entries) }}
+          sideRoom={sideRoom}
+          onMove={(id, m) => panels.movePane!(id, m, isShown, sideRoom)}
+          onAddBox={(area) => panels.addBox!(area)}
+          boxesFull={BOX_IDS.every((b) => panels.stateOf(b) !== 'removed')}
+        />
+        <button type="button" onClick={panels.undo}>Undo</button>
+      </>
+    )
+  }
+  const title = (i: number) => {
+    const e = SHARED_PANES[i]
+    return boxLabels({ box1: e.id }).box1
+  }
+  const add = (area: 'a' | 'b' | 'log' | 'side') => btn(t(`panels.box.add.${area}.aria` as const))
+
+  it('each column has its own, named for it; the box it adds stands at that column’s foot, named for what it shows', () => {
+    render(<BoxHost />)
+    for (const area of ['a', 'b', 'log'] as const) expect(add(area).textContent).toBe(t('panels.box.add'))
+    fireEvent.click(add('b'))
+    expect(last(cols().b)).toBe('box1')
+    expect(last(names(group('Column 2')))).toBe(title(0))
+    fireEvent.click(add('log'))
+    expect(names(group('Log column'))).toEqual([title(1)])
+    // …and it moves like a pane: ◀ from the log column takes it to column 2's foot.
+    fireEvent.click(btn(`Move ${title(1)} to the column on the left`))
+    expect(last(cols().b)).toBe('box2')
+  })
+
+  it('the left side has one only while the window has room for the side', () => {
+    render(<BoxHost />)
+    expect(screen.queryByRole('button', { name: t('panels.box.add.side.aria') })).toBeNull()
+    cleanup()
+    render(<BoxHost sideRoom />)
+    fireEvent.click(add('side'))
+    expect(api!.layout.leftSide).toEqual(['box1'])
+    expect(names(group('Left side'))).toEqual([title(0)])
+  })
+
+  it('with six on screen every one is disabled, and says why', () => {
+    render(<BoxHost />)
+    for (let i = 0; i < 6; i++) fireEvent.click(add('a'))
+    for (const area of ['a', 'b', 'log'] as const) {
+      const b = add(area) as HTMLButtonElement
+      expect(b.disabled, area).toBe(true)
+      expect(document.getElementById(b.getAttribute('aria-describedby') ?? '')?.textContent).toBe(t('panels.box.full'))
+    }
+  })
+
+  it('the sixth add, pressed from a focused button, keeps focus in that column: on the new box’s last live move', () => {
+    render(<BoxHost />)
+    for (let i = 0; i < 5; i++) fireEvent.click(add('a'))
+    const sixth = add('a') as HTMLButtonElement
+    sixth.focus()
+    fireEvent.click(sixth)
+    expect(sixth.disabled).toBe(true)
+    const now = document.activeElement as HTMLButtonElement
+    expect(now, 'focus fell to the page').not.toBe(document.body)
+    expect(now.disabled).toBe(false)
+    expect(now.getAttribute('data-arrange')).toMatch(/^box6 /)
+    expect(group('Column 1').contains(now)).toBe(true)
+  })
+
+  it('an add is one undoable step', () => {
+    render(<BoxHost />)
+    fireEvent.click(add('a'))
+    expect(api!.stateOf('box1')).toBe('docked')
+    fireEvent.click(btn('Undo'))
+    expect(api!.stateOf('box1')).toBe('removed')
+  })
+
+  it('a cockpit that offers no boxes here shows no add at all (the hosted Remote page)', () => {
+    render(<Host />)
+    expect(screen.queryByRole('button', { name: t('panels.box.add.a.aria') })).toBeNull()
   })
 })

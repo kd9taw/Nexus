@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opening its cockpit. Nothing transmits. Beside a cockpit, a click selects the station in the rail
   only, never the station your cockpit is working. In a box narrower than its columns the list
   scrolls sideways inside the box. On Nexus Remote the box says the list is not available there.
+- **Boxes in Phone, CW and JS8: any Conditions pane among the cockpit's own.** In ⊞ Panels ▸
+  Arrange, every column, and Phone's left side, ends with **+ Add a box**: up to six boxes, each
+  showing any pane of Conditions (the Clock, Space Wx, POTA/SOTA, the Spots and Needed boards and
+  the rest), picked from the box's title. A pane shows once on a screen: picking one that is already
+  showing moves it into the box. Boxes move like panes, and hiding or moving one ends nothing. A
+  click in a box never changes the station you are working, and nothing in a box transmits. No box
+  shows until you add one, so nobody's screen changes on update, and Reset layout hides them again.
+  Not on Nexus Remote.
 
 ### Changed
 
