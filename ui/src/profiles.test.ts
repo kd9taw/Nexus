@@ -253,4 +253,37 @@ describe('mergeProfile — the local logger pushes never import', () => {
       }
     },
   )
+
+  // DXKeeper's push has no switch of its own: an empty host is off, so the host IS its on/off.
+  // A profile saved before DXKeeper was set up blanked it and the push stopped with no error; one
+  // saved with it set started sending every contact to DXKeeper after the operator had cleared it.
+  it("DXKeeper's host keeps its current value, set or blank", () => {
+    for (const [now, saved] of [['127.0.0.1', ''], ['', '127.0.0.1']]) {
+      const current = { mycall: 'KD9TAW', dxkeeperHost: now, band: '20m' } as unknown as Settings
+      const profile = { dxkeeperHost: saved, band: '40m' } as unknown as Settings
+      const merged = mergeProfile(current, profile) as unknown as Record<string, unknown>
+      expect(merged.dxkeeperHost).toBe(now)
+      expect(merged.band).toBe('40m')
+    }
+  })
+
+  // The rest stay with the profile: N3FJP's and N1MM+'s addresses (a Field Day profile carries the
+  // club's master-log address) and the WSJT-X UDP API, a feed other programs listen to.
+  it('the other logger addresses and the WSJT-X UDP API still come from a profile', () => {
+    const current = {
+      mycall: 'KD9TAW',
+      n3fjpHost: '',
+      n1mmAddr: '',
+      wsjtxUdp: false,
+    } as unknown as Settings
+    const saved = {
+      n3fjpHost: '192.168.1.10',
+      n1mmAddr: '127.0.0.1:12060',
+      wsjtxUdp: true,
+    } as unknown as Settings
+    const merged = mergeProfile(current, saved) as unknown as Record<string, unknown>
+    expect(merged.n3fjpHost).toBe('192.168.1.10')
+    expect(merged.n1mmAddr).toBe('127.0.0.1:12060')
+    expect(merged.wsjtxUdp).toBe(true)
+  })
 })

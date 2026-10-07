@@ -82,13 +82,19 @@ const NEVER_IMPORT: readonly string[] = [
   // pushes, and DXKeeper's own upload switch. Left importable, a profile saved before HRD
   // forwarding was set up stopped it with no error; one saved with it on restarted it beside a
   // JTAlert relay into HRD and every contact was logged twice; and `dxkeeperUploads` turned back
-  // on sent every contact to LoTW, eQSL, ClubLog and QRZ a second time. The hosts and addresses
-  // still travel with a profile, as the upload accounts do (DXKeeper's push has no switch of its
-  // own: an empty host is off). A new local logger's push switch joins this list.
+  // on sent every contact to LoTW, eQSL, ClubLog and QRZ a second time. A new local logger's push
+  // switch joins this list.
   'hrdLogging',
   'dxkeeperUploads',
   'n3fjpUpload',
   'n1mmUpload',
+  // DXKeeper's push has no switch of its own: an empty host is off, so its host is its on/off and
+  // stays too. A profile saved before DXKeeper was set up blanked it and the push stopped with no
+  // error; one saved with it set started the push again after the operator had cleared it. The
+  // other hosts and addresses still travel with a profile, as the upload accounts do (a Field Day
+  // profile carries the club's master-log address), and so does the WSJT-X UDP API (`wsjtxUdp`),
+  // a feed other programs listen to rather than a push to one logger.
+  'dxkeeperHost',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.
