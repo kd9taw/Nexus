@@ -5,6 +5,21 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
+  twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
+  put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
+  the contact nearest its time, and only on one within 30 minutes of it, the window LoTW itself
+  matches in. A confirmation more than 30 minutes from every contact you logged with that station
+  on that band is left out and counted as unmatched, as a confirmation of a contact missing from
+  your log always was; a QRZ download adds it to your log as a contact you did not have. Two
+  confirmations never go on one contact. A contact imported with no time of day still takes its
+  confirmation by its date. Confirmations that earlier versions put on the wrong contact stay
+  where they are.
+
 ## [1.17.0] — 2026-10-07
 
 ### Added
