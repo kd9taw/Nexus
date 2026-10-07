@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched since your account's last download by any program. The older confirmations never
   arrived, and the syncs after it carried on from there. Nexus now asks for everything from
   1900-01-01 in that case.
+- **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
+  the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
+  worked a station twice on one band in a UTC day, the later contact's upload could mark the
+  earlier one instead. That contact then no longer looked due for upload, so it was never sent to
+  LoTW and could never be confirmed. Each upload now marks only the contact nearest its time, and
+  only one within 30 minutes of it, the same match a confirmation uses.
 
 ## [1.17.0] — 2026-10-07
 

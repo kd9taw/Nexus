@@ -94,7 +94,7 @@ LoTW confirmation sync uses a two-pull flow that runs when you click Sync in the
 
 1. **Pull 1 — confirmations** (`qso_qsl=yes`): fetches new QSLs using the stored `APP_LoTW_LASTQSL` high-water timestamp as the `qso_qslsince` cursor, so only records newer than your last sync are downloaded. With no cursor (the first sync, or after the LoTW username changes or the log is cleared) it asks for everything from 1900-01-01; leaving `qso_qslsince` out would make LoTW fall back to the account's last download by any program. The cursor advances only after a successful fetch and only if your LoTW username has not changed during the fetch.
 
-2. **Pull 2 — own-echo** (`qso_qsl=no`): fetches your own uploaded QSOs bounded by the oldest in-flight upload date, promoting Pending uploads to Accepted without scanning your entire logbook.
+2. **Pull 2 — own-echo** (`qso_qsl=no`): fetches your own uploaded QSOs bounded by the oldest in-flight upload date, promoting Pending uploads to Accepted without scanning your entire logbook. Each uploaded record marks only the contact nearest its time, within 30 minutes, as a confirmation does.
 
 This lets Nexus distinguish "never uploaded" from "uploaded, waiting on partner" — a distinction single-pull tools cannot make.
 

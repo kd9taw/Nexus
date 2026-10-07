@@ -504,19 +504,21 @@ fn merge_pass<R: StoredRecord>(
 }
 
 /// Promote a logged QSO's own LoTW upload state to `Accepted` when it appears in
-/// the **own-QSO report** (LoTW's `qso_qsl=no` — your records LoTW holds but the
-/// partner hasn't matched yet). That membership is proof LoTW has your side on
+/// the **own-QSO report** (LoTW's `qso_qsl=no` — the records LoTW holds from your
+/// uploads). That membership is proof LoTW has your side on
 /// file, which is exactly what turns a "Pending" (awaiting echo) or never-marked
 /// upload into the "waiting on the other operator" (R2) state, and clears a false
 /// "never uploaded" (R1) for QSOs uploaded out-of-band (e.g. plain TQSL).
 ///
-/// Consume-once by (call, band, mode-class, UTC-day) with a ±1-day midnight
-/// tolerance. Unlike [`reconcile`] it does not compare times, so of two same-day
-/// contacts it promotes the earlier in the log first; what it writes is an upload
-/// state, never a confirmation. Award-confirmed QSOs are skipped (already matched —
-/// and `qso_qsl=no` would not list them anyway). Idempotent: an already-Accepted/
-/// Duplicate QSO is re-stamped harmlessly and not counted. Returns the number
-/// *newly* promoted.
+/// Paired exactly as [`reconcile`] pairs a confirmation report (`pair_report`: the nearest
+/// contact with the same call, band and mode class within 30 minutes, settled nearest first,
+/// no contact taking two rows). Up to 1.17.0 a row took the oldest contact on its UTC day
+/// without comparing times, so the upload of the later of two contacts with one station on one
+/// band that day marked the earlier one `Accepted`, and a contact marked `Accepted` is no
+/// longer owed to LoTW, so it was never uploaded. What it writes is an upload state, never a
+/// confirmation. Award-confirmed QSOs keep their place in the pairing, so their own row never
+/// lands on a neighbour, but are never written. Idempotent: an already-Accepted/Duplicate QSO
+/// is re-stamped harmlessly and not counted. Returns the number *newly* promoted.
 pub fn promote_own_echo<R: StoredRecord>(
     local: &mut [R],
     own: &[QsoRecord],
@@ -524,47 +526,23 @@ pub fn promote_own_echo<R: StoredRecord>(
 ) -> usize {
     use crate::logbook::{UploadOutcome, UploadStatus};
 
-    // Index award-unconfirmed local QSOs by match key; reversed so pop() consumes
-    // in log order (oldest first).
-    let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
-    for (i, r) in local.iter().enumerate() {
-        let r: &QsoRecord = r.borrow();
-        if !r.award_confirmed {
-            buckets.entry(key(r)).or_default().push(i);
-        }
-    }
-    for v in buckets.values_mut() {
-        v.reverse();
-    }
-
     let mut promoted = 0usize;
-    for inc in own {
-        let call_u = inc.call.to_ascii_uppercase();
-        let band_l = inc.band.to_ascii_lowercase();
-        let mc = mode_class(&inc.mode);
-        let day = inc.when_unix / 86_400;
-        let mut idx = None;
-        for d in [day, day.wrapping_sub(1), day + 1] {
-            if let Some(v) = buckets.get_mut(&(call_u.clone(), band_l.clone(), mc, d)) {
-                if let Some(i) = v.pop() {
-                    idx = Some(i);
-                    break;
-                }
-            }
+    for i in pair_report(local, own).into_iter().flatten() {
+        let r: &QsoRecord = local[i].borrow();
+        if r.award_confirmed {
+            continue;
         }
-        if let Some(i) = idx {
-            let already_on_file = matches!(
-                local[i].borrow().upload.lotw.as_ref().map(|s| s.outcome),
-                Some(UploadOutcome::Accepted) | Some(UploadOutcome::Duplicate)
-            );
-            local[i].write().upload.lotw = Some(UploadStatus {
-                outcome: UploadOutcome::Accepted,
-                when_unix,
-                detail: None,
-            });
-            if !already_on_file {
-                promoted += 1;
-            }
+        let already_on_file = matches!(
+            r.upload.lotw.as_ref().map(|s| s.outcome),
+            Some(UploadOutcome::Accepted) | Some(UploadOutcome::Duplicate)
+        );
+        local[i].write().upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix,
+            detail: None,
+        });
+        if !already_on_file {
+            promoted += 1;
         }
     }
     promoted
@@ -719,6 +697,102 @@ mod tests {
         let n = promote_own_echo(&mut log, &own, 1);
         assert_eq!(n, 0);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Pending));
+    }
+
+    /// An own-QSO row is proof about ONE upload. It used to promote the oldest contact with the
+    /// station that UTC day whatever its time, so the 18:00 upload marked the 06:00 contact
+    /// Accepted: that one no longer looked owed and was never uploaded, and 18:00 stayed Pending.
+    #[test]
+    fn own_echo_promotes_the_contact_nearest_its_time() {
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 6, 0), UploadOutcome::Pending),
+            with_lotw(w1aw_at(20_000, 18, 0), UploadOutcome::Pending),
+        ];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 18, 0)], 9), 1);
+        assert_eq!(
+            lotw_outcome(&log[0]),
+            Some(UploadOutcome::Pending),
+            "06:00 was not listed"
+        );
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
+        // Both inside the window, so only the nearest rule (not the window) picks 18:00.
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 17, 45), UploadOutcome::Pending),
+            with_lotw(w1aw_at(20_000, 18, 0), UploadOutcome::Pending),
+        ];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 17, 58)], 9), 1);
+        assert_eq!(
+            lotw_outcome(&log[0]),
+            Some(UploadOutcome::Pending),
+            "17:45 is 13 min off"
+        );
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
+    }
+
+    #[test]
+    fn own_echo_31_minutes_from_every_contact_promotes_nothing() {
+        let mut log = vec![with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending)];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 31)], 9), 0);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Pending));
+        // The edge is inclusive, as the confirmation match's is: 30:00 still pairs.
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 30)], 9), 1);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
+    }
+
+    /// Settled nearest first across the whole report, never in the order LoTW lists its rows:
+    /// the 10:01 row is A's, so the 10:19 row, though nearer A than B, is B's.
+    #[test]
+    fn own_echo_settles_the_nearer_row_first() {
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending), // A
+            with_lotw(w1aw_at(20_000, 10, 40), UploadOutcome::Pending), // B
+        ];
+        let own = [w1aw_at(20_000, 10, 19), w1aw_at(20_000, 10, 1)];
+        assert_eq!(promote_own_echo(&mut log, &own, 9), 2);
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted), "B");
+    }
+
+    /// No contact takes two rows: the 10:02 row is not the 10:00 contact's a second time.
+    #[test]
+    fn own_echo_never_gives_one_contact_two_rows() {
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending),
+            with_lotw(w1aw_at(20_000, 10, 20), UploadOutcome::Pending),
+        ];
+        let own = [w1aw_at(20_000, 10, 0), w1aw_at(20_000, 10, 2)];
+        assert_eq!(promote_own_echo(&mut log, &own, 9), 2);
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
+    }
+
+    /// A confirmed contact still owns its own row. `qso_qsl=no` lists every upload LoTW holds,
+    /// matched or not (`QSL_RCVD` is "Y" or "N"), and leaving confirmed contacts out of the
+    /// pairing handed a confirmed contact's row to its unconfirmed neighbour.
+    #[test]
+    fn own_echo_never_hands_a_confirmed_contacts_row_to_its_neighbour() {
+        let mut confirmed = w1aw_at(20_000, 10, 0);
+        confirmed.award_confirmed = true;
+        let mut log = vec![
+            confirmed,
+            with_lotw(w1aw_at(20_000, 10, 20), UploadOutcome::Pending),
+        ];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 0)], 9), 0);
+        assert_eq!(
+            lotw_outcome(&log[0]),
+            None,
+            "a confirmed contact is still never written"
+        );
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Pending));
+    }
+
+    /// A contact imported with no time of day keeps the day rule here too, as it does for a
+    /// confirmation: its 00:00 is no time to be 30 minutes from.
+    #[test]
+    fn own_echo_a_date_only_contact_still_pairs_on_its_day() {
+        let mut date_only = with_lotw(w1aw_at(20_000, 0, 0), UploadOutcome::Pending);
+        date_only.time_known = false;
+        let mut log = vec![date_only];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 14, 0)], 9), 1);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
     }
 
     #[test]
