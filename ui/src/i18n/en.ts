@@ -5660,8 +5660,8 @@ export const EN = {
     other: ' · {{count}} uploads now on file',
   },
   // Names the Download confirmations button: reword that and this sentence moves with it.
-  'settings.connections.lotw.redownload.done':
-    'Done. Your next LoTW download brings your whole confirmation history. Click Download confirmations to start it.',
+  'settings.connections.lotw.redownload.pending':
+    'Your whole LoTW history was not downloaded this time. Your next Download confirmations still asks for all of it.',
   'settings.connections.lotw.redownload.failed': 'Could not reset the LoTW download',
   'settings.connections.eqsl.password.saveFailed': 'Could not save the eQSL password',
   'settings.connections.eqsl.password.saved': 'eQSL password saved — auto-upload to eQSL is ON',
@@ -7483,15 +7483,15 @@ export const EN = {
   'settings.confirmations.lotw.sync.busy': 'Downloading…',
   'settings.confirmations.lotw.sync.hint':
     'This only pulls confirmations <b>down</b>. To send your contacts <em>to</em> LoTW, use <b>Upload to LoTW (N)</b> in the Logbook. Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole history (can be slow); later ones are incremental.',
-  // Download everything again: it clears only the sync cursor, and the next Download
-  // confirmations is the whole history, once.
+  // Download everything again: it clears only the sync cursor, then starts the download, which
+  // is the whole history, once.
   'settings.confirmations.lotw.redownload.action': 'Download everything again',
   'settings.confirmations.lotw.redownload.title':
-    'For confirmations an earlier download missed: the next download asks LoTW for your whole history again.',
+    'For confirmations an earlier download missed: downloads your whole LoTW history again.',
   'settings.confirmations.lotw.redownload.confirm.title':
     'Download your whole LoTW history again?',
   'settings.confirmations.lotw.redownload.confirm.body':
-    'Your next LoTW download will ask for every confirmation on your account, not just the new ones. That is one large download, and it can take several minutes. Your logged contacts and the confirmations on them are not changed.',
+    'This asks LoTW for every confirmation on your account, not just the new ones, and starts right away. That is one large download, and it can take several minutes. Your logged contacts and the confirmations on them are not changed.',
   'settings.confirmations.lotw.stationLocation.label': 'LoTW Station Location',
   'settings.confirmations.lotw.stationLocation.placeholder': 'exact TQSL Station Location name',
   'settings.confirmations.lotw.stationLocation.hint':

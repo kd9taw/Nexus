@@ -1745,9 +1745,10 @@ whether or not something is stored. **Set** saves one, **Forget** removes it.
   Logbook. The first pull covers your whole history and can be slow; later ones
   are incremental.
 - **Download everything again** — for confirmations an earlier download missed.
-  It asks first, then makes your next **Download confirmations** ask LoTW for
-  your whole history once: one large download. Your logged contacts and the
-  confirmations on them are not changed.
+  It asks first, then downloads your whole LoTW history once, straight away:
+  one large download. If that download cannot run or fails, your next
+  **Download confirmations** still asks for all of it. Your logged contacts and
+  the confirmations on them are not changed.
 - **LoTW Station Location** — for **uploading**. Signing is done by your
   installed **TQSL** against this named Station Location — set it up in TQSL
   first; the name must match exactly. **No certificate or password is stored by
