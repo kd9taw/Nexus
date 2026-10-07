@@ -34,8 +34,9 @@ pub struct LotwQuery {
     /// Scope to this station call (`qso_owncall`); `None`/empty → account default.
     pub owncall: Option<String>,
     /// Incremental cursor (`qso_qslsince`): UTC `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS`.
-    /// `None`/empty → full pull (first sync). Only valid when the rest of the
-    /// query is identical to the one that produced the stored high-water.
+    /// `None`/empty → full pull (first sync), which [`build_report_url`] asks for from
+    /// 1900-01-01. Only valid when the rest of the query is identical to the one that
+    /// produced the stored high-water.
     pub qsl_since: Option<String>,
 }
 
@@ -66,6 +67,20 @@ fn pct(s: &str) -> String {
     out
 }
 
+/// The `qso_qslsince` that asks for every confirmation the account holds.
+///
+/// Leaving the parameter out does NOT ask for everything. LoTW's developer page
+/// (`lotw.arrl.org/lotw-help/developer-query-qsos-qsls/`) documents `qso_qslsince` as
+/// "Returns QSL records received (matched or updated) on or after the specified date",
+/// and its default "when qso_qslsince is missing or empty" as the greatest
+/// `APP_LoTW_LASTQSL` returned for a non-specific `qso_qsl="yes"` query: the account's
+/// last download, by any program. A first sync, a changed username or a cleared log
+/// (each leaves the cursor empty) therefore got only what matched since then, and the
+/// cursor then moved past the gap for good (#399: 1 confirmation without a date, about
+/// 1,000 with this one, on the reporter's account). Any date before the account's first
+/// confirmation asks for all of them.
+const FULL_HISTORY_SINCE: &str = "1900-01-01";
+
 /// Build the LoTW confirmation-download URL. Always requests confirmations with
 /// award-relevant detail fields. The returned URL contains the password (encoded)
 /// — treat it as a secret: never log it.
@@ -82,18 +97,19 @@ pub fn build_report_url(q: &LotwQuery) -> String {
             url.push_str(&pct(call));
         }
     }
-    if let Some(since) = q.qsl_since.as_deref() {
-        let since = since.trim();
-        if !since.is_empty() {
-            url.push_str("&qso_qslsince=");
-            url.push_str(&pct(since));
-        }
-    }
+    let since = q
+        .qsl_since
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(FULL_HISTORY_SINCE);
+    url.push_str("&qso_qslsince=");
+    url.push_str(&pct(since));
     url
 }
 
 /// Build the LoTW **own-QSO** download URL (`qso_qsl=no`): the records LoTW holds
-/// from you that the partner hasn't matched yet. Used to promote an in-flight
+/// from your uploads, matched or not. Used to promote an in-flight
 /// upload from "Pending" to "Accepted" — proof your side is on file, so the QSO is
 /// now genuinely "waiting on the other operator" (R2) rather than never-sent (R1).
 ///
@@ -102,6 +118,14 @@ pub fn build_report_url(q: &LotwQuery) -> String {
 /// `YYYY-MM-DD` lower bound, e.g. the oldest in-flight upload's date) keeps the pull
 /// from scanning the whole log every sync. The returned URL carries the password —
 /// never log it.
+///
+/// `qso_qsorxsince` is always [`FULL_HISTORY_SINCE`]. LoTW's developer page documents it as
+/// "Returns QSO records received (uploaded) on or after the specified date", and its default
+/// "when qso_qsorxsince is missing or empty" as the `APP_LoTW_LASTQSORX` returned for a
+/// non-specific `qso_qsl="no"` query: the account's last such download, by any program. Nexus
+/// keeps no cursor for this pull, so leaving it out (as up to 1.17.0) skipped every upload LoTW
+/// received before another program last downloaded them, and those contacts stayed Pending.
+/// `start_date` still bounds the pull.
 pub fn build_own_report_url(q: &LotwQuery, start_date: Option<&str>) -> String {
     let mut url = format!(
         "{LOTW_REPORT_URL}?login={}&password={}&qso_query=1&qso_qsl=no",
@@ -122,6 +146,8 @@ pub fn build_own_report_url(q: &LotwQuery, start_date: Option<&str>) -> String {
             url.push_str(&pct(start));
         }
     }
+    url.push_str("&qso_qsorxsince=");
+    url.push_str(FULL_HISTORY_SINCE);
     url
 }
 
@@ -207,9 +233,9 @@ mod tests {
         // Password special chars must be percent-encoded, never raw.
         assert!(url.contains("password=p%40ss%20w%26rd%3D1"));
         assert!(!url.contains("p@ss w&rd=1"));
-        // No qso_owncall / qso_qslsince when not provided.
+        // No qso_owncall when not provided; no cursor asks for the whole history.
         assert!(!url.contains("qso_owncall="));
-        assert!(!url.contains("qso_qslsince="));
+        assert!(url.contains("qso_qslsince=1900-01-01"));
     }
 
     #[test]
@@ -222,6 +248,25 @@ mod tests {
         assert!(url.contains("qso_owncall=KD9TAW"));
         // Space in the date is encoded.
         assert!(url.contains("qso_qslsince=2026-01-02%2003%3A04%3A05"));
+    }
+
+    #[test]
+    fn an_empty_cursor_asks_for_the_whole_history() {
+        // #399. Without `qso_qslsince` LoTW does not send everything: its default is the
+        // account's last download, by any program. A first sync, a changed username or a
+        // cleared log (each leaves the cursor empty) got only what matched since then, and the
+        // cursor then moved past the gap for good.
+        for since in [None, Some(""), Some("   ")] {
+            let url = build_report_url(&LotwQuery {
+                qsl_since: since.map(str::to_string),
+                ..q()
+            });
+            assert!(
+                url.contains("&qso_qslsince=1900-01-01"),
+                "cursor {since:?} must ask from 1900-01-01"
+            );
+            assert_eq!(url.matches("qso_qslsince=").count(), 1);
+        }
     }
 
     #[test]
@@ -255,14 +300,30 @@ mod tests {
     }
 
     #[test]
-    fn blank_since_or_owncall_is_omitted() {
+    fn the_own_qso_pull_asks_for_every_upload_lotw_received() {
+        // #399's class, on the second pull. Without `qso_qsorxsince` LoTW does not list every
+        // upload: its default is the `APP_LoTW_LASTQSORX` of the account's last non-specific
+        // `qso_qsl="no"` query, by any program. Nexus keeps no cursor for this pull, so an
+        // upload LoTW received before another program's last such download was never listed,
+        // and its contact stayed Pending.
+        for start in [Some("2026-03-01"), None] {
+            let url = build_own_report_url(&q(), start);
+            assert!(
+                url.contains("&qso_qsorxsince=1900-01-01"),
+                "start {start:?} must ask for uploads received from 1900-01-01"
+            );
+            assert_eq!(url.matches("qso_qsorxsince=").count(), 1);
+        }
+    }
+
+    #[test]
+    fn blank_owncall_is_omitted() {
+        // (A blank cursor is not omitted: `an_empty_cursor_asks_for_the_whole_history`.)
         let url = build_report_url(&LotwQuery {
             owncall: Some("  ".into()),
-            qsl_since: Some("".into()),
             ..q()
         });
         assert!(!url.contains("qso_owncall="));
-        assert!(!url.contains("qso_qslsince="));
     }
 
     #[test]

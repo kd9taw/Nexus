@@ -812,10 +812,12 @@ fn best_r4_candidate(records: &[&DiagRow], orphan: &OrphanConfirmation) -> Optio
         let (_, band, mode, day) = key_parts(r);
         let band_diff = band != o_band;
         let mode_diff = mode != o_mode;
-        let day_diff = day.abs_diff(o_day) > 1; // ±1 already tolerated by reconcile
+        let day_diff = day.abs_diff(o_day) > 1; // reconcile searches ±1 day
         let diffs = band_diff as usize + mode_diff as usize + day_diff as usize;
         if diffs != 1 {
-            continue; // 0 would've matched; ≥2 is too ambiguous to claim
+            // ≥2 is too ambiguous to claim. 0 missed on TIME alone (more than reconcile's 30
+            // minutes away, or a nearer confirmation took the contact): not explained here.
+            continue;
         }
         let code = if band_diff {
             ReasonCode::R4aBandMismatch

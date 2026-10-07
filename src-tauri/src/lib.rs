@@ -18481,12 +18481,13 @@ fn notify_erase(state: State<'_, SharedEngine>, window: u8) -> Result<(), String
 }
 
 /// WSJT-X "Decode" button / F6: re-run the decoder over the last period's
-/// audio with the current settings; only newly-found lines are ingested.
+/// audio with the current settings; only newly-found lines are ingested. The
+/// decode runs with the Engine lock released (`redecode_shared`), so the radio
+/// loop keeps ticking — and keeps its unkey on time — while it does.
 #[tauri::command(async)]
 fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let _ = eng.redecode();
-    Ok(eng.snapshot())
+    let _ = tempo_app::engine::redecode_shared(&state);
+    Ok(engine_lock(&state).snapshot())
 }
 
 /// Start a CQ run; `dir` = a directed-CQ token ("DX"/"NA"/"POTA"/…) or None
@@ -22870,6 +22871,44 @@ fn is_complete_lotw_body(body: &str) -> bool {
     body.to_ascii_lowercase().contains("<app_lotw_eof>")
 }
 
+/// Whether a finished LoTW download may move the sync cursor to its high-water: only when its
+/// body is complete, and only while the username and the cursor are still the ones it used. The
+/// fetch runs without the engine lock, for minutes on a full pull, and in that time a username
+/// change or Download everything again ([`reset_lotw_cursor`]) can empty the cursor, and this
+/// download's high-water would put back the incremental cursor that the reset removed.
+fn lotw_cursor_may_advance(
+    s: &Settings,
+    body: &str,
+    used_username: &str,
+    used_since: &str,
+) -> bool {
+    is_complete_lotw_body(body)
+        && s.lotw_username.trim() == used_username.trim()
+        && s.lotw_last_qsl.trim() == used_since.trim()
+}
+
+/// Settings ▸ Confirmations ▸ LoTW ▸ Download everything again: empty the sync cursor, so the
+/// next download asks LoTW for the whole confirmation history once
+/// ([`tempo_app::engine::Engine::reset_lotw_cursor`]). The UI asks first, because that download
+/// is large. It touches no contact or confirmation.
+#[tauri::command(async)]
+fn reset_lotw_cursor(state: State<'_, SharedEngine>) {
+    let mut eng = engine_lock(&state);
+    let updated = eng.reset_lotw_cursor();
+    persist_settings(updated, |e| {
+        conn_log(
+            "LoTW",
+            "error",
+            format!("failed to persist the sync cursor reset: {e}"),
+        )
+    });
+    conn_log(
+        "LoTW",
+        "info",
+        "sync cursor cleared: the next download asks for the whole history",
+    );
+}
+
 #[tauri::command]
 async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
     // The impl blocks on the LoTW fetch (its own note below) and shells out to
@@ -22913,6 +22952,7 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .get_password()
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
     let used_username = username.clone(); // for the post-fetch cursor-binding guard
+    let used_since = since.clone(); // and the cursor it started from (`lotw_cursor_may_advance`)
     let owncall = Some(owncall).filter(|c| !c.is_empty());
 
     // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
@@ -22969,12 +23009,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             // this download used. If `set_settings` changed it during the (lock-free)
             // fetch, it already reset the cursor to a full pull for the new identity —
             // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull. Persist via a narrow
-            // setter so the sync never disturbs live operation (no mode reset /
+            // skipping records on the next incremental pull — AND (c) the cursor is still
+            // the one this download started from: Download everything again empties it
+            // while a fetch may be running, and this high-water must not undo that. Persist
+            // via a narrow setter so the sync never disturbs live operation (no mode reset /
             // TX-queue clear).
-            if is_complete_lotw_body(&body)
-                && eng.settings().lotw_username.trim() == used_username.trim()
-            {
+            if lotw_cursor_may_advance(eng.settings(), &body, &used_username, &used_since) {
                 let updated = eng.set_lotw_cursor(high_water);
                 persist_settings(updated, |e| {
                     conn_log(
@@ -29243,8 +29283,23 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         };
         (m, 2700)
     }
+    /// `t`: is the radio transmitting, whoever keyed it (#398).
+    ///
+    /// ⚠️ IT USED TO ANSWER `snapshot().radio.transmitting`, THE SLOT-TX FLAG ALONE. Only an FT
+    /// over raises it, so phone PTT held in Nexus, a client's own `T 1` and the radio keyed at
+    /// its own mic all read 0, and a program sharing the radio was told it was receiving while
+    /// it transmitted. The satellite path's answer to the same blind spot,
+    /// `transmitting || rig_keyed`, is not enough here: the radio loop stops reading the radio's
+    /// PTT back while Nexus holds the key, so `rig_keyed` stays down through Nexus's own PTT.
+    /// [`Engine::on_air`] is the engine's one answer to "is anything on the air": the slot flag,
+    /// the radio keyed at the shack, Tune, and every owner [`Engine::tx_owner`] knows.
+    ///
+    /// Read-only: this answers other programs and keys nothing. It shares `on_air`'s one known
+    /// gap: the engine hands a recorded voice message, an APRS frame and each CW word to the
+    /// radio loop and keeps nothing of it, so the whole of a voice message or a frame, and the
+    /// last word of a CW message, read 0.
     fn ptt(&self) -> bool {
-        engine_lock(&self.engine).snapshot().radio.transmitting
+        engine_lock(&self.engine).on_air()
     }
     fn set_freq(&self, hz: u64) -> bool {
         let mut e = engine_lock(&self.engine);
@@ -33068,6 +33123,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_lotw_password,
             clear_lotw_password,
             download_lotw_report,
+            reset_lotw_cursor,
             upload_lotw_report,
             mark_lotw_uploaded,
             set_eqsl_password,
@@ -38495,6 +38551,77 @@ mod tests {
         assert_eq!(rig.freq_hz(), 14_105_000);
     }
 
+    /// #398: the broker's `t` answered the slot-TX flag alone, so a radio keyed any other way
+    /// read 0 to every program sharing it. The reporter mutes the PC's audio while the radio
+    /// transmits; in SSB neither Nexus's own PTT nor the radio's mic moved the answer, and only
+    /// an FT over did. Real rigctld asks the radio, which is keyed whoever keyed it. Each way
+    /// keys a fresh engine, must read 1, lets go, and must read 0 again; every wrong answer is
+    /// collected so one run names all of them.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_reports_ptt_for_every_way_the_radio_is_keyed() {
+        use tempo_audio::rigctld_server::RigBackend;
+        // Armed in Phone on a phone segment, the reporter's case, with "Other programs may key
+        // transmit" on so a client's own `T 1` is granted.
+        let armed = || {
+            let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+                tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+            ));
+            {
+                let mut e = engine_lock(&shared);
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cat_broker_ptt = true;
+                e.apply_settings(s);
+                e.set_frequency(14.290, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                assert!(
+                    e.tx_enabled() && e.tx_allowed() && !e.on_air(),
+                    "premise: transmit is armed and legal on 14.290 USB, and nothing is keyed"
+                );
+            }
+            let rig = super::EngineRig::new(shared.clone());
+            (shared, rig)
+        };
+        type Key = dyn Fn(&SharedEngine, &super::EngineRig, bool);
+        let ways: [(&str, &Key); 4] = [
+            // The one way that already worked, kept as the control for the others.
+            ("an FT over (the slot flag)", &|e, _, on| {
+                engine_lock(e).app.set_transmitting(on)
+            }),
+            ("phone PTT held in Nexus", &|e, _, on| {
+                engine_lock(e).set_ptt(on)
+            }),
+            (
+                "the radio keyed at its own mic, read back over CAT",
+                &|e, _, on| engine_lock(e).observe_rig_ptt(on),
+            ),
+            ("this client's own `T 1`", &|_, rig, on| {
+                assert!(
+                    rig.set_ptt(on),
+                    "premise: the broker grants the key and its release"
+                )
+            }),
+        ];
+        let mut wrong = Vec::new();
+        for (way, key) in ways {
+            let (shared, rig) = armed();
+            key(&shared, &rig, true);
+            if !rig.ptt() {
+                wrong.push(format!("{way}: read 0 while the radio was keyed"));
+            }
+            key(&shared, &rig, false);
+            if rig.ptt() {
+                wrong.push(format!("{way}: read 1 after letting go"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "the share port's `t` was wrong:\n  {}",
+            wrong.join("\n  ")
+        );
+    }
+
     /// ⭐ THE PICK TELLS THE ENGINE WHAT THE UPLINK TAKES, and the next pick forgets it.
     /// KOSEN-1 (CW up over an AFSK downlink), then RS-44 (an inverting linear), then SO-50 (an
     /// FM repeater), each through the pick's own engine half with the catalogue's records,
@@ -41241,6 +41368,66 @@ mod tests {
             e.settings().lotw_last_qsl.trim().is_empty(),
             "an incremental cursor is a lie about an empty log"
         );
+    }
+
+    /// Download everything again, for an account whose cursor moved past confirmations it never
+    /// received (#399): the next pull asks LoTW for the whole history, and nothing in the log
+    /// changes, not a contact and not a confirmation. Only the cursor is the reset's to touch.
+    #[test]
+    fn download_everything_again_empties_the_cursor_and_leaves_the_log_alone() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.import_adif(&lotw_download());
+        e.set_lotw_cursor("2026-08-04 21:12:44".to_string());
+        let before = e.stored_log();
+        assert_eq!(before.len(), 5);
+        assert!(
+            before.iter().all(|q| q.confirmed),
+            "the fixture's contacts are confirmed"
+        );
+
+        let persisted = e.reset_lotw_cursor();
+        assert!(
+            persisted.lotw_last_qsl.is_empty(),
+            "what the command hands the writer"
+        );
+        // What `download_lotw_report_impl` builds the next pull from.
+        let next = tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
+            username: "nt9e".into(),
+            password: "x".into(),
+            owncall: None,
+            qsl_since: Some(e.settings().lotw_last_qsl.trim().to_string())
+                .filter(|c| !c.is_empty()),
+        });
+        assert!(
+            next.contains("&qso_qslsince=1900-01-01"),
+            "the whole history: {next}"
+        );
+        assert_eq!(e.stored_log(), before, "no contact or confirmation changed");
+    }
+
+    /// The reset can land while a download runs: the fetch holds no engine lock, for minutes on
+    /// a full pull. Its high-water must not go back over the reset, or the next sync is
+    /// incremental again and the history the operator asked for never arrives.
+    #[test]
+    fn a_download_already_running_does_not_undo_download_everything_again() {
+        let body = lotw_download();
+        let mut s = tempo_app::settings::Settings {
+            lotw_username: "nt9e".into(),
+            lotw_last_qsl: "2026-08-04 21:12:44".into(),
+            ..Default::default()
+        };
+        let used = s.lotw_last_qsl.clone();
+        assert!(
+            super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
+            "control: nothing moved during the fetch, so its high-water is the new cursor"
+        );
+        s.lotw_last_qsl.clear(); // Download everything again, mid-fetch
+        assert!(
+            !super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
+            "an incremental download finishing after the reset must leave the cursor empty"
+        );
+        // A full pull already running fetched everything the reset asks for: it may advance.
+        assert!(super::lotw_cursor_may_advance(&s, &body, "nt9e", ""));
     }
 
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."

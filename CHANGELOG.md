@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Download everything again, for LoTW confirmations an earlier download missed (#399).**
+  Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
+  confirmations. It asks first, then downloads your whole confirmation history once, straight away,
+  the way a first download now does; if that download cannot run or fails, your next Download
+  confirmations still asks for all of it. Use it if you set up LoTW in Nexus before this
+  release: that first download asked for too little, and each download after it carried on from
+  there, so older confirmations never arrived. Your logged contacts and the confirmations on them
+  are not changed.
 - **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
   **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
   its own, and a click works the station as it does on the Needed screen, moving the radio and
@@ -33,6 +41,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
+  re-runs the decoder over the last period, which takes from a fraction of a second to a few
+  seconds with the band, the decode depth and the computer. Until now the radio loop, the part of
+  Nexus that keys and unkeys the radio, waited for it: pressed near the end of an over, Decode kept
+  the transmitter keyed until the decode finished. The decode now runs while the radio loop carries
+  on. If the next period's decodes land before it finishes, its result is left out; press Decode
+  again for the period on screen.
+- **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
+  twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
+  put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
+  the contact nearest its time, and only on one within 30 minutes of it, the window LoTW itself
+  matches in. A confirmation more than 30 minutes from every contact you logged with that station
+  on that band is left out and counted as unmatched, as a confirmation of a contact missing from
+  your log always was; a QRZ download adds it to your log as a contact you did not have. Two
+  confirmations never go on one contact. A contact imported with no time of day still takes its
+  confirmation by its date. Confirmations that earlier versions put on the wrong contact stay
+  where they are.
+- **The first LoTW download brings your whole confirmation history (#399).** With no earlier
+  download on record (the first sync, or after you changed the LoTW username or cleared the log),
+  Nexus asked LoTW for confirmations without saying from when, and LoTW then sends only what it
+  matched since your account's last download by any program. The older confirmations never
+  arrived, and the syncs after it carried on from there. Nexus now asks for everything from
+  1900-01-01 in that case.
+- **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
+  the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
+  worked a station twice on one band in a UTC day, the later contact's upload could mark the
+  earlier one instead. That contact then no longer looked due for upload, so it was never sent to
+  LoTW and could never be confirmed. Each upload now marks only the contact nearest its time, and
+  only one within 30 minutes of it, the same match a confirmation uses.
+- **A LoTW download recognises every upload LoTW holds.** Besides confirmations, a LoTW download
+  asks LoTW which of your uploads it holds, so those contacts read as waiting on the other
+  operator. Nexus did not say from when, and LoTW then lists only the uploads it received since
+  your account's last such download by any program, such as another logger's LoTW sync. Contacts
+  uploaded before that went on waiting for LoTW to take them. Nexus now asks for every upload LoTW
+  received, back to your oldest contact still waiting.
+- **The shared radio address says the radio is transmitting however it was keyed (#398).** With
+  Share this radio with other programs on, a program asking the shared address whether the radio is
+  transmitting (rigctld's `t`) heard yes only during Nexus's own digital overs, such as FT8. Phone
+  PTT in Nexus, Tune, a CW, RTTY or SSTV over, a program's own key through the shared address and
+  the radio keyed at its own microphone all read as receive, so a script that mutes the computer's
+  audio while you transmit never fired on SSB. All of them now read as transmit; keyed at the radio,
+  within about a second, because Nexus reads the radio's PTT once a second. One gap is left: while
+  Nexus plays a recorded voice message or an APRS packet, and during the last word of a CW message,
+  the shared address still reads receive.
+- **Loading a profile no longer switches your logbook uploads back on, or off (#396).** A profile
+  (Settings ▸ Radio ▸ Profiles) carried the automatic upload switches for QRZ, ClubLog, eQSL,
+  HRDLog.net, World Radio League, Cloudlog/Wavelog and LoTW. Load one saved while QRZ upload was on
+  and it came back on after you had switched it off, and your contacts went to QRZ before you could
+  correct them; load one saved before you set up an upload and that upload quietly stopped. Loading
+  a profile now leaves every upload switch as you last set it, as it already left your callsign and
+  licence class. It leaves the switches that send your contacts to another logging program alone
+  too: Ham Radio Deluxe logging, N3FJP's Forward every QSO, N1MM+'s Broadcast every QSO, Let
+  DXKeeper do the uploads, and the DXKeeper host, which is what turns DXKeeper's push on and off.
+- **ClubLog uploads work in the Linux and Raspberry Pi packages (#388).** The .deb, AppImage and
+  Raspberry Pi packages were built without the ClubLog application key the Windows and Mac
+  installers carry, so ClubLog uploads failed with "This build has no ClubLog application key", and
+  ClubLog's Most Wanted ranking was missing from the DXpedition list's order. They now carry the
+  key too, so your ClubLog email and Application Password are all you need, on every platform.
 - **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
   Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
   list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line

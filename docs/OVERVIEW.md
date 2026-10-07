@@ -215,8 +215,9 @@ official installers bundle the required ClubLog API key — it is never publishe
 ClubLog auto-revokes committed keys, so source builds bring their own free key from
 clublog.org/requestapikey.php; eQSL outbound push and InBox confirmation
 import (host-pinned to eqsl.cc, HTTPS forced).
-Reconciliation tolerates ±1 day of midnight skew and matches by mode-class, so FT4-vs-FT8
-labeling differences don't orphan confirmations.
+Reconciliation puts each confirmation on the logged contact nearest its time, within 30 minutes
+and across midnight, and matches by mode-class, so FT4-vs-FT8 labeling differences don't orphan
+confirmations.
 
 **Journey** is the shipped, local-only achievement layer: XP/levels, auto-detected Firsts
 ("first DX", "first CW", "first park" — named with heritage context), tiered ladders toward the

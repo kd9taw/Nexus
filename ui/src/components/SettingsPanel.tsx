@@ -56,6 +56,7 @@ import {
   detectRigs,
   downloadEqslReport,
   downloadLotwReport,
+  resetLotwCursor,
   getAllRigModels,
   getPortlessRigModels,
   getCatCwUnprovenRigModels,
@@ -2866,8 +2867,12 @@ export function SettingsPanel({
     }
   }
 
-  const onSyncLotw = async () => {
-    if (!form) return
+  // `fromScratch`: Download everything again has just emptied the sync cursor, and this form
+  // still holds the one it loaded. A save that sends the whole form (the active radio changed
+  // elsewhere since it loaded) would put that cursor back before the download read it, so the
+  // save carries the empty one. Resolves to whether the download finished.
+  const onSyncLotw = async (fromScratch = false): Promise<boolean> => {
+    if (!form) return false
     setLotwSyncing(true)
     // Persist the form first so the download runs against the username the user
     // sees — the backend reads SAVED settings, not the in-form draft (and a
@@ -2877,6 +2882,7 @@ export function SettingsPanel({
       await saveForm({
         ...withActiveRadioConfig(form),
         mycall: form.mycall.trim().toUpperCase(),
+        ...(fromScratch ? { lotwLastQsl: '' } : {}),
       })
       return downloadLotwReport()
     }, t('settings.connections.lotw.sync.failed'))
@@ -2900,6 +2906,29 @@ export function SettingsPanel({
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
+    }
+    return !!r
+  }
+
+  // Download everything again: for confirmations an earlier download never brought (a first
+  // download that asked LoTW for too little, after which the cursor went on from there). It
+  // empties only the sync cursor, then starts the download Download confirmations runs, which
+  // asks for the whole history once. A download that cannot start or fails leaves the cursor
+  // empty, so the next one still asks for everything, and the toast says so.
+  const onRedownloadLotw = async () => {
+    const yes = await confirmDialog({
+      title: t('settings.confirmations.lotw.redownload.confirm.title'),
+      body: t('settings.confirmations.lotw.redownload.confirm.body'),
+      confirmLabel: t('settings.confirmations.lotw.redownload.action'),
+    })
+    if (!yes) return
+    const ok = await withErrorToast(async () => {
+      await resetLotwCursor()
+      return true
+    }, t('settings.connections.lotw.redownload.failed'))
+    if (!ok) return
+    if (!(await onSyncLotw(true))) {
+      pushToast(t('settings.connections.lotw.redownload.pending'), 'info')
     }
   }
 
@@ -10811,12 +10840,21 @@ export function SettingsPanel({
                     <button
                       type="button"
                       className="settings-refresh"
-                      onClick={onSyncLotw}
+                      onClick={() => onSyncLotw()}
                       disabled={remote || (lotwSyncing || !form.lotwUsername.trim())}
                     >
                       {lotwSyncing
                         ? t('settings.confirmations.lotw.sync.busy')
                         : t('settings.confirmations.lotw.sync.action')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onRedownloadLotw}
+                      disabled={remote || (lotwSyncing || !form.lotwUsername.trim())}
+                      title={t('settings.confirmations.lotw.redownload.title')}
+                    >
+                      {t('settings.confirmations.lotw.redownload.action')}
                     </button>
                   </div>
                   <span className="settings-hint">

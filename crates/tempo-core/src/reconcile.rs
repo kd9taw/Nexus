@@ -42,7 +42,7 @@ pub struct ReconcileSummary {
 }
 
 /// CW / Phone / Digital bucket for tolerant matching — LoTW reports vary in
-/// submode naming and exact time, so we match on the mode *class* + day.
+/// submode naming, so we match on the mode *class* (and on time within a window).
 ///
 /// The voice vocabulary MUST stay in step with `propagation::ModeClass::from_adif`
 /// (tempo-core can't depend on propagation, so this is kept aligned by hand and by
@@ -61,6 +61,12 @@ pub fn mode_class(mode: &str) -> &'static str {
         _ => "Digital", // FT8/FT4/RTTY/JT*/MFSK/PSK/FT1/DX1/… → data
     }
 }
+
+/// How far apart in time a report row and the logged contact it lands on may be: LoTW only
+/// matches two operators' records when their times agree within 30 minutes, and QRZ calls two
+/// records within 30 minutes of each other one contact. A row further than this from every
+/// logged contact with the station is none of them.
+const MATCH_WINDOW_SECS: u64 = 30 * 60;
 
 type Key = (String, String, &'static str, u64);
 fn key(r: &QsoRecord) -> Key {
@@ -228,23 +234,65 @@ fn build_buckets<R: Borrow<QsoRecord>>(local: &[R]) -> HashMap<Key, Vec<usize>> 
     build_buckets_by(local, key)
 }
 
-/// Consume-once lookup of the local QSO matching `inc`: exact UTC day preferred,
-/// then ±1 day — tolerates a report timestamped across midnight from the logged
-/// QSO (clock skew / the other op's minute), which would otherwise falsely orphan
-/// the same contact. Returns the matched local index and removes it from the bucket.
-fn take_match(buckets: &mut HashMap<Key, Vec<usize>>, inc: &QsoRecord) -> Option<usize> {
-    let call_u = inc.call.to_ascii_uppercase();
-    let band_l = inc.band.to_ascii_lowercase();
-    let mc = mode_class(&inc.mode);
-    let day = inc.when_unix / 86_400;
-    for d in [day, day.wrapping_sub(1), day + 1] {
-        if let Some(v) = buckets.get_mut(&(call_u.clone(), band_l.clone(), mc, d)) {
-            if let Some(i) = v.pop() {
-                return Some(i);
+/// How near a report row is to a logged contact, as [`pair_report`] ranks pairs (smallest
+/// first), or `None` when the row cannot be that contact.
+///
+/// Two measured times: the seconds between them, at most [`MATCH_WINDOW_SECS`]. A side with
+/// no measured time (`time_known == false`: a date-only import parked at 00:00 UTC) has no
+/// time to be near, so it keeps the day rule this matcher had before it compared times (the
+/// same UTC day, else the day either side), and it ranks after every pair of two measured
+/// times, because a fabricated midnight is no evidence of nearness.
+fn closeness(local: &QsoRecord, inc: &QsoRecord) -> Option<(bool, u64)> {
+    if local.time_known && inc.time_known {
+        let apart = local.when_unix.abs_diff(inc.when_unix);
+        (apart <= MATCH_WINDOW_SECS).then_some((false, apart))
+    } else {
+        let days = (local.when_unix / 86_400).abs_diff(inc.when_unix / 86_400);
+        (days <= 1).then_some((true, days))
+    }
+}
+
+/// Pair each report row with the logged contact it confirms: `out[j]` is the index in `local`
+/// that row `j` lands on, or `None` when it is none of them. Consume-once both ways: no contact
+/// takes two rows, and no row two contacts.
+///
+/// A row and a contact are candidates when they share call, band and mode class and their
+/// times are within [`MATCH_WINDOW_SECS`] ([`closeness`]). The day either side of the row's own
+/// is searched too, so a pair split by midnight (23:58 and 00:03) is still a pair. Every
+/// candidate pair in the report is then settled NEAREST FIRST: a row never takes a contact that
+/// another row is nearer to, and the order the service lists its rows in (LoTW's is newest
+/// match first) decides nothing. Equal distances go to the earlier row, then to the earlier
+/// contact in the log.
+///
+/// Up to 1.17.0 a row took the oldest contact on its own UTC day (else the day either side)
+/// without looking at the time, so of two contacts with one station on one band in one day,
+/// the confirmation of the later one landed on the earlier, for good (#400).
+fn pair_report<R: Borrow<QsoRecord>>(local: &[R], incoming: &[QsoRecord]) -> Vec<Option<usize>> {
+    let buckets = build_buckets(local);
+    let mut candidates = Vec::new();
+    for (j, inc) in incoming.iter().enumerate() {
+        let (call, band, mc, day) = key(inc);
+        for d in [day.wrapping_sub(1), day, day + 1] {
+            let Some(bucket) = buckets.get(&(call.clone(), band.clone(), mc, d)) else {
+                continue;
+            };
+            for &i in bucket {
+                if let Some(near) = closeness(local[i].borrow(), inc) {
+                    candidates.push((near, j, i));
+                }
             }
         }
     }
-    None
+    candidates.sort_unstable();
+    let mut taken = vec![false; local.len()];
+    let mut out = vec![None; incoming.len()];
+    for (_, j, i) in candidates {
+        if out[j].is_none() && !taken[i] {
+            out[j] = Some(i);
+            taken[i] = true;
+        }
+    }
+    out
 }
 
 /// Monotonically upgrade a matched local record from an incoming report row (only
@@ -301,16 +349,17 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
 }
 
 /// Merge a confirmation/credit report into `local`, in place. Each incoming
-/// record consumes at most one matching local QSO (so two same-day/band/mode
+/// record lands on at most one logged QSO, the one nearest its time within 30
+/// minutes (`pair_report`), and no QSO takes two records (so two same-day/band/mode
 /// contacts with one call reconcile against two distinct report rows). Unmatched
 /// confirmations become orphans (a "why is this missing?" diagnostic) — they are
 /// NOT added, because a LoTW/eQSL confirmation of a QSO we never logged is a gap to
 /// surface, not a contact to fabricate.
 pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> ReconcileSummary {
-    let mut buckets = build_buckets(local);
+    let pairs = pair_report(local, incoming);
     let mut sum = ReconcileSummary::default();
-    for inc in incoming {
-        match take_match(&mut buckets, inc) {
+    for (inc, pair) in incoming.iter().zip(pairs) {
+        match pair {
             Some(i) => apply_match(local[i].write(), inc, &mut sum),
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
@@ -322,8 +371,10 @@ pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> Re
                 let mc = mode_class(&inc.mode);
                 let call_u = inc.call.to_ascii_uppercase();
                 let band_l = inc.band.to_ascii_lowercase();
+                let (.., h, mi, _) = datetime_utc(inc.when_unix);
                 let reason = format!(
-                    "no logged QSO with {call_u} on {band_l} ({mc}) on {}",
+                    "no logged QSO with {call_u} on {band_l} ({mc}) within 30 minutes of {} \
+                     {h:02}{mi:02}Z",
                     fmt_day(inc.when_unix),
                 );
                 sum.orphans.push(OrphanConfirmation {
@@ -341,11 +392,12 @@ pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> Re
 }
 
 /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
-/// book pulled back down). ONE consume-once pass keyed identically to [`reconcile`]
-/// (call / band / mode-CLASS / UTC-day, ±1-day tolerance): a row that matches a local
-/// QSO upgrades its confirmation monotonically; a row that matches NOTHING is APPENDED
-/// as a genuinely-new QSO (and indexed so a later duplicate row in the same batch
-/// matches it rather than adding twice). The single shared key is the whole point —
+/// book pulled back down). ONE consume-once pass paired exactly as [`reconcile`] pairs
+/// (`pair_report`: call / band / mode-CLASS, the nearest contact within 30 minutes): a row
+/// that pairs with a local QSO upgrades its confirmation monotonically; a row that pairs
+/// with NOTHING (a row more than 30 minutes from every logged contact with the station is
+/// one) is APPENDED as a genuinely-new QSO, and is never a match for a later row in the
+/// same batch. The single shared pairing is the whole point —
 /// a separate full-mode import + class-reconcile disagree on "same QSO" whenever the
 /// mode spelling differs (local `SSB` vs a re-uploaded `USB`, `FT4` vs `MFSK`), which
 /// double-logs the contact. Returns the newly-added records (so the caller persists
@@ -354,14 +406,8 @@ pub fn merge_and_add<R: StoredRecord>(
     local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
-    let mut buckets = build_buckets(local);
-    merge_pass(
-        local,
-        incoming,
-        &mut buckets,
-        |b, _local, inc| take_match(b, inc),
-        |_, _| {},
-    )
+    let pairs = pair_report(local, &incoming);
+    merge_pass(local, incoming, pairs, |_, _| {})
 }
 
 /// Two-way merge of OUR OWN on-disk log back into memory — the two-instance recovery
@@ -371,14 +417,15 @@ pub fn merge_and_add<R: StoredRecord>(
 ///
 /// # Why not the report matcher
 ///
-/// [`merge_and_add`]'s key is deliberately fuzzy — UTC day with a ±1-day midnight
-/// tolerance — because a LoTW/eQSL/QRZ report's timestamps are the OTHER side's and
-/// legitimately differ from ours. The rows here are not a report: they came out of our
-/// own `save()` and carry our own `when_unix` to the second. Applied to them the
+/// [`merge_and_add`]'s match is deliberately tolerant — the nearest contact within 30
+/// minutes, across midnight — because a report's timestamps can legitimately differ
+/// from ours. The rows here are not a report: they came out of our
+/// own `save()` and carry our own `when_unix` to the second. Applied to them a
 /// tolerance is not slack, it is a mis-pairing: with two contacts with one station on
-/// one band inside a day (routine FT8), whenever file order and memory order diverge —
-/// another instance appended a QSO we never loaded — the day bucket paired the wrong
-/// two rows. Observed: memory holding only the 18:00 contact, disk holding 06:00
+/// one band close together (routine FT8), whenever file order and memory order diverge —
+/// another instance appended a QSO we never loaded — a tolerant key can pair the wrong
+/// two rows. Observed with the day-keyed matcher this function once shared: memory
+/// holding only the 18:00 contact, disk holding 06:00
 /// (award-confirmed) and 18:00, recovered to *two* 18:00 rows with the confirmation on
 /// the wrong contact and the 06:00 QSO gone. Exact identity cannot pair them; a row
 /// that fails to match is genuinely a row we do not hold, which is exactly what the
@@ -405,7 +452,11 @@ pub fn merge_own_disk<R: StoredRecord>(
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets_by(local, exact_key);
-    merge_pass(local, incoming, &mut buckets, take_own_disk, adopt_id)
+    let pairs = incoming
+        .iter()
+        .map(|inc| take_own_disk(&mut buckets, local, inc))
+        .collect();
+    merge_pass(local, incoming, pairs, adopt_id)
 }
 
 /// Our memory and our own file hold one row under two ids (two instances each gave it one):
@@ -417,33 +468,33 @@ fn adopt_id(local: &mut QsoRecord, disk: &QsoRecord) {
     };
 }
 
-/// The shared body of the two-way merges: each incoming row consumes at most one local
-/// QSO via `take` and upgrades it monotonically, or is appended as new. `take` is the
-/// whole difference between them — a fuzzy report key vs. our own exact identity.
+/// The shared body of the two-way merges: each incoming row upgrades the local QSO that
+/// `pairs` names for it, monotonically, or is appended as new. The pairing is the whole
+/// difference between them — a report's nearest-in-time match vs. our own exact identity —
+/// and it is settled before anything is appended.
 fn merge_pass<R: StoredRecord>(
     local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
-    buckets: &mut HashMap<Key, Vec<usize>>,
-    take: impl Fn(&mut HashMap<Key, Vec<usize>>, &[R], &QsoRecord) -> Option<usize>,
+    pairs: Vec<Option<usize>>,
     on_pair: impl Fn(&mut QsoRecord, &QsoRecord),
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut sum = ReconcileSummary::default();
     let mut added = Vec::new();
-    for inc in incoming {
-        match take(buckets, local, &inc) {
+    for (inc, pair) in incoming.into_iter().zip(pairs) {
+        match pair {
             Some(i) => {
                 let held = local[i].write();
                 apply_match(held, &inc, &mut sum);
                 on_pair(held, &inc);
             }
             None => {
-                // New contact from the download — append it. Do NOT re-index it into the
-                // consume-once bucket: a later same-key row in this batch is a DISTINCT QSO
-                // (consume-once, exactly like `reconcile`). Re-indexing broke re-sync
-                // idempotency — the appended slot got popped by a same-key row, leaving its
-                // twin to re-append on every fetch (phantom-duplicate accretion). Because
-                // the buckets are rebuilt from the grown log next sync, each row then pops
-                // its own match and nothing re-adds.
+                // New contact from the download — append it. It is never a match for a later
+                // row in this batch (the pairing was settled first): a later same-key row is a
+                // DISTINCT QSO (consume-once, exactly like `reconcile`). Matching it to the
+                // appended slot broke re-sync idempotency — the slot got popped by a same-key
+                // row, leaving its twin to re-append on every fetch (phantom-duplicate
+                // accretion). Because the pairing is rebuilt from the grown log next sync, each
+                // row then pairs with its own match and nothing re-adds.
                 added.push(inc.clone());
                 local.push(R::from(inc));
             }
@@ -453,17 +504,21 @@ fn merge_pass<R: StoredRecord>(
 }
 
 /// Promote a logged QSO's own LoTW upload state to `Accepted` when it appears in
-/// the **own-QSO report** (LoTW's `qso_qsl=no` — your records LoTW holds but the
-/// partner hasn't matched yet). That membership is proof LoTW has your side on
+/// the **own-QSO report** (LoTW's `qso_qsl=no` — the records LoTW holds from your
+/// uploads). That membership is proof LoTW has your side on
 /// file, which is exactly what turns a "Pending" (awaiting echo) or never-marked
 /// upload into the "waiting on the other operator" (R2) state, and clears a false
 /// "never uploaded" (R1) for QSOs uploaded out-of-band (e.g. plain TQSL).
 ///
-/// Consume-once by (call, band, mode-class, UTC-day) with the same ±1-day midnight
-/// tolerance as [`reconcile`]. Award-confirmed QSOs are skipped (already matched —
-/// and `qso_qsl=no` would not list them anyway). Idempotent: an already-Accepted/
-/// Duplicate QSO is re-stamped harmlessly and not counted. Returns the number
-/// *newly* promoted.
+/// Paired exactly as [`reconcile`] pairs a confirmation report (`pair_report`: the nearest
+/// contact with the same call, band and mode class within 30 minutes, settled nearest first,
+/// no contact taking two rows). Up to 1.17.0 a row took the oldest contact on its UTC day
+/// without comparing times, so the upload of the later of two contacts with one station on one
+/// band that day marked the earlier one `Accepted`, and a contact marked `Accepted` is no
+/// longer owed to LoTW, so it was never uploaded. What it writes is an upload state, never a
+/// confirmation. Award-confirmed QSOs keep their place in the pairing, so their own row never
+/// lands on a neighbour, but are never written. Idempotent: an already-Accepted/Duplicate QSO
+/// is re-stamped harmlessly and not counted. Returns the number *newly* promoted.
 pub fn promote_own_echo<R: StoredRecord>(
     local: &mut [R],
     own: &[QsoRecord],
@@ -471,47 +526,23 @@ pub fn promote_own_echo<R: StoredRecord>(
 ) -> usize {
     use crate::logbook::{UploadOutcome, UploadStatus};
 
-    // Index award-unconfirmed local QSOs by match key; reversed so pop() consumes
-    // in log order (oldest first), mirroring `reconcile`.
-    let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
-    for (i, r) in local.iter().enumerate() {
-        let r: &QsoRecord = r.borrow();
-        if !r.award_confirmed {
-            buckets.entry(key(r)).or_default().push(i);
-        }
-    }
-    for v in buckets.values_mut() {
-        v.reverse();
-    }
-
     let mut promoted = 0usize;
-    for inc in own {
-        let call_u = inc.call.to_ascii_uppercase();
-        let band_l = inc.band.to_ascii_lowercase();
-        let mc = mode_class(&inc.mode);
-        let day = inc.when_unix / 86_400;
-        let mut idx = None;
-        for d in [day, day.wrapping_sub(1), day + 1] {
-            if let Some(v) = buckets.get_mut(&(call_u.clone(), band_l.clone(), mc, d)) {
-                if let Some(i) = v.pop() {
-                    idx = Some(i);
-                    break;
-                }
-            }
+    for i in pair_report(local, own).into_iter().flatten() {
+        let r: &QsoRecord = local[i].borrow();
+        if r.award_confirmed {
+            continue;
         }
-        if let Some(i) = idx {
-            let already_on_file = matches!(
-                local[i].borrow().upload.lotw.as_ref().map(|s| s.outcome),
-                Some(UploadOutcome::Accepted) | Some(UploadOutcome::Duplicate)
-            );
-            local[i].write().upload.lotw = Some(UploadStatus {
-                outcome: UploadOutcome::Accepted,
-                when_unix,
-                detail: None,
-            });
-            if !already_on_file {
-                promoted += 1;
-            }
+        let already_on_file = matches!(
+            r.upload.lotw.as_ref().map(|s| s.outcome),
+            Some(UploadOutcome::Accepted) | Some(UploadOutcome::Duplicate)
+        );
+        local[i].write().upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix,
+            detail: None,
+        });
+        if !already_on_file {
+            promoted += 1;
         }
     }
     promoted
@@ -577,6 +608,22 @@ mod tests {
 
     fn lotw_outcome(r: &QsoRecord) -> Option<UploadOutcome> {
         r.upload.lotw.as_ref().map(|s| s.outcome)
+    }
+
+    /// A W1AW 20m FT8 contact, or report row, at `h:m` UTC on `day`.
+    fn w1aw_at(day: u64, h: u64, m: u64) -> QsoRecord {
+        let mut r = rec("W1AW", "20m", "FT8", day);
+        r.when_unix = day * 86_400 + h * 3600 + m * 60;
+        r
+    }
+
+    /// `r` as a LoTW confirmation granting `credit`, so a test can tell BY VALUE which row a
+    /// contact received.
+    fn confirms(mut r: QsoRecord, credit: &str) -> QsoRecord {
+        r.confirmed = true;
+        r.award_confirmed = true;
+        r.credit_granted = vec![credit.into()];
+        r
     }
 
     #[test]
@@ -650,6 +697,102 @@ mod tests {
         let n = promote_own_echo(&mut log, &own, 1);
         assert_eq!(n, 0);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Pending));
+    }
+
+    /// An own-QSO row is proof about ONE upload. It used to promote the oldest contact with the
+    /// station that UTC day whatever its time, so the 18:00 upload marked the 06:00 contact
+    /// Accepted: that one no longer looked owed and was never uploaded, and 18:00 stayed Pending.
+    #[test]
+    fn own_echo_promotes_the_contact_nearest_its_time() {
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 6, 0), UploadOutcome::Pending),
+            with_lotw(w1aw_at(20_000, 18, 0), UploadOutcome::Pending),
+        ];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 18, 0)], 9), 1);
+        assert_eq!(
+            lotw_outcome(&log[0]),
+            Some(UploadOutcome::Pending),
+            "06:00 was not listed"
+        );
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
+        // Both inside the window, so only the nearest rule (not the window) picks 18:00.
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 17, 45), UploadOutcome::Pending),
+            with_lotw(w1aw_at(20_000, 18, 0), UploadOutcome::Pending),
+        ];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 17, 58)], 9), 1);
+        assert_eq!(
+            lotw_outcome(&log[0]),
+            Some(UploadOutcome::Pending),
+            "17:45 is 13 min off"
+        );
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
+    }
+
+    #[test]
+    fn own_echo_31_minutes_from_every_contact_promotes_nothing() {
+        let mut log = vec![with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending)];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 31)], 9), 0);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Pending));
+        // The edge is inclusive, as the confirmation match's is: 30:00 still pairs.
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 30)], 9), 1);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
+    }
+
+    /// Settled nearest first across the whole report, never in the order LoTW lists its rows:
+    /// the 10:01 row is A's, so the 10:19 row, though nearer A than B, is B's.
+    #[test]
+    fn own_echo_settles_the_nearer_row_first() {
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending), // A
+            with_lotw(w1aw_at(20_000, 10, 40), UploadOutcome::Pending), // B
+        ];
+        let own = [w1aw_at(20_000, 10, 19), w1aw_at(20_000, 10, 1)];
+        assert_eq!(promote_own_echo(&mut log, &own, 9), 2);
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted), "B");
+    }
+
+    /// No contact takes two rows: the 10:02 row is not the 10:00 contact's a second time.
+    #[test]
+    fn own_echo_never_gives_one_contact_two_rows() {
+        let mut log = vec![
+            with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending),
+            with_lotw(w1aw_at(20_000, 10, 20), UploadOutcome::Pending),
+        ];
+        let own = [w1aw_at(20_000, 10, 0), w1aw_at(20_000, 10, 2)];
+        assert_eq!(promote_own_echo(&mut log, &own, 9), 2);
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
+    }
+
+    /// A confirmed contact still owns its own row. `qso_qsl=no` lists every upload LoTW holds,
+    /// matched or not (`QSL_RCVD` is "Y" or "N"), and leaving confirmed contacts out of the
+    /// pairing handed a confirmed contact's row to its unconfirmed neighbour.
+    #[test]
+    fn own_echo_never_hands_a_confirmed_contacts_row_to_its_neighbour() {
+        let mut confirmed = w1aw_at(20_000, 10, 0);
+        confirmed.award_confirmed = true;
+        let mut log = vec![
+            confirmed,
+            with_lotw(w1aw_at(20_000, 10, 20), UploadOutcome::Pending),
+        ];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 0)], 9), 0);
+        assert_eq!(
+            lotw_outcome(&log[0]),
+            None,
+            "a confirmed contact is still never written"
+        );
+        assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Pending));
+    }
+
+    /// A contact imported with no time of day keeps the day rule here too, as it does for a
+    /// confirmation: its 00:00 is no time to be 30 minutes from.
+    #[test]
+    fn own_echo_a_date_only_contact_still_pairs_on_its_day() {
+        let mut date_only = with_lotw(w1aw_at(20_000, 0, 0), UploadOutcome::Pending);
+        date_only.time_known = false;
+        let mut log = vec![date_only];
+        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 14, 0)], 9), 1);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
     }
 
     #[test]
@@ -838,6 +981,136 @@ mod tests {
         assert!(!log[0].award_confirmed);
     }
 
+    #[test]
+    fn a_confirmation_lands_on_the_contact_nearest_its_time() {
+        // #400. Two contacts with one station on one band in one UTC day: a QSO that broke
+        // down and was redone, or FT8 then FT4 (one mode class). LoTW confirms only the later
+        // one. The day-keyed matcher handed it to the EARLIER contact, by its place in the log,
+        // and a merge only ever adds, so the false confirmation counted toward awards for good.
+        let mut log = vec![w1aw_at(20_000, 6, 0), w1aw_at(20_000, 18, 0)];
+        let report = confirms(w1aw_at(20_000, 18, 2), "DXCC");
+        let s = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!((s.matched, s.orphans.len()), (1, 0));
+        assert!(
+            log[1].award_confirmed,
+            "the 18:00 contact, two minutes away"
+        );
+        assert_eq!(log[1].credit_granted, vec!["DXCC".to_string()]);
+        assert!(
+            !log[0].confirmed && !log[0].award_confirmed && log[0].credit_granted.is_empty(),
+            "and nothing on the 06:00 one"
+        );
+
+        // Both inside the window (a redo fifteen minutes later): still the nearer one.
+        let mut log = vec![w1aw_at(20_000, 17, 45), w1aw_at(20_000, 18, 0)];
+        let report = confirms(w1aw_at(20_000, 17, 58), "DXCC");
+        let s = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!((s.matched, s.orphans.len()), (1, 0));
+        assert!(log[1].award_confirmed, "18:00 is two minutes away");
+        assert!(!log[0].award_confirmed, "17:45 is thirteen");
+    }
+
+    #[test]
+    fn a_confirmation_31_minutes_from_every_contact_does_not_merge() {
+        // LoTW only matches two operators' times within 30 minutes, so a confirmation further
+        // than that from every contact in the log is none of them: it stays out, an orphan,
+        // exactly like one for a contact that was never logged. Either side of the contact.
+        let day = 20_000;
+        let mut log = vec![w1aw_at(day, 12, 0)];
+        let after = confirms(w1aw_at(day, 12, 31), "DXCC");
+        let before = confirms(w1aw_at(day, 11, 29), "DXCC");
+        let s = reconcile(&mut log, &[after, before]);
+        assert_eq!(s.matched, 0);
+        assert!(!log[0].confirmed && !log[0].award_confirmed && log[0].credit_granted.is_empty());
+        let mut orphaned: Vec<u64> = s.orphans.iter().map(|o| o.when_unix).collect();
+        orphaned.sort_unstable();
+        assert_eq!(
+            orphaned,
+            vec![
+                day * 86_400 + 11 * 3600 + 29 * 60,
+                day * 86_400 + 12 * 3600 + 31 * 60
+            ]
+        );
+
+        // Thirty minutes exactly is inside the window.
+        let edge = confirms(w1aw_at(day, 12, 30), "DXCC");
+        let s = reconcile(&mut log, std::slice::from_ref(&edge));
+        assert_eq!((s.matched, s.orphans.len()), (1, 0));
+        assert!(log[0].award_confirmed);
+    }
+
+    #[test]
+    fn two_confirmations_never_share_a_contact_and_the_nearer_one_takes_it() {
+        // One contact, logged at 10:00, and two confirmations for the station that day: 10:01
+        // (this contact) and 10:24 (another QSO, logged somewhere else and never here). LoTW
+        // lists the newest match first, so the 10:24 row can arrive first. Taken in report
+        // order it would claim the contact (24 minutes is inside the window) and orphan the
+        // row that is really this contact's. The nearer pair settles first.
+        let mut log = vec![w1aw_at(20_000, 10, 0)];
+        let elsewhere = confirms(w1aw_at(20_000, 10, 24), "DXCC");
+        let this_one = confirms(w1aw_at(20_000, 10, 1), "WAS");
+        let s = reconcile(&mut log, &[elsewhere, this_one]);
+        assert_eq!(s.matched, 1, "one contact takes one confirmation");
+        assert_eq!(
+            log[0].credit_granted,
+            vec!["WAS".to_string()],
+            "the 10:01 row's credit, not the 10:24 row's"
+        );
+        assert_eq!(s.orphans.len(), 1);
+        assert_eq!(
+            s.orphans[0].when_unix,
+            20_000 * 86_400 + 10 * 3600 + 24 * 60,
+            "the 10:24 row is the contact this log lacks"
+        );
+    }
+
+    #[test]
+    fn a_near_pair_split_by_midnight_still_pairs() {
+        // 23:58 and 00:03 are five minutes apart on two UTC days. The day-keyed matcher took
+        // anything on the confirmation's own day first (here a 00:20 contact with the same
+        // station) and only looked across midnight when that day had nothing. Time decides.
+        let mut log = vec![w1aw_at(20_000, 23, 58), w1aw_at(20_001, 0, 20)];
+        let report = confirms(w1aw_at(20_001, 0, 3), "DXCC");
+        let s = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!((s.matched, s.orphans.len()), (1, 0));
+        assert!(
+            log[0].award_confirmed,
+            "the 23:58 contact, five minutes away"
+        );
+        assert!(
+            !log[1].award_confirmed,
+            "not the 00:20 one, seventeen minutes away"
+        );
+    }
+
+    #[test]
+    fn a_date_only_contact_still_pairs_on_its_day() {
+        // A contact imported with no time of day (`time_known == false`, parked at 00:00) has
+        // no time to be near. Nexus never signs one for LoTW, so a confirmation for it comes
+        // from an upload made elsewhere, with the real time: 14:23 here. It pairs by its date,
+        // as it always has.
+        let mut log = vec![date_only("W1AW", "20m", "FT8", 20_000, None)];
+        let report = confirms(w1aw_at(20_000, 14, 23), "DXCC");
+        let s = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!((s.matched, s.orphans.len()), (1, 0));
+        assert!(log[0].award_confirmed);
+    }
+
+    #[test]
+    fn a_measured_time_in_the_window_beats_a_date_only_contact() {
+        // Confirmation at 00:10. The date-only contact's midnight is ten minutes from it and the
+        // contact logged at 00:35 is twenty-five, but only one of those times was measured.
+        let mut log = vec![
+            date_only("W1AW", "20m", "FT8", 20_000, None),
+            w1aw_at(20_000, 0, 35),
+        ];
+        let report = confirms(w1aw_at(20_000, 0, 10), "DXCC");
+        let s = reconcile(&mut log, std::slice::from_ref(&report));
+        assert_eq!((s.matched, s.orphans.len()), (1, 0));
+        assert!(log[1].award_confirmed, "the contact logged at 00:35");
+        assert!(!log[0].award_confirmed, "not the one with no time of day");
+    }
+
     // ---- merge_and_add (two-way download sync) ----
 
     #[test]
@@ -901,17 +1174,19 @@ mod tests {
     }
 
     #[test]
-    fn merge_add_still_tolerates_a_download_timestamp_that_differs() {
-        // THE REASON the download/report matcher is fuzzy, pinned: a QRZ/LoTW copy of our
-        // QSO carries the OTHER side's clock. Hours off inside the day, and across midnight,
-        // must still be the SAME contact — matched and upgraded, never appended as a phantom.
-        // (`merge_own_disk` is exact precisely because its rows are not this.)
+    fn merge_add_still_tolerates_a_download_timestamp_inside_the_window() {
+        // THE REASON the download/report matcher is tolerant, pinned: a downloaded copy of our
+        // QSO can carry a time a little off ours (another program logged or uploaded it). Inside
+        // the 30-minute window, and across midnight, it is the SAME contact — matched and
+        // upgraded, never appended as a phantom. (`merge_own_disk` is exact precisely because
+        // its rows are not this.) Hours off is another contact since 2026-10-07 (#400):
+        // `merge_add_appends_a_row_31_minutes_from_every_contact`.
         let mut logged = rec("W1AW", "20m", "FT8", 20_000);
         logged.when_unix = 20_000 * 86_400 + 6 * 3600; // we logged 06:00
         let mut log = vec![logged];
 
         let mut same_day = rec("W1AW", "20m", "FT8", 20_000);
-        same_day.when_unix = 20_000 * 86_400 + 18 * 3600; // they report 18:00
+        same_day.when_unix = 20_000 * 86_400 + 6 * 3600 + 20 * 60; // they report 06:20
         same_day.confirmed = true;
         let (added, sum) = merge_and_add(&mut log, vec![same_day]);
         assert!(
@@ -921,14 +1196,65 @@ mod tests {
         assert_eq!((log.len(), sum.matched), (1, 1));
         assert!(log[0].confirmed);
 
-        // ...and across the midnight boundary (the ±1-day tolerance).
+        // ...and across the midnight boundary.
+        let mut late = rec("W1AW", "20m", "FT8", 20_000);
+        late.when_unix = 20_000 * 86_400 + 86_399; // we logged 23:59:59
+        let mut log = vec![late];
         let mut next_day = rec("W1AW", "20m", "FT8", 20_001);
-        next_day.when_unix = 20_001 * 86_400 + 60;
+        next_day.when_unix = 20_001 * 86_400 + 60; // they report 00:01 the next day
         next_day.award_confirmed = true;
         let (added2, sum2) = merge_and_add(&mut log, vec![next_day]);
-        assert!(added2.is_empty(), "±1-day tolerance still matches");
+        assert!(added2.is_empty(), "across midnight it still matches");
         assert_eq!((log.len(), sum2.matched), (1, 1));
         assert!(log[0].award_confirmed);
+    }
+
+    #[test]
+    fn merge_add_lands_a_downloaded_confirmation_on_the_nearest_contact() {
+        // #400 through the QRZ fetch: two contacts with the station that day, QRZ shows only
+        // the later one confirmed.
+        let mut log = vec![w1aw_at(20_000, 6, 0), w1aw_at(20_000, 18, 0)];
+        let mut row = w1aw_at(20_000, 18, 2);
+        row.confirmed = true; // QRZ's own confirmation: confirmed, never award-grade
+        let (added, sum) = merge_and_add(&mut log, vec![row]);
+        assert!(added.is_empty(), "it is the 18:00 contact, not a new one");
+        assert_eq!((log.len(), sum.matched), (2, 1));
+        assert!(log[1].confirmed, "the 18:00 contact QRZ confirmed");
+        assert!(!log[0].confirmed, "and not the 06:00 one");
+    }
+
+    #[test]
+    fn merge_add_appends_a_row_31_minutes_from_every_contact() {
+        // In the QRZ fetch a row that is none of the logged contacts is a contact the log lacks,
+        // so beyond the window it is added as one, never folded onto the same-day QSO.
+        let mut log = vec![w1aw_at(20_000, 12, 0)];
+        let mut row = w1aw_at(20_000, 12, 31);
+        row.confirmed = true;
+        let (added, sum) = merge_and_add(&mut log, vec![row]);
+        assert_eq!(sum.matched, 0);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].when_unix, 20_000 * 86_400 + 12 * 3600 + 31 * 60);
+        assert_eq!(log.len(), 2);
+        assert!(!log[0].confirmed, "the 12:00 contact is untouched");
+    }
+
+    #[test]
+    fn merge_add_settles_the_nearer_row_first() {
+        // The two-confirmation case through the QRZ fetch: the 10:24 row arrives first, and it
+        // is the contact the log lacks (added), not the 10:00 contact's confirmation.
+        let mut log = vec![w1aw_at(20_000, 10, 0)];
+        let elsewhere = confirms(w1aw_at(20_000, 10, 24), "DXCC");
+        let this_one = confirms(w1aw_at(20_000, 10, 1), "WAS");
+        let (added, sum) = merge_and_add(&mut log, vec![elsewhere, this_one]);
+        assert_eq!(sum.matched, 1);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].when_unix, 20_000 * 86_400 + 10 * 3600 + 24 * 60);
+        assert_eq!(log.len(), 2);
+        assert_eq!(
+            log[0].credit_granted,
+            vec!["WAS".to_string()],
+            "the 10:00 contact took the 10:01 row"
+        );
     }
 
     // ---- merge_own_disk (recover OUR OWN file before a full rewrite) ----
