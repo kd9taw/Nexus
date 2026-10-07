@@ -1250,6 +1250,13 @@ export async function downloadLotwReport(): Promise<LotwSyncResult> {
   return invoke<LotwSyncResult>('download_lotw_report')
 }
 
+/** Empty the LoTW sync cursor, so the next `downloadLotwReport` asks LoTW for the whole
+ *  confirmation history once (Settings' Download everything again). Touches no contact or
+ *  confirmation. */
+export async function resetLotwCursor(): Promise<void> {
+  await invoke<void>('reset_lotw_cursor')
+}
+
 /** Sign + upload QSOs to LoTW via the operator's installed TQSL. `indices` =
  *  specific log rows, or omit for the default unsent-unconfirmed batch. */
 export async function uploadLotwReport(indices?: number[]): Promise<UploadReport> {

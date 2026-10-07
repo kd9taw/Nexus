@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Download everything again, for LoTW confirmations an earlier download missed (#399).**
+  Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
+  confirmations. It asks first, then makes your next LoTW download ask for your whole confirmation
+  history once, the way a first download now does. Use it if you set up LoTW in Nexus before this
+  release: that first download asked for too little, and each download after it carried on from
+  there, so older confirmations never arrived. Your logged contacts and the confirmations on them
+  are not changed.
+
 ### Fixed
 
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station

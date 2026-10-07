@@ -6114,6 +6114,18 @@ impl Engine {
         self.settings.clone()
     }
 
+    /// Empty the LoTW incremental-sync cursor, so the next download asks LoTW for the
+    /// account's whole confirmation history once: Settings' "Download everything again", for an
+    /// account whose cursor moved past confirmations it never received (a first sync before
+    /// #399's fix asked for too little, and the cursor went on from there). The own-QSO pull has
+    /// no cursor of its own to reset. Like [`Engine::set_lotw_cursor`] it has none of
+    /// [`Engine::apply_settings`]' side effects, and it touches no contact or confirmation.
+    /// Returns the updated [`Settings`] for the caller to persist.
+    pub fn reset_lotw_cursor(&mut self) -> Settings {
+        self.settings.lotw_last_qsl.clear();
+        self.settings.clone()
+    }
+
     /// Advance the persisted eQSL incremental-sync cursor (`eqsl_last_sync`) WITHOUT
     /// the side effects of [`Engine::apply_settings`] (see [`Engine::set_lotw_cursor`]).
     /// Returns the updated [`Settings`] for the caller to persist.

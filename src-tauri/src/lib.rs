@@ -22870,6 +22870,44 @@ fn is_complete_lotw_body(body: &str) -> bool {
     body.to_ascii_lowercase().contains("<app_lotw_eof>")
 }
 
+/// Whether a finished LoTW download may move the sync cursor to its high-water: only when its
+/// body is complete, and only while the username and the cursor are still the ones it used. The
+/// fetch runs without the engine lock, for minutes on a full pull, and in that time a username
+/// change or Download everything again ([`reset_lotw_cursor`]) can empty the cursor, and this
+/// download's high-water would put back the incremental cursor that the reset removed.
+fn lotw_cursor_may_advance(
+    s: &Settings,
+    body: &str,
+    used_username: &str,
+    used_since: &str,
+) -> bool {
+    is_complete_lotw_body(body)
+        && s.lotw_username.trim() == used_username.trim()
+        && s.lotw_last_qsl.trim() == used_since.trim()
+}
+
+/// Settings ▸ Confirmations ▸ LoTW ▸ Download everything again: empty the sync cursor, so the
+/// next download asks LoTW for the whole confirmation history once
+/// ([`tempo_app::engine::Engine::reset_lotw_cursor`]). The UI asks first, because that download
+/// is large. It touches no contact or confirmation.
+#[tauri::command(async)]
+fn reset_lotw_cursor(state: State<'_, SharedEngine>) {
+    let mut eng = engine_lock(&state);
+    let updated = eng.reset_lotw_cursor();
+    persist_settings(updated, |e| {
+        conn_log(
+            "LoTW",
+            "error",
+            format!("failed to persist the sync cursor reset: {e}"),
+        )
+    });
+    conn_log(
+        "LoTW",
+        "info",
+        "sync cursor cleared: the next download asks for the whole history",
+    );
+}
+
 #[tauri::command]
 async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
     // The impl blocks on the LoTW fetch (its own note below) and shells out to
@@ -22913,6 +22951,7 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .get_password()
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
     let used_username = username.clone(); // for the post-fetch cursor-binding guard
+    let used_since = since.clone(); // and the cursor it started from (`lotw_cursor_may_advance`)
     let owncall = Some(owncall).filter(|c| !c.is_empty());
 
     // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
@@ -22969,12 +23008,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             // this download used. If `set_settings` changed it during the (lock-free)
             // fetch, it already reset the cursor to a full pull for the new identity —
             // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull. Persist via a narrow
-            // setter so the sync never disturbs live operation (no mode reset /
+            // skipping records on the next incremental pull — AND (c) the cursor is still
+            // the one this download started from: Download everything again empties it
+            // while a fetch may be running, and this high-water must not undo that. Persist
+            // via a narrow setter so the sync never disturbs live operation (no mode reset /
             // TX-queue clear).
-            if is_complete_lotw_body(&body)
-                && eng.settings().lotw_username.trim() == used_username.trim()
-            {
+            if lotw_cursor_may_advance(eng.settings(), &body, &used_username, &used_since) {
                 let updated = eng.set_lotw_cursor(high_water);
                 persist_settings(updated, |e| {
                     conn_log(
@@ -33068,6 +33107,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_lotw_password,
             clear_lotw_password,
             download_lotw_report,
+            reset_lotw_cursor,
             upload_lotw_report,
             mark_lotw_uploaded,
             set_eqsl_password,
@@ -41241,6 +41281,66 @@ mod tests {
             e.settings().lotw_last_qsl.trim().is_empty(),
             "an incremental cursor is a lie about an empty log"
         );
+    }
+
+    /// Download everything again, for an account whose cursor moved past confirmations it never
+    /// received (#399): the next pull asks LoTW for the whole history, and nothing in the log
+    /// changes, not a contact and not a confirmation. Only the cursor is the reset's to touch.
+    #[test]
+    fn download_everything_again_empties_the_cursor_and_leaves_the_log_alone() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.import_adif(&lotw_download());
+        e.set_lotw_cursor("2026-08-04 21:12:44".to_string());
+        let before = e.stored_log();
+        assert_eq!(before.len(), 5);
+        assert!(
+            before.iter().all(|q| q.confirmed),
+            "the fixture's contacts are confirmed"
+        );
+
+        let persisted = e.reset_lotw_cursor();
+        assert!(
+            persisted.lotw_last_qsl.is_empty(),
+            "what the command hands the writer"
+        );
+        // What `download_lotw_report_impl` builds the next pull from.
+        let next = tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
+            username: "nt9e".into(),
+            password: "x".into(),
+            owncall: None,
+            qsl_since: Some(e.settings().lotw_last_qsl.trim().to_string())
+                .filter(|c| !c.is_empty()),
+        });
+        assert!(
+            next.contains("&qso_qslsince=1900-01-01"),
+            "the whole history: {next}"
+        );
+        assert_eq!(e.stored_log(), before, "no contact or confirmation changed");
+    }
+
+    /// The reset can land while a download runs: the fetch holds no engine lock, for minutes on
+    /// a full pull. Its high-water must not go back over the reset, or the next sync is
+    /// incremental again and the history the operator asked for never arrives.
+    #[test]
+    fn a_download_already_running_does_not_undo_download_everything_again() {
+        let body = lotw_download();
+        let mut s = tempo_app::settings::Settings {
+            lotw_username: "nt9e".into(),
+            lotw_last_qsl: "2026-08-04 21:12:44".into(),
+            ..Default::default()
+        };
+        let used = s.lotw_last_qsl.clone();
+        assert!(
+            super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
+            "control: nothing moved during the fetch, so its high-water is the new cursor"
+        );
+        s.lotw_last_qsl.clear(); // Download everything again, mid-fetch
+        assert!(
+            !super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
+            "an incremental download finishing after the reset must leave the cursor empty"
+        );
+        // A full pull already running fetched everything the reset asks for: it may advance.
+        assert!(super::lotw_cursor_may_advance(&s, &body, "nt9e", ""));
     }
 
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."

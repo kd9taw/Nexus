@@ -56,6 +56,7 @@ import {
   detectRigs,
   downloadEqslReport,
   downloadLotwReport,
+  resetLotwCursor,
   getAllRigModels,
   getPortlessRigModels,
   getCatCwUnprovenRigModels,
@@ -2901,6 +2902,24 @@ export function SettingsPanel({
       )
       onSaved?.()
     }
+  }
+
+  // Download everything again: for confirmations an earlier download never brought (a first
+  // download that asked LoTW for too little, after which the cursor went on from there). It
+  // empties only the sync cursor, so the next Download confirmations asks for the whole history
+  // once. It saves nothing else and downloads nothing by itself.
+  const onRedownloadLotw = async () => {
+    const yes = await confirmDialog({
+      title: t('settings.confirmations.lotw.redownload.confirm.title'),
+      body: t('settings.confirmations.lotw.redownload.confirm.body'),
+      confirmLabel: t('settings.confirmations.lotw.redownload.action'),
+    })
+    if (!yes) return
+    const ok = await withErrorToast(async () => {
+      await resetLotwCursor()
+      return true
+    }, t('settings.connections.lotw.redownload.failed'))
+    if (ok) pushToast(t('settings.connections.lotw.redownload.done'), 'success')
   }
 
   const onSaveEqslPassword = async () => {
@@ -10817,6 +10836,15 @@ export function SettingsPanel({
                       {lotwSyncing
                         ? t('settings.confirmations.lotw.sync.busy')
                         : t('settings.confirmations.lotw.sync.action')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onRedownloadLotw}
+                      disabled={remote || !form.lotwUsername.trim()}
+                      title={t('settings.confirmations.lotw.redownload.title')}
+                    >
+                      {t('settings.confirmations.lotw.redownload.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
