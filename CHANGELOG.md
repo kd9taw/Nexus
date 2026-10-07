@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confirmations never go on one contact. A contact imported with no time of day still takes its
   confirmation by its date. Confirmations that earlier versions put on the wrong contact stay
   where they are.
+- **The first LoTW download brings your whole confirmation history (#399).** With no earlier
+  download on record (the first sync, or after you changed the LoTW username or cleared the log),
+  Nexus asked LoTW for confirmations without saying from when, and LoTW then sends only what it
+  matched since your account's last download by any program. The older confirmations never
+  arrived, and the syncs after it carried on from there. Nexus now asks for everything from
+  1900-01-01 in that case.
 
 ## [1.17.0] — 2026-10-07
 
