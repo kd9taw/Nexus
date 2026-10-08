@@ -9,7 +9,7 @@
 use crate::dxcc;
 use crate::dxped::{NeedKind, OperatorNeeds};
 use crate::geo::{haversine_km, km_token, maidenhead_to_latlon};
-use crate::model::{Band, ModeClass, PathSpot, Side};
+use crate::model::{exact_mode, Band, ModeClass, PathSpot, Side};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -192,6 +192,12 @@ pub struct NeedAlert {
     /// Operating-mode class — "CW" / "Phone" / "Digital". Routes a click-to-work to the
     /// matching cockpit and drives the band's mode badge.
     pub mode: String,
+    /// The mode the station was heard in, through [`crate::model::mode_key`] ("FT8", "SSB"), or
+    /// `None` when its source named only a class (a cluster spot placed by its frequency). A
+    /// [`NeedTag::NewMode`] row is a need for THIS mode: a window shows its chip only where it
+    /// shows this mode, so an FT4 need never paints the FT8 roster.
+    #[serde(default)]
+    pub exact_mode: Option<String>,
     /// Exact spot frequency in MHz, when known (cluster/RBN) — lets click-to-work QSY to
     /// the spot, not just the band's default. `None` for band-level reception needs.
     pub freq_mhz: Option<f64>,
@@ -349,7 +355,7 @@ pub fn score_slots(
     // DXCC need — ARRL DXCC entities only (WAE/CQ-only entities earn no DXCC tag).
     if info.is_dxcc {
         if let Some(b) = heard_on {
-            match needs.need(info.entity, b, ModeClass::from_adif(mode)) {
+            match needs.need(info.entity, b, mode) {
                 NeedKind::Atno => tags.push(NeedTag::NewEntity),
                 NeedKind::NewBand => tags.push(NeedTag::NewBand),
                 NeedKind::NewMode => tags.push(NeedTag::NewMode),
@@ -449,6 +455,7 @@ pub fn score_slots(
         0
     };
     let priority = tags[0].tier() + rarity_boost;
+    let exact = exact_mode(mode);
     let headline = match tags[0] {
         NeedTag::NewEntity => format!("New one — {}", info.entity),
         // The band rides these three headlines because the need is now judged PER BAND
@@ -457,20 +464,22 @@ pub fn score_slots(
         // catch: the operator may well have that square in the log from 20 m.
         NeedTag::NewZone => format!("New CQ zone {} on {} — {}", info.cq_zone, band, info.entity),
         NeedTag::NewBand => format!("New band — {} {}", info.entity, band),
-        // Name the mode class — with CW/Phone needs flowing, a NewMode CW row and a
-        // NewMode Phone row for the same entity must read differently.
+        // Name the mode: the need is "never worked this entity in THIS mode", so the row says
+        // which ("New mode — FT8 The Gambia" with FT4 in the log), or names the class for a
+        // station heard in a class alone, when no mode of it was ever worked.
         //
         // The band is deliberately ABSENT (operator report 2026-07-29). `LogNeeds`
-        // keys `worked_mode` as (entity, mode-class) with NO band — a mode need means
-        // "never worked this entity in this mode class on ANY band", which is exactly
-        // what the per-mode DXCC awards count (band slots are DXCC Challenge's axis,
-        // and NewBand's job). Appending the band the station happened to be heard on
-        // made a true "never worked Asiatic Russia on CW" need render as
+        // keys `worked_mode` as (entity, mode) with NO band — a mode need means
+        // "never worked this entity in this mode on ANY band" (band slots are DXCC
+        // Challenge's axis, and NewBand's job). Appending the band the station happened to
+        // be heard on made a true "never worked Asiatic Russia on CW" need render as
         // "New mode — CW Asiatic Russia 30m", which an operator with six 30m FT8
         // contacts there reads — correctly — as a false claim. Say what we check.
         NeedTag::NewMode => format!(
             "New mode — {} {} (any band)",
-            ModeClass::from_adif(mode).label(),
+            exact
+                .as_deref()
+                .unwrap_or(ModeClass::from_adif(mode).label()),
             info.entity
         ),
         NeedTag::NewGrid => format!(
@@ -511,14 +520,12 @@ pub fn score_slots(
         // The operating-mode class for routing/badging. `rank` attaches the exact
         // frequency from the Heard (score is frequency-agnostic award logic).
         // "RTTY" is carried through as a DISPLAY/ROUTING submode (never a ModeClass
-        // variant): the award .need() above already treated it as Digital
-        // (from_adif("RTTY") = Digital), so RTTY DXCC stays a Digital-class award —
-        // this only lets the row read "RTTY" and route to the RTTY cockpit, and keeps
+        // variant): it lets the row read "RTTY" and route to the RTTY cockpit, and keeps
         // an RTTY row distinct from an FT8 row of the same call/band in rank()'s dedup.
         // Carry the SPECIFIC digital submode (RTTY/FT8/FT4) as the display+routing label so the
         // Needed board designates the exact mode and keeps them as distinct rows in rank()'s
-        // dedup. The award .need() above already treated each as Digital (from_adif), so this
-        // changes only the badge/routing, not the award class. Everything else keeps its class.
+        // dedup. A label only: the mode need above was judged on the exact mode, which rides
+        // in `exact_mode`. Everything else keeps its class.
         mode: {
             let up = mode.to_ascii_uppercase();
             if up == "RTTY" || up == "FT8" || up == "FT4" {
@@ -527,6 +534,7 @@ pub fn score_slots(
                 ModeClass::from_adif(mode).label().to_string()
             }
         },
+        exact_mode: exact,
         freq_mhz: None,
         grid_rarity: rarity,
         grid: grid.map(str::to_string),
@@ -824,6 +832,7 @@ pub fn activation_alert(
         priority: 0,
         headline: String::new(),
         mode: mode.label().to_string(),
+        exact_mode: exact_mode(mode.label()),
         freq_mhz: None,
         admitted_at: None,
         evidence: None,
@@ -939,6 +948,7 @@ pub fn watched_alert(
         priority: 0,
         headline: String::new(),
         mode: ModeClass::from_adif(mode).label().to_string(),
+        exact_mode: exact_mode(mode),
         freq_mhz: None,
         admitted_at: None,
         evidence: None,
@@ -3664,6 +3674,7 @@ mod tests {
                 priority: tags.first().map(|t| t.tier()).unwrap_or(0),
                 headline: String::new(),
                 mode: "Digital".into(),
+                exact_mode: None,
                 tags,
                 freq_mhz: None,
                 admitted_at: None,

@@ -107,6 +107,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installers carry, so ClubLog uploads failed with "This build has no ClubLog application key", and
   ClubLog's Most Wanted ranking was missing from the DXpedition list's order. They now carry the
   key too, so your ClubLog email and Application Password are all you need, on every platform.
+- **"New mode" counts each mode on its own, on every screen.** The callsign card treated FT8,
+  FT4, RTTY, PSK31 and the other modes as separate modes, while the Call Roster, Band Activity, the
+  Needed board and the need alerts only asked whether you had worked a country in CW, phone or any
+  digital mode. So a country you had worked on FT4 but never on FT8 showed "New mode-slot" on the
+  card and nothing on the roster beside it. Now they all count each mode separately, as the card
+  does: a country worked on FT4 lights up as a new mode on FT8, so expect more mode needs than
+  before, and the need goes out once a contact in that mode is in your log. The roster and Band
+  Activity show a mode need only while you are on that mode, and the Needed board names it, as in
+  "New mode — FT8 The Gambia (any band)". USB and LSB still count as one mode, SSB. A DX cluster
+  spot that Nexus can only place as phone or digital from its frequency is still a new mode only
+  when you have never worked that country in any mode of that kind. The DXCC award totals still
+  count CW, Phone and Digital, as ARRL does.
+- **A contact imported from JS8Call keeps JS8 as its mode.** JS8Call logs JS8 as MFSK with JS8 as
+  the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
+  those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
+  file again does not add them twice.
 
 ## [1.17.0] — 2026-10-07
 

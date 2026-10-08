@@ -719,9 +719,11 @@ export function OperateDecodes({
           // Tooltip suffix for highlighted rows so the operator knows why the color appeared.
           // An appended CLAUSE carrying its own separator, interpolated whole.
           const hlTip = hlEntry ? t('operate.decodes.row.highlighted') : ''
-          // Need context for this row (why is this station worth working) — icons + colour.
+          // Need context for this row (why is this station worth working) — icons + colour. The
+          // surface's mode is the tier, the mode every row here is decoded in: a "new mode" need
+          // is for one mode, so an FT4 need never marks a row on the FT8 feed.
           const rowAlerts = d.from ? (needAlertsByCall.get(d.from.toUpperCase()) ?? []) : []
-          const needs = resolveDecodeNeeds(d, band, rowAlerts, 'Digital', needScopes)
+          const needs = resolveDecodeNeeds(d, band, rowAlerts, tier, needScopes)
           // Beam heading for this row: the decode's own grid when it sent one, else
           // the centre of its entity (marked `~`), else nothing at all.
           const az = azimuthTo(myGrid, d.grid, d.country, centroids)

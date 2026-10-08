@@ -602,7 +602,7 @@ mod tests {
     //! reused across an upload stamp exactly where that is correct.
     use super::*;
     use crate::remote_service::stored_log_tests::StoredLog;
-    use propagation::model::{Band, ModeClass};
+    use propagation::model::Band;
     use propagation::OperatorNeeds;
     use tempo_core::logbook::sqlite::{Resolved, WriteHold};
     use tempo_core::logbook::{UploadDetail, UploadOutcome};
@@ -1009,7 +1009,7 @@ mod tests {
 
     /// Everything a reader can observe of a needs model, as one comparable value (C12's own
     /// measure): every set it exposes, sorted, and its verdict for every worked entity (and two
-    /// it never worked) on every band in every mode class.
+    /// it never worked) on every band in each mode below.
     fn observed(n: &propagation::LogNeeds) -> String {
         fn sorted<T: std::fmt::Debug>(items: impl Iterator<Item = T>) -> String {
             let mut v: Vec<String> = items.map(|x| format!("{x:?}")).collect();
@@ -1032,8 +1032,12 @@ mod tests {
         entities.sort();
         for e in &entities {
             for b in Band::ALL {
-                for m in [ModeClass::Cw, ModeClass::Phone, ModeClass::Digital] {
-                    out.push(format!("{e}/{b:?}/{m:?}={:?}", n.need(e, b, m)));
+                // Each class a source can name, and the exact modes these logs hold plus one they
+                // never do: the mode need is judged per mode.
+                for m in [
+                    "CW", "Phone", "Digital", "FT8", "FT4", "SSB", "RTTY", "MFSK", "FM",
+                ] {
+                    out.push(format!("{e}/{b:?}/{m}={:?}", n.need(e, b, m)));
                 }
             }
         }

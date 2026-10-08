@@ -17,7 +17,7 @@ sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 | `NewState` — new state (WAS) | 60 |
 | `NewGrid` — new Maidenhead square | 55 |
 | `NewBand` — new band-slot | 50 |
-| `NewMode` — new mode class | 30 |
+| `NewMode` — new mode for the entity, any band; each mode counts on its own (FT8 and FT4 apart, USB and LSB both SSB) | 30 |
 | `NewPark` — a park or summit not yet worked in the activation running now | 20 |
 | `Confirm` — confirmation opportunity | 10 |
 | `Dxped` — active DXpedition chip | 0 |
