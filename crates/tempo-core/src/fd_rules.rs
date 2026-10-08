@@ -4515,8 +4515,14 @@ mod tests {
     #[test]
     fn wfd_bans_wsjt_modes_but_never_rtty_or_sstv() {
         let wfd = ruleset(FdEvent::WinterFd, 2026);
-        // The whole WSJT suite is out at WFD 2026…
-        for m in ["FT8", "FT4", "FST4", "JT65", "Q65", "MSK144", "WSPR"] {
+        // The whole WSJT suite is out at WFD, in the sponsor's own words for 2027
+        // (winterfieldday.org rules, read 2026-10-08): "WSJT modes include: FT2, FST4, FT4,
+        // FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W, and Echo." FT2, which this build
+        // ships, is the one the list lacked…
+        for m in [
+            "FT2", "FST4", "FT4", "FT8", "JT4", "JT9", "JT65", "Q65", "MSK144", "WSPR", "FST4W",
+            "ECHO",
+        ] {
             assert!(wfd.mode_banned(m), "{m} is banned at WFD");
         }
         assert!(wfd.mode_banned(" ft8 "), "case-insensitive + trimmed");
