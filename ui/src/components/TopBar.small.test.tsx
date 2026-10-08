@@ -22,13 +22,18 @@
 // reachable and enabled on every screen at every pinned scale) and scripts/browser-probe are the
 // instruments for that. The App-level half (the twelve screens really render the bar's Stop TX,
 // enabled and sending halt_tx) is in stop-control-wiring.test.tsx.
-import { describe, it, expect, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { TopBar } from './TopBar'
 import { StationControlContext } from '../stationAccess'
 import type { RadioStatus, Tier } from '../types'
+
+// THE BUDGET (2026-10-08). The top bar renders for real at each size, and the FT-only case's time scales with the CPU it
+// gets: 0.57–0.67 s alone on a quiet box, but past vitest's 5 s default twice in full-suite runs at a load of 20–30.
+// 15 s is the budget the other real-render files carry; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const read = (p: string): string => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8')
 
