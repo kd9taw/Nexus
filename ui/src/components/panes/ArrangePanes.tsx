@@ -27,6 +27,10 @@
 // screen is listed and moved like any pane, under the name of what it shows. With all six on screen the
 // buttons stay where they are, disabled, and say why — the note explains, it never hides the control.
 //
+// FT'S COLUMNS (2026-10-07): a cockpit whose columns are not Phone's names them itself (`columns`, in their
+// order on screen — FT's side rail can stand on the left, and Roster has two), and says what a narrower
+// window does with them (`narrow`). ◀ ▶ then follow that order, and there is no log form to mention.
+//
 // THE STOP LINE is not near this: only a pane with a vocabulary id can be listed or moved (the
 // ArrangeSpec, features/panelPlace), and no control that stops a transmission has one. A move changes
 // where a pane stands in the region or on the left side and nothing else — the header and the TX dock
@@ -85,6 +89,11 @@ export interface ArrangePanesProps<P extends string> {
   onAddBox?: (area: PaneColumn | 'side') => void
   /** Every box is on screen: the add buttons stay, disabled, and say why. */
   boxesFull?: boolean
+  /** The cockpit's columns as they stand on screen, each with its name and its "+ Add a box" name, where
+   *  they are not Phone's a | b | log (FT: see the header). */
+  columns?: ReadonlyArray<{ col: PaneColumn; name: string; addAria: string }>
+  /** What a narrower window does with the columns, where it is not what Phone's do. */
+  narrow?: string
 }
 
 /** Each place's "+ Add a box", named for where it adds one: a whole sentence per place. */
@@ -95,7 +104,7 @@ const ADD_ARIA: Readonly<Record<PaneColumn | 'side', () => string>> = {
   side: () => t('panels.box.add.side.aria'),
 }
 
-export function ArrangePanes<P extends string>({ spec, layout, shown, labels, sideRoom = false, onMove, onAddBox, boxesFull = false }: ArrangePanesProps<P>) {
+export function ArrangePanes<P extends string>({ spec, layout, shown, labels, sideRoom = false, onMove, onAddBox, boxesFull = false, columns, narrow }: ArrangePanesProps<P>) {
   const uid = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   // The move just pressed from a focused button, until the render that shows it.
@@ -107,7 +116,10 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
   const side = layout.leftSide ?? []
   const sideOn = spec.leftSide != null && sideRoom
   const arr = { place: layout.place, leftSide: layout.leftSide }
-  const can = (id: P, move: PaneMove) => canMoveArranged(spec, arr, id, move, shown, sideOn)
+  // The columns in their order on screen: the cockpit's own, or Phone's a | b | log.
+  const places = columns ?? PANE_COLUMNS.map((col) => ({ col, name: columnName(col), addAria: ADD_ARIA[col]() }))
+  const order = columns?.map((c) => c.col)
+  const can = (id: P, move: PaneMove) => canMoveArranged(spec, arr, id, move, shown, sideOn, order)
   // A pane on the side is listed there while the side shows; otherwise it is in its column.
   const inColumn = (id: P) => shown(id) && !(sideOn && side.includes(id))
   const moveLabel = (id: P, move: PaneMove): string =>
@@ -134,8 +146,8 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
                   aria-label={moveLabel(id, move)}
                   aria-describedby={pinnedId}
                   title={moveLabel(id, move)}
-                  // The columns on screen are a | b | log: no cockpit renders a stored column order
-                  // yet, so the moves follow the stock one (as the hook's do).
+                  // The moves follow the columns' order on screen: the cockpit's (`columns`), else a | b
+                  // | log — no cockpit renders a stored column order yet (as the hook's moves do).
                   disabled={!can(id, move)}
                   data-arrange={`${id} ${move}`}
                   onClick={(e) => {
@@ -164,7 +176,7 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
       <button
         type="button"
         className="panels-arrange-add"
-        aria-label={ADD_ARIA[area]()}
+        aria-label={places.find((p) => p.col === area)?.addAria ?? ADD_ARIA[area]()}
         aria-describedby={boxesFull ? `${uid}-full` : undefined}
         disabled={boxesFull}
         data-add={area}
@@ -251,20 +263,20 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
           )}
         </div>
       )}
-      {PANE_COLUMNS.map((col) => {
+      {places.map(({ col, name }) => {
         const ids = cols[col].filter(inColumn)
         return (
           <div key={col} className="panels-arrange-col" role="group" aria-labelledby={`${uid}-${col}`}>
             <span className="panels-arrange-colhead" id={`${uid}-${col}`}>
-              {columnName(col)}
+              {name}
             </span>
-            {col === 'log' && <span className="panels-menu-why">{t('panels.arrange.logForm')}</span>}
+            {col === 'log' && !columns && <span className="panels-menu-why">{t('panels.arrange.logForm')}</span>}
             {ids.map((id) => paneRow(id, false))}
             {addButton(col)}
           </div>
         )
       })}
-      <span className="panels-menu-why">{t('panels.arrange.narrow')}</span>
+      <span className="panels-menu-why">{narrow ?? t('panels.arrange.narrow')}</span>
     </div>
   )
 }

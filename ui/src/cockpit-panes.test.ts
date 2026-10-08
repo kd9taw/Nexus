@@ -418,6 +418,30 @@ describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and
   })
 })
 
+describe("FT'S ARRANGED COLUMNS (2026-10-07): stacks that scroll, FT's gap, and the rail first only by its own class", () => {
+  // FT keeps its own grid; once the operator arranges anything, each of its columns is an `.op-stack`
+  // (OperateCockpit's arranged branch). Its frames are content-sized strips and floored feeds, so the
+  // column itself must be the scroller behind them, or the Tx1–Tx6 machine's tail is past a clip edge.
+  it('each column is a flex column that scrolls, and a feed in it floors at a yielding 10em', () => {
+    const y = classWinner('op-stack', blockOverflowY)
+    expect(y && SCROLLS(y.value), `an arranged column does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('op-stack', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('op-stack', blockDecl('flex-direction'))?.value).toBe('column')
+    expect(classWinner('op-stack', blockDecl('min-height'))?.value, 'a column that cannot shrink to its track').toBe('0')
+    expect(classWinner('op-stack', blockDecl('min-width'))?.value).toBe('0')
+    expect(classWinner('op-stack', blockVar('--cockpit-fill-min'))?.value).toMatch(/^min\(10em, ?100%\)$/)
+  })
+
+  it("its frames stack with FT's own gap, the stock rail's", () => {
+    expect(classWinner('op-stack', blockDecl('gap'))?.value).toBe(classWinner('cockpit-side', blockDecl('gap'))?.value)
+  })
+
+  it('the rail goes first by `order` only, through its own class, never every arranged column', () => {
+    expect(classWinner('op-stack-lead', blockDecl('order'))?.value).toBe('-1')
+    expect(classWinner('op-stack', blockDecl('order')), 'every arranged column would stand first').toBeNull()
+  })
+})
+
 describe('the region owns exactly one scroll behaviour per state', () => {
   it("flow='stack': the REGION scrolls (the operator's scrollbar comes back)", () => {
     const st = REGION_STATES[0]
@@ -953,8 +977,9 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
       '.layout.single.sstv-view',
     ])
     // …and Phone's LEFT SIDE (2026-10-03), whose column IS the scroller its frames sit in
-    // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above).
-    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col'])
+    // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above), and FT's arranged
+    // columns (2026-10-07), the same: `.op-stack` scrolls (computed in its block above).
+    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col', '.op-stack'])
     const offenders = [
       ...STYLES_RULES.filter(
         (r) => /--cockpit-fill-min\s*:/.test(r.body) && !ALLOWED_KNOB.has(r.selector),

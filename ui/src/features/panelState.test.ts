@@ -625,11 +625,13 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
-    for (const v of [OPERATE_PANELS, SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS]) {
+    for (const v of [SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS]) {
       expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope'])
     }
-    // JS8 is a grid cockpit: its six boxes ship hidden beside its RF scope pane.
+    // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the six boxes of each ship hidden
+    // beside its RF scope pane.
     expect([...(panelState.JS8_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', ...BOX_IDS])
+    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', ...BOX_IDS])
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)

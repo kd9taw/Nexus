@@ -229,5 +229,9 @@ export function stopLineApi(actual: Record<string, unknown>): Record<string, unk
     sstvSend: vi.fn(async () => sstvState),
     sstvStop: vi.fn(async () => sstvState),
     setOperatingMode: vi.fn(async () => ({})),
+    // FT's callsign card (the case selects a station, so the card is on screen to sweep): the award
+    // entity is a name, and the log has nothing to say about the station, as the FT suites answer.
+    resolveEntity: vi.fn(async () => 'United States'),
+    askLog: vi.fn(async () => null),
   }
 }

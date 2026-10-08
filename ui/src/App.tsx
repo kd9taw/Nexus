@@ -2918,8 +2918,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       : null,
   }
-  // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside Phone,
-  // CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
+  // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside FT,
+  // Phone, CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
   // differently in one place from the other. The amplifier and the band ride the snapshot App already
   // polls, as on Connect; the Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they
   // are to Connect. Neither the rail nor a box stands on the hosted Remote page (the desktop first), so
@@ -3657,6 +3657,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               panels={operatePanels}
               onPopOut={() => void openPanelWindow('operate')}
               active={effectiveView === 'operate'}
+              boxes={cockpitBoxes}
             />
           </div>
           {remote?.cwPhone && isViewEnabled('cw') && (remoteContacts.cw || effectiveView === 'cw') && (

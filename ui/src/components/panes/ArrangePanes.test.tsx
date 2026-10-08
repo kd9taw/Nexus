@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { ArrangePanes } from './ArrangePanes'
 import { boxLabels } from './CockpitBox'
-import { BOX_IDS, PHONE_PANELS, boxEntries, usePanelLayout, type PanelLayoutApi, type PhonePanelId } from '../../features/panelState'
+import { BOX_IDS, OPERATE_ARRANGE, OPERATE_PANELS, PHONE_PANELS, boxEntries, placeOf, usePanelLayout, type OperatePanelId, type PanelLayoutApi, type PhonePanelId } from '../../features/panelState'
 import { placedColumns } from '../../features/panelPlace'
 import { SHARED_PANES } from '../../features/sharedPanes'
 import { t } from '../../i18n'
@@ -302,5 +302,58 @@ describe('⊞ Arrange ▸ + Add a box (any pane in any area, 2026-10-07)', () =>
   it('a cockpit that offers no boxes here shows no add at all (the hosted Remote page)', () => {
     render(<Host />)
     expect(screen.queryByRole('button', { name: t('panels.box.add.a.aria') })).toBeNull()
+  })
+})
+
+describe('⊞ Arrange ▸ a cockpit’s own columns (FT, 2026-10-07)', () => {
+  // A cockpit whose columns are not Phone's names them, in their order on screen, and says what a narrower
+  // window does: ◀ ▶ follow that order, each column's "+ Add a box" carries its own name, and there is no
+  // log form to mention. Drawn over FT's Roster layout with its rail on the left (rail | main column).
+  const COLUMNS = [
+    { col: 'log' as const, name: 'Side rail', addAria: 'Add a box to the side rail' },
+    { col: 'a' as const, name: 'Main column', addAria: 'Add a box to the main column' },
+  ]
+  const FT_LABELS = { bandActivity: 'Band Activity', callRoster: 'Call Roster', rxfreq: 'Rx Frequency', recall: 'Callsign card', ...boxLabels({}) } as Record<OperatePanelId, string>
+  const ftShown = (id: OperatePanelId) => ['bandActivity', 'callRoster', 'rxfreq'].includes(id)
+  let ft: PanelLayoutApi<OperatePanelId> | null = null
+  function Named() {
+    const panels = usePanelLayout(OPERATE_PANELS, 'main')
+    ft = panels
+    return (
+      <ArrangePanes
+        spec={OPERATE_ARRANGE.roster}
+        layout={{ ...panels.layout, place: placeOf(OPERATE_PANELS, panels.layout, 'roster') }}
+        shown={ftShown}
+        labels={FT_LABELS}
+        onMove={(id, m) => panels.movePane!(id, m, ftShown, false, { layout: 'roster', order: COLUMNS.map((c) => c.col) })}
+        onAddBox={(area) => panels.addBox!(area, 'roster')}
+        columns={COLUMNS}
+        narrow="On a narrower window, the columns stand one above the other."
+      />
+    )
+  }
+
+  it('lists the columns it is given, in that order, with their names and their own add buttons', () => {
+    render(<Named />)
+    expect(groups().map((g) => g.querySelector('.panels-arrange-colhead')!.textContent)).toEqual(['Side rail', 'Main column'])
+    expect(names(group('Side rail'))).toEqual(['Band Activity', 'Rx Frequency'])
+    expect(names(group('Main column'))).toEqual(['Call Roster'])
+    expect(within(group('Side rail')).getByRole('button', { name: 'Add a box to the side rail' })).toBeTruthy()
+    expect(within(group('Main column')).getByRole('button', { name: 'Add a box to the main column' })).toBeTruthy()
+    expect(screen.queryByText(t('panels.arrange.logForm')), 'a log form the cockpit does not have').toBeNull()
+    expect(screen.getByText('On a narrower window, the columns stand one above the other.')).toBeTruthy()
+    expect(screen.queryByText(t('panels.arrange.narrow'))).toBeNull()
+  })
+
+  it('◀ ▶ follow the order on screen: the main column’s ◀ goes to the rail beside it, its ▶ nowhere', () => {
+    render(<Named />)
+    const left = btn(t('panels.arrange.left.aria', { pane: 'Call Roster' })) as HTMLButtonElement
+    const right = btn(t('panels.arrange.right.aria', { pane: 'Call Roster' })) as HTMLButtonElement
+    expect([left.disabled, right.disabled]).toEqual([false, true])
+    fireEvent.click(left)
+    expect(placedColumns(OPERATE_ARRANGE.roster, placeOf(OPERATE_PANELS, ft!.layout, 'roster')).log).toContain('callRoster')
+    // The button that pressed it stays live (now ▶, back to the main column), and the rail's own ◀ goes nowhere.
+    expect((btn(t('panels.arrange.right.aria', { pane: 'Call Roster' })) as HTMLButtonElement).disabled).toBe(false)
+    expect((btn(t('panels.arrange.left.aria', { pane: 'Call Roster' })) as HTMLButtonElement).disabled).toBe(true)
   })
 })

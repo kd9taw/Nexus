@@ -55,13 +55,13 @@
 // container rendered. This file pays the mock cost to render the real one, so "Stop TX is
 // reachable" is an assertion about the button the operator presses.
 //
-// Operate is swept in OperateCockpit.structure.test.tsx instead ("every protected control
-// renders INSIDE .cockpit-qso with every panel id removed") — its stop controls are in the
-// merged QSO strip rather than a CockpitHeader, and that suite already owns the mock
-// surface for them. It is driven off OPERATE_PANEL_IDS for the same reason as here.
-// IT IS NOT THIS SWEEP'S EQUIVALENT, and it is not described as one: it takes no baseline,
-// compares no `disabled` state and hides every id at once rather than one at a time. It
-// catches a control that VANISHES; it would not catch one left mounted-and-disabled.
+// OPERATE (FT) IS SWEPT HERE TOO since 2026-10-07, when ⊞ Arrange came to it: one case per layout
+// (Classic, Roster), its stop controls in the merged QSO strip rather than a CockpitHeader. Until then
+// its only sweep was OperateCockpit.structure.test.tsx's presence-only one ("every protected control
+// renders INSIDE .cockpit-qso with every panel id removed"), which took no baseline, compared no
+// `disabled` state and hid every id at once rather than one at a time. That file still holds the
+// wider dock law — the strip's whole TX and sequencer surface inside the strip — now singly and all
+// at once, with a baseline, in both layouts and with the rail on either side.
 //
 // EACH LIST BELOW IS A SUBSET OF ITS COCKPIT'S CENSUS, NOT A COPY OF IT. panelState.ts once
 // claimed "each cockpit's sweep list is the same set, which is how this is checkable in
@@ -98,7 +98,8 @@
 //
 // THIS FILE IS THE FIRST OF SEVERAL (2026-10-07). The arrangement sweeps grew long enough that this one
 // file was the slowest in the UI suite by far, so they are split by cockpit and each runs on a worker of
-// its own: stop-line.<view>.test.tsx sweeps that cockpit's arrangements (and Phone's file its left side).
+// its own: stop-line.<view>.test.tsx sweeps that cockpit's arrangements (and Phone's file its left side;
+// FT, arranged per layout, has stop-line.operate.<layout>.test.tsx).
 // The cases, the fixtures and the run they share are in stop-line.testkit.tsx and stop-line.api.testkit.ts.
 // What stays here is the vocabulary sweep over every case, the checks that each sweep is reading something,
 // the coverage checks — every vocabulary swept, and every arranging one in the file named for its cockpit —
@@ -117,6 +118,8 @@ import {
   cw,
   cwDual,
   js8,
+  operateClassic,
+  operateRoster,
   panelsWith,
   phone,
   phoneDual,
@@ -216,8 +219,10 @@ describe('the stop line, computed against the real cockpits', () => {
     // A budget for real work (2026-10-02): eleven fresh mounts for Phone, each followed by one
     // accessible-name pass over every button, and Phone, the first case, also pays the file's
     // first render. It took 0.55 s alone, 2.6 s in the full suite, 3.0 s at a fifth of a CPU
-    // and 5.9 s at a tenth, past the 5 s default.
-    20_000,
+    // and 5.9 s at a tenth, past the 5 s default. FT's cases (2026-10-07) are the heaviest:
+    // seventeen mounts of the whole FT screen with its boxes and the callsign card, 1.3 s each
+    // alone and 11.8 s (Classic) and 9.2 s (Roster) at a tenth of a CPU, so the budget is 30 s.
+    30_000,
   )
 
   it('the two Sub-receiver cases really draw a SUB row — else they would sweep a copy of their twin', async () => {
@@ -241,10 +246,10 @@ describe('the stop line, computed against the real cockpits', () => {
     }
   })
 
-  it('the six boxes are on screen with nothing hidden in Phone, CW and JS8 — else hiding them would sweep nothing', async () => {
+  it('the six boxes are on screen with nothing hidden in FT, Phone, CW and JS8 — else hiding them would sweep nothing', async () => {
     // Every box SHIPS HIDDEN (defaultRemoved); with nothing hidden each sweep above starts with all six
     // on screen, each showing an entry of the shared list, so every hide of one is a real one.
-    for (const c of [phone, cw, js8, phoneDual, cwDual] as Array<Case<any>>) {
+    for (const c of [phone, cw, js8, phoneDual, cwDual, operateClassic, operateRoster] as Array<Case<any>>) {
       c.render(panelsWith<string>([]))
       await settle()
       for (const b of BOX_IDS) {
@@ -257,13 +262,15 @@ describe('the stop line, computed against the real cockpits', () => {
       expect(document.querySelector('.pane-frame[data-pane^="box"]'), `${c.cockpit}: hidden, a box is still on screen`).toBeNull()
       cleanup()
     }
-  })
+    // Two mounts of each of seven cockpits (FT's two layouts among them): 4.0 s at a tenth of a CPU,
+    // close to the 5 s default, so a budget of its own.
+  }, 20_000)
 
-  it('the RF scope pane is on screen with nothing hidden in RTTY, PSK, JS8 and SSTV — else hiding it would sweep nothing', async () => {
+  it('the RF scope pane is on screen with nothing hidden in FT, RTTY, PSK, JS8 and SSTV — else hiding it would sweep nothing', async () => {
     // It SHIPS HIDDEN (defaultRemoved), and every sweep above starts from "nothing hidden", so it is
     // on screen at their baseline and every hide of it — singly and with everything else — is a real
-    // one. Operate's twin is in OperateCockpit.structure.test.tsx.
-    for (const c of [rtty, psk, js8, sstv] as Array<Case<any>>) {
+    // one. FT's stands beside its waterfall (OperateCockpit.structure.test.tsx holds where).
+    for (const c of [rtty, psk, js8, sstv, operateClassic, operateRoster] as Array<Case<any>>) {
       c.render(panelsWith<string>([]))
       await settle()
       expect(c.ids, `${c.cockpit}: "rfScope" left the vocabulary`).toContain('rfScope')
@@ -282,16 +289,9 @@ describe('the stop line, computed against the real cockpits', () => {
     // computed against ALL_PANEL_VOCABULARIES rather than asserted about this file's own
     // list: add a sixth cockpit and this goes red naming it, whatever anybody remembers.
     //
-    // ELSEWHERE is the honest part — one vocabulary is swept in another file, and it has
-    // to be declared here to count.
-    // The declared sweep for `operate` is PRESENCE-ONLY (no baseline, no disabled
-    // comparison, no one-id-at-a-time pass) — weaker than the cases above, and named that
-    // way here so nobody reads this map as "every cockpit gets the same sweep".
+    // ELSEWHERE is the honest part — a vocabulary swept in another file has to be declared here
+    // to count. (`operate` was one, swept presence-only, until it gained its cases above.)
     const ELSEWHERE: Record<string, string> = {
-      operate:
-        'OperateCockpit.structure.test.tsx — "every protected control renders INSIDE ' +
-        '.cockpit-qso with every panel id removed" (PRESENCE-ONLY: all ids at once, no ' +
-        'baseline, no disabled comparison)',
       // Connect has a ⊞ vocabulary (its seven slots) and NO transmit control of any kind, so
       // there is no stop to lose — what is swept is the property that remains meaningful:
       // closing a pane, singly and all at once, leaves every control outside the panes on
@@ -343,8 +343,11 @@ describe('the stop line, computed against the real cockpits', () => {
 describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that stops a transmission', () => {
   // One case per arranging vocabulary (the first; the Sub-receiver twins change no placement, and
   // each pass is 550 renders).
-  const ARRANGING = CASES.filter(
-    (c, i) => ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)?.arrange && CASES.findIndex((d) => d.view === c.view) === i,
+  // A cockpit arranged per layout (FT) has a case per layout, and each is swept.
+  const arranges = (c: Case<string>) => c.arrange ?? ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)?.arrange
+  const sweepKey = (c: Case<string>) => `${c.view}/${c.layout ?? ''}`
+  const ARRANGING = (CASES as Array<Case<string>>).filter(
+    (c, i) => arranges(c) && (CASES as Array<Case<string>>).findIndex((d) => sweepKey(d) === sweepKey(c)) === i,
   )
 
   it('some cockpit arranges, so this sweep is reading something', () => {
@@ -352,15 +355,20 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
   })
 
   it('every cockpit that arranges is swept over its arrangements, in the file named for it', () => {
-    // Every vocabulary that arranges has a case here, so none can be missed by the file check below.
-    for (const vocab of ALL_PANEL_VOCABULARIES.filter((v) => v.arrange)) {
-      expect(ARRANGING.map((c) => c.view), `the "${vocab.view}" cockpit arranges and has no stop-line case`).toContain(vocab.view)
+    // Every vocabulary that arranges has a case here — one per layout where it arranges per layout —
+    // so none can be missed by the file check below.
+    for (const vocab of ALL_PANEL_VOCABULARIES.filter((v) => v.arrange || v.arrangeBy)) {
+      const layouts = vocab.arrangeBy ? Object.keys(vocab.arrangeBy) : ['']
+      for (const layout of layouts) {
+        expect(ARRANGING.map(sweepKey), `the "${vocab.view}" cockpit arranges${layout ? ` its ${layout} layout` : ''} and has no stop-line case`).toContain(`${vocab.view}/${layout}`)
+      }
     }
     for (const c of ARRANGING as Array<Case<string>>) {
-      const file = `stop-line.${c.view}.test.tsx`
+      // A cockpit arranged per layout has a file per layout, each on a worker of its own.
+      const file = `stop-line.${c.view}${c.layout ? `.${c.layout}` : ''}.test.tsx`
       const source = readFileSync(resolve(__dirname, file), 'utf8')
-      const swept = [...source.matchAll(/arrangementRuns\((\w+)\)/g)].map((m) => CASE_BY_NAME[m[1]]?.view)
-      expect(swept, `${file} does not run the arrangement sweep for ${c.cockpit}`).toContain(c.view)
+      const swept = [...source.matchAll(/arrangementRuns\((\w+)\)/g)].map((m) => CASE_BY_NAME[m[1]]).filter((d) => d != null)
+      expect(swept.map(sweepKey), `${file} does not run the arrangement sweep for ${c.cockpit}`).toContain(sweepKey(c))
     }
     // Phone's LEFT SIDE (2026-10-03): its own sweep, in Phone's file. Any other cockpit given a left side
     // needs one too, and is red here until it has it.

@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   click in a box never changes the station you are working, and nothing in a box transmits. No box
   shows until you add one, so nobody's screen changes on update, and Reset layout hides them again.
   Not on Nexus Remote.
+- **FT8 and FT4: arrange the panes, and add boxes.** In ⊞ Panels ▸ Arrange, the panes of the FT
+  layout you are in move between its columns: Band Activity, Rx Frequency, the Tx messages, Stations
+  and the callsign card among Column 1, Column 2 and the side rail in Classic; the Call Roster, Band
+  Activity, Rx Frequency and the card between the main column and the side rail in Roster. Classic
+  and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
+  Conditions pane, as Phone, CW and JS8 do. Moving a pane changes nothing it does: a double-click
+  still answers the station, and Band Activity keeps its decodes. Nothing moves until you move it, so
+  nobody's FT screen changes on update, and Reset layout puts both layouts back. Not on Nexus Remote.
 
 ### Changed
 

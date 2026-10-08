@@ -16,8 +16,11 @@ import { RttyCockpit } from './RttyCockpit'
 import { PskCockpit } from './PskCockpit'
 import { Js8Cockpit } from './Js8Cockpit'
 import { SstvView } from './SstvView'
+import { OperateCockpit } from './OperateCockpit'
 import {
   ALL_PANEL_VOCABULARIES,
+  OPERATE_ARRANGE,
+  OPERATE_PANEL_IDS,
   PHONE_PANEL_IDS,
   CW_PANEL_IDS,
   RTTY_PANEL_IDS,
@@ -30,9 +33,12 @@ import type { BoxSource } from './panes/CockpitBox'
 import { arrangeIds, coerceLeftSide, coercePlacement, moveArranged, movePane, type Arrangement, type ArrangeSpec, type PaneMove, type PanePlacement } from '../features/panelPlace'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
-export function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>, leftSide?: P[]): PanelLayoutApi<P> {
+/** A panel record with every id shown but `removed`, and the placement given: the record's own, or, for a
+ *  cockpit arranged per layout (FT), that layout's (`layoutName`). */
+export function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>, leftSide?: P[], layoutName?: string): PanelLayoutApi<P> {
+  const placed = place ? (layoutName != null ? { places: { [layoutName]: place } } : { place }) : {}
   return {
-    layout: place || leftSide ? { v: 2, state: {}, share: {}, ...(place ? { place } : {}), ...(leftSide ? { leftSide } : {}) } : { v: 1, state: {}, share: {} },
+    layout: place || leftSide ? { v: 2, state: {}, share: {}, ...placed, ...(leftSide ? { leftSide } : {}) } : { v: 1, state: {}, share: {} },
     stateOf: (id) => (removed.includes(id) ? 'removed' : 'docked'),
     setPanelState: () => {},
     shareOf: () => 1,
@@ -112,6 +118,11 @@ export interface Case<P extends string> {
   ids: readonly P[]
   stopControls: Array<[label: string, name: RegExp]>
   render: (panels: PanelLayoutApi<P>) => void
+  /** A cockpit arranged per layout (FT): the layout this case renders, its ArrangeSpec, and how to read
+   *  the order its panes stand in, which the arrangement sweep compares with the stock one. */
+  layout?: string
+  arrange?: ArrangeSpec<P>
+  order?: () => Array<string | null>
 }
 
 export const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
@@ -338,12 +349,126 @@ export const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
     ),
 }
 
-export const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual]
+/** FT's panes in the order they stand, from the wrappers it has always drawn — the stock branch puts no
+ *  `data-pane` on them, the arranged one keeps the same wrappers — so a stock and an arranged screen read
+ *  alike. */
+function operateOrder(): string[] {
+  const lower = document.querySelector('.cockpit-lower')
+  if (!lower) return []
+  const of = (el: Element): string | null =>
+    el.getAttribute('data-pane') ??
+    (el.matches('.cockpit-decodes, .cockpit-decodes-side')
+      ? 'bandActivity'
+      : el.matches('.cockpit-rxfreq')
+        ? 'rxfreq'
+        : el.matches('.cockpit-roster-main')
+          ? 'callRoster'
+          : el.matches('.cockpit-roster')
+            ? 'stations'
+            : el.matches('.tx-panel')
+              ? 'txmsgs'
+              : el.matches('.recall-card')
+                ? 'recall'
+                : null)
+  const out: string[] = []
+  for (const el of lower.querySelectorAll('[data-pane], .cockpit-decodes, .cockpit-decodes-side, .cockpit-rxfreq, .cockpit-roster-main, .cockpit-roster, .tx-panel, .recall-card')) {
+    const id = of(el)
+    if (id && out[out.length - 1] !== id) out.push(id)
+  }
+  return out
+}
+
+/** FT, in each of its layouts, with the props App gives it and the boxes App lends it. Its stop-line
+ *  census is Stop TX (`.op-btn.stop` in the QSO strip → halt_tx, the only control that cuts an over in
+ *  flight), Tune (the carrier it started) and Esc (keyboard-only, census-only). TX On/Off and S&P are NOT
+ *  stops (`set_tx_enabled` lets the over in flight complete, by the operator's 2026-07-31 ruling; S&P
+ *  ends the CQ run and arms nothing), so they are not listed; OperateCockpit.structure.test.tsx holds the
+ *  whole strip — every TX and sequencer control — inside the QSO strip, a wider claim than this. */
+const operateCase = (layout: 'classic' | 'roster'): Case<(typeof OPERATE_PANEL_IDS)[number]> => ({
+  cockpit: layout === 'classic' ? 'FT, Classic' : 'FT, Roster',
+  view: 'operate',
+  ids: OPERATE_PANEL_IDS,
+  stopControls: [
+    ['Stop TX', /^stop tx$/i],
+    ['Tune', /^tune$|^tuning…$/i],
+  ],
+  layout,
+  arrange: OPERATE_ARRANGE[layout],
+  order: operateOrder,
+  render: (panels) =>
+    render(
+      <OperateCockpit
+        snap={operateSnap}
+        theme="dark"
+        tier="FT8"
+        onTierChange={() => {}}
+        bandPlan={[]}
+        onSetFrequency={() => {}}
+        onSourceChange={() => {}}
+        onTune={() => {}}
+        onCall={() => {}}
+        onSetTxLevel={() => {}}
+        onSetMode={() => {}}
+        onSetTxEven={() => {}}
+        onSetTxCycleAuto={() => {}}
+        onResend={() => {}}
+        onFreetext={() => {}}
+        onLog={() => {}}
+        onOverrideTx={() => {}}
+        onHaltTx={() => {}}
+        onSetTxEnabled={() => {}}
+        onSetTune={() => {}}
+        onSetHoldTxFreq={() => {}}
+        roster={<div data-testid="stations-roster" />}
+        needByCall={new Map()}
+        selectedCall="W1ABC"
+        onSelect={() => {}}
+        layoutMode={layout}
+        onLayoutMode={() => {}}
+        panels={panels}
+        boxes={boxSource}
+      />,
+    ),
+})
+
+/** FT's station: a station heard and selected, so the callsign card is on screen at every baseline. */
+const operateSnap = {
+  mycall: 'KD9TAW',
+  mygrid: 'EN61',
+  stations: [{ call: 'W1ABC', grid: 'FN42', snr: -7, lastHeardSlot: 0, heardCount: 3, presence: 'live', worked: false, country: 'United States' }],
+  recentDecodes: [],
+  conversations: [],
+  highlights: [],
+  harqRescues: 0,
+  clearTick: 0,
+  qso: null,
+  link: { tier: 'FT8', periodSecs: 15 },
+  radio: {
+    ...radio,
+    dialMhz: 14.074,
+    slot: 0,
+    source: 'native',
+    sourceLabel: 'Native',
+    nextSlotMs: 5000,
+    rxOffsetHz: 1500,
+    txOffsetHz: 1500,
+    txLevel: 0.5,
+    txEven: true,
+    txCycleAuto: true,
+    atu: true,
+    decodeDepth: 2,
+  },
+} as unknown as AppSnapshot
+
+export const operateClassic = operateCase('classic')
+export const operateRoster = operateCase('roster')
+
+export const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster]
 
 /** Each case by the name it is exported under: how stop-line.test.tsx reads which case a sweep file sweeps
  *  (its coverage checks), so a file that sweeps the wrong cockpit, or none, is red there. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const CASE_BY_NAME: Readonly<Record<string, Case<any>>> = { phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual }
+export const CASE_BY_NAME: Readonly<Record<string, Case<any>>> = { phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster }
 
 export async function settle() {
   await act(async () => {
@@ -425,8 +550,8 @@ export function arrangementRuns(c: Case<any>) {
  *  run of fifty. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
-  const spec = ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)!.arrange! as ArrangeSpec<string>
-  const order = () => [...document.querySelectorAll('.cockpit-panes .pane-frame')].map((f) => f.getAttribute('data-pane'))
+  const spec = (c.arrange ?? ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)!.arrange!) as ArrangeSpec<string>
+  const order = c.order ?? (() => [...document.querySelectorAll('.cockpit-panes .pane-frame')].map((f) => f.getAttribute('data-pane')))
   c.render(panelsWith<string>([]))
   await settle()
   const stock = order()
@@ -440,7 +565,7 @@ export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
     const i = k * 10 + j
     const combos: Array<readonly string[]> = [[], ...c.ids.map((id: string) => [id]), [...c.ids]]
     for (const removed of combos) {
-      c.render(panelsWith(removed, place))
+      c.render(panelsWith(removed, place, undefined, c.layout))
       await settle()
       if (removed.length === 0 && order().join() !== stock.join()) differs++
       const on = stopsOnScreen(c.stopControls)
@@ -466,6 +591,13 @@ export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
  *  full suite, 83 s at a fifth and 160 s at a tenth. Only one of Phone's 50 placements repeats, so there is
  *  no repeated render left to skip. At 1 ms every run times out. */
 export const ARRANGEMENT_RUN_BUDGET_MS = 240_000
+
+/** FT's arrangement sweep's budget, per run of ten placements (2026-10-07): seventeen mounts a placement
+ *  (its fifteen ids hidden singly, then none and all), each with the QSO strip, the header, the callsign
+ *  card and six boxes, and one accessible-name pass. The first run of each layout (the heaviest) took,
+ *  alone, 12.6 s for Classic and 8.9 s for Roster; at a fifth of a CPU 43.9 s and 43.7 s; at a tenth
+ *  113.9 s and 93.4 s — CW's figures, and the same 240 s keeps the same headroom. */
+export const OPERATE_RUN_BUDGET_MS = 240_000
 
 /** `n` arrangements of Phone's spec with its LEFT SIDE in play (2026-10-03), alternately menu-built
  *  (every move made as on a window wide enough for the side, so ◀ puts listed panes there and ▶ takes

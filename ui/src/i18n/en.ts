@@ -8607,6 +8607,12 @@ export const EN = {
   'operate.seam.railRoster.label': 'Side rail / Call Roster',
   'operate.panels.railLeft.label': 'Side rail on the left',
   'operate.panels.railLeft.note': 'Stations in Classic; Band Activity and Rx Frequency in Roster',
+  'operate.arrange.main': 'Main column',
+  'operate.arrange.main.add.aria': 'Add a box to the main column',
+  'operate.arrange.rail': 'Side rail',
+  'operate.arrange.rail.add.aria': 'Add a box to the side rail',
+  'operate.arrange.narrow': 'On a narrower window, the columns stand one above the other.',
+  'operate.seam.pair.label': '{{above}} / {{below}}',
 
   // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
   // built rather than at import (the registry-by-getter rule, batch 3).

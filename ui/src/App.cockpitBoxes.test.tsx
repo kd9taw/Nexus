@@ -7,6 +7,7 @@
 //     display — the dashboard rail's rule (App.dashRail.test.tsx), here inside the CW cockpit itself.
 //   · A Spots box's row click works the spot through the board's own Work and keys nothing.
 //   · The hosted Remote page keeps its own panes: the same stored record draws no box there.
+//   · FT (2026-10-07) gets the same boxes, in its arranged columns, with the same selection rule.
 // Each case asserts the cockpit itself rendered, so nothing here can pass over a crash panel.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
@@ -114,6 +115,23 @@ describe('⛔ a click in a box never changes the station the cockpit is working'
   })
 })
 
+describe('FT’s boxes (2026-10-07): App lends them to the FT cockpit as to the others', () => {
+  const ft = () => document.querySelector<HTMLElement>('main.operate-cockpit')
+  const ftBox = (b: string) => ft()?.querySelector<HTMLElement>(`.pane-frame[data-pane="${b}"]`) ?? null
+  it('a stored box stands in FT’s side rail, and a click in it selects in the boxes only — never app-wide', async () => {
+    localStorage.setItem('nexus.panels.operate.main', cwBoxes('getout'))
+    await mountOn('operate')
+    expect(ft(), 'the FT cockpit did not render').not.toBeNull()
+    await waitFor(() => expect(within(ftBox('box2')!).getByText('K1ABC')).toBeTruthy())
+    expect(ftBox('box1')!.closest('.op-stack'), 'the box is not in FT’s arranged columns').not.toBeNull()
+    vi.mocked(api.selectPeer).mockClear()
+    fireEvent.click(within(ftBox('box2')!).getByText('K1ABC'))
+    await act(async () => {})
+    expect(api.selectPeer, 'a click in a box selected a station app-wide').not.toHaveBeenCalled()
+    expect(ftBox('box1')!.querySelector('.cs-call')?.textContent, 'the boxes’ own selection').toBe('K1ABC')
+  })
+})
+
 describe('the hosted Remote page keeps its own panes', () => {
   it('the same stored record draws no box there, while the desktop draws it', async () => {
     localStorage.setItem('nexus.panels.cw.main', cwBoxes('getout'))
@@ -143,5 +161,38 @@ describe('the hosted Remote page keeps its own panes', () => {
     await act(async () => {})
     expect(cockpit(), 'premise: the Remote page shows the CW cockpit').not.toBeNull()
     expect(document.querySelector('.pane-frame[data-pane^="box"]'), 'a box on the Remote page').toBeNull()
+  })
+
+  it('…and in the FT cockpit: a stored FT box is drawn on the desktop and not on the Remote page', async () => {
+    localStorage.setItem('nexus.panels.operate.main', cwBoxes('getout'))
+    await mountOn('operate')
+    expect(document.querySelector('main.operate-cockpit .pane-frame[data-pane="box1"]'), 'control: the desktop draws the stored box').not.toBeNull()
+    cleanup()
+    window.location.hash = '#operate'
+    render(
+      <App
+        remote={{
+          snapshot: APP_SNAPSHOT as unknown as AppSnapshot,
+          settings: settingsFixture as unknown as Settings,
+          bandPlan: [],
+          status: <div>Observer</div>,
+          cwPhone: true,
+        }}
+      />,
+    )
+    await screen.findByText('Observer')
+    await act(async () => {})
+    // FT's cockpit is always mounted (a keep-alive host) and draws boxes only while it is the screen on
+    // view, so the premise is that it IS on view here, or the check below would pass for that reason.
+    const onView = () => document.querySelector('.operate-host:not([hidden]) main.operate-cockpit')
+    if (!onView()) {
+      const labels = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].map((b) => b.querySelector('.mode-label')?.textContent ?? '')
+      const ftNav = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].find((b) => /^(FT|DX|Operate|Digital)/.test(b.querySelector('.mode-label')?.textContent ?? ''))
+      expect(ftNav, `premise: the Remote page offers FT (it offers ${labels.join(', ')})`).toBeTruthy()
+      fireEvent.click(ftNav!)
+      await act(async () => {})
+    }
+    expect(onView(), 'premise: the Remote page shows the FT cockpit').not.toBeNull()
+    expect(document.querySelector('main.operate-cockpit .pane-frame[data-pane^="box"]'), 'a box on the Remote page').toBeNull()
   })
 })

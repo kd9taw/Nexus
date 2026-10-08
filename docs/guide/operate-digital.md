@@ -101,6 +101,28 @@ right of every row.*
 Use Classic when you want the familiar WSJT-X message-by-message control; use
 Roster when you're scanning a busy band for the one call worth working.
 
+**Arrange the columns.** In ⊞ Panels ▸ **Arrange**, each pane of the layout you are in is listed
+under the column it stands in: Column 1, Column 2 and the side rail in Classic, the main column and
+the side rail in Roster. **▲ ▼** move a pane up or down in its column and **◀ ▶** move it into the
+column beside it, so the Call Roster and Rx Frequency can share Roster's main column, or Band
+Activity can stand over Rx Frequency in Classic. Classic and Roster keep separate arrangements, and
+switching layouts brings each back as you left it. Two feeds stacked in one column get a divider
+between them; the side rail keeps the side you put it on, and a column you empty is not drawn.
+Moving a pane changes nothing it does: a double-click still answers the station, and Band Activity
+keeps its decodes. Nothing moves until you move it, and **Reset layout** puts both layouts back as
+they shipped.
+
+**Boxes.** Any pane of [Conditions](connect.md) — the Clock, Space Wx, POTA / SOTA, the Spots and
+Needed boards and the rest — can also stand in these columns, in up to six boxes. In ⊞ Panels ▸
+**Arrange**, each column ends with **+ Add a box**: it puts a box at the foot of that column, showing
+the first pane not already on the screen, and the picker in the box's title chooses another. A pane
+already on the screen is marked there, and choosing it moves it into this box. Boxes move like panes
+and close with their **✕**; hiding or moving one ends nothing. A box shows in Classic and Roster
+alike, and each layout keeps where it stands. A click in a box selects the station in the boxes only,
+never the station you are working, and nothing in a box transmits: **Work** and **HUNT** move the
+radio and open its screen. No box shows until you add one. Boxes are not shown on Nexus Remote or in
+this screen's pop-out window.
+
 ![The same cockpit with the toggle flipped from Classic to Roster. The Tx1–Tx6 message panel is gone, replaced by a wide sortable Call Roster — one row per station with CALL, NEED, COUNTRY, GRID, DIST, BRG, SNR and AGE columns, sorted by NEED so the GRID and POTA rows sit above the CNF ones, with "Needed only" and "Hide worked" both ticked. Band Activity and the RX Frequency decodes move into a narrow column on the right.](../img/manual/operate-roster.webp)
 
 ## Core workflows

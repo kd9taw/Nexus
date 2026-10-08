@@ -23691,7 +23691,8 @@ button.sat-chip:disabled {
    overlap), so a divider is centred in the gap between its neighbours and takes nothing from the
    column. Each rule names the gap it gives back: the cockpit shells' and the pane grid's columns'
    (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
-   a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px).
+   a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px),
+   and FT's arranged columns (`.op-stack`, 8 px, in cockpit-panes.css: their dividers carry `in-op-stack`).
    Phone's scope divider carries `in-column` too since its left side (2026-10-03): it stands in the
    stage (cockpit-panes.css), whose gap is the shell's, so a shell-child selector cannot reach it.
    Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
@@ -23706,7 +23707,8 @@ button.sat-chip:disabled {
 }
 .cockpit-body > .pane-splitter.horizontal,
 .cockpit-side > .pane-splitter.horizontal,
-.cockpit-qsocol > .pane-splitter.horizontal {
+.cockpit-qsocol > .pane-splitter.horizontal,
+.pane-splitter.horizontal.in-op-stack {
   margin-block: calc(-0.5 * var(--space-2) - var(--space-1));
 }
 
