@@ -37,7 +37,8 @@ vi.mock('../api', () => {
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
     parkStateReview: vi.fn(async () => []), applyParkStates: noop(),
-    confirmationCheck: noop(), applyConfirmationCheck: noop(), cancelConfirmationCheck: vi.fn(async () => {}),
+    startConfirmationCheck: noop(), confirmationCheck: noop(), applyConfirmationCheck: noop(),
+    cancelConfirmationCheck: vi.fn(async () => {}),
   }
 })
 vi.mock('../toast', () => ({

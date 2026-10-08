@@ -1182,42 +1182,53 @@ export const EN = {
     other: '{{count}} contacts now hold their park’s state',
   },
   'logbook.parkStates.failed': 'Could not check park states',
-  // "Check confirmations" (ConfirmationReview): contacts holding a LoTW confirmation or upload mark
-  // that LoTW's own records give another contact, or none. LoTW, calls, bands and modes are
-  // invariant tokens. `{{time}}` is a UTC time (HH:MM, with its date when that is not the line's
-  // own), `{{codes}}` ADIF award credit names, `{{path}}` a file path: data, never translated.
+  // "Check confirmations" (ConfirmationReview): contacts holding a LoTW, eQSL or QRZ confirmation,
+  // or LoTW's upload mark, that the service's own records give another contact, or none. LoTW,
+  // eQSL, QRZ, calls, bands and modes are invariant tokens; `{{service}}` is one of the three.
+  // `{{time}}` is a UTC time (HH:MM, with its date when that is not the line's own), `{{codes}}`
+  // ADIF award credit names, `{{path}}` a file path, `{{reason}}` the station's own words: data,
+  // never translated.
   'logbook.confirmations.button': 'Check confirmations',
   'logbook.confirmations.buttonTitle':
-    'Download your whole LoTW history and list the contacts holding a LoTW confirmation or upload mark that LoTW gives another contact, or none, for you to tick and take off',
+    'Download your whole history from LoTW, eQSL and QRZ, each one you have set up, and list the contacts holding a confirmation or LoTW upload mark that the service gives another contact, or none, for you to tick and take off',
   'logbook.confirmations.title': 'Check confirmations',
   'logbook.confirmations.intro':
-    'Earlier versions of Nexus could put the LoTW confirmation of one contact, or the mark that LoTW holds its upload, on another contact with the same station, band and mode on the same UTC day. Check downloads your whole LoTW history once, which can take several minutes, and lists each contact holding a LoTW confirmation or upload mark that LoTW’s own records give another contact, or none. A line starts ticked only when those records decide it. Nothing changes until you press the button, nothing is uploaded, and no paper card is touched.',
+    'Earlier versions of Nexus could put the confirmation of one contact, from LoTW, eQSL or QRZ, or the mark that LoTW holds its upload, on another contact with the same station, band and mode on the same UTC day. Check downloads your whole history once from each of these services you have set up, which can take several minutes for LoTW, and lists each contact holding a confirmation or upload mark that the service’s own records give another contact, or none. A line starts ticked only when those records decide it. Nothing changes until you press the button, nothing is uploaded, and no paper card is touched.',
   'logbook.confirmations.check': 'Check',
-  'logbook.confirmations.checking': 'Downloading your whole LoTW history…',
+  'logbook.confirmations.checking': 'Downloading your whole {{service}} history…',
+  'logbook.confirmations.notChecked': 'Not checked: {{reason}}',
   'logbook.confirmations.none':
     'LoTW’s records back every LoTW confirmation and upload mark this check can judge.',
-  'logbook.confirmations.change': 'LoTW ✓ → —',
+  'logbook.confirmations.noneService':
+    '{{service}}’s records back every {{service}} confirmation this check can judge.',
+  'logbook.confirmations.change': '{{service}} ✓ → —',
   'logbook.confirmations.changeUpload': 'LoTW: on file → not uploaded',
-  'logbook.confirmations.why.moved': 'LoTW’s confirmation is your {{time}} contact’s',
-  'logbook.confirmations.why.contradicted': 'LoTW holds this contact unconfirmed',
-  'logbook.confirmations.why.orphan': 'LoTW confirms a {{time}} QSO that is not in your log',
+  'logbook.confirmations.why.moved': '{{service}}’s confirmation is your {{time}} contact’s',
+  'logbook.confirmations.why.contradicted': '{{service}} holds this contact unconfirmed',
+  'logbook.confirmations.why.orphan': '{{service}} confirms a {{time}} QSO that is not in your log',
   'logbook.confirmations.why.uploadMoved': 'The upload LoTW holds is your {{time}} contact’s',
   'logbook.confirmations.why.uploadOrphan': 'LoTW holds a {{time}} upload that is not in your log',
   'logbook.confirmations.why.dateOnly': 'no time of day',
   'logbook.confirmations.unticked.dateOnly':
-    'This contact, or one the check compares it with, has a date but no time of day, so LoTW’s records cannot say which contact this belongs to. Tick it only if you are sure.',
+    'This contact, or one the check compares it with, has a date but no time of day, so {{service}}’s records cannot say which contact this belongs to. Tick it only if you are sure.',
   'logbook.confirmations.unticked.notReplayed':
     'Earlier versions could not have put this confirmation here by taking the wrong contact, so it came some other way: an import, an older call, or a paper card an older Nexus filed as LoTW. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.notReplayedEqsl':
+    'Earlier versions could not have put this card here by taking the wrong contact, so it came some other way: an import, an older call, or a confirmation an older Nexus filed as eQSL. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.notReplayedQrz':
+    'Earlier versions could not have put this confirmation here by taking the wrong contact, so it came some other way, such as an import or an older call. Tick it only if you are sure.',
   'logbook.confirmations.unticked.uploadNotReplayed':
     'Earlier versions could not have marked this contact by taking the wrong one, so the mark came some other way, such as an import. Tick it only if you are sure.',
   'logbook.confirmations.unticked.tie':
-    'LoTW’s record is exactly as near your other contact as this one, so the check cannot tell which it belongs to. Tick it only if you are sure.',
+    '{{service}}’s record is exactly as near your other contact as this one, so the check cannot tell which it belongs to. Tick it only if you are sure.',
   'logbook.confirmations.unticked.orphan':
-    'No contact in your log is within 30 minutes of LoTW’s record: the QSO may be missing from your log, or this contact’s time may be more than 30 minutes off. Tick it only if you are sure.',
+    'No contact in your log is within 30 minutes of {{service}}’s record: the QSO may be missing from your log, or this contact’s time may be more than 30 minutes off. Tick it only if you are sure.',
   'logbook.confirmations.unticked.insideWindow':
-    'LoTW’s record is within 30 minutes of this contact too, so it may be this contact’s. Tick it only if you are sure.',
+    '{{service}}’s record is within 30 minutes of this contact too, so it may be this contact’s. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.insideWindowEqsl':
+    'eQSL’s card is within 30 minutes of this contact too, and a card carries the time the other station logged, so it may be this contact’s. Tick it only if you are sure.',
   'logbook.confirmations.unticked.notToTheMinute':
-    'LoTW’s unconfirmed record is near this contact but not on its minute, so it may be another QSO’s. Tick it only if you are sure.',
+    '{{service}}’s unconfirmed record is near this contact but not on its minute, so it may be another QSO’s. Tick it only if you are sure.',
   'logbook.confirmations.badge.card': 'paper card — keeps award credit',
   'logbook.confirmations.badge.credit': 'credit {{codes}} removed',
   'logbook.confirmations.badge.submitted': 'submitted credit {{codes}} removed',
@@ -1225,18 +1236,18 @@ export const EN = {
   'logbook.confirmations.badge.owedTitle':
     'LoTW holds no upload of this contact. Once it is changed, Upload to LoTW sends it, and so does the automatic LoTW upload if you turned that on.',
   'logbook.confirmations.gains': {
-    one: '{{count}} contact gains the confirmation LoTW holds for it.',
-    other: '{{count}} contacts gain the confirmation LoTW holds for them.',
+    one: '{{count}} contact gains the confirmation {{service}} holds for it.',
+    other: '{{count}} contacts gain the confirmation {{service}} holds for them.',
   },
   'logbook.confirmations.unreached': {
-    one: '{{count}} contact holds a LoTW confirmation that LoTW does not list within a day of it; this check leaves it alone.',
+    one: '{{count}} contact holds a {{service}} confirmation that {{service}} does not list within a day of it; this check leaves it alone.',
     other:
-      '{{count}} contacts hold a LoTW confirmation that LoTW does not list within a day of them; this check leaves them alone.',
+      '{{count}} contacts hold a {{service}} confirmation that {{service}} does not list within a day of them; this check leaves them alone.',
   },
   'logbook.confirmations.outOfScope': {
-    one: '{{count}} contact with a LoTW confirmation was logged under another call than the one in Settings; this check leaves it alone.',
+    one: '{{count}} contact with a {{service}} confirmation was logged under another call than the one in Settings; this check leaves it alone.',
     other:
-      '{{count}} contacts with a LoTW confirmation were logged under another call than the one in Settings; this check leaves them alone.',
+      '{{count}} contacts with a {{service}} confirmation were logged under another call than the one in Settings; this check leaves them alone.',
   },
   'logbook.confirmations.uploadsUnreached': {
     one: '{{count}} contact marked as uploaded has no upload LoTW lists within a day of it; this check leaves it alone.',
@@ -1254,16 +1265,16 @@ export const EN = {
     other: 'Change {{count}} contacts',
   },
   'logbook.confirmations.done.confirmations': {
-    one: 'Took LoTW’s confirmation off {{count}} contact.',
-    other: 'Took LoTW’s confirmation off {{count}} contacts.',
+    one: 'Took {{service}}’s confirmation off {{count}} contact.',
+    other: 'Took {{service}}’s confirmation off {{count}} contacts.',
   },
   'logbook.confirmations.done.uploads': {
     one: 'Marked {{count}} contact as not uploaded to LoTW.',
     other: 'Marked {{count}} contacts as not uploaded to LoTW.',
   },
   'logbook.confirmations.done.gained': {
-    one: '{{count}} contact gained the confirmation LoTW holds for it.',
-    other: '{{count}} contacts gained the confirmation LoTW holds for them.',
+    one: '{{count}} contact gained the confirmation {{service}} holds for it.',
+    other: '{{count}} contacts gained the confirmation {{service}} holds for them.',
   },
   'logbook.confirmations.done.skipped': {
     one: '{{count}} ticked line was left alone: its contact changed after the check.',
