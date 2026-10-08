@@ -889,34 +889,44 @@ pub fn confirmation_repairs(
     (Err(station::LOG_BUSY.into()), Durability::default())
 }
 
+/// What Apply in Check confirmations made of one service's check ([`apply_confirmation_check`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceApplied {
+    pub channel: tempo_core::reconcile::check::Channel,
+    /// Contacts whose confirmation from this service was taken off.
+    pub confirmations: usize,
+    /// Contacts its download, merged, gave the confirmation they lacked.
+    pub gained: usize,
+}
+
 /// What Apply in Check confirmations made ([`apply_confirmation_check`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfirmationsApplied {
-    /// Contacts whose LoTW confirmation was taken off.
-    pub confirmations: usize,
+    /// Each service checked, in the order its download was handed in.
+    pub services: Vec<ServiceApplied>,
     /// Contacts whose LoTW upload mark was cleared.
     pub uploads: usize,
-    /// The download merged, as a sync merges it: what it added.
-    pub merged: tempo_core::reconcile::ReconcileSummary,
     /// The file holding the contacts about to change as they were, beside `log.adi`: an import
     /// of it puts each change back. `None` when no ticked contact still held what its line showed.
     pub before_file: Option<std::path::PathBuf>,
 }
 
 /// ★ Apply in Logbook ▸ Check confirmations: `lines` are the lines the operator ticked, each with
-/// the contact as the check read it, and `report` is the confirmation download the check read
-/// (LoTW's; the check holds it, and nothing else does). In this order, each step only once the
-/// one before it is made:
+/// the contact as the check read it, and `downloads` are the downloads the check read, one per
+/// service (LoTW's confirmations, eQSL's InBox, QRZ's book; the check holds them, and nothing else
+/// does). In this order, each step only once the one before it is made:
 ///
 /// 1. **The before-file**: each contact a ticked line will change, as it is now, written to a new
 ///    file beside `log.adi` ([`before_file_name`]) and flushed to disk before anything changes.
 ///    An ADIF import of it puts every change back: the import matches each contact on its exact
 ///    call, band, mode and second, and adds back what the change took off (a confirmation, its
 ///    codes, an upload mark), which is all an import does. Not written, nothing changes.
-/// 2. **The gains**: the download merged as a sync merges it ([`merge_lotw_report`]), so each
-///    contact it confirms that lacks the confirmation gains it. No sync cursor moves. An import
-///    does not undo these: they are LoTW's own confirmations of those contacts.
-/// 3. **The confirmations** the ticked lines take off ([`confirmation_repairs`], `Key`).
+/// 2. **The gains**: each download merged ([`merged_for_check`]), so each contact it confirms that
+///    lacks the confirmation gains it. No sync cursor moves. An import does not undo these: they
+///    are the services' own confirmations of those contacts.
+/// 3. **The confirmations** the ticked lines take off, one service after another
+///    ([`confirmation_repairs`], `Key`). A contact's lines of different services each still apply
+///    once another has gone first (`tempo_core::reconcile::check::uncheck`).
 /// 4. **The upload marks** the ticked lines clear ([`confirmation_repairs`], `Stamp`): those
 ///    contacts are owed to LoTW again, and go in the operator's next upload.
 ///
@@ -926,7 +936,7 @@ pub struct ConfirmationsApplied {
 /// ⚠️ It reads the store and writes a file: call it with no lock held.
 pub fn apply_confirmation_check(
     engine: &Mutex<Engine>,
-    report: &str,
+    downloads: &[(tempo_core::reconcile::check::Channel, String)],
     lines: &[tempo_core::reconcile::check::CheckLine],
     now_unix: u64,
 ) -> (Result<ConfirmationsApplied, String>, Durability) {
@@ -935,46 +945,51 @@ pub fn apply_confirmation_check(
         Ok(file) => file,
         Err(e) => return (Err(e), Durability::default()),
     };
-    let (merged, mut durability) = until_written(|| merge_lotw_report(engine, report));
-    let merged = match merged {
-        Ok(merged) => merged,
-        Err(e) => return (Err(e), durability),
-    };
-    if durability.turned_back(crate::logstore::DURABLE_WAIT) {
-        return (Err(station::LOG_BUSY.into()), durability);
+    let mut durability = Durability::default();
+    let mut services = Vec::new();
+    for (channel, text) in downloads {
+        match made_again(|| merged_for_check(engine, *channel, text), &mut durability) {
+            Ok(gained) => services.push(ServiceApplied {
+                channel: *channel,
+                confirmations: 0,
+                gained,
+            }),
+            Err(e) => return (Err(e), durability),
+        }
     }
-    let (confirmations, uploads): (Vec<CheckLine>, Vec<CheckLine>) = lines
-        .iter()
-        .cloned()
-        .partition(|l| l.mark != Mark::LotwUpload);
-    let confirmations = match repaired(engine, &confirmations, &mut durability) {
-        Ok(made) => made,
-        Err(e) => return (Err(e), durability),
+    let marked = |mark: Mark| -> Vec<CheckLine> {
+        lines.iter().filter(|l| l.mark == mark).cloned().collect()
     };
-    let uploads = match repaired(engine, &uploads, &mut durability) {
+    for service in &mut services {
+        let taken_off = marked(Mark::Confirmation(service.channel));
+        match made_again(|| confirmation_repairs(engine, &taken_off), &mut durability) {
+            Ok(made) => service.confirmations = made,
+            Err(e) => return (Err(e), durability),
+        }
+    }
+    let cleared = marked(Mark::LotwUpload);
+    let uploads = match made_again(|| confirmation_repairs(engine, &cleared), &mut durability) {
         Ok(made) => made,
         Err(e) => return (Err(e), durability),
     };
     (
         Ok(ConfirmationsApplied {
-            confirmations,
+            services,
             uploads,
-            merged,
             before_file,
         }),
         durability,
     )
 }
 
-/// One of Apply's changes ([`confirmation_repairs`]), made again while the store turns it back
-/// ([`until_written`]), its durability added to `durability`. How many contacts it changed; a
-/// change the store turned back every time is `LogBusy`.
-fn repaired(
-    engine: &Mutex<Engine>,
-    lines: &[tempo_core::reconcile::check::CheckLine],
+/// One of Apply's changes, made again while the store turns it back ([`until_written`]), its
+/// durability added to `durability`. How many contacts it changed or gained; a change the store
+/// turned back every time is `LogBusy`.
+fn made_again(
+    make: impl FnMut() -> (Result<usize, String>, Durability),
     durability: &mut Durability,
 ) -> Result<usize, String> {
-    let (made, d) = until_written(|| confirmation_repairs(engine, lines));
+    let (made, d) = until_written(make);
     let busy = d.turned_back(crate::logstore::DURABLE_WAIT);
     *durability = std::mem::take(durability).and(d);
     let made = made?;
@@ -982,6 +997,56 @@ fn repaired(
         return Err(station::LOG_BUSY.into());
     }
     Ok(made)
+}
+
+/// Step 2 of [`apply_confirmation_check`] for one service: its download merged for the gains,
+/// planned with the Engine lock released. LoTW's and eQSL's are merged as their syncs merge them,
+/// and record Settings' last-sync summary as those do ([`merge_lotw_report`],
+/// [`merge_eqsl_report`]). QRZ's book gives only QRZ's own confirmation
+/// ([`station::plan_qrz_gains`]): Sync from QRZ also adds the contacts the book holds that the log
+/// lacks, and carries QRZ's copies of other services' confirmations, and neither is a gain this
+/// check showed, nor its summary a sync's. How many contacts gained the service's confirmation.
+fn merged_for_check(
+    engine: &Mutex<Engine>,
+    channel: tempo_core::reconcile::check::Channel,
+    text: &str,
+) -> (Result<usize, String>, Durability) {
+    use tempo_core::reconcile::check::Channel;
+    /// A plan, and how many contacts it gives `channel`'s confirmation.
+    fn gaining<R>(
+        planned: Result<(R, station::Planned), String>,
+        channel: Channel,
+    ) -> Result<((R, usize), station::Planned), String> {
+        let (out, planned) = planned?;
+        let gained = planned.gained(channel);
+        Ok(((out, gained), planned))
+    }
+    match channel {
+        Channel::Lotw => bulk(
+            engine,
+            "merge_lotw_report",
+            |plan| gaining(station::plan_report(plan, text), channel),
+            |e, (summary, gained)| {
+                e.station_mut().last_lotw_reconcile = Some(summary);
+                gained
+            },
+        ),
+        Channel::Eqsl => bulk(
+            engine,
+            "merge_eqsl_report",
+            |plan| gaining(station::plan_report(plan, text), channel),
+            |e, (summary, gained)| {
+                e.station_mut().last_eqsl_reconcile = Some(summary);
+                gained
+            },
+        ),
+        Channel::Qrz => bulk(
+            engine,
+            "gain_qrz_confirmations",
+            |plan| gaining(station::plan_qrz_gains(plan, text), channel),
+            |_, ((), gained)| gained,
+        ),
+    }
 }
 
 /// The before-file's name for an Apply made at `now_unix`: `log.adi`'s folder holds it, under a
