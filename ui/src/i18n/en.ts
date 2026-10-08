@@ -1762,6 +1762,21 @@ export const EN = {
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
+  // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
+  // joined by "/" (COOK/DUPG) and logged as one contact per county. The county codes are
+  // invariant tokens; {{exchange}} is the exchange as logged.
+  'logEntry.countyLine.logged': {
+    one: 'Logged {{call}} {{exchange}} ({{mode}})',
+    other: 'Logged {{call}} {{exchange}} ({{mode}}): {{count}} contacts, one per county',
+  },
+  'logEntry.countyLine.dupe': {
+    one: '{{call}} in {{counties}} is a dupe on this band/mode, not logged again',
+    other: '{{call}} in {{counties}} are dupes on this band/mode, not logged again',
+  },
+  'logEntry.countyLine.unknown': "{{value}} is not a county on the sponsor's list, so this county line cannot be logged.",
+  'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
+  'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
+  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
   'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.hint': 'Did you mean {{codes}}?',
