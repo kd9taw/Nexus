@@ -27,7 +27,7 @@ When the FM sub-mode is active, the cockpit mode badge reads **FM** instead of t
 
 Nexus polls the rig via rigctld every 750 ms and mirrors the VFO frequency into the cockpit header. A manual VFO knob turn appears in the UI in under one second with no operator action required. Note: at very fast VFO spin rates, a transient frequency can be missed between polls since the UI reflects polled values, not a continuous hardware stream.
 
-The rig model and port are set in Settings; the default rigctld port is **4532** (Hamlib NET rigctl default). If your rig is not yet configured (`rig_model: 0`), the dial display shows no value.
+The rig model and port are set in Settings; the default rigctld port is **4534** (Hamlib's usual 4532 belongs to the CAT broker). If your rig is not yet configured (`rig_model: 0`), the dial display shows no value.
 
 ## Band selection
 
@@ -147,7 +147,7 @@ You go from "there's a needed station on 20 m SSB" to "rig is there, call is in 
 | Setting | Default | Notes |
 |---|---|---|
 | `ptt_method` | `vox` | `cat`, `rts`, `dtr` also available |
-| `rigctld_port` | `4532` | Hamlib NET rigctl default |
+| `rigctld_port` | `4534` | Not Hamlib's usual 4532, which the CAT broker uses |
 | `rig_model` | `0` | No CAT; set to Hamlib model number |
 | `baud` | `38400` | CAT serial baud rate |
 | `tx_level` | `0.9` | TX audio gain before sound card (0.0–1.0) |

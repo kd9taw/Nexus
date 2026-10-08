@@ -16,7 +16,7 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 | Page | What you will do |
 |---|---|
 | [Getting Started](Getting-Started.md) | Download, install, first-run wizard, callsign/grid/license class, audio and CAT smoke-test |
-| [Rig and Audio Setup](Rig-and-Audio-Setup.md) | rigctld CAT (port 4532), PTT method (CAT / RTS / DTR / VOX), audio device selection, TX level, time-sync |
+| [Rig and Audio Setup](Rig-and-Audio-Setup.md) | rigctld CAT (port 4534), PTT method (CAT / RTS / DTR / VOX), audio device selection, TX level, time-sync |
 
 ### Operating
 

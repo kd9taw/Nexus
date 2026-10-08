@@ -351,6 +351,23 @@ describe('⊞ Arrange in FT', () => {
     expect(inBand(), 'Band Activity came back empty after the move').toContain('CQ W1ABC FN42')
   })
 
+  it('the sorts come back after the first move too: they are the cockpit’s, not the panes’', async () => {
+    render(<Live layoutMode="roster" />)
+    await settle()
+    const bandSort = () => document.querySelector<HTMLSelectElement>('.cockpit-lower .operate-decodes:not(.compact) .od-sort select')!
+    const rosterSort = () => document.querySelector('.cockpit-lower .operate-roster .or-th.active')?.textContent
+    const callHeader = () => within(document.querySelector<HTMLElement>('.cockpit-lower .operate-roster')!).getByRole('button', { name: /^Call( [▲▼])?$/ })
+    expect([bandSort().value, rosterSort()], 'fixture: the defaults').toEqual(['time', 'Need ▼'])
+    fireEvent.change(bandSort(), { target: { value: 'dt' } })
+    fireEvent.click(callHeader())
+    expect([bandSort().value, rosterSort()], 'fixture: the picks took').toEqual(['dt', 'Call ▲'])
+    // The first arranging act: the region leaves today's tree, remounting its panes.
+    move('rxfreq', 'left', 'roster')
+    await settle()
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    expect([bandSort().value, rosterSort()]).toEqual(['dt', 'Call ▲'])
+  })
+
   it('a double-click on a decode calls the station through the cockpit’s own handler, wherever the pane stands', async () => {
     const calls: unknown[][] = []
     const onCall = (...a: unknown[]) => void calls.push(a)

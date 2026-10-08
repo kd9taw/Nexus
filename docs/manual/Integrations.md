@@ -9,7 +9,7 @@ Shack-interop reference for every external protocol and online service Nexus spe
 | Service | Protocol | Default address |
 |---|---|---|
 | WSJT-X UDP (in + out) | UDP | `127.0.0.1:2237` |
-| Hamlib rigctld (CAT) | TCP | `127.0.0.1:4532` |
+| Hamlib rigctld (CAT) | TCP | `127.0.0.1:4534` |
 | CAT broker (share rig) | TCP listen | `4532` (off by default) |
 | N3FJP Field Day API | TCP | `<host>:1100` |
 | N1MM+ contactinfo | UDP broadcast | `<host>:12060` |

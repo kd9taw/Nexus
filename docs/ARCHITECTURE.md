@@ -553,7 +553,7 @@ its co-located DLLs, so CAT works **offline** with no separate Hamlib install.
 
 The radio loop maps `Settings` → `RadioConfig`, resolves the PTT method, sets the
 dial/mode once, then keys/decodes per slot (§3.4). The default config is VOX
-(`rig_model = 0`, `rigctld_port = 4532`).
+(`rig_model = 0`, `rigctld_port = 4534`).
 
 ---
 

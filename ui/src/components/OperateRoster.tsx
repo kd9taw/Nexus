@@ -85,6 +85,11 @@ interface Props {
   /** Post the selected station to the DX cluster (spot it at the current dial).
    *  Absent = no cluster connected → the control hides. */
   onSpot?: (call: string) => void
+  /** Externally-owned sort. The FT cockpit passes one so the column the operator sorted by survives
+   *  the region remounting its panes (⊞ Arrange's first move, and the dashboard rail's boxes folding
+   *  in below `lg` and out again) instead of going back to Need. Omitted: a private sort, as before. */
+  sort?: RosterSort
+  onSort?: (sort: RosterSort) => void
 }
 
 type SortKey =
@@ -98,6 +103,11 @@ type SortKey =
   | 'bearing'
   | 'snr'
   | 'age'
+
+/** The column the roster is sorted by, and which way. */
+export type RosterSort = { key: SortKey; dir: 'asc' | 'desc' }
+/** Need, strongest first: the order until the operator clicks a column. */
+export const DEFAULT_ROSTER_SORT: RosterSort = { key: 'need', dir: 'desc' }
 
 // The call roster shows only ACTIVELY-heard stations: a station drops off once
 // it hasn't been decoded for this many T/R cycles, so the list reflects who's
@@ -166,6 +176,8 @@ export function OperateRoster({
   onSpot,
   band,
   feedMode,
+  sort: keptSort,
+  onSort,
 }: Props) {
   const control = useStationControl()
   // A public spot of another station posts from the station's own cluster login, so it rides
@@ -181,7 +193,9 @@ export function OperateRoster({
       .then(setDeclination)
       .catch(() => {})
   }, [])
-  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'need', dir: 'desc' })
+  const [ownSort, setOwnSort] = useState<RosterSort>(DEFAULT_ROSTER_SORT)
+  const sort = keptSort ?? ownSort
+  const setSort = onSort ?? setOwnSort
   // Persisted per-surface (operateFilters.ts): the operator ticks Needed-only once and it is
   // still ticked after a restart. Defaults are both off, so nothing changes for anyone who
   // has never touched them.
@@ -418,9 +432,9 @@ export function OperateRoster({
       className={`or-th${sort.key === key ? ' active' : ''}`}
       title={title ?? t('operate.roster.sort.title', { column: label })}
       onClick={() =>
-        setSort((p) =>
-          p.key === key
-            ? { key, dir: p.dir === 'asc' ? 'desc' : 'asc' }
+        setSort(
+          sort.key === key
+            ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
             : {
                 key,
                 dir:

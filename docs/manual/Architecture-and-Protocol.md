@@ -68,7 +68,7 @@ Everything is built on the **77-bit message** — the same WSJT-X-compatible pay
 
 ## Rig control
 
-Nexus handles rig control in-app. For **CAT** it **launches Hamlib's `rigctld`** itself (default local TCP `127.0.0.1:4532`) and talks the line protocol (`T 1`/`T 0` PTT, `F <hz>` set freq, `M <mode> <pb>` set mode) — installer builds bundle `rigctld` so this works offline. Alternatively it keys PTT via **serial RTS/DTR**, or relies on **VOX**. The radio loop maps your Settings to a rig config, sets dial/mode, and keys/decodes per slot, retuning live when you change band/sideband. See [Rig and Audio Setup](Rig-and-Audio-Setup.md).
+Nexus handles rig control in-app. For **CAT** it **launches Hamlib's `rigctld`** itself (default local TCP `127.0.0.1:4534`) and talks the line protocol (`T 1`/`T 0` PTT, `F <hz>` set freq, `M <mode> <pb>` set mode) — installer builds bundle `rigctld` so this works offline. Alternatively it keys PTT via **serial RTS/DTR**, or relies on **VOX**. The radio loop maps your Settings to a rig config, sets dial/mode, and keys/decodes per slot, retuning live when you change band/sideband. See [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 
 ---
 

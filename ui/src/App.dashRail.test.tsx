@@ -12,7 +12,7 @@
 //     macro's `!` sends — and a Spots row in it works the spot through the board's own Work.
 // The one-poll claim is DashRail.feeds.test.tsx; each cockpit's stop controls beside the rail are
 // DashRail.stopLine.test.tsx.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 vi.mock('./api', async (importOriginal) => {
@@ -32,7 +32,7 @@ vi.mock('./components/MapView', () => ({ MapView: () => <div data-testid="map" /
 
 import * as api from './api'
 import App from './App'
-import { COCKPIT_MAIN } from './appCockpits.testkit'
+import { APP_SNAPSHOT, COCKPIT_MAIN } from './appCockpits.testkit'
 import { DASH_RAIL_SECTIONS } from './features/dashRail'
 
 // Each case mounts the real App (this file mounts it more than once per case); under the full suite's
@@ -260,6 +260,96 @@ describe('on a window too small for the rail, its boxes stand in the cockpit’s
     await act(async () => {})
     expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')).toEqual([])
     expect(lower().hasAttribute('data-arranged')).toBe(false)
+  })
+
+  // FT draws today's tree while the rail stands beside it and its arranged columns while the rail's boxes stand in it, so
+  // crossing the line remounts FT's panes, once each way. What the operator set in them must be what they set, by value,
+  // on both sides — none of it the pane's default, or a reset would look the same.
+  describe('FT keeps what the operator set in its panes, each way across the line', () => {
+    const station = (call: string, snr: number, heardCount: number) => ({
+      call, grid: 'EN52', snr, lastHeardSlot: 0, heardCount, presence: 'heard', worked: false,
+    })
+    const decode = (from: string, snr: number, freqHz: number) => ({
+      from, snr, dtSec: 0.2, freqHz, message: `CQ ${from} FN31`, isCq: true, directedToMe: false, worked: false, tier: 'FT8', rv: 0,
+    })
+    const SNAP = {
+      ...APP_SNAPSHOT,
+      stations: [station('K1AAA', -20, 4), station('W2BBB', -5, 5), station('N3CCC', -12, 1)],
+      // Heard in this order, so Time (the default) reads K1AAA, W2BBB, N3CCC.
+      recentDecodes: [decode('K1AAA', -20, 900), decode('W2BBB', -5, 1700), decode('N3CCC', -12, 1300)],
+    }
+    const FT = '.operate-host:not([hidden]) main.operate-cockpit'
+    const ft = () => document.querySelector<HTMLElement>(FT)!
+    const arranged = () => ft().querySelector('.cockpit-lower')!.hasAttribute('data-arranged')
+    const firstWord = (el: Element) => el.getAttribute('aria-label')?.split(/[ ,]/)[0]
+    // Band Activity is the full decode window; Rx Frequency is the compact one, with no sort.
+    const bandSort = () => ft().querySelector<HTMLSelectElement>('.operate-decodes:not(.compact) .od-sort select')!
+    const bandRows = () => [...ft().querySelectorAll('.operate-decodes:not(.compact) .decode-row')].map(firstWord)
+    const rosterSort = () => ft().querySelector('.operate-roster .or-th.active')?.textContent
+    const rosterRows = () => [...ft().querySelectorAll('.operate-roster .or-row:not(.or-header)')].map(firstWord)
+    const stations = () => ft().querySelector<HTMLElement>('.station-list')!
+    const stationsChip = () => within(stations()).getAllByRole('tab').find((c) => c.getAttribute('aria-selected') === 'true')?.textContent
+    const stationsSearch = () => within(stations()).getByRole('searchbox', { name: 'Search stations' }) as HTMLInputElement
+    const stationsRows = () =>
+      within(stations()).queryAllByTitle(/^Double-click to work /).map((el) => el.getAttribute('title')!.replace('Double-click to work ', ''))
+    /** Across the line to 1280×800 and back to 1366×768, checking `seen()` against what the operator set at each stop. */
+    const across = async (seen: () => unknown, set: unknown) => {
+      await resize(1280, 800)
+      await waitFor(() => expect(foldedIn(FT)).toHaveLength(4))
+      expect(arranged(), 'below lg FT draws its arranged columns').toBe(true)
+      expect(seen(), 'below lg').toEqual(set)
+      await resize(1366, 768)
+      await waitFor(() => expect(railEl()).not.toBeNull())
+      expect(arranged(), 'beside the rail FT draws today’s tree').toBe(false)
+      expect(seen(), 'back beside the rail').toEqual(set)
+    }
+
+    // App takes its snapshot from each of these, and the area sync and the mode assert run on load.
+    const answer = (snap: unknown) => {
+      for (const f of [api.getSnapshot, api.setArea, api.setOperatingMode]) vi.mocked(f).mockImplementation(async () => snap as never)
+    }
+
+    beforeEach(() => {
+      answer(SNAP)
+      localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ operate: true }))
+      localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: SLOTS }))
+      windowOf(1366, 768)
+    })
+    afterEach(() => answer(APP_SNAPSHOT))
+
+    it('Roster: the Call Roster’s sort and Band Activity’s', async () => {
+      localStorage.setItem('nexus.operateLayout', 'roster')
+      await mountOn('operate')
+      await waitFor(() => expect(railEl()).not.toBeNull())
+      expect(arranged()).toBe(false)
+      await waitFor(() => expect(rosterRows()).toHaveLength(3))
+      expect(rosterSort(), 'the Call Roster’s default').toBe('Need ▼')
+      expect(bandSort().value, 'Band Activity’s default').toBe('time')
+      // Call, then Call again: descending.
+      fireEvent.click(within(ft().querySelector<HTMLElement>('.operate-roster')!).getByRole('button', { name: /^Call( [▲▼])?$/ }))
+      fireEvent.click(within(ft().querySelector<HTMLElement>('.operate-roster')!).getByRole('button', { name: /^Call( [▲▼])?$/ }))
+      fireEvent.change(bandSort(), { target: { value: 'snr' } })
+      const seen = () => ({ roster: rosterSort(), rosterRows: rosterRows(), band: bandSort().value, bandRows: bandRows() })
+      const set = { roster: 'Call ▼', rosterRows: ['W2BBB', 'N3CCC', 'K1AAA'], band: 'snr', bandRows: ['W2BBB', 'N3CCC', 'K1AAA'] }
+      expect(seen(), 'the operator’s picks did not take').toEqual(set)
+      await across(seen, set)
+    })
+
+    it('Classic: Band Activity’s sort, and the Stations list’s chip and search', async () => {
+      localStorage.setItem('nexus.operateLayout', 'classic')
+      await mountOn('operate')
+      await waitFor(() => expect(railEl()).not.toBeNull())
+      expect(arranged()).toBe(false)
+      await waitFor(() => expect(stationsRows()).toHaveLength(3))
+      expect(stationsChip(), 'the Stations list’s default').toBe('All')
+      fireEvent.change(bandSort(), { target: { value: 'freq' } })
+      fireEvent.click(within(stations()).getByRole('tab', { name: 'Beaconing' }))
+      fireEvent.change(stationsSearch(), { target: { value: 'W2' } })
+      const seen = () => ({ band: bandSort().value, bandRows: bandRows(), chip: stationsChip(), search: stationsSearch().value, rows: stationsRows() })
+      const set = { band: 'freq', bandRows: ['K1AAA', 'N3CCC', 'W2BBB'], chip: 'Beaconing', search: 'W2', rows: ['W2BBB'] }
+      expect(seen(), 'the operator’s picks did not take').toEqual(set)
+      await across(seen, set)
+    })
   })
 })
 

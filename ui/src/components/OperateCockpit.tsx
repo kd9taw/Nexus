@@ -65,11 +65,11 @@ import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { PaneSeam } from './PaneSeam'
 import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
-import { DecodeHistory } from '../decodeHistory'
+import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
-import { OperateRoster } from './OperateRoster'
+import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
@@ -521,6 +521,12 @@ export function OperateCockpit({
   // mid-session (operator report 2026-07-21).
   const bandHistRef = useRef(new DecodeHistory())
   const rxHistRef = useRef(new DecodeHistory())
+  // Band Activity's and the Call Roster's sorts live here too, for the same reason: the region remounts
+  // its panes when it switches between today's tree and the arranged columns (⊞ Arrange's first move,
+  // and the dashboard rail's boxes folding in below `lg` and out again), and a sort held in the pane
+  // went back to Time or Need each time.
+  const [bandSort, setBandSort] = useState<DecodeSort>('time')
+  const [rosterSort, setRosterSort] = useState<RosterSort>(DEFAULT_ROSTER_SORT)
   // The RF scope pane's FT overlay: the newest slot's decodes and the RX/TX offsets, at dial ± offset.
   const rfFt = useMemo(
     () => ftOverlay(snap.recentDecodes ?? [], snap.radio.rxOffsetHz, snap.radio.txOffsetHz, snap.radio.sideband),
@@ -759,8 +765,8 @@ export function OperateCockpit({
   // the update: OperateCockpit.arrange.test.tsx holds it to a golden of the tree as it was. Once arranged,
   // each column is a keyed stack of role-typed frames (the arranged branch; cockpit-panes.css "FT'S
   // ARRANGED COLUMNS"), and a pane moved up or down in its column is moved, not remounted. The first
-  // arranging act remounts the region's panes once, which loses a sort; the decode windows' history is
-  // this cockpit's, so their rows come back.
+  // arranging act remounts the region's panes once; the decode windows' history and the two sorts are
+  // this cockpit's (and the Stations list's chip and search are App's), so they come back as they were.
   const arrangeSpec = OPERATE_ARRANGE[layoutMode]
   const place = placeOf(OPERATE_PANELS, panels.layout, layoutMode)
   // A box arranges only a window that lends boxes: in the pop-out and on the hosted page a box in the record,
@@ -1222,6 +1228,8 @@ export function OperateCockpit({
             {...closeProps('bandActivity')}
             paneTitle={labels.bandActivity}
             history={bandHistRef.current}
+            sort={bandSort}
+            onSort={setBandSort}
             decodes={snap.recentDecodes}
             slot={snap.radio.slot}
             rxOffsetHz={snap.radio.rxOffsetHz}
@@ -1284,6 +1292,8 @@ export function OperateCockpit({
             ignoredCalls={ignored}
             onToggleIgnore={handleToggleIgnore}
             onSpot={(call) => openSpot(call)}
+            sort={rosterSort}
+            onSort={setRosterSort}
           />,
         )
       case 'stations':
@@ -1953,6 +1963,8 @@ export function OperateCockpit({
                     // cluster deserves a glance before it goes out); the dialog seeds the dial + a mode
                     // comment itself.
                     onSpot={(call) => openSpot(call)}
+                    sort={rosterSort}
+                    onSort={setRosterSort}
                   />
                 </div>
               )}
@@ -1968,6 +1980,8 @@ export function OperateCockpit({
                         {...closeProps('bandActivity')}
                         paneTitle={labels.bandActivity}
                         history={bandHistRef.current}
+                        sort={bandSort}
+                        onSort={setBandSort}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
                         slot={snap.radio.slot}
@@ -2047,6 +2061,8 @@ export function OperateCockpit({
                     {...closeProps('bandActivity')}
                     paneTitle={labels.bandActivity}
                     history={bandHistRef.current}
+                    sort={bandSort}
+                    onSort={setBandSort}
                     decodes={snap.recentDecodes}
                     late={snap.lateDecodes}
                     slot={snap.radio.slot}

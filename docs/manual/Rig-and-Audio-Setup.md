@@ -49,7 +49,7 @@ When Detect identifies a bridge chip that needs a driver, it shows the vendor UR
 
 On Windows, Nexus ships `rigctld.exe` plus the required DLLs (`libhamlib-4.dll`, `libusb-1.0.dll`, `libwinpthread-1.dll`, `libgcc_s_seh-1.dll`) inside the installer's `resources/hamlib/` directory. The app prefers this bundled binary over any `rigctld` on PATH, so CAT works immediately after install with no separate Hamlib download.
 
-Nexus launches rigctld internally, connects to it over a local TCP socket on the configured port (default **4532**), and uses 500 ms read/write timeouts. You do not run rigctld manually.
+Nexus launches rigctld internally, connects to it over a local TCP socket on the configured port (default **4534**), and uses 500 ms read/write timeouts. You do not run rigctld manually.
 
 The spawned rigctld process is placed in a Windows **Job Object** with the `KILL_ON_JOB_CLOSE` flag. When Nexus exits — including abnormal exits and crashes — the OS kills rigctld automatically and releases the COM port. A stuck port or lingering rigctld after a crash is not expected; if it occurs, file a bug.
 
@@ -241,7 +241,7 @@ Frequency is polled continuously — a manual VFO knob turn is reflected in the 
 | `pttMethod` | `vox` | Change to `cat`, `rts`, or `dtr` |
 | `rigModel` | `0` (none) | Select from the curated dropdown (unlisted rigs: NET rigctl, model 2) |
 | `baud` | `38400` | Match your rig's CAT baud setting |
-| `rigctldPort` | `4532` | Local TCP port; Hamlib NET rigctl default |
+| `rigctldPort` | `4534` | Local TCP port; not Hamlib's usual 4532, which the CAT broker uses |
 | `serialPort` | `''` (empty) | Fill via Detect or manually |
 | `audioIn` / `audioOut` | `''` (system default) | Fill via Detect or manually |
 | `txLevel` | `0.9` (90%) | Trim until ALC reads zero |

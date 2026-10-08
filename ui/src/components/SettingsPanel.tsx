@@ -818,7 +818,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // this profile drives is a property of the profile, and dropping it on Save would move an
     // operator's RIG 2 radio silently onto RIG 1.
     omnirigSlot: s.omnirigSlot ?? 1,
-    rigctldPort: s.rigctldPort ?? 4532,
+    rigctldPort: s.rigctldPort ?? 4534,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
     // ⚠️ PER-RADIO, so it MUST be seeded here for the same reason `omnirigSlot` is: the Save
@@ -5629,7 +5629,7 @@ export function SettingsPanel({
                   type="number"
                   inputMode="numeric"
                   value={String(form.rigctldPort)}
-                  placeholder="4532"
+                  placeholder="4534"
                   onChange={(e) => update('rigctldPort', e.target.value)}
                   autoComplete="off"
                 />
@@ -7108,7 +7108,7 @@ export function SettingsPanel({
                       em: <em />,
                       code: <code className="rig-share-direct mono" />,
                     }}
-                    vals={{ address: `127.0.0.1:${form.rigctldPort || 4532}` }}
+                    vals={{ address: `127.0.0.1:${form.rigctldPort || 4534}` }}
                   />
                 </span>
               )}
