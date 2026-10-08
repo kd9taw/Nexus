@@ -149,6 +149,28 @@ trusted; the connection can only carry log rows, never key a transmitter or
 change a setting. The N3FJP/N1MM pushes above keep working alongside if you
 want both.
 
+**Field Day only, for now.** Club sync runs for ARRL Field Day and Winter Field
+Day. With any other contest selected (a state QSO party, for example) a station
+does not host or join, and the contest screen and the Club Sync settings say so.
+Log on each position by itself and merge the Cabrillo files afterwards. The
+manual's Field Day page has the steps for the Illinois QSO Party.
+
+Before any club event:
+
+- **Windows asks about the firewall** the first time a PC hosts, and the first
+  time a position looks for club events. Allow Nexus on **Private** networks. If
+  Windows calls the site network Public, change it to Private, because a Public
+  network blocks all of it. The host listens on TCP port 42073 (the **Host
+  port**) and announces itself on UDP port 42074, which **Find club events**
+  listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
+  firewall rule of its own.
+- **Set every clock first.** Nexus never changes a PC's clock. A position whose
+  clock is more than 30 seconds from the host's shows a warning when it joins,
+  but the contact times in the club log and in each Cabrillo file come from each
+  position's own clock, and when two positions log the same contact the club log
+  keeps the earlier one. Set every laptop from one source, a phone for example,
+  before the event starts.
+
 ---
 
 ## POTA / SOTA hunter
@@ -200,6 +222,8 @@ they're heard on the air.
 - **Winter Field Day shows raw counts, not a computed total** — by design.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
+- **Club sync runs for the two Field Days only.** A club running any other
+  contest logs on each position and merges the Cabrillo files afterwards.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
   CW and Phone strips it stays on the general log while a session runs. Not a
   design choice; not wired up yet.
