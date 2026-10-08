@@ -25,8 +25,10 @@ serde_json = "1"
 
 [features]
 # `test_util`: the log as a test reads it (SPEC-2 C19 Part D), for another crate's tests: a
-# dev-dependency naming this feature turns it on, so no shipped build compiles it.
-test-util = []
+# dev-dependency naming this feature turns it on, so no shipped build compiles it. It turns on
+# tempo-core's own for those tests too: the confirmation check's replay of 1.17.0's matcher, which
+# builds the state 1.17.0 left by running it (`tempo_core::reconcile::check::replay`).
+test-util = ["tempo-core/test-util"]
 
 [dev-dependencies]
 # The same crate as above with one more feature, for this crate's tests only: `test-util`, the
