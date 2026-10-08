@@ -2032,9 +2032,7 @@ impl Logbook {
     /// report drops new confirmations on already-logged QSOs". Pure merge — call
     /// [`save`](Self::save) to persist.
     pub fn merge_report(&mut self, text: &str) -> crate::reconcile::ReconcileSummary {
-        let mut incoming = parse_adif(text);
-        lotw_channel_fixup(text, &mut incoming);
-        crate::reconcile::reconcile(&mut self.records[..], &incoming)
+        crate::reconcile::reconcile(&mut self.records[..], &report_rows(text))
     }
 
     /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
@@ -3685,6 +3683,16 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
             r.award_confirmed = r.qsl_rcvd.award();
         }
     }
+}
+
+/// A confirmation report's rows exactly as [`Logbook::merge_report`] reads them: the parse, and a
+/// LoTW report's bare `QSL_RCVD` on the LoTW channel ([`lotw_channel_fixup`]). For a reader that
+/// must never disagree with the merge about which channel a row confirms: a check of a download
+/// against the log ([`crate::reconcile::check`]).
+pub fn report_rows(text: &str) -> Vec<QsoRecord> {
+    let mut incoming = parse_adif(text);
+    lotw_channel_fixup(text, &mut incoming);
+    incoming
 }
 
 /// The records an ADIF text holds, as every import reads them — a pure parse: nothing deduped,
@@ -9358,6 +9366,50 @@ mod tests {
         lb3.import_adif(&third_party);
         assert!(lb3.records()[0].qsl_rcvd.card);
         assert!(!lb3.records()[0].qsl_rcvd.lotw);
+    }
+
+    /// A report's rows as its merge reads them ([`report_rows`]): a LoTW report's bare `QSL_RCVD`
+    /// is LoTW's confirmation, a third-party file's is still a card, and the merge reads exactly
+    /// these rows. A check of a download against the log reads them here, so it can never
+    /// disagree with the merge about which channel a row confirms.
+    #[test]
+    fn a_report_reads_as_its_merge_reads_it() {
+        let (y, mo, d, ..) = datetime_utc(1_700_000_000);
+        let row = format!(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>{y:04}{mo:02}{d:02}<QSL_RCVD:1>Y\
+             <CREDIT_GRANTED:4>DXCC<EOR>\n"
+        );
+        let report = format!(
+            "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW\n<eoh>\n{row}\
+             <APP_LoTW_EOF>\n"
+        );
+        let third_party = format!("<EOH>\n{row}");
+        let rows = report_rows(&report);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].qsl_rcvd,
+            QslRcvd {
+                lotw: true,
+                ..QslRcvd::default()
+            },
+            "LoTW's own channel, not a card"
+        );
+        assert_eq!(
+            report_rows(&third_party)[0].qsl_rcvd,
+            QslRcvd {
+                card: true,
+                ..QslRcvd::default()
+            },
+            "a third-party file's QSL_RCVD is a card"
+        );
+        for text in [&report, &third_party] {
+            let mut merged = Logbook::new();
+            merged.add(rec("W1AW", "20m", 1_700_000_000));
+            merged.merge_report(text);
+            let mut by_rows = vec![rec("W1AW", "20m", 1_700_000_000)];
+            crate::reconcile::reconcile(&mut by_rows, &report_rows(text));
+            assert_eq!(*merged.records()[0], by_rows[0], "{text}");
+        }
     }
 
     #[test]

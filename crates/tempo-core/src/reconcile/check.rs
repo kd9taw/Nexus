@@ -38,7 +38,11 @@
 //!
 //! LoTW's `Accepted` upload marks are checked the same way, against its own-QSO list and a replay
 //! of 1.17.0's `promote_own_echo`: a contact marked `Accepted` that no own-list row pairs with is
-//! one LoTW holds no upload of, so it was never uploaded again.
+//! one LoTW holds no upload of, so it was never uploaded again. That pull left out the contacts
+//! award-confirmed when it ran, and the replay takes a contact as award-confirmed by a paper card,
+//! or by a LoTW confirmation LoTW's download supports. A LoTW mark the download does not support
+//! is the one under check: it may be 1.17.0's own, put there after the pull had marked the contact
+//! `Accepted` from another contact's upload, so it does not keep the contact out of the replay.
 //!
 //! The replay is an approximation. 1.17.0 merged incremental syncs, not one whole download, and
 //! read the award state the log had then. Every line is the operator's own tick for that reason.
@@ -275,9 +279,19 @@ pub fn check_report<R: Borrow<QsoRecord>>(
     }
 
     if channel == Channel::Lotw {
+        // Award-confirmed as 1.17.0's pull could have read it: a paper card, or a LoTW
+        // confirmation the download supports.
+        let award_then = |i: usize| {
+            let q = &local[i].borrow().qsl_rcvd;
+            q.card || (q.lotw && supported[i].is_some())
+        };
         let uploads = Download {
             rows: own_rows,
-            replayed: row_of(local.len(), &pair_own_echo_1_17(local, own_rows), |_| true),
+            replayed: row_of(
+                local.len(),
+                &pair_own_echo_1_17(local, own_rows, award_then),
+                |_| true,
+            ),
             reach: index_rows(own_rows, |_| true),
             pairs: own_pairs,
             own_records: true,
@@ -543,15 +557,19 @@ fn pair_report_1_17<R: Borrow<QsoRecord>>(
 /// 1.17.0's own-QSO pull (`promote_own_echo`), replayed: the same lookup over only the contacts
 /// that were not award-confirmed, which it left out of its buckets (copied from the tag; its row
 /// loop is [`take_match`]'s, written out inline there). It wrote `Accepted` on each contact it
-/// returns. The award state it reads here is the log's now, not the one it read then.
-fn pair_own_echo_1_17<R: Borrow<QsoRecord>>(local: &[R], own: &[QsoRecord]) -> Vec<Option<usize>> {
+/// returns. `award_confirmed` says which contacts were award-confirmed when it ran: the log's state
+/// then, which no stored field records, so the caller says how it reads it.
+fn pair_own_echo_1_17<R: Borrow<QsoRecord>>(
+    local: &[R],
+    own: &[QsoRecord],
+    award_confirmed: impl Fn(usize) -> bool,
+) -> Vec<Option<usize>> {
     // Index award-unconfirmed local QSOs by match key; reversed so pop() consumes
     // in log order (oldest first), mirroring `reconcile`.
     let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
     for (i, r) in local.iter().enumerate() {
-        let r: &QsoRecord = r.borrow();
-        if !r.award_confirmed {
-            buckets.entry(key(r)).or_default().push(i);
+        if !award_confirmed(i) {
+            buckets.entry(key(r.borrow())).or_default().push(i);
         }
     }
     for v in buckets.values_mut() {
@@ -583,8 +601,46 @@ fn take_match(buckets: &mut HashMap<Key, Vec<usize>>, inc: &QsoRecord) -> Option
     None
 }
 
+/// 1.17.0's merges, replayed onto a log: how a test, in this crate or another, builds the state
+/// 1.17.0 left by running its matcher, never by setting a flag by hand (#400). Built only for
+/// tests: in this crate's, and with `test-util` in another crate's.
+#[cfg(any(test, feature = "test-util"))]
+pub mod replay {
+    use super::{pair_own_echo_1_17, pair_report_1_17};
+    use crate::logbook::{QsoRecord, UploadOutcome, UploadStatus};
+    use crate::reconcile::{apply_match, ReconcileSummary};
+
+    /// `log` as 1.17.0's `reconcile` left it after `rows`: its matcher's pairing, and the merge
+    /// every version makes of a paired row (`apply_match`). `rows` are a report's rows as its
+    /// merge reads them (`crate::logbook::report_rows`).
+    pub fn left_by_1_17(mut log: Vec<QsoRecord>, rows: &[QsoRecord]) -> Vec<QsoRecord> {
+        let mut sum = ReconcileSummary::default();
+        for (row, pair) in rows.iter().zip(pair_report_1_17(&log, rows)) {
+            if let Some(i) = pair {
+                apply_match(&mut log[i], row, &mut sum);
+            }
+        }
+        log
+    }
+
+    /// `log` as 1.17.0's own-QSO pull left it after `own`, LoTW's own-QSO list: `Accepted` on
+    /// each contact its matcher gave a row, the contacts award-confirmed as it ran left out.
+    pub fn echoed_by_1_17(mut log: Vec<QsoRecord>, own: &[QsoRecord]) -> Vec<QsoRecord> {
+        let pairs = pair_own_echo_1_17(&log, own, |i| log[i].award_confirmed);
+        for i in pairs.into_iter().flatten() {
+            log[i].upload.lotw = Some(UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix: 7,
+                detail: None,
+            });
+        }
+        log
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::replay::{echoed_by_1_17, left_by_1_17};
     use super::*;
     use crate::logbook::UploadStatus;
     use crate::reconcile::tests::{lotw_outcome, rec, w1aw_at, with_lotw};
@@ -611,30 +667,6 @@ mod tests {
         r.qsl_rcvd.eqsl = true;
         r.confirmed = true;
         r
-    }
-
-    /// `log` as 1.17.0's `reconcile` left it after `rows`: its matcher's pairing, and the merge
-    /// every version makes of a paired row ([`apply_match`]).
-    fn left_by_1_17(mut log: Vec<QsoRecord>, rows: &[QsoRecord]) -> Vec<QsoRecord> {
-        let mut sum = ReconcileSummary::default();
-        for (row, pair) in rows.iter().zip(pair_report_1_17(&log, rows)) {
-            if let Some(i) = pair {
-                apply_match(&mut log[i], row, &mut sum);
-            }
-        }
-        log
-    }
-
-    /// `log` as 1.17.0's own-QSO pull left it: `Accepted` on each contact its matcher gave a row.
-    fn echoed_by_1_17(mut log: Vec<QsoRecord>, own: &[QsoRecord]) -> Vec<QsoRecord> {
-        for i in pair_own_echo_1_17(&log, own).into_iter().flatten() {
-            log[i].upload.lotw = Some(UploadStatus {
-                outcome: UploadOutcome::Accepted,
-                when_unix: 7,
-                detail: None,
-            });
-        }
-        log
     }
 
     /// `row` merged into `log[i]` the way an ADIF import upgrades a contact it already holds.
@@ -993,12 +1025,16 @@ mod tests {
             pair_report_1_17(&either_side, &[w1aw_at(D, 12, 0)]),
             [Some(0)]
         );
-        // Its own-QSO twin skipped award-confirmed contacts.
+        // Its own-QSO twin skipped the contacts award-confirmed as it ran.
         let mut confirmed = w1aw_at(D, 6, 0);
         confirmed.award_confirmed = true;
-        assert_eq!(pair_own_echo_1_17(&pair, &row), [Some(0)]);
         assert_eq!(
-            pair_own_echo_1_17(&[confirmed, w1aw_at(D, 18, 0)], &row),
+            pair_own_echo_1_17(&pair, &row, |i| pair[i].award_confirmed),
+            [Some(0)]
+        );
+        let skipped = [confirmed, w1aw_at(D, 18, 0)];
+        assert_eq!(
+            pair_own_echo_1_17(&skipped, &row, |i| skipped[i].award_confirmed),
             [Some(1)]
         );
     }
@@ -1034,6 +1070,63 @@ mod tests {
         // Not uploaded: owed to LoTW again, exactly as before 1.17.0's pull.
         let after = uncheck(&log[0], line).expect("06:00 still holds what the line shows");
         assert_eq!(after, w1aw_at(D, 6, 0));
+    }
+
+    #[test]
+    fn a_contact_both_marks_were_misplaced_on_is_ticked_when_lotw_proves_it() {
+        // 06:00 was never uploaded; 18:00 was, and LoTW's own-QSO list holds only it. 1.17.0's
+        // pull marked 06:00 Accepted from 18:00's upload while 06:00 was unconfirmed, and a later
+        // sync put 18:00's confirmation on it: 06:00 is award-confirmed now only by a LoTW mark
+        // LoTW's download does not support.
+        let own = vec![w1aw_at(D, 18, 0)];
+        let rows = vec![lotw(w1aw_at(D, 18, 2), &["DXCC"])];
+        let before = vec![
+            w1aw_at(D, 6, 0),
+            with_lotw(w1aw_at(D, 18, 0), UploadOutcome::Pending),
+        ];
+        let log = left_by_1_17(echoed_by_1_17(before.clone(), &own), &rows);
+        assert!(log[0].qsl_rcvd.lotw && log[0].award_confirmed);
+        assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
+        let check = check_report(&log, &rows, &own, Channel::Lotw, OWN);
+        let ticked: Vec<(usize, Mark, Option<Unticked>)> = check
+            .lines
+            .iter()
+            .map(|l| (l.index, l.mark, l.unticked))
+            .collect();
+        assert_eq!(
+            ticked,
+            [
+                (0, Mark::Confirmation(Channel::Lotw), None),
+                (0, Mark::LotwUpload, None)
+            ],
+            "the confirmation LoTW does not support leaves 06:00 in the pull's replay"
+        );
+        // Both changes put 06:00 back as it was before 1.17.0: owed to LoTW again.
+        let after = check.lines.iter().fold(log[0].clone(), |r, line| {
+            uncheck(&r, line).expect("06:00 still holds what each line shows")
+        });
+        assert_eq!(after, before[0]);
+
+        // A paper card kept a contact out of the pull, and keeps it out of the replay: the same
+        // marks on a contact holding one leave its upload line unticked.
+        let mut card = w1aw_at(D, 6, 0);
+        card.qsl_rcvd.card = true;
+        card.confirmed = true;
+        card.award_confirmed = true;
+        let mut carded = echoed_by_1_17(before, &own);
+        imported(&mut carded, 0, &card);
+        let carded = left_by_1_17(carded, &rows);
+        assert!(carded[0].qsl_rcvd.card && carded[0].qsl_rcvd.lotw);
+        let check = check_report(&carded, &rows, &own, Channel::Lotw, OWN);
+        let upload = check
+            .lines
+            .iter()
+            .find(|l| l.mark == Mark::LotwUpload)
+            .expect("the upload mark LoTW does not hold is listed");
+        assert_eq!(
+            (upload.index, upload.unticked),
+            (0, Some(Unticked::NotReplayed))
+        );
     }
 
     /// A contact or a row: two stations, two bands, three modes in two classes, over three days,
