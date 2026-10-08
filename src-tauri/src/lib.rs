@@ -8453,6 +8453,12 @@ struct FdRulesetDto {
     /// the contest starts. Absent when it does not apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     location_warning: Option<tempo_app::dto::LocationWarningDto>,
+    /// The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order, for Settings
+    /// to offer: the Illinois QSO Party's eight. Filled by the PREVIEW only and absent when
+    /// empty: the Remote field-day capture sends this DTO too, and the hosted page refuses a
+    /// key it does not know, so a capture must stay the shape every published page accepts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    entry_classes: Vec<String>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -8479,6 +8485,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         exchange: Vec::new(),
         problem: String::new(),
         location_warning: None,
+        entry_classes: Vec::new(),
     }
 }
 
@@ -8503,6 +8510,8 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
         dto.event.as_str(),
         tempo_core::fd_rules::CURRENT_RULES_YEAR,
     ) {
+        // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
+        dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
         match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
             Ok(s) => {
                 dto.role = s.role().id.to_string();
@@ -35223,6 +35232,33 @@ mod tests {
             "2026 seed is dormant"
         );
         assert!(sfd.rules_year >= 2026);
+        // The Illinois QSO Party's classes reach Settings' preview, Unlimited last…
+        let s = tempo_app::settings::Settings {
+            fd_event: "ilqp".into(),
+            ..Default::default()
+        };
+        let preview = super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s));
+        assert_eq!(
+            preview.entry_classes.len(),
+            8,
+            "{:?}",
+            preview.entry_classes
+        );
+        assert_eq!(
+            preview.entry_classes.last().map(String::as_str),
+            Some("UNLIMITED")
+        );
+        // …and never the Remote capture, whose hosted page refuses a key it does not know.
+        let capture = serde_json::to_value(super::fd_ruleset_dto("ilqp")).unwrap();
+        assert!(capture.get("entryClasses").is_none(), "{capture}");
+        // CONTROL: Field Day's preview declares none.
+        assert!(
+            super::fd_ruleset_preview(
+                &tempo_app::engine::Engine::with_settings(Default::default())
+            )
+            .entry_classes
+            .is_empty()
+        );
     }
 
     /// …and the state the command hands back reflects the arm, through the DTO the cockpit

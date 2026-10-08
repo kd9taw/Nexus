@@ -22,9 +22,11 @@
 //! when a ruleset asks for it and it holds a value.** `CATEGORY-ASSISTED` and
 //! `CATEGORY-POWER` are the entry's own declarations (Settings ▸ Contesting),
 //! `CATEGORY-BAND` / `CATEGORY-MODE` and `CLAIMED-SCORE` are read off the log, and
-//! `NAME` / `EMAIL` are the entrant's own settings ([`CabrilloEntrant`]). `CLUB` and
-//! `OPERATORS` still have no source. A field nothing fills is a field that ships empty,
-//! and an emitted header nobody set is the defect above written a second time.
+//! `NAME` / `EMAIL` / `CLUB` / `ENTRY-CLASS` are the entrant's own settings
+//! ([`CabrilloEntrant`]). `OPERATORS` is everyone the rows say was at the key plus the
+//! entrant's own list, and `QRP-COMPETITION` follows the declared power. A field nothing
+//! fills is a field that ships empty, and an emitted header nobody set is the defect above
+//! written a second time.
 
 /// Cabrillo's `CATEGORY-OPERATOR` — who operated the entry.
 ///
@@ -120,6 +122,19 @@ pub struct CabrilloHeaders {
     /// can actually fill — the three together being what stops "extra headers" from
     /// becoming a place to put anything.
     pub il_county: String,
+    /// `CLUB` — the contest club the entry counts for. Optional: `""` writes no line.
+    pub club: String,
+    /// `OPERATORS` — the operators' callsigns, space-separated as Cabrillo 3.0 lists them.
+    /// Optional: `""` writes no line.
+    pub operators: String,
+    /// ⭐ **`ENTRY-CLASS`** — a sponsor's own entry class (the Illinois QSO Party's
+    /// `ILLINOIS FIXED LOW POWER`, or `UNLIMITED` for a club running several transmitters at
+    /// once). Not a Cabrillo 3.0 header: it is here because a sponsor's processing software
+    /// reads it and this build can source it from a list the ruleset declares. Optional.
+    pub entry_class: String,
+    /// `QRP-COMPETITION` — `YES` for an entry that declared QRP power, the Illinois QSO
+    /// Party's own certification line. Optional: `""` writes no line.
+    pub qrp_competition: String,
     /// `X-` headers, emitted last in the order given. Cabrillo-legal and ignored by
     /// robots; `X-NEXUS-RULES-YEAR` says which rules data scored the entry.
     pub x_headers: Vec<(String, String)>,
@@ -149,10 +164,14 @@ impl CabrilloHeaders {
         if let Some(score) = self.claimed_score {
             s.push_str(&format!("CLAIMED-SCORE: {score}\n"));
         }
+        optional(&mut s, "CLUB", &self.club);
         s.push_str(&format!("CREATED-BY: {}\n", self.created_by));
         optional(&mut s, "EMAIL", &self.email);
         optional(&mut s, "NAME", &self.name);
+        optional(&mut s, "OPERATORS", &self.operators);
         optional(&mut s, "IL-COUNTY", &self.il_county);
+        optional(&mut s, "ENTRY-CLASS", &self.entry_class);
+        optional(&mut s, "QRP-COMPETITION", &self.qrp_competition);
         for (tag, val) in &self.x_headers {
             s.push_str(&format!("{tag}: {val}\n"));
         }
@@ -160,15 +179,23 @@ impl CabrilloHeaders {
     }
 }
 
-/// ⭐ **Who is submitting the entry** — `NAME` and `EMAIL`, read from the entrant's own
-/// settings at EXPORT time rather than from the session: neither is part of anything sent
-/// on the air, and a corrected typo must reach the next file.
+/// ⭐ **Who is submitting the entry** — `NAME` and `EMAIL`, and the entry's `CLUB`,
+/// `ENTRY-CLASS` and extra `OPERATORS`, read from the entrant's own settings at EXPORT time
+/// rather than from the session: none is part of anything sent on the air, and a corrected
+/// typo, or a class picked after the contest, must reach the next file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CabrilloEntrant {
     /// `NAME`.
     pub name: String,
     /// `EMAIL`.
     pub email: String,
+    /// `CLUB`.
+    pub club: String,
+    /// `ENTRY-CLASS`, as picked. Written only when it is one of the ruleset's own classes.
+    pub entry_class: String,
+    /// More `OPERATORS`, typed: callsigns separated by spaces or commas, added after the
+    /// operators the rows themselves carry.
+    pub operators: String,
 }
 
 /// ⭐ **One column of a sponsor's own Cabrillo exchange template**, where its QSO line is

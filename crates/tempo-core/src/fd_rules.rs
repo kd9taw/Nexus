@@ -288,6 +288,23 @@ pub struct FdRuleset {
     /// (`"CATEGORY-POWER"`, `"NAME"`…). Empty writes none — the header block every contest
     /// wrote before this existed.
     pub cabrillo_headers: &'static [&'static str],
+    /// ⭐ **The optional headers that state the ENTRY** — `ENTRY-CLASS`, `CLUB`, `OPERATORS`
+    /// and `QRP-COMPETITION` — written exactly as [`cabrillo_headers`](Self::cabrillo_headers)
+    /// are: only where the ruleset lists them and they hold a value. The Illinois QSO Party's
+    /// own sample log carries all four, and its 2026 rules say *"The header information is
+    /// automatically pulled and used by the processing software"*.
+    ///
+    /// ⚠️ **A list of its own, not more names in `cabrillo_headers`, because the rules file
+    /// reaches installed builds.** 1.17.0's loader refuses the whole file over one header it
+    /// cannot write (measured: *`ruleset ilqp/2026: cabrillo header "ENTRY-CLASS" is not one
+    /// this build can write`*), while it ignores an unknown key.
+    pub cabrillo_entry_headers: &'static [&'static str],
+    /// The sponsor's own entry classes, the only values `ENTRY-CLASS` is written with, in the
+    /// sponsor's order — what Settings offers for the contest. Empty for every contest that
+    /// declares none, and never non-empty without `ENTRY-CLASS` in
+    /// [`cabrillo_entry_headers`](Self::cabrillo_entry_headers) (the loader refuses either
+    /// half alone).
+    pub entry_classes: &'static [&'static str],
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
     /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
     pub cabrillo_location: &'static [(&'static str, &'static str)],
@@ -895,6 +912,14 @@ struct CabrilloSpec {
     /// The optional headers to write (each only when it holds a value).
     #[serde(default)]
     headers: Vec<String>,
+    /// The optional ENTRY headers to write, from [`CABRILLO_ENTRY_HEADERS`] — kept apart
+    /// from `headers` so a build that predates them still loads this file (see
+    /// [`FdRuleset::cabrillo_entry_headers`]).
+    #[serde(default)]
+    entry_headers: Vec<String>,
+    /// The sponsor's entry classes, the values `ENTRY-CLASS` may take, in its order.
+    #[serde(default)]
+    entry_classes: Vec<String>,
     /// Sent QTH → `LOCATION` spelling, where the two lists differ.
     #[serde(default)]
     location: std::collections::BTreeMap<String, String>,
@@ -933,6 +958,14 @@ const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
     "IL-COUNTY",
     "NAME",
 ];
+
+/// The optional headers that state the ENTRY and arrived after 1.17.0: the sponsor's entry
+/// class, the club, the operators and the QRP certification. A ruleset names them in
+/// `cabrillo.entry_headers`, NEVER in `cabrillo.headers`: a build that predates a header
+/// refuses a `headers` value it cannot write, and refuses the whole rules file with it, so
+/// every installed Nexus would stop receiving rules updates. An unknown KEY is ignored (the
+/// additive rule in the module header), which is why these travel under one.
+const CABRILLO_ENTRY_HEADERS: &[&str] = &["CLUB", "ENTRY-CLASS", "OPERATORS", "QRP-COMPETITION"];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -2037,6 +2070,40 @@ mode class ({})",
                     ));
                 }
             }
+            for h in &r.cabrillo.entry_headers {
+                if !CABRILLO_ENTRY_HEADERS.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo entry header {h:?} is not one this build can write"
+                    ));
+                }
+            }
+            // ENTRY-CLASS and its classes come as a pair: a header with no class to write
+            // ships blank, and classes nothing writes are a picker that changes nothing.
+            let writes_class = r.cabrillo.entry_headers.iter().any(|h| h == "ENTRY-CLASS");
+            if writes_class == r.cabrillo.entry_classes.is_empty() {
+                return Err(if writes_class {
+                    format!("{tag}: cabrillo writes ENTRY-CLASS but names no entry_classes")
+                } else {
+                    format!("{tag}: cabrillo names entry_classes but never writes ENTRY-CLASS")
+                });
+            }
+            let mut classes = std::collections::HashSet::new();
+            for c in &r.cabrillo.entry_classes {
+                let shaped = !c.is_empty()
+                    && c.len() <= 48
+                    && c.trim() == c
+                    && c.bytes().all(|b| {
+                        b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ' || b == b'-'
+                    });
+                if !shaped {
+                    return Err(format!(
+                        "{tag}: cabrillo entry class {c:?} is not an uppercase class name"
+                    ));
+                }
+                if !classes.insert(c.as_str()) {
+                    return Err(format!("{tag}: cabrillo entry class {c:?} is listed twice"));
+                }
+            }
             let token = |v: &str| {
                 !v.is_empty()
                     && v.bytes()
@@ -2660,6 +2727,8 @@ fn build(spec: FileSpec) -> RulesTable {
                         .into_boxed_slice(),
                 ),
                 cabrillo_headers: leak_keys(r.cabrillo.headers),
+                cabrillo_entry_headers: leak_keys(r.cabrillo.entry_headers),
+                entry_classes: leak_keys(r.cabrillo.entry_classes),
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location
@@ -3869,6 +3938,28 @@ mod tests {
             .contains("power_tiers"));
     }
 
+    /// The entry headers never share a name with the list an older build checks. A header
+    /// in `cabrillo.headers` that a build cannot write makes that build refuse the whole
+    /// rules file, so anything after 1.17.0 travels under `cabrillo.entry_headers`, a key the
+    /// older loader ignores (the additive rule above). Disjoint lists keep "which list does
+    /// this name go in" a question with one answer.
+    #[test]
+    fn the_entry_headers_never_reach_the_list_an_older_build_checks() {
+        for h in CABRILLO_ENTRY_HEADERS {
+            assert!(
+                !CABRILLO_OPTIONAL_HEADERS.contains(h),
+                "{h} is in both lists"
+            );
+        }
+        // POSITIVE CONTROL: the shipped Illinois ruleset declares all four, under the new key.
+        let rs = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("shipped");
+        assert_eq!(rs.cabrillo_entry_headers, CABRILLO_ENTRY_HEADERS);
+        assert!(rs
+            .cabrillo_headers
+            .iter()
+            .all(|h| !CABRILLO_ENTRY_HEADERS.contains(h)));
+    }
+
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
     /// `Option` field silently even with no `#[serde(default)]` attribute, which
     /// is exactly why nothing in the new blocks is optional.
@@ -5013,6 +5104,12 @@ mod tests {
             assert_eq!(
                 x.cabrillo_headers, y.cabrillo_headers,
                 "{}: headers",
+                x.event
+            );
+            assert_eq!(
+                (x.cabrillo_entry_headers, x.entry_classes),
+                (y.cabrillo_entry_headers, y.entry_classes),
+                "{}: entry headers",
                 x.event
             );
             assert_eq!(

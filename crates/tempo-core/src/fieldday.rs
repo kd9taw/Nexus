@@ -293,6 +293,15 @@ pub struct LoggedQso {
     /// general-log merge — so a satellite contact made during Field Day still earns LoTW
     /// satellite credit and still reaches Nexus's own Satellite VUCC and needs boards.
     pub sat: Option<SatLeg>,
+    /// ⭐ **Who was at the key when this contact was logged** — the callsign in the Field Day
+    /// operator setting at that moment, uppercase, journaled as ADIF `OPERATOR`. `""` when
+    /// nobody was named, which is every single-op station: it is never filled with the
+    /// station's own call, because the row already carries that and an `OPERATOR` nobody
+    /// chose would be indistinguishable from one somebody did.
+    ///
+    /// A club rotates operators through one position, so the person belongs to the ROW, not
+    /// the log: the Cabrillo `OPERATORS` header is everyone the rows name.
+    pub operator: String,
 }
 
 impl LoggedQso {
@@ -426,6 +435,12 @@ pub struct FieldDayLog {
     /// never exported or pushed as "FT8". Applies to the "DIG" class only:
     /// CW/PH manual entries ARE their on-air mode and keep an empty submode.
     pub current_submode: String,
+    /// The operator at the key RIGHT NOW (ADIF `OPERATOR`, uppercase; `""` = nobody named),
+    /// stamped by the engine at FD entry, whenever the operator setting changes and before
+    /// every manual contact, and copied onto each row as it is logged, exactly as
+    /// [`current_submode`](Self::current_submode) is — so every log path, the digital
+    /// sequencer's own included, names whoever was at the key for that contact.
+    pub operator: String,
     qsos: Vec<LoggedQso>,
     /// The dupe index, keyed by the ruleset's own [`DupeRule`](crate::contest::DupeRule)
     /// as an ordered `Vec<String>` rather than by a `(call, band, mode)` tuple — a
@@ -466,6 +481,7 @@ impl FieldDayLog {
             on_air_rx_hz: None,
             event,
             current_submode: String::new(),
+            operator: String::new(),
             qsos: Vec::new(),
             worked: HashSet::new(),
             constant_sent_warning: None,
@@ -938,6 +954,7 @@ impl FieldDayLog {
             seq,
             dupe,
             sat: sat.cloned(),
+            operator: self.operator.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -1330,6 +1347,11 @@ impl FieldDayLog {
             if q.seq > 0 {
                 s.push_str(&adif_field("APP_NEXUS_QSEQ", &q.seq.to_string()));
             }
+            // ADIF's own `OPERATOR` ("the logging operator's callsign"), the tag the general
+            // log already writes for the same person. Only when somebody was named.
+            if !q.operator.is_empty() {
+                s.push_str(&adif_field("OPERATOR", &q.operator));
+            }
             s.push_str("<EOR>\n");
         }
         s
@@ -1643,6 +1665,12 @@ impl FieldDayLog {
             seq,
             dupe,
             sat,
+            // Who was at the key, from the journal's own `OPERATOR` — a row journaled before
+            // the tag existed names nobody, which is what it always meant.
+            operator: f
+                .get("OPERATOR")
+                .map(|o| o.trim().to_ascii_uppercase())
+                .unwrap_or_default(),
         });
         RowFate::Restored
     }
@@ -1680,6 +1708,16 @@ impl FieldDayLog {
         // rules file's `cabrillo.headers`); a value the ruleset does not ask for is "".
         let declared = |tag: &str, value: String| {
             if rs.cabrillo_headers.contains(&tag) {
+                value
+            } else {
+                String::new()
+            }
+        };
+        // …and the same rule for the headers that state the entry, which a ruleset lists
+        // under `cabrillo.entry_headers` (see `FdRuleset::cabrillo_entry_headers` for why
+        // that is a list of its own).
+        let declared_entry = |tag: &str, value: String| {
+            if rs.cabrillo_entry_headers.contains(&tag) {
                 value
             } else {
                 String::new()
@@ -1823,6 +1861,33 @@ impl FieldDayLog {
                     .flatten()
                     .unwrap_or_default()
                     .to_string(),
+            ),
+            // ⭐ THE ENTRY'S OWN LINES, for a sponsor whose processing software reads them
+            // (the Illinois QSO Party: *"make sure entry class, personal information, call
+            // sign, station location, and club affiliation are correctly shown"*). The club
+            // and the class are the entrant's settings; a class is written only when it is
+            // one of THIS sponsor's, so a pick left over from another contest claims nothing.
+            club: declared_entry("CLUB", entrant.club.trim().to_string()),
+            entry_class: declared_entry(
+                "ENTRY-CLASS",
+                rs.entry_classes
+                    .iter()
+                    .find(|c| c.eq_ignore_ascii_case(entrant.entry_class.trim()))
+                    .map_or_else(String::new, |c| c.to_string()),
+            ),
+            operators: declared_entry(
+                "OPERATORS",
+                cabrillo_operators(&self.qsos, &entrant.operators),
+            ),
+            // The sponsor's QRP certification follows the power the entry DECLARED, read
+            // when the session started like CATEGORY-POWER; anything else claims nothing.
+            qrp_competition: declared_entry(
+                "QRP-COMPETITION",
+                if self.session.category_power.eq_ignore_ascii_case("QRP") {
+                    "YES".to_string()
+                } else {
+                    String::new()
+                },
             ),
         };
         let mut s = headers.render();
@@ -2069,6 +2134,25 @@ fn khz_in_band(khz: u32, band: &str) -> bool {
 /// band Cabrillo has no token for. It is only ever written for a ruleset that lists the
 /// header, and CQ WW RTTY classifies logs exactly this way (X.2: "Logs with contacts only
 /// on one band will be classified as single band entries").
+/// Cabrillo `OPERATORS`: everyone the rows say was at the key, in the order they first
+/// logged, then whoever the entrant typed (callsigns split on spaces or commas). Uppercase,
+/// each once, space-separated as Cabrillo 3.0 lists them. `""` when nobody is named, which
+/// writes no line: a single-op station's call is already the entry's `CALLSIGN`.
+fn cabrillo_operators(qsos: &[LoggedQso], typed: &str) -> String {
+    let mut ops: Vec<String> = Vec::new();
+    let named = qsos
+        .iter()
+        .map(|q| q.operator.as_str())
+        .chain(typed.split(|c: char| c == ',' || c.is_whitespace()));
+    for op in named {
+        let op = op.trim().to_ascii_uppercase();
+        if !op.is_empty() && !ops.contains(&op) {
+            ops.push(op);
+        }
+    }
+    ops.join(" ")
+}
+
 fn cabrillo_category_band(qsos: &[LoggedQso]) -> String {
     let mut bands = qsos.iter().map(|q| q.band.trim().to_ascii_lowercase());
     let Some(first) = bands.next() else {

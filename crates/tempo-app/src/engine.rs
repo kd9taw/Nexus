@@ -6278,6 +6278,12 @@ impl Engine {
     /// [`Settings`] for the caller to persist.
     pub fn set_fd_operator(&mut self, call: String) -> Settings {
         self.settings.fd_operator = call.trim().to_ascii_uppercase();
+        // The next contact is theirs, whichever path logs it (the digital sequencer's
+        // included), so the running log learns the name now rather than at the next QSY.
+        let operator = self.fd_row_operator();
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.operator = operator;
+        }
         self.settings.clone()
     }
 
@@ -6425,12 +6431,23 @@ impl Engine {
             }
         };
         let (on_air_mhz, on_air_rx_mhz) = self.log_frequencies();
+        // …and who is at the key, which a Save can change exactly as it changes the band.
+        let operator = self.fd_row_operator();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
             station.log.on_air_hz = hz(on_air_mhz);
             station.log.on_air_rx_hz = on_air_rx_mhz.map(hz).filter(|v| *v > 0);
+            station.log.operator = operator;
         }
+    }
+
+    /// Who is at the key, as a contest row records it (`LoggedQso::operator`): the Field Day
+    /// operator setting, uppercase, or `""` when nobody is named. Never the station's own
+    /// call, for the reason `log_qso` leaves `QsoRecord::operator` empty: an operator nobody
+    /// chose would be indistinguishable from one somebody did.
+    fn fd_row_operator(&self) -> String {
+        self.settings.fd_operator.trim().to_ascii_uppercase()
     }
 
     /// Switch the ACTIVE radio (dual-radio). Persists the current radio's live tune into its
@@ -12958,6 +12975,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // The submode funnel: the sequencer's log() calls record
                     // the tier actually keyed (set_tier re-stamps on a change).
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
+                    // …and who is at the key, by the same funnel.
+                    st.log.operator = self.fd_row_operator();
                     st
                 }),
                 running: true,
@@ -12967,6 +12986,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     let mut st =
                         FieldDayStation::search_and_pounce(&mycall, &mygrid, session, &band);
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
+                    st.log.operator = self.fd_row_operator();
                     st
                 }),
                 running: false,
@@ -24382,14 +24402,18 @@ contact yourself."
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
                     "adif" => Ok(station.log.adif()),
-                    // NAME and EMAIL are the entrant's own settings, read at export so a
-                    // corrected typo reaches the next file; the log writes them only where
-                    // the contest's rules list those headers (never for Field Day).
+                    // NAME and EMAIL, CLUB, ENTRY-CLASS and the typed OPERATORS are the
+                    // entrant's own settings, read at export so a corrected typo reaches the
+                    // next file; the log writes each only where the contest's rules list that
+                    // header (never for Field Day).
                     _ => station.log.cabrillo_with(
                         freq_khz,
                         &tempo_core::contest::CabrilloEntrant {
                             name: self.settings.op_name.trim().to_string(),
                             email: self.settings.contest_email.trim().to_string(),
+                            club: self.settings.contest_club.trim().to_string(),
+                            entry_class: self.settings.contest_entry_class.trim().to_string(),
+                            operators: self.settings.contest_operators.trim().to_string(),
                         },
                     ),
                 }
@@ -41705,6 +41729,72 @@ mod tests {
         // …and the score says it leaves nothing out, which is what lets the Cabrillo
         // carry a CLAIMED-SCORE at all.
         assert_eq!(fd.score_note_key, "");
+    }
+
+    /// ⭐ **The Illinois QSO Party file heads the sponsor's entry lines from Settings and the
+    /// rows**, through the export the dialog itself calls. The class, the club and the typed
+    /// operators are read at export, so a class picked after the party still reaches the
+    /// file; the operator at the key is stamped on each contact as it is logged, so a change
+    /// of seat mid-party is two names, not one; and QRP power declared before the party is
+    /// the sponsor's QRP certification. The wire keys are the ones Settings sends.
+    #[test]
+    fn the_illinois_partys_file_heads_the_entry_lines_from_settings_and_rows() {
+        let mut e = Engine::new("W9AWE", "EN50", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "ADAM".into();
+            s.contest_category_power = "QRP".into();
+            s.fd_operator = "w9xyz".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), q.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K9NR", &ex("KANK"), "CW", None)
+            .unwrap());
+        // The seat changes hands, through the contest screen's own operator box.
+        e.set_fd_operator("aa9xyz".into());
+        assert!(e
+            .contest_log_manual("N9ABC", &ex("COOK"), "PH", None)
+            .unwrap());
+        // After the party: the class, the club and one more operator, on Settings' wire keys.
+        let mut v = serde_json::to_value(e.settings()).unwrap();
+        v["contestEntryClass"] = "UNLIMITED".into();
+        v["contestClub"] = "Western Ill Amateur Radio Club".into();
+        v["contestOperators"] = "KB9QRS".into();
+        e.apply_settings(serde_json::from_value(v).unwrap());
+        let cab = e.export_log("cabrillo").expect("one entry");
+        assert!(cab.contains("ENTRY-CLASS: UNLIMITED\n"), "{cab}");
+        assert!(
+            cab.contains("CLUB: Western Ill Amateur Radio Club\n"),
+            "{cab}"
+        );
+        assert!(cab.contains("OPERATORS: W9XYZ AA9XYZ KB9QRS\n"), "{cab}");
+        assert!(cab.contains("QRP-COMPETITION: YES\n"), "{cab}");
+        // CONTROL: the same station in ARRL Field Day writes none of the four — its rules
+        // list none, so a club's Field Day file is exactly what it has always been.
+        let mut fd = Engine::new("W9AWE", "EN50", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_event = "arrlfd".into();
+            s.fd_class = "3A".into();
+            s.fd_section = "IL".into();
+            fd.apply_settings(s);
+        }
+        fd.set_mode("fieldday-run").unwrap();
+        assert!(fd.fd_log_manual("K9NR", "2A", "WI", "CW").unwrap());
+        let cab = fd.export_log("cabrillo").expect("one entry");
+        for tag in ["ENTRY-CLASS", "CLUB:", "OPERATORS", "QRP-COMPETITION"] {
+            assert!(!cab.contains(tag), "Field Day lists no {tag}:\n{cab}");
+        }
     }
 
     /// ⭐ **The New York QSO Party on the operator's screen and in the file they submit** —

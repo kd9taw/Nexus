@@ -1959,6 +1959,18 @@ the Cabrillo headers.
   about your entry. The NAME line is your operator name from the
   [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
   not your ClubLog account email, and Remote never sees it.
+- **Entry class.** Shown only for a contest whose rules list the sponsor's own
+  entry classes: the Illinois QSO Party's eight, from its 2026 rules. It goes on
+  the ENTRY-CLASS line of the Cabrillo log. A club running more than one
+  transmitter at once in the Illinois QSO Party enters `UNLIMITED`. For a QRP
+  entry, set **Power category** to QRP too, which writes `QRP-COMPETITION: YES`.
+- **Club.** Your contest club, for the CLUB line of the Cabrillo log when the
+  contest's rules have one (the Illinois QSO Party). Leave it blank to leave the
+  line out.
+- **Other operators.** The OPERATORS line lists everyone who was set as
+  **Operator at the key** when they logged a contact. Type anyone else here, as
+  callsigns separated by spaces or commas. All three are read when you export the
+  log, so you can fill them in after the contest.
 
 ### Your station data
 

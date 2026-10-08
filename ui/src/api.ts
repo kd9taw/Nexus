@@ -487,6 +487,10 @@ export interface FdRulesetDto {
   problem?: string
   /** The W/VE warning (never a refusal) these settings would start the contest with. */
   locationWarning?: import('./types').ContestLocationWarning
+  /** The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order: what Settings
+   *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
+   *  tokens: the sponsor's names, never translated. */
+  entryClasses?: string[]
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
