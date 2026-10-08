@@ -11127,6 +11127,9 @@ impl Engine {
     /// positional arguments of [`fd_log_manual`](Self::fd_log_manual) are the shape the
     /// FT sequencer and the club host hand off the air and stay; a QSO party's four
     /// slots have no way to ride them.
+    ///
+    /// ONE row through [`contest_log_manual_rows`](Self::contest_log_manual_rows), the
+    /// write a county line takes too, so the two cannot record a contact differently.
     pub fn contest_log_manual(
         &mut self,
         call: &str,
@@ -11134,6 +11137,36 @@ impl Engine {
         mode: &str,
         submode: Option<&str>,
     ) -> Result<bool, String> {
+        let logged = self.contest_log_manual_rows(call, &[fields.to_vec()], mode, submode)?;
+        Ok(logged == [true])
+    }
+
+    /// ⭐ **Log ONE contact as several rows** — a station on a COUNTY LINE, which the
+    /// Illinois QSO Party counts once per county: *"Contacts with/by stations at the border
+    /// of 2/3/4 counties count as 2/3/4 counties and 2/3/4 QSOs"* (its 2026 rules).
+    ///
+    /// `rows` is one field vector per row, each exactly what
+    /// [`contest_log_manual`](Self::contest_log_manual) takes; the entry strip sends the same
+    /// vector once per county, with that county in its QTH slot. The answer is, per row, the
+    /// bool that function returns for one: did the row enter the log.
+    ///
+    /// ⚠️ **One contact on the air, so ONE time, band and serial for every row.** The band
+    /// is synced and the clock read once, before the first row, and the peer's serial is
+    /// bound once and released once. A clock read per row could put two counties of one
+    /// contact a second apart, or either side of a minute, and the sponsor's checker then
+    /// has rows that do not match the other station's log.
+    ///
+    /// ⭐ **Each row is admitted on its OWN dupe key**, through the write a single contact
+    /// takes, so an already-worked county is refused (or, under a ruleset that logs its
+    /// duplicates, marked) exactly as it would be alone, and the other counties still log.
+    /// The journal is written once, after the last row.
+    pub fn contest_log_manual_rows(
+        &mut self,
+        call: &str,
+        rows: &[Vec<(String, String)>],
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<Vec<bool>, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
         let now = now_unix_secs();
         // The phone mode behind a "PH" class, on the same terms as `fd_log_contact` —
@@ -11143,6 +11176,10 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
+        // No row is no contact: no serial to bind and nothing to write.
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
         // ⭐ **Stamp the row with the number THIS STATION COPIED**, which is the number
         // bound to them by `working` — not a fresh one, and not a lookup of whatever the
         // counter has reached by now.
@@ -11153,16 +11190,20 @@ impl Engine {
         // relied upon, because logging must stamp a real serial even on a path that
         // never announced the peer — an older shell, a test, a future caller.
         station.log.session.working(call, now);
-        let logged =
-            station
-                .log
-                .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now);
+        let logged: Vec<bool> = rows
+            .iter()
+            .map(|fields| {
+                station
+                    .log
+                    .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now)
+            })
+            .collect();
         // The row carries the number from here on, so the binding may finally be
         // forgotten. Done whether or not the row landed: a dupe is refused above, and a
         // refused contact is over — its number is spent, which no log checker can see,
         // while handing it to the next station is an error against both of them.
         station.log.session.logged(call);
-        if logged {
+        if logged.contains(&true) {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }
         Ok(logged)
@@ -41608,6 +41649,173 @@ mod tests {
         // …and the score says it leaves nothing out, which is what lets the Cabrillo
         // carry a CLAIMED-SCORE at all.
         assert_eq!(fd.score_note_key, "");
+    }
+
+    /// An Illinois station in the Illinois QSO Party, from KANE, and the strip's two-slot
+    /// field vector for one county.
+    fn ilqp_from_kane() -> (Engine, impl Fn(&str) -> Vec<(String, String)>) {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "KANE".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), q.to_string()),
+            ]
+        };
+        (e, ex)
+    }
+
+    /// ⭐ **A county line is ONE call that logs one scored row PER COUNTY, at one time.**
+    ///
+    /// ILQP's 2026 rules: *"Contacts with/by stations at the border of 2/3/4 counties count as
+    /// 2/3/4 counties and 2/3/4 QSOs."* The strip sends the same vector once per county; every
+    /// row must be an ordinary contact with its own county, and all of them must carry the ONE
+    /// time, band and mode they were worked at — two rows a second apart are two contacts the
+    /// sponsor's checker has to match separately.
+    #[test]
+    fn a_county_line_logs_one_scored_row_per_county_at_one_time() {
+        let (mut e, ex) = ilqp_from_kane();
+        let rows = |qs: &[&str]| qs.iter().map(|q| ex(q)).collect::<Vec<_>>();
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG"]), "CW", None)
+                .unwrap(),
+            vec![true, true]
+        );
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(fd.qso_count, 2, "two QSOs, one per county");
+        assert_eq!(fd.points, 4, "two CW contacts, 2 points each");
+        assert_eq!(fd.mult_count, Some(2), "COOK and DUPG, each a county");
+        let worked: Vec<(&str, String)> = fd
+            .log
+            .iter()
+            .map(|q| (q.call.as_str(), q.rcvd.join(" ")))
+            .collect();
+        assert_eq!(
+            worked,
+            vec![
+                ("K9NR", "599 COOK".to_string()),
+                ("K9NR", "599 DUPG".to_string())
+            ]
+        );
+        let first = &fd.log[0];
+        for q in &fd.log {
+            assert_eq!(
+                (q.when_unix, q.band.as_str(), q.mode.as_str()),
+                (first.when_unix, first.band.as_str(), "CW"),
+                "one contact on the air: one time, band and mode"
+            );
+        }
+
+        // Four counties are four contacts, in the order given.
+        assert_eq!(
+            e.contest_log_manual_rows(
+                "N9MOB",
+                &rows(&["COOK", "DUPG", "KANE", "WILL"]),
+                "CW",
+                None
+            )
+            .unwrap(),
+            vec![true; 4]
+        );
+        let fd = e.snapshot().field_day.expect("still in the contest");
+        assert_eq!(fd.qso_count, 6);
+        assert_eq!(fd.points, 12);
+        assert_eq!(fd.mult_count, Some(4), "COOK, DUPG, KANE and WILL");
+        let n9mob: Vec<String> = fd
+            .log
+            .iter()
+            .filter(|q| q.call == "N9MOB")
+            .map(|q| q.rcvd.join(" "))
+            .collect();
+        assert_eq!(n9mob, ["599 COOK", "599 DUPG", "599 KANE", "599 WILL"]);
+
+        // THE FILE the operator submits carries one QSO line per county.
+        let cab = e.export_log("cabrillo").expect("one entry");
+        for county in ["COOK", "DUPG"] {
+            let line = format!(" W9XYZ 599 KANE K9NR 599 {county}\n");
+            assert_eq!(cab.matches(line.as_str()).count(), 1, "{line:?} in\n{cab}");
+        }
+
+        // An empty list is no contact at all: nothing is written.
+        assert_eq!(
+            e.contest_log_manual_rows("K9ZZZ", &[], "CW", None).unwrap(),
+            Vec::<bool>::new()
+        );
+        assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
+    }
+
+    /// ⭐ **Each county of a line is dupe-checked on its own, and the others still log.**
+    ///
+    /// ILQP keys a contact on call, band, mode (CW and digital one) AND county, so a station
+    /// already worked in DuPage is a dupe there and nowhere else on the line. The refusal is
+    /// exactly the one a single contact gets: `false`, nothing written for that county.
+    #[test]
+    fn a_county_line_refuses_only_the_county_already_worked() {
+        let (mut e, ex) = ilqp_from_kane();
+        let rows = |qs: &[&str]| qs.iter().map(|q| ex(q)).collect::<Vec<_>>();
+        assert!(e
+            .contest_log_manual("K9NR", &ex("DUPG"), "CW", None)
+            .unwrap());
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "CW", None)
+                .unwrap(),
+            vec![true, false, true],
+            "DUPG is the dupe, COOK and KANE are new"
+        );
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(fd.qso_count, 3, "DUPG once, then COOK and KANE");
+        let counties: Vec<String> = fd.log.iter().map(|q| q.rcvd.join(" ")).collect();
+        assert_eq!(counties, ["599 DUPG", "599 COOK", "599 KANE"]);
+        // The same line on DIGITAL is three dupes — CW and digital are one mode here…
+        assert_eq!(
+            e.contest_log_manual_rows(
+                "K9NR",
+                &rows(&["COOK", "DUPG", "KANE"]),
+                "DIG",
+                Some("RTTY")
+            )
+            .unwrap(),
+            vec![false; 3]
+        );
+        // …and on PHONE three new contacts, the positive control that the refusals above are
+        // the dupe key and not a line that refuses everything after its first dupe.
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "PH", None)
+                .unwrap(),
+            vec![true; 3]
+        );
+        assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
+    }
+
+    /// ⭐ **A county line's rows are ORDINARY rows** — each its own sequence number, so a
+    /// correction from the logbook reaches one county's row and leaves the others alone, as
+    /// it would two contacts logged one at a time.
+    #[test]
+    fn a_county_lines_rows_are_corrected_one_at_a_time() {
+        let (mut e, ex) = ilqp_from_kane();
+        let rows = vec![ex("COOK"), ex("DUPG")];
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows, "CW", None)
+                .unwrap(),
+            vec![true, true]
+        );
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("the contest is running");
+        };
+        let seqs: Vec<u64> = station.log.qsos().iter().map(|q| q.seq).collect();
+        assert_eq!(seqs, [1, 2], "two rows, two sequence numbers");
+        let band = station.log.qsos()[1].band.clone();
+        assert!(station.log.correct_row(seqs[1], "K9NS", &band));
+        let calls: Vec<&str> = station.log.qsos().iter().map(|q| q.call.as_str()).collect();
+        assert_eq!(calls, ["K9NR", "K9NS"], "the DUPG row alone was corrected");
     }
 
     /// ⭐ **The New York QSO Party on the operator's screen and in the file they submit** —
