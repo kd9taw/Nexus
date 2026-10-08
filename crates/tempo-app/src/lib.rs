@@ -981,6 +981,7 @@ impl AppState {
             field_day: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
+            late_decodes: None,
             highlights: Vec::new(),
             clear_tick: 0,
             logged_tick: 0,

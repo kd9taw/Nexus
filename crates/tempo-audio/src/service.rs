@@ -11632,7 +11632,9 @@ impl RadioLoop {
                         emit_rx_decodes(sinks, &eng, &mut station.psk_spots, now, cur_dial);
                     }
                 }
-                DecodeApplied::Stale => {}
+                // A period heard on the band or mode just left: on screen only. It is never a
+                // TX decision, and WSJT-X sends it to neither a logger nor PSK Reporter.
+                DecodeApplied::Late { .. } | DecodeApplied::Stale => {}
             }
         }
 
