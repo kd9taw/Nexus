@@ -6,6 +6,8 @@
 //! air stayed as it was. Where a case leaves room under the gate's two connections per address
 //! (every connection here comes from this box's one address), a paired computer keeps an over on the
 //! air on its own connection through it ([`Controller`]), and the over must still be there after.
+//! A case's next connection from here waits for the shack to let go of the ones before it
+//! ([`let_go`]): a refused key's connection is held there until the computer's close arrives.
 //!
 //! Keys are made for each run and never written anywhere but the in-memory stores. Each case is
 //! skipped, saying so, on a box with no private IPv4 address of its own.
@@ -129,6 +131,24 @@ impl Controller {
     }
 }
 
+/// Until the shack holds no more of this box's connections than the `kept` ones the case keeps
+/// open, so the next one has its place under the gate's two per address. A refused key's
+/// connection is let go only once the computer's close arrives, or when its drain gives up a second
+/// after the refusal (`channel::drain`), and a close can arrive late: Linux under memory pressure
+/// sends the FIN only with the retransmission of the data before it, about 200 ms later. A
+/// connection sooner than that is dropped before TLS, and the computer's client says `unreachable`.
+async fn let_go(r: &Running, kept: usize) {
+    let source = r.at.ip();
+    let deadline = Instant::now() + channel::HANDSHAKE;
+    while r.lan.open_from(source) > kept {
+        assert!(
+            Instant::now() < deadline,
+            "the shack held a connection from {source} past the handshake's deadline"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // ----- The cases -----
 
 /// ★ An unpinned key. A computer holding a key the shack never paired, and pinning the shack's own,
@@ -138,7 +158,10 @@ impl Controller {
 /// address is ignored, and a new connection from there with the paired key is dropped before TLS too
 /// (`unreachable`), a denial of service of LAN Remote's new connections and nothing else. It reached
 /// nothing. CONTROL: the paired computer was welcomed from this address before, and its own
-/// connection keeps control and the over through all of it.
+/// connection keeps control and the over through all of it. CONTROL for the waits: the first try's
+/// computer keeps its connection open after the refusal, so the shack holds it in one of the
+/// address's two places until its drain gives up, and the next try is dropped before TLS if it does
+/// not wait for that.
 #[tokio::test]
 async fn an_unpinned_key_is_refused_in_the_handshake_and_reaches_nothing() {
     let Some(r) = listening().await else {
@@ -150,8 +173,10 @@ async fn an_unpinned_key_is_refused_in_the_handshake_and_reaches_nothing() {
     let before = snapshot(&r.s);
     let mut stranger = paired_record(&r.s, at);
     stranger.pkcs8 = Computer::new().key;
+    let first = TcpStream::connect(r.at).await.unwrap().into_std().unwrap();
+    let still_open = first.try_clone().unwrap();
     let refused = open(
-        TcpStream::connect(r.at).await.unwrap(),
+        TcpStream::from_std(first).unwrap(),
         &stranger.pkcs8,
         &r.s.public_key,
     )
@@ -159,12 +184,19 @@ async fn an_unpinned_key_is_refused_in_the_handshake_and_reaches_nothing() {
     .expect_err("an unpinned key got through the handshake");
     assert!(refused.contains("AccessDenied"), "{refused}");
     for n in 2..=FAILURES_BEFORE_IGNORED {
+        let_go(&r, 1).await;
         assert_eq!(
             road::connect_at(&stranger, &[at]).await.err(),
             Some("notPaired"),
             "try {n}"
         );
     }
+    drop(still_open);
+    // The first wait was the drain's second: the over's lease and presence are renewed, as a live
+    // page's heartbeat would have done meanwhile.
+    controller.renewed(&r.s).await;
+    // Dropped because the address is ignored, not because its two places are taken.
+    let_go(&r, 1).await;
     assert_eq!(
         road::connect_at(&paired_record(&r.s, at), &[at])
             .await
@@ -784,6 +816,9 @@ async fn a_man_in_the_middle_with_his_own_key_is_refused_at_both_ends() {
         "the middle spent the code"
     );
     reached_nothing(&r.s, &before, "a man in the middle");
+    // The middle's connection and the refused one before it, let go first: the control needs a
+    // place under the gate.
+    let_go(&r, 0).await;
     let kept = pairing::pair(at, typed, "Den PC", &[])
         .await
         .expect("the control: the same code, direct");
