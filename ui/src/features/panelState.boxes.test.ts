@@ -188,6 +188,29 @@ describe('+ Add a box', () => {
   })
 })
 
+describe('once per screen with the dashboard rail beside the cockpit (`elsewhere`)', () => {
+  // The rail's slots come before the cockpit's boxes (App computes what the rail shows): a box whose entry the
+  // rail shows shows another, and "+ Add a box" takes none of them. The record is never rewritten by it.
+  const spec = PHONE_PANELS
+
+  it('a box gives the rail its entry on screen and keeps it in the record', () => {
+    const rec = coercePanelLayout(spec, { state: { box1: 'docked', box2: 'docked' }, boxes: { box1: 'clock', box2: 'pota' } })
+    const shown = boxEntries(spec, rec, undefined, ['clock', FIRST[0]])
+    expect(shown.box2).toBe('pota')
+    expect(shown.box1, 'the Clock is on the screen twice').not.toBe('clock')
+    expect([...Object.values(shown)].some((e) => e === 'clock' || e === FIRST[0]), 'a box took one of the rail’s').toBe(false)
+    expect(rec.boxes?.box1, 'the rail rewrote the record').toBe('clock')
+    // With the rail gone the box shows its own again.
+    expect(boxEntries(spec, rec).box1).toBe('clock')
+  })
+
+  it('“+ Add a box” takes no entry the rail shows', () => {
+    const added = addBoxTo(spec, emptyPanelLayout<PhonePanelId>(), 'a', undefined, [FIRST[0], FIRST[1]])!
+    expect(boxEntries(spec, added, undefined, [FIRST[0], FIRST[1]])).toEqual({ box1: FIRST[2] })
+    expect(added.boxes?.box1).toBe(FIRST[2])
+  })
+})
+
 describe('a box’s picker', () => {
   const spec = PHONE_PANELS
 

@@ -753,8 +753,9 @@ export interface PanelLayoutApi<P extends string> {
   /** ⊞ Arrange's "+ Add a box" (2026-10-07): the first hidden box, on screen at the foot of `area` (a
    *  column, or the left side), showing the first entry of the shared list not on screen (`addBoxTo`).
    *  ONE undoable step, and none at all when every box is on screen. Optional: only a vocabulary with
-   *  boxes has it. `layout`: the layout it is added in, for a vocabulary arranged per layout. */
-  addBox?: (area: PaneColumn | 'side', layout?: string) => void
+   *  boxes has it. `layout`: the layout it is added in, for a vocabulary arranged per layout. `elsewhere`:
+   *  the entries the dashboard rail beside the cockpit shows, which the new box does not take. */
+  addBox?: (area: PaneColumn | 'side', layout?: string, elsewhere?: readonly string[]) => void
   /** A box's picker: show `entry` in `box` (`showInBox`) — an entry on screen moves here. ONE undoable
    *  step. Optional, as `addBox`. */
   setBox?: (box: P, entry: string) => void
@@ -921,7 +922,8 @@ export function usePanelLayout<P extends string>(
     [key, spec],
   )
   const addBox = useCallback(
-    (area: PaneColumn | 'side', layout?: string) => boxStep((cur) => addBoxTo(spec, cur, area, layout)),
+    (area: PaneColumn | 'side', layout?: string, elsewhere?: readonly string[]) =>
+      boxStep((cur) => addBoxTo(spec, cur, area, layout, elsewhere)),
     [boxStep, spec],
   )
   const setBox = useCallback((box: P, entry: string) => boxStep((cur) => showInBox(spec, cur, box, entry)), [boxStep, spec])
@@ -1573,7 +1575,7 @@ export function boxScaleValue(v: unknown): number | null {
 
 /** The entries the cockpit's own panes show right now (`sharedAs`), by `stateOf` (the record's own
  *  reading unless a host gives its own). */
-function ownShown<P extends string>(
+export function ownShown<P extends string>(
   spec: PanelVocabulary<P>,
   layout: PanelLayout<P>,
   stateOf: (id: P) => PanelState = (id) => panelStateIn(spec, layout, id),
@@ -1587,20 +1589,23 @@ function ownShown<P extends string>(
  * What each box ON SCREEN shows: the ONE reading of the record's `boxes`, for the cockpits, the picker,
  * "+ Add a box" and the record's own coercion. ONCE PER SCREEN (the operator's pick): a box keeps its
  * stored entry unless the list has no such entry, the cockpit already shows it as one of its own panes
- * (`sharedAs`), or an earlier box holds it; then, as for a box on screen with nothing stored, it shows
- * the first entry of the shared list that is not on screen — twenty-nine entries and six boxes, so
- * there always is one. A hidden box shows nothing. Whether a pane is on screen is `stateOf`: the record's
- * own reading (`panelStateIn`), or the host's — a cockpit passes its panel record's `stateOf`, so its
- * boxes are on screen exactly when the host says, as every other pane of it is.
+ * (`sharedAs`), the dashboard rail beside the cockpit shows it (`elsewhere`), or an earlier box holds it;
+ * then, as for a box on screen with nothing stored, it shows the first entry of the shared list that is
+ * not on screen — twenty-nine entries, six boxes and four rail slots, so there always is one. A hidden box
+ * shows nothing. Whether a pane is on screen is `stateOf`: the record's own reading (`panelStateIn`), or the
+ * host's — a cockpit passes its panel record's `stateOf`, so its boxes are on screen exactly when the host
+ * says, as every other pane of it is. `elsewhere` changes what a box shows, never what the record stores
+ * (the record's own coercion passes none), so a box gets its own entry back when the rail lets it go.
  */
 export function boxEntries<P extends string>(
   spec: PanelVocabulary<P>,
   layout: PanelLayout<P>,
   stateOf: (id: P) => PanelState = (id) => panelStateIn(spec, layout, id),
+  elsewhere: Iterable<string> = [],
 ): Partial<Record<P, string>> {
   const ids = boxIdsOf(spec)
   const onScreen = (b: P) => stateOf(b) !== 'removed'
-  const taken = new Set(ownShown(spec, layout, stateOf))
+  const taken = new Set([...ownShown(spec, layout, stateOf), ...elsewhere])
   const out: Partial<Record<P, string>> = {}
   for (const b of ids) {
     const e = layout.boxes?.[b]
@@ -1637,23 +1642,26 @@ function withScreenBoxes<P extends string>(spec: PanelVocabulary<P>, layout: Pan
 
 /**
  * "+ Add a box" (⊞ Panels ▸ Arrange): the first hidden box, put on screen at the foot of `area` and
- * showing the first entry of the shared list not on screen. On the LEFT SIDE it also stands at the foot
- * of its stock column, which is where it is whenever the side does not show; in a column it leaves the
- * side. Null when every box is on screen, or for the side of a cockpit that has none. The cockpit's own
- * panes stay exactly where they were. `layoutName`: the layout it is added in, for a vocabulary arranged
- * per layout (FT), whose placement it then stands in.
+ * showing the first entry of the shared list not on screen: not the cockpit's, and not one the dashboard
+ * rail beside it shows (`elsewhere`). On the LEFT SIDE it also stands at the foot of its stock column,
+ * which is where it is whenever the side does not show; in a column it leaves the side. Null when every
+ * box is on screen, or for the side of a cockpit that has none. The cockpit's own panes stay exactly where
+ * they were. `layoutName`: the layout it is added in, for a vocabulary arranged per layout (FT), whose
+ * placement it then stands in.
  */
 export function addBoxTo<P extends string>(
   spec: PanelVocabulary<P>,
   layout: PanelLayout<P>,
   area: PaneColumn | 'side',
   layoutName?: string,
+  elsewhere: Iterable<string> = [],
 ): PanelLayout<P> | null {
   const arrange = arrangeSpecOf(spec, layoutName)
   if (!arrange?.boxes || (area === 'side' && !arrange.leftSide)) return null
   const box = arrange.boxes.find((b) => panelStateIn(spec, layout, b) === 'removed')
   if (box == null) return null
-  const taken = new Set([...ownShown(spec, layout), ...Object.values(boxEntries(spec, layout))])
+  const beside = [...elsewhere]
+  const taken = new Set([...ownShown(spec, layout), ...beside, ...Object.values(boxEntries(spec, layout, undefined, beside))])
   const free = SHARED_PANES.find((e) => !taken.has(e.id))
   if (!free) return null
   const state: Partial<Record<P, PanelState>> = { ...layout.state }

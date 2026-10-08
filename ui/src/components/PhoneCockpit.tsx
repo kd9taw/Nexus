@@ -37,7 +37,7 @@ import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { LeftSide } from './panes/LeftSide'
-import { CockpitBox, boxLabels, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
@@ -1385,7 +1385,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   //
   // THE BOXES (2026-10-07): what each box on screen shows (features/panelState `boxEntries`) — none at
   // all where the window lends them nothing (the hosted Remote page). They are named for what they show.
-  const entries = panels && boxes ? boxEntries(PHONE_PANELS, panels.layout, panels.stateOf) : {}
+  // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
+  const entries = panels && boxes ? boxEntries(PHONE_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
   const labels = { ...phonePanelLabels(), ...boxLabels(entries) }
   const host = panels
     ? panelHost(panels, {
@@ -2414,6 +2415,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const onScreen = new Set<string>([
     ...Object.values(entries),
     ...(Object.entries(PHONE_PANELS.sharedAs ?? {}) as [PhonePanelId, string][]).filter(([own]) => shown(own)).map(([, e]) => e),
+    // …and what the dashboard rail beside it shows.
+    ...(boxes?.rail?.shows ?? []),
   ])
   for (const b of BOX_IDS) {
     const entry = entries[b]
@@ -2425,7 +2428,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         source={boxes}
         selection={boxSel}
         onScreen={(e) => onScreen.has(e)}
-        onPick={(e) => panels.setBox?.(b, e)}
+        onPick={(e) => pickForBox(panels.setBox, boxes, b, e, entry)}
         onRemove={() => panels.setPanelState(b, 'removed')}
         stacked={flow === 'stack' && !sideGroup.includes(b)}
       />
@@ -2527,7 +2530,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                     sideRoom={sideRoom}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown, sideRoom)}
                     // "+ Add a box" only where the window lends them (never the hosted Remote page).
-                    onAddBox={boxes && panels.addBox ? panels.addBox : undefined}
+                    onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                     boxesFull={BOX_IDS.every((b) => shown(b))}
                   />
                 ) : undefined

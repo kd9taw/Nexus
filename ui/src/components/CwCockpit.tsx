@@ -39,7 +39,7 @@ import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
-import { CockpitBox, boxLabels, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import {
   panelHost,
   NO_DSP_FUNCS_REASON,
@@ -722,7 +722,8 @@ export function CwCockpit({
   const subRowHere = subRowShown({ catOk, receivers: snap.radio.receivers })
   // THE BOXES (2026-10-07): what each box on screen shows, none where the window lends them nothing
   // (Phone's rule), each named for what it shows.
-  const entries = panels && boxes ? boxEntries(CW_PANELS, panels.layout, panels.stateOf) : {}
+  // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
+  const entries = panels && boxes ? boxEntries(CW_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
   const labels = { ...cwPanelLabels(), ...boxLabels(entries) }
   const host = panels
     ? panelHost(panels, {
@@ -1664,6 +1665,8 @@ export function CwCockpit({
   const onScreen = new Set<string>([
     ...Object.values(entries),
     ...(Object.entries(CW_PANELS.sharedAs ?? {}) as [CwPanelId, string][]).filter(([own]) => shown(own)).map(([, e]) => e),
+    // …and what the dashboard rail beside it shows.
+    ...(boxes?.rail?.shows ?? []),
   ])
   for (const b of BOX_IDS) {
     const entry = entries[b]
@@ -1675,7 +1678,7 @@ export function CwCockpit({
         source={boxes}
         selection={boxSel}
         onScreen={(e) => onScreen.has(e)}
-        onPick={(e) => panels.setBox?.(b, e)}
+        onPick={(e) => pickForBox(panels.setBox, boxes, b, e, entry)}
         onRemove={() => panels.setPanelState(b, 'removed')}
         stacked={flow === 'stack'}
       />
@@ -1739,7 +1742,7 @@ export function CwCockpit({
                     labels={labels}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown)}
                     // "+ Add a box" only where the window lends them (never the hosted Remote page).
-                    onAddBox={boxes && panels.addBox ? panels.addBox : undefined}
+                    onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                     boxesFull={BOX_IDS.every((b) => shown(b))}
                   />
                 ) : undefined

@@ -259,8 +259,10 @@ fetched twice.
 
 **Inside a cockpit: boxes.** In Phone, CW and JS8 the same panes can also stand among the cockpit's
 own, in up to six boxes: ⊞ Panels ▸ **Arrange** ▸ **+ Add a box** at the foot of a column (and of
-Phone's left side). A box has the same picker, and a pane shows once on a screen: choosing one that
-is already showing moves it. Like the rail, a box selects a station in the boxes only and has no
+Phone's left side). A box has the same picker, and a pane shows once on a screen, the dashboard rail
+beside the cockpit included: choosing one that is already showing moves it, and the place it left
+takes what you had there. While the rail shows a pane, a box that holds it shows another until the
+rail lets it go. Like the rail, a box selects a station in the boxes only and has no
 transmit control. See [Phone](phone.md) for the details.
 
 The panes you can assign:

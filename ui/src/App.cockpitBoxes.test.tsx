@@ -196,3 +196,68 @@ describe('the hosted Remote page keeps its own panes', () => {
     expect(document.querySelector('main.operate-cockpit .pane-frame[data-pane^="box"]'), 'a box on the Remote page').toBeNull()
   })
 })
+
+describe('once per screen, across the cockpit and the dashboard rail beside it', () => {
+  // The operator's "Once per screen" (2026-10-07), across the cockpit and its rail, computed in App, which owns
+  // both records: the cockpit's own Spots and Needed panes first, then the rail's slots, then the cockpit's
+  // boxes. A pick on either side moves the entry there and hands the other side what it showed.
+  const RAIL = { rail1: 'clock', rail2: 'bandTiles', rail3: 'spacewx', rail4: 'getout' }
+  const railFrame = (pane: string) => document.querySelector<HTMLElement>(`.dash-rail .pane-frame[data-pane="${pane}"]`)
+  const railPanes = () => [...document.querySelectorAll<HTMLElement>('.dash-rail .dash-rail-col > .pane-frame')].map((f) => f.dataset.pane)
+  const shows = (b: string) => box(b)?.querySelector('[data-box]')?.getAttribute('data-box') ?? null
+  const railOn = () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: RAIL }))
+  }
+
+  it('a box whose board the rail shows shows another; picked there, it moves into the box and the rail takes what the box showed', async () => {
+    railOn()
+    localStorage.setItem('nexus.panels.cw.main', JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'clock' } }))
+    await mountOn('cw')
+    expect(cockpit(), 'the CW cockpit did not render').not.toBeNull()
+    await waitFor(() => expect(railPanes()).toEqual(['clock', 'bandTiles', 'spacewx', 'getout']))
+    // The rail keeps its Clock; the box shows the first pane not on screen, and its picker marks the Clock.
+    const instead = shows('box1')
+    expect(instead, 'the Clock is on the screen twice').not.toBe('clock')
+    expect(instead).not.toBeNull()
+    const pick = box('box1')!.querySelector<HTMLSelectElement>('select.pane-pick')!
+    expect([...pick.options].find((o) => o.value === 'clock')?.textContent).toMatch(/on screen/)
+    // The record still says the Clock: what the box shows changed, not what it holds.
+    expect(JSON.parse(localStorage.getItem('nexus.panels.cw.main')!).boxes.box1).toBe('clock')
+    fireEvent.change(pick, { target: { value: 'clock' } })
+    await act(async () => {})
+    expect(shows('box1')).toBe('clock')
+    expect(railFrame('clock'), 'the Clock is still in the rail').toBeNull()
+    expect(railPanes()[0], 'the rail’s slot did not take what the box showed').toBe(instead)
+  })
+
+  it('a pick in the rail moves a board out of a box, which takes what the slot showed', async () => {
+    railOn()
+    localStorage.setItem('nexus.panels.cw.main', JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'selection' } }))
+    await mountOn('cw')
+    await waitFor(() => expect(railPanes()).toEqual(['clock', 'bandTiles', 'spacewx', 'getout']))
+    expect(shows('box1')).toBe('selection')
+    const slotPick = railFrame('getout')!.querySelector<HTMLSelectElement>('select.pane-pick')!
+    expect([...slotPick.options].find((o) => o.value === 'selection')?.textContent, 'the rail’s picker does not mark the box’s').toMatch(/on screen/)
+    fireEvent.change(slotPick, { target: { value: 'selection' } })
+    await act(async () => {})
+    expect(railPanes()).toEqual(['clock', 'bandTiles', 'spacewx', 'selection'])
+    expect(shows('box1'), 'the box did not take what the slot showed').toBe('getout')
+  })
+
+  it('the cockpit’s own Needed pane comes first: the rail’s Needed slot shows another until the rail’s pick hides the pane', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: { ...RAIL, rail4: 'needed' } }))
+    localStorage.setItem('nexus.panels.cw.main', JSON.stringify({ v: 2, state: { needed: 'docked' }, share: {} }))
+    await mountOn('cw')
+    expect(cockpit()!.querySelector('[data-pane="needed"]'), 'premise: CW shows its own Needed pane').not.toBeNull()
+    await waitFor(() => expect(railPanes()).toHaveLength(4))
+    expect(railPanes(), 'the Needed board is on the screen twice').not.toContain('needed')
+    const slot4 = document.querySelectorAll<HTMLElement>('.dash-rail .dash-rail-col > .pane-frame')[3]
+    fireEvent.change(slot4.querySelector<HTMLSelectElement>('select.pane-pick')!, { target: { value: 'needed' } })
+    await act(async () => {})
+    expect(railPanes()[3]).toBe('needed')
+    expect(cockpit()!.querySelector('[data-pane="needed"]'), 'the cockpit still shows its own Needed pane').toBeNull()
+    expect(JSON.parse(localStorage.getItem('nexus.panels.cw.main')!).state.needed).toBe('removed')
+  })
+})

@@ -86,6 +86,7 @@ export function PaneFrame<S extends string = SlotId>({
   onRemoveTab,
   rotateSecs,
   onRotate,
+  marked,
 }: {
   slotId: S
   /** The slot as the picker's accessible name says it. Omitted ⇒ the slot id (Connect's). */
@@ -114,6 +115,9 @@ export function PaneFrame<S extends string = SlotId>({
   onAddTab?: (paneId: PaneId) => void
   /** Take the shown pane out of the slot — offered only while the slot holds two or more. */
   onRemoveTab?: () => void
+  /** The panes on screen elsewhere, which the picker marks: beside a cockpit, what the cockpit and the rail's
+   *  other slots show (once per screen across the two: choosing one moves it here). Omitted ⇒ none marked. */
+  marked?: ReadonlySet<PaneId>
   /** Seconds between tabs, when this slot rotates (the dashboard window and the TV page). */
   rotateSecs?: number
   /** Set or clear it. Omitted ⇒ the menu offers no rotation (the main window). */
@@ -218,7 +222,7 @@ export function PaneFrame<S extends string = SlotId>({
                 <optgroup key={cat} label={PANE_CATEGORY_LABEL[cat]()}>
                   {items.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.title}
+                      {p.id !== paneId && marked?.has(p.id) ? t('panels.box.pick.onScreen', { title: p.title }) : p.title}
                     </option>
                   ))}
                 </optgroup>

@@ -87,12 +87,14 @@ import { sectionFeatures, featureById, type FeatureId } from './features/registr
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
 import { useAlertGeoScope } from './features/alertGeoScope'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
-import { isDashRailSection, useDashRailSections, type DashRailSection } from './features/dashRail'
+import { DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
+import { sharedPaneById, sharedPaneOf } from './features/sharedPanes'
+import type { PaneId } from './features/connectConfig'
 import { DashRail, dashRailRecords, useDashRail } from './components/DashRail'
-import type { BoxSource } from './components/panes/CockpitBox'
+import type { BoxSource, RailLink } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
@@ -2944,6 +2946,60 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }
   // The cockpits' boxes are the desktop's: the Remote page keeps its own panes.
   const cockpitBoxes = remote ? undefined : boxSource
+  // ONCE PER SCREEN, ACROSS THE COCKPIT AND THE RAIL BESIDE IT (the operator's "Once per screen"): one reading
+  // of what the two show, made here, where both records live. The cockpit's own Spots and Needed panes come
+  // first, then the rail's slots, then the cockpit's boxes: a slot whose board the cockpit shows as a pane of
+  // its own shows another (features/dashRail `railOnScreen`), and a box whose entry the rail shows shows
+  // another (features/panelState `boxEntries`). Neither record is rewritten by that, so each gets its own back
+  // when the other lets it go. A pick on either side moves the entry there and hands the other side what it
+  // showed, as two boxes swap. Only the cockpit on screen has the rail beside it.
+  const boxCockpits: Partial<Record<DashRailSection, { spec: PanelVocabulary<string>; panels: PanelLayoutApi<string> }>> = {
+    operate: { spec: OPERATE_PANELS as PanelVocabulary<string>, panels: operatePanels as unknown as PanelLayoutApi<string> },
+    phone: { spec: PHONE_PANELS as PanelVocabulary<string>, panels: phonePanels as unknown as PanelLayoutApi<string> },
+    cw: { spec: CW_PANELS as PanelVocabulary<string>, panels: cwPanels as unknown as PanelLayoutApi<string> },
+    js8: { spec: JS8_PANELS as PanelVocabulary<string>, panels: js8Panels as unknown as PanelLayoutApi<string> },
+  }
+  const railRecords = railSection ? dashRailRecords(dashRailRec, railSection) : null
+  const railHost = railSection && cockpitBoxes ? boxCockpits[railSection] : undefined
+  const hostOwn = railHost ? ownShown(railHost.spec, railHost.panels.layout, railHost.panels.stateOf) : []
+  const railBoxes =
+    railRecords && railShown
+      ? railOnScreen(railRecords.slots, DASH_SLOT_IDS.filter((s) => railRecords.panels.stateOf(s) !== 'removed'), hostOwn)
+      : []
+  const railShows = railBoxes.map((b) => b.entry)
+  const hostEntries = railHost ? boxEntries(railHost.spec, railHost.panels.layout, railHost.panels.stateOf, railShows) : {}
+  // The rail's pick: the box in its slot, and what the cockpit showed of it moves: a box of the cockpit that
+  // showed it takes what the slot showed, and the cockpit's own pane that is that board is hidden (a hide that
+  // ends nothing).
+  const railPick = (slot: DashSlotId, pane: PaneId) => {
+    if (!railRecords) return
+    const was = railBoxes.find((b) => b.slot === slot)?.entry ?? sharedPaneOf(railRecords.slots[slot])?.id
+    railRecords.assignPane(slot, pane)
+    const entry = sharedPaneOf(pane)?.id
+    if (!railHost || entry == null) return
+    const box = Object.keys(hostEntries).find((b) => hostEntries[b] === entry)
+    if (box != null && was != null) railHost.panels.setBox?.(box, was)
+    for (const [own, e] of Object.entries(railHost.spec.sharedAs ?? {})) {
+      if (e === entry && railHost.panels.stateOf(own) !== 'removed') railHost.panels.setPanelState(own, 'removed')
+    }
+  }
+  const railLink: RailLink | undefined =
+    railRecords && railBoxes.length > 0
+      ? {
+          shows: railShows,
+          // A box took one of the rail's: the slot that showed it takes what the box showed.
+          take: (entry, give) => {
+            const slot = railBoxes.find((b) => b.entry === entry)?.slot
+            if (slot == null) return
+            const pane = give != null ? sharedPaneById(give)?.pane : undefined
+            if (pane) railRecords.assignPane(slot, pane)
+            else railRecords.panels.setPanelState(slot, 'removed')
+          },
+        }
+      : undefined
+  /** What a cockpit's boxes are lent: the window's source, and the rail beside it while it is the one on screen. */
+  const boxesFor = (section: DashRailSection): BoxSource | undefined =>
+    cockpitBoxes && railLink && section === railSection ? { ...cockpitBoxes, rail: railLink } : cockpitBoxes
   const cwWorkspace = (
     <CwCockpit
       active={!remote || (effectiveView === 'cw' && !remote.stale)}
@@ -2966,7 +3022,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       panels={cwPanels}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
-      boxes={cockpitBoxes}
+      boxes={boxesFor('cw')}
     />
   )
   const phoneWorkspace = (
@@ -2991,7 +3047,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       onOpenSettings={openSettingsAt}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
-      boxes={cockpitBoxes}
+      boxes={boxesFor('phone')}
     />
   )
 
@@ -3660,7 +3716,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               panels={operatePanels}
               onPopOut={() => void openPanelWindow('operate')}
               active={effectiveView === 'operate'}
-              boxes={cockpitBoxes}
+              boxes={boxesFor('operate')}
             />
           </div>
           {remote?.cwPhone && isViewEnabled('cw') && (remoteContacts.cw || effectiveView === 'cw') && (
@@ -3786,7 +3842,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
-                boxes={cockpitBoxes}
+                boxes={boxesFor('js8')}
               />
             </div>
           )}
@@ -3800,7 +3856,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             section={railSection}
             // Everything its boxes are lent, exactly as the cockpits' boxes are (`boxSource`, above).
             {...boxSource}
-            rail={dashRailRecords(dashRailRec, railSection)}
+            rail={{
+              ...dashRailRecords(dashRailRec, railSection),
+              // What this screen shows in each slot (once per screen), and the pick that moves an entry here.
+              slots: { ...railRecords!.slots, ...Object.fromEntries(railBoxes.map((b) => [b.slot, b.pane])) },
+              stored: railRecords!.slots,
+              assignPane: railPick,
+              marked: new Set(
+                [...hostOwn, ...Object.values(hostEntries)].flatMap((e) => (e != null ? (sharedPaneById(e)?.pane ?? []) : [])),
+              ),
+            }}
             onHide={() => setRailOn(railSection, false)}
             scale={scale}
           />

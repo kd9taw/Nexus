@@ -108,8 +108,14 @@ export function useDashRail(): { slots: DashSlotsApi; panels: Record<DashRailSec
 
 /** One cockpit's rail, from its records: what the rail draws and every change it can make. */
 export interface DashRailRecords {
-  /** Which box each slot shows. */
+  /** Which box each slot shows: the record's, or, on a screen where the cockpit shows a slot's board as a
+   *  pane of its own, the one App gives that slot instead (features/dashRail `railOnScreen`). */
   slots: Record<DashSlotId, PaneId>
+  /** Which box each slot holds in the record, where that differs from `slots` (what ⊞ Undo puts back after
+   *  a Reset). Omitted ⇒ `slots`. */
+  stored?: Record<DashSlotId, PaneId>
+  /** The panes on screen beside the rail, in the cockpit, which every picker marks. */
+  marked?: ReadonlySet<PaneId>
   /** A slot's pick: that box in that slot. */
   assignPane: (slot: DashSlotId, pane: PaneId) => void
   /** Every slot back to its stock box (⊞ Reset). */
@@ -302,6 +308,9 @@ function DashRailBody(p: DashRailProps) {
     [],
   )
   const shown = DASH_SLOT_IDS.filter((s) => panels.stateOf(s) !== 'removed')
+  // What every picker marks as on screen: the cockpit's (App's reading) and the rail's own slots, so a pick
+  // of one says it moves here (once per screen across the two; within the rail the two slots swap).
+  const marked = new Set<PaneId>([...(p.rail.marked ?? []), ...shown.map((s) => slots[s])])
   return (
     <>
       {/* `dash-head` is the head's content hook for styles.css, which may not name the structural
@@ -327,7 +336,7 @@ function DashRailBody(p: DashRailProps) {
             }}
             canUndo={panels.canUndo}
             onReset={() => {
-              beforeReset.current = slots
+              beforeReset.current = p.rail.stored ?? slots
               panels.reset()
               resetSlots()
             }}
@@ -383,6 +392,7 @@ function DashRailBody(p: DashRailProps) {
                 // its own: one Undo step, and the rail's Reset puts every box back at the app's size.
                 textScale={panels.scaleOf(s)}
                 onTextScale={change((f: number) => panels.setScale(s, f))}
+                marked={marked}
               />
             </Fragment>
           )

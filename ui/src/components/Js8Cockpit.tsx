@@ -23,7 +23,7 @@ import { regionColsStyle } from '../features/paneColumns'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
-import { CockpitBox, boxLabels, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { panelHost } from '../features/panelHost'
 import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
 import { regionGroups } from '../features/panelPlace'
@@ -201,7 +201,8 @@ export function Js8Cockpit({
   // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
   // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
   // the Conditions feeds while it is mounted, and a hidden JS8 must not keep them asking.
-  const entries = panels && boxes && active ? boxEntries(JS8_PANELS, panels.layout, panels.stateOf) : {}
+  // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
+  const entries = panels && boxes && active ? boxEntries(JS8_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
   const labels = { ...js8PanelLabels(), ...boxLabels(entries) }
   const host = panels
     ? panelHost(panels, {
@@ -1062,8 +1063,9 @@ export function Js8Cockpit({
   // above it: a move within a column is a React move, not a remount, and the pinned log never
   // changes column.
   // THE BOXES (2026-10-07), as Phone's: each one on screen, in the cockpit's frame with its entry's role.
-  // JS8 shows no shared board as a pane of its own, so only the other boxes are "on screen elsewhere".
-  const onScreen = new Set<string>(Object.values(entries))
+  // JS8 shows no shared board as a pane of its own, so only the other boxes and the dashboard rail beside it
+  // are "on screen elsewhere".
+  const onScreen = new Set<string>([...Object.values(entries), ...(boxes?.rail?.shows ?? [])])
   const boxEls = {} as Record<BoxId, React.ReactNode>
   for (const b of BOX_IDS) {
     const entry = entries[b]
@@ -1075,7 +1077,7 @@ export function Js8Cockpit({
           source={boxes}
           selection={boxSel}
           onScreen={(e) => onScreen.has(e)}
-          onPick={(e) => panels.setBox?.(b, e)}
+          onPick={(e) => pickForBox(panels.setBox, boxes, b, e, entry)}
           onRemove={() => panels.setPanelState(b, 'removed')}
           stacked={flow === 'stack'}
         />
@@ -1193,7 +1195,7 @@ export function Js8Cockpit({
                       labels={labels}
                       onMove={(id, move) => panels.movePane!(id, move, paneShown)}
                       // "+ Add a box" only where the window lends them (never the hosted Remote page).
-                      onAddBox={boxes && panels.addBox ? panels.addBox : undefined}
+                      onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                       boxesFull={BOX_IDS.every((b) => shown(b))}
                     />
                   ) : undefined

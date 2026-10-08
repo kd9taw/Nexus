@@ -75,7 +75,7 @@ import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
-import { CockpitBox, boxLabels, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { paneRoleStyle } from './panes/CockpitPaneFrame'
 import {
   BOX_IDS,
@@ -733,7 +733,8 @@ export function OperateCockpit({
   // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
   // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
   // the Conditions feeds while it is mounted, and a hidden FT must not keep them asking (JS8's rule).
-  const entries = boxes && active ? boxEntries(OPERATE_PANELS, panels.layout, stateOf) : {}
+  // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
+  const entries = boxes && active ? boxEntries(OPERATE_PANELS, panels.layout, stateOf, boxes.rail?.shows) : {}
   const labels = { ...panelLabels(), ...boxLabels(entries) }
   const panelSpec: PanelHostSpec<OperatePanelId> = {
     menu: LAYOUT_PANELS[layoutMode],
@@ -1193,7 +1194,7 @@ export function OperateCockpit({
   // fills its column by its weight, the Tx1–Tx6 machine is its own height, and the card keeps its bound
   // (`.cockpit-recall`). Two fill panes adjacent in a column share a divider, which writes their shares as
   // the Roster rail's always has.
-  const boxOnScreen = new Set<string>(Object.values(entries))
+  const boxOnScreen = new Set<string>([...Object.values(entries), ...(boxes?.rail?.shows ?? [])])
   const arrangedPane = (id: OperatePanelId, split: number | undefined): ReactNode => {
     const share = panels.layout.share[id]
     const fill = (cls: string, body: ReactNode) => (
@@ -1315,7 +1316,7 @@ export function OperateCockpit({
             source={boxes}
             selection={boxSel}
             onScreen={(e) => boxOnScreen.has(e)}
-            onPick={(e) => panels.setBox?.(id, e)}
+            onPick={(e) => pickForBox(panels.setBox, boxes, id, e, entry)}
             onRemove={() => setPanelState(id, 'removed')}
             stacked={false}
           />
@@ -1389,7 +1390,7 @@ export function OperateCockpit({
       labels={labels}
       onMove={(id, move) => panels.movePane?.(id, move, arrangeListed, false, { layout: layoutMode, order: colOrder })}
       // "+ Add a box" only where the window lends them (never the hosted Remote page or the pop-out).
-      onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, layoutMode) : undefined}
+      onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, layoutMode, boxes.rail?.shows) : undefined}
       boxesFull={BOX_IDS.every((b) => shown(b))}
       columns={colOrder.map((col) => ({ col, ...columnNames[col] }))}
       narrow={t('operate.arrange.narrow')}

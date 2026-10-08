@@ -31,7 +31,18 @@ import { surfaceGet } from '../../features/windowScope'
 import type { DashRailProps } from '../DashRail'
 import type { MapIntent } from '../MapView'
 
-/** What the window lends a cockpit's boxes: exactly what it lends the dashboard rail (App). */
+/** THE DASHBOARD RAIL BESIDE THE COCKPIT, as its boxes see it (App computes it, where both records live: the
+ *  operator's "Once per screen" across the cockpit and its rail). */
+export interface RailLink {
+  /** The shared-list entries the rail shows on this screen: no box shows one of them too. */
+  shows: readonly string[]
+  /** A box's picker chose one of them (`entry`): the rail's slot that showed it takes what the box showed
+   *  (`give`) in exchange, as two boxes swap. */
+  take: (entry: string, give: string | null) => void
+}
+
+/** What the window lends a cockpit's boxes: exactly what it lends the dashboard rail (App), and the rail
+ *  beside the cockpit where it stands on screen. */
 export type BoxSource = Pick<
   DashRailProps,
   | 'myGrid'
@@ -47,7 +58,23 @@ export type BoxSource = Pick<
   | 'spotsFeed'
   | 'otaBoard'
   | 'neededBoard'
->
+> & {
+  /** The dashboard rail beside this cockpit, while it is on screen (App lends it the cockpit on screen only). */
+  rail?: RailLink
+}
+
+/** A box's picker: `entry` in `box` (the record's `setBox`), and, where the rail beside the cockpit shows it,
+ *  the rail's slot takes what the box showed (`was`) in exchange — once per screen across the two. */
+export function pickForBox<P extends string>(
+  setBox: ((box: P, entry: string) => void) | undefined,
+  source: BoxSource | undefined,
+  box: P,
+  entry: string,
+  was: string | undefined,
+): void {
+  setBox?.(box, entry)
+  if (source?.rail?.shows.includes(entry)) source.rail.take(entry, was ?? null)
+}
 
 /** A cockpit's box selection, the box highlight a band tile's click sets, and Connect's goal. */
 export interface BoxSelection {

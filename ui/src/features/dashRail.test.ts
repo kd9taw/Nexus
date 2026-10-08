@@ -19,6 +19,7 @@ import {
   loadDashSlots,
   loadRailSections,
   parseRailWidth,
+  railOnScreen,
   railWidthMax,
   slotsOf,
   stepRailWidth,
@@ -216,5 +217,29 @@ describe('the width: a stored preference fitted into the window, the cockpit kee
   it('a junk stored width is "never sized"', () => {
     for (const raw of [null, '', 'wide', '-3', '0', 'NaN', 'Infinity']) expect(parseRailWidth(raw), String(raw)).toBeNull()
     expect(parseRailWidth('333.6')).toBe(334)
+  })
+})
+
+describe('what the rail shows on a screen (once per screen across the cockpit and its rail)', () => {
+  // The cockpit's own boards come first (Phone's and CW's Spots and Needed panes): a slot holding one shows the
+  // first entry of the shared list not on screen instead, and gets its own back when the pane goes. Hidden slots
+  // show nothing and take nothing.
+  const RAIL = { rail1: 'clock', rail2: 'needed', rail3: 'spacewx', rail4: 'getout' } as const
+
+  it('every slot on screen, in order, with its own box', () => {
+    expect(railOnScreen(RAIL, ['rail1', 'rail2', 'rail3', 'rail4'])).toEqual([
+      { slot: 'rail1', pane: 'clock', entry: 'clock' },
+      { slot: 'rail2', pane: 'needed', entry: 'neededBoard' },
+      { slot: 'rail3', pane: 'spacewx', entry: 'spacewx' },
+      { slot: 'rail4', pane: 'getout', entry: 'getout' },
+    ])
+  })
+
+  it('a slot whose board the cockpit shows as its own shows another, and a hidden slot nothing', () => {
+    const on = railOnScreen(RAIL, ['rail1', 'rail2', 'rail4'], ['neededBoard'])
+    expect(on.map((b) => b.slot)).toEqual(['rail1', 'rail2', 'rail4'])
+    expect(on[1].entry, 'the Needed board is on the screen twice').not.toBe('neededBoard')
+    expect(new Set(on.map((b) => b.entry)).size, 'the substitute is on screen already').toBe(3)
+    expect(on.some((b) => b.entry === 'neededBoard')).toBe(false)
   })
 })
