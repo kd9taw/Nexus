@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
+  straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
+  has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
+  RS-BA1 and wfview use, with no bridge program in between, and runs its own CI-V control over it:
+  frequency and mode both ways, the dial followed as you turn it, the meters, and the radio's own
+  panadapter (one frame a sweep over the network, so no CI-V baud applies). **Nothing transmits on
+  this connection yet**: every transmit path (FT, Tune, CW, the voice keyer, PTT, APRS, RTTY, PSK,
+  SSTV and another program's PTT through Nexus) says so and stops before the radio is keyed, and the
+  radio is never sent a key. There is no audio over it yet: keep the USB cable for audio. The
+  network password is kept in your computer's keychain, one per radio profile, never in Settings or
+  a log. At connect Nexus reads, and never changes, the radio's time-out timer and MOD Input
+  settings and shows them in Rig & CAT. The radio takes one network program at a time; use it on
+  your own network, or through a VPN. If the session drops, Nexus reconnects by itself after 1, 2,
+  4, 8 and 16 seconds, then every 30; if the radio refused the login or another program took it,
+  Nexus waits for Test CAT. USB stays the default and nothing changes unless you pick it. An older
+  Nexus reads this connection as Serial. NEEDS-BENCH: not yet tried on a radio; an IC-7760 is first.
 - **Download everything again, for LoTW confirmations an earlier download missed (#399).**
   Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
   confirmations. It asks first, then downloads your whole confirmation history once, straight away,

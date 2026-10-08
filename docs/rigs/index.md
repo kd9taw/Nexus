@@ -31,7 +31,7 @@ brand-specific page yet. If you run one and want notes added, open an issue.
 
 ---
 
-## The three connection types
+## The connection types
 
 Everything in **Settings ▸ Radio ▸ Rig & CAT** comes down to one choice — the
 **Connection** dropdown:
@@ -63,6 +63,16 @@ Choose this for a **FlexRadio** driven through SmartSDR CAT, or for any rig
 served by a **remote `rigctld`** over TCP. You set a single **Network Address**
 as `host:port` — for a Flex that's `127.0.0.1:5002`. See the
 [FlexRadio guide](flexradio.md) for the full picture.
+
+### Icom network (LAN / Wi-Fi) — Beta
+
+Offered only for the six Icoms with a network port built in: the IC-7610,
+IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2. Nexus logs in to the radio's
+own network server and drives CAT and the radio's panadapter over it, **receive
+and control only**: nothing transmits on this connection yet, and it carries no
+audio. You set the **Radio address**, the **Network user** and its **Network
+password** (kept in the computer's keychain), and the **Control port** if you
+moved it from 50001. See [the Icom guide](icom.md#nexuss-own-network-connection-beta).
 
 ### OmniRig (Windows only)
 

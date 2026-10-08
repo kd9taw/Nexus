@@ -438,7 +438,12 @@ Baud continue across to the right.*
   **Show all models** for the full Hamlib catalog, or type a model number
   directly ("Hamlib may still support it even without a friendly name here").
 - **Connection** — "Serial for a USB/COM rig (most, incl. Xiegu); Network for a
-  FlexRadio via SmartSDR or a remote rigctld over TCP."
+  FlexRadio via SmartSDR or a remote rigctld over TCP." For the six Icoms with a
+  network port (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2) there is
+  also **Icom network (LAN / Wi-Fi) — Beta**: receive and control only, with the
+  **Radio address**, **Network user**, **Network password** (stored in the
+  keychain, write-only) and **Control port (UDP)** in place of Serial Port and
+  Baud. See the [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of
