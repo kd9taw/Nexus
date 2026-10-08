@@ -1,0 +1,101 @@
+{
+  "about": "What a contact's mode is for the 'new mode' need, the same in the engine and in every window. A 'folds' row is a contact as an ADIF file logs it (MODE, SUBMODE), the mode Nexus stores for it (which is what every window is handed) and the key a mode need compares. A 'scenarios' row is a log and a station heard, with the needs engine's answer and the callsign card's. Read by crates/propagation (the needs engine), crates/tempo-core (the ADIF reader, and the card's answer from the engine) and ui/src/features/modeKeys.shared.test.ts (the UI's modeKey, the card, the roster's gate and Band Activity's). Change a row and all three must agree again.",
+  "folds": [
+    { "mode": "FT8", "submode": null, "stored": "FT8", "key": "FT8" },
+    { "mode": "ft8", "submode": null, "stored": "ft8", "key": "FT8", "note": "case is not a different mode" },
+    { "mode": "MFSK", "submode": "FT4", "stored": "FT4", "key": "FT4", "note": "how WSJT-X logs FT4: the submode is the mode" },
+    { "mode": "FT4", "submode": null, "stored": "FT4", "key": "FT4" },
+    { "mode": "MFSK", "submode": "Q65", "stored": "Q65", "key": "Q65" },
+    { "mode": "MFSK", "submode": "FST4", "stored": "FST4", "key": "FST4" },
+    { "mode": "MFSK", "submode": "FST4W", "stored": "FST4W", "key": "FST4W" },
+    { "mode": "MFSK", "submode": "FT2", "stored": "FT2", "key": "FT2" },
+    { "mode": "MFSK", "submode": "JS8", "stored": "JS8", "key": "JS8", "note": "how JS8Call logs JS8" },
+    { "mode": "JS8", "submode": null, "stored": "JS8", "key": "JS8" },
+    { "mode": "MFSK", "submode": "TEMPOFAST", "stored": "TempoFast", "key": "TEMPOFAST" },
+    { "mode": "MFSK", "submode": "TEMPODEEP", "stored": "TempoDeep", "key": "TEMPODEEP" },
+    { "mode": "MFSK", "submode": null, "stored": "MFSK", "key": "MFSK", "note": "a bare MFSK could be FT4, JS8 or another mode: left as it is, never guessed" },
+    { "mode": "SSB", "submode": null, "stored": "SSB", "key": "SSB" },
+    { "mode": "SSB", "submode": "USB", "stored": "SSB", "key": "SSB", "note": "the sideband in SUBMODE, as Log4OM writes it" },
+    { "mode": "SSB", "submode": "LSB", "stored": "SSB", "key": "SSB" },
+    { "mode": "USB", "submode": null, "stored": "USB", "key": "SSB", "note": "both sidebands are one mode, SSB" },
+    { "mode": "LSB", "submode": null, "stored": "LSB", "key": "SSB" },
+    { "mode": "PH", "submode": null, "stored": "PH", "key": "PH", "note": "N3FJP's generic phone token may have been FM or AM: left as it is, never guessed" },
+    { "mode": "AM", "submode": null, "stored": "AM", "key": "AM" },
+    { "mode": "FM", "submode": null, "stored": "FM", "key": "FM" },
+    { "mode": "CW", "submode": null, "stored": "CW", "key": "CW" },
+    { "mode": "RTTY", "submode": null, "stored": "RTTY", "key": "RTTY" },
+    { "mode": "PSK31", "submode": null, "stored": "PSK31", "key": "PSK31" },
+    { "mode": "BPSK31", "submode": null, "stored": "BPSK31", "key": "PSK31", "note": "two spellings of one waveform" },
+    { "mode": "PSK63", "submode": null, "stored": "PSK63", "key": "PSK63" },
+    { "mode": "BPSK63", "submode": null, "stored": "BPSK63", "key": "PSK63" },
+    { "mode": "PSK", "submode": "PSK31", "stored": "PSK", "key": "PSK", "note": "the reader keeps the PSK parent and parks this SUBMODE in the passthrough, which no fold reads" },
+    { "mode": "MSK144", "submode": null, "stored": "MSK144", "key": "MSK144" },
+    { "mode": "JT65", "submode": null, "stored": "JT65", "key": "JT65" }
+  ],
+  "spellings": [
+    { "stored": " ft8 ", "key": "FT8", "note": "surrounding space and case" },
+    { "stored": "usb", "key": "SSB" },
+    { "stored": "﻿FT4", "key": "FT4", "note": "ECMAScript's trim() removes U+FEFF" },
+    { "stored": "FT8\u0085", "key": "FT8\u0085", "note": "and keeps U+0085, which Rust's str::trim would remove" }
+  ],
+  "scenarios": [
+    {
+      "name": "heard on FT8, worked only on SSB and FT4: a new mode",
+      "entity": "The Gambia",
+      "log": [
+        { "call": "C56YK", "band": "20m", "mode": "SSB", "confirmed": true },
+        { "call": "C5AAA", "band": "40m", "mode": "FT4", "confirmed": false }
+      ],
+      "heard": { "call": "C5R", "band": "20m", "mode": "FT8" },
+      "alert": { "tags": ["NewMode"], "mode": "FT8", "exactMode": "FT8", "headline": "New mode — FT8 The Gambia (any band)" },
+      "cardNewMode": true
+    },
+    {
+      "name": "heard on FT4, worked on FT4 on another band: nothing new",
+      "entity": "The Gambia",
+      "log": [
+        { "call": "C56YK", "band": "20m", "mode": "SSB", "confirmed": true },
+        { "call": "C5AAA", "band": "40m", "mode": "FT4", "confirmed": false }
+      ],
+      "heard": { "call": "C5R", "band": "20m", "mode": "FT4" },
+      "alert": null,
+      "cardNewMode": false
+    },
+    {
+      "name": "the FT8 contact logged: the need clears",
+      "entity": "The Gambia",
+      "log": [
+        { "call": "C56YK", "band": "20m", "mode": "SSB", "confirmed": true },
+        { "call": "C5AAA", "band": "40m", "mode": "FT4", "confirmed": false },
+        { "call": "C5R", "band": "20m", "mode": "FT8", "confirmed": false }
+      ],
+      "heard": { "call": "C5R", "band": "20m", "mode": "FT8" },
+      "alert": null,
+      "cardNewMode": false
+    },
+    {
+      "name": "USB and LSB are one mode",
+      "entity": "The Gambia",
+      "log": [{ "call": "C56YK", "band": "20m", "mode": "USB", "confirmed": true }],
+      "heard": { "call": "C5R", "band": "20m", "mode": "LSB" },
+      "alert": null,
+      "cardNewMode": false
+    },
+    {
+      "name": "PH is not guessed to be SSB",
+      "entity": "The Gambia",
+      "log": [{ "call": "C56YK", "band": "20m", "mode": "PH", "confirmed": true }],
+      "heard": { "call": "C5R", "band": "20m", "mode": "SSB" },
+      "alert": { "tags": ["NewMode"], "mode": "Phone", "exactMode": "SSB", "headline": "New mode — SSB The Gambia (any band)" },
+      "cardNewMode": true
+    },
+    {
+      "name": "a bare MFSK is not guessed to be FT4",
+      "entity": "The Gambia",
+      "log": [{ "call": "C56YK", "band": "20m", "mode": "MFSK", "confirmed": true }],
+      "heard": { "call": "C5R", "band": "20m", "mode": "FT4" },
+      "alert": { "tags": ["NewMode"], "mode": "FT4", "exactMode": "FT4", "headline": "New mode — FT4 The Gambia (any band)" },
+      "cardNewMode": true
+    }
+  ]
+}

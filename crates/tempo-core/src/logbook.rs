@@ -3471,6 +3471,9 @@ pub(crate) fn promoted_submode(sub: &str) -> Option<&'static str> {
         // The read side of the FT2 cascade above — without it our own export
         // re-imports as bare "MFSK" and the mode is lost on the next full save.
         "FT2" => Some("FT2"),
+        // The read side of the JS8 pair above, and how JS8Call itself logs it. Without it a
+        // JS8Call import was stored as bare "MFSK", a contact no window could say the mode of.
+        "JS8" => Some("JS8"),
         "Q65" => Some("Q65"),
         "FST4" => Some("FST4"),
         "FST4W" => Some("FST4W"),
@@ -7031,18 +7034,27 @@ mod tests {
     #[test]
     fn reimporting_a_wsjtx_log_after_submode_promotion_adds_no_duplicates() {
         // Rows imported by a pre-promotion build are stored as bare "MFSK";
-        // the same source row now parses as "FT4". The legacy-twin probe must
-        // treat the promoted row as the duplicate it is.
-        let legacy =
-            "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:4>MFSK<EOR>";
-        let promoted = "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
-                        <MODE:4>MFSK<SUBMODE:3>FT4<EOR>";
-        let mut lb = Logbook::new();
-        lb.import_adif(&(adif_header() + legacy));
-        let (added, skipped, _) = lb.import_adif(&(adif_header() + promoted));
-        assert!(added.is_empty(), "the promoted twin is the same QSO");
-        assert_eq!(skipped, 1);
-        assert_eq!(lb.records().len(), 1);
+        // the same source row now parses as "FT4" (WSJT-X) or "JS8" (JS8Call).
+        // The legacy-twin probe must treat the promoted row as the duplicate it is.
+        for sub in ["FT4", "JS8"] {
+            let legacy =
+                "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:4>MFSK<EOR>";
+            let promoted = format!(
+                "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                 <MODE:4>MFSK<SUBMODE:3>{sub}<EOR>"
+            );
+            assert_eq!(
+                parse_adif(&promoted)[0].mode,
+                sub,
+                "premise: {sub} is promoted"
+            );
+            let mut lb = Logbook::new();
+            lb.import_adif(&(adif_header() + legacy));
+            let (added, skipped, _) = lb.import_adif(&(adif_header() + &promoted));
+            assert!(added.is_empty(), "the promoted {sub} twin is the same QSO");
+            assert_eq!(skipped, 1);
+            assert_eq!(lb.records().len(), 1);
+        }
     }
 
     #[test]

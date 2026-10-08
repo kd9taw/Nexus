@@ -97,6 +97,49 @@ fn modes_and_bands_key_as_the_ui_keys_them() {
     }
 }
 
+/// The mode a logged contact counts as for "new mode", from the table the needs engine
+/// (`crates/propagation`) and the UI's `modeKey` read too: what the ADIF reader stores for each
+/// MODE/SUBMODE pair, and the key the card's answer folds that to.
+#[test]
+fn a_logged_mode_keys_as_the_shared_table_says() {
+    let table: Value = serde_json::from_str(include_str!(
+        "../../../../../ui/src/features/__fixtures__/mode-keys.json"
+    ))
+    .expect("mode-keys.json");
+    let field = |row: &Value, f: &str| -> String {
+        row[f]
+            .as_str()
+            .unwrap_or_else(|| panic!("{f} in {row}"))
+            .to_string()
+    };
+    for row in table["folds"].as_array().expect("folds") {
+        let mode = field(row, "mode");
+        let submode = row["submode"]
+            .as_str()
+            .map(|s| format!("<SUBMODE:{}>{s}", s.len()))
+            .unwrap_or_default();
+        let adif = format!(
+            "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:{}>{mode}{submode}<EOR>",
+            mode.len()
+        );
+        let records = parse_adif(&adif);
+        assert_eq!(records.len(), 1, "{adif}");
+        assert_eq!(
+            records[0].mode,
+            field(row, "stored"),
+            "stored mode of {row}"
+        );
+        assert_eq!(
+            mode_key(&records[0].mode),
+            field(row, "key"),
+            "key of {row}"
+        );
+    }
+    for row in table["spellings"].as_array().expect("spellings") {
+        assert_eq!(mode_key(&field(row, "stored")), field(row, "key"), "{row}");
+    }
+}
+
 /// `UI_BANDS` IS `ui/src/band.ts`'s `BAND_RANGES`: read off the TypeScript, so a band added
 /// there and not here — or an edge moved — fails here rather than answering differently.
 #[test]
