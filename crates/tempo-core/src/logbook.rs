@@ -9405,8 +9405,9 @@ mod tests {
         for text in [&report, &third_party] {
             let mut merged = Logbook::new();
             merged.add(rec("W1AW", "20m", 1_700_000_000));
+            // The same contact, its id included, merged with the rows read here.
+            let mut by_rows = vec![QsoRecord::clone(&merged.records()[0])];
             merged.merge_report(text);
-            let mut by_rows = vec![rec("W1AW", "20m", 1_700_000_000)];
             crate::reconcile::reconcile(&mut by_rows, &report_rows(text));
             assert_eq!(*merged.records()[0], by_rows[0], "{text}");
         }

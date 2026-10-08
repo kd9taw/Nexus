@@ -42767,7 +42767,7 @@ mod tests {
             lotw.fetch(url)
         })
         .expect("the check reads");
-        let seen: Vec<(&str, &str, &str, bool, Option<&str>, bool)> = dto
+        let seen: Vec<_> = dto
             .lines
             .iter()
             .map(|l| {
