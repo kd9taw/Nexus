@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
+  Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
+  including the new Unlimited that a club running more than one transmitter at once must enter),
+  **Club** and **Other operators**, all read when you export, so you can set them after the
+  party. The OPERATORS line lists everyone who was set as Operator at the key when they logged a
+  contact, then any others you type, and a QRP entry gets `QRP-COMPETITION: YES` from its Power
+  category. Each contest contact now records the operator at the key, and the contest log's
+  backup file keeps it across a restart. Every other contest's file is unchanged.
 - **Download everything again, for LoTW confirmations an earlier download missed (#399).**
   Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
   confirmations. It asks first, then downloads your whole confirmation history once, straight away,
@@ -86,6 +94,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Club sync no longer builds a Field Day club log for other contests.** Hosting a club event,
+  or joining one, with the Illinois QSO Party (or any contest other than ARRL Field Day and
+  Winter Field Day) selected built an ARRL Field Day club log: counties dropped, CW and RTTY with
+  one station counted as two contacts, a mobile's new county counted as a dupe, and a club file
+  headed `CONTEST: ARRL-FD`. Club sync now runs for the two Field Days only. With any other
+  contest selected the station neither hosts nor joins, and the contest screen, the club board
+  window and Settings ▸ Contesting ▸ Field Day Club Sync say why. For a state QSO party, log on
+  each position by itself and merge the Cabrillo files afterwards; the Field Day manual has the
+  steps for the Illinois QSO Party.
+- **Winter Field Day 2027 is on 23 and 24 January.** The sponsor's 2027 rules put the event on
+  the fourth full weekend of January, and Nexus still used the last full weekend from the 2025
+  rules, so it counted down to 30 January, a week late. Installed copies pick the fix up from
+  the rules file once it is published (Settings ▸ Contesting ▸ Field Day Setup ▸ Check for rules
+  updates), at the next launch.
+- **FT2 is on Winter Field Day's banned-mode list**, as the sponsor's 2027 list has it. The
+  warning is advisory, as before: the log strip warns and nothing is refused.
 - **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only, and the IC-9700, IC-705 and
   IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT offered the picker on
   the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put

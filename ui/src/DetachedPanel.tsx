@@ -85,6 +85,7 @@ import { SstvViewer } from './components/SstvViewer'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
+import { clubSyncRefused, contestName } from './fdEvent'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
@@ -820,6 +821,15 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       <DetachedShell>
         {club ? (
           <FdClubSection club={club} detached />
+        ) : clubSyncRefused(settings) ? (
+          // Switched on for a contest club sync cannot run, so the engine refuses it:
+          // say why, never that the operator is "somewhere else" with a club running.
+          <div style={FDCLUB_OFF_WRAP}>
+            <h2 style={FDCLUB_OFF_HEAD}>{t('detached.fdClub.off.head')}</h2>
+            <p style={FDCLUB_OFF_BODY}>
+              {t('fieldDay.club.refused.body', { contest: contestName(settings?.fdEvent?.trim()) })}
+            </p>
+          </div>
         ) : syncConfigured ? (
           // Configured, but this window cannot see the club right now — the operator is
           // simply somewhere else in the app. Say that, and say nothing about settings.

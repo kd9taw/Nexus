@@ -4027,6 +4027,14 @@ export interface Settings {
   /** Cabrillo `EMAIL` for a contest log, '' = the header is left out. Not the ClubLog login.
    *  Withheld from Remote. */
   contestEmail?: string
+  /** Cabrillo `CLUB` for a contest log whose rules list it, '' = the header is left out. */
+  contestClub?: string
+  /** Cabrillo `ENTRY-CLASS`: one of the selected contest's own classes
+   *  (`FdRulesetDto.entryClasses`), '' = undeclared. Written only when it is one of them. */
+  contestEntryClass?: string
+  /** More Cabrillo `OPERATORS`, typed (calls separated by spaces or commas). The header lists
+   *  the operators the contacts were stamped with (`fdOperator`), then these. */
+  contestOperators?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else

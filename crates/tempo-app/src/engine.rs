@@ -6416,6 +6416,12 @@ impl Engine {
     /// [`Settings`] for the caller to persist.
     pub fn set_fd_operator(&mut self, call: String) -> Settings {
         self.settings.fd_operator = call.trim().to_ascii_uppercase();
+        // The next contact is theirs, whichever path logs it (the digital sequencer's
+        // included), so the running log learns the name now rather than at the next QSY.
+        let operator = self.fd_row_operator();
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.operator = operator;
+        }
         self.settings.clone()
     }
 
@@ -6563,12 +6569,23 @@ impl Engine {
             }
         };
         let (on_air_mhz, on_air_rx_mhz) = self.log_frequencies();
+        // …and who is at the key, which a Save can change exactly as it changes the band.
+        let operator = self.fd_row_operator();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
             station.log.on_air_hz = hz(on_air_mhz);
             station.log.on_air_rx_hz = on_air_rx_mhz.map(hz).filter(|v| *v > 0);
+            station.log.operator = operator;
         }
+    }
+
+    /// Who is at the key, as a contest row records it (`LoggedQso::operator`): the Field Day
+    /// operator setting, uppercase, or `""` when nobody is named. Never the station's own
+    /// call, for the reason `log_qso` leaves `QsoRecord::operator` empty: an operator nobody
+    /// chose would be indistinguishable from one somebody did.
+    fn fd_row_operator(&self) -> String {
+        self.settings.fd_operator.trim().to_ascii_uppercase()
     }
 
     /// Switch the ACTIVE radio (dual-radio). Persists the current radio's live tune into its
@@ -11794,7 +11811,18 @@ impl Engine {
     /// Start hosting: build the club log for the configured event and replay
     /// its append-only journal (the host-restart recovery). Idempotent-ish:
     /// called again it rebuilds from the same journal.
+    ///
+    /// ⚠️ Refused for a contest that is not one of the two Field Day events: the club
+    /// log can only run a Field Day event's rules (see [`Self::fd_sync_enabled`]), and
+    /// `FdEvent::from_code` reads every other id as ARRL Field Day.
     pub fn fd_host_start(&mut self, journal_path: PathBuf) -> std::io::Result<()> {
+        if !self.contest_is_field_day() {
+            return Err(std::io::Error::other(format!(
+                "club sync runs only for ARRL Field Day and Winter Field Day, and the \
+                 contest selected is {}",
+                self.settings.fd_event.trim()
+            )));
+        }
         let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
         let name = if self.settings.fd_event_name.trim().is_empty() {
             // An unnamed event still needs an on-air label for the beacon.
@@ -11818,9 +11846,41 @@ impl Engine {
         self.fd_club.is_some()
     }
 
-    /// Whether sync is configured at all (drives `SyncState::Disabled`).
+    /// Whether club sync RUNS: hosting is on or a join address is set, for a contest club
+    /// sync can run. Drives `SyncState::Disabled`, the snapshot's `club` block and, through
+    /// [`Self::fd_sync_targets`], the shell's sockets.
+    ///
+    /// ⚠️ **A club runs one of the two Field Day events and nothing else.** The club log
+    /// scores, dupes and exports by the Field Day event's rules
+    /// ([`crate::fdevent::ClubLog`]), so sync configured for any other contest is refused
+    /// here rather than run. Hosting the Illinois QSO Party used to build an ARRL Field Day
+    /// club log in silence: every merged row lost its county, CW and RTTY with one station
+    /// counted as two contacts, a mobile's new county counted as a dupe, and the club file
+    /// was headed `CONTEST: ARRL-FD`. The UI says why from the same three settings
+    /// (`clubSyncRefused` in `ui/src/fdEvent.ts`).
     pub fn fd_sync_enabled(&self) -> bool {
-        self.settings.fd_host_enable || !self.settings.fd_join_addr.trim().is_empty()
+        (self.settings.fd_host_enable || !self.settings.fd_join_addr.trim().is_empty())
+            && self.contest_is_field_day()
+    }
+
+    /// What the shell's sync supervisor runs: the port to host the club on, and the
+    /// address this station's own position client joins. A host joins ITSELF over
+    /// loopback ("a host is just another position"). `(None, None)` while sync does not
+    /// run ([`Self::fd_sync_enabled`]), which is also how a change of contest stops a
+    /// running host or position: the supervisor tears down whatever it no longer wants.
+    pub fn fd_sync_targets(&self) -> (Option<u16>, Option<String>) {
+        if !self.fd_sync_enabled() {
+            return (None, None);
+        }
+        let s = &self.settings;
+        if s.fd_host_enable {
+            (
+                Some(s.fd_host_port),
+                Some(format!("127.0.0.1:{}", s.fd_host_port)),
+            )
+        } else {
+            (None, Some(s.fd_join_addr.trim().to_string()))
+        }
     }
 
     /// The club event's display name (beacon + welcome), host role only.
@@ -13119,6 +13179,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // The submode funnel: the sequencer's log() calls record
                     // the tier actually keyed (set_tier re-stamps on a change).
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
+                    // …and who is at the key, by the same funnel.
+                    st.log.operator = self.fd_row_operator();
                     st
                 }),
                 running: true,
@@ -13128,6 +13190,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     let mut st =
                         FieldDayStation::search_and_pounce(&mycall, &mygrid, session, &band);
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
+                    st.log.operator = self.fd_row_operator();
                     st
                 }),
                 running: false,
@@ -24766,14 +24829,18 @@ contact yourself."
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
                     "adif" => Ok(station.log.adif()),
-                    // NAME and EMAIL are the entrant's own settings, read at export so a
-                    // corrected typo reaches the next file; the log writes them only where
-                    // the contest's rules list those headers (never for Field Day).
+                    // NAME and EMAIL, CLUB, ENTRY-CLASS and the typed OPERATORS are the
+                    // entrant's own settings, read at export so a corrected typo reaches the
+                    // next file; the log writes each only where the contest's rules list that
+                    // header (never for Field Day).
                     _ => station.log.cabrillo_with(
                         freq_khz,
                         &tempo_core::contest::CabrilloEntrant {
                             name: self.settings.op_name.trim().to_string(),
                             email: self.settings.contest_email.trim().to_string(),
+                            club: self.settings.contest_club.trim().to_string(),
+                            entry_class: self.settings.contest_entry_class.trim().to_string(),
+                            operators: self.settings.contest_operators.trim().to_string(),
                         },
                     ),
                 }
@@ -41853,6 +41920,100 @@ mod tests {
         assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
     }
 
+    /// ⭐ **Club sync is refused for a contest that is not one of the two Field Days.**
+    ///
+    /// The club log runs a Field Day event's rules, and `FdEvent::from_code` reads every
+    /// other id as ARRL Field Day. So hosting with the Illinois QSO Party selected built an
+    /// ARRL Field Day club log in silence: counties dropped from the merged rows, CW and
+    /// RTTY with one station counted as two contacts, a mobile's new county counted as a
+    /// dupe, and a club file headed `CONTEST: ARRL-FD`. Now the host is never built, the
+    /// shell's supervisor is handed nothing to listen on or join, and no club block reaches
+    /// the screen (the UI says why from the same settings). The controls: both Field Days,
+    /// and the blank default that means ARRL Field Day, host and join exactly as before.
+    #[test]
+    fn club_sync_is_refused_for_a_contest_that_is_not_a_field_day() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-refused-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "COOK".into();
+            s.fd_host_enable = true;
+            s.fd_host_port = 42073;
+            s.fd_position_id = "eeee0001".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        // HOSTING: refused, never an ARRL Field Day club log for the party.
+        let hosted = e.fd_host_start(dir.join("ilqp.ndjson"));
+        assert!(
+            hosted.is_err(),
+            "hosting the Illinois QSO Party must be refused; it built a club running {:?}",
+            e.fd_club.as_ref().map(|c| c.contest_id.clone())
+        );
+        assert!(!e.fd_hosting());
+        assert_eq!(e.fd_sync_targets(), (None, None), "nothing to listen on");
+        assert_eq!(e.fd_sync_state(), crate::fdevent::SyncState::Disabled);
+        assert!(
+            e.snapshot()
+                .field_day
+                .expect("the party itself runs")
+                .club
+                .is_none(),
+            "no club block: nothing is syncing"
+        );
+        // JOINING: refused the same way, whatever the address.
+        {
+            let mut s = e.settings().clone();
+            s.fd_host_enable = false;
+            s.fd_join_addr = "192.168.1.10:42073".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_sync_targets(), (None, None), "nothing to join");
+        assert_eq!(e.fd_sync_state(), crate::fdevent::SyncState::Disabled);
+
+        // CONTROLS: ARRL Field Day, Winter Field Day and the blank default host and join
+        // exactly as they always have.
+        for (event, contest_id) in [
+            ("arrlfd", "ARRL-FIELD-DAY"),
+            ("wfd", "WFD"),
+            ("", "ARRL-FIELD-DAY"),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.fd_event = event.into();
+            s.fd_host_enable = true;
+            s.fd_host_port = 42073;
+            e.apply_settings(s.clone());
+            assert_eq!(
+                e.fd_sync_targets(),
+                (Some(42073), Some("127.0.0.1:42073".to_string())),
+                "{event:?} hosts, and joins itself over loopback"
+            );
+            e.fd_host_start(dir.join(format!("{event}.ndjson")))
+                .expect("a Field Day club is hosted");
+            assert!(e.fd_hosting());
+            assert_eq!(e.fd_club.as_ref().unwrap().contest_id, contest_id);
+            e.fd_host_stop();
+            s.fd_host_enable = false;
+            s.fd_join_addr = " 192.168.1.10:42073 ".into();
+            e.apply_settings(s);
+            assert_eq!(
+                e.fd_sync_targets(),
+                (None, Some("192.168.1.10:42073".to_string())),
+                "{event:?} joins the address it was given"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ §18.2's refusal has to REACH the operator, and this is the only test that
     /// runs the whole path it travels: the `ClubBackend` trait object the socket
     /// loop holds → `EngineClubBackend` → `Engine::fd_club_join` → `ClubLog`.
@@ -42085,6 +42246,72 @@ mod tests {
         // …and the score says it leaves nothing out, which is what lets the Cabrillo
         // carry a CLAIMED-SCORE at all.
         assert_eq!(fd.score_note_key, "");
+    }
+
+    /// ⭐ **The Illinois QSO Party file heads the sponsor's entry lines from Settings and the
+    /// rows**, through the export the dialog itself calls. The class, the club and the typed
+    /// operators are read at export, so a class picked after the party still reaches the
+    /// file; the operator at the key is stamped on each contact as it is logged, so a change
+    /// of seat mid-party is two names, not one; and QRP power declared before the party is
+    /// the sponsor's QRP certification. The wire keys are the ones Settings sends.
+    #[test]
+    fn the_illinois_partys_file_heads_the_entry_lines_from_settings_and_rows() {
+        let mut e = Engine::new("W9AWE", "EN50", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "ADAM".into();
+            s.contest_category_power = "QRP".into();
+            s.fd_operator = "w9xyz".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), q.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K9NR", &ex("KANK"), "CW", None)
+            .unwrap());
+        // The seat changes hands, through the contest screen's own operator box.
+        e.set_fd_operator("aa9xyz".into());
+        assert!(e
+            .contest_log_manual("N9ABC", &ex("COOK"), "PH", None)
+            .unwrap());
+        // After the party: the class, the club and one more operator, on Settings' wire keys.
+        let mut v = serde_json::to_value(e.settings()).unwrap();
+        v["contestEntryClass"] = "UNLIMITED".into();
+        v["contestClub"] = "Western Ill Amateur Radio Club".into();
+        v["contestOperators"] = "KB9QRS".into();
+        e.apply_settings(serde_json::from_value(v).unwrap());
+        let cab = e.export_log("cabrillo").expect("one entry");
+        assert!(cab.contains("ENTRY-CLASS: UNLIMITED\n"), "{cab}");
+        assert!(
+            cab.contains("CLUB: Western Ill Amateur Radio Club\n"),
+            "{cab}"
+        );
+        assert!(cab.contains("OPERATORS: W9XYZ AA9XYZ KB9QRS\n"), "{cab}");
+        assert!(cab.contains("QRP-COMPETITION: YES\n"), "{cab}");
+        // CONTROL: the same station in ARRL Field Day writes none of the four — its rules
+        // list none, so a club's Field Day file is exactly what it has always been.
+        let mut fd = Engine::new("W9AWE", "EN50", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_event = "arrlfd".into();
+            s.fd_class = "3A".into();
+            s.fd_section = "IL".into();
+            fd.apply_settings(s);
+        }
+        fd.set_mode("fieldday-run").unwrap();
+        assert!(fd.fd_log_manual("K9NR", "2A", "WI", "CW").unwrap());
+        let cab = fd.export_log("cabrillo").expect("one entry");
+        for tag in ["ENTRY-CLASS", "CLUB:", "OPERATORS", "QRP-COMPETITION"] {
+            assert!(!cab.contains(tag), "Field Day lists no {tag}:\n{cab}");
+        }
     }
 
     /// An Illinois station in the Illinois QSO Party, from KANE, and the strip's two-slot

@@ -115,7 +115,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { CONTESTS, isFieldDay } from '../fdEvent'
+import { CONTESTS, contestName, isFieldDay } from '../fdEvent'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -11958,6 +11958,61 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.contestPick.email.hint')}</span>
               </label>
+              {/* ⭐ THE SPONSOR'S OWN ENTRY LINES. A contest whose rules declare entry classes
+                  (the Illinois QSO Party, whose processing software reads the header) is
+                  offered exactly those, from the rules data and never from a list kept here;
+                  the names are the sponsor's own and are never translated. A saved class that
+                  is not one of this contest's shows as unset, which is also what the export
+                  does with it. CLUB and the extra OPERATORS are typed, and all three are read
+                  when the log is exported. */}
+              {rulesetPreview?.entryClasses?.length ? (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.entryClass.label')}</span>
+                  <select
+                    disabled={locked('contestEntryClass')}
+                    className="settings-input"
+                    value={
+                      rulesetPreview.entryClasses.includes(form.contestEntryClass ?? '')
+                        ? form.contestEntryClass
+                        : ''
+                    }
+                    onChange={(e) => update('contestEntryClass', e.target.value)}
+                  >
+                    <option value="">{t('settings.contestPick.entryAxes.unset')}</option>
+                    {rulesetPreview.entryClasses.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">{t('settings.contestPick.entryClass.hint')}</span>
+                </label>
+              ) : null}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.club.label')}</span>
+                <input
+                  disabled={locked('contestClub')}
+                  className="settings-input"
+                  type="text"
+                  value={form.contestClub ?? ''}
+                  onChange={(e) => update('contestClub', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.contestPick.club.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.operators.label')}</span>
+                <input
+                  disabled={locked('contestOperators')}
+                  className="settings-input mono"
+                  type="text"
+                  value={form.contestOperators ?? ''}
+                  onChange={(e) => update('contestOperators', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.contestPick.operators.hint')}</span>
+              </label>
             </fieldset>
           )}
 
@@ -12407,6 +12462,13 @@ export function SettingsPanel({
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day-club">
             <legend>{t('settings.fdClub.legend')}</legend>
+            {/* Club sync runs a Field Day event's rules, so the engine refuses it for any
+                other contest (`Engine::fd_sync_enabled`). Said here, where it is turned on. */}
+            {!isFieldDay(form.fdEvent?.trim()) && (
+              <p className="settings-note" role="note">
+                {t('fieldDay.club.refused.body', { contest: contestName(form.fdEvent?.trim()) })}
+              </p>
+            )}
             <label className="settings-field">
               <span className="settings-label">{t('settings.fdClub.host.label')}</span>
               <button disabled={remote}

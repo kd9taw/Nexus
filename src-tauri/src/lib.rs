@@ -8455,6 +8455,12 @@ struct FdRulesetDto {
     /// the contest starts. Absent when it does not apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     location_warning: Option<tempo_app::dto::LocationWarningDto>,
+    /// The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order, for Settings
+    /// to offer: the Illinois QSO Party's eight. Filled by the PREVIEW only and absent when
+    /// empty: the Remote field-day capture sends this DTO too, and the hosted page refuses a
+    /// key it does not know, so a capture must stay the shape every published page accepts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    entry_classes: Vec<String>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -8481,6 +8487,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         exchange: Vec::new(),
         problem: String::new(),
         location_warning: None,
+        entry_classes: Vec::new(),
     }
 }
 
@@ -8505,6 +8512,8 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
         dto.event.as_str(),
         tempo_core::fd_rules::CURRENT_RULES_YEAR,
     ) {
+        // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
+        dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
         match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
             Ok(s) => {
                 dto.role = s.role().id.to_string();
@@ -32614,20 +32623,10 @@ fn start_on_the_logbook(
             // quietly on a timer instead of re-erroring every second.
             let mut bind_failed: Option<(u16, std::time::Instant)> = None;
             loop {
-                let (want_host, want_addr) = {
-                    let e = engine_lock(&mgr_engine);
-                    let s = e.settings();
-                    let want_host = s.fd_host_enable.then_some(s.fd_host_port);
-                    // The host joins ITSELF over loopback; otherwise the
-                    // operator's join address (empty = no client).
-                    let want_addr = if s.fd_host_enable {
-                        Some(format!("127.0.0.1:{}", s.fd_host_port))
-                    } else {
-                        let a = s.fd_join_addr.trim().to_string();
-                        (!a.is_empty()).then_some(a)
-                    };
-                    (want_host, want_addr)
-                };
+                // What to run is the engine's answer (the host's own loopback join
+                // included), so sync configured for a contest it cannot run, anything
+                // but the two Field Days, is refused where the sockets are made.
+                let (want_host, want_addr) = engine_lock(&mgr_engine).fd_sync_targets();
 
                 // --- host listener + beacon reconcile ---
                 if want_host != hosting.as_ref().map(|(p, _)| *p) {
@@ -35813,6 +35812,33 @@ mod tests {
             "2026 seed is dormant"
         );
         assert!(sfd.rules_year >= 2026);
+        // The Illinois QSO Party's classes reach Settings' preview, Unlimited last…
+        let s = tempo_app::settings::Settings {
+            fd_event: "ilqp".into(),
+            ..Default::default()
+        };
+        let preview = super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s));
+        assert_eq!(
+            preview.entry_classes.len(),
+            8,
+            "{:?}",
+            preview.entry_classes
+        );
+        assert_eq!(
+            preview.entry_classes.last().map(String::as_str),
+            Some("UNLIMITED")
+        );
+        // …and never the Remote capture, whose hosted page refuses a key it does not know.
+        let capture = serde_json::to_value(super::fd_ruleset_dto("ilqp")).unwrap();
+        assert!(capture.get("entryClasses").is_none(), "{capture}");
+        // CONTROL: Field Day's preview declares none.
+        assert!(
+            super::fd_ruleset_preview(
+                &tempo_app::engine::Engine::with_settings(Default::default())
+            )
+            .entry_classes
+            .is_empty()
+        );
     }
 
     /// …and the state the command hands back reflects the arm, through the DTO the cockpit

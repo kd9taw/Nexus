@@ -98,6 +98,23 @@ export function contestShortName(id: string | undefined): string {
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 
+/**
+ * ⭐ **Club sync is switched on for a contest it cannot run, so the engine refuses it.**
+ *
+ * The club log runs a Field Day event's rules, so hosting or joining is refused for
+ * anything but the two Field Days (`Engine::fd_sync_enabled`): hosting the Illinois QSO
+ * Party used to build an ARRL Field Day club log in silence. This reads the same three
+ * settings the engine does, so the screen saying why cannot disagree with what the
+ * sockets do.
+ */
+export function clubSyncRefused(
+  s: { fdHostEnable?: boolean; fdJoinAddr?: string; fdEvent?: string } | null | undefined,
+): boolean {
+  if (!s) return false
+  const configured = s.fdHostEnable === true || (s.fdJoinAddr ?? '').trim() !== ''
+  return configured && !isFieldDay(s.fdEvent?.trim())
+}
+
 export interface FdEvent {
   kind: FdKind
   /** UTC start of the event (Saturday 1800 UTC for ARRL FD; 1600 UTC for WFD). */

@@ -172,7 +172,7 @@ surface as chips on the Needed board when they're heard on the air.
 
 A settings switch turns the event on — **ARRL Field Day** or **Winter Field Day** — and the app
 reshapes for the weekend: exchange grammar (class + section, or WFD category), a live countdown
-that knows the real date rules (4th Saturday of June; WFD's *last full weekend* of January, both
+that knows the real date rules (4th Saturday of June; WFD's *4th full weekend* of January, both
 days in January), dupe checking per (call, band, mode-class), and a scoreboard showing its work:
 QSO points (phone 1, CW/digital 2) × the legal power multiplier (×1/×2/×5, clamped in the engine)
 + a 16-item ARRL bonus checklist = total. WFD deliberately shows raw counts only — its

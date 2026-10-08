@@ -214,3 +214,68 @@ describe('the contest log email', () => {
     expect((await inputFor('Email for contest logs')).value).toBe('op@example.com')
   })
 })
+
+// ⭐ THE SPONSOR'S OWN ENTRY LINES. The Illinois QSO Party's processing software reads
+// ENTRY-CLASS, CLUB and OPERATORS out of the Cabrillo header. The classes come from the
+// contest's rules data through the ruleset preview, never from a list in the panel, so the
+// picker exists only for a contest that declares them; Club and Other operators are text
+// like the email above, read by the engine at export.
+describe('the entry class, club and other operators', () => {
+  const ILQP_CLASSES = [
+    'ILLINOIS FIXED HIGH POWER',
+    'ILLINOIS FIXED LOW POWER',
+    'ILLINOIS PORTABLE',
+    'ILLINOIS MOBILE',
+    'ILLINOIS ROVER',
+    'OUTSIDE ILLINOIS HIGH POWER',
+    'OUTSIDE ILLINOIS LOW POWER',
+    'UNLIMITED',
+  ]
+  const selectFor = async (label: string) =>
+    (await screen.findByText(label, { selector: '.settings-label' }))
+      .closest('.settings-field')!
+      .querySelector('select') as HTMLSelectElement
+
+  it('offers the contest\'s own classes and saves the pick, the club and the operators', async () => {
+    stored = { ...stored, fdEvent: 'ilqp' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'ilqp', entryClasses: ILQP_CLASSES } as never),
+    )
+    renderPanel()
+    await openContesting()
+    const picker = await selectFor('Entry class')
+    const offered = Array.from(picker.options).map((o) => o.value)
+    expect(offered).toEqual(['', ...ILQP_CLASSES])
+    fireEvent.change(picker, { target: { value: 'UNLIMITED' } })
+    fireEvent.change(await inputFor('Club'), {
+      target: { value: 'Western Ill Amateur Radio Club' },
+    })
+    fireEvent.change(await inputFor('Other operators'), { target: { value: 'kb9qrs, w9xyz' } })
+    await save()
+    await waitFor(() => expect(lastSaved()?.contestEntryClass).toBe('UNLIMITED'))
+    expect(lastSaved()!.contestClub).toBe('Western Ill Amateur Radio Club')
+    expect(lastSaved()!.contestOperators).toBe('KB9QRS, W9XYZ')
+  })
+
+  it('shows a saved class that is not one of this contest\'s as not set', async () => {
+    stored = { ...stored, fdEvent: 'ilqp', contestEntryClass: 'MULTI-OP' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'ilqp', entryClasses: ILQP_CLASSES } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect((await selectFor('Entry class')).value).toBe('')
+  })
+
+  it('POSITIVE CONTROL: a contest that declares no classes offers no class picker', async () => {
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd' } as never))
+    renderPanel()
+    await openContesting()
+    // The section is there (its Club box is) and the preview has answered, and the class
+    // picker is not.
+    expect(await inputFor('Club')).toBeTruthy()
+    await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText('Entry class', { selector: '.settings-label' })).toBeNull()
+  })
+})

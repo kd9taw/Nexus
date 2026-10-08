@@ -360,6 +360,7 @@ fn the_cabrillo_header_is_the_sponsors_own_and_the_lines_carry_codes() {
     let me = CabrilloEntrant {
         name: "EXAMPLE OPERATOR".into(),
         email: "op@example.com".into(),
+        ..Default::default()
     };
     let cab = log.cabrillo_with(7_000, &me).expect("one entry");
     assert!(
@@ -386,6 +387,163 @@ fn the_cabrillo_header_is_the_sponsors_own_and_the_lines_carry_codes() {
     ));
     let cab = out.cabrillo_with(7_000, &me).expect("one entry");
     assert!(!cab.contains("IL-COUNTY"), "{cab}");
+}
+
+/// ⭐ **The entry's own lines, which the sponsor's software reads** — `ENTRY-CLASS`, `CLUB`,
+/// `OPERATORS` and `QRP-COMPETITION`, all four in its `Sample_Excel_Log`, and asked for by its
+/// 2026 rules (*"Announcing the 2026 Illinois QSO Party"*, read 2026-10-08): *"make sure entry
+/// class, personal information, call sign, station location, and club affiliation are
+/// correctly shown. The header information is automatically pulled and used by the processing
+/// software."* A club running several positions at once enters the new class: *"Stations
+/// wishing to employ multiple transmitted signals simultaneously at a single site may enter as
+/// "Unlimited"."*
+#[test]
+fn the_entry_lines_the_sponsors_software_reads_are_written() {
+    use tempo_core::contest::{CabrilloEntrant, StationData};
+    let rs = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("shipped");
+    assert_eq!(
+        rs.entry_classes,
+        [
+            "ILLINOIS FIXED HIGH POWER",
+            "ILLINOIS FIXED LOW POWER",
+            "ILLINOIS PORTABLE",
+            "ILLINOIS MOBILE",
+            "ILLINOIS ROVER",
+            "OUTSIDE ILLINOIS HIGH POWER",
+            "OUTSIDE ILLINOIS LOW POWER",
+            "UNLIMITED",
+        ],
+        "the 2026 rules' entry classes, in their order, in the sample log's spelling"
+    );
+    let qrp = StationData {
+        contest_category_power: "QRP".into(),
+        ..station("IL", "ADAM")
+    };
+    let mut log = FieldDayLog::new("W9AWE", select(&qrp), "40m");
+    // Two operators take the seat in turn, and the first comes back for a third contact.
+    for (op, call, qth) in [
+        ("W9XYZ", "K9NR", "KANK"),
+        ("AA9XYZ", "N9ABC", "COOK"),
+        ("W9XYZ", "K9DEF", "WILL"),
+    ] {
+        log.operator = op.into();
+        assert!(log.log_fields_at(
+            call,
+            &fields(&[("RST", "599"), ("QTH", qth)]),
+            "CW",
+            "",
+            0,
+            1_792_342_800
+        ));
+    }
+    let me = CabrilloEntrant {
+        club: "Western Ill Amateur Radio Club".into(),
+        entry_class: "unlimited".into(),
+        operators: "w9xyz, KB9QRS".into(),
+        ..Default::default()
+    };
+    let cab = log.cabrillo_with(7_000, &me).expect("one entry");
+    assert!(
+        cab.contains("ENTRY-CLASS: UNLIMITED\n"),
+        "the sponsor's class, as the sponsor spells it:\n{cab}"
+    );
+    assert!(
+        cab.contains("CLUB: Western Ill Amateur Radio Club\n"),
+        "{cab}"
+    );
+    assert!(
+        cab.contains("OPERATORS: W9XYZ AA9XYZ KB9QRS\n"),
+        "the rows' operators in the order they first logged, then the typed one, each once:\n{cab}"
+    );
+    assert!(
+        cab.contains("QRP-COMPETITION: YES\n"),
+        "the declared QRP power is the certification:\n{cab}"
+    );
+
+    // CONTROLS. A class that is not one of this sponsor's claims nothing (a pick left over
+    // from another contest); a power that is not QRP certifies nothing; nobody named and
+    // nothing typed is no OPERATORS line; no club is no CLUB line.
+    let mut solo = FieldDayLog::new("W9XYZ", select(&station("IL", "ADAM")), "40m");
+    assert!(solo.log_fields_at(
+        "K9NR",
+        &fields(&[("RST", "599"), ("QTH", "KANK")]),
+        "CW",
+        "",
+        0,
+        1_792_342_800
+    ));
+    let stale = CabrilloEntrant {
+        entry_class: "MULTI-OP".into(),
+        ..Default::default()
+    };
+    let cab = solo.cabrillo_with(7_000, &stale).expect("one entry");
+    for tag in ["ENTRY-CLASS", "OPERATORS", "QRP-COMPETITION", "CLUB"] {
+        assert!(!cab.contains(tag), "{tag} with nothing declared:\n{cab}");
+    }
+    // …and a party whose sponsor asks for none of them writes none, whatever is set.
+    let ny = ruleset_by_id("nyqp", CURRENT_RULES_YEAR).expect("shipped");
+    let ny_station = StationData {
+        contest_category_power: "QRP".into(),
+        ..station("NY", "ALB")
+    };
+    let mut nylog = FieldDayLog::new(
+        "W2XYZ",
+        ContestSession::for_ruleset(ny, &ny_station).expect("nyqp starts"),
+        "40m",
+    );
+    nylog.operator = "W2XYZ".into();
+    assert!(nylog.log_fields_at(
+        "K2AAA",
+        &fields(&[("RST", "599"), ("QTH", "SUF")]),
+        "CW",
+        "",
+        0,
+        1_792_342_800
+    ));
+    let cab = nylog.cabrillo_with(7_000, &me).expect("one entry");
+    for tag in ["ENTRY-CLASS", "OPERATORS", "QRP-COMPETITION", "CLUB"] {
+        assert!(!cab.contains(tag), "NYQP lists no {tag}:\n{cab}");
+    }
+}
+
+/// ⭐ **Who was at the key survives a restart.** The journal is the only copy of a contest
+/// contact on disk, so each row's operator rides it as ADIF's own `OPERATOR`, and a club
+/// position that crashes at hour five still heads its file with everyone who operated it.
+#[test]
+fn the_operator_at_the_key_rides_the_journal() {
+    use tempo_core::contest::CabrilloEntrant;
+    let mut log = FieldDayLog::new("W9AWE", select(&station("IL", "ADAM")), "40m");
+    log.operator = "AA9XYZ".into();
+    assert!(log.log_fields_at(
+        "K9NR",
+        &fields(&[("RST", "599"), ("QTH", "KANK")]),
+        "CW",
+        "",
+        0,
+        1_792_342_800
+    ));
+    // CONTROL in the same journal: a contact nobody was named for writes no tag.
+    log.operator = String::new();
+    assert!(log.log_fields_at(
+        "N9ABC",
+        &fields(&[("RST", "599"), ("QTH", "COOK")]),
+        "CW",
+        "",
+        0,
+        1_792_342_860
+    ));
+    let journal = log.adif();
+    assert_eq!(journal.matches("<OPERATOR:").count(), 1, "{journal}");
+    assert!(journal.contains("<OPERATOR:6>AA9XYZ"), "{journal}");
+
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "ADAM")), "40m");
+    back.merge_adif(&journal, 0);
+    let ops: Vec<&str> = back.qsos().iter().map(|q| q.operator.as_str()).collect();
+    assert_eq!(ops, ["AA9XYZ", ""], "each row keeps its own operator");
+    let cab = back
+        .cabrillo_with(7_000, &CabrilloEntrant::default())
+        .expect("one entry");
+    assert!(cab.contains("OPERATORS: AA9XYZ\n"), "{cab}");
 }
 
 /// ⭐ **The claimed score an ILQP entrant submits includes the bonus stations**, because

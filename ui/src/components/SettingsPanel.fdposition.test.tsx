@@ -245,3 +245,37 @@ describe('a blank position name refuses a club-sync save', () => {
     expect(screen.queryByText(/Name this position on the Contesting tab/)).toBeNull()
   })
 })
+
+// ⭐ CLUB SYNC RUNS ONLY FOR THE TWO FIELD DAYS. The engine refuses hosting and joining for any
+// other contest (the club log runs a Field Day event's rules), so the Club Sync section says so
+// on the tab where the switch is, naming the contest the picker holds.
+describe('the Club Sync section says it will not run for a contest that is not a Field Day', () => {
+  async function openContesting() {
+    fireEvent.click(await screen.findByRole('tab', { name: /contesting/i }))
+  }
+
+  it('names the selected party and says this station will not host or join', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(settingsFixture({ fdEvent: 'ilqp', fdHostEnable: true })),
+    )
+    renderPanel()
+    await openContesting()
+    expect(
+      await screen.findByText(/With Illinois QSO Party selected, this station does not host or join/),
+    ).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: ARRL Field Day and Winter Field Day carry no such note', async () => {
+    for (const fdEvent of ['arrlfd', 'wfd']) {
+      api.get('getSettings').mockImplementation(() =>
+        Promise.resolve(settingsFixture({ fdEvent, fdHostEnable: true })),
+      )
+      renderPanel()
+      await openContesting()
+      // The section is on screen (its host switch is found), and the note is not in it.
+      expect(await screen.findByRole('switch', { name: /club event hosting/ })).toBeTruthy()
+      expect(screen.queryByText(/this station does not host or join/)).toBeNull()
+      cleanup()
+    }
+  })
+})
