@@ -2781,18 +2781,31 @@ fn checks_of(
 /// every service's confirmation of 18:00 on 06:00, each put there by 1.17.0's matcher, and K1ABC
 /// holds eQSL's card of a 15:00 QSO this log lacks. Of the four lines only 06:00's eQSL line is
 /// ticked: 06:00 loses eQSL's confirmation and keeps LoTW's, its DXCC and QRZ's; K1ABC keeps its
-/// card; and 18:00 gains each service's confirmation from the merges. Nothing else moves.
+/// card; and 18:00 gains each service's confirmation from the merges. N0SUP, which LoTW confirms,
+/// takes the DXCC its row brings since, and that is no gain. Nothing else moves.
 #[test]
 fn apply_takes_off_only_the_ticked_lines_of_each_service() {
     use tempo_core::reconcile::check::{replay::left_by_1_17, Channel, Mark};
     let d = Dir::new("check-each-service");
-    let lotw = lotw_answer(&[adif_row(
+    let w1aw = adif_row(
         "W1AW",
         "20m",
         "FT8",
         "180200",
         "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
-    )]);
+    );
+    // What LoTW sent the old sync, and what it holds now: N0SUP's DXCC was granted since.
+    let lotw_then = lotw_answer(std::slice::from_ref(&w1aw));
+    let lotw = lotw_answer(&[
+        w1aw,
+        adif_row(
+            "N0SUP",
+            "20m",
+            "FT8",
+            "120100",
+            "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        ),
+    ]);
     let inbox = eqsl_answer(&[
         adif_row("W1AW", "20m", "FT8", "180100", "<EQSL_QSL_RCVD:1>Y"),
         adif_row("K1ABC", "20m", "FT8", "150000", "<EQSL_QSL_RCVD:1>Y"),
@@ -2806,8 +2819,9 @@ fn apply_takes_off_only_the_ticked_lines_of_each_service() {
         adif_row("W1AW", "20m", "FT8", "060000", ""),
         adif_row("W1AW", "20m", "FT8", "180000", ""),
         adif_row("K1ABC", "20m", "FT8", "100000", ""),
+        adif_row("N0SUP", "20m", "FT8", "120000", "<LOTW_QSL_RCVD:1>Y"),
     ]);
-    for text in [&lotw, &inbox, &book] {
+    for text in [&lotw_then, &inbox, &book] {
         log = left_by_1_17(log, &tempo_core::logbook::report_rows(text));
     }
     let engine = holding(&d, &log);
@@ -2871,12 +2885,15 @@ fn apply_takes_off_only_the_ticked_lines_of_each_service() {
     late.credit_granted = vec!["DXCC".into()];
     expected.push(late);
     expected.push(at("K1ABC", "100000"));
+    let mut credited = at("N0SUP", "120000");
+    credited.credit_granted = vec!["DXCC".into()];
+    expected.push(credited);
     let mut now = engine.stored_records();
     now.sort_by_key(|r| (r.call.clone(), r.when_unix));
     expected.sort_by_key(|r| (r.call.clone(), r.when_unix));
     assert_eq!(
         now, expected,
-        "06:00 loses eQSL's alone; 18:00 gains each service's; K1ABC is untouched"
+        "06:00 loses eQSL's alone; 18:00 gains each service's; K1ABC is untouched; N0SUP is credited"
     );
     assert!(
         early.qsl_rcvd.lotw && early.qsl_rcvd.qrz && early.credit_granted == ["DXCC"],

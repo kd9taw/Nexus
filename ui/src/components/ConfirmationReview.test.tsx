@@ -360,16 +360,36 @@ describe('Check confirmations', () => {
     expect(message).not.toContain(t('logbook.confirmations.done.uploads', { count: 0 }))
   })
 
-  it('drops a check that lands after Cancel without a word', async () => {
+  it('drops a check that lands after Cancel without a word, even once the next one has started', async () => {
+    const late: ((c: ConfirmationCheck) => void)[] = []
     let fail: (e: unknown) => void = () => {}
-    check.mockImplementation(() => new Promise((_, r) => { fail = r }))
+    check.mockImplementation(
+      (_, service) =>
+        new Promise((resolve, reject) => {
+          if (service === 'qrz') fail = reject
+          else late.push(resolve)
+        }),
+    )
     const { dialog, onClose } = await opened()
     fireEvent.click(checkButton(dialog))
     await waitFor(() => expect(check).toHaveBeenCalledTimes(3))
     fireEvent.click(within(dialog).getByRole('button', { name: t('logbook.confirmations.cancel') }))
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(cancel).toHaveBeenCalledTimes(1)
-    await act(async () => fail('This check was cancelled, so nothing was kept from it.'))
+    // Checked again at once (this host keeps the dialog open): a new check, every service pending.
+    start.mockResolvedValue(8)
+    check.mockImplementation(() => new Promise(() => {}))
+    fireEvent.click(checkButton(dialog))
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(6))
+    // The first check's downloads land now, and its cancelled one fails: none of it is shown.
+    const cancelled = 'This check was cancelled, so nothing was kept from it.'
+    await act(async () => {
+      for (const land of late) land(FOUND.lotw as ConfirmationCheck)
+      fail(cancelled)
+    })
+    expect(within(dialog).queryByText('K1ABC')).toBeNull()
+    expect(within(dialog).queryByText(t('logbook.confirmations.notChecked', { reason: cancelled }))).toBeNull()
+    expect(within(dialog).getAllByRole('status'), 'the new check still downloads').toHaveLength(3)
     expect(toast).not.toHaveBeenCalled()
   })
 
