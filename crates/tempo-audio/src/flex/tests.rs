@@ -1552,6 +1552,66 @@ fn a_key_is_refused_while_nothing_feeds_the_dax_nexus_set() {
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
+/// ⭐ NOR A VOICE OVER ON THE DAX NEXUS SET (operator ruling, 2026-10-08, "Same rule for Phone"):
+/// right after the transmit slice goes from a digital mode to Phone, the radio still takes its
+/// transmit audio from the DAX Nexus set until the routing's next quiet point puts the mic back,
+/// and the operator's voice would not reach the air. `T 1` in between is refused, in the shim's
+/// words. The controls: once the mic is back the same verb keys; and while the stream's browser
+/// voice is live, Phone wants DAX, which carries that voice, and the key goes out on it.
+#[test]
+fn a_phone_key_is_refused_until_the_radio_has_its_mic_back() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    eventually("the echo", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    let asked = Instant::now();
+    let answer = c.ask("T 1", 1);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        format!(
+            "answer={answer:?} xmit1={} refused={:?}",
+            count(&sim, "xmit 1"),
+            d.key_refused_since(asked)
+        ),
+        "answer=\"RPRT -1\\n\" xmit1=0 refused=Some((\"not keying a USB over: the radio still \
+         takes its transmit audio from the DAX Nexus set, not its mic input, until Nexus puts the \
+         mic back\", FlexAudioRefusal { mode: \"USB\", cause: MicNotBack }))"
+    );
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    eventually("the mic", || {
+        (d.session().snapshot().model.transmit.dax == Some(false)).then_some(())
+    });
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    // The stream's browser voice: Phone wants DAX, and the key goes out on it.
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    d.set_native_audio(true);
+    route_until(&d, &sim, true, "transmit set dax=1", 1);
+    eventually("the echo", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_for(&d, true, 300);
+    assert_eq!(
+        count(&sim, "transmit set dax=0"),
+        0,
+        "premise: Phone with the browser voice keeps DAX"
+    );
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
 /// with the radio still reporting USB and the mic as the source, `T 1` is refused.
 #[test]

@@ -6387,6 +6387,8 @@ export const DE: PartialCatalog = {
   "shell.lane.slotUnkeyFailed.detail": "Das Funkgerät hat das Abschalten der PTT um {{time}} UTC nicht angenommen ({{why}}), daher wurde TX ausgeschaltet. Es sendet möglicherweise noch: Prüfen Sie das Funkgerät sofort. Nexus schaltet die PTT weiter ab, bis das Funkgerät es annimmt. Schalten Sie TX wieder ein, sobald das Funkgerät empfängt.",
   "shell.lane.slotAudioLost.message": "SENDUNG BEENDET — TX GESTOPPT",
   "shell.lane.slotAudioLost.detail": "Natives Flex-DAX-Audio ging um {{time}} UTC mitten in einer Sendung aus, daher wäre der Rest dieser Sendung stumm gesendet worden. Nexus hat die Sendung dort beendet und TX ausgeschaltet. Schalten Sie TX wieder ein, um weiterzumachen.",
+  "shell.lane.pttRefused.message": "PTT ABGELEHNT",
+  "shell.lane.pttRefused.detail": "Nexus hat die {{mode}}-Sendung um {{time}} UTC nicht getastet: Das Funkgerät nahm sein Sendeaudio noch über DAX, wie Nexus es eingestellt hatte, nicht von seinem Mikrofon, daher wäre Ihre Stimme nicht gesendet worden. Es wurde nichts gesendet. Lassen Sie die PTT los, dann stellt Nexus das Funkgerät gleich wieder auf seinen Mikrofoneingang um; drücken Sie die PTT dann erneut.",
   "shell.lane.clockRepairHold.message": "UHRREPARATUR — TX PAUSIERT",
   "shell.lane.clockRepairHold.detail": "Nexus repariert die Uhr dieses Computers. Bis die Reparatur fertig ist, höchstens zwei Minuten lang, beginnt keine Aussendung, damit sich die Uhr nicht mitten in einem Durchgang verstellt.",
   "shell.lane.prop.offline.message": "Ausbreitung: keine Livedaten",

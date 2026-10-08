@@ -10338,8 +10338,24 @@ impl RadioLoop {
                 // `ptt_plain`, not `ptt`: this is the operator talking into the radio's own
                 // microphone (or a broker client's key), so a Rear/Data radio (#381) keys it as it
                 // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
+                let asked = Instant::now();
                 let ptt_failed = rig.ptt_plain(ptt).is_err();
-                self.report_ptt(engine, ptt && ptt_failed);
+                if ptt {
+                    // A press Nexus's own Flex client kept off the air because the radio still
+                    // takes its transmit audio from the DAX Nexus set, not the mic (`flex::shim`):
+                    // the status lane says so, in place of the PTT and CAT advice, which would be
+                    // wrong. Each press answers anew.
+                    let mic_not_back = ptt_failed
+                        .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                        .flatten()
+                        .and_then(|d| d.key_refused_since(asked))
+                        .filter(|(_, r)| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
+                        .map(|(_, r)| r.mode);
+                    engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
+                    self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
+                } else {
+                    self.report_ptt(engine, false);
+                }
                 self.manual_ptt_applied = ptt;
             }
             // ⚠️ THE LEVEL PUSHES FROM HERE ON (power, mic gain, the receive levels, NR, notch,

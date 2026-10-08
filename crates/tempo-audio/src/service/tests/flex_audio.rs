@@ -1879,6 +1879,143 @@ fn native_audio_off_mid_message_leaves_the_voice_keyer_as_it_was() {
     );
 }
 
+/// The operator's Phone key on a station on DAX for FT8, made as the loop sees the switch to
+/// Phone (`ticks_between` 0: in the same tick) or that many ticks after it, with native audio
+/// turned off at the same moment as the switch when `native_off`. Read by value, for that press and
+/// for a second one once it is let go and the radio has its mic back: the source each `xmit 1`
+/// went out on (DAX until a `transmit set dax=0` goes before it), and after each press the status
+/// lane's refusal (its mode, as the UI receives it) and whether the PTT banner is up.
+fn phone_key_after_ft8(native_off: bool, ticks_between: usize) -> String {
+    let mut s = FlexScene::with_session(true, reports(&["USB"]));
+    run_until(&mut s, "settle: the tee and the DAX source", |s| {
+        s.backend.tee.lock().unwrap().is_some()
+            && s.log()
+                .iter()
+                .any(|(_, e)| command(e, "transmit set dax=1"))
+    });
+    s.run(300);
+    let switched = Instant::now();
+    if native_off {
+        s.set_native_audio(false);
+    }
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+        if ticks_between == 0 {
+            e.set_ptt(true);
+        }
+    }
+    for _ in 0..ticks_between {
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if ticks_between > 0 {
+        s.engine.lock().unwrap().set_ptt(true);
+    }
+    s.run(500);
+    let after = |s: &FlexScene| {
+        let e = s.engine.lock().unwrap();
+        format!(
+            "lane={} banner={}",
+            serde_json::to_value(e.snapshot()).unwrap()["radio"]["pttRefused"]["mode"],
+            e.snapshot().radio.audio_error.is_some()
+        )
+    };
+    let first = after(&s);
+    s.engine.lock().unwrap().set_ptt(false);
+    // Its mic back, and a first press that keyed let go of, as the client's readback proves it:
+    // its admission refuses a key until then.
+    run_until(&mut s, "the radio never had its mic back", |s| {
+        idle(s)
+            && s.state
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(|d| {
+                    let snap = d.session().snapshot();
+                    snap.transmit_ready && snap.model.transmit.dax == Some(false)
+                })
+    });
+    s.run(200);
+    s.engine.lock().unwrap().set_ptt(true);
+    s.run(400);
+    let second = after(&s);
+    s.engine.lock().unwrap().set_ptt(false);
+    s.run(300);
+    let mut dax = true;
+    let mut keyed_on = Vec::new();
+    for (_, e) in s.log().iter().filter(|(t, _)| *t >= switched) {
+        match e {
+            SimEvent::Command { text, .. } if text == "transmit set dax=0" => dax = false,
+            SimEvent::Command { text, .. } if text == "transmit set dax=1" => dax = true,
+            SimEvent::Command { text, .. } if text == "xmit 1" => {
+                keyed_on.push(if dax { "DAX" } else { "mic" })
+            }
+            _ => {}
+        }
+    }
+    format!("keyed on {keyed_on:?}; first press: {first}; second press: {second}")
+}
+
+/// ⭐⭐ NOR A SILENT PHONE OVER (operator ruling, 2026-10-08, "Same rule for Phone"). A station on
+/// DAX for FT8 switches to Phone: the radio takes its transmit audio from the DAX Nexus set until
+/// the routing's quiet point at the end of the tick puts the operator's mic back. A key the loop
+/// sees in that same tick (a press made with the switch, or held through it) went out on DAX, and
+/// with the key held no quiet point came, so the whole over was silent, the mic unused, with no
+/// word on screen. It is now refused, with the reason on the status lane in place of the PTT advice,
+/// until the radio has its mic back; the next press keys on the mic. The same with native audio
+/// turned off at the same moment. The control: a press the loop sees a tick later already went
+/// out after the mic's write, before as now, and nothing is refused.
+#[test]
+fn a_phone_key_is_refused_while_the_radio_is_still_on_the_dax_nexus_set() {
+    let cases = [
+        ("native on, same tick", false, 0),
+        ("native off, same tick", true, 0),
+        ("native on, next tick", false, 1),
+        ("native off, next tick", true, 1),
+    ];
+    let got: Vec<String> = cases
+        .iter()
+        .map(|(name, off, ticks)| format!("{name}: {}", phone_key_after_ft8(*off, *ticks)))
+        .collect();
+    let want: Vec<String> = cases
+        .iter()
+        .map(|(name, _, ticks)| {
+            let outcome = if *ticks == 0 {
+                "keyed on [\"mic\"]; first press: lane=\"USB\" banner=false; second press: \
+                 lane=null banner=false"
+            } else {
+                "keyed on [\"mic\", \"mic\"]; first press: lane=null banner=false; second press: \
+                 lane=null banner=false"
+            };
+            format!("{name}: {outcome}")
+        })
+        .collect();
+    assert_eq!(got.join("\n"), want.join("\n"));
+}
+
+/// The lane above is the Phone key's alone. A key the client keeps off the air for another
+/// cause, here a manual key in FT8 on the radio's mic as native audio comes on, keeps the PTT
+/// banner it always had, and the lane says nothing of a radio on DAX in place of its mic.
+#[test]
+fn a_key_kept_off_the_air_for_another_cause_keeps_the_ptt_banner() {
+    let mut s = FlexScene::new(true);
+    s.engine.lock().unwrap().set_ptt(true);
+    s.run(300);
+    let (lane, banner) = {
+        let e = s.engine.lock().unwrap();
+        (
+            serde_json::to_value(e.snapshot()).unwrap()["radio"]["pttRefused"].clone(),
+            e.snapshot().radio.audio_error.is_some(),
+        )
+    };
+    assert_eq!(
+        format!("xmit1={} lane={lane} banner={banner}", keys(&s)),
+        "xmit1=0 lane=null banner=true"
+    );
+}
+
 /// ⭐⭐ THE KEYING PATH NEVER CARRIES THE FLAG (operator ruling, 2026-10-03: "write the flag when
 /// the mode or the TX slice changes, never between the slot boundary and `xmit 1`"). FT8 with TX
 /// enabled and an over queued every TX period, while the operator turns native audio off and on at

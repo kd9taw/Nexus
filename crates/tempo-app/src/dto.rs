@@ -1105,6 +1105,21 @@ pub enum FlexAudioCause {
     /// while it was on, which nothing feeds until the operator's own setting, its mic input, is
     /// back.
     DaxUnfed,
+    /// A voice over, and the radio still takes its transmit audio from the DAX Nexus set (for a
+    /// digital mode, or while native audio was on) in place of its mic input, until Nexus puts the
+    /// mic back.
+    MicNotBack,
+}
+
+/// The operator's PTT that Nexus's own Flex client kept off the air because the radio still took
+/// its transmit audio from the DAX Nexus set, not its mic ([`RadioStatus::ptt_refused`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PttRefused {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// The transmit slice's mode, in the radio's own word (`USB`). Data, never translated.
+    pub mode: String,
 }
 
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
@@ -1416,6 +1431,13 @@ pub struct RadioStatus {
     /// ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_audio_lost: Option<SlotAudioLost>,
+    /// The operator's last PTT press (Phone) did not key: right after the transmit slice left a
+    /// digital mode, or native audio went off, the radio still took its transmit audio from the
+    /// DAX Nexus set, not its mic, and Nexus's own Flex client kept the key off the air. Cleared by
+    /// the next press that keys, or that fails for another reason. ABSENT until it happens, so
+    /// every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ptt_refused: Option<PttRefused>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]

@@ -2641,6 +2641,10 @@ pub struct Engine {
     /// which halted TX ([`Engine::halt_tx_for_lost_slot_audio`]). Kept until the operator turns TX
     /// on again.
     slot_audio_lost: Option<crate::dto::SlotAudioLost>,
+    /// The operator's PTT press Nexus's own Flex client kept off the air because the radio still
+    /// took its transmit audio from the DAX Nexus set, not its mic ([`Engine::set_ptt_refused`]).
+    /// Kept until a press keys, or fails for another reason.
+    ptt_refused: Option<crate::dto::PttRefused>,
     /// Unix-secs when the current unattended-transmit run began (first TX after the
     /// last operator action), or `None` if not transmitting. The watchdog trips on
     /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
@@ -5255,6 +5259,7 @@ impl Engine {
             slot_key_refused: None,
             slot_unkey_failed: None,
             slot_audio_lost: None,
+            ptt_refused: None,
             tx_watchdog_start: None,
             cq_pause_until: None,
             recent_dt: VecDeque::new(),
@@ -9422,6 +9427,18 @@ impl Engine {
             return;
         }
         self.manual_ptt = on && self.tx_enabled && self.tx_allowed();
+    }
+
+    /// What came of the operator's PTT press, as the radio loop keyed it, for the status lane:
+    /// `Some(mode)` when Nexus's own Flex client kept it off the air because the radio still took
+    /// its transmit audio from the DAX Nexus set, not its mic (operator ruling, 2026-10-08, "Same
+    /// rule for Phone"); `None` for a press that keyed, or failed for another reason, so each press
+    /// answers anew. `mode` is the transmit slice's, in the radio's own word.
+    pub fn set_ptt_refused(&mut self, mode: Option<&str>) {
+        self.ptt_refused = mode.map(|mode| crate::dto::PttRefused {
+            at: now_unix_secs(),
+            mode: mode.to_string(),
+        });
     }
 
     /// Whether the operator is holding manual PTT (live phone) — read by the loop. Also
@@ -21370,6 +21387,7 @@ contact yourself."
         s.radio.slot_key_refused = self.slot_key_refused.clone();
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
         s.radio.slot_audio_lost = self.slot_audio_lost.clone();
+        s.radio.ptt_refused = self.ptt_refused.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
