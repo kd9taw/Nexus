@@ -183,6 +183,7 @@ of a page.
 |---|---|
 | Set my callsign, grid or license class | [Settings ▸ Station ▸ Operator & Radio](settings-reference.md#operator--radio) |
 | Pick a COM port, rig model or baud rate | [Settings ▸ Radio ▸ Rig & CAT](settings-reference.md#rig--cat) |
+| Connect a Hermes Lite 2, or another SDR run by Thetis or piHPSDR | [Hermes Lite 2 and SDR Program Setup](../rigs/sdr-programs.md) |
 | Pick the sound card the radio is on | [Settings ▸ Radio ▸ Audio](settings-reference.md#audio) |
 | Hear the radio through the computer's speakers | [Settings ▸ Radio ▸ Receive audio on this computer](settings-reference.md#receive-audio-on-this-computer) |
 | Check why the rig is not connecting | The [Setup health strip](settings-reference.md#setup-health) in Settings ▸ Radio |

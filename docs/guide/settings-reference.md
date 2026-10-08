@@ -437,8 +437,10 @@ Baud continue across to the right.*
 - **Rig Model** — "Hamlib rig model." A curated ~50-rig list by default; tick
   **Show all models** for the full Hamlib catalog, or type a model number
   directly ("Hamlib may still support it even without a friendly name here").
-- **Connection** — "Serial for a USB/COM rig (most, incl. Xiegu); Network for a
-  FlexRadio via SmartSDR or a remote rigctld over TCP."
+- **Connection** — "Serial for a rig on a USB/COM port (most rigs, including
+  Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC
+  (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld." For a Hermes
+  Lite 2, see [Hermes Lite 2 and SDR Program Setup](../rigs/sdr-programs.md).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of

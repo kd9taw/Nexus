@@ -225,8 +225,8 @@ own CAT settings (usually a com0com virtual COM pair, or TCP).
 | Program | Model | Hamlib # |
 |---|---|---|
 | PowerSDR / mRX PS (older Flex, Apache ANAN) | *PowerSDR / mRX PS (Apache ANAN / legacy FLEX)* | 2048 |
-| Thetis (Hermes Lite 2 / ANAN / HPSDR) | *Thetis (Hermes Lite 2 / ANAN / HPSDR)* | 2054 |
-| piHPSDR / OpenHPSDR | *piHPSDR / OpenHPSDR (Hermes Lite 2 / ANAN)* | 2040 |
+| [Thetis (Hermes Lite 2 / ANAN / HPSDR)](sdr-programs.md) | *Thetis (Hermes Lite 2 / ANAN / HPSDR)* | 2054 |
+| [piHPSDR / OpenHPSDR](sdr-programs.md) | *piHPSDR / OpenHPSDR (Hermes Lite 2 / ANAN)* | 2040 |
 | SDR Console | *SDR Console (SDR-Radio.com)* | 2056 |
 
 These are **not** a TS-2000 emulation, whatever older guides say: 2048 and 2054
