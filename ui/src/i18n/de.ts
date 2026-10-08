@@ -4238,6 +4238,8 @@ export const DE: PartialCatalog = {
   "fieldDay.club.popOut.title": "Die Club-Bandtafel in eigenem Fenster öffnen (zweiter Monitor) — wer auf welchem Band ist, über alle Stationen",
   "fieldDay.club.skew": "Die Uhr dieses PCs weicht {{secs}} s vom Host ab — Uhrzeit dieses PCs prüfen",
   "fieldDay.club.error": "Host: {{msg}}",
+  "fieldDay.club.refused.chip": "Kein Sync",
+  "fieldDay.club.refused.body": "Club-Sync funktioniert vorerst nur für ARRL Field Day und Winter Field Day. Mit {{contest}} hostet diese Station kein Club-Event und tritt keinem bei. Jede Position führt ihr eigenes Log: danach die Cabrillo-Datei jeder Position exportieren und zu einer Datei zusammenführen.",
   "fieldDay.club.board.empty": "Noch keine Positionen gehört — jede weitere Nexus-Position in diesem Netz erscheint hier, sobald sie loggt.",
   "fieldDay.club.board.column.position": "Position",
   "fieldDay.club.bands.column.band": "Band",

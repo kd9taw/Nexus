@@ -3,7 +3,7 @@
 // WFD's final six hours). What remains here is pure labeling over a window the
 // backend supplies, so these tests feed explicit windows.
 import { describe, it, expect } from 'vitest'
-import { fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
+import { clubSyncRefused, fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
 
 // The real 2026 windows, as the Rust side computes them (pinned there in
 // crates/tempo-core/src/fd_rules.rs::event_windows_are_algorithmic_and_dodge_the_feb_spill).
@@ -80,5 +80,24 @@ describe('fdHeaderSubtitle', () => {
     const ev = fdEventFromWindow('wfd', start, start + 30 * 3600)!
     const sub = fdHeaderSubtitle(new Date(Date.UTC(2027, 0, 1)), ev)
     expect(sub).toContain('Jan 31–Feb 1')
+  })
+})
+
+// The engine refuses club sync for anything but the two Field Days (`Engine::fd_sync_enabled`,
+// pinned in Rust by `club_sync_is_refused_for_a_contest_that_is_not_a_field_day`). The screen
+// says why from this, so it has to read the same three settings the same way, the trim included.
+describe('clubSyncRefused', () => {
+  it('is true for hosting or joining while a contest that is not a Field Day is picked', () => {
+    expect(clubSyncRefused({ fdEvent: 'ilqp', fdHostEnable: true })).toBe(true)
+    expect(clubSyncRefused({ fdEvent: 'cqww_cw', fdJoinAddr: '192.168.1.10:42073' })).toBe(true)
+  })
+  it('is false for both Field Days and the blank default, whitespace and all', () => {
+    for (const fdEvent of ['arrlfd', 'wfd', '', ' wfd ', undefined]) {
+      expect(clubSyncRefused({ fdEvent, fdHostEnable: true })).toBe(false)
+    }
+  })
+  it('is false when club sync is not switched on at all', () => {
+    expect(clubSyncRefused({ fdEvent: 'ilqp', fdHostEnable: false, fdJoinAddr: '   ' })).toBe(false)
+    expect(clubSyncRefused(null)).toBe(false)
   })
 })

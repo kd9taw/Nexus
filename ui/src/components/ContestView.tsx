@@ -13,7 +13,7 @@ import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, se
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
-import { contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
+import { clubSyncRefused, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -1143,6 +1143,30 @@ export function FdClubSection({
   )
 }
 
+/**
+ * Club sync switched on for a contest it cannot run, said where the club block would be.
+ *
+ * The engine refuses it (`clubSyncRefused`, `Engine::fd_sync_enabled`): the club log runs a
+ * Field Day event's rules, and hosting any other contest used to build an ARRL Field Day club
+ * log in silence. With nothing syncing there is no club block, so without this the screen
+ * would simply go quiet about a switch the operator turned on.
+ */
+export function FdClubRefused({ contest }: { contest: string }) {
+  return (
+    <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
+      <div style={CLUB_HEADER}>
+        <span style={{ fontSize: textPx(13), fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.club.head')}
+        </span>
+        <span style={clubChipStyle('refused')}>{t('fieldDay.club.refused.chip')}</span>
+      </div>
+      <div style={CLUB_WARN} role="status">
+        {t('fieldDay.club.refused.body', { contest })}
+      </div>
+    </div>
+  )
+}
+
 // Scoreboard header (operator + pop-out) — inline off the shared tokens so it stays
 // theme-aware without touching styles.css, like SectionsBoard above.
 const SCOREBOARD_HEADER: CSSProperties = {
@@ -1897,6 +1921,11 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
       {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
       {fieldDay?.club && (
         <FdClubSection club={fieldDay.club} onExport={observed ? undefined : handleExport} busy={busy !== null} readOnly={observed} />
+      )}
+      {/* …or why it is not syncing: switched on for a contest club sync cannot run. The
+          station's own settings, which a Remote observation does not carry. */}
+      {!fieldDay?.club && clubSyncRefused(nativeSettings) && (
+        <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} />
       )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}

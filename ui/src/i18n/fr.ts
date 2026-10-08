@@ -1675,6 +1675,8 @@ export const FR: PartialCatalog = {
   "fieldDay.club.popOut.title": "Détacher le tableau des bandes du club dans sa propre fenêtre (second écran) — qui est sur quelle bande, à chaque poste",
   "fieldDay.club.skew": "L'horloge de ce PC diffère de {{secs}} s de celle de l'hôte — vérifiez l'horloge de ce PC",
   "fieldDay.club.error": "Hôte : {{msg}}",
+  "fieldDay.club.refused.chip": "Pas de synchro",
+  "fieldDay.club.refused.body": "Pour l'instant, la synchro club ne fonctionne que pour ARRL Field Day et Winter Field Day. Avec {{contest}} sélectionné, cette station n'héberge ni ne rejoint aucun événement de club. Chaque position tient son propre log : ensuite, exportez le fichier Cabrillo de chaque position et fusionnez-les en un seul.",
   "fieldDay.club.board.empty": "Aucune position entendue pour l'instant — chaque autre position Nexus de ce réseau apparaît ici dès qu'elle journalise.",
   "fieldDay.club.board.column.position": "Position",
   "fieldDay.club.bands.column.band": "Bande",

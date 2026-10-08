@@ -32077,20 +32077,10 @@ fn start_on_the_logbook(
             // quietly on a timer instead of re-erroring every second.
             let mut bind_failed: Option<(u16, std::time::Instant)> = None;
             loop {
-                let (want_host, want_addr) = {
-                    let e = engine_lock(&mgr_engine);
-                    let s = e.settings();
-                    let want_host = s.fd_host_enable.then_some(s.fd_host_port);
-                    // The host joins ITSELF over loopback; otherwise the
-                    // operator's join address (empty = no client).
-                    let want_addr = if s.fd_host_enable {
-                        Some(format!("127.0.0.1:{}", s.fd_host_port))
-                    } else {
-                        let a = s.fd_join_addr.trim().to_string();
-                        (!a.is_empty()).then_some(a)
-                    };
-                    (want_host, want_addr)
-                };
+                // What to run is the engine's answer (the host's own loopback join
+                // included), so sync configured for a contest it cannot run, anything
+                // but the two Field Days, is refused where the sockets are made.
+                let (want_host, want_addr) = engine_lock(&mgr_engine).fd_sync_targets();
 
                 // --- host listener + beacon reconcile ---
                 if want_host != hosting.as_ref().map(|(p, _)| *p) {

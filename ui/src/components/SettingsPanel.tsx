@@ -115,7 +115,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { CONTESTS, isFieldDay } from '../fdEvent'
+import { CONTESTS, contestName, isFieldDay } from '../fdEvent'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -12407,6 +12407,13 @@ export function SettingsPanel({
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day-club">
             <legend>{t('settings.fdClub.legend')}</legend>
+            {/* Club sync runs a Field Day event's rules, so the engine refuses it for any
+                other contest (`Engine::fd_sync_enabled`). Said here, where it is turned on. */}
+            {!isFieldDay(form.fdEvent?.trim()) && (
+              <p className="settings-note" role="note">
+                {t('fieldDay.club.refused.body', { contest: contestName(form.fdEvent?.trim()) })}
+              </p>
+            )}
             <label className="settings-field">
               <span className="settings-label">{t('settings.fdClub.host.label')}</span>
               <button disabled={remote}

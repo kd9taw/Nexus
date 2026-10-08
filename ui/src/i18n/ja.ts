@@ -2610,6 +2610,8 @@ export const JA: PartialCatalog = {
   "fieldDay.club.popOut.title": "クラブのバンドボードを別ウィンドウに切り離します（セカンドモニター用）— 各ポジションがどのバンドに出ているかが分かります",
   "fieldDay.club.skew": "このPCの時計がホストと{{secs}}秒ずれています — このPCの時計を確認してください",
   "fieldDay.club.error": "ホスト: {{msg}}",
+  "fieldDay.club.refused.chip": "同期なし",
+  "fieldDay.club.refused.body": "クラブ同期は現在、ARRL Field Day と Winter Field Day でのみ使えます。{{contest}} を選択している間、この局はクラブイベントをホストも参加もしません。各ポジションはそれぞれ自分のログを持つため、終了後に各ポジションの Cabrillo ファイルを書き出し、1つに結合してください。",
   "fieldDay.club.board.empty": "まだポジションが見つかりません — このネットワーク上の他の Nexus ポジションは、ログを取った時点でここに表示されます。",
   "fieldDay.club.board.column.position": "ポジション",
   "fieldDay.club.bands.column.band": "バンド",

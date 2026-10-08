@@ -1675,6 +1675,8 @@ export const ES: PartialCatalog = {
   "fieldDay.club.popOut.title": "Abrir el tablero de bandas del club en su propia ventana (segundo monitor) — quién está en qué banda, en todos los puestos",
   "fieldDay.club.skew": "El reloj de este PC difiere {{secs}} s del anfitrión — revisa el reloj de este PC",
   "fieldDay.club.error": "Anfitrión: {{msg}}",
+  "fieldDay.club.refused.chip": "Sin sincronizar",
+  "fieldDay.club.refused.body": "Por ahora, la sincronización de club solo funciona para ARRL Field Day y Winter Field Day. Con {{contest}} seleccionado, esta estación no aloja ningún evento de club ni se une a ninguno. Cada posición lleva su propio log: después, exporta el archivo Cabrillo de cada posición y únelos en uno.",
   "fieldDay.club.board.empty": "Aún no se oyen posiciones — cada otra posición Nexus de esta red aparece aquí en cuanto registra.",
   "fieldDay.club.board.column.position": "Posición",
   "fieldDay.club.bands.column.band": "Banda",

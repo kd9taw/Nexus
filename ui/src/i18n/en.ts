@@ -3875,6 +3875,8 @@ export const EN = {
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
   'fieldDay.club.error': 'Host: {{msg}}',
+  'fieldDay.club.refused.chip': 'Not syncing',
+  'fieldDay.club.refused.body': 'Club sync works only for ARRL Field Day and Winter Field Day for now. With {{contest}} selected, this station does not host or join a club event. Each position keeps its own log, so export every position\'s Cabrillo file afterwards and merge them into one.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
