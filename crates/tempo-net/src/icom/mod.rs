@@ -203,7 +203,8 @@ pub const PROVENANCE: &[Ported] = &[
         differences: "one owner with time passed in, returning actions; no reconnect inside; \
                       liveness fixed at 5000 ms; transmit-enable 0 and no audio; frames never \
                       truncated; a frame refused before a sequence is used; one advertised radio \
-                      with another name is a warning; the control replay buffer purged at 10 s",
+                      with another name is a warning; the highest offered rate where 48 kHz \
+                      is not; the control replay buffer purged at 10 s",
         blobs: &[
             (
                 "rigs/icom/network_session.c",

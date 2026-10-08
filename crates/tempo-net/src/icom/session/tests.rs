@@ -54,7 +54,7 @@ use std::num::NonZeroU16;
 use std::time::Duration;
 
 use super::*;
-use crate::icom::caps::{Model, Rates, RATE_8000};
+use crate::icom::caps::{Model, Rates, RATE_24000, RATE_8000};
 use crate::icom::reconnect::{End, Ladder, Next};
 use crate::icom::sim::{
     self, Entry, SimRadio, SocketClient, SocketRadio, World, FREQ_REPLY, READ_FREQ, STEP_MS,
@@ -361,19 +361,52 @@ fn capability_index_out_of_range() {
 // upstream: test_session_capability_rate_rejected
 #[test]
 fn capability_rate_rejected() {
-    // A rate the radio does not advertise fails at connect, where the message can name the rates
-    // it does offer. (Upstream's second half, the same radio at a rate it offers, needs a rate
-    // setting; there is none at this stage, and every other test connects at 48 kHz.)
+    // A radio that offers no receive rate at all fails at connect, where the message can say so.
+    let mut radio = SimRadio::new();
+    radio.radios[0].rx = 0;
+    radio.radios[0].tx = 0;
+    let mut w = world(radio);
+    assert!(w.run_until(1000, World::closed));
+    assert_eq!(failure(&w), Some(ConnectError::RateNotOffered(Rates(0))));
+    assert!(w.radio.connection_info.is_none());
+}
+
+/// The rate the connection request names, as the radio received it.
+fn requested_rates(w: &World) -> (u32, u32) {
+    let info = w.radio.connection_info.as_ref().expect("the request");
+    let be32 = |at: usize| u32::from_be_bytes([info[at], info[at + 1], info[at + 2], info[at + 3]]);
+    (be32(0x74), be32(0x78))
+}
+
+/// ⭐ NO AUDIO STARTS AT THIS STAGE, so the rate only has to be one the radio takes: 48 kHz where
+/// it offers it, as upstream asks, else the highest it offers. Upstream refuses a radio that lacks
+/// the configured rate; here that would cost the operator CAT over a rate nothing uses.
+#[test]
+fn the_request_names_48_khz_or_the_highest_rate_the_radio_offers() {
+    let w = connected(SimRadio::new());
+    assert_eq!(
+        requested_rates(&w),
+        (48_000, 48_000),
+        "every rate offered: 48 kHz"
+    );
+    let mut radio = SimRadio::new();
+    radio.radios[0].rx = RATE_8000 | RATE_24000;
+    radio.radios[0].tx = RATE_8000 | RATE_24000;
+    let w = connected(radio);
+    assert_eq!(
+        requested_rates(&w),
+        (24_000, 24_000),
+        "no 48 kHz: the highest offered"
+    );
     let mut radio = SimRadio::new();
     radio.radios[0].rx = RATE_8000;
     radio.radios[0].tx = RATE_8000;
-    let mut w = world(radio);
-    assert!(w.run_until(1000, World::closed));
-    assert_eq!(
-        failure(&w),
-        Some(ConnectError::RateNotOffered(Rates(RATE_8000)))
+    let w = connected(radio);
+    assert_eq!(requested_rates(&w), (8_000, 8_000));
+    assert!(
+        connected_radio(&w).tx_audio_advertised,
+        "its transmit audio is still reported"
     );
-    assert!(w.radio.connection_info.is_none());
 }
 
 // upstream: test_session_capability_tx_suppressed

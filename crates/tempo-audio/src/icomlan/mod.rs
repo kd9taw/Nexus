@@ -180,7 +180,7 @@ pub fn connect_failed_text(e: &ConnectError, host: Ipv4Addr, model: IcomModel) -
             net_model(model).map_or("Icom", Model::radio_name)
         ),
         ConnectError::RateNotOffered(_) => {
-            "The radio did not offer the receive format Nexus asks for".into()
+            "The radio offered no audio format for Nexus to name in its connection request".into()
         }
         ConnectError::NoCivPort => "The radio did not open its CI-V port for Nexus".into(),
         ConnectError::Request(_) => "Nexus could not build its request to the radio".into(),

@@ -69,7 +69,9 @@
 //! or one too long to keep for a retransmit, is refused before a sequence number is used, where
 //! upstream sends it and reports a failure; a radio name that differs from the model's is a
 //! warning when the radio advertises only one radio, where upstream refuses (with several
-//! advertised, a name that matches none is still refused); a datagram on any socket is serviced
+//! advertised, a name that matches none is still refused); a radio that does not offer 48 kHz is
+//! asked for the highest receive rate it does offer, since no audio stream is started, where
+//! upstream refuses one that lacks the configured rate; a datagram on any socket is serviced
 //! as it arrives, so a ping on the control socket during the CI-V handshake is answered then; the
 //! control socket's replay buffer is purged at the same 10 s age as the CI-V one, so the login
 //! packet, whose credential fields are only obfuscated, is not kept for the session's life; the
@@ -139,7 +141,8 @@ pub const DRAIN_TOTAL_MS: u64 = 250;
 pub const DISCONNECT_GRACE_MS: u64 = 300;
 /// The client name the login carries.
 pub const CLIENT_NAME: &str = "Nexus";
-/// The receive rate the connection request names (upstream's default; nothing is started).
+/// The receive rate the connection request names where the radio offers it (upstream's default;
+/// nothing is started). A radio that does not is asked for the highest rate it does offer.
 pub const RX_RATE_HZ: u32 = 48_000;
 /// The longest CI-V frame the session sends: one whose packet the replay buffer can keep.
 pub const MAX_CIV_FRAME: usize = SEQBUF_PKTMAX - CIV_HEADER_LEN;
@@ -236,7 +239,7 @@ pub enum ConnectError {
     LoginRefused,
     /// No advertised radio could be chosen.
     NoRadio(Unselected),
-    /// The chosen radio does not offer the receive rate the request names.
+    /// The chosen radio advertises no receive rate at all.
     RateNotOffered(Rates),
     /// The radio answered the connection request with an error: it is still holding another
     /// session's slot.
@@ -417,6 +420,8 @@ struct Chosen {
     civ_addr: u8,
     link: Link,
     tx_audio: bool,
+    /// The rate the connection request names, both ways.
+    rate: u32,
 }
 
 enum Phase {
@@ -829,8 +834,8 @@ impl Session {
             user: self.user.as_str(),
             rx_codec: CODEC_LPCM16,
             tx_codec: CODEC_LPCM16,
-            rx_rate: RX_RATE_HZ,
-            tx_rate: RX_RATE_HZ,
+            rx_rate: radio.rate,
+            tx_rate: radio.rate,
             civ_port: self.sockets[at(Role::Civ)].local_port,
             audio_port: self.sockets[at(Role::Audio)].local_port,
             tx_buffer_ms: TX_BUFFER_MS,
@@ -936,15 +941,24 @@ impl Session {
             },
         };
         let radio = &caps.radios[index];
-        if !radio.rx_rates.supports(RX_RATE_HZ) {
-            return Err(ConnectError::RateNotOffered(radio.rx_rates));
-        }
+        // No audio stream is started at this stage, so the rate only has to be one the radio
+        // takes: 48 kHz where it offers it, as upstream asks, else the highest it offers.
+        let rate = if radio.rx_rates.supports(RX_RATE_HZ) {
+            RX_RATE_HZ
+        } else {
+            *radio
+                .rx_rates
+                .list()
+                .first()
+                .ok_or(ConnectError::RateNotOffered(radio.rx_rates))?
+        };
         self.radio = Some(Chosen {
             identity: radio.identity,
             name: radio.name.clone(),
             civ_addr: radio.civ_addr,
             link: radio.link,
-            tx_audio: radio.tx_rates.0 != 0 && radio.tx_rates.supports(RX_RATE_HZ),
+            tx_audio: radio.tx_rates.0 != 0 && radio.tx_rates.supports(rate),
+            rate,
         });
         Ok(())
     }
