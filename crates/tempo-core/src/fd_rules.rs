@@ -171,10 +171,11 @@ pub struct AssistancePolicy {
 /// Which Saturday of the month anchors the event weekend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeekendRule {
-    /// The nth Saturday whose Sunday is still in the month (SFD: 4th of June).
+    /// The nth Saturday whose Sunday is still in the month (SFD: 4th of June; WFD:
+    /// 4th of January since the sponsor's 2027 rules).
     NthFull(u8),
-    /// The last such Saturday (WFD: last full weekend of January — the
-    /// Feb-spill correction lives in "full", not here).
+    /// The last such Saturday (CQ WW RTTY: the last full weekend of September — a
+    /// spill into the next month is ruled out by "full", not here).
     LastFull,
 }
 
@@ -3539,7 +3540,7 @@ mod tests {
             27 * 3600,
             "27-hour SFD period"
         );
-        // Last FULL weekend of January 2026 = the 24th, NOT the 31st (whose
+        // 4th FULL weekend of January 2026 = the 24th; the 31st is no full weekend (its
         // Sunday spills into February).
         assert_eq!(full_weekend_saturdays(2026, 1, 31), vec![3, 10, 17, 24]);
         let wfd = ruleset(FdEvent::WinterFd, 2026).event_window(2026);
@@ -3557,6 +3558,41 @@ mod tests {
             "30-hour WFD period"
         );
         assert_eq!(wfd.end_unix % 86_400, 22 * 3600, "2200Z Sunday end");
+    }
+
+    /// ⭐ **Winter Field Day is the FOURTH full weekend of January**, the sponsor's own
+    /// statement for 2027 (winterfieldday.org rules, read 2026-10-08): *"Winter Field Day is
+    /// held the 4th full weekend in January. For 2027, it will be held on January 23rd and
+    /// 24th."* The 2025 rules said *"the last full weekend in January"*, and the two readings
+    /// part in any January with five full weekends: 2027 is the first since that wording
+    /// changed, when the last full weekend (30–31) would put the countdown, the spectator
+    /// board's hourly chart and every "starts in" a week late. 2028 parts again (22 against
+    /// 29). The other years pin the same rule where the two agree.
+    #[test]
+    fn winter_field_day_is_the_fourth_full_weekend_of_january() {
+        let wfd = ruleset(FdEvent::WinterFd, 2026);
+        for (year, saturday) in [
+            (2026, 24),
+            (2027, 23),
+            (2028, 22),
+            (2029, 27),
+            (2030, 26),
+            (2031, 25),
+            (2032, 24),
+            (2033, 22),
+        ] {
+            let w = wfd.event_window(year);
+            assert_eq!(
+                w.start_unix,
+                days_from_civil(year as i64, 1, saturday) as u64 * 86_400 + 16 * 3600,
+                "WFD {year} starts 1600Z Saturday 1/{saturday}"
+            );
+            assert_eq!(
+                w.end_unix - w.start_unix,
+                30 * 3600,
+                "WFD {year} runs 30 hours"
+            );
+        }
     }
 
     #[test]

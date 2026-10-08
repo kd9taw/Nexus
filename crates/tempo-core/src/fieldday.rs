@@ -25,7 +25,7 @@ pub enum FdEvent {
     /// CW/digital 2 pts, power multiplier, ~100-pt bonus menu.
     #[default]
     ArrlFd,
-    /// Winter Field Day (last full January weekend): category like `2O`
+    /// Winter Field Day (the fourth full January weekend): category like `2O`
     /// (count + Home/Indoor/Mobile/Outdoor).
     WinterFd,
 }

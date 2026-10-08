@@ -113,6 +113,27 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
         ),
         "a file downloaded before NYQP existed loses to this seed"
     );
+    // …and for Winter Field Day's date. The file published from the seed before the
+    // sponsor's 2027 rules is stamped 2026-09-29T07:00:00Z and carries the last-full-weekend
+    // rule; on an equal stamp it would win, and every upgraded install would count WFD 2027
+    // down to 30 January, a week late.
+    let mut before_wfd_date: serde_json::Value = serde_json::from_str(SEED).unwrap();
+    let wfd = before_wfd_date["rulesets"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["event"] == "wfd")
+        .expect("the seed carries wfd");
+    wfd["window"]["weekend"] = "last_full".into();
+    wfd["window"].as_object_mut().unwrap().remove("n");
+    before_wfd_date["generated"] = "2026-09-29T07:00:00Z".into();
+    assert!(
+        matches!(
+            fd_rules::install_from(&before_wfd_date.to_string()),
+            Err(RulesInitError::OlderThanSeed { .. })
+        ),
+        "a file downloaded before the WFD date moved loses to this seed"
+    );
 
     // -- The install: seed with SFD phone points edited 1 → 3. -------------
     let mut spec: serde_json::Value = serde_json::from_str(SEED).unwrap();
