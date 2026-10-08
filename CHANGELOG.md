@@ -159,6 +159,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
   file again does not add them twice.
+- **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
+  An activator's own row on the Needed board still asked only whether you had worked the country in
+  CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever
+  modes it announced. So an activator or a DXpedition on FT8 in a country you had worked only on
+  FT4 showed no new mode there, while the same station decoded by your radio did. The activator row
+  now judges the mode the spot names ("New mode — FT8 … (any band) · POTA …"), and a DXpedition card
+  is a new mode while any mode the operation announced is one you have never worked that country
+  in. A spot that names only data, phone or digital, or no mode at all, and an operation that
+  announced no mode or only "PSK", keep the old rule: a new mode only when you have never worked
+  that country in any mode of that kind.
 
 ## [1.17.0] — 2026-10-07
 
