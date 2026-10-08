@@ -14624,6 +14624,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 #[cfg(test)]
 mod tests {
     mod clock_repair_tests;
+    mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
