@@ -289,6 +289,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
   what it is waiting for, as the other boxes do: where to set up a rotator or an amplifier, that no
   needed station is being heard yet, or that the contest calendar appears once Nexus is online.
+- **The note in Nexus's Hamlib folder says what is in it.** The README.txt installed beside Hamlib
+  said Linux used the system Hamlib and told AppImage users to install libhamlib-utils, but every
+  download has carried its own Hamlib since 1.9.0, on Linux and macOS as on Windows. It now says what
+  each download carries, that Nexus starts that copy first, and when it falls back to a Hamlib
+  installed on the computer.
 
 ## [1.17.0] — 2026-10-07
 
