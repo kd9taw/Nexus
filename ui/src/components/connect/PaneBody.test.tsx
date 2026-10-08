@@ -35,7 +35,10 @@ import { SHARED_PANES } from '../../features/sharedPanes'
 import type { PaneContext } from './paneContext'
 import type { PaneId } from '../../features/connectConfig'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 const ctx = (over: Partial<PaneContext> = {}): PaneContext =>
   ({
@@ -78,6 +81,11 @@ async function drawn(node: ReactNode): Promise<string> {
 
 describe('PaneBody — the body of every shared box', () => {
   it('hosts each entry: exactly what its box draws, or its one line exactly when the box draws no panel', async () => {
+    // One instant for both draws. The beacons box shows the beacon on the air now, a new one every 10 s, and
+    // each box is drawn twice here; a slot change between the two draws read as a mismatch. Frozen 1 ms before a
+    // slot change, so a clock that moves again fails this every run, not once in a hundred.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(Date.UTC(2026, 9, 8, 12, 0, 9, 999)))
     const fellBack: string[] = []
     for (const e of SHARED_PANES) {
       const def = paneById(e.pane)!
