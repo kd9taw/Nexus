@@ -3,12 +3,13 @@
 //! With waveform output enabled, the radio streams each scope sweep as a numbered burst of
 //! `27 00` frames: the first frame of a burst carries a header (center/fixed mode, the RF
 //! position, an out-of-range flag), the rest carry the waveform points (one byte each,
-//! `0x00..=0xA0` display height). [`ScopeAssembler`] reassembles bursts into complete
+//! display height up to the radio's own top: `0xA0`, or `0xC8` on an IC-7610 — see
+//! `point_max`). [`ScopeAssembler`] reassembles bursts into complete
 //! sweeps normalized to the waterfall's 0..1 row contract, tagged with the absolute RF span,
 //! and [`publish_sweep`] hands each one to the spectrum feed as one frame.
 //!
 //! Scope bytes never collide with CI-V framing (`FE`/`FD`/`FB`/`FA`): sequence counters are
-//! BCD, frequencies/spans are BCD, and waveform points top out at `0xA0` — so the ordinary
+//! BCD, frequencies/spans are BCD, and waveform points top out at `0xC8` — so the ordinary
 //! [`super::frame::FrameSplitter`] splits scope frames safely and hands them here.
 //!
 //! Byte layout per the official Icom CI-V reference (IC-7300 §19, command 27; shared by the
@@ -21,12 +22,36 @@
 //! layout, point count, and height range; its dual-receiver differences are only which scope
 //! the stream carries (`27 12`, pinned to Main by [`scope_stream_frames`]) and the rig-side
 //! precondition that wave output over USB needs CI-V USB baud 115200 (it NAKs `27 11 01` at
-//! lower rates — the "scope never streams" trap).
+//! lower rates — the "scope never streams" trap). The IC-7610 (A7380-7EX-4, PDF p. 15) has
+//! the same frame layout with two different numbers: 15 frames over USB (the header, 13 of
+//! 50 points, then 39) and data range 0–200, length 689 — which is why the scale is per model.
 
+use super::commands::IcomModel;
 use super::frame::{bcd_to_freq, Frame};
 
-/// Scope display height ceiling: waveform bytes run 0..=160.
-const POINT_MAX: f32 = 160.0;
+/// The top of this radio's waveform scale: the value its strongest point is sent as. Each one
+/// is the "Data range" in item 7 of the radio's own "Scope waveform data" (`27 00`) entry:
+///
+/// | Model | Top | Points | Source |
+/// |---|---|---|---|
+/// | IC-7300 | 160 (`A0`) | 475 | Full Manual A7292-4EX-12, PDF p. 172 (printed 19-14) |
+/// | IC-7610 | **200** (`C8`) | 689 | CI-V Reference Guide A7380-7EX-4, PDF p. 15 |
+/// | IC-9700 | 160 | 475 | CI-V Reference Guide A7508-3EX-4, PDF p. 26 |
+/// | IC-705 | 160 | 475 | CI-V Reference Guide A7560-8EX-6, PDF p. 29 |
+/// | IC-905 | 160 (`A0`) | 475 | CI-V Reference Guide A7711-9EX-2, PDF p. 29 |
+///
+/// Read against 160, every IC-7610 point from 161 to 200 drew at full height: the strongest
+/// fifth of its scale came out flat. A radio the caller did not name (`None`) keeps 160, the
+/// top of every native Icom but the 7610. No wildcard arm, so a model added to [`IcomModel`]
+/// has to be read against its own guide first: the IC-7760, for one, tops out at 200 like
+/// the 7610 (A7788-8EX, PDF p. 24).
+fn point_max(model: Option<IcomModel>) -> u8 {
+    match model {
+        Some(IcomModel::Ic7610) => 200,
+        Some(IcomModel::Ic7300 | IcomModel::Ic9700 | IcomModel::Ic705 | IcomModel::Ic905)
+        | None => 160,
+    }
+}
 /// Cap accumulated points per sweep — a corrupt total can't grow the buffer unbounded.
 const MAX_POINTS: usize = 4096;
 
@@ -150,17 +175,26 @@ fn parse_waveform(data: &[u8]) -> Option<(u32, u32, Option<SweepHeader>, &[u8])>
 /// a completed, in-range sweep pops out. Missed/out-of-order frames drop the burst and
 /// resync on the next header — a lossy stream degrades to a lower frame rate, never to
 /// a corrupted row.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ScopeAssembler {
     header: Option<SweepHeader>,
     points: Vec<u8>,
     next_seq: u32,
     total: u32,
+    /// The top of this radio's scale (`point_max`): a point is divided by it.
+    point_max: f32,
 }
 
 impl ScopeAssembler {
-    pub fn new() -> Self {
-        Self::default()
+    /// An assembler for `model`'s sweeps, scaled to that radio's own range.
+    pub fn new(model: Option<IcomModel>) -> Self {
+        ScopeAssembler {
+            header: None,
+            points: Vec::new(),
+            next_seq: 0,
+            total: 0,
+            point_max: f32::from(point_max(model)),
+        }
     }
 
     pub fn push(&mut self, f: &Frame) -> Option<ScopeSweep> {
@@ -198,7 +232,7 @@ impl ScopeAssembler {
             }
             let row = points
                 .iter()
-                .map(|&p| (f32::from(p) / POINT_MAX).min(1.0))
+                .map(|&p| (f32::from(p) / self.point_max).min(1.0))
                 .collect();
             return Some(ScopeSweep {
                 row,
@@ -221,8 +255,9 @@ impl ScopeAssembler {
 /// with the next frame number, which is how a reader polling faster than the radio sweeps tells a
 /// new sweep from the last one again.
 ///
-/// - The scale is RELATIVE: a point is the rig's display height (0–160) against its own REF
-///   level, which Nexus sets but never reads back, so no dB axis can be claimed for it.
+/// - The scale is RELATIVE: a point is the rig's display height (0–160, or 0–200 on an
+///   IC-7610) against its own REF level, which Nexus sets but never reads back, so no dB axis
+///   can be claimed for it.
 /// - The slice is 0, the Main receiver: the stream is pinned to the Main scope
 ///   ([`scope_stream_frames`]) and `parse_waveform` drops the Sub's sweeps.
 pub fn publish_sweep(feed: &tempo_app::engine::SpectrumFeed, sweep: ScopeSweep) {
@@ -268,7 +303,7 @@ mod tests {
 
     #[test]
     fn assembles_a_three_frame_center_mode_sweep() {
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         assert!(asm.push(&wf_frame(1, 3, &center_header())).is_none());
         assert!(asm.push(&wf_frame(2, 3, &[0, 40, 80])).is_none());
         let sweep = asm.push(&wf_frame(3, 3, &[120, 160])).expect("complete");
@@ -283,7 +318,7 @@ mod tests {
 
     #[test]
     fn fixed_mode_header_uses_edges_directly() {
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         let mut hdr = vec![0x01]; // fixed mode
         hdr.extend_from_slice(&freq_to_bcd(144_000_000)); // lower
         hdr.extend_from_slice(&freq_to_bcd(144_500_000)); // upper
@@ -296,7 +331,7 @@ mod tests {
 
     #[test]
     fn a_missed_frame_drops_the_burst_and_resyncs_on_the_next_header() {
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         assert!(asm.push(&wf_frame(1, 3, &center_header())).is_none());
         // Frame 2 lost; frame 3 arrives → burst dropped, no bogus sweep.
         assert!(asm.push(&wf_frame(3, 3, &[1, 2])).is_none());
@@ -307,7 +342,7 @@ mod tests {
 
     #[test]
     fn out_of_range_sweeps_are_dropped() {
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         let mut hdr = vec![0x00];
         hdr.extend_from_slice(&freq_to_bcd(145_000_000));
         hdr.extend_from_slice(&freq_to_bcd(25_000));
@@ -345,7 +380,7 @@ mod tests {
     fn sub_receiver_sweeps_are_ignored() {
         // A dual-watch IC-9700 interleaves sub-receiver sweeps (main/sub byte 01) on the
         // same command — mixing them into the main burst would corrupt both.
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         let mut data = vec![0x00, 0x01, 0x01, 0x02]; // sub receiver, seq 1 of 2
         data.extend_from_slice(&center_header());
         let sub = Frame {
@@ -365,7 +400,7 @@ mod tests {
     fn scroll_modes_parse_with_their_base_styles_and_unknown_modes_drop() {
         // Mode 02 = Scroll-C carries CENTER-style fields (center ± span); 03 = Scroll-F
         // carries FIXED-style edges; an unknown mode byte must drop, not misread.
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         let mut hdr = vec![0x02]; // Scroll-C
         hdr.extend_from_slice(&freq_to_bcd(145_000_000));
         hdr.extend_from_slice(&freq_to_bcd(25_000));
@@ -417,7 +452,7 @@ mod tests {
 
     #[test]
     fn garbage_and_foreign_subcommands_are_ignored() {
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         // A 27 14 (mode set ack echo) or short/foreign frame must not panic or emit.
         let foreign = Frame {
             to: 0xE0,
@@ -447,7 +482,7 @@ mod tests {
                 unreachable!("a sweep was published, so the fallback is never asked")
             })
         };
-        let mut asm = ScopeAssembler::new();
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         assert!(asm.push(&wf_frame(1, 2, &center_header())).is_none());
         publish_sweep(
             &feed,

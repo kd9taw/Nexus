@@ -62,36 +62,12 @@ note: $NEW carries a prerelease suffix, so this is a HAND-BUILT tester build.
 EOF
 fi
 
-# 1. The three manifests.
-sed -i "0,/^version = \"[^\"]*\"/s//version = \"$NEW\"/" src-tauri/Cargo.toml
-sed -i "0,/\"version\": *\"[^\"]*\"/s//\"version\": \"$NEW\"/" src-tauri/tauri.conf.json
-npm version --prefix ui --no-git-tag-version --allow-same-version "$NEW" >/dev/null
-# CITATION.cff sat at 0.21.5 for twenty-one releases because nothing here wrote it; it is the
-# file academic citations resolve against, so it moves with the rest.
-sed -i "0,/^version: .*/s//version: $NEW/" CITATION.cff
-
-# 2. Tracked lockfile follows the manifest.
-cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null 2>&1 \
-  || echo "warn: cargo metadata failed — refresh src-tauri/Cargo.lock with the next build" >&2
-
-# 3. CHANGELOG heading.
-TODAY=$(date +%F)
-# The guide's overview states the version it documents, in prose, on its own line. It ships
-# inside the app, on the website and in the PDF/EPUB, so a stale number here tells every reader
-# the manual describes a release it does not. It was 1.10.3 while the book was 1.11.1.
-if grep -q '^\*\*This guide documents Nexus ' docs/guide/index.md; then
-  sed -i -E "s/^\*\*This guide documents Nexus [0-9]+\.[0-9]+\.[0-9]+[^*]*\.\*\*/**This guide documents Nexus $NEW.**/" docs/guide/index.md
-  echo "guide overview: documents Nexus $NEW"
-fi
-
-if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
-  sed -i "0,/^## \[Unreleased\]/s//## [$NEW] — $TODAY/" CHANGELOG.md
-  echo "CHANGELOG: [Unreleased] -> [$NEW] — $TODAY"
-else
-  echo "warn: no '## [Unreleased]' section in CHANGELOG.md — write the release notes by hand." >&2
-fi
-
-# 3b. The release prose, and this one REFUSES rather than warns.
+# 0. The release prose, and this one REFUSES rather than warns. It runs BEFORE anything is
+# changed. It used to run after steps 1-3 had already bumped the manifests and stamped the
+# CHANGELOG, so a refusal left the tree half-bumped, and the re-run then refused as "not
+# greater than current", which meant the TLE seed (step 4) and the alignment check (step 5)
+# never ran. 1.17.0's seed had to be re-cut by hand after exactly that (1.16.0 shipped one
+# 13 days old).
 #
 # publish.yml reads docs/RELEASE_NOTES-<ver>.md AT THE TAG and falls back to the GitHub
 # release body only when that file is absent. The fallback body is the auto-generated
@@ -123,6 +99,35 @@ else
     exit 1
   fi
   echo "release notes: $NOTES_FILE ($(wc -l < "$NOTES_FILE") lines)"
+fi
+
+# 1. The three manifests.
+sed -i "0,/^version = \"[^\"]*\"/s//version = \"$NEW\"/" src-tauri/Cargo.toml
+sed -i "0,/\"version\": *\"[^\"]*\"/s//\"version\": \"$NEW\"/" src-tauri/tauri.conf.json
+npm version --prefix ui --no-git-tag-version --allow-same-version "$NEW" >/dev/null
+# CITATION.cff sat at 0.21.5 for twenty-one releases because nothing here wrote it; it is the
+# file academic citations resolve against, so it moves with the rest.
+sed -i "0,/^version: .*/s//version: $NEW/" CITATION.cff
+
+# 2. Tracked lockfile follows the manifest.
+cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null 2>&1 \
+  || echo "warn: cargo metadata failed — refresh src-tauri/Cargo.lock with the next build" >&2
+
+# 3. CHANGELOG heading.
+TODAY=$(date +%F)
+# The guide's overview states the version it documents, in prose, on its own line. It ships
+# inside the app, on the website and in the PDF/EPUB, so a stale number here tells every reader
+# the manual describes a release it does not. It was 1.10.3 while the book was 1.11.1.
+if grep -q '^\*\*This guide documents Nexus ' docs/guide/index.md; then
+  sed -i -E "s/^\*\*This guide documents Nexus [0-9]+\.[0-9]+\.[0-9]+[^*]*\.\*\*/**This guide documents Nexus $NEW.**/" docs/guide/index.md
+  echo "guide overview: documents Nexus $NEW"
+fi
+
+if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
+  sed -i "0,/^## \[Unreleased\]/s//## [$NEW] — $TODAY/" CHANGELOG.md
+  echo "CHANGELOG: [Unreleased] -> [$NEW] — $TODAY"
+else
+  echo "warn: no '## [Unreleased]' section in CHANGELOG.md — write the release notes by hand." >&2
 fi
 
 # 4. The bundled TLE seed snapshot — src-tauri/resources/tles/tles.json, the

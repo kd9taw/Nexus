@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only.** Settings ▸ Radio ▸ Rig &
+  CAT offered it on the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or
+  D3 picked there put a value Icom does not define for those radios into the command that sets
+  their DATA mode for the digital modes. If you picked D2 or D3 on one of them, Nexus still sends
+  it, and the picker stays on screen until you set it back to D1. NEEDS-BENCH: what these radios
+  do with a D2 or D3 has not been checked on a radio.
+- **The Connection help no longer sends RS-BA1 users to NET rigctl.** For an Icom on its LAN port,
+  the help under Connection in Settings ▸ Radio ▸ Rig & CAT said to point Nexus at a rigctld
+  server with Rig Model NET rigctl, whether the program in between was wfview or RS-BA1. RS-BA1
+  runs no rigctld server, so an RS-BA1 user who followed it found nothing to connect to. It now
+  says: with RS-BA1, choose Serial, your Icom's model and the virtual COM port RS-BA1 creates. With
+  wfview, turn on its rigctld server and use Network and NET rigctl, as before.
+- **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
+  CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
+  0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full
+  height, so the strongest signals on the band all looked the same. The IC-7610 is now read on its
+  own scale; the other radios are unchanged. NEEDS-BENCH on an IC-7610: a strong carrier should no
+  longer sit flat against the top, and heights should follow the radio's own scope.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of

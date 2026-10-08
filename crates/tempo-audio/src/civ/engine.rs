@@ -20,6 +20,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use super::commands::IcomModel;
 use super::frame::{Frame, FrameSplitter};
 use super::scope::{scope_stream_frames, ScopeAssembler, ScopeSweep};
 use super::state::CivState;
@@ -133,8 +134,11 @@ pub struct CivEngine {
 }
 
 impl CivEngine {
-    /// Start the engine on `io`, talking to the radio at CI-V address `radio_addr`.
-    pub fn start(io: Box<dyn CivIo>, radio_addr: u8) -> CivEngine {
+    /// Start the engine on `io`, talking to the radio at CI-V address `radio_addr`. `model` is
+    /// which Icom that is, when known: its scope sweeps are scaled to that radio's own range
+    /// (0–200 on an IC-7610, 0–160 on the rest), which the address cannot tell, because the
+    /// operator can change it on the radio.
+    pub fn start(io: Box<dyn CivIo>, radio_addr: u8, model: Option<IcomModel>) -> CivEngine {
         let (tx, rx) = mpsc::channel::<CivRequest>();
         let state = Arc::new(Mutex::new(CivState::default()));
         let scope_row = Arc::new(Mutex::new(None));
@@ -153,6 +157,7 @@ impl CivEngine {
                     engine_loop(
                         io,
                         radio_addr,
+                        model,
                         rx,
                         state,
                         scope_row,
@@ -260,6 +265,7 @@ fn resolves(expect: Expect, f: &Frame) -> Option<Result<Frame, CivError>> {
 fn engine_loop(
     mut io: Box<dyn CivIo>,
     radio_addr: u8,
+    model: Option<IcomModel>,
     rx: mpsc::Receiver<CivRequest>,
     state: Arc<Mutex<CivState>>,
     scope_row: Arc<Mutex<Option<ScopeSweep>>>,
@@ -268,7 +274,7 @@ fn engine_loop(
     alive: Arc<AtomicBool>,
 ) {
     let mut splitter = FrameSplitter::new();
-    let mut assembler = ScopeAssembler::new();
+    let mut assembler = ScopeAssembler::new(model);
     let mut pending: Option<(CivRequest, Instant)> = None;
     // The engine's own housekeeping commands, queued ahead of caller traffic. They flow
     // through the SAME pending slot as user requests — every write must, or their acks
@@ -1092,7 +1098,7 @@ mod tests {
     #[test]
     fn transact_read_and_set_against_a_fake_radio() {
         let (radio, _push) = FakeRadio::new(0xA2);
-        let eng = CivEngine::start(Box::new(radio), 0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, None);
         let h = eng.handle();
         // Read the frequency.
         let f = h
@@ -1125,7 +1131,7 @@ mod tests {
     #[test]
     fn sub_commanded_read_matches_on_the_sub_byte() {
         let (radio, _push) = FakeRadio::new(0xA2);
-        let eng = CivEngine::start(Box::new(radio), 0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, None);
         let f = eng
             .handle()
             .transact(
@@ -1143,7 +1149,7 @@ mod tests {
     fn a_dead_radio_times_out_instead_of_wedging() {
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.mute = true;
-        let eng = CivEngine::start(Box::new(radio), 0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, None);
         let t0 = Instant::now();
         let r = eng.handle().transact(
             read_freq(0xA2),
@@ -1169,7 +1175,7 @@ mod tests {
     #[test]
     fn unsolicited_transceive_folds_into_state_without_a_request() {
         let (radio, push) = FakeRadio::new(0xA2);
-        let eng = CivEngine::start(Box::new(radio), 0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, None);
         // The operator turns the knob: the radio pushes cmd 00 with the new freq.
         let f = Frame {
             to: 0x00, // transceive broadcasts to address 00
@@ -1225,7 +1231,7 @@ mod tests {
     #[test]
     fn nak_resolves_as_nak_not_timeout() {
         let (radio, _push) = FakeRadio::new(0xA2);
-        let eng = CivEngine::start(Box::new(radio), 0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, None);
         // The fake NAKs unknown commands — 0x1C PTT isn't scripted.
         let r = eng
             .handle()
