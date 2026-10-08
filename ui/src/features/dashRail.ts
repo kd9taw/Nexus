@@ -112,7 +112,8 @@ export function loadDashConfig(): DashRailConfig {
   return { slots: { ...DASH_DEFAULT_SLOTS }, sections: {} }
 }
 
-/** A cockpit's slots: its own, else the window's shared rail — so its first open is today's rail (D4). */
+/** A cockpit's slots: its own, else the window's shared rail — so its first open is today's rail (the operator's
+ *  "Per cockpit"). */
 export function slotsOf(config: DashRailConfig, section: DashRailSection): Record<DashSlotId, PaneId> {
   return config.sections[section] ?? config.slots
 }
