@@ -73,7 +73,7 @@ the operator's own LAN. The surfaces most relevant to a security report:
 
 - **`rigctld` control port (localhost TCP)** — for CAT/PTT control Nexus
   launches Hamlib's `rigctld` itself and connects to it over TCP on localhost
-  (default port **4532**). Anything that can reach that local TCP port can key
+  (default port **4534**). Anything that can reach that local TCP port can key
   your radio and change frequency/mode. It is intended to be localhost-only.
 
 - **Nexus spawns `rigctld`** — when CAT PTT is selected, Nexus runs the bundled

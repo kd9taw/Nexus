@@ -75,7 +75,7 @@ Before leaving Settings, open **Settings → Radio ▸ Rig & CAT** and click **D
 
 If your rig connected via a generic cable (CH340 reporting only "USB Serial"), detection fills the port and audio but leaves the model blank — select it from the dropdown. For radios whose model cannot be found in the table, enter the Hamlib model number directly; the definitive list for your Hamlib version is `rigctld -l`.
 
-After filling in the fields, click **Test CAT**. Nexus saves your settings, spawns rigctld internally on port `4532` (configurable), waits up to 1.3 s for it to connect, and reports the read dial frequency or a specific error. CAT and PTT are independent axes: a VOX rig still receives frequency and mode commands over the CAT channel if one is configured.
+After filling in the fields, click **Test CAT**. Nexus saves your settings, spawns rigctld internally on port `4534` (configurable), waits up to 1.3 s for it to connect, and reports the read dial frequency or a specific error. CAT and PTT are independent axes: a VOX rig still receives frequency and mode commands over the CAT channel if one is configured.
 
 ### PTT method
 
@@ -148,7 +148,7 @@ The settings file is tolerant of partial content: any key not present loads its 
 |---|---|
 | PTT method | `vox` |
 | Rig model | `0` (none — select or detect) |
-| Rigctld port | `4532` |
+| Rigctld port | `4534` |
 | CAT broker | off |
 | TX level | `0.9` (90%) |
 | TX watchdog | 6 minutes |

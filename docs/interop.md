@@ -124,9 +124,9 @@ solves the classic conflict: Nexus owns the rig, and other apps talk to the radi
   `\dump_state`, `\chk_vfo`, and `\get_powerstat`.
 
 > **Port note.** Nexus talks to the radio through its own internal `rigctld` on
-> `rigctld_port` (also default 4532). If you enable the broker, give the two distinct
-> ports so they don't collide — e.g. leave the broker on 4532 for your other apps and
-> keep Nexus's internal port separate.
+> `rigctld_port`, default 4534, so it never collides with the broker on 4532. If you
+> change either port, keep the two distinct: leave the broker on 4532 for your other
+> apps and Nexus's internal port on a number of its own.
 
 ### PTT arbitration — who gets to transmit
 

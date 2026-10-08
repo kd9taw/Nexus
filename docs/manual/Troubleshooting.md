@@ -39,7 +39,7 @@ shows only the demo, update to the current release.
 1. **Wrong rig model** — confirm the Hamlib model number. The in-app list covers approximately 50 curated radios cross-referenced to Hamlib 4.7.1. For a rig that is not in the list, run an external `rigctld` for it and connect Nexus as **NET rigctl** (model 2).
 2. **Wrong COM port** — pick the correct serial port and hit **Refresh** to re-scan. Verify nothing else holds the port (WSJT-X, another logger, a leftover Nexus instance, a `rigctld.exe` from a previous session).
 3. **Wrong baud rate** — match the rig's CAT baud setting exactly. Common values: 9600, 19200, 38400, 57600. Default is 38400.
-4. **rigctld TCP port conflict** — Nexus binds rigctld on port `4532` by default. If another rigctld or the CAT broker is already on that port, change **rigctld Port** in Settings.
+4. **rigctld TCP port conflict** — Nexus binds rigctld on port `4534` by default. If another rigctld or the CAT broker is already on that port, change **rigctld Port** in Settings.
 5. **Bundled vs. system rigctld** — every installer ships Hamlib under `resources/hamlib/` and prefers it over any PATH copy. If the bundled copy cannot start, Nexus falls back to a system Hamlib (`sudo apt install libhamlib-utils` / `brew install hamlib`), searching the Homebrew/MacPorts prefixes itself so no PATH setup is needed.
 6. **Slow machine / heavy COM load** — the Test CAT probe has a hard 1300 ms timeout. On a very slow machine or a congested COM port the daemon may not finish initializing in time; try once more after a moment.
 

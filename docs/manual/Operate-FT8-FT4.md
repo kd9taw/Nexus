@@ -220,7 +220,7 @@ At startup Nexus reads compound calls (slashed calls such as `W1AW/7`) from your
 | `decode_flow_hz` | 200 | Low passband edge |
 | `decode_fhigh_hz` | 2900 | High passband edge |
 | `hold_tx_freq` | false | RX click drags TX with it |
-| `rigctld_port` | 4532 | Hamlib rigctld TCP port |
+| `rigctld_port` | 4534 | Hamlib rigctld TCP port |
 | `wsjtx_udp` | false | Must be set to true to enable UDP output to JTAlert/GridTracker/loggers |
 | `wsjtx_udp` target | 127.0.0.1:2237 | WSJT-X UDP ecosystem target (irrelevant unless `wsjtx_udp` is true) |
 | `psk_flush_secs` | 300 | PSK Reporter flush interval (hardcoded) |

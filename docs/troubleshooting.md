@@ -168,7 +168,7 @@ there is no driver to install; the port appears as `/dev/cu.*` (macOS) or
    previous session.
 3. **Wrong baud rate** — match the rig's CAT baud exactly (default 38400; common
    values 9600 / 19200 / 38400 / 57600).
-4. **Port conflict** — `rigctld` binds `4532` by default; change **rigctld Port**
+4. **Port conflict** — `rigctld` binds `4534` by default; change **rigctld Port**
    if something else is on it.
 5. **A slow rig or busy port** — the probe waits a fixed ~1.3 s. On a slow machine
    or a congested serial port that can be too short; just run **Test CAT** again,

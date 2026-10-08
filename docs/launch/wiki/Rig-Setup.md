@@ -118,11 +118,11 @@ and off by default**, and it is **not yet confirmed on hardware here** — if
 decodes stop after you switch it on, switch it back off and the Hamlib CAT path
 above is unchanged underneath.
 
-**rigctld TCP Port = 4532.** In **Settings ▸ Radio ▸ Rig & CAT ▸ Advanced** (a
-collapsed group), the **rigctld TCP Port** should be the default **4532** (Hamlib's
-standard). If a Flex connects for
+**rigctld TCP Port = 4534.** In **Settings ▸ Radio ▸ Rig & CAT ▸ Advanced** (a
+collapsed group), the **rigctld TCP Port** should be the default **4534** (Hamlib's
+usual 4532 belongs to Nexus's CAT broker, where other programs connect). If a Flex connects for
 one operator but not another — a "can't reach the radio's CAT link" error — check
-this is 4532; a non-default value left over from a multi-radio setup is the usual
+this is 4534; a non-default value left over from a multi-radio setup is the usual
 cause. (Only change it deliberately when running two radios at once.)
 
 → Full guide: <https://github.com/kd9taw/Nexus/blob/main/docs/rigs/flexradio.md>

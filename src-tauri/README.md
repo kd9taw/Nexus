@@ -204,10 +204,10 @@ dependency).
 2. For CAT keying, run rigctld (or use VOX and skip this):
 
    ```bash
-   rigctld -m <rig-model> -r /dev/ttyUSB0 -t 4532    # listens on 127.0.0.1:4532
+   rigctld -m <rig-model> -r /dev/ttyUSB0 -t 4534    # listens on 127.0.0.1:4534
    ```
 
-   (`RadioConfig::default()` uses `127.0.0.1:4532`, 14.074 MHz, USB. VOX is also
+   (`RadioConfig::default()` uses `127.0.0.1:4534`, 14.074 MHz, USB. VOX is also
    supported — see `tempo_audio::rig::PttMode`.)
 3. Build/run with the radio loop enabled (also needs the audio dev libs:
    `libasound2-dev` on Linux):

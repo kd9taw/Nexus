@@ -475,7 +475,7 @@ Baud continue across to the right.*
 
 **Advanced** (a collapsed group) holds the rest:
 
-- **rigctld TCP Port** — "Port Nexus launches rigctld on" (default 4532).
+- **rigctld TCP Port** — "Port Nexus launches rigctld on" (default 4534).
 - **Data modes use plain SSB** — **leave this off unless you know you need it.**
   Nexus normally puts the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for
   FT8, FT4, RTTY-AFSK and SSTV, because on most rigs that is the only mode where
