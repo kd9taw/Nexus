@@ -76,9 +76,9 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Give up early when nothing at all has answered the first probe by now.
 pub const FIRST_ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Why every transmit is refused on this connection, as the operator reads it.
-pub const KEYING_REFUSED: &str =
-    "Transmit is off on the Icom network connection (Beta: receive and control only)";
+/// Why every transmit is refused on this connection, as the operator reads it: the engine's own
+/// refusal before PTT says the same.
+pub const KEYING_REFUSED: &str = tempo_app::settings::ICOM_LAN_TX_REFUSED;
 
 /// How long a frame handed to the session thread waits for it to say whether it went out.
 const SEND_WAIT: Duration = Duration::from_millis(500);

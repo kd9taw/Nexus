@@ -498,6 +498,12 @@ pub fn rig_conn_is_icom_lan(rig_conn: &str) -> bool {
     rig_conn.eq_ignore_ascii_case("icomlan")
 }
 
+/// Why every transmission is refused on the Icom network connection, as the operator reads it:
+/// the engine's refusal before PTT and the network daemon's own refusal of the keying verbs say
+/// the same thing.
+pub const ICOM_LAN_TX_REFUSED: &str =
+    "Transmit is off on the Icom network connection (Beta: receive and control only)";
+
 /// The Icoms with a network server built in, the only ones the Icom network connection is offered
 /// for: IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2. The UI mirrors this list
 /// (`ICOM_LAN_MODELS`), and a test holds the two together.
