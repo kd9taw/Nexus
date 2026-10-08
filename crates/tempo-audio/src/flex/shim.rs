@@ -37,7 +37,8 @@
 //! whatever that input hears on a digital frequency. So `T 1` is refused while the transmit
 //! slice's mode is digital (the mode this shim just commanded counts, before the radio reports
 //! it) and the radio does not report `transmit dax=1` on Nexus's own transmit stream. It only
-//! refuses, sends nothing, and the loop reports a refused PTT.
+//! refuses, sends nothing, and the loop reports a refused PTT, with the shim's reason
+//! ([`super::FlexDaemon::key_refused_since`]: the rigctld answer, `RPRT -1`, carries none).
 //!
 //! Nexus's own design, not a port.
 
@@ -45,6 +46,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use tempo_app::dto::{FlexAudioCause, FlexAudioRefusal};
 use tempo_net::flex::admission::another_dax_feeder;
 use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, TxStart, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
@@ -205,8 +207,9 @@ impl FlexShim {
     }
 
     /// Why a key must not go out on the audio route as it stands, if it must not: a digital
-    /// over while the radio would take its audio from its mic input (see the module header).
-    pub(crate) fn audio_refuses_key(&self) -> Option<String> {
+    /// over while the radio would take its audio from its mic input (see the module header). In
+    /// the shim's words, for the log and the refusal on screen, and as a cause, for the UI's own.
+    pub(crate) fn audio_refuses_key(&self) -> Option<(String, FlexAudioRefusal)> {
         if !self.state.native_audio.load(Ordering::Relaxed) {
             return None;
         }
@@ -228,7 +231,7 @@ impl FlexShim {
         if from_dax && snap.dax_tx_stream.is_some() {
             return None;
         }
-        Some(format!(
+        let why = format!(
             "not keying a {mode} over: the radio takes its transmit audio from {}{}",
             if from_dax { "DAX" } else { "its mic input" },
             if snap.dax_tx_stream.is_some() {
@@ -236,6 +239,13 @@ impl FlexShim {
             } else {
                 " and Nexus's DAX transmit stream does not exist yet"
             }
+        );
+        Some((
+            why,
+            FlexAudioRefusal {
+                mode,
+                cause: FlexAudioCause::NotYetDax,
+            },
         ))
     }
 
@@ -411,8 +421,14 @@ impl RigBackend for FlexShim {
 
     fn set_ptt(&self, on: bool) -> bool {
         if on {
-            if let Some(why) = self.audio_refuses_key() {
+            if let Some((why, cause)) = self.audio_refuses_key() {
                 tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
+                // For the radio loop to put on screen: the refusal it reads is only `RPRT -1`.
+                *self
+                    .state
+                    .refused
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), why, cause));
                 return false;
             }
             self.start(TxStart::Key)

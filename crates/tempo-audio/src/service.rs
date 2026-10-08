@@ -5094,6 +5094,16 @@ impl RadioLoop {
         }
     }
 
+    /// Nexus's own Flex client kept the slot key asked for at `asked` off the air for the audio
+    /// route: its words and its cause go on the refusal that key's halt put on screen, in place of
+    /// the rigctld answer, `RPRT -1`, which carries no reason. Anything else: nothing.
+    fn explain_flex_refusal(&self, eng: &mut Engine, asked: Instant) {
+        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+        if let Some((why, cause)) = flex.and_then(|d| d.key_refused_since(asked)) {
+            eng.explain_refused_key(&why, cause);
+        }
+    }
+
     /// Whether this loop already holds the transmitter: an over's PTT hold, or the operator's own
     /// PTT. A key that fails then is not a new key refused ([`KeyUp::Held`]); the slot overs ask
     /// the same question ([`crate::slot::key_slot_transmitter`]).
@@ -11503,6 +11513,7 @@ impl RadioLoop {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
                         let held = self.holds_tx();
+                        let asked = Instant::now();
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`).
                         if crate::slot::key_slot_transmitter(&mut eng, rig, backend, held) {
@@ -11534,6 +11545,8 @@ impl RadioLoop {
                             self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                             self.last_slot = Some(slot_now); // slot handled; skip the boundary
                             self.prev_slot_was_tx = true;
+                        } else {
+                            self.explain_flex_refusal(&mut eng, asked);
                         }
                     }
                 }
@@ -12105,6 +12118,7 @@ impl RadioLoop {
         // a failed key while this loop already holds the transmitter is not one
         // (`slot::slot_key_failure`).
         let held = self.holds_tx();
+        let asked = Instant::now();
         let action = crate::slot::slot_tx_phase(
             eng,
             rig,
@@ -12117,6 +12131,7 @@ impl RadioLoop {
             prebuilt,
             held,
         );
+        self.explain_flex_refusal(eng, asked);
         if let Some(t) = action.tx_until_ms {
             self.tx_until_ms = Some(t);
             // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).

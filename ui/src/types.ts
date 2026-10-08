@@ -4572,6 +4572,19 @@ export interface SlotKeyRefused {
   at: number
   /** What came back for the key, in the rig link's own words: data, never translated. */
   why: string
+  /** Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
+   *  its transmit audio from: the lane then says that in its own words. Absent otherwise. */
+  flexAudio?: FlexAudioRefusal | null
+}
+
+/** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
+ *  FlexAudioRefusal). */
+export interface FlexAudioRefusal {
+  /** The transmit slice's mode, in the radio's own word (DIGU): data, never translated. */
+  mode: string
+  /** `notYetDax`: native audio is on, and the radio does not take its transmit audio from Nexus's
+   *  DAX yet. */
+  cause: 'notYetDax'
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words

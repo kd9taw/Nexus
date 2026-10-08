@@ -1078,6 +1078,29 @@ pub struct SlotKeyRefused {
     /// What came back for the key, in the rig link's own words. Data: shown as it is, never
     /// translated.
     pub why: String,
+    /// Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
+    /// its transmit audio from: the UI says that in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flex_audio: Option<FlexAudioRefusal>,
+}
+
+/// Why Nexus's own Flex client kept a slot over's key off the air
+/// ([`SlotKeyRefused::flex_audio`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexAudioRefusal {
+    /// The transmit slice's mode, in the radio's own word (`DIGU`). Data, never translated.
+    pub mode: String,
+    pub cause: FlexAudioCause,
+}
+
+/// What kept a key off the air ([`FlexAudioRefusal`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FlexAudioCause {
+    /// Native audio is on, and the radio does not take its transmit audio from Nexus's DAX yet: it
+    /// takes it from its mic input, or Nexus's DAX transmit stream does not exist yet.
+    NotYetDax,
 }
 
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).

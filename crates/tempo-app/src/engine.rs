@@ -14562,7 +14562,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
             at: now_unix_secs(),
             why: why.to_string(),
+            flex_audio: None,
         });
+    }
+
+    /// The refusal [`Self::halt_tx_for_refused_key`] just put on screen was Nexus's own Flex
+    /// client keeping the key off the air, for where the radio takes its transmit audio from: the
+    /// client's own words replace the rigctld answer (`RPRT -1` carries no reason), and the cause
+    /// is the UI's to say. With no refusal on screen there is nothing to explain.
+    pub fn explain_refused_key(&mut self, why: &str, flex_audio: crate::dto::FlexAudioRefusal) {
+        if let Some(refused) = self.slot_key_refused.as_mut() {
+            refused.why = why.to_string();
+            refused.flex_audio = Some(flex_audio);
+        }
     }
 
     /// Halt TX because the radio did not accept the unkey that ended a slot over (FT8, FT4, JS8
@@ -33405,6 +33417,34 @@ mod tests {
             e.snapshot().radio.slot_key_refused,
             None,
             "turning TX on again is, and clears it"
+        );
+    }
+
+    /// Nexus's own Flex client keeps a key off the air for the audio route, and the rigctld wire
+    /// says only `RPRT -1`: the refusal on screen takes the client's words and its cause, and
+    /// nothing is explained while nothing was refused.
+    #[test]
+    fn a_flex_clients_refusal_takes_its_own_words_and_cause() {
+        use crate::dto::{FlexAudioCause, FlexAudioRefusal};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let cause = FlexAudioRefusal {
+            mode: "DIGU".into(),
+            cause: FlexAudioCause::NotYetDax,
+        };
+        let words = "not keying a DIGU over: the radio takes its transmit audio from its mic input";
+        e.explain_refused_key(words, cause.clone());
+        assert_eq!(e.snapshot().radio.slot_key_refused, None, "nothing refused");
+        e.halt_tx_for_refused_key("rigctld PTT error: \"RPRT -1\\n\"");
+        e.explain_refused_key(words, cause.clone());
+        let refused = e.snapshot().radio.slot_key_refused.unwrap();
+        assert_eq!(
+            (refused.why.as_str(), refused.flex_audio),
+            (words, Some(cause))
+        );
+        let radio = serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        assert_eq!(
+            radio["slotKeyRefused"]["flexAudio"],
+            serde_json::json!({ "mode": "DIGU", "cause": "notYetDax" })
         );
     }
 

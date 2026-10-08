@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a radio that way, for every program on it. Nexus then refused every FT8 or other digital over and
   turned TX off. It now opens its transmit stream whatever that setting already is, and the overs
   go out over DAX. The setting itself is left as Nexus found it. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: the status lane says why Nexus held back an over.** With the Flex native client
+  (Beta) and Flex native DAX audio on, Nexus does not key an FT8 or other digital over while the
+  radio is not yet taking its transmit audio from Nexus over DAX, and turns TX off. The lane said
+  only that the radio did not accept PTT (`RPRT -1`) and told you to check your PTT method and CAT
+  port, which had nothing to do with it. It now says that Nexus did not key the over, and why.
+  NEEDS-BENCH on a FLEX radio.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of

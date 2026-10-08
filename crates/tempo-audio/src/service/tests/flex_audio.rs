@@ -1420,6 +1420,59 @@ fn first_boundary() -> f64 {
     first
 }
 
+/// The engine's refusal on screen, if any, and whether TX is on.
+fn refusal(s: &FlexScene) -> (Option<tempo_app::dto::SlotKeyRefused>, bool) {
+    let e = s.engine.lock().unwrap();
+    (e.snapshot().radio.slot_key_refused, e.tx_enabled())
+}
+
+/// ⭐ THE CLIENT'S OWN REASON REACHES THE SCREEN. A digital over the client keeps off the air for
+/// the audio route halts TX like any refused key, but the rigctld wire carries only `RPRT -1`:
+/// the refusal on screen carries the client's reason instead. Native audio comes on 900 ms before
+/// a boundary, inside the routing's guard, so at the boundary the radio still takes its transmit
+/// audio from its mic input and Nexus's transmit stream does not exist yet.
+#[test]
+fn a_refusal_for_the_audio_route_says_why_on_screen() {
+    let mut s = FlexScene::new(false);
+    s.run(1_500);
+    let mut toggled = false;
+    let mut during = |sc: &mut FlexScene, rel: f64| {
+        if !toggled && rel >= -900.0 {
+            toggled = true;
+            sc.set_native_audio(true);
+            // A Settings save clears the queued over (`apply_settings`); the CQ run goes on.
+            let mut e = sc.engine.lock().unwrap();
+            e.broadcast("CQ TEST W9XYZ EN37");
+            let _ = e.take_immediate_tx();
+        }
+    };
+    let (_, played) = one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_000.0,
+        &mut during,
+    );
+    let (refused, tx_enabled) = refusal(&s);
+    assert!(
+        played.is_none() && keys(&s) == 0 && !tx_enabled,
+        "the premise: the client refused the key, nothing played, TX off"
+    );
+    assert_eq!(
+        refused.map(|r| (r.why, r.flex_audio)),
+        Some((
+            "not keying a DIGU over: the radio takes its transmit audio from its mic input and \
+             Nexus's DAX transmit stream does not exist yet"
+                .to_string(),
+            Some(tempo_app::dto::FlexAudioRefusal {
+                mode: "DIGU".to_string(),
+                cause: tempo_app::dto::FlexAudioCause::NotYetDax,
+            })
+        ))
+    );
+}
+
 /// ⭐⭐ THE KEYING PATH NEVER CARRIES THE FLAG (operator ruling, 2026-10-03: "write the flag when
 /// the mode or the TX slice changes, never between the slot boundary and `xmit 1`"). FT8 with TX
 /// enabled and an over queued every TX period, while the operator turns native audio off and on at

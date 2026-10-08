@@ -10165,6 +10165,11 @@ export const EN = {
   'shell.lane.slotKeyRefused.message': 'PTT REFUSED — TX STOPPED',
   'shell.lane.slotKeyRefused.detail':
     'The radio did not accept PTT at {{time}} UTC ({{why}}), so that over was not sent and TX was turned off. Check your PTT method and CAT/port, then turn TX on again.',
+  // Nexus's own Flex client kept the key off the air itself, for where the radio takes its transmit
+  // audio from: the radio refused nothing, so the PTT and CAT advice above would be wrong.
+  // `{{mode}}` is the radio's own mode word (DIGU), as data.
+  'shell.lane.slotKeyRefused.flex.notYetDax':
+    'Nexus did not key the {{mode}} over at {{time}} UTC: Flex native DAX audio is on, but the radio was not yet taking its transmit audio from Nexus over DAX. Nothing was sent and TX was turned off. Nexus finishes setting the radio up within a moment; then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.

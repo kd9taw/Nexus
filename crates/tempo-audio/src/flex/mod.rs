@@ -59,6 +59,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use tempo_app::dto::FlexAudioRefusal;
 use tempo_app::engine::receivers::RxOwner;
 use tempo_app::engine::slices::{SliceIntent, SliceReport};
 use tempo_net::flex::admission::another_dax_feeder;
@@ -107,6 +108,9 @@ pub(crate) struct ClientState {
     pub(crate) native_audio: AtomicBool,
     /// The mode the shim last commanded for a slice, and when, until the radio reports it.
     pub(crate) commanded: Mutex<Option<(u8, String, Instant)>>,
+    /// The last key the shim kept off the air for the audio route: when, its words and its cause,
+    /// for the radio loop to put on screen ([`FlexDaemon::key_refused_since`]).
+    pub(crate) refused: Mutex<Option<(Instant, String, FlexAudioRefusal)>>,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
@@ -481,6 +485,16 @@ impl FlexDaemon {
     /// from DAX rather than the radio's mic, as last read while native audio was on. Cheap.
     pub fn radio_dax(&self) -> Option<bool> {
         self.audio.as_ref().and_then(audio::Audio::radio_dax)
+    }
+
+    /// Why the shim kept a key asked for at or after `asked` off the air for the audio route, if
+    /// it did: its words and its cause, once. The rigctld answer the radio loop reads for that key,
+    /// `RPRT -1`, carries no reason.
+    pub fn key_refused_since(&self, asked: Instant) -> Option<(String, FlexAudioRefusal)> {
+        match lock(&self.state.refused).take() {
+            Some((at, why, cause)) if at >= asked => Some((why, cause)),
+            _ => None,
+        }
     }
 
     /// Whether another program feeds the radio's DAX transmit audio (SmartSDR's DAX).
