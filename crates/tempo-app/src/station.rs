@@ -346,7 +346,7 @@ fn lotw_fingerprint(r: &QsoRecord) -> u64 {
 /// being re-sendable, it kept the "Upload to LoTW (N)" count from ever clearing.
 ///
 /// THE rule, as [`lotw_unsent`] asks it of the store.
-pub(crate) fn owed_to_lotw(r: &QsoRecord) -> bool {
+pub fn owed_to_lotw(r: &QsoRecord) -> bool {
     !r.award_confirmed
         && r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent())
         && r.time_known
@@ -794,6 +794,134 @@ pub(crate) fn park_state_pairs(
             now.state = Some(to);
             Some((Arc::clone(row), Some(Arc::new(now))))
         })
+        .collect()
+}
+
+/// What [`check_lotw_confirmations`] reads of a contact it only counts: its call, the call it was
+/// logged under (the station call, else the operator), its confirmations and its upload marks.
+const CHECK_COUNTED: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "call",
+        "station_callsign",
+        "operator",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: true,
+};
+
+/// ★ Logbook ▸ Check confirmations, for LoTW (`tempo_core::reconcile::check`): LoTW's downloads
+/// checked against the log, read with the Engine lock released. `report` is LoTW's whole
+/// confirmation history, read exactly as its merge reads it
+/// ([`tempo_core::logbook::report_rows`]); `own` is LoTW's whole own-QSO list, read as its own
+/// merge reads it; `own_call` is the call both were asked for, so a contact logged under another
+/// is counted, not judged. It writes nothing.
+///
+/// The contacts it checks are every contact of a call either download names, in log order: the
+/// candidate sub-log ([`LogPlan::candidates`]), which holds every contact a row can pair with
+/// and every one 1.17.0's matcher could have put a row on. After them come the other contacts
+/// holding LoTW's confirmation or its `Accepted` upload mark, read narrow ([`CHECK_COUNTED`]).
+/// No row names their call, so the check only counts them, and a count needs no more. Its lines
+/// carry their contacts; its gains are places in contacts the caller never sees, so a count.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub fn check_lotw_confirmations(
+    plan: &LogPlan,
+    report: &str,
+    own: &str,
+    own_call: Option<&str>,
+) -> Result<tempo_core::reconcile::check::ConfirmationCheck, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{call_norm_of, Order, Scope};
+    use tempo_core::logbook::UploadOutcome;
+    use tempo_core::reconcile::check::{check_report, Channel};
+    let rows = tempo_core::logbook::report_rows(report);
+    let own_rows = tempo_core::logbook::parse_adif(own);
+    let calls: std::collections::BTreeSet<String> = rows
+        .iter()
+        .chain(&own_rows)
+        .map(|r| call_norm_of(&r.call))
+        .collect();
+    let mut local = plan.candidates(&calls)?;
+    let counted = |r: &QsoRecord| {
+        !calls.contains(&call_norm_of(&r.call))
+            && (r.qsl_rcvd.lotw
+                || r.upload
+                    .lotw
+                    .as_ref()
+                    .is_some_and(|s| s.outcome == UploadOutcome::Accepted))
+    };
+    let mut others: Vec<Arc<QsoRecord>> = Vec::new();
+    // The rows this process changed that the store holds: read below as they now stand.
+    let mut changed_here: HashSet<RecordId> = HashSet::new();
+    let mut keep = |r: &QsoRecord| {
+        match r.id.and_then(|id| plan.pending.row(id)) {
+            Some(mine) => {
+                changed_here.extend(r.id);
+                others.extend(mine.filter(|m| counted(m)));
+            }
+            None if counted(r) => others.push(Arc::new(r.clone())),
+            None => {}
+        }
+        ControlFlow::Continue(())
+    };
+    let crate::logstore::LogRows::Store(reads) = &plan.rows;
+    reads
+        .read(std::time::Duration::ZERO, |db| {
+            db.each_narrow(CHECK_COUNTED, Scope::All, Order::Log, &mut keep)
+        })
+        .map_err(|e| e.to_string())?;
+    // Rows on their way that the store has not taken at all.
+    others.extend(
+        plan.pending
+            .rows_matching(|r| counted(r))
+            .into_iter()
+            .filter(|r| r.id.is_some_and(|id| !changed_here.contains(&id))),
+    );
+    local.extend(others);
+    Ok(check_report(
+        &local,
+        &rows,
+        &own_rows,
+        Channel::Lotw,
+        own_call,
+    ))
+}
+
+/// The rows the lines the operator ticked in Check confirmations make
+/// (`tempo_core::reconcile::check::uncheck`), `rows` being the contacts as a plan read them: each
+/// contact still holding what its lines showed, once, with every one of its lines' changes. A
+/// contact changed since the check listed it, or gone, is left as it is: the operator ticked the
+/// change they were shown, on the contact they were shown.
+pub(crate) fn unchecked_pairs(
+    rows: &HashMap<RecordId, Arc<QsoRecord>>,
+    lines: &[tempo_core::reconcile::check::CheckLine],
+) -> Vec<MadeRow> {
+    use tempo_core::reconcile::check::uncheck;
+    let mut made: Vec<(Arc<QsoRecord>, QsoRecord)> = Vec::new();
+    let mut at: HashMap<RecordId, usize> = HashMap::new();
+    for line in lines {
+        let Some((id, row)) = line.contact.id.and_then(|id| Some((id, rows.get(&id)?))) else {
+            continue;
+        };
+        match at.get(&id) {
+            Some(&k) => {
+                if let Some(after) = uncheck(&made[k].1, line) {
+                    made[k].1 = after;
+                }
+            }
+            None => {
+                if let Some(after) = uncheck(row, line) {
+                    at.insert(id, made.len());
+                    made.push((Arc::clone(row), after));
+                }
+            }
+        }
+    }
+    made.into_iter()
+        .map(|(before, after)| (before, Some(Arc::new(after))))
         .collect()
 }
 

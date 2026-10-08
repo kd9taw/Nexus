@@ -2344,3 +2344,387 @@ fn a_chunk_of_fills_is_planned_only_once_the_chunks_before_the_last_are_stored()
         "the last chunk, with fill_ver, planned once every earlier fill is in the store"
     );
 }
+
+// ── Logbook ▸ Check confirmations ───────────────────────────────────────────────────────────
+
+/// One ADIF record: `call` on `band` in `mode` at `hhmmss` UTC on 2026-10-01, with `more`.
+fn adif_row(call: &str, band: &str, mode: &str, hhmmss: &str, more: &str) -> String {
+    format!(
+        "<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<QSO_DATE:8>20261001<TIME_ON:6>{hhmmss}\
+         {more}<EOR>\n",
+        call.len(),
+        band.len(),
+        mode.len()
+    )
+}
+
+/// LoTW's answer as its downloads read: the banner, `rows`, and the end marker.
+fn lotw_answer(rows: &[String]) -> String {
+    format!(
+        "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW\n<eoh>\n{}<APP_LoTW_EOF>\n",
+        rows.concat()
+    )
+}
+
+/// The contacts an ADIF text holds, as the log would read them.
+fn contacts(rows: &[String]) -> Vec<QsoRecord> {
+    tempo_core::logbook::parse_adif(&rows.concat())
+}
+
+/// A shared engine on the store of `d`, holding `log`: written to `log.adi` as the operator's own
+/// ADIF, and taken in by the store as an operator's log is. Every contact `K…` is the United
+/// States, so the hot index knows an entity for it.
+fn holding(d: &Dir, log: &[QsoRecord]) -> Arc<Mutex<Engine>> {
+    let mut text = adif_header();
+    for r in log {
+        text.push_str(&tempo_core::logbook::adif_record_own_log(r));
+    }
+    std::fs::write(d.log(), text).unwrap();
+    let mut e = engine_on_store(d);
+    flush(&e);
+    e.set_dxcc_resolver(|call| call.starts_with('K').then(|| "United States".to_string()));
+    Arc::new(Mutex::new(e))
+}
+
+/// The check, as the command reads it: with the Engine lock released, for K2DEF, the call
+/// `engine_on_store`'s station keeps.
+fn check_of(
+    engine: &Mutex<Engine>,
+    report: &str,
+    own: &str,
+) -> tempo_core::reconcile::check::ConfirmationCheck {
+    station::check_lotw_confirmations(&crate::engine::log_plan(engine), report, own, Some("K2DEF"))
+        .expect("the check reads the log")
+}
+
+/// The contact `call` at `hhmmss`, as the store holds it.
+fn contact_at(engine: &Mutex<Engine>, call: &str, hhmmss: &str) -> QsoRecord {
+    let when = contacts(&[adif_row(call, "20m", "FT8", hhmmss, "")])[0].when_unix;
+    let found: Vec<QsoRecord> = engine
+        .stored_records()
+        .into_iter()
+        .filter(|r| r.call == call && r.when_unix == when)
+        .collect();
+    assert_eq!(found.len(), 1, "{call} at {hhmmss}");
+    found.into_iter().next().unwrap()
+}
+
+/// #400's pair, both its marks 1.17.0's, and an S2 contact, built by replaying 1.17.0's merges
+/// (`tempo_core::reconcile::check::replay`): W1AW on 20 m FT8 at 06:00 and 18:00, where 1.17.0's
+/// own-QSO pull marked 06:00 Accepted from 18:00's upload and a later sync put 18:00's
+/// confirmation (DXCC) on 06:00; and K1ABC on 20 m FT8 at 10:00, which got the confirmation of a
+/// 15:00 QSO this log does not hold, while LoTW holds 10:00 itself unconfirmed. The log, LoTW's
+/// confirmation download and its own-QSO list.
+fn misplaced_scene() -> (Vec<QsoRecord>, String, String) {
+    use tempo_core::reconcile::check::replay::{echoed_by_1_17, left_by_1_17};
+    let confirmations = lotw_answer(&[
+        adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180200",
+            "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        ),
+        adif_row(
+            "K1ABC",
+            "20m",
+            "FT8",
+            "150000",
+            "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        ),
+    ]);
+    let own = lotw_answer(&[
+        adif_row("W1AW", "20m", "FT8", "180000", "<QSL_RCVD:1>Y"),
+        adif_row("K1ABC", "20m", "FT8", "100000", "<QSL_RCVD:1>N"),
+        adif_row("K1ABC", "20m", "FT8", "150000", "<QSL_RCVD:1>Y"),
+    ]);
+    let mut log = contacts(&[
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+        adif_row("W1AW", "20m", "FT8", "180000", ""),
+        adif_row("K1ABC", "20m", "FT8", "100000", ""),
+    ]);
+    // 18:00 and 10:00 were uploaded; 06:00 never was.
+    for r in &mut log[1..] {
+        r.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Pending,
+            when_unix: 1,
+            detail: None,
+        });
+    }
+    let echoed = echoed_by_1_17(log, &tempo_core::logbook::parse_adif(&own));
+    let log = left_by_1_17(echoed, &tempo_core::logbook::report_rows(&confirmations));
+    (log, confirmations, own)
+}
+
+/// When the tests' Apply happens: 2026-10-07 18:00:00 UTC.
+const APPLIED_AT: u64 = 1_791_396_000;
+
+/// The ticked contacts of `ticked` that are not, as the store holds them, exactly what `before`
+/// held of them: each named by its call and time.
+fn not_as_before(
+    engine: &Mutex<Engine>,
+    before: &[QsoRecord],
+    ticked: &[tempo_core::reconcile::check::CheckLine],
+) -> Vec<String> {
+    let now = engine.stored_records();
+    let mut ids: Vec<RecordId> = Vec::new();
+    for id in ticked.iter().filter_map(|l| l.contact.id) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids.iter()
+        .filter(|id| {
+            let was = before.iter().find(|r| r.id == Some(**id));
+            let is = now.iter().find(|r| r.id == Some(**id));
+            was != is
+        })
+        .map(|id| {
+            let r = before
+                .iter()
+                .find(|r| r.id == Some(*id))
+                .expect("held before");
+            format!("{}@{}", r.call, r.when_unix)
+        })
+        .collect()
+}
+
+/// ★ Apply's before-file puts every change back. Imported through Logbook ▸ Import ADIF, it
+/// leaves each contact a ticked line changed exactly as it was before Apply (the confirmation,
+/// its credit code and the upload mark all back), while the contact that gained LoTW's
+/// confirmation keeps it: an import only adds. The positive control comes first: a before-file
+/// holding no contact puts nothing back, and this test sees that.
+#[test]
+fn the_before_file_imported_puts_every_change_back() {
+    use tempo_core::reconcile::check::CheckLine;
+    let d = Dir::new("check-before-file");
+    let (log, report, own) = misplaced_scene();
+    let engine = holding(&d, &log);
+    let check = check_of(&engine, &report, &own);
+    let ticked: Vec<CheckLine> = check
+        .lines
+        .iter()
+        .filter(|l| l.decisive())
+        .cloned()
+        .collect();
+    assert_eq!(ticked.len(), 3, "{:#?}", check.lines);
+    let before = engine.stored_records();
+
+    let (applied, durability) = apply_confirmation_check(&engine, &report, &ticked, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let applied = applied.expect("applied");
+    assert_eq!((applied.confirmations, applied.uploads), (2, 1));
+    let file = applied.before_file.expect("a before-file");
+    assert_eq!(
+        file,
+        d.0.join(before_file_name(APPLIED_AT)),
+        "beside log.adi"
+    );
+    assert_eq!(
+        not_as_before(&engine, &before, &ticked).len(),
+        2,
+        "Apply changed both ticked contacts"
+    );
+
+    // The control: a before-file holding no contact puts nothing back.
+    let (made, written) = until_written(|| import_adif(&engine, &adif_header()));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    made.expect("imported");
+    assert_eq!(
+        not_as_before(&engine, &before, &ticked).len(),
+        2,
+        "an empty before-file puts nothing back, and the comparison sees it"
+    );
+
+    let text = std::fs::read_to_string(&file).expect("the before-file reads");
+    let (made, written) = until_written(|| import_adif(&engine, &text));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    let (added, skipped, ..) = made.expect("imported");
+    assert_eq!(
+        (added, skipped),
+        (0, 2),
+        "both rows are contacts the log holds"
+    );
+    assert_eq!(
+        not_as_before(&engine, &before, &ticked),
+        Vec::<String>::new(),
+        "every ticked contact is back as it was"
+    );
+    let gained = contact_at(&engine, "W1AW", "180000");
+    assert!(
+        gained.qsl_rcvd.lotw && gained.credit_granted == ["DXCC"],
+        "18:00 keeps the confirmation LoTW holds for it: {gained:?}"
+    );
+}
+
+/// ★ Apply changes a ticked contact only while it still holds what its line showed: a paper card
+/// marked after the check is a change, so that contact keeps its LoTW confirmation and the card,
+/// while the other ticked contact changes. The before-file holds only the contact that changed.
+#[test]
+fn a_contact_changed_after_the_check_is_left_alone() {
+    use tempo_core::reconcile::check::CheckLine;
+    let d = Dir::new("check-changed-since");
+    let (log, report, own) = misplaced_scene();
+    let engine = holding(&d, &log);
+    let check = check_of(&engine, &report, &own);
+    let ticked: Vec<CheckLine> = check
+        .lines
+        .iter()
+        .filter(|l| l.decisive())
+        .cloned()
+        .collect();
+    assert_eq!(ticked.len(), 3, "{:#?}", check.lines);
+
+    // After the check, before Apply: K1ABC's paper card arrives.
+    let id = contact_at(&engine, "K1ABC", "100000").id.expect("an id");
+    let (made, written) = change_ops(&engine, id, None, &[card(id)], "test");
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert!(matches!(made, Ok(Ok(_))), "{made:?}");
+
+    let (applied, durability) = apply_confirmation_check(&engine, &report, &ticked, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let applied = applied.expect("applied");
+    assert_eq!(
+        (applied.confirmations, applied.uploads),
+        (1, 1),
+        "W1AW's two lines are made; K1ABC's is not"
+    );
+    let carded = contact_at(&engine, "K1ABC", "100000");
+    assert!(
+        carded.qsl_rcvd.card && carded.qsl_rcvd.lotw && carded.credit_granted == ["DXCC"],
+        "K1ABC is as the operator left it: {carded:?}"
+    );
+    let moved = contact_at(&engine, "W1AW", "060000");
+    assert!(
+        !moved.qsl_rcvd.any() && moved.credit_granted.is_empty() && moved.upload.lotw.is_none(),
+        "W1AW at 06:00 is as it was before 1.17.0: {moved:?}"
+    );
+    let file = applied.before_file.expect("a before-file");
+    let kept = tempo_core::logbook::parse_adif(&std::fs::read_to_string(&file).unwrap());
+    let kept: Vec<(&str, u64)> = kept
+        .iter()
+        .map(|r| (r.call.as_str(), r.when_unix))
+        .collect();
+    assert_eq!(
+        kept,
+        [("W1AW", moved.when_unix)],
+        "the file holds the contact that changed, and only it"
+    );
+}
+
+/// ★ A confirmation taken off reaches the hot index: the confirmed badge (an entity confirmed on
+/// a band) follows the removal, and the index answers as one built from the store. The change
+/// is `Key`, which moves the watermarks every fold keyed on the log's content reads; an upload
+/// mark cleared alone is a `Stamp`, which moves none of them.
+#[test]
+fn a_confirmation_taken_off_takes_the_badge_off_and_the_index_follows() {
+    use tempo_core::reconcile::check::{LineClass, Mark};
+    let d = Dir::new("check-hot-index");
+    let (log, report, own) = misplaced_scene();
+    let engine = holding(&d, &log);
+    let badge = |e: &Mutex<Engine>| {
+        engine_lock(e)
+            .station()
+            .hot()
+            .entity_confirmed_on("United States", "20m")
+    };
+    let marks = |e: &Mutex<Engine>| engine_lock(e).station().marks();
+    assert!(badge(&engine), "K1ABC's misplaced confirmation confirms it");
+    the_index_is_the_stores(&engine, &d, "before");
+    let check = check_of(&engine, &report, &own);
+    let k1abc = check
+        .lines
+        .iter()
+        .find(|l| l.class == LineClass::Contradicted)
+        .cloned()
+        .expect("K1ABC's line");
+
+    let was = marks(&engine);
+    let (made, durability) = confirmation_repairs(&engine, std::slice::from_ref(&k1abc));
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(made, Ok(1));
+    let now = marks(&engine);
+    assert!(
+        now.index_rev > was.index_rev && now.key_rev > was.key_rev && now.shape_rev > was.shape_rev,
+        "a confirmation taken off is a Key change: {was:?} → {now:?}"
+    );
+    assert!(!badge(&engine), "the badge follows the removal");
+    the_index_is_the_stores(&engine, &d, "after a confirmation is taken off");
+
+    let upload = check
+        .lines
+        .iter()
+        .find(|l| l.mark == Mark::LotwUpload)
+        .cloned()
+        .expect("W1AW's upload line");
+    let was = marks(&engine);
+    let (made, durability) = confirmation_repairs(&engine, std::slice::from_ref(&upload));
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(made, Ok(1));
+    let now = marks(&engine);
+    assert!(now.revision > was.revision, "the change was made");
+    assert_eq!(
+        (now.index_rev, now.key_rev, now.shape_rev),
+        (was.index_rev, was.key_rev, was.shape_rev),
+        "an upload mark cleared alone is a Stamp"
+    );
+    assert!(
+        contact_at(&engine, "W1AW", "060000").upload.lotw.is_none(),
+        "06:00 is owed to LoTW again"
+    );
+    the_index_is_the_stores(&engine, &d, "after an upload mark is cleared");
+}
+
+/// ★ The check reads every contact of a call either download names, and counts, never lists, the
+/// LoTW marks it cannot judge: a confirmation on a contact whose call LoTW names nowhere, one on a
+/// contact logged under another call than the one the downloads are for, and an `Accepted` mark
+/// on a contact LoTW's own-QSO list does not name.
+#[test]
+fn the_check_counts_the_marks_no_download_names() {
+    use tempo_core::reconcile::check::Unjudged;
+    let d = Dir::new("check-counts");
+    let (mut log, report, own) = misplaced_scene();
+    let mut others = contacts(&[
+        adif_row("W9IMP", "20m", "FT8", "120000", "<LOTW_QSL_RCVD:1>Y"),
+        adif_row(
+            "W9OLD",
+            "20m",
+            "FT8",
+            "120100",
+            "<LOTW_QSL_RCVD:1>Y<STATION_CALLSIGN:5>N0OLD",
+        ),
+        adif_row("W9UPL", "20m", "FT8", "120200", ""),
+    ]);
+    others[2].upload.lotw = Some(UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 1,
+        detail: None,
+    });
+    log.extend(others);
+    let engine = holding(&d, &log);
+    let check = check_of(&engine, &report, &own);
+    let listed: Vec<&str> = check
+        .lines
+        .iter()
+        .map(|l| l.contact.call.as_str())
+        .collect();
+    assert_eq!(listed, ["W1AW", "K1ABC", "W1AW"], "only the scene's lines");
+    assert_eq!(
+        (check.flags, check.uploads),
+        (
+            Unjudged {
+                unreached: 1,
+                out_of_scope: 1
+            },
+            Unjudged {
+                unreached: 1,
+                out_of_scope: 0
+            }
+        )
+    );
+    assert_eq!(
+        check.gains.len(),
+        1,
+        "W1AW at 18:00 gains LoTW's confirmation"
+    );
+}

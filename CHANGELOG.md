@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
   Nexus Remote.
 
+- **Check confirmations, for LoTW confirmations earlier versions put on the wrong contact (#400).**
+  If you worked a station twice on one band and mode in a UTC day, the earlier contact could take
+  the later one's LoTW confirmation, or LoTW's mark that it holds the later one's upload.
+  Logbook ▸ Check confirmations downloads your whole LoTW history once and lists each contact
+  holding a LoTW confirmation or upload mark that LoTW's own records give another of your contacts,
+  or none. Each line says why it is listed and what the change keeps or costs, and starts ticked
+  only when LoTW's records decide it. Nothing changes until you press Change, and nothing is
+  uploaded. The contacts it changes are first saved, as they were, to a file beside your log, and
+  importing that file with Logbook ▸ Import ADIF puts them back. A paper card is never touched,
+  and a contact that loses a false LoTW confirmation and was never uploaded goes in your next LoTW
+  upload. It checks LoTW; eQSL and QRZ confirmations are not checked.
+
 ### Changed
 
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
@@ -145,7 +157,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your log always was; a QRZ download adds it to your log as a contact you did not have. Two
   confirmations never go on one contact. A contact imported with no time of day still takes its
   confirmation by its date. Confirmations that earlier versions put on the wrong contact stay
-  where they are.
+  where they are until you run Logbook ▸ Check confirmations (above).
 - **The first LoTW download brings your whole confirmation history (#399).** With no earlier
   download on record (the first sync, or after you changed the LoTW username or cleared the log),
   Nexus asked LoTW for confirmations without saying from when, and LoTW then sends only what it

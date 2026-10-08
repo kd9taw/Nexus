@@ -245,6 +245,9 @@ const MIGRATED = [
   'components/SpotsPanel.tsx',
   'components/SpotDialog.tsx',
   'components/ParkStateReview.tsx',
+  // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes
+  // are tokens, held as data or a named constant.
+  'components/ConfirmationReview.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/PounceBanner.tsx',
