@@ -290,6 +290,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
   file again does not add them twice.
+- **A contact imported from fldigi keeps its PSK mode.** fldigi logs PSK31 as PSK with PSK31 as
+  the submode, and the same for PSK63, QPSK31 and its other PSK modes. Nexus kept only the PSK, so
+  a PSK31 station read as a new mode against a log full of PSK31 contacts. The logbook and the
+  "new mode" need now see PSK31, PSK63, QPSK31 and the rest. Each contact is still written back,
+  in your exports and in what goes to LoTW, QRZ and the other services, exactly as fldigi wrote
+  it. Contacts logged on the PSK screen are written as before. Contacts imported before this
+  release keep PSK, and importing the same file again does not add them twice.
+- **Changing the mode of an imported contact no longer leaves its old submode behind.** A contact
+  imported from another logger can carry a submode Nexus keeps exactly as it was written, such as
+  fldigi's PSK31 or Log4OM's USB. Changing that contact's mode in the Logbook kept the old submode,
+  so a PSK31 contact corrected to CW was written to your log and your exports as CW with a PSK31
+  submode. Now a mode edit drops a submode the new mode does not have, and a PSK contact moved to
+  another PSK mode takes the new one with it (corrected to PSK63, it is written as PSK with PSK63,
+  as fldigi writes it). Editing any other field leaves the submode as it was.
+- **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
+  An activator's own row on the Needed board still asked only whether you had worked the country in
+  CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever
+  modes it announced. So an activator or a DXpedition on FT8 in a country you had worked only on
+  FT4 showed no new mode there, while the same station decoded by your radio did. The activator row
+  now judges the mode the spot names ("New mode — FT8 … (any band) · POTA …"), and a DXpedition card
+  is a new mode while any mode the operation announced is one you have never worked that country
+  in. A spot that names only data, phone or digital, or no mode at all, and an operation that
+  announced no mode or only "PSK", keep the old rule: a new mode only when you have never worked
+  that country in any mode of that kind.
 - **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
   Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
   list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line

@@ -29,7 +29,7 @@
     "call": "K1ABC",
     "entity": "United States",
     "evidence": "POTA US-0001 — K1ABC on the air",
-    "exactMode": null,
+    "exactMode": "FT8",
     "freqMhz": 14.074,
     "gridRarity": null,
     "headline": "Confirm — United States · POTA US-0001",
