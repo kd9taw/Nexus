@@ -47,6 +47,9 @@ export interface RigFormFacts {
   rigConn: string
   pttMethod: string
   rigModel: number
+  /** The Icom network connection's radio address and network user. */
+  icomLanHost?: string
+  icomLanUser?: string
   /** Chosen sound-card device NAMES, for the same-radio check. Absent = nothing chosen yet. */
   audioIn?: string
   audioOut?: string
@@ -72,10 +75,14 @@ export function checkRigForm(
   portInfos?: SerialPortInfo[],
   /** The device lists the audio pickers are showing, for the same-radio check. */
   audio?: AudioDevices,
+  /** Whether the edited radio has an Icom network password saved; `null`/absent = not known. */
+  icomLanPasswordSaved?: boolean | null,
 ): RigCheck[] {
   const out: RigCheck[] = []
   // A network rig has no serial port at all; none of this applies.
   if (form.rigConn === 'network') return out
+  // Nor does the Icom network connection: it has its own facts to check.
+  if (form.rigConn === 'icomlan') return checkIcomLan(form, icomLanPasswordSaved)
   // Nor does an OmniRig one, and for a stronger reason: OmniRig owns the rig type, the COM
   // port and the baud, so every field these checks read belongs to another program. Blocking a
   // save on "no serial port chosen" would make a correct OmniRig configuration unsaveable —
@@ -192,6 +199,48 @@ export function checkRigForm(
   return out
 }
 
+/** Is `host` an IPv4 address in dotted form? The radio's network protocol names it by one. */
+export function isIpv4(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host.trim())
+  return m !== null && m.slice(1).every((o) => Number(o) <= 255)
+}
+
+/**
+ * The Icom network connection's checks: a radio it can serve and an address are required, because
+ * without either nothing can connect; a missing network user or password is a warning, because the
+ * operator may save first and set them after.
+ */
+function checkIcomLan(form: RigFormFacts, passwordSaved?: boolean | null): RigCheck[] {
+  const out: RigCheck[] = []
+  if (!ICOM_LAN_MODELS.includes(form.rigModel)) {
+    out.push({ level: 'error', message: t('settings.radio.check.icomLanModel') })
+  }
+  if (!isIpv4(form.icomLanHost ?? '')) {
+    // The example is an invariant token: data, never catalog text a translator could reformat.
+    out.push({
+      level: 'error',
+      message: t('settings.radio.check.icomLanAddress', { example: '192.168.1.50' }),
+    })
+  }
+  if (!(form.icomLanUser ?? '').trim()) {
+    out.push({ level: 'warning', message: t('settings.radio.check.icomLanUser') })
+  }
+  if (passwordSaved === false) {
+    out.push({ level: 'warning', message: t('settings.radio.check.icomLanPassword') })
+  }
+  return out
+}
+
+/**
+ * The Icoms with a network server built in, the only radios the Icom network connection is offered
+ * for: IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2.
+ *
+ * ⚠️ MIRRORS `ICOM_LAN_RIGS` in crates/tempo-app/src/settings.rs, and `rigFormChecks.icomlan.test.ts`
+ * reads that file and fails if the two drift: the screen offers the connection on exactly the radios
+ * the daemon can serve.
+ */
+export const ICOM_LAN_MODELS: readonly number[] = [3078, 3081, 3085, 3090, 3092, 3094]
+
 /** Convenience: does anything here stop a save? */
 export function blocks(checks: RigCheck[]): boolean {
   return checks.some((c) => c.level === 'error')
@@ -215,6 +264,8 @@ export function nativeCivBlockedReason(rigModel: number, rigConn: string): strin
   if (!NATIVE_CIV_MODELS.includes(rigModel)) return 'not-supported'
   if (rigConn === 'network') return 'network'
   if (rigConn === 'omnirig') return 'omnirig'
+  // The Icom network connection always drives the radio with Nexus's own CI-V engine.
+  if (rigConn === 'icomlan') return 'icomlan'
   return null
 }
 

@@ -113,7 +113,7 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
             aria-pressed={radio.tuning}
             onClick={() => onTune(!radio.tuning)}
             disabled={!control || !radio.txAllowed}
-            title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
+            title={radio.txRefusal ?? "Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."}
           >
             Tune
           </button>
@@ -181,12 +181,18 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
       {/* The ON AIR sign reads the arbiter (`isOnAir`), never the FT slot flag alone, so a voice
           over, CW, RTTY, a tune or a key held at the radio all light it; an over armed through the
           stream lights it once the voice keys it (`lit`, above). Paint only. */}
-      <span className={`cq-statecap ${lit ? 'tx' : radio.txEnabled ? 'rx' : 'off'}`}>
+      {/* A connection that transmits nothing says so here, with its reason on hover, rather
+          than "receiving" over a TX that cannot key. A key the radio itself holds still lights
+          the sign: what is on the air is shown first. */}
+      <span className={`cq-statecap ${lit ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
+        title={!lit && radio.txRefusal ? radio.txRefusal : undefined}>
         {lit
           ? t('operate.strip.state.transmitting')
-          : radio.txEnabled
-            ? t('operate.strip.state.receiving')
-            : t('operate.strip.state.txOff')}
+          : radio.txRefusal
+            ? t('operate.strip.state.connectionNoTx')
+            : radio.txEnabled
+              ? t('operate.strip.state.receiving')
+              : t('operate.strip.state.txOff')}
       </span>
     </div>
   )

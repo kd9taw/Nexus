@@ -1511,6 +1511,10 @@ export interface RadioStatus {
   /** Whether the operator's license class permits TX at the current dial+mode. False = TX
    * hard-blocked (outside privileges); the cockpit shows a lock indicator. */
   txAllowed: boolean
+  /** Why the radio's CAT connection refuses every transmission, when it does (the Icom network
+   *  connection is receive and control only in its Beta). `txAllowed` is false with it; name this
+   *  reason rather than the licence's. */
+  txRefusal?: string | null
   /** The dial the next over would be EMITTED on — the confirmed split TX frequency when the rig
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */

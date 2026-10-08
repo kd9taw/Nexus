@@ -394,7 +394,7 @@ export function Js8Cockpit({
       return true
     }
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast(t('js8.toast.txLocked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('js8.toast.txLocked'), 'info', 3500)
       return true
     }
     return false
