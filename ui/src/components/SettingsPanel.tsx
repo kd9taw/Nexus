@@ -115,7 +115,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { CONTESTS, contestName, isFieldDay } from '../fdEvent'
+import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, isFieldDay } from '../fdEvent'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -3460,6 +3460,9 @@ export function SettingsPanel({
   const fdSectionRetired = fdSectionInvalid
     ? RETIRED_SECTIONS[form.fdSection.trim().toUpperCase()]
     : undefined
+  // Why club sync cannot run the picked contest at all, or null when it can — shown beside
+  // the switches before anybody turns one on.
+  const clubRefusalHere = contestClubRefusal(form.fdEvent)
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>
@@ -12462,11 +12465,12 @@ export function SettingsPanel({
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day-club">
             <legend>{t('settings.fdClub.legend')}</legend>
-            {/* Club sync runs a Field Day event's rules, so the engine refuses it for any
-                other contest (`Engine::fd_sync_enabled`). Said here, where it is turned on. */}
-            {!isFieldDay(form.fdEvent?.trim()) && (
+            {/* Club sync runs the picked contest's own rules, and the engine refuses it for a
+                contest whose merged log would be wrong whoever built it
+                (`Engine::club_sync_refusal`). Said here, where it is turned on. */}
+            {clubRefusalHere && (
               <p className="settings-note" role="note">
-                {t('fieldDay.club.refused.body', { contest: contestName(form.fdEvent?.trim()) })}
+                {clubSyncRefusalText(clubRefusalHere, contestName(form.fdEvent?.trim()))}
               </p>
             )}
             <label className="settings-field">

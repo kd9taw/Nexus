@@ -85,7 +85,7 @@ import { SstvViewer } from './components/SstvViewer'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
-import { clubSyncRefused, contestName } from './fdEvent'
+import { clubSyncRefusal, clubSyncRefusalText, contestName, isFieldDay } from './fdEvent'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
@@ -817,17 +817,23 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // wherever the operator happens to be standing.
     const syncConfigured =
       settings?.fdHostEnable === true || (settings?.fdJoinAddr ?? '').trim() !== ''
+    const clubRefusal = clubSyncRefusal(settings)
     return (
       <DetachedShell>
         {club ? (
-          <FdClubSection club={club} detached />
-        ) : clubSyncRefused(settings) ? (
+          <FdClubSection
+            club={club}
+            detached
+            fieldDay={isFieldDay(snap.fieldDay?.event)}
+            keepsDupes={snap.fieldDay?.dupeRule?.logDupes === true}
+          />
+        ) : clubRefusal ? (
           // Switched on for a contest club sync cannot run, so the engine refuses it:
           // say why, never that the operator is "somewhere else" with a club running.
           <div style={FDCLUB_OFF_WRAP}>
             <h2 style={FDCLUB_OFF_HEAD}>{t('detached.fdClub.off.head')}</h2>
             <p style={FDCLUB_OFF_BODY}>
-              {t('fieldDay.club.refused.body', { contest: contestName(settings?.fdEvent?.trim()) })}
+              {clubSyncRefusalText(clubRefusal, contestName(settings?.fdEvent?.trim()))}
             </p>
           </div>
         ) : syncConfigured ? (

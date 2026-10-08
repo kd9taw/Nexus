@@ -240,6 +240,17 @@ pub enum Msg {
         /// The position's own high-water seq (its journal's max).
         #[serde(default)]
         max_seq: u64,
+        /// ⭐ **The contest this position is logging** — the rules-file id (`"arrlfd"`,
+        /// `"ilqp"`), which is what its rows' exchange means.
+        ///
+        /// The host refuses a position logging a different contest, by name: a club log
+        /// keys, scores and exports every row by ONE ruleset, and a row from another is
+        /// read against the wrong exchange. Defaulted, and needing no version bump in
+        /// either direction: an older host ignores the field, and an older position
+        /// sends `""`, which the host serves for Field Day exactly as before and refuses
+        /// for anything else.
+        #[serde(default)]
+        contest: String,
     },
     /// host→pos, the join's answer.
     Welcome {
@@ -255,6 +266,12 @@ pub enum Msg {
         /// Host wall clock, for the >30 s skew warning (never adjusted).
         #[serde(default)]
         now_unix: u64,
+        /// The contest the host's club log runs (the rules-file id), or `""` from a host
+        /// too old to say — which ran a Field Day club log whatever contest it had
+        /// selected, so a position logging anything else must not stream to it
+        /// ([`PositionSync::host_contest`]).
+        #[serde(default)]
+        contest: String,
     },
     /// pos→host, one QSO row.
     Qso(WireQso),
@@ -356,6 +373,8 @@ pub struct JoinAccept {
     pub host_call: String,
     /// Host's high-water ack for the joining position.
     pub acked: u64,
+    /// The contest the club runs (the rules-file id) — the welcome's `contest`.
+    pub contest: String,
 }
 
 /// Everything the socket loop can do to the application — and, deliberately,
@@ -372,6 +391,10 @@ pub trait ClubBackend: Send + Sync {
     /// show or send a QSO-party exchange. The wire layer owns "newer than us is
     /// refused"; the policy layer owns "older than us, and this contest", and it
     /// owns the wording too, because only it knows the contest to name.
+    ///
+    /// `contest` is the JOIN's own (`""` from a position too old to send one), and it
+    /// reaches the backend for the same reason: whether a position logging that
+    /// contest may join this club is the policy layer's question.
     fn join(
         &self,
         v: u32,
@@ -379,6 +402,7 @@ pub trait ClubBackend: Send + Sync {
         name: &str,
         call: &str,
         max_seq: u64,
+        contest: &str,
     ) -> Result<JoinAccept, String>;
     /// Merge one row into the club log (idempotent on `(pos, seq)`); returns
     /// the new high-water ack for `row.pos`.
@@ -513,6 +537,7 @@ fn serve_club_connection(
                         name,
                         call,
                         max_seq,
+                        contest,
                     } => {
                         if v > PROTO_VERSION {
                             let _ = writer.write_all(
@@ -526,7 +551,7 @@ fn serve_club_connection(
                             );
                             break;
                         }
-                        let accept = match backend.join(v, &pos, &name, &call, max_seq) {
+                        let accept = match backend.join(v, &pos, &name, &call, max_seq, &contest) {
                             Ok(a) => a,
                             Err(msg) => {
                                 let _ =
@@ -540,6 +565,7 @@ fn serve_club_connection(
                             host_call: accept.host_call,
                             acked: accept.acked,
                             now_unix: now_unix(),
+                            contest: accept.contest,
                         };
                         if writer.write_all(encode_line(&welcome).as_bytes()).is_err() {
                             break;
@@ -706,6 +732,13 @@ pub trait PositionSync: Send + Sync {
     /// This position's identity for the JOIN line:
     /// `(pos id, friendly name, station call, own max seq)`.
     fn identity(&self) -> (String, String, String, u64);
+    /// The contest this position is logging, for the JOIN line (the rules-file id).
+    fn contest(&self) -> String;
+    /// The contest the host named in its welcome (`""` from a host too old to name
+    /// one). `Err(reason)` = this position must not stream to that host: nothing is
+    /// sent, the reason is shown exactly as a host's refusal is, and the session ends
+    /// (the pump retries on its backoff, as after any refusal).
+    fn host_contest(&self, contest: &str) -> Result<(), String>;
     /// Own rows with `seq > after` (ascending) — THE outbox definition; no
     /// separate queue exists to corrupt.
     fn outbox_after(&self, after: u64) -> Vec<WireQso>;
@@ -756,6 +789,7 @@ fn run_position_session(
             name,
             call,
             max_seq,
+            contest: backend.contest(),
         })
         .as_bytes(),
     )?;
@@ -780,8 +814,16 @@ fn run_position_session(
                         host_call,
                         acked: a,
                         now_unix,
+                        contest,
                         ..
                     }) => {
+                        // Checked BEFORE anything is taken from the welcome: a host
+                        // running another contest's rules must not be streamed to at
+                        // all, and nothing below has happened yet.
+                        if let Err(msg) = backend.host_contest(&contest) {
+                            backend.on_error(&msg);
+                            break Ok(false);
+                        }
                         welcomed = true;
                         acked = a;
                         sent_to = a; // everything past the ack re-streams below
@@ -983,6 +1025,7 @@ mod tests {
                 name: "CW tent".into(),
                 call: "KD9TAW".into(),
                 max_seq: 42,
+                contest: String::new(),
             },
             Msg::Welcome {
                 v: 1,
@@ -990,6 +1033,7 @@ mod tests {
                 host_call: "W9ABC".into(),
                 acked: 37,
                 now_unix: 1_782_583_500,
+                contest: String::new(),
             },
             Msg::Qso(WireQso {
                 pos: "a1b2c3d4".into(),
@@ -1064,6 +1108,7 @@ mod tests {
             name: String::new(),
             call: String::new(),
             max_seq: 0,
+            contest: String::new(),
         });
         assert!(j.contains("\"t\":\"join\"") && j.contains("\"max_seq\""));
         let w = encode_line(&Msg::Welcome {
@@ -1072,6 +1117,7 @@ mod tests {
             host_call: "X".into(),
             acked: 0,
             now_unix: 0,
+            contest: String::new(),
         });
         assert!(w.contains("\"t\":\"welcome\"") && w.contains("\"host_call\""));
     }
@@ -1151,6 +1197,8 @@ mod tests {
         /// What the POLICY layer answers an older position with, if anything —
         /// the seam §18.2's refusal comes down.
         refuse_below_v2: Mutex<Option<String>>,
+        /// The contest each JOIN named, in arrival order — what reached the policy layer.
+        contests: Mutex<Vec<String>>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1165,8 +1213,10 @@ mod tests {
             _name: &str,
             _call: &str,
             _max_seq: u64,
+            contest: &str,
         ) -> Result<JoinAccept, String> {
             self.log(format!("join v{v} {pos}"));
+            self.contests.lock().unwrap().push(contest.to_string());
             // The guard is dropped before the branch, not held across it: an
             // `if let` scrutinee lives until the end of the body, which is how a
             // lock taken here would still be held while the arm runs.
@@ -1180,6 +1230,7 @@ mod tests {
                 event: "TEST FD".into(),
                 host_call: "W9ABC".into(),
                 acked: *self.acked.lock().unwrap().get(pos).unwrap_or(&0),
+                contest: "arrlfd".into(),
             })
         }
         fn merge(&self, row: &WireQso) -> u64 {
@@ -1299,6 +1350,7 @@ mod tests {
             name: "tent".into(),
             call: "KD9TAW".into(),
             max_seq,
+            contest: String::new(),
         }
     }
 
@@ -1680,6 +1732,7 @@ mod tests {
                 name: String::new(),
                 call: String::new(),
                 max_seq: 0,
+                contest: String::new(),
             }],
             500,
         );
@@ -1821,6 +1874,10 @@ mod tests {
         welcome_now: Mutex<u64>,
         /// The operator's Settings field, renameable mid-session.
         name: Mutex<String>,
+        /// The contests hosts named in their welcomes, in arrival order.
+        host_contests: Mutex<Vec<String>>,
+        /// What the POLICY layer answers a host's contest with — `Some` refuses it.
+        refuse_host: Mutex<Option<String>>,
     }
     impl Default for FakePosition {
         fn default() -> Self {
@@ -1831,12 +1888,26 @@ mod tests {
                 errors: Mutex::new(Vec::new()),
                 welcome_now: Mutex::new(0),
                 name: Mutex::new("SSB tent".into()),
+                host_contests: Mutex::new(Vec::new()),
+                refuse_host: Mutex::new(None),
             }
         }
     }
     impl PositionSync for FakePosition {
         fn identity(&self) -> (String, String, String, u64) {
             ("dddd0001".into(), "SSB tent".into(), "KD9TAW".into(), 3)
+        }
+        fn contest(&self) -> String {
+            "ilqp".into()
+        }
+        fn host_contest(&self, contest: &str) -> Result<(), String> {
+            self.host_contests.lock().unwrap().push(contest.to_string());
+            // The guard is dropped before the branch, as `FakeClub::join`'s is.
+            let refusal = self.refuse_host.lock().unwrap().clone();
+            match refusal {
+                Some(msg) => Err(msg),
+                None => Ok(()),
+            }
         }
         fn outbox_after(&self, after: u64) -> Vec<WireQso> {
             (after + 1..=3)
@@ -1952,6 +2023,122 @@ mod tests {
             *posn.linked.lock().unwrap(),
             vec![true, false],
             "link chip saw up then down"
+        );
+    }
+
+    /// ⭐ **The contest travels both ways at JOIN**, because a club log keys, scores and
+    /// exports by one ruleset and the policy layer at each end has to be able to say no.
+    /// The position's own contest reaches the host's backend, and the host's reaches the
+    /// position's — over a real socket, through the real pump and accept loop.
+    #[test]
+    fn the_join_names_the_positions_contest_and_the_welcome_names_the_clubs() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, host_sd) = start_host(club.clone());
+        let posn = Arc::new(FakePosition::default());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && *posn.acked.lock().unwrap() < 3 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+
+        assert_eq!(
+            *club.contests.lock().unwrap(),
+            vec!["ilqp".to_string()],
+            "the position's contest reached the host's policy layer"
+        );
+        assert_eq!(
+            *posn.host_contests.lock().unwrap(),
+            vec!["arrlfd".to_string()],
+            "…and the club's reached the position's"
+        );
+
+        // OLDER BYTES, both directions: a JOIN with no `contest` (any build before this
+        // field) reaches the backend as "", which is what the policy layer reads as "too
+        // old to say" — not a parse failure, and not some contest by default.
+        let got = talk_raw(
+            addr,
+            &[r#"{"t":"join","v":2,"pos":"eeee0001","name":"","call":"KD9TAW","max_seq":0}"#],
+            400,
+        );
+        assert!(
+            got.iter().any(|m| matches!(m, Msg::Welcome { .. })),
+            "an older position's join still decodes and is answered: {got:?}"
+        );
+        assert_eq!(
+            club.contests.lock().unwrap().last().map(String::as_str),
+            Some(""),
+            "an older JOIN names no contest"
+        );
+        host_sd.store(true, Ordering::Relaxed);
+        // …and an older host's WELCOME decodes with no contest, which is what the position
+        // has to refuse a non-Field-Day stream on.
+        assert!(matches!(
+            decode_line(r#"{"t":"welcome","v":2,"event":"X","host_call":"W9ABC","acked":0,"now_unix":1}"#),
+            Some(Msg::Welcome { contest, .. }) if contest.is_empty()
+        ));
+    }
+
+    /// ⭐ A position whose policy layer refuses the host's contest STREAMS NOTHING — the
+    /// check runs on the welcome, before the outbox is read — and the reason reaches the
+    /// operator the way a host's own refusal does.
+    #[test]
+    fn a_position_that_refuses_the_hosts_contest_streams_nothing_and_says_why() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, host_sd) = start_host(club.clone());
+        let posn = Arc::new(FakePosition::default());
+        *posn.refuse_host.lock().unwrap() = Some("the host runs another contest".into());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && posn.errors.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Long enough that a pump that kept going after the welcome would have streamed.
+        std::thread::sleep(Duration::from_millis(400));
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+        host_sd.store(true, Ordering::Relaxed);
+
+        assert_eq!(
+            posn.errors.lock().unwrap().first().map(String::as_str),
+            Some("the host runs another contest"),
+            "the refusal is shown, verbatim"
+        );
+        assert!(
+            club.merged.lock().unwrap().is_empty(),
+            "not one row reached a host whose contest was refused"
+        );
+        assert_eq!(
+            *posn.welcome_now.lock().unwrap(),
+            0,
+            "the refused welcome was not taken (no ack, no clock)"
+        );
+        // POSITIVE CONTROL: the same position with the refusal lifted streams its rows —
+        // so the empty merge above is the refusal, not a pump that never connected.
+        *posn.refuse_host.lock().unwrap() = None;
+        let (addr, host_sd) = start_host(club.clone());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && *posn.acked.lock().unwrap() < 3 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+        host_sd.store(true, Ordering::Relaxed);
+        assert_eq!(
+            club.merged.lock().unwrap().len(),
+            3,
+            "control: all three rows merged"
         );
     }
     #[test]

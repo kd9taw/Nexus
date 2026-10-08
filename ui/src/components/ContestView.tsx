@@ -13,7 +13,7 @@ import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, se
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
-import { clubSyncRefused, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
+import { clubSyncRefusal, clubSyncRefusalText, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -1000,12 +1000,20 @@ export function FdClubSection({
   busy = false,
   detached = false,
   readOnly = false,
+  fieldDay = true,
+  keepsDupes = false,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
   busy?: boolean
   detached?: boolean
   readOnly?: boolean
+  /** The club runs one of the two Field Days. Any other contest has no sections, so its
+   *  counters leave them out rather than show a zero that means nothing. */
+  fieldDay?: boolean
+  /** The contest reports its duplicates (`DupeRule::log_dupes`), so the club file keeps a
+   *  repeat as a zero-point line instead of keeping only the earliest. */
+  keepsDupes?: boolean
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
@@ -1038,11 +1046,13 @@ export function FdClubSection({
         )}
         <span style={{ flex: '1 1 auto' }} />
         <span style={{ fontSize: textPx(big ? 16 : 13), color: 'var(--text-dim)' }}>
-          {t('fieldDay.club.counters', {
-            score: club.score,
-            qsos: club.qsos,
-            sections: club.sections,
-          })}
+          {fieldDay
+            ? t('fieldDay.club.counters', {
+                score: club.score,
+                qsos: club.qsos,
+                sections: club.sections,
+              })
+            : t('fieldDay.club.countersContest', { score: club.score, qsos: club.qsos })}
         </span>
         {club.hosting && onExport && (
           <>
@@ -1051,7 +1061,11 @@ export function FdClubSection({
               className="export-btn"
               disabled={busy}
               onClick={() => onExport('club-cabrillo')}
-              title={t('fieldDay.club.export.cabrillo.title')}
+              title={
+                keepsDupes
+                  ? t('fieldDay.club.export.cabrillo.titleKept')
+                  : t('fieldDay.club.export.cabrillo.title')
+              }
             >
               {t('fieldDay.club.export.cabrillo.label')}
             </button>
@@ -1060,7 +1074,11 @@ export function FdClubSection({
               className="export-btn"
               disabled={busy}
               onClick={() => onExport('club-adif')}
-              title={t('fieldDay.club.export.adif.title')}
+              title={
+                keepsDupes
+                  ? t('fieldDay.club.export.adif.titleKept')
+                  : t('fieldDay.club.export.adif.title')
+              }
             >
               {t('fieldDay.club.export.adif.label')}
             </button>
@@ -1146,12 +1164,13 @@ export function FdClubSection({
 /**
  * Club sync switched on for a contest it cannot run, said where the club block would be.
  *
- * The engine refuses it (`clubSyncRefused`, `Engine::fd_sync_enabled`): the club log runs a
- * Field Day event's rules, and hosting any other contest used to build an ARRL Field Day club
- * log in silence. With nothing syncing there is no club block, so without this the screen
- * would simply go quiet about a switch the operator turned on.
+ * The engine refuses it (`clubSyncRefusal`, `Engine::club_sync_refusal`): the club log runs
+ * the picked contest's own rules, and refuses only a contest whose merged log would be wrong
+ * whoever built it — a serial-number exchange, or a sponsor template with a transmitter
+ * column. With nothing syncing there is no club block, so without this the screen would
+ * simply go quiet about a switch the operator turned on.
  */
-export function FdClubRefused({ contest }: { contest: string }) {
+export function FdClubRefused({ contest, why }: { contest: string; why: ClubSyncRefusal }) {
   return (
     <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
       <div style={CLUB_HEADER}>
@@ -1161,7 +1180,7 @@ export function FdClubRefused({ contest }: { contest: string }) {
         <span style={clubChipStyle('refused')}>{t('fieldDay.club.refused.chip')}</span>
       </div>
       <div style={CLUB_WARN} role="status">
-        {t('fieldDay.club.refused.body', { contest })}
+        {clubSyncRefusalText(why, contest)}
       </div>
     </div>
   )
@@ -1624,6 +1643,9 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   // the picker said, so a CQ WW log sat under an "ARRL Field Day" banner with Class and
   // Section columns empty on every row.
   const fdEventIsFieldDay = isFieldDay(fieldDay?.event)
+  // Why club sync is not running, when it is switched on for a contest it cannot run — read
+  // from the station's own settings, which a Remote observation does not carry.
+  const clubRefusal = clubSyncRefusal(nativeSettings)
   const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(fieldDay?.event)
   const fdEvent = useMemo(
     () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName),
@@ -1920,12 +1942,19 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
 
       {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
       {fieldDay?.club && (
-        <FdClubSection club={fieldDay.club} onExport={observed ? undefined : handleExport} busy={busy !== null} readOnly={observed} />
+        <FdClubSection
+          club={fieldDay.club}
+          onExport={observed ? undefined : handleExport}
+          busy={busy !== null}
+          readOnly={observed}
+          fieldDay={fdEventIsFieldDay}
+          keepsDupes={fieldDay.dupeRule?.logDupes === true}
+        />
       )}
       {/* …or why it is not syncing: switched on for a contest club sync cannot run. The
           station's own settings, which a Remote observation does not carry. */}
-      {!fieldDay?.club && clubSyncRefused(nativeSettings) && (
-        <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} />
+      {!fieldDay?.club && clubRefusal && (
+        <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} why={clubRefusal} />
       )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
