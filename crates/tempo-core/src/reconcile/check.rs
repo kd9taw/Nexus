@@ -44,6 +44,13 @@
 //! is the one under check: it may be 1.17.0's own, put there after the pull had marked the contact
 //! `Accepted` from another contact's upload, so it does not keep the contact out of the replay.
 //!
+//! QRZ's book is QRZ's own record of the operator's contacts, confirmed or not, and it re-reports
+//! what other services hold: its copies of LoTW's, eQSL's and a paper card's confirmation, and of
+//! LoTW's credit. Only QRZ's own confirmation (`APP_QRZLOG_STATUS`) is its word, so the copies
+//! never support, contradict or tick anything here, and Apply's gains from the book
+//! ([`gain_qrz_confirmations`]) carry QRZ's confirmation alone. Neither an eQSL nor a QRZ
+//! confirmation ever gave award credit, so their lines take no credit code off.
+//!
 //! The replay is an approximation. 1.17.0 merged incremental syncs, not one whole download, and
 //! read the award state the log had then. Every line is the operator's own tick for that reason.
 
@@ -82,6 +89,25 @@ impl Channel {
     /// (LoTW's report, QRZ's book), rather than cards at the time the other station logged (eQSL).
     fn rows_are_own_records(self) -> bool {
         self != Channel::Eqsl
+    }
+
+    /// Whether the service's own record of a contact (LoTW's own-QSO list, QRZ's book) says the
+    /// service confirms it. LoTW's list marks a confirmed record with a bare `QSL_RCVD`, which a
+    /// parse reads as a card, so any channel will do. QRZ's book also re-reports what other
+    /// services hold (its copies of `LOTW_QSL_RCVD`, `EQSL_QSL_RCVD` and `QSL_RCVD`), which is not
+    /// QRZ's word: only its own `APP_QRZLOG_STATUS` is.
+    fn own_record_confirms(self, q: &QslRcvd) -> bool {
+        match self {
+            Channel::Lotw => q.any(),
+            Channel::Eqsl | Channel::Qrz => self.held(q),
+        }
+    }
+
+    /// Whether the service's confirmation is award-grade, and so the one whose row brings credit
+    /// codes (LoTW's). An eQSL or QRZ confirmation never gave award credit, so its line takes no
+    /// code off: a code on a QRZ row is QRZ's copy of LoTW's.
+    fn award_grade(self) -> bool {
+        self == Channel::Lotw
     }
 }
 
@@ -269,7 +295,7 @@ pub fn check_report<R: Borrow<QsoRecord>>(
         // The service's own record of this very contact, where it holds it unconfirmed.
         let own = own_of[i]
             .map(|o| &own_rows[o])
-            .filter(|o| !o.qsl_rcvd.any());
+            .filter(|o| !channel.own_record_confirms(&o.qsl_rcvd));
         let mark = Mark::Confirmation(channel);
         match judge(local, i, mark, &confirmations, own, own_call) {
             Verdict::Listed(line) => check.lines.push(*line),
@@ -315,9 +341,10 @@ pub fn check_report<R: Borrow<QsoRecord>>(
 /// and nothing changes.
 ///
 /// A confirmation line clears the service's flag, derives `confirmed` and `award_confirmed` again
-/// from the four channels, and removes the codes the line names. It never touches a paper card,
-/// so a contact holding one stays award-confirmed. An upload line clears LoTW's upload state, so
-/// the contact is owed to LoTW again. Nothing else about the contact moves.
+/// from the four channels, and removes the codes the line names (only a LoTW line names any). It
+/// never touches a paper card, so a contact holding one stays award-confirmed. An upload line
+/// clears LoTW's upload state, so the contact is owed to LoTW again. Nothing else about the
+/// contact moves, and each of a contact's lines still applies once another has gone first.
 pub fn uncheck(rec: &QsoRecord, line: &CheckLine) -> Option<QsoRecord> {
     if !still_shows(rec, line) {
         return None;
@@ -338,11 +365,38 @@ pub fn uncheck(rec: &QsoRecord, line: &CheckLine) -> Option<QsoRecord> {
     Some(now)
 }
 
+/// Apply's gains from QRZ's book: QRZ's own confirmation put on each contact that one of the
+/// book's confirming rows pairs with and that lacks it, the rows paired as the check and a sync
+/// pair the whole book (`pair_report`), so QRZ's record of an unconfirmed contact still takes that
+/// contact. Nothing else a row carries reaches a contact: not QRZ's copies of what LoTW, eQSL or a
+/// paper card hold, nor their credit codes or upload marks (QRZ re-reports them, and they are not
+/// its word), nor the operator's own fields. No row becomes a contact either: the QSOs the book
+/// holds that the log lacks are Sync from QRZ's to add. How many contacts gained it.
+pub fn gain_qrz_confirmations<R: crate::logbook::StoredRecord>(
+    local: &mut [R],
+    book: &[QsoRecord],
+) -> usize {
+    let mut gained = 0;
+    for (row, pair) in book.iter().zip(pair_report(local, book)) {
+        let Some(i) = pair else { continue };
+        if row.qsl_rcvd.qrz && !local[i].borrow().qsl_rcvd.qrz {
+            let rec = local[i].write();
+            rec.qsl_rcvd.qrz = true;
+            rec.confirmed = true;
+            gained += 1;
+        }
+    }
+    gained
+}
+
 /// Whether `rec` still holds what `line` showed of it: the same contact (every field the check
-/// paired and scoped it by) and the mark as the line read it, which for a confirmation is every
-/// channel and code (what the change rewrites and the line shows) and for an upload line is LoTW's
-/// upload state. Nothing else is compared, so either of a contact's two lines applies whichever
-/// goes first.
+/// paired and scoped it by), and of its mark what the line's change rewrites and what the line
+/// shows. For a confirmation line that is its own service's flag, and for LoTW's, whose
+/// confirmation brings award credit, the paper card that keeps the credit and the codes the change
+/// takes off; for an upload line, LoTW's upload state. No line compares what another of the
+/// contact's lines rewrites (each rewrites its own flag or the upload state, a LoTW line the codes,
+/// and the `confirmed`/`award_confirmed` read again from the channels), so a contact's lines, of
+/// every service, apply whichever goes first.
 fn still_shows(rec: &QsoRecord, line: &CheckLine) -> bool {
     let was = &line.contact;
     rec.id == was.id
@@ -354,10 +408,12 @@ fn still_shows(rec: &QsoRecord, line: &CheckLine) -> bool {
         && rec.station_callsign == was.station_callsign
         && rec.operator == was.operator
         && match line.mark {
-            Mark::Confirmation(_) => {
-                rec.qsl_rcvd == was.qsl_rcvd
-                    && rec.credit_granted == was.credit_granted
-                    && rec.credit_submitted == was.credit_submitted
+            Mark::Confirmation(channel) => {
+                channel.held(&rec.qsl_rcvd) == channel.held(&was.qsl_rcvd)
+                    && (!channel.award_grade()
+                        || (rec.qsl_rcvd.card == was.qsl_rcvd.card
+                            && rec.credit_granted == was.credit_granted
+                            && rec.credit_submitted == was.credit_submitted))
             }
             Mark::LotwUpload => rec.upload.lotw == was.upload.lotw,
         }
@@ -441,7 +497,7 @@ fn judge<R: Borrow<QsoRecord>>(
         }
     };
     let remove = match mark {
-        Mark::Confirmation(_) if explained => brought(r, row),
+        Mark::Confirmation(channel) if explained && channel.award_grade() => brought(r, row),
         _ => Codes::default(),
     };
     Verdict::Listed(Box::new(CheckLine {
@@ -1127,6 +1183,164 @@ mod tests {
             (upload.index, upload.unticked),
             (0, Some(Unticked::NotReplayed))
         );
+    }
+
+    /// `r` as QRZ's record of it, confirmed by QRZ itself (`APP_QRZLOG_STATUS=C`): never an
+    /// award-grade confirmation.
+    fn qrz(mut r: QsoRecord) -> QsoRecord {
+        r.qsl_rcvd.qrz = true;
+        r.confirmed = true;
+        r
+    }
+
+    /// `row` as QRZ's book can carry it: with QRZ's copies of what LoTW, eQSL and a paper card
+    /// hold, and of LoTW's credit (its `LOTW_QSL_RCVD`, `EQSL_QSL_RCVD`, `QSL_RCVD` and
+    /// `CREDIT_GRANTED`), beside whatever QRZ itself says.
+    fn with_copies(mut row: QsoRecord) -> QsoRecord {
+        row.qsl_rcvd.lotw = true;
+        row.qsl_rcvd.eqsl = true;
+        row.qsl_rcvd.card = true;
+        row.confirmed = true;
+        row.award_confirmed = true;
+        row.credit_granted = vec!["DXCC".into()];
+        row
+    }
+
+    /// `call` on 20 m FT8 at `h:m` UTC on the scenes' day.
+    fn on_20m(call: &str, h: u64, m: u64) -> QsoRecord {
+        let mut r = w1aw_at(D, h, m);
+        r.call = call.into();
+        r
+    }
+
+    /// QRZ's book, newest first as 1.17.0's merge read it, and the log that merge left: #400's
+    /// pair on W1AW, 18:00's confirmation on 06:00, which QRZ holds to the minute, unconfirmed;
+    /// K1ABC at 10:00 holding the confirmation of a 15:00 QSO this log lacks, while QRZ holds 10:00
+    /// five minutes off, unconfirmed; and N0SUP at 12:00, which QRZ confirms. 06:00 also holds a
+    /// LoTW confirmation of its own, with its DXCC.
+    fn the_qrz_scenes() -> (Vec<QsoRecord>, Vec<QsoRecord>) {
+        let book = vec![
+            qrz(w1aw_at(D, 18, 0)),
+            w1aw_at(D, 6, 0),
+            qrz(on_20m("K1ABC", 15, 0)),
+            on_20m("K1ABC", 10, 5),
+            qrz(on_20m("N0SUP", 12, 0)),
+        ];
+        let mut log = vec![
+            w1aw_at(D, 6, 0),
+            w1aw_at(D, 18, 0),
+            on_20m("K1ABC", 10, 0),
+            on_20m("N0SUP", 12, 0),
+        ];
+        imported(&mut log, 0, &lotw(w1aw_at(D, 6, 0), &["DXCC"]));
+        let log = left_by_1_17(log, &book);
+        let held: Vec<bool> = log.iter().map(|r| r.qsl_rcvd.qrz).collect();
+        assert_eq!(
+            held,
+            [true, false, true, true],
+            "1.17.0 put 18:00's confirmation on 06:00, and 15:00's on 10:00"
+        );
+        (log, book)
+    }
+
+    #[test]
+    fn a_qrz_rows_copies_of_other_services_never_tick_or_move_a_line() {
+        let (log, book) = the_qrz_scenes();
+        let check = check_report(&log, &book, &book, Channel::Qrz, OWN);
+        let seen: Vec<(usize, LineClass, Option<Unticked>, Codes)> = check
+            .lines
+            .iter()
+            .map(|l| (l.index, l.class, l.unticked, l.remove.clone()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (0, LineClass::Contradicted, None, Codes::default()),
+                (
+                    2,
+                    LineClass::Contradicted,
+                    Some(Unticked::NotToTheMinute),
+                    Codes::default()
+                ),
+            ],
+            "QRZ's own unconfirmed records decide both, and neither takes a code off"
+        );
+        assert_eq!(check.gains, [1], "18:00 gains QRZ's confirmation");
+        // The same book, its rows carrying QRZ's copies of LoTW's, eQSL's and a card's
+        // confirmation and of LoTW's credit: not one line moves, ticks or takes a code off.
+        let copied: Vec<QsoRecord> = book.into_iter().map(with_copies).collect();
+        assert_eq!(
+            check_report(&log, &copied, &copied, Channel::Qrz, OWN),
+            check,
+            "QRZ's copies of other services' word are not QRZ's"
+        );
+        // The change takes off QRZ's confirmation alone: 06:00 keeps its own LoTW confirmation
+        // and its DXCC.
+        let after = uncheck(&log[0], &check.lines[0]).expect("06:00 holds what the line shows");
+        assert!(!after.qsl_rcvd.qrz);
+        assert!(
+            after.qsl_rcvd.lotw && after.award_confirmed && after.credit_granted == ["DXCC"],
+            "{after:?}"
+        );
+    }
+
+    #[test]
+    fn a_contacts_lines_of_every_service_apply_whichever_goes_first() {
+        // #400's pair, with every service's confirmation of 18:00 put on 06:00 by 1.17.0's
+        // matcher: LoTW's (its row at 18:02, granting DXCC), eQSL's (the card its sender timed
+        // 18:01) and QRZ's (its record of 18:00; it holds 06:00 unconfirmed).
+        let lotw_rows = vec![lotw(w1aw_at(D, 18, 2), &["DXCC"])];
+        let eqsl_rows = vec![eqsl(w1aw_at(D, 18, 1))];
+        let book = vec![qrz(w1aw_at(D, 18, 0)), w1aw_at(D, 6, 0)];
+        let before = vec![w1aw_at(D, 6, 0), w1aw_at(D, 18, 0)];
+        let log = left_by_1_17(
+            left_by_1_17(left_by_1_17(before.clone(), &lotw_rows), &eqsl_rows),
+            &book,
+        );
+        assert!(log[0].qsl_rcvd.lotw && log[0].qsl_rcvd.eqsl && log[0].qsl_rcvd.qrz);
+        let lines: Vec<CheckLine> = [
+            check_report(&log, &lotw_rows, &[], Channel::Lotw, OWN),
+            check_report(&log, &eqsl_rows, &[], Channel::Eqsl, OWN),
+            check_report(&log, &book, &book, Channel::Qrz, OWN),
+        ]
+        .into_iter()
+        .flat_map(|c| c.lines)
+        .collect();
+        let marks: Vec<(usize, Mark, bool)> = lines
+            .iter()
+            .map(|l| (l.index, l.mark, l.decisive()))
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                (0, Mark::Confirmation(Channel::Lotw), true),
+                (0, Mark::Confirmation(Channel::Eqsl), true),
+                (0, Mark::Confirmation(Channel::Qrz), true),
+            ]
+        );
+        // Each line still holds once another of the contact's lines has gone first, in either
+        // order: 06:00 ends as it was before 1.17.0.
+        for order in [lines.clone(), lines.iter().rev().cloned().collect()] {
+            let after = order
+                .iter()
+                .try_fold(log[0].clone(), |r, line| uncheck(&r, line));
+            assert_eq!(after.as_ref(), Some(&before[0]));
+        }
+    }
+
+    #[test]
+    fn apply_gives_a_contact_qrzs_own_confirmation_and_nothing_else_its_book_holds() {
+        let (log, book) = the_qrz_scenes();
+        let copied: Vec<QsoRecord> = book.into_iter().map(with_copies).collect();
+        let mut after = log.clone();
+        assert_eq!(gain_qrz_confirmations(&mut after, &copied), 1);
+        // 18:00 gains QRZ's confirmation, and nothing else its row re-reports; 06:00 and 10:00,
+        // which QRZ holds unconfirmed, take nothing from their rows; and K1ABC's 15:00 QSO stays
+        // out of the log, for Sync from QRZ to add.
+        let mut gained = log.clone();
+        gained[1].qsl_rcvd.qrz = true;
+        gained[1].confirmed = true;
+        assert_eq!(after, gained);
     }
 
     /// A contact or a row: two stations, two bands, three modes in two classes, over three days,
