@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moment it should have stopped. Each now takes effect at once. What the decoder carries is
   cleared when the running decode finishes, before the next one starts, so the decodes you see are
   the same as before.
+- **After a band or mode change, the decodes of the period being decoded at that moment now
+  appear, as they do in WSJT-X.** Until now Nexus dropped them. They show at the top of the cleared
+  Band Activity and Rx Frequency panes under a line naming the band, mode and dial they were heard
+  on (for example 20m · FT8 · 14.074 MHz), coloured for that band, and ALL.TXT records them at that
+  dial. They are for reading only: a double-click does not work them, they go to neither your
+  logger nor PSK Reporter, and the auto-sequencer never answers them. The panes also no longer show
+  the last period of the band you left again as if it were the new band's. And, as in WSJT-X,
+  decodes the decoder found by expecting the previous period's messages (WSJT-X marks them a7) are
+  hidden for one and a half periods after any band or mode change, FT8 to FT4 and back on one band
+  included, because they can be left over from the band or mode you left.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on

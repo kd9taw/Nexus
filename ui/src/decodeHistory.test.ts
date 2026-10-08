@@ -12,7 +12,7 @@ import {
   RX_TOL_HZ,
   TIER_PERIOD_SECS,
 } from './decodeHistory'
-import type { DecodeRow } from './types'
+import type { DecodeRow, LateDecodes } from './types'
 
 function row(p: Partial<DecodeRow> & Pick<DecodeRow, 'message' | 'freqHz'>): DecodeRow {
   return {
@@ -145,6 +145,41 @@ describe('band / tier scope wipe', () => {
     expect(h.entries()).toHaveLength(1)
     expect(h.setScope('20m', 'FT4')).toBe(true)
     expect(h.entries()).toHaveLength(0)
+  })
+})
+
+describe('a period heard before a band or mode change (WSJT-X shows it)', () => {
+  const late: LateDecodes = {
+    band: '20m',
+    dialMhz: 14.074,
+    tier: 'FT8',
+    periodStartMs: 8 * 15_000,
+    slot: 9,
+    rows: [row({ message: 'CQ W9XYZ EN52', freqHz: 1200 })],
+  }
+
+  it('lands after the wipe, once, under its own slot, keeping what it was heard on', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([row({ message: 'CQ K2DEF FN20', freqHz: 800 })], 8)
+    expect(h.setScope('40m', 'FT8')).toBe(true)
+    h.ingestLate(late)
+    h.ingestLate(late) // the next poll sends it again
+    h.ingest([row({ message: 'CQ JA1XYZ PM95', freqHz: 900 })], 11)
+    const list = orderEntries(h.entries(), 'time')
+    expect(list.map((d) => [d.message, d.slot, d.heard?.band])).toEqual([
+      ['CQ W9XYZ EN52', 9, '20m'],
+      ['CQ JA1XYZ PM95', 11, undefined],
+    ])
+    expect(list[0].heard).toEqual({ band: '20m', dialMhz: 14.074, tier: 'FT8', periodStartMs: 120_000 })
+  })
+
+  it('the same line heard live in the same slot is a row of its own', () => {
+    const h = new DecodeHistory()
+    h.setScope('40m', 'FT8')
+    h.ingestLate(late)
+    h.ingest(late.rows, late.slot)
+    expect(h.entries().map((d) => d.heard?.band ?? 'live')).toEqual(['20m', 'live'])
   })
 })
 

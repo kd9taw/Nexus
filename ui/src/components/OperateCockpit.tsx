@@ -1632,6 +1632,7 @@ export function OperateCockpit({
                         paneTitle={labels.bandActivity}
                         history={bandHistRef.current}
                         decodes={snap.recentDecodes}
+                        late={snap.lateDecodes}
                         slot={snap.radio.slot}
                         rxOffsetHz={snap.radio.rxOffsetHz}
                         band={snap.radio.band}
@@ -1665,6 +1666,7 @@ export function OperateCockpit({
                         paneTitle={labels.rxfreq}
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
+                        late={snap.lateDecodes}
                         slot={snap.radio.slot}
                         rxOffsetHz={snap.radio.rxOffsetHz}
                         band={snap.radio.band}
@@ -1709,6 +1711,7 @@ export function OperateCockpit({
                     paneTitle={labels.bandActivity}
                     history={bandHistRef.current}
                     decodes={snap.recentDecodes}
+                    late={snap.lateDecodes}
                     slot={snap.radio.slot}
                     rxOffsetHz={snap.radio.rxOffsetHz}
                     band={snap.radio.band}
@@ -1736,6 +1739,7 @@ export function OperateCockpit({
                         paneTitle={labels.rxfreq}
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
+                        late={snap.lateDecodes}
                         slot={snap.radio.slot}
                         rxOffsetHz={snap.radio.rxOffsetHz}
                         band={snap.radio.band}

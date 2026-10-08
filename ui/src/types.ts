@@ -2103,6 +2103,22 @@ export interface MeterReadout {
   cwToneHz: number | null
 }
 
+/** The period a band or mode change caught while it was being decoded, which WSJT-X shows and so
+ *  does Nexus: display only, under the band, dial and mode it was heard on, never the new ones. */
+export interface LateDecodes {
+  /** The band it was received on ('' off the bands). */
+  band: string
+  /** The dial it was received on (MHz). */
+  dialMhz: number
+  /** The mode it was received in. */
+  tier: Tier
+  /** The received period's start, Unix ms — what its separator shows. */
+  periodStartMs: number
+  /** Where it sorts among the panes' rows: its boundary in the CURRENT mode's slot numbering. */
+  slot: number
+  rows: DecodeRow[]
+}
+
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
 export interface DecodeRow {
   from: string | null
@@ -4489,6 +4505,9 @@ export interface AppSnapshot {
   fieldDay: FieldDayStatus | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
+  /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
+   *  unless there is one, until the first period of the new band or mode decodes. */
+  lateDecodes?: LateDecodes
   /** JTAlert-style UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
