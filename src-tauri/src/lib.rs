@@ -21043,6 +21043,10 @@ struct ConfirmationCheckDto {
     session: u64,
     /// `lotw`, `eqsl` or `qrz`.
     service: &'static str,
+    /// How many records the service's download held: LoTW's confirmations, eQSL's cards, QRZ's
+    /// book. Said in the Connections log, where a bench can hold it against the service's own
+    /// count.
+    records: usize,
     /// Newest first; a contact's confirmation line before its upload line.
     lines: Vec<ConfirmationLineDto>,
     /// The contacts the service confirms that lack its confirmation: Apply adds it.
@@ -21060,6 +21064,7 @@ impl ConfirmationCheckDto {
     fn of(
         session: u64,
         channel: tempo_core::reconcile::check::Channel,
+        records: usize,
         found: &tempo_app::station::ServiceCheck,
     ) -> Self {
         let check = &found.check;
@@ -21073,6 +21078,7 @@ impl ConfirmationCheckDto {
         Self {
             session,
             service: check_mark_name(tempo_core::reconcile::check::Mark::Confirmation(channel)),
+            records,
             lines,
             gain_ids: found.gains.iter().map(|id| id.to_string()).collect(),
             unreached: check.flags.unreached,
@@ -21148,7 +21154,8 @@ fn checked_and_held(
         return Err(CHECK_CANCELLED.to_string());
     }
     let (report, found) = run()?;
-    let dto = ConfirmationCheckDto::of(session, channel, &found);
+    let records = tempo_core::logbook::parse_adif(&report).len();
+    let dto = ConfirmationCheckDto::of(session, channel, records, &found);
     let held = checks.hold(
         session,
         HeldService {
@@ -21256,7 +21263,8 @@ async fn confirmation_check(
         check_connector(channel),
         |c: &ConfirmationCheckDto| {
             format!(
-                "check confirmations: {} listed, {} would gain a confirmation",
+                "check confirmations: {} records, {} listed, {} would gain a confirmation",
+                c.records,
                 c.lines.len(),
                 c.gain_ids.len()
             )
@@ -43438,14 +43446,18 @@ mod tests {
         }
         let checks = crate::ConfirmationChecks::default();
         let session = checks.start("main");
-        let mut ticked = Vec::new();
-        for dto in [
+        let found = [
             lotw_checked(&checks, session, &engine, &lotw),
             eqsl_checked(&checks, session, &engine, &eqsl),
             qrz_checked(&checks, session, &engine, &qrz),
-        ] {
-            ticked.extend(decisive(&dto.expect("the check reads")));
-        }
+        ]
+        .map(|dto| dto.expect("the check reads"));
+        assert_eq!(
+            found.each_ref().map(|dto| (dto.service, dto.records)),
+            [("lotw", 4), ("eqsl", 1), ("qrz", 1)],
+            "each download's records, as the Connections log says them"
+        );
+        let ticked: Vec<crate::TickedLineDto> = found.iter().flat_map(decisive).collect();
         let (made, durability) =
             crate::applied_from(&checks, session, &ticked, &engine, CHECKED_AT);
         durability

@@ -1121,6 +1121,9 @@ export interface ConfirmationCheck {
   /** The check, which its Apply names. */
   session: number
   service: CheckedService
+  /** How many records the service's download held (LoTW's confirmations, eQSL's cards, QRZ's
+   *  book), as the Connections log says them. */
+  records: number
   lines: ConfirmationLine[]
   /** The contacts the service confirms that lack its confirmation: Apply adds it. */
   gainIds: string[]

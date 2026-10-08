@@ -87,7 +87,7 @@ const QRZ_LINES: ConfirmationLine[] = [
   line('DL1ABC', { mark: 'qrz', whenUnix: at(3, 8), rowUnix: at(3, 8, 1), siblingUnix: at(3, 8, 1), decisive: false, unticked: 'notReplayed' }),
 ]
 const found = (service: CheckedService, lines: ConfirmationLine[], over: Partial<ConfirmationCheck> = {}): ConfirmationCheck => ({
-  session: 7, service, lines, gainIds: ['id-W1AW-2'], unreached: 0, outOfScope: 0, uploadsUnreached: 0, uploadsOutOfScope: 0, ...over,
+  session: 7, service, records: lines.length, lines, gainIds: ['id-W1AW-2'], unreached: 0, outOfScope: 0, uploadsUnreached: 0, uploadsOutOfScope: 0, ...over,
 })
 /** Each service's check. 18:00 W1AW gains all three services' confirmations, K2GAIN LoTW's. */
 const FOUND: Record<CheckedService, ConfirmationCheck | string> = {
