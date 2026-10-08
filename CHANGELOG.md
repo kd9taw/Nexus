@@ -56,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a contact that loses a false LoTW confirmation and was never uploaded goes in your next LoTW
   upload. It checks LoTW; eQSL and QRZ confirmations are not checked.
 
+- **Illinois QSO Party: a station on a county line takes one entry.** The 2026 rules count a
+  station on the border of two to four counties once per county. Type its counties into the QTH
+  box joined by `/`, as the station sends them (`COOK/DUPG`, up to four), and Enter logs one
+  contact per county, all at the same time, band and mode. N1MM Logger+ takes county lines the
+  same way. Each county can be typed as its code or its name and is offered from the sponsor's
+  list. A county already worked on that band and mode is not logged again, and Nexus says which
+  one it was while the others are logged. A part that is not a county on the sponsor's list stops
+  the whole line. Each county is an ordinary contact in the log, and a single county logs as
+  before.
+
 ### Changed
 
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
