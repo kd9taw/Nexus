@@ -2566,6 +2566,10 @@ export interface NeedAlert {
    * the matching cockpit and drives the row's mode badge. 'RTTY' is a Digital submode label
    * (RBN skimmer spots only) that routes to the RTTY cockpit; it filters as Digital. */
   mode: string
+  /** The mode the station was heard in, folded as `modeKey` folds it ('FT8', 'SSB'), or absent/null
+   * when its source named only a class (a cluster spot placed by its frequency). A NewMode need is a
+   * need for THIS mode, so its chip shows only where the surface is that mode (`tagsForSurface`). */
+  exactMode?: string | null
   /** Exact spot frequency in MHz when known (cluster/RBN), else null (band-level
    * reception needs). Lets click-to-work QSY to the spot, not just the band default. */
   freqMhz: number | null

@@ -276,11 +276,41 @@ describe('tagsForSurface (the false "new mode" gate)', () => {
   })
 
   it('matches the backend submode vocabulary against a class label', () => {
-    // The backend sends mode: 'FT8'/'FT4'/'RTTY' verbatim for digital rows, but the
-    // decode feed describes itself as the class 'Digital'. Raw === never matched.
+    // The backend sends mode: 'FT8'/'FT4'/'RTTY' verbatim for digital rows, and a surface may
+    // describe itself by class ('Digital'). Raw === never matched. These alerts name no exact
+    // mode — a build that sends none — so the class rule is theirs.
     for (const m of ['FT8', 'FT4', 'RTTY', 'Digital']) {
       expect(tagsForSurface(ar(['NewMode'], m), '30m', 'Digital')).toEqual(['NewMode'])
     }
+  })
+
+  // Operator ruling 2026-10-07, "each mode separately": a new-mode need names its mode, and its
+  // chip shows only where the surface is that mode.
+  it('shows a new-mode need for FT4 on the FT4 surface and never on the FT8 one', () => {
+    const ft4 = { ...ar(['NewMode'], 'FT4'), exactMode: 'FT4' }
+    expect(tagsForSurface(ft4, '30m', 'FT8')).toEqual([])
+    expect(tagsForSurface(ft4, '30m', 'FT4')).toEqual(['NewMode'])
+    // …and a surface that names only a class cannot show a need for one mode.
+    expect(tagsForSurface(ft4, '30m', 'Digital')).toEqual([])
+  })
+
+  it('folds the surface the way the need was folded: USB and LSB are both SSB', () => {
+    const ssb = { ...ar(['NewMode'], 'Phone'), exactMode: 'SSB' }
+    expect(tagsForSurface(ssb, '30m', 'usb')).toEqual(['NewMode'])
+    expect(tagsForSurface(ssb, '30m', 'LSB')).toEqual(['NewMode'])
+    expect(tagsForSurface(ssb, '30m', 'FM')).toEqual([])
+  })
+
+  it('a new-mode need with no exact mode keeps the class rule (a station heard in a class alone)', () => {
+    const digital = { ...ar(['NewMode'], 'Digital'), exactMode: null }
+    expect(tagsForSurface(digital, '30m', 'FT8')).toEqual(['NewMode'])
+    expect(tagsForSurface(digital, '30m', 'CW')).toEqual([])
+  })
+
+  it('Confirm keeps the class rule whatever the exact mode', () => {
+    const confirm = { ...ar(['Confirm'], 'FT4'), exactMode: 'FT4' }
+    expect(tagsForSurface(confirm, '30m', 'FT8')).toEqual(['Confirm'])
+    expect(tagsForSurface(confirm, '30m', 'CW')).toEqual([])
   })
 
   it('folds band-label case (a real log carries both 30M and 30m)', () => {
@@ -297,8 +327,8 @@ describe('tagsForSurface (the false "new mode" gate)', () => {
   })
 
   it('keeps a same-class new-mode need scored on another band (the predicate is entity-wide)', () => {
-    // worked_mode is keyed (entity, mode-class) with NO band, so a digital mode need
-    // is closable on any band — including this one.
+    // worked_mode is keyed (entity, mode) with NO band, so a mode need is closable on
+    // any band — including this one.
     expect(tagsForSurface(ar(['NewMode'], 'FT8', '20m'), '30m', 'FT8')).toEqual(['NewMode'])
   })
 

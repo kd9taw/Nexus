@@ -49,7 +49,7 @@ fn ar_log() -> LogNeeds {
 fn worked_entity_band_and_mode_is_not_a_new_mode() {
     let needs = ar_log();
     assert_ne!(
-        needs.need("Asiatic Russia", Band::B30, ModeClass::Digital),
+        needs.need("Asiatic Russia", Band::B30, ModeClass::Digital.label()),
         NeedKind::NewMode,
         "30m FT8 Asiatic Russia is worked six times over — it can never be a new mode",
     );
@@ -65,7 +65,7 @@ fn mixed_case_band_labels_credit_the_same_slot() {
     lower.add("RF9C", "30m", "FT8", None, None, false);
     for n in [&upper, &lower] {
         assert_ne!(
-            n.need("Asiatic Russia", Band::B30, ModeClass::Digital),
+            n.need("Asiatic Russia", Band::B30, ModeClass::Digital.label()),
             NeedKind::NewBand,
             "a 30M/30m band label must credit the 30m slot either way",
         );
@@ -86,7 +86,7 @@ fn digital_submode_spellings_all_credit_the_digital_slot() {
         let mut n = LogNeeds::new();
         n.add("RF9C", "30m", spelling, None, None, false);
         assert_ne!(
-            n.need("Asiatic Russia", Band::B30, ModeClass::Digital),
+            n.need("Asiatic Russia", Band::B30, ModeClass::Digital.label()),
             NeedKind::NewMode,
             "{spelling} is a digital contact — it must satisfy the digital mode slot",
         );
@@ -106,12 +106,12 @@ fn ph_is_phone_not_digital() {
     let mut n = LogNeeds::new();
     n.add("RF9C", "30m", "PH", None, None, false);
     assert_eq!(
-        n.need("Asiatic Russia", Band::B30, ModeClass::Digital),
+        n.need("Asiatic Russia", Band::B30, ModeClass::Digital.label()),
         NeedKind::NewMode,
         "a phone contact must NOT satisfy the digital mode slot",
     );
     assert_ne!(
-        n.need("Asiatic Russia", Band::B30, ModeClass::Phone),
+        n.need("Asiatic Russia", Band::B30, ModeClass::Phone.label()),
         NeedKind::NewMode,
         "...and it must satisfy the phone slot",
     );
@@ -156,12 +156,12 @@ fn voice_modes_classify_as_phone() {
     }
 }
 
-/// THE WORDING DEFECT. `worked_mode` is keyed (entity, mode-class) with no band — a
-/// NewMode need means "never worked this entity in this mode class, on ANY band",
-/// which is what the per-mode DXCC awards actually count. The headline used to append
-/// the band the station happened to be heard on, so a true "never worked Asiatic
-/// Russia on CW" need rendered as "New mode — CW Asiatic Russia 30m" and read as a
-/// false claim about 30m to an operator with six 30m FT8 contacts there.
+/// THE WORDING DEFECT. `worked_mode` is keyed (entity, mode) with no band — a
+/// NewMode need means "never worked this entity in this mode, on ANY band". The
+/// headline used to append the band the station happened to be heard on, so a true
+/// "never worked Asiatic Russia on CW" need rendered as "New mode — CW Asiatic Russia
+/// 30m" and read as a false claim about 30m to an operator with six 30m FT8 contacts
+/// there.
 #[test]
 fn new_mode_headline_does_not_claim_a_band() {
     let needs = ar_log();

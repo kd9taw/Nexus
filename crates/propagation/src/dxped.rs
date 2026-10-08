@@ -11,7 +11,7 @@ use crate::advisor::PropAdvisory;
 use crate::dxcc;
 use crate::geo::{bearing_deg, compass_octant, haversine_km, maidenhead_to_latlon};
 use crate::likelihood::{BandOutlook, PathModel, Workability};
-use crate::model::{Band, ModeClass, Region, SpaceWx};
+use crate::model::{exact_mode, mode_key, Band, ModeClass, Region, SpaceWx};
 
 /// How "needed" a DXpedition slot is for the operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -101,10 +101,11 @@ impl DxpeditionPlan {
 }
 
 /// The operator's needs — implemented by [`LogNeeds`] (from the ADIF log) or by
-/// [`NeedsSet`] (manual/demo). `mode` is the [`ModeClass`] being evaluated
-/// (Nexus work-now cards pass `Digital`).
+/// [`NeedsSet`] (manual/demo). `mode` is the mode the station is heard in, as its source names
+/// it: an exact mode ("FT8", "USB"), or a class label where that is all the source knows
+/// ("Digital", "Phone" — see [`exact_mode`]). Nexus work-now cards pass "Digital".
 pub trait OperatorNeeds {
-    fn need(&self, entity: &str, band: Band, mode: ModeClass) -> NeedKind;
+    fn need(&self, entity: &str, band: Band, mode: &str) -> NeedKind;
 }
 
 /// A simple in-memory needs model holding the **needed** slots explicitly (for
@@ -120,7 +121,7 @@ pub struct NeedsSet {
 }
 
 impl OperatorNeeds for NeedsSet {
-    fn need(&self, entity: &str, band: Band, _mode: ModeClass) -> NeedKind {
+    fn need(&self, entity: &str, band: Band, _mode: &str) -> NeedKind {
         if self.atno.contains(entity) {
             NeedKind::Atno
         } else if self.needed_band.contains(&(entity.to_string(), band)) {
@@ -134,14 +135,20 @@ impl OperatorNeeds for NeedsSet {
 }
 
 /// Needs derived from the operator's **ADIF logbook**. Holds what's been
-/// *worked* (entities, bands, mode-classes, confirmations) and answers `need()`
+/// *worked* (entities, bands, modes, confirmations) and answers `need()`
 /// by absence — so an **empty log naturally makes every entity ATNO** (a
 /// newcomer sees every active DXpedition as a candidate, refining as they log).
 #[derive(Default)]
 pub struct LogNeeds {
     worked_entity: HashSet<String>,
     worked_band: HashSet<(String, Band)>,
-    worked_mode: HashSet<(String, ModeClass)>,
+    /// `(entity, mode)`, any band, the mode through [`mode_key`] — the "new mode" need's slots.
+    /// FT8 and FT4 are two modes here, as they are on the callsign card, which keys the log's
+    /// modes with the same fold.
+    worked_mode: HashSet<(String, String)>,
+    /// `(entity, mode class)`, any band — what the "new mode" need falls back to for a station
+    /// heard in a class alone (a cluster spot placed by its frequency, see [`exact_mode`]).
+    worked_class: HashSet<(String, ModeClass)>,
     confirmed_band: HashSet<(String, Band)>,
     /// CQ zones worked, PER BAND (for WAZ "new zone" need-aware spotting) —
     /// `(zone, band)`, keyed like the awards engine's slots. See
@@ -182,8 +189,9 @@ impl LogNeeds {
     /// Fold one logged contact in. Resolves the entity via [`crate::dxcc`]
     /// (cty.dat) so it matches the DXpedition side; unresolved calls are skipped
     /// (rare with the full country file). `band` is an ADIF band label ("20m"),
-    /// `mode` an ADIF MODE string. Terrestrial only — a caller folding real log
-    /// records uses [`add_qso`](Self::add_qso), which also takes the satellite
+    /// `mode` the contact's stored mode: the ADIF reader has already let a SUBMODE that names
+    /// the real mode win (FT4, JS8, Q65 and the rest under MFSK). Terrestrial only — a caller
+    /// folding real log records uses [`add_qso`](Self::add_qso), which also takes the satellite
     /// flag.
     pub fn add(
         &mut self,
@@ -273,7 +281,8 @@ impl LogNeeds {
         }
         let entity = info.entity.to_string();
         self.worked_entity.insert(entity.clone());
-        self.worked_mode
+        self.worked_mode.insert((entity.clone(), mode_key(mode)));
+        self.worked_class
             .insert((entity.clone(), ModeClass::from_adif(mode)));
         if let Some(b) = worked_on {
             self.worked_band.insert((entity.clone(), b));
@@ -355,12 +364,21 @@ fn parse_mhz(band: &str) -> f64 {
 }
 
 impl OperatorNeeds for LogNeeds {
-    fn need(&self, entity: &str, band: Band, mode: ModeClass) -> NeedKind {
+    fn need(&self, entity: &str, band: Band, mode: &str) -> NeedKind {
+        // The heard mode goes through the SAME fold the log's modes did, so working the station
+        // in the mode it is heard in is exactly what clears the need. A station heard in a
+        // class alone is new only when no mode of that class was ever worked.
+        let mode_worked = match exact_mode(mode) {
+            Some(key) => self.worked_mode.contains(&(entity.to_string(), key)),
+            None => self
+                .worked_class
+                .contains(&(entity.to_string(), ModeClass::from_adif(mode))),
+        };
         if !self.worked_entity.contains(entity) {
             NeedKind::Atno
         } else if !self.worked_band.contains(&(entity.to_string(), band)) {
             NeedKind::NewBand
-        } else if !self.worked_mode.contains(&(entity.to_string(), mode)) {
+        } else if !mode_worked {
             NeedKind::NewMode
         } else if !self.confirmed_band.contains(&(entity.to_string(), band)) {
             NeedKind::Confirm
@@ -516,7 +534,7 @@ impl DxpeditionTracker {
                 .map(|i| i.entity.to_string())
                 .unwrap_or_else(|| p.entity.clone());
             for &band in &p.bands {
-                let need = needs.need(&match_entity, band, ModeClass::Digital);
+                let need = needs.need(&match_entity, band, ModeClass::Digital.label());
                 if need == NeedKind::Satisfied {
                     continue;
                 }
@@ -841,30 +859,18 @@ mod tests {
     fn logneeds_derives_all_four_tiers() {
         let mut n = LogNeeds::new();
         // Empty log → everything ATNO (newcomer-candidate behavior).
-        assert_eq!(
-            n.need("Japan", Band::B20, ModeClass::Digital),
-            NeedKind::Atno
-        );
+        assert_eq!(n.need("Japan", Band::B20, "FT8"), NeedKind::Atno);
         // Work Japan on 40m CW, unconfirmed.
         n.add("JA1ABC", "40m", "CW", None, None, false);
         // Entity worked, but not on 20m → NewBand.
-        assert_eq!(
-            n.need("Japan", Band::B20, ModeClass::Digital),
-            NeedKind::NewBand
-        );
-        // 40m worked but only CW → Digital is a NewMode.
-        assert_eq!(
-            n.need("Japan", Band::B40, ModeClass::Digital),
-            NeedKind::NewMode
-        );
+        assert_eq!(n.need("Japan", Band::B20, "FT8"), NeedKind::NewBand);
+        // 40m worked but only CW → FT8 is a NewMode.
+        assert_eq!(n.need("Japan", Band::B40, "FT8"), NeedKind::NewMode);
         // 40m CW worked but unconfirmed → Confirm.
-        assert_eq!(n.need("Japan", Band::B40, ModeClass::Cw), NeedKind::Confirm);
+        assert_eq!(n.need("Japan", Band::B40, "CW"), NeedKind::Confirm);
         // Confirm it → Satisfied.
         n.add("JA1ABC", "40m", "CW", None, None, true);
-        assert_eq!(
-            n.need("Japan", Band::B40, ModeClass::Cw),
-            NeedKind::Satisfied
-        );
+        assert_eq!(n.need("Japan", Band::B40, "CW"), NeedKind::Satisfied);
     }
 
     #[test]

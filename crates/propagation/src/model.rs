@@ -141,10 +141,11 @@ impl Band {
     }
 }
 
-/// DXCC mode-award class. Awards (and "new mode" needs) are tracked by class —
-/// CW / Phone / Digital — not by individual submode. Nexus operates Digital, so
-/// its work-now cards evaluate [`ModeClass::Digital`]; an imported ADIF log's
-/// CW/SSB contacts still classify correctly.
+/// DXCC mode-award class. The award totals count by class — CW / Phone / Digital — not by
+/// individual mode, as ARRL does. A "new mode" need does NOT: it compares exact modes
+/// ([`mode_key`]), and falls back to the class only for a station heard in a class alone
+/// ([`exact_mode`]). Nexus's work-now cards evaluate [`ModeClass::Digital`]; an imported ADIF
+/// log's CW/SSB contacts still classify correctly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ModeClass {
     Cw,
@@ -179,6 +180,41 @@ impl ModeClass {
             ModeClass::Digital => "Digital",
         }
     }
+}
+
+/// A mode's own identity: what a "new mode" need compares, on the worked side (a logged
+/// contact's stored mode) and the heard side (the mode a station is heard in) alike. FT8, FT4,
+/// RTTY and PSK31 are four modes here, as they are on the callsign card.
+///
+/// Spellings of one identical mode fold together and nothing else does: both sidebands are SSB
+/// (ADIF's own submodes of it), BPSK31 and BPSK63 are PSK31 and PSK63. FM and AM stay apart from
+/// SSB, and FT4 from FT8. A token that does not say which mode it was, a bare `MFSK` or N3FJP's
+/// generic `PH`, is left as it is and never guessed into one.
+///
+/// This is the UI's `modeKey` (`ui/src/features/callHistory.ts`) and the card's engine answer
+/// (`tempo_core::logbook::query::mode_key`), to the character: ECMAScript's `trim()` (U+FEFF
+/// yes, U+0085 no) and its full Unicode upper-casing. `ui/src/features/__fixtures__/mode-keys.json`
+/// holds all three to one table.
+pub fn mode_key(mode: &str) -> String {
+    let m = mode
+        .trim_matches(|c: char| c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}'))
+        .to_uppercase();
+    match m.as_str() {
+        "USB" | "LSB" => "SSB".to_string(),
+        "BPSK31" => "PSK31".to_string(),
+        "BPSK63" => "PSK63".to_string(),
+        _ => m,
+    }
+}
+
+/// The mode a station heard in `mode` is in, by [`mode_key`] ("FT8", "CW", "SSB" for "USB"), or
+/// `None` when `mode` names only a CLASS. A cluster spot placed in the band plan by its frequency
+/// arrives as "Phone" or "Digital", and a source with no mode at all as "". The station's real
+/// mode is not known then, so the one mode need the log can back is "never worked this entity in
+/// any mode of the class" ([`ModeClass::from_adif`] of the same `mode`).
+pub fn exact_mode(mode: &str) -> Option<String> {
+    let key = mode_key(mode);
+    (!matches!(key.as_str(), "" | "PHONE" | "DIGITAL")).then_some(key)
 }
 
 /// Standard FT8 / FT4 / MSK144 DIGITAL "watering holes" (dial MHz). Checked FIRST because on

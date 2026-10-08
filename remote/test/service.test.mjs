@@ -1111,14 +1111,19 @@ test('plain HTTP to the hosted service is sent to https:// before any route, dat
       assert.equal(response.headers.get('strict-transport-security'), null, 'HSTS is never sent in the clear')
     }
     assert.deepEqual(await rowCounts(hosted.db, tables), before, 'plain HTTP wrote nothing: no account, enrollment, ticket or rate-limit hit')
-    // Positive control: the same socket and enrollment over TLS do write, so the counts can see it.
+    // Positive control: the same socket and enrollment over TLS do write. Compared by row id, not by count:
+    // the enrollment runs the service's sweep of expired rows, and a rate-limit window ends on a wall-clock
+    // minute, so a run that crosses a minute boundary loses rows its own setup wrote and a count can stand still.
+    const ids = async table => new Set((await hosted.db.prepare(`SELECT id FROM ${table}`).all()).results.map(r => r.id))
+    const added = async (table, prior) => [...await ids(table)].filter(row => !prior.has(row)).length
+    const rateBefore = await ids('rate_limits'), enrollBefore = await ids('enrollments')
     const station = await hosted.mf.dispatchFetch(`${HOSTED}${connect}`, { headers: { ...pair.native.headers(), upgrade: 'websocket' } })
     assert.equal(station.status, 101)
     station.webSocket.accept()
     station.webSocket.close(1000, 'testComplete')
     await hosted.client().post('enroll', { name: 'Synthetic test station' })
-    const after = await rowCounts(hosted.db, tables)
-    assert.ok(after.rate_limits > before.rate_limits && after.enrollments > before.enrollments, 'positive control: over TLS the same requests write')
+    assert.ok(await added('rate_limits', rateBefore) > 0, 'positive control: the TLS socket and enrollment write a rate-limit row')
+    assert.ok(await added('enrollments', enrollBefore) > 0, 'positive control: the TLS enrollment writes an enrollment')
   } finally { await hosted.mf.dispose() }
 })
 
