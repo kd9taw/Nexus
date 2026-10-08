@@ -125,6 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs no rigctld server, so an RS-BA1 user who followed it found nothing to connect to. It now
   says: with RS-BA1, choose Serial, your Icom's model and the virtual COM port RS-BA1 creates. With
   wfview, turn on its rigctld server and use Network and NET rigctl, as before.
+- **The setup wizard describes Network the way Settings does.** On the wizard's Rig step, Network
+  read "FlexRadio / remote rigctld", although it is also how Nexus reaches an SDR program on the same
+  computer, such as Thetis for a Hermes Lite 2. It now reads "SDR software, or a remote rig", the
+  words of the Connection choice in Settings ▸ Radio ▸ Rig & CAT, and the wizard's picture in Help ▸
+  Getting started says the same. The German, Spanish, French and Japanese text uses each language's
+  own words for that Connection choice.
 - **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
   CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
   0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full

@@ -919,7 +919,7 @@ export const EN = {
   'gettingStarted.radio.shot.usbLabel': 'USB / Serial',
   'gettingStarted.radio.shot.usbBlurb': 'Most rigs — one cable',
   'gettingStarted.radio.shot.netLabel': 'Network',
-  'gettingStarted.radio.shot.netBlurb': 'FlexRadio / remote rigctld',
+  'gettingStarted.radio.shot.netBlurb': 'SDR software, or a remote rig',
   'gettingStarted.radio.shot.audioIn': 'Audio in',
   'gettingStarted.radio.shot.audioOut': 'Audio out',
   'gettingStarted.radio.shot.testCatBtn': '⚡ Test CAT',
@@ -6508,7 +6508,7 @@ export const EN = {
   'setup.rig.conn.serial.label': 'USB / Serial',
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
-  'setup.rig.conn.network.blurb': 'FlexRadio / remote rigctld',
+  'setup.rig.conn.network.blurb': 'SDR software, or a remote rig',
   'setup.rig.address.label': 'Address',
   'setup.rig.network.hint':
     'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
