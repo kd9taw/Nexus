@@ -205,6 +205,51 @@ fn native_audio_off_puts_back_only_what_nexus_changed() {
     assert_eq!(r.step(&view(true, "USB"), false, true, 0), None);
 }
 
+/// Nexus's own write leaves the radio on DAX over the operator's mic from that write until the
+/// mic's write: through native audio going off, which is when nothing feeds that DAX. Never the
+/// operator's own DAX, never once the operator has moved the flag, never beside another program's
+/// DAX; a previous session's write until it is put back.
+#[test]
+fn nexus_leaves_the_radio_on_dax_from_its_own_write_until_the_mic_is_back() {
+    let mut r = Routing::default();
+    assert_eq!(r.step(&view(false, "DIGU"), true, false, 0), DAX);
+    assert!(!r.leaves_dax(&view(false, "DIGU")), "nothing written yet");
+    r.written(true, Why::FollowMode, 0);
+    assert!(
+        r.leaves_dax(&view(false, "DIGU")),
+        "a write in flight stands"
+    );
+    assert!(r.leaves_dax(&view(true, "DIGU")));
+    assert_eq!(
+        r.step(&view(true, "DIGU"), false, false, 10),
+        Some(Step::Write {
+            dax: false,
+            why: Why::NativeAudioOff
+        })
+    );
+    assert!(
+        r.leaves_dax(&view(true, "DIGU")),
+        "native audio off, not yet put back"
+    );
+    let mut other = view(true, "DIGU");
+    other.other_feeder = true;
+    assert!(!r.leaves_dax(&other), "another program's DAX feeds it");
+    assert!(!r.leaves_dax(&view(false, "DIGU")), "the operator moved it");
+    r.written(false, Why::NativeAudioOff, 10);
+    assert!(
+        !r.leaves_dax(&view(true, "DIGU")),
+        "the mic's write is on its way"
+    );
+    // The operator's own DAX: nothing of Nexus's.
+    let mut r = Routing::default();
+    assert_eq!(r.step(&view(true, "DIGU"), true, false, 0), None);
+    assert!(!r.leaves_dax(&view(true, "DIGU")));
+    // A previous session's DAX over the operator's mic, until it is put back.
+    let r = Routing::new(Some(false));
+    assert!(r.leaves_dax(&view(true, "DIGU")));
+    assert!(!r.leaves_dax(&view(false, "DIGU")));
+}
+
 #[test]
 fn a_previous_sessions_change_is_put_back_at_the_next_connect_first() {
     // The last session wrote DAX over the operator's mic and never restored it (a crash).

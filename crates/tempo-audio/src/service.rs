@@ -5892,11 +5892,10 @@ impl RadioLoop {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
                 self.dax_tee_id = None;
-                self.flex_mic_off_pushed = Some(false);
                 self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
-                // The mic is the operator's again — see the tee-sync block below for why this
-                // transition has to reach the engine from BOTH places that clear the tee.
-                engine_lock(engine).observe_flex_dax_tx(false);
+                // Not "the mic is the operator's again": Nexus's own write can leave the radio on
+                // DAX until the routing's next quiet point. The tee-sync block below, this tick,
+                // tells the engine what the radio reports.
             }
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
@@ -5925,16 +5924,19 @@ impl RadioLoop {
         // The flag follows the TX slice's mode (operator ruling, 2026-10-03), so Phone at the
         // shack keeps the mic and the stream's browser voice takes DAX. Pushed on the TRANSITION
         // only (no per-tick engine lock), and from the radio's own report rather than the
-        // `flex_native_audio` setting. The Phone cockpit renders it; nothing gates on it.
-        let client = self
-            .rigctld_proc
-            .as_ref()
-            .and_then(CatDaemon::flex)
-            .filter(|_| self.flex_client_audio);
+        // `flex_native_audio` setting: with native audio off too, while Nexus's own write still
+        // has the radio on DAX (the toggle, or the receive floor above, takes the tee out at once;
+        // the routing puts the mic back at its next quiet point). The Phone cockpit renders it;
+        // nothing gates on it.
+        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+        let client = flex.filter(|_| self.flex_client_audio);
         let want_tee: Option<crate::backend::TxTeeHandle> = client
             .filter(|d| d.tx_route_ready())
             .and_then(crate::flex::FlexDaemon::tx_tee);
-        let mic_off = client.is_some_and(|d| d.radio_dax() == Some(true));
+        let mic_off = match client {
+            Some(d) => d.radio_dax() == Some(true),
+            None => flex.is_some_and(crate::flex::FlexDaemon::leaves_dax),
+        };
         let want_id = want_tee
             .as_ref()
             .map(|t| Arc::as_ptr(t) as *const () as usize);

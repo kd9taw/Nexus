@@ -37,7 +37,9 @@
 //! ([`FlexDaemon::sync_tx_routing`]) and never beside another program's DAX, and the operator's own
 //! setting is put back at disconnect and at the next connect. While native audio is on, a digital
 //! over is refused at `T 1` unless the radio takes its audio from Nexus's DAX
-//! ([`shim::FlexShim`]): the radio's mic must never carry a digital over.
+//! ([`shim::FlexShim`]): the radio's mic must never carry a digital over. With it off, a digital
+//! over is refused while Nexus's own write still has the radio on DAX, which nothing feeds then:
+//! never a silent over.
 //!
 //! ## Not yet
 //! No panadapter stream from this session (the older native pan still opens its own), no
@@ -111,6 +113,10 @@ pub(crate) struct ClientState {
     /// The last key the shim kept off the air for the audio route: when, its words and its cause,
     /// for the radio loop to put on screen ([`FlexDaemon::key_refused_since`]).
     pub(crate) refused: Mutex<Option<(Instant, String, FlexAudioRefusal)>>,
+    /// The transmit audio routing ([`routing`]): carried out at the radio loop's quiet points
+    /// ([`FlexDaemon::sync_tx_routing`]), and asked by the shim at `T 1` whether Nexus's own write
+    /// leaves the radio on DAX ([`Routing::leaves_dax`]).
+    pub(crate) routing: Mutex<Routing>,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
@@ -135,6 +141,29 @@ pub(crate) fn effective_mode(
             }
         }
         _ => reported,
+    }
+}
+
+/// What the routing decides from ([`routing::View`]), read from the session's state: for the
+/// radio loop's quiet points and the shim's `T 1` alike.
+pub(crate) fn routing_view(snap: &Snapshot, state: &ClientState) -> View {
+    let tx_slice = match snap.model.tx_slices().as_slice() {
+        [slice]
+            if owner_of(
+                snap.model.slices.get(slice).and_then(|s| s.client_handle),
+                snap.handle,
+            ) == Owner::Ours =>
+        {
+            Some(*slice)
+        }
+        _ => None,
+    };
+    View {
+        radio: snap.model.transmit.dax,
+        tx_slice,
+        tx_mode: tx_slice.and_then(|s| effective_mode(&snap.model, s, state)),
+        other_feeder: another_dax_feeder(&snap.model, snap.handle, snap.dax_tx_stream).is_some(),
+        dax_tx_stream: snap.dax_tx_stream.is_some(),
     }
 }
 
@@ -244,7 +273,6 @@ pub struct FlexDaemon {
     alarm: Arc<Mutex<Alarm>>,
     state: Arc<ClientState>,
     audio: Option<audio::Audio>,
-    routing: Mutex<Routing>,
     memory: Arc<dyn Memory>,
     /// This radio in the memory.
     memory_key: String,
@@ -321,10 +349,13 @@ impl FlexDaemon {
             remove_ours(&conn);
             return Err(std::io::Error::other(why));
         }
-        let state = Arc::new(ClientState::default());
-        let audio = audio::Audio::start(Arc::downgrade(&conn), state.clone(), udp, options.vita)?;
         let memory_key = radio.to_string();
         let remembered = options.memory.recall(&memory_key);
+        let state = Arc::new(ClientState {
+            routing: Mutex::new(Routing::new(remembered)),
+            ..ClientState::default()
+        });
+        let audio = audio::Audio::start(Arc::downgrade(&conn), state.clone(), udp, options.vita)?;
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -378,7 +409,6 @@ impl FlexDaemon {
             alarm,
             state,
             audio: Some(audio),
-            routing: Mutex::new(Routing::new(remembered)),
             memory: options.memory,
             memory_key,
             asked_tx_stream: Mutex::new(None),
@@ -518,6 +548,14 @@ impl FlexDaemon {
                 .is_some_and(|a| a.radio_dax() == Some(false) && !a.other_feeder())
     }
 
+    /// Whether Nexus's own write still has the radio taking its transmit audio from DAX in place
+    /// of the operator's own setting, its mic ([`Routing::leaves_dax`]), as the radio reports it
+    /// now: true from native audio going off until the routing puts the mic back at a quiet point.
+    pub fn leaves_dax(&self) -> bool {
+        let view = routing_view(&self.conn().snapshot(), &self.state);
+        lock(&self.state.routing).leaves_dax(&view)
+    }
+
     /// Our receive streams and their channels.
     #[cfg(test)]
     pub(crate) fn rx_streams(&self) -> std::collections::BTreeMap<u32, u8> {
@@ -525,28 +563,6 @@ impl FlexDaemon {
             .as_ref()
             .map(audio::Audio::rx_streams)
             .unwrap_or_default()
-    }
-
-    fn routing_view(&self, snap: &Snapshot) -> View {
-        let tx_slice = match snap.model.tx_slices().as_slice() {
-            [slice]
-                if owner_of(
-                    snap.model.slices.get(slice).and_then(|s| s.client_handle),
-                    snap.handle,
-                ) == Owner::Ours =>
-            {
-                Some(*slice)
-            }
-            _ => None,
-        };
-        View {
-            radio: snap.model.transmit.dax,
-            tx_slice,
-            tx_mode: tx_slice.and_then(|s| effective_mode(&snap.model, s, &self.state)),
-            other_feeder: another_dax_feeder(&snap.model, snap.handle, snap.dax_tx_stream)
-                .is_some(),
-            dax_tx_stream: snap.dax_tx_stream.is_some(),
-        }
     }
 
     /// Carry out the next step of the transmit audio routing, if any (operator ruling,
@@ -560,10 +576,10 @@ impl FlexDaemon {
         if snap.phase != Phase::Ready {
             return None;
         }
-        let view = self.routing_view(&snap);
+        let view = routing_view(&snap, &self.state);
         let native = self.state.native_audio.load(Ordering::Relaxed);
         let now = monotonic_ms();
-        let step = lock(&self.routing).step(&view, native, browser_voice, now)?;
+        let step = lock(&self.state.routing).step(&view, native, browser_voice, now)?;
         let (audio, done) = match step {
             Step::CreateDaxTx => {
                 let mut asked = lock(&self.asked_tx_stream);
@@ -587,7 +603,7 @@ impl FlexDaemon {
         match conn.route(audio) {
             Ok(_) => {
                 if let Step::Write { dax, why } = step {
-                    let keep = lock(&self.routing).written(dax, why, now);
+                    let keep = lock(&self.state.routing).written(dax, why, now);
                     self.memory.keep(&self.memory_key, keep);
                 }
                 *lock(&self.routing_refusal) = None;
@@ -615,8 +631,9 @@ impl FlexDaemon {
     /// What cannot be put back now stays in the memory for the next connect.
     fn restore_routing(&self, conn: &Connection) {
         // Nothing owed (the common case): no wait at all.
-        let owed =
-            |snap: &Snapshot| lock(&self.routing).restore_on_disconnect(&self.routing_view(snap));
+        let owed = |snap: &Snapshot| {
+            lock(&self.state.routing).restore_on_disconnect(&routing_view(snap, &self.state))
+        };
         if owed(&conn.snapshot()) == Restore::Nothing {
             self.memory.keep(&self.memory_key, None);
             return;

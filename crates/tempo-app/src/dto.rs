@@ -1101,6 +1101,10 @@ pub enum FlexAudioCause {
     /// Native audio is on, and the radio does not take its transmit audio from Nexus's DAX yet: it
     /// takes it from its mic input, or Nexus's DAX transmit stream does not exist yet.
     NotYetDax,
+    /// Native audio is off, and the radio still takes its transmit audio from the DAX Nexus set
+    /// while it was on, which nothing feeds until the operator's own setting, its mic input, is
+    /// back.
+    DaxUnfed,
 }
 
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).

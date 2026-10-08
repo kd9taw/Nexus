@@ -4583,8 +4583,9 @@ export interface FlexAudioRefusal {
   /** The transmit slice's mode, in the radio's own word (DIGU): data, never translated. */
   mode: string
   /** `notYetDax`: native audio is on, and the radio does not take its transmit audio from Nexus's
-   *  DAX yet. */
-  cause: 'notYetDax'
+   *  DAX yet. `daxUnfed`: native audio is off, and the radio still takes its transmit audio from
+   *  the DAX Nexus set, which nothing feeds until its mic input is back. */
+  cause: 'notYetDax' | 'daxUnfed'
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words

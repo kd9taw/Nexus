@@ -6378,6 +6378,7 @@ export const ES: PartialCatalog = {
   "shell.lane.slotKeyRefused.message": "PTT RECHAZADO — TX DETENIDO",
   "shell.lane.slotKeyRefused.detail": "La radio no aceptó el PTT a las {{time}} UTC ({{why}}), así que ese turno no se envió y TX se apagó. Revisa tu método de PTT y el CAT/puerto, y luego vuelve a activar TX.",
   "shell.lane.slotKeyRefused.flex.notYetDax": "Nexus no puso en el aire el turno de {{mode}} a las {{time}} UTC: el audio DAX nativo de Flex está activado, pero la radio aún no tomaba su audio de transmisión de Nexus por DAX. No se envió nada y TX se apagó. Nexus termina de preparar la radio en un momento; luego vuelve a activar TX.",
+  "shell.lane.slotKeyRefused.flex.daxUnfed": "Nexus no puso en el aire el turno de {{mode}} a las {{time}} UTC: el audio DAX nativo de Flex está desactivado, pero la radio aún tomaba su audio de transmisión por DAX, como Nexus la había configurado, y ahora nada alimenta DAX. No se envió nada y TX se apagó. Nexus vuelve a poner la radio en su entrada de micrófono en un momento; luego vuelve a activar TX.",
   "shell.lane.slotUnkeyFailed.message": "FALLO AL DESACTIVAR EL PTT — TX DETENIDO",
   "shell.lane.slotUnkeyFailed.detail": "La radio no aceptó la desactivación del PTT a las {{time}} UTC ({{why}}), así que TX se apagó. Puede que siga transmitiendo: revisa la radio ahora. Nexus sigue desactivando el PTT hasta que la radio lo acepte. Vuelve a activar TX cuando la radio esté recibiendo.",
   "shell.lane.clockRepairHold.message": "REPARACIÓN DEL RELOJ — TX EN ESPERA",
