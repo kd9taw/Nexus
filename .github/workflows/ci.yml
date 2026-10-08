@@ -661,6 +661,13 @@ jobs:
       - name: The release green-CI gate still refuses and still passes
         run: bash scripts/require-green-ci.test.sh
 
+      # scripts/release-prep refuses a release with no prose notes, and that refusal must change
+      # nothing. It used to come after the version bump, so the re-run refused as "not greater
+      # than current" and the TLE seed and the alignment check never ran: 1.17.0's seed was re-cut
+      # by hand. Hermetic (a throwaway repo per case, no network, ~1 s), both directions.
+      - name: release-prep refuses before it changes anything, and its re-run goes through
+        run: bash scripts/release-prep.test.sh
+
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.
       #

@@ -625,11 +625,14 @@ pub fn set_rptr_offset(radio: u8, hz: u64) -> Frame {
 /// DATA mode (cmd `1A 06`). The first data byte is `00` for off, and for ON it is **which**
 /// data mode — which is the part that was wrong here.
 ///
-/// ⚠️ ON A SINGLE-DATA-MODE ICOM (IC-7300) the byte is simply 1 = on. On the multi-data-mode
-/// radios (IC-7610, IC-9700, IC-705, IC-905) it SELECTS D1/D2/D3, and passing a hard 1 is why
-/// those radios always landed on D1 — an IC-7610 operator with USB audio wired to D2 found the
-/// radio moved back under them on every mode assert (report, 2026-08-19). `mode` is clamped to
-/// 1..=3 so a bad setting can never put an undefined value on the bus.
+/// ⚠️ ON A SINGLE-DATA-MODE ICOM the byte is simply 1 = on: the IC-7300, IC-9700, IC-705 and
+/// IC-905 define only `00` (OFF) and `01` (ON) here (Full Manual A7292-4EX-12, PDF p. 168;
+/// A7508-3EX-4, PDF p. 19; A7560-8EX-6, PDF p. 23; A7711-9EX-2, PDF p. 24). On the IC-7610 it
+/// SELECTS D1/D2/D3 (A7380-7EX-4, PDF p. 13), and passing a hard 1 is why that radio always
+/// landed on D1 — an IC-7610 operator with USB audio wired to D2 found the radio moved back
+/// under them on every mode assert (report, 2026-08-19). `mode` is clamped to 1..=3 so a bad
+/// setting can never put a value outside that range on the bus; a 2 or 3 still goes to a
+/// single-DATA radio as given, and Settings offers the choice on the IC-7610 alone.
 ///
 /// The filter byte keeps the rig's current selection when `None`.
 pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
