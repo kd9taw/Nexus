@@ -1888,7 +1888,8 @@ fn native_audio_off_mid_message_leaves_the_voice_keyer_as_it_was() {
 /// radio's READY naming no transmitter), and never within the loop's guard of a boundary, either
 /// side. The flag does change: the writes happen, between overs. And a toggle inside the guard
 /// before a boundary has that over refused, whichever way it went: never keyed on the mic, never
-/// keyed on a DAX nothing feeds.
+/// keyed on a DAX nothing feeds; the late toggle that turns native audio off ends its over there
+/// (operator ruling, 2026-10-08, "End the over").
 #[test]
 fn the_dax_source_is_written_only_at_quiet_points() {
     let mut s = FlexScene::new(true);
@@ -1905,6 +1906,8 @@ fn the_dax_source_is_written_only_at_quiet_points() {
         -1_200.0, -900.0, -400.0, -120.0, -40.0, -5.0, 0.0, 15.0, 60.0, 300.0,
     ];
     let mut overs: Vec<(Instant, Option<Instant>)> = Vec::new();
+    // The boundaries of the overs ended there because native audio went off under them.
+    let mut ended: Vec<Instant> = Vec::new();
     let mut native = true;
     for offset in &offsets {
         let mut toggled = false;
@@ -1956,6 +1959,22 @@ fn the_dax_source_is_written_only_at_quiet_points() {
                 "toggle {offset:+}: the client refused the key, and the over was played or TX \
                  left on"
             );
+        }
+        // Native audio turned off after the over keyed takes its audio with the tee: the over ends
+        // there and TX halts. Only that toggle: off, after the key.
+        if s.engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .slot_audio_lost
+            .is_some()
+        {
+            assert!(
+                xmit.is_some() && !native && !tx_enabled && *offset > 0.0,
+                "toggle {offset:+}: an over was ended for its lost audio"
+            );
+            ended.push(at);
         }
         overs.push((at, xmit));
         // Let the over run its course before the next period's pre-roll: the unkey, the readback
@@ -2037,10 +2056,13 @@ fn the_dax_source_is_written_only_at_quiet_points() {
             );
         }
         // The guard either side of every boundary an over keyed at, less the session's delivery
-        // (≤ one read poll). After a refused key TX is halted (asserted above), and with no slot
-        // transmission armed the quiet point holds no write off a boundary
-        // (`RadioLoop::tx_routing_quiet`): nothing keys after it.
-        for (at, _) in overs.iter().filter(|(_, xmit)| xmit.is_some()) {
+        // (≤ one read poll). After a refused key, or an over ended for its lost audio, TX is
+        // halted (asserted above), and with no slot transmission armed the quiet point holds no
+        // write off a boundary (`RadioLoop::tx_routing_quiet`): nothing keys after it.
+        for (at, _) in overs
+            .iter()
+            .filter(|(at, xmit)| xmit.is_some() && !ended.contains(at))
+        {
             let off = ms(*w, *at);
             assert!(
                 off.abs() >= ROUTING_GUARD_MS - 50.0,
@@ -2053,6 +2075,12 @@ fn the_dax_source_is_written_only_at_quiet_points() {
         writes.len() >= offsets.len() / 2,
         "the flag must follow the toggles: only {} writes",
         writes.len()
+    );
+    assert_eq!(
+        ended.len(),
+        1,
+        "the one late toggle that turns native audio off ends its over\n{}",
+        trace.join("\n")
     );
     // The evidence, for the record (`--nocapture`).
     let nearest = |w: &Instant| {
