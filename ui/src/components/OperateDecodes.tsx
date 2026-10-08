@@ -184,6 +184,12 @@ interface Props {
    * decodes vanished ("no decodes" mid-session; operator report 2026-07-21). When
    * omitted (detached panels, other hosts) a private history is used as before. */
   history?: DecodeHistory
+  /** Externally-owned sort, for the same reason. The cockpit passes Band Activity's, so the order
+   * the operator picked survives the region remounting its panes (⊞ Arrange's first move, and the
+   * dashboard rail's boxes folding in below `lg` and out again) instead of going back to Time. When
+   * omitted, a private sort is used as before. */
+  sort?: DecodeSort
+  onSort?: (sort: DecodeSort) => void
   /**
    * Apply the operator's country exclusion to this pane (default on).
    *
@@ -254,6 +260,8 @@ export function OperateDecodes({
   onErase,
   clearTick = 0,
   history,
+  sort: keptSort,
+  onSort,
   hideExcludedCountries = true,
   myGrid = '',
 }: Props) {
@@ -289,7 +297,9 @@ export function OperateDecodes({
     saveDecodeFilter(f)
     setFilterState(f)
   }
-  const [sort, setSort] = useState<DecodeSort>('time')
+  const [ownSort, setOwnSort] = useState<DecodeSort>('time')
+  const sort = keptSort ?? ownSort
+  const setSort = onSort ?? setOwnSort
   // #276 "Newest on top" — an option, OFF by default so the pane keeps the WSJT-X order. It is
   // a TIME-order statement, so another sort ignores it (reversing an SNR ranking would read as a
   // broken sort), and like the chips it applies only on the pane that renders the chip bar:

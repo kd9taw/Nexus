@@ -99,7 +99,7 @@ import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRai
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
 import { TopBar } from './components/TopBar'
-import { StationList } from './components/StationList'
+import { StationList, type StationFilter } from './components/StationList'
 import { Conversation } from './components/Conversation'
 import { TempoHeader } from './components/TempoHeader'
 import { CockpitTxStrip } from './components/CockpitTxStrip'
@@ -551,6 +551,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // would drop the record. Survives Classic ↔ Roster because visibility is keyed by
   // panel id, not by layout.
   const operatePanels = usePanelLayout(OPERATE_PANELS)
+  // FT's Stations list's filter chip and search, owned here for the same reason: the list is a pane in
+  // the cockpit's region, which remounts its panes when it switches between today's tree and the
+  // arranged columns (⊞ Arrange's first move, the dashboard rail's boxes folding in below `lg` and out
+  // again). Neither is stored, so a restart still opens on All with no search.
+  const [operateStationsFilter, setOperateStationsFilter] = useState<StationFilter>('all')
+  const [operateStationsQuery, setOperateStationsQuery] = useState('')
   // Host SSTV's panel record above its keep-alive view so removals + share edits survive the
   // view's remounts (panelState.ts: owned by a host that outlives the view).
   const sstvPanels = usePanelLayout(SSTV_PANELS)
@@ -2827,6 +2833,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       bandUnread={bandUnread}
       onSelectBand={() => handleSelect('*')}
       dropAfterCycles={3}
+      filter={operateStationsFilter}
+      onFilter={setOperateStationsFilter}
+      query={operateStationsQuery}
+      onQuery={setOperateStationsQuery}
     />
   )
 

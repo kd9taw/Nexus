@@ -16,7 +16,8 @@ import { useWatchMatch } from '../watchlist'
 
 type Presence = Station['presence'] | 'offline'
 
-type Filter = 'all' | 'heard-now' | 'beaconing' | 'needed'
+/** The filter chip's ids. */
+export type StationFilter = 'all' | 'heard-now' | 'beaconing' | 'needed'
 
 interface Props {
   /** THE PANE'S OWN ✕ (Operate's ⊞ `stations` entry) — the SAME setPanelState the tick
@@ -69,10 +70,17 @@ interface Props {
    * the list shows who's on the band NOW. Unset (the Tempo chat roster) keeps the
    * long presence retention that store-and-forward delivery depends on. */
   dropAfterCycles?: number
+  /** Externally-owned filter chip and search. App passes them for FT's Stations pane, so both
+   * survive FT's region remounting its panes (⊞ Arrange's first move, and the dashboard rail's
+   * boxes folding in below `lg` and out again). Omitted: the list keeps its own, as before. */
+  filter?: StationFilter
+  onFilter?: (filter: StationFilter) => void
+  query?: string
+  onQuery?: (query: string) => void
 }
 
 /** The filter `id`s are persisted-shaped tokens; only the labels are prose. */
-const FILTERS: { id: Filter; labelKey: MessageKey }[] = [
+const FILTERS: { id: StationFilter; labelKey: MessageKey }[] = [
   { id: 'all', labelKey: 'roster.filter.all' },
   { id: 'heard-now', labelKey: 'roster.filter.heardNow' },
   { id: 'beaconing', labelKey: 'roster.filter.beaconing' },
@@ -100,15 +108,23 @@ export function StationList({
   dropAfterCycles,
   band,
   feedMode,
+  filter: keptFilter,
+  onFilter,
+  query: keptQuery,
+  onQuery,
 }: Props) {
   const control = useStationControl()
-  const [filter, setFilter] = useState<Filter>('all')
+  const [ownFilter, setOwnFilter] = useState<StationFilter>('all')
+  const filter = keptFilter ?? ownFilter
+  const setFilter = onFilter ?? setOwnFilter
   // The search box. Deliberately NOT persisted: a filter chip is a way of working and
   // survives the session, but a search is a thing you are doing right now, and finding
   // yesterday's `PA*` still narrowing a 478-station list on the next band is a bug report
   // waiting to happen. Esc clears it, which is also the way out for anyone who typed into
   // it by accident and cannot see why the band went quiet.
-  const [query, setQuery] = useState('')
+  const [ownQuery, setOwnQuery] = useState('')
+  const query = keptQuery ?? ownQuery
+  const setQuery = onQuery ?? setOwnQuery
   // The operator's watch list, live — the same matcher the Call Roster and Spots ask, so a
   // watched station wears the same WATCH tile here and counts toward "Needed".
   const watchOf = useWatchMatch()

@@ -294,6 +294,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download has carried its own Hamlib since 1.9.0, on Linux and macOS as on Windows. It now says what
   each download carries, that Nexus starts that copy first, and when it falls back to a Hamlib
   installed on the computer.
+- **FT keeps the sort, filter and search you set in its panes when the window gets too narrow for
+  the dashboard rail, and wide again.** With the rail on, a window below that size moves the rail's
+  boxes into FT's side rail, and FT redrew its panes each time it crossed that line: the Call Roster
+  went back to sorting by Need, Band Activity to Time, and the Stations list to All with its search
+  cleared. They now stay as you set them, both ways. They still start from those defaults when Nexus
+  starts.
 
 ## [1.17.0] — 2026-10-07
 
