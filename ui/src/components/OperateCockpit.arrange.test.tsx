@@ -478,6 +478,24 @@ describe('FT’s boxes', () => {
     }
   })
 
+  it('where no box is lent, a box in the record arranges nothing: the pop-out and the hosted page draw today’s tree', async () => {
+    // A box added on the desktop in Roster's main column: Classic has no placement, and stands the box at
+    // the foot of its rail.
+    const record = JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'clock' }, places: { roster: { box1: { col: 'a', order: 1 } } } })
+    for (const layoutMode of ['roster', 'classic'] as const) {
+      localStorage.setItem(panelStorageKey('operate'), record)
+      render(<Live layoutMode={layoutMode} />)
+      await settle()
+      expect(`## ${layoutMode}\n${treeOf(lower())}\n`, `${layoutMode}, no box lent`).toBe(goldenSection(layoutMode))
+      cleanup()
+      localStorage.setItem(panelStorageKey('operate'), record)
+      render(<Live layoutMode={layoutMode} boxes={SOURCE} />)
+      await settle()
+      expect(pane('box1'), `${layoutMode}: the desktop draws the box`).not.toBeNull()
+      cleanup()
+    }
+  })
+
   it('a box’s ✕ hides it and ends nothing; with the last box gone and nothing moved, FT keeps the arranged columns until Reset', async () => {
     render(<Live layoutMode="roster" boxes={SOURCE} />)
     await settle()

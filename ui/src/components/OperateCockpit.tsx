@@ -748,7 +748,11 @@ export function OperateCockpit({
   // this cockpit's, so their rows come back.
   const arrangeSpec = OPERATE_ARRANGE[layoutMode]
   const place = placeOf(OPERATE_PANELS, panels.layout, layoutMode)
-  const arranged = place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
+  // A box arranges only a window that lends boxes: in the pop-out and on the hosted page a box in the record,
+  // or a box's place, leaves today's tree, so there only a pane placed in this layout arranges it.
+  const arranged = boxes
+    ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
+    : place != null && Object.keys(place).some((id) => !isBoxId(id))
   const cardOn = shownRecallCall != null && shown('recall')
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
   // a station), and a box only where the window lends it one.
