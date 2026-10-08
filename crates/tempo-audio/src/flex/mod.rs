@@ -521,7 +521,8 @@ impl FlexDaemon {
     /// it did: its words and its cause, once. The rigctld answer the radio loop reads for that key,
     /// `RPRT -1`, carries no reason.
     pub fn key_refused_since(&self, asked: Instant) -> Option<(String, FlexAudioRefusal)> {
-        match lock(&self.state.refused).take() {
+        let refused = lock(&self.state.refused).take();
+        match refused {
             Some((at, why, cause)) if at >= asked => Some((why, cause)),
             _ => None,
         }
