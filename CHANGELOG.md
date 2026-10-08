@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   height, so the strongest signals on the band all looked the same. The IC-7610 is now read on its
   own scale; the other radios are unchanged. NEEDS-BENCH on an IC-7610: a strong carrier should no
   longer sit flat against the top, and heights should follow the radio's own scope.
+- **An Icom panadapter whose lower edge is below 0 Hz is drawn over the right span.** In the Fixed
+  and Scroll-F scope modes the radio sends Nexus's own CI-V connection the scope's two edges, and
+  marks a lower edge below 0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a
+  span the radio was not showing. That edge is now read as negative. It only happens with the
+  scope's lower edge below 0 Hz, at the very bottom of the radio's range. Not yet seen on a radio.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
