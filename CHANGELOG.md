@@ -49,9 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each
-  cockpit's rail starts as the rail you had. A pane also shows once across a cockpit and its rail:
-  a box in the cockpit shows another pane while the rail shows its own, and picking a pane that is
-  already showing, in the rail or in a box, moves it there, the other side taking what it showed.
+  cockpit's rail starts as the rail you had.
+- **A pane shows once across a cockpit and its dashboard rail.** While the rail shows a pane, a box in
+  the cockpit that holds the same pane shows another. Picking a pane that is already showing, in the
+  rail or in a box, moves it there, and the other side takes what it showed.
+- **On a small window the dashboard rail's boxes move into the cockpit.** Beside FT, Phone, CW and
+  JS8, on a window too small for the rail, its boxes now stand at the foot of the cockpit's columns
+  (FT's side rail, the first column in the others) instead of disappearing, and go back into the
+  rail when the window is wide enough. The Now-Bar's **Dashboard** button switches them there too.
 - **POTA/SOTA: one fetch a minute per window, however many lists show it.** The POTA/SOTA screen, a
   Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
   themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all

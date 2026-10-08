@@ -5262,6 +5262,7 @@ export const DE: PartialCatalog = {
   "dashRail.slot.where.rail3": "Mitte, unten",
   "dashRail.slot.where.rail4": "unten",
   "dashRail.menu.small": "Erscheint erst in einem größeren Fenster (oder bei kleinerem Zoom). Für diesen Bereich gemerkt.",
+  "dashRail.menu.folded": "In diesem Fenster stehen ihre Boxen unten in den Spalten dieses Bildschirms; in einem größeren Fenster (oder bei kleinerem Zoom) steht die Leiste wieder daneben. Für diesen Bereich gemerkt.",
   "connect.rail.handle.title": "Ziehen oder mit den Pfeiltasten die Größe ändern ({{label}}). Doppelklick setzt zurück.",
   "connect.layout.heading": "Layout",
   "connect.layout.standard": "Standard",

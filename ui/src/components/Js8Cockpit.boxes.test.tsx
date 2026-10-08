@@ -9,7 +9,7 @@
 // whose fixtures this file follows.
 import type { ReactNode, Ref } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen, within } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import type { AppSnapshot, Js8State } from '../types'
 import { BOX_IDS, JS8_PANELS, boxEntries, panelStorageKey, usePanelLayout, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
@@ -145,12 +145,12 @@ async function frame() {
 
 const SOURCE: BoxSource = { myGrid: 'EN52', theme: 'dark', stations: [], prop: null, needByCall: new Map() }
 let api: PanelLayoutApi<Js8PanelId> | null = null
-function Live({ lend = true, active = true }: { lend?: boolean; active?: boolean }) {
+function Live({ lend = true, active = true, source = SOURCE }: { lend?: boolean; active?: boolean; source?: BoxSource }) {
   const panels = usePanelLayout(JS8_PANELS)
   api = panels
-  return <Js8Cockpit snap={snap} panels={panels} active={active} boxes={lend ? SOURCE : undefined} />
+  return <Js8Cockpit snap={snap} panels={panels} active={active} boxes={lend ? source : undefined} />
 }
-async function mount(props: { lend?: boolean; active?: boolean } = {}) {
+async function mount(props: { lend?: boolean; active?: boolean; source?: BoxSource } = {}) {
   render(<Live {...props} />)
   await act(async () => {
     for (let i = 0; i < 4; i++) await Promise.resolve()
@@ -231,6 +231,32 @@ function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+
+describe('the dashboard rail’s boxes, on a window too small for the rail', () => {
+  it('stand at the foot of the leading column at every tier, with no ✕, and their picker is the rail’s', async () => {
+    const pick = vi.fn()
+    await mount({
+      source: {
+        ...SOURCE,
+        rail: { shows: ['clock'], take: vi.fn(), folded: { boxes: [{ slot: 'rail1', pane: 'clock', entry: 'clock' }], pick } },
+      },
+    })
+    for (const w of [700, 1300, 1800]) {
+      await tier(w)
+      expect(framesIn(cols()[0]).slice(-1), `at ${w} px`).toEqual(['rail1'])
+    }
+    expect(within(boxFrame('rail1')!).queryByRole('button', { name: /^Hide/ })).toBeNull()
+    fireEvent.change(boxFrame('rail1')!.querySelector('select.pane-pick')!, { target: { value: 'getout' } })
+    expect(pick).toHaveBeenCalledWith('rail1', 'getout')
+    // They count for the column they stand in, as boxes do: with JS8's own panes there hidden, the leading
+    // track holds them alone and keeps its place.
+    act(() => api!.setPanelState('activity', 'removed'))
+    act(() => api!.setPanelState('offsets', 'removed'))
+    await tier(1800)
+    expect(region().getAttribute('data-cols')).toBe('3')
+    expect(framesIn(cols()[0])).toEqual(['rail1'])
+  })
+})
 
 describe('THE FIBER-IDENTITY SWEEP, with boxes: no add, pick, hide or move remounts the log form', () => {
   it('70 random box and pane acts with tier flips between them', async () => {

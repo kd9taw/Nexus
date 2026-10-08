@@ -8,7 +8,7 @@
 // as in CwCockpit.arrange.test.tsx, whose mocks this file follows.
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen, within } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
 import { BOX_IDS, CW_PANELS, boxEntries, panelStorageKey, usePanelLayout, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -113,7 +113,7 @@ const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWor
 const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
 
 let api: PanelLayoutApi<CwPanelId> | null = null
-function Live({ lend = true }: { lend?: boolean }) {
+function Live({ lend = true, source = SOURCE }: { lend?: boolean; source?: BoxSource }) {
   const panels = usePanelLayout(CW_PANELS)
   api = panels
   return (
@@ -125,7 +125,7 @@ function Live({ lend = true }: { lend?: boolean }) {
       panels={panels}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
-      boxes={lend ? SOURCE : undefined}
+      boxes={lend ? source : undefined}
     />
   )
 }
@@ -219,6 +219,33 @@ function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+
+describe('the dashboard rail’s boxes, on a window too small for the rail', () => {
+  it('stand at the foot of the leading column at every tier, with no ✕, and keep the leading track alone', async () => {
+    const pick = vi.fn()
+    const source: BoxSource = {
+      ...SOURCE,
+      rail: { shows: ['clock'], take: vi.fn(), folded: { boxes: [{ slot: 'rail1', pane: 'clock', entry: 'clock' }], pick } },
+    }
+    render(<Live source={source} />)
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    for (const w of [700, 1300, 1800]) {
+      await tier(w)
+      expect(framesIn(cols()[0]).slice(-1), `at ${w} px`).toEqual(['rail1'])
+    }
+    expect(within(boxFrame('rail1')!).queryByRole('button', { name: /^Hide/ })).toBeNull()
+    fireEvent.change(boxFrame('rail1')!.querySelector('select.pane-pick')!, { target: { value: 'getout' } })
+    expect(pick).toHaveBeenCalledWith('rail1', 'getout')
+    // A box counts for the column it stands in: with CW's own panes there hidden, it keeps the leading track.
+    act(() => api!.setPanelState('decode', 'removed'))
+    act(() => api!.setPanelState('sent', 'removed'))
+    await tier(1800)
+    expect(region().getAttribute('data-cols')).toBe('3')
+    expect(framesIn(cols()[0])).toEqual(['rail1'])
+  })
+})
 
 describe('THE FIBER-IDENTITY SWEEP, with boxes: no add, pick, hide or move remounts the log form', () => {
   it('70 random box and pane acts with tier flips between them', async () => {

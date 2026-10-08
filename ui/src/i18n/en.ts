@@ -7947,6 +7947,7 @@ export const EN = {
   'dashRail.slot.where.rail3': 'lower middle',
   'dashRail.slot.where.rail4': 'bottom',
   'dashRail.menu.small': 'Needs a larger window (or a smaller zoom) to show. Remembered for this section.',
+  'dashRail.menu.folded': 'On this window its boxes stand at the foot of this screen\'s columns; the rail comes back beside them on a larger window (or a smaller zoom). Remembered for this section.',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes

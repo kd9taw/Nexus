@@ -21,7 +21,9 @@
 //     Connect's rail clamps (features/connectRails): the stored value is never rewritten by a fit, so
 //     a bigger window gets it back.
 //   · "Never on small windows" is the published viewport class (useViewport): the rail renders
-//     nothing below `lg`. Never a size-based @media.
+//     nothing below `lg`. Never a size-based @media. Below it, beside the cockpits whose columns take
+//     boxes (`DASH_RAIL_FOLDS`), the rail's boxes stand in those columns instead (the operator's "They
+//     move into the columns", 2026-10-07) until the window is wide enough; nothing here is rewritten.
 //
 // THE COCKPIT KEEPS ITS FLOOR. The rail may take only what the window has BEYOND the supported floor
 // window (1024×768 at its own auto zoom): the cockpit beside it is never narrower than it is on a
@@ -47,6 +49,12 @@ export type DashRailSection = (typeof DASH_RAIL_SECTIONS)[number]
 export function isDashRailSection(v: string): v is DashRailSection {
   return (DASH_RAIL_SECTIONS as readonly string[]).includes(v)
 }
+
+/** THE COCKPITS THE RAIL FOLDS INTO on a window too small for it (the operator's "They move into the
+ *  columns", 2026-10-07): the ones whose columns take boxes of their own, FT, Phone, CW and JS8. There the
+ *  rail's boxes stand at the foot of the column the cockpit's own boxes stand in until the window is wide
+ *  enough again. Beside RTTY, PSK, SSTV and APRS, which have no such columns, the rail stays hidden there. */
+export const DASH_RAIL_FOLDS: readonly DashRailSection[] = ['operate', 'phone', 'cw', 'js8']
 
 /** The rail's four slots, top to bottom. */
 export const DASH_SLOT_IDS = ['rail1', 'rail2', 'rail3', 'rail4'] as const

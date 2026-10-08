@@ -90,7 +90,7 @@ import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
-import { DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
+import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
 import { sharedPaneById, sharedPaneOf } from './features/sharedPanes'
 import type { PaneId } from './features/connectConfig'
 import { DashRail, dashRailRecords, useDashRail } from './components/DashRail'
@@ -2654,11 +2654,18 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { isOn: railIsOn, setOn: setRailOn } = dashRail
   const railSection: DashRailSection | null = !remote && isDashRailSection(effectiveView) ? effectiveView : null
   const railShown = railSection != null && railFits && railIsOn(railSection)
+  // ON A WINDOW TOO SMALL FOR IT (the operator's "They move into the columns"): beside FT, Phone, CW and
+  // JS8 the rail's boxes stand in the cockpit's columns instead, until the window is wide enough again.
+  const railFoldsHere = railSection != null && DASH_RAIL_FOLDS.includes(railSection)
+  const railFolds = railFoldsHere && !railFits && railIsOn(railSection!)
   // Its switch for the cockpit's ⊞ Panels menu, published before paint (components/dashRailSwitch) and
   // withdrawn when App goes: null where the rail does not stand.
   const railSwitch = useMemo<DashRailSwitch | null>(
-    () => (railSection ? { on: railIsOn(railSection), fits: railFits, set: (on: boolean) => setRailOn(railSection, on) } : null),
-    [railSection, railIsOn, setRailOn, railFits],
+    () =>
+      railSection
+        ? { on: railIsOn(railSection), fits: railFits, folds: railFoldsHere, set: (on: boolean) => setRailOn(railSection, on) }
+        : null,
+    [railSection, railIsOn, setRailOn, railFits, railFoldsHere],
   )
   useLayoutEffect(() => publishDashRailSwitch(railSwitch), [railSwitch])
   useLayoutEffect(() => () => publishDashRailSwitch(null), [])
@@ -2963,7 +2970,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const railHost = railSection && cockpitBoxes ? boxCockpits[railSection] : undefined
   const hostOwn = railHost ? ownShown(railHost.spec, railHost.panels.layout, railHost.panels.stateOf) : []
   const railBoxes =
-    railRecords && railShown
+    railRecords && (railShown || (railFolds && railHost))
       ? railOnScreen(railRecords.slots, DASH_SLOT_IDS.filter((s) => railRecords.panels.stateOf(s) !== 'removed'), hostOwn)
       : []
   const railShows = railBoxes.map((b) => b.entry)
@@ -2995,6 +3002,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             if (pane) railRecords.assignPane(slot, pane)
             else railRecords.panels.setPanelState(slot, 'removed')
           },
+          // Below lg, the rail's boxes themselves, for the cockpit's columns.
+          folded: railFolds
+            ? {
+                boxes: railBoxes,
+                pick: (slot, entry) => {
+                  const pane = sharedPaneById(entry)?.pane
+                  if (pane) railPick(slot, pane)
+                },
+              }
+            : undefined,
         }
       : undefined
   /** What a cockpit's boxes are lent: the window's source, and the rail beside it while it is the one on screen. */
@@ -3614,7 +3631,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
         // The dashboard rail's switch: beside an operating cockpit, and only where the window can
         // show the rail, so the bar never offers a press that changes nothing.
-        rail={railSection && railFits ? { on: railShown, onToggle: () => setRailOn(railSection, !railShown) } : undefined}
+        rail={
+          // Where the switch changes what is on screen: the rail beside the cockpit, or its boxes in the columns.
+          railSection && (railFits || railFoldsHere)
+            ? { on: railShown || railFolds, onToggle: () => setRailOn(railSection, !railIsOn(railSection)) }
+            : undefined
+        }
       />
 
       {/* `data-dash-rail` while the dashboard rail takes width beside the cockpit: Operate's QSO strip

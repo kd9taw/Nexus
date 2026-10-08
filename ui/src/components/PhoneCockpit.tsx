@@ -37,7 +37,7 @@ import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { LeftSide } from './panes/LeftSide'
-import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
@@ -1477,17 +1477,20 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const placed3 = regionGroups(PHONE_PANELS.arrange!, place, 3, inRegion)
   // A BOX counts for the column it stands in, as a feed does there: one in column 1 as Band Activity
   // does, one in column 2 as a rig strip does. Where they stand never makes the grouping "arranged"
-  // (features/panelPlace), so with no box on screen this is exactly the rule it was.
-  const boxInA = placed3[0].ids.some(isBoxId)
+  // (features/panelPlace), so with no box on screen this is exactly the rule it was. The DASHBOARD RAIL'S
+  // boxes, on a window too small for the rail (the operator's "They move into the columns"), stand at the
+  // foot of column 1, where Phone's own boxes stand until placed, and count as boxes there.
+  const folded = boxes?.rail?.folded?.boxes ?? []
+  const boxInA = placed3[0].ids.some(isBoxId) || folded.length > 0
   const boxInB = placed3[1].ids.some(isBoxId)
   const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || boxInA || boxInB
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
     arranged
-      ? placed3[0].ids.length > 0 && placed3[1].ids.length > 0
+      ? placed3[0].ids.length + folded.length > 0 && placed3[1].ids.length > 0
         ? 3
-        : placed3[0].ids.length + placed3[1].ids.length > 0
+        : placed3[0].ids.length + folded.length + placed3[1].ids.length > 0
           ? 2
           : 1
       : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || boxInA)
@@ -2893,13 +2896,14 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               <Fragment key="log-form">{logPane}</Fragment>
             </div>
           ) : // Below three tracks the leading column is not rendered when it holds nothing.
-          cols < 3 && g.ids.length === 0 ? null : (
+          cols < 3 && g.ids.length === 0 && !(g.col === 'a' && folded.length > 0) ? null : (
             <div
               className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`}
               key={g.col === 'a' ? 'main' : 'aux'}
               ref={g.col === 'a' ? mainColRef : auxColRef}
             >
               {g.ids.map(placedPane)}
+              {g.col === 'a' && foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
             </div>
           ),
         )}

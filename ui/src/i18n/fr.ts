@@ -1282,6 +1282,7 @@ export const FR: PartialCatalog = {
   "dashRail.slot.where.rail3": "milieu, en bas",
   "dashRail.slot.where.rail4": "en bas",
   "dashRail.menu.small": "Il faut une fenêtre plus grande (ou un zoom plus petit) pour l’afficher. Mémorisé pour cette section.",
+  "dashRail.menu.folded": "Dans cette fenêtre, ses cases se placent au pied des colonnes de cet écran ; dans une fenêtre plus grande (ou avec un zoom plus petit), la colonne revient à côté. Mémorisé pour cette section.",
   "connect.rail.handle.title": "Glisser, ou utiliser les flèches, pour redimensionner ({{label}}). Double-clic pour réinitialiser.",
   "connect.layout.heading": "Disposition",
   "connect.layout.standard": "Standard",

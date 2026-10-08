@@ -75,7 +75,7 @@ import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
-import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { paneRoleStyle } from './panes/CockpitPaneFrame'
 import {
   BOX_IDS,
@@ -91,7 +91,7 @@ import {
   type PanelLayoutApi,
   type PanelState,
 } from '../features/panelState'
-import { columnsOf, placedColumns, type PaneColumn } from '../features/panelPlace'
+import { columnsOf, placedColumns, stockColumn, type PaneColumn } from '../features/panelPlace'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
   CLASSIC_FLOOR,
@@ -765,11 +765,18 @@ export function OperateCockpit({
   const place = placeOf(OPERATE_PANELS, panels.layout, layoutMode)
   // A box arranges only a window that lends boxes: in the pop-out and on the hosted page a box in the record,
   // or a box's place, leaves today's tree, so there only a pane placed in this layout arranges it.
-  // The other layout's panes stand only in the arranged columns, so one added here arranges FT too.
+  // THE DASHBOARD RAIL'S BOXES, on a window too small for the rail (the operator's "They move into the
+  // columns"): they stand at the foot of the column FT's own boxes stand in until placed, the side rail.
+  const folded = boxes?.rail?.folded?.boxes ?? []
+  const foldCol = stockColumn(arrangeSpec, BOX_IDS[0]) ?? 'log'
+  // The other layout's panes, and the rail's boxes, stand only in the arranged columns, so either arranges
+  // FT too.
   const arranged =
     (boxes
       ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
-      : place != null && Object.keys(place).some((id) => !isBoxId(id))) || extra.some(shown)
+      : place != null && Object.keys(place).some((id) => !isBoxId(id))) ||
+    extra.some(shown) ||
+    folded.length > 0
   const cardOn = shownRecallCall != null && shown('recall')
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
   // a station), and a box only where the window lends it one.
@@ -778,7 +785,7 @@ export function OperateCockpit({
   // the operator can place it before it has anything to show.
   const arrangeListed = (id: OperatePanelId): boolean => (isBoxId(id) ? entries[id] != null : shown(id))
   const arrangedCols = placedColumns(arrangeSpec, place)
-  const arrangedShown = columnsOf(arrangeSpec).filter((c) => arrangedCols[c].some(arrangedOn))
+  const arrangedShown = columnsOf(arrangeSpec).filter((c) => arrangedCols[c].some(arrangedOn) || (c === foldCol && folded.length > 0))
   // The populated-column count and whether the rail stands, from whichever branch draws the region: the
   // column collapse, the rail side and the dividers between the columns read them, positional as ever.
   const lowerCols = arranged ? (['one', 'one', 'two', 'three'] as const)[Math.max(1, arrangedShown.length)] : dataCols
@@ -1348,12 +1355,16 @@ export function OperateCockpit({
         />,
       )
     }
-    const body = ids.map((id) => (
-      <Fragment key={id}>
-        {arrangedPane(id, splitOf.get(id))}
-        {seamAfter.get(id)}
-      </Fragment>
-    ))
+    const body = [
+      ...ids.map((id) => (
+        <Fragment key={id}>
+          {arrangedPane(id, splitOf.get(id))}
+          {seamAfter.get(id)}
+        </Fragment>
+      )),
+      // The rail's boxes, below lg, at the foot of the column the boxes stand in.
+      ...(c === foldCol ? foldedRailBoxes(boxes, boxSel, (e) => boxOnScreen.has(e), false) : []),
+    ]
     if (c === 'log')
       return (
         <aside key="log" className={`op-stack${railOnLeft ? ' op-stack-lead' : ''}`} ref={layoutMode === 'roster' ? rosterSideRef : classicSideRef}>

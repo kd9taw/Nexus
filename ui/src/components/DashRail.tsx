@@ -9,7 +9,8 @@
 // keys nothing), and every cockpit's stop controls stay in that cockpit's header and dock. Its track is
 // one flat rule in cockpit-panes.css (`.dash-rail`); its width is a stored preference fitted into the
 // window on load and on every resize, and never so wide that the cockpit beside it is narrower than on
-// a 1024×768 screen (features/dashRail). Below `lg` App does not render it at all.
+// a 1024×768 screen (features/dashRail). Below `lg` App does not render it at all: beside FT, Phone, CW and
+// JS8 its boxes then stand at the foot of the cockpit's columns (panes/CockpitBox `foldedRailBoxes`).
 //
 // WHAT IT IS MADE OF — nothing a second system: Connect's `PaneFrame`s and registry (every box is
 // pickable in every slot), Connect's pane context built by the same code (connect/usePaneContext, the

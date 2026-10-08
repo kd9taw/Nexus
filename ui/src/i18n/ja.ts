@@ -4979,6 +4979,7 @@ export const JA: PartialCatalog = {
   "dashRail.slot.where.rail3": "中央・下",
   "dashRail.slot.where.rail4": "下",
   "dashRail.menu.small": "表示するにはもっと大きなウィンドウ（または小さいズーム）が必要です。このセクション用に記憶されます。",
+  "dashRail.menu.folded": "このウィンドウでは、ボックスがこの画面の列の下に並びます。もっと大きなウィンドウ（または小さいズーム）では列が横に戻ります。このセクション用に記憶されます。",
   "connect.rail.handle.title": "ドラッグまたは矢印キーでサイズ変更({{label}})。ダブルクリックでリセット。",
   "connect.layout.heading": "レイアウト",
   "connect.layout.standard": "標準",

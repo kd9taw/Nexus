@@ -175,10 +175,10 @@ describe('each cockpit keeps its own rail, and each starts from today’s', () =
 })
 
 describe('never on a small window', () => {
-  it('below lg: no rail, no NOW bar switch, and the ⊞ row keeps the choice and says why', async () => {
-    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+  it('below lg: no rail, no NOW bar switch, and the ⊞ row keeps the choice and says why (a cockpit with no box columns)', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ rtty: true }))
     windowOf(1280, 800) // 85 % → 1506 effective px: md
-    await mountOn('cw')
+    await mountOn('rtty')
     expect(document.documentElement.getAttribute('data-viewport')).toBe('md')
     expect(railEl(), 'the rail rendered below lg').toBeNull()
     expect(shellMarked()).toBe(false)
@@ -188,6 +188,78 @@ describe('never on a small window', () => {
     expect(row.checked, 'the choice was lost on a small window').toBe(true)
     expect(row.getAttribute('aria-describedby')).toBeTruthy()
     expect(menu.textContent).toContain('Needs a larger window')
+  })
+})
+
+describe('on a window too small for the rail, its boxes stand in the cockpit’s columns', () => {
+  // The operator's "They move into the columns" (2026-10-07): beside FT, Phone, CW and JS8, below `lg` the rail's
+  // boxes stand at the foot of the column the cockpit's own boxes stand in until placed, until the window is wide
+  // enough again; the record is never rewritten by a width. Their picker is the rail's; they carry no ✕ (a slot
+  // closed there could come back only from the rail's own ⊞, which a window this size does not show).
+  const SLOTS = { rail1: 'clock', rail2: 'spacewx', rail3: 'needed', rail4: 'getout' }
+  const foldedIn = (main: string) =>
+    [...document.querySelectorAll<HTMLElement>(`${main} .pane-frame[data-pane^="rail"]`)].map(
+      (f) => `${f.dataset.pane}:${f.querySelector('[data-box]')?.getAttribute('data-box')}`,
+    )
+  const resize = async (w: number, h: number) => {
+    windowOf(w, h)
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+  }
+
+  it('CW: at the foot of the leading column, with no ✕; the NOW bar and the ⊞ row say so; the rail comes back on a larger window and folds again', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: SLOTS }))
+    windowOf(1280, 800)
+    await mountOn('cw')
+    expect(document.documentElement.getAttribute('data-viewport')).toBe('md')
+    expect(railEl(), 'the rail rendered below lg').toBeNull()
+    await waitFor(() => expect(foldedIn('main.cw-cockpit')).toEqual(['rail1:clock', 'rail2:spacewx', 'rail3:neededBoard', 'rail4:getout']))
+    const frames = [...document.querySelectorAll<HTMLElement>('main.cw-cockpit .pane-frame[data-pane^="rail"]')]
+    const lead = frames[0].closest('.cockpit-col')!
+    expect(lead, 'not in the leading column').toBe(document.querySelector('main.cw-cockpit .cockpit-panes > .cockpit-col'))
+    expect(frames.every((f) => f.parentElement === lead), 'the boxes are spread over the columns').toBe(true)
+    expect([...lead.children].slice(-4), 'not at the foot of the column').toEqual(frames)
+    for (const f of frames) expect(within(f).queryByRole('button', { name: /^Hide/ }), 'a folded box offers a ✕').toBeNull()
+    expect(nowSwitch()?.getAttribute('aria-pressed'), 'the NOW bar does not offer the switch that moves them').toBe('true')
+    const menu = openPanels()
+    expect((within(menu).getByRole('checkbox', { name: 'Dashboard rail' }) as HTMLInputElement).checked).toBe(true)
+    expect(menu.textContent).toContain('stand at the foot of this screen')
+    fireEvent.click(document.body)
+    // A larger window: the rail stands beside the cockpit again, and the columns let them go.
+    await resize(1366, 768)
+    await waitFor(() => expect(railEl()).not.toBeNull())
+    expect(foldedIn('main.cw-cockpit')).toEqual([])
+    expect([...railEl()!.querySelectorAll<HTMLElement>('.dash-rail-col > .pane-frame')].map((f) => f.dataset.pane)).toEqual(['clock', 'spacewx', 'needed', 'getout'])
+    await resize(1280, 800)
+    await waitFor(() => expect(railEl()).toBeNull())
+    expect(foldedIn('main.cw-cockpit')).toHaveLength(4)
+    expect(JSON.parse(localStorage.getItem('nexus.dashrail.config')!), 'a width rewrote the rail’s record').toEqual({ slots: SLOTS })
+  })
+
+  it('FT: at the foot of the side rail, in FT’s arranged columns; turned off, FT draws today’s tree again', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ operate: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: SLOTS }))
+    windowOf(1280, 800)
+    await mountOn('operate')
+    const lower = () => document.querySelector<HTMLElement>('.operate-host:not([hidden]) main.operate-cockpit .cockpit-lower')!
+    await waitFor(() => expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')).toHaveLength(4))
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    const side = lower().querySelector<HTMLElement>(':scope > aside.op-stack')!
+    expect(side, 'FT’s side rail is not drawn').not.toBeNull()
+    expect([...side.querySelectorAll<HTMLElement>(':scope > .pane-frame[data-pane^="rail"]')].map((f) => f.dataset.pane)).toEqual(['rail1', 'rail2', 'rail3', 'rail4'])
+    // A pick in a folded box is the rail's: its slot takes it.
+    const pick = side.querySelector<HTMLSelectElement>('.pane-frame[data-pane="rail2"] select.pane-pick')!
+    fireEvent.change(pick, { target: { value: 'bandTiles' } })
+    await act(async () => {})
+    expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')[1]).toBe('rail2:bandTiles')
+    expect(JSON.parse(localStorage.getItem('nexus.dashrail.config')!).sections.operate.rail2).toBe('bandTiles')
+    // Off from the NOW bar: the boxes go, and with nothing else arranged FT is today's tree.
+    fireEvent.click(nowSwitch()!)
+    await act(async () => {})
+    expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')).toEqual([])
+    expect(lower().hasAttribute('data-arranged')).toBe(false)
   })
 })
 

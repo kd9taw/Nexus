@@ -203,7 +203,7 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
               </div>
               {rail.on && !rail.fits && (
                 <span className="panels-menu-why" id={`${uid}-rail-why`}>
-                  {t('dashRail.menu.small')}
+                  {rail.folds ? t('dashRail.menu.folded') : t('dashRail.menu.small')}
                 </span>
               )}
             </div>

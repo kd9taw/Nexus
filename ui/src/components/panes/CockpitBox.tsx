@@ -15,11 +15,14 @@
 // list box is capped and scrolls inside itself (`box-body--stacked`, styles.css), so a long list never
 // pushes the log form a screen down; at the bounded tiers the pane body scrolls it.
 //
+// THE DASHBOARD RAIL'S BOXES stand here too on a window too small for the rail (`foldedRailBoxes`): the same
+// frame and picker, acting on the rail's record.
+//
 // THE STOP LINE is not near any of this: a box shows only an entry of the shared list, none of which
 // hosts a control that starts or stops a transmission, and the cockpit's own senders never stand in one.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { t } from '../../i18n'
 import { useLocale } from '../../i18n/useLocale'
 import { CockpitPaneFrame } from './CockpitPaneFrame'
@@ -27,6 +30,7 @@ import { BoxBody } from './BoxBody'
 import { PANES, PANE_CATEGORIES, PANE_CATEGORY_LABEL, paneById } from '../connect/panes'
 import { sharedPaneById, sharedPaneOf, type SharedPane } from '../../features/sharedPanes'
 import { BOX_IDS, type BoxId } from '../../features/panelState'
+import type { DashSlotId, RailBox } from '../../features/dashRail'
 import { surfaceGet } from '../../features/windowScope'
 import type { DashRailProps } from '../DashRail'
 import type { MapIntent } from '../MapView'
@@ -39,6 +43,15 @@ export interface RailLink {
   /** A box's picker chose one of them (`entry`): the rail's slot that showed it takes what the box showed
    *  (`give`) in exchange, as two boxes swap. */
   take: (entry: string, give: string | null) => void
+  /** ON A WINDOW TOO SMALL FOR THE RAIL (the operator's "They move into the columns", 2026-10-07): the rail's
+   *  boxes on screen, which the cockpit stands at the foot of the column its own boxes stand in until placed,
+   *  until the window is wide enough again (`foldedRailBoxes`). The rail's record is never rewritten by a
+   *  window's width. */
+  folded?: {
+    boxes: readonly RailBox[]
+    /** A folded box's picker: that entry in that slot of the rail, moved there if it is on screen. */
+    pick: (slot: DashSlotId, entry: string) => void
+  }
 }
 
 /** What the window lends a cockpit's boxes: exactly what it lends the dashboard rail (App), and the rail
@@ -208,4 +221,33 @@ export function CockpitBox({ box, entry, source, selection, onScreen, onPick, on
       </div>
     </CockpitPaneFrame>
   )
+}
+
+/**
+ * THE RAIL'S BOXES IN THE COCKPIT, on a window too small for the rail (RailLink `folded`): each in the
+ * cockpit's frame as a box is, keyed by its slot, its picker acting on the rail. They carry no ✕: a slot
+ * closed here could be brought back only from the rail's own ⊞ Panels, which a window this size does not
+ * show, so they leave the screen with the rail's own switch (⊞ Panels ▸ Dashboard rail). The cockpit stands
+ * them at the foot of the column its own boxes stand in until placed.
+ */
+export function foldedRailBoxes(
+  source: BoxSource | undefined,
+  selection: BoxSelection,
+  onScreen: (entry: string) => boolean,
+  stacked: boolean,
+): ReactNode[] {
+  const folded = source?.rail?.folded
+  if (!source || !folded) return []
+  return folded.boxes.map((b) => (
+    <CockpitBox
+      key={b.slot}
+      box={b.slot}
+      entry={b.entry}
+      source={source}
+      selection={selection}
+      onScreen={onScreen}
+      onPick={(e) => folded.pick(b.slot, e)}
+      stacked={stacked}
+    />
+  ))
 }

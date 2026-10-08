@@ -249,8 +249,11 @@ boxes to share the height between them; both also work from the keyboard, and a 
 puts the default back. The rail shows only
 on a large window, about 1600 px wide at your zoom (a 1366×768 laptop at its usual 85 %
 qualifies), and the cockpit beside it is never narrower than it is on a 1024×768 screen, so a
-saved width is trimmed to fit. On a smaller window the rail stays hidden, and the ⊞ Panels entry
-keeps your choice and says why. The rail has no transmit control, and clicking a station in it
+saved width is trimmed to fit. On a smaller window, beside FT, Phone, CW and JS8, the rail's boxes
+stand at the foot of the cockpit's columns instead (FT's side rail, the first column in the others),
+where their picker still changes them, and they go back into the rail when the window is wide
+enough; beside RTTY, PSK, SSTV and APRS the rail stays hidden there. The ⊞ Panels entry keeps your
+choice and says which. The rail has no transmit control, and clicking a station in it
 selects that station in the rail only, never the station your cockpit is working. A **Spots**,
 **Needed** or **POTA / SOTA** box works a station there as it does on Conditions: a click on a spot
 or a need, or on **HUNT**, moves the radio to the station and opens its screen. Nothing transmits. The rail reads the

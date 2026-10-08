@@ -10,7 +10,7 @@
 // are stubbed as in PhoneCockpit.arrange.test.tsx, whose mocks this file follows.
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen, within } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { BOX_IDS, PHONE_PANELS, boxEntries, panelStorageKey, usePanelLayout, type PanelLayoutApi, type PhonePanelId } from '../features/panelState'
@@ -115,7 +115,7 @@ const BOARDS = {
 let api: PanelLayoutApi<PhonePanelId> | null = null
 /** Phone on the REAL panel record, lent the boxes' source as App lends it on the desktop (`lend`), or
  *  not, as on the hosted Remote page; `feeds` wires the Spots and Needed boards. */
-function Live({ lend = true, feeds = false }: { lend?: boolean; feeds?: boolean }) {
+function Live({ lend = true, feeds = false, source = SOURCE }: { lend?: boolean; feeds?: boolean; source?: BoxSource }) {
   const panels = usePanelLayout(PHONE_PANELS)
   api = panels
   return (
@@ -125,7 +125,7 @@ function Live({ lend = true, feeds = false }: { lend?: boolean; feeds?: boolean 
       onWorkSpot={() => {}}
       spots={[]}
       panels={panels}
-      boxes={lend ? SOURCE : undefined}
+      boxes={lend ? source : undefined}
       {...(feeds ? BOARDS : {})}
     />
   )
@@ -262,6 +262,33 @@ function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+
+describe('the dashboard rail’s boxes, on a window too small for the rail', () => {
+  // App lends them (RailLink `folded`) when the rail is on and the window is below lg: Phone stands them at the
+  // foot of column 1, where its own boxes stand until placed, at every tier. Their picker is the rail's, and they
+  // carry no ✕ (the rail's own switch takes them away).
+  it('stand at the foot of the leading column at every tier, with no ✕, and their picker is the rail’s', async () => {
+    const pick = vi.fn()
+    const folded: BoxSource = {
+      ...SOURCE,
+      rail: {
+        shows: ['clock', 'spacewx'],
+        take: vi.fn(),
+        folded: { boxes: [{ slot: 'rail1', pane: 'clock', entry: 'clock' }, { slot: 'rail2', pane: 'spacewx', entry: 'spacewx' }], pick },
+      },
+    }
+    render(<Live source={folded} />)
+    await frame()
+    for (const w of [700, 1300, 1800]) {
+      await tier(w)
+      expect(framesIn(cols()[0]).slice(-2), `at ${w} px`).toEqual(['rail1', 'rail2'])
+    }
+    expect(within(boxFrame('rail1')!).queryByRole('button', { name: /^Hide/ })).toBeNull()
+    expect(bodyOf('rail2')).toBe(`box-body-${paneOf('spacewx')}`)
+    fireEvent.change(boxFrame('rail2')!.querySelector('select.pane-pick')!, { target: { value: 'getout' } })
+    expect(pick).toHaveBeenCalledWith('rail2', 'getout')
+  })
+})
 
 describe('THE FIBER-IDENTITY SWEEP, with boxes: no add, pick, hide or move remounts the log form, the keyer or the scope', () => {
   it('80 random box and pane acts, with window and tier flips between them', async () => {

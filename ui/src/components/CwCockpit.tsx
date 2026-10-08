@@ -39,7 +39,7 @@ import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
-import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import {
   panelHost,
   NO_DSP_FUNCS_REASON,
@@ -1158,7 +1158,10 @@ export function CwCockpit({
     (id) => !placed3[0].ids.includes(id) || (stockPlace && (id === 'spots' || id === 'needed')),
   )
   const rigAt = midAt < 0 ? merged.length : midAt
-  const leadCount = placed3[0].ids.length
+  // The DASHBOARD RAIL'S boxes, on a window too small for the rail (the operator's "They move into the
+  // columns"), stand at the foot of the leading column, where CW's own boxes stand until placed.
+  const folded = boxes?.rail?.folded?.boxes ?? []
+  const leadCount = placed3[0].ids.length + folded.length
   const midCount = placed3[1].ids.length + (hasRigCtlPane ? 1 : 0)
   // Stock, this is exactly the rule it replaced (the lead column's decode + sent, and the middle's
   // rig controls, Band Activity and copilot, each present or not).
@@ -2132,6 +2135,7 @@ export function CwCockpit({
           <>
             <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
               {placed3[0].ids.map(placedPane)}
+              {foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
             </div>
             <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux" ref={auxColRef}>
               {[rigCtlSlot, ...placed3[1].ids.map(placedPane)]}
@@ -2145,6 +2149,7 @@ export function CwCockpit({
             {leadCount + midCount > 0 && (
               <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
                 {[...merged.slice(0, rigAt).map(placedPane), rigCtlSlot, ...merged.slice(rigAt).map(placedPane)]}
+                {foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
               </div>
             )}
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>

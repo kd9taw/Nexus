@@ -23,7 +23,7 @@ import { regionColsStyle } from '../features/paneColumns'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
-import { CockpitBox, boxLabels, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { panelHost } from '../features/panelHost'
 import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
 import { regionGroups } from '../features/panelPlace'
@@ -515,7 +515,10 @@ export function Js8Cockpit({
   const place = panels?.layout.place
   const paneShown = (id: Js8PanelId): boolean => (isBoxId(id) ? entries[id] != null : shown(id) && (id !== 'log' || snap != null))
   const placed3 = regionGroups(JS8_PANELS.arrange!, place, 3, paneShown)
-  const populated = placed3.filter((g) => g.ids.length > 0).length
+  // The DASHBOARD RAIL'S boxes, on a window too small for the rail (the operator's "They move into the
+  // columns"), stand at the foot of the leading column, where JS8's own boxes stand until placed.
+  const folded = boxes?.rail?.folded?.boxes ?? []
+  const populated = placed3.filter((g, i) => g.ids.length > 0 || (i === 0 && folded.length > 0)).length
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
   // The boxes' selection: the cockpit's own, shared by its boxes and never the window's (CockpitBox).
   const boxSel = useBoxSelection()
@@ -1304,6 +1307,7 @@ export function Js8Cockpit({
           <>
             <div className="cockpit-col" key="main" ref={mainColRef}>
               {slots(rendered[0])}
+              {foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
             </div>
             <div className="cockpit-col" key="aux" ref={auxColRef}>
               {slots(rendered[1])}
@@ -1316,9 +1320,10 @@ export function Js8Cockpit({
           </>
         ) : (
           <>
-            {rendered[0].length > 0 && (
+            {(rendered[0].length > 0 || folded.length > 0) && (
               <div className="cockpit-col" key="main" ref={mainColRef}>
                 {slots(rendered[0])}
+                {foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
               </div>
             )}
             {rendered[1].length > 0 && (
