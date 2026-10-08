@@ -94,15 +94,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Club sync no longer builds a Field Day club log for other contests.** Hosting a club event,
-  or joining one, with the Illinois QSO Party (or any contest other than ARRL Field Day and
-  Winter Field Day) selected built an ARRL Field Day club log: counties dropped, CW and RTTY with
-  one station counted as two contacts, a mobile's new county counted as a dupe, and a club file
-  headed `CONTEST: ARRL-FD`. Club sync now runs for the two Field Days only. With any other
-  contest selected the station neither hosts nor joins, and the contest screen, the club board
-  window and Settings ▸ Contesting ▸ Field Day Club Sync say why. For a state QSO party, log on
-  each position by itself and merge the Cabrillo files afterwards; the Field Day manual has the
-  steps for the Illinois QSO Party.
+- **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
+  joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
+  selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station
+  counted as two contacts, a mobile's new county counted as a dupe, and a club file headed
+  `CONTEST: ARRL-FD`. The club log now runs the host's contest under its own rules: its
+  exchange, what counts as a dupe (CW and digital are one mode at the Illinois QSO Party, and a
+  mobile in a new county is a new contact), its multipliers and bonus stations, and its own
+  Cabrillo file, with the Entry class, Club and Operators lines. At a QSO party the log strip
+  warns while you type when another position, or this one, has already worked the station from
+  that county. Every position must pick the host's contest: a position logging another one,
+  or running a Nexus too old to say which, is refused when it joins, and its club chip names
+  both contests. The two Field Days count as different contests here too. Two kinds of contest
+  are refused, with the reason on the contest screen, the club board window and in Settings ▸
+  Contesting ▸ Field Day Club Sync: one with a serial number in the exchange (Sweepstakes, CQ
+  WPX, the California QSO Party), and CQ World-Wide, whose log must say which transmitter made
+  each contact. The spectator scoreboard is Field Day only. Try a club on two of your own PCs
+  before the party; the Field Day manual has a checklist.
+- **A contact queued while a club position was offline keeps the operator who logged it.** The
+  operator was read when the contact was sent rather than when it was logged, so after an outage
+  the contacts still waiting went up under whoever had sat down since, on the club board and in
+  the club file's operators.
 - **Winter Field Day 2027 is on 23 and 24 January.** The sponsor's 2027 rules put the event on
   the fourth full weekend of January, and Nexus still used the last full weekend from the 2025
   rules, so it counted down to 30 January, a week late. Installed copies pick the fix up from

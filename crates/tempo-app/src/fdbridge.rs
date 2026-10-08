@@ -34,8 +34,9 @@ impl ClubBackend for EngineClubBackend {
         name: &str,
         call: &str,
         _max_seq: u64,
+        contest: &str,
     ) -> Result<JoinAccept, String> {
-        engine_lock(&self.0).fd_club_join(v, pos, name, call)
+        engine_lock(&self.0).fd_club_join(v, pos, name, call, contest)
     }
 
     fn merge(&self, row: &WireQso) -> u64 {
@@ -67,6 +68,14 @@ pub struct EnginePositionSync(pub Arc<Mutex<Engine>>);
 impl PositionSync for EnginePositionSync {
     fn identity(&self) -> (String, String, String, u64) {
         engine_lock(&self.0).fd_sync_identity()
+    }
+
+    fn contest(&self) -> String {
+        engine_lock(&self.0).fd_position_contest()
+    }
+
+    fn host_contest(&self, contest: &str) -> Result<(), String> {
+        engine_lock(&self.0).fd_accept_host_contest(contest)
     }
 
     fn outbox_after(&self, after: u64) -> Vec<WireQso> {

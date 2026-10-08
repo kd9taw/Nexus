@@ -5,7 +5,7 @@
 // warning, and the host-only club export buttons. The whole section is gated on
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, act } from '@testing-library/react'
+import { render, screen, cleanup, act, within } from '@testing-library/react'
 import { ContestView } from './ContestView'
 import { getSettings } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -129,6 +129,40 @@ describe('ContestView club sync section', () => {
     expect(screen.getByText('Host: update the host')).toBeTruthy()
   })
 
+  it('counts a party club by its score and QSOs — a party has no sections to count', () => {
+    render(
+      <ContestView fieldDay={{ ...fd({ ...CLUB, hosting: true }), event: 'ilqp' }} onSetMode={() => {}} />,
+    )
+    const club = within(screen.getByLabelText('Club sync'))
+    expect(club.getByText('Club: 1234 pts · 312 QSOs')).toBeTruthy()
+    expect(club.queryByText(/sections/)).toBeNull()
+    // The party keeps only the earliest of a repeat, as Field Day does.
+    expect(screen.getByText('Club Cabrillo').getAttribute('title')).toMatch(/earliest contact wins/)
+  })
+
+  it('says a club file keeps every repeat for a contest that wants them reported', () => {
+    render(
+      <ContestView
+        fieldDay={{
+          ...fd({ ...CLUB, hosting: true }),
+          event: 'nyqp',
+          dupeRule: {
+            byCall: true,
+            byBand: true,
+            byModeClass: true,
+            byFields: ['QTH'],
+            bySentFields: ['QTH'],
+            modeClassGroups: [],
+            logDupes: true,
+          },
+        }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Club Cabrillo').getAttribute('title')).toMatch(/every contact stays in/)
+    expect(screen.getByText('Club ADIF').getAttribute('title')).toMatch(/every contact stays in/)
+  })
+
   it('offers the club exports only in the host role', () => {
     render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} onSetMode={() => {}} />)
     expect(screen.getByText('Club Cabrillo')).toBeTruthy()
@@ -136,13 +170,13 @@ describe('ContestView club sync section', () => {
   })
 })
 
-// ⭐ CLUB SYNC SWITCHED ON FOR A CONTEST IT CANNOT RUN. The engine refuses it (the club log
-// runs a Field Day event's rules; hosting the Illinois QSO Party used to build an ARRL Field
-// Day club log in silence), so no club block arrives — and the screen says why instead of
-// going quiet about a switch the operator turned on. The view reads its settings once, on
-// mount; every case below waits the same two microtasks for them, so an absence is measured
-// at the moment the presence case finds its text.
-describe('club sync switched on for a contest that is not a Field Day', () => {
+// ⭐ CLUB SYNC SWITCHED ON FOR A CONTEST IT CANNOT RUN. The club log runs the picked contest's
+// own rules and the engine refuses only a contest whose merged log would be wrong whoever built
+// it (a serial-number exchange, a template with a transmitter column), so no club block arrives —
+// and the screen says why instead of going quiet about a switch the operator turned on. The view
+// reads its settings once, on mount; every case below waits the same two microtasks for them, so
+// an absence is measured at the moment the presence case finds its text.
+describe('club sync switched on for a contest the club log cannot run', () => {
   async function renderWith(settings: Record<string, unknown>) {
     vi.mocked(getSettings).mockResolvedValueOnce({ ...defaultSettings, ...settings } as never)
     render(<ContestView fieldDay={fd(undefined)} onSetMode={() => {}} />)
@@ -153,28 +187,29 @@ describe('club sync switched on for a contest that is not a Field Day', () => {
   }
 
   it('says it is not syncing, and why, where the club block would be', async () => {
-    await renderWith({ fdEvent: 'ilqp', fdHostEnable: true })
+    await renderWith({ fdEvent: 'cqww_cw', fdHostEnable: true })
     expect(screen.getByText('Not syncing')).toBeTruthy()
     expect(
-      screen.getByText(/With Illinois QSO Party selected, this station does not host or join/),
+      screen.getByText(/Club sync does not run CQ World-Wide DX Contest \(CW\): its log must say which transmitter/),
     ).toBeTruthy()
   })
 
-  it('says the same for a join address', async () => {
-    await renderWith({ fdEvent: 'ilqp', fdHostEnable: false, fdJoinAddr: '192.168.1.10:42073' })
+  it('says the same for a join address, with a serial-number contest\'s own reason', async () => {
+    await renderWith({ fdEvent: 'arrlss_cw', fdHostEnable: false, fdJoinAddr: '192.168.1.10:42073' })
     expect(screen.getByText('Not syncing')).toBeTruthy()
+    expect(screen.getByText(/its serial numbers must run in one sequence/)).toBeTruthy()
   })
 
-  it('POSITIVE CONTROL: ARRL Field Day and Winter Field Day with hosting on say nothing of it', async () => {
-    for (const fdEvent of ['arrlfd', 'wfd', '']) {
+  it('POSITIVE CONTROL: the Illinois QSO Party, both Field Days and the default say nothing of it', async () => {
+    for (const fdEvent of ['ilqp', 'nyqp', 'arrlfd', 'wfd', '']) {
       await renderWith({ fdEvent, fdHostEnable: true })
       expect(screen.queryByText('Not syncing')).toBeNull()
       cleanup()
     }
   })
 
-  it('POSITIVE CONTROL: the party with club sync never switched on says nothing either', async () => {
-    await renderWith({ fdEvent: 'ilqp', fdHostEnable: false, fdJoinAddr: '' })
+  it('POSITIVE CONTROL: a refused contest with club sync never switched on says nothing either', async () => {
+    await renderWith({ fdEvent: 'cqww_cw', fdHostEnable: false, fdJoinAddr: '' })
     expect(screen.queryByText('Not syncing')).toBeNull()
   })
 })

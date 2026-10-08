@@ -1,0 +1,21 @@
+{
+  "about": "The dupe key a contest contact gets under its contest's own rule, the same in the engine and in the log strip. 'rules' is each ruleset's dupe rule as the snapshot ships it (FieldDayStatus.dupeRule). Each row is a contact (call, band, mode class, the exchange it received and the exchange this station sent, by slot) and the key the engine builds for it (DupeRule::key_of, crates/tempo-core/src/contest/dupe.rs). Read by crates/tempo-app/src/fdevent.rs (the engine's rule from the rules seed and its key for every row) and ui/src/features/contestDupe.keys.shared.test.ts (the strip's key, from the rule here). Change a row and both must agree again.",
+  "rules": {
+    "ilqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [["CW", "DIG"]], "logDupes": false },
+    "ohqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [], "logDupes": false },
+    "nyqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [], "logDupes": true },
+    "arrlvhf_jun": { "byCall": true, "byBand": true, "byModeClass": false, "byFields": ["GRID"], "bySentFields": ["GRID"], "modeClassGroups": [], "logDupes": true },
+    "arrlfd": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": [], "bySentFields": [], "modeClassGroups": [], "logDupes": false }
+  },
+  "rows": [
+    { "ruleset": "ilqp", "call": " k9aaa ", "band": "40m", "mode": "CW", "rx": { "RST": "599", "QTH": "cook" }, "tx": { "RST": "599", "QTH": "MCLN" }, "key": ["K9AAA", "40M", "CW", "COOK", "MCLN"] },
+    { "ruleset": "ilqp", "call": "K9AAA", "band": "40m", "mode": "DIG", "rx": { "RST": "599", "QTH": "COOK" }, "tx": { "RST": "599", "QTH": "MCLN" }, "key": ["K9AAA", "40M", "CW", "COOK", "MCLN"], "note": "CW and digital are one mode at this party, so RTTY keys as CW" },
+    { "ruleset": "ilqp", "call": "K9AAA", "band": "40m", "mode": "PH", "rx": { "RST": "59", "QTH": "COOK" }, "tx": { "RST": "59", "QTH": "MCLN" }, "key": ["K9AAA", "40M", "PH", "COOK", "MCLN"], "note": "phone is a mode of its own" },
+    { "ruleset": "ilqp", "call": "K9AAA", "band": "40m", "mode": "CW", "rx": { "RST": "599", "QTH": "WILL" }, "tx": { "RST": "599", "QTH": "MCLN" }, "key": ["K9AAA", "40M", "CW", "WILL", "MCLN"], "note": "a mobile in a new county is a new station" },
+    { "ruleset": "ilqp", "call": "K9AAA", "band": "40m", "mode": "CW", "rx": { "RST": "599", "QTH": "COOK" }, "tx": { "RST": "599", "QTH": "DUPG" }, "key": ["K9AAA", "40M", "CW", "COOK", "DUPG"], "note": "and so is this station, once it has moved" },
+    { "ruleset": "ohqp", "call": "K8AAA", "band": "40m", "mode": "DIG", "rx": { "RST": "599", "QTH": "FRAN" }, "tx": { "RST": "599", "QTH": "ADAM" }, "key": ["K8AAA", "40M", "DIG", "FRAN", "ADAM"], "note": "no grouping: digital is its own mode" },
+    { "ruleset": "nyqp", "call": "W2AAA", "band": "20m", "mode": "DIG", "rx": { "RST": "599", "QTH": " mon" }, "tx": { "RST": "599", "QTH": "ALB" }, "key": ["W2AAA", "20M", "DIG", "MON", "ALB"] },
+    { "ruleset": "arrlvhf_jun", "call": "w1aw", "band": "2m", "mode": "PH", "rx": { "GRID": "fn31" }, "tx": { "GRID": "EN61" }, "key": ["W1AW", "2M", "FN31", "EN61"], "note": "no mode class in the key: once per band, any mode" },
+    { "ruleset": "arrlfd", "call": "W1AW", "band": "20m", "mode": "CW", "rx": { "CLASS": "2A", "SECTION": "CT" }, "tx": { "CLASS": "3A", "SECTION": "WI" }, "key": ["W1AW", "20M", "CW"], "note": "Field Day keys on no exchange slot" }
+  ]
+}
