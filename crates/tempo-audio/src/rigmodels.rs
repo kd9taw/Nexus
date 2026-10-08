@@ -50,19 +50,20 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         // IC-7760 (split control-head/RF-deck flagship). Verified index 92 in the bundled
         // Hamlib 4.7.1 riglist.h → model 3092. Driven via Hamlib rigctld over the controller's
         // USB B socket (the RF deck's USB port carries I/Q only: IC-7760 Basic Manual, PDF
-        // pp. 88 and 90), NOT Nexus's native CI-V/scope path (that stays limited to the
-        // 7300-family radios `icom_scope_model` lists). On its LAN port the 7760 speaks Icom's
-        // own network protocol, and the bundled Hamlib has no model that does (4.7.1's
-        // `rigctl -l` lists no Icom network model), so a LAN-connected 7760 reaches Nexus only
-        // through a bridge: wfview's rigctld server, or the virtual COM port RS-BA1 creates.
-        // Its scope stream is documented (A7788-8EX, PDF p. 24: 0–200, 689 points) but has not
-        // been on a bench here. Adding it here is what makes CAT work — before, the 7760 was
-        // absent from every table, so it fell through to a wrong/zero model and CAT was dead.
+        // pp. 88 and 90), NOT Nexus's native CI-V/scope path over USB (that stays limited to
+        // the 7300-family radios `icom_scope_model` lists). On its LAN port the 7760 speaks
+        // Icom's own network protocol, which the bundled Hamlib has no model for (4.7.1's
+        // `rigctl -l` lists no Icom network model); Nexus's own Icom network client drives it
+        // there (`icom_lan_model`, Beta), with its native scope (A7788-8EX-2, PDF p. 25: 0–200,
+        // 689 points). Neither path has been on a bench here. Adding it here is what makes CAT
+        // work — before, the 7760 was absent from every table, so it fell through to a
+        // wrong/zero model and CAT was dead.
         (3092, "Icom IC-7760"),
         // IC-7300MKII — `RIG_MODEL_IC7300MK2 = RIG_MAKE_MODEL(RIG_ICOM, 94)` in the bundled
         // 4.7.0 riglist.h → 3094 (`rigctl -l` names it `IC-7300MK2`, Beta). Driven via rigctld,
-        // NOT the native CI-V/scope path: `icom_scope_model` stays limited to the radios whose
-        // `0x27` stream we have actually seen, and this one has not been on a bench here.
+        // NOT the native CI-V/scope path over USB: `icom_scope_model` stays limited to the radios
+        // whose `0x27` stream we have actually seen. Over its network connection Nexus's own
+        // Icom network client drives it (`icom_lan_model`, Beta); neither has been on a bench.
         (3094, "Icom IC-7300MKII"),
         (3070, "Icom IC-7100"),
         (3013, "Icom IC-718"),
@@ -766,9 +767,16 @@ pub(crate) fn is_slow_serial_link(model: u32, baud: u32, is_network: bool) -> bo
 /// - **Flex** (SmartSDR CAT 2036 / native 23005) over a **network** connection → `FlexVita`.
 /// - **Icom 7300/7610/9700/705/905** over a **serial** connection → `IcomCiv` (the scope
 ///   needs the native CI-V serial owner; over network rigctld it isn't reachable).
-/// - Everything else (Xiegu, other Icoms, Yaesu, Kenwood, a network Icom) → `None`
-///   (audio-FFT fallback).
+/// - **The six network Icoms** over the **Icom network** connection (`"icomlan"`) → `IcomCiv`:
+///   the same native daemon, carried over the radio's own network session.
+/// - Everything else (Xiegu, other Icoms, Yaesu, Kenwood, an Icom behind a rigctld on the
+///   network) → `None` (audio-FFT fallback).
 pub fn native_spectrum_kind(model: u32, rig_conn: &str) -> Option<SpectrumKind> {
+    if tempo_app::settings::rig_conn_is_icom_lan(rig_conn) {
+        return icom_lan_model(model).map(|m| SpectrumKind::IcomCiv {
+            civ_addr: m.default_civ_addr(),
+        });
+    }
     let is_network = rig_conn.eq_ignore_ascii_case("network");
     match model {
         2036 | 23005 if is_network => Some(SpectrumKind::FlexVita),
@@ -1211,6 +1219,20 @@ mod tests {
         );
         // A network Icom can't use the native serial CI-V scope → audio-FFT fallback.
         assert_eq!(native_spectrum_kind(3081, "network"), None);
+        // The Icom network connection carries the native scope for the six network Icoms, the
+        // IC-7760 and IC-7300MK2 included; an IC-7300 has no network port.
+        assert_eq!(
+            native_spectrum_kind(3092, "icomlan"),
+            Some(SpectrumKind::IcomCiv { civ_addr: 0xB2 })
+        );
+        assert_eq!(
+            native_spectrum_kind(3081, "icomlan"),
+            Some(SpectrumKind::IcomCiv { civ_addr: 0xA2 })
+        );
+        assert_eq!(native_spectrum_kind(3073, "icomlan"), None);
+        // ⛔ The serial map is unchanged: neither new model gets the native scope over USB.
+        assert_eq!(native_spectrum_kind(3092, "serial"), None);
+        assert_eq!(native_spectrum_kind(3094, "serial"), None);
         // Yaesu FTDX10 (no native spectrum stream) and an unlisted Icom → None.
         assert_eq!(native_spectrum_kind(1042, "serial"), None);
         assert_eq!(native_spectrum_kind(3013, "serial"), None); // IC-718: no scope

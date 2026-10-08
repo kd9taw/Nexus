@@ -1405,7 +1405,9 @@ fn scope_family(
 ) -> tempo_app::engine::remote_radio::ScopeFamily {
     use tempo_app::engine::remote_radio::ScopeFamily;
     use tempo_audio::rigmodels::{native_spectrum_kind, SpectrumKind};
-    let conn = if tempo_app::settings::rig_conn_is_network(&settings.rig_conn, &settings.rig_addr) {
+    let conn = if tempo_app::settings::rig_conn_is_icom_lan(&settings.rig_conn) {
+        "icomlan"
+    } else if tempo_app::settings::rig_conn_is_network(&settings.rig_conn, &settings.rig_addr) {
         "network"
     } else {
         "serial"

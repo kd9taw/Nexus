@@ -48135,6 +48135,9 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            icom_lan_host: p.icom_lan_host.clone(),
+            icom_lan_user: p.icom_lan_user.clone(),
+            icom_lan_port: p.icom_lan_port,
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);

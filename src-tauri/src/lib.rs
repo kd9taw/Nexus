@@ -17250,7 +17250,10 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             let eng = engine_lock(&state);
             let r = eng.snapshot().radio;
             let s = eng.settings();
-            let is_network = s.rig_conn == "network" && !s.rig_addr.is_empty();
+            // The Icom network connection has no serial port to sweep: its Test CAT reports
+            // through the live session, so it is never handed to the ladder.
+            let is_network = (s.rig_conn == "network" && !s.rig_addr.is_empty())
+                || tempo_app::settings::rig_conn_is_icom_lan(&s.rig_conn);
             // The ladder applies only to a KNOWN Icom on a real serial port (it speaks
             // raw CI-V) whose CAT channel is what the failed probe actually exercised —
             // a dedicated-PTT-port failure must keep its own error, not a ladder verdict
@@ -31398,6 +31401,10 @@ pub fn run() {
         icom_native_cat: settings.icom_native_cat,
         flex_native_cat: settings.flex_native_cat,
         flex_radio_ip: settings.flex_radio_ip.clone(),
+        icom_lan_host: settings.icom_lan_host.clone(),
+        icom_lan_user: settings.icom_lan_user.clone(),
+        icom_lan_port: settings.icom_lan_port,
+        radio_id: settings.active_radio,
         broker_self_port: if settings.cat_broker {
             Some(settings.cat_broker_port)
         } else {

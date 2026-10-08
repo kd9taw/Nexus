@@ -487,6 +487,40 @@ pub fn flex_client_reachable(rig_model: u32, flex_radio_ip: &str) -> bool {
     FLEX_CLIENT_RIGS.contains(&rig_model) && !flex_radio_ip.trim().is_empty()
 }
 
+/// Is this rig driven over the radio's own network connection, by Nexus's Icom network client
+/// (the "Icom network (LAN / Wi-Fi)" Connection choice, Beta)?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for that question, like [`rig_conn_is_omnirig`]:
+/// `tempo_audio::service::Transport::is_icom_lan` calls this, and so does the engine's transmit
+/// refusal, so the daemon choice and the refusal cannot disagree. A build from before the choice
+/// existed reads this value as Serial (it is neither "network" nor "omnirig").
+pub fn rig_conn_is_icom_lan(rig_conn: &str) -> bool {
+    rig_conn.eq_ignore_ascii_case("icomlan")
+}
+
+/// The Icoms with a network server built in, the only ones the Icom network connection is offered
+/// for: IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2. The UI mirrors this list
+/// (`ICOM_LAN_MODELS`), and a test holds the two together.
+pub const ICOM_LAN_RIGS: [u32; 6] = [3078, 3081, 3085, 3090, 3092, 3094];
+
+/// The control port a network Icom listens on unless its operator moved it.
+pub const ICOM_LAN_DEFAULT_PORT: u16 = 50001;
+
+fn default_icom_lan_port() -> u16 {
+    ICOM_LAN_DEFAULT_PORT
+}
+
+/// Could Nexus's Icom network client serve this radio: one of [`ICOM_LAN_RIGS`], on the Icom
+/// network connection, with an IPv4 address set?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for the daemon choice, as [`flex_client_reachable`] is for the
+/// Flex client. The connection choice is the opt-in: nothing selects it for the operator.
+pub fn icom_lan_reachable(rig_model: u32, rig_conn: &str, host: &str) -> bool {
+    ICOM_LAN_RIGS.contains(&rig_model)
+        && rig_conn_is_icom_lan(rig_conn)
+        && host.trim().parse::<std::net::Ipv4Addr>().is_ok()
+}
+
 impl Settings {
     /// Is the RECEIVE dial Doppler's to correct?
     ///
@@ -1670,6 +1704,20 @@ pub struct Settings {
     /// per-radio truth is `RadioProfile::flex_native_cat` and this is the active radio's mirror.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// The radio's own address for Nexus's Icom network client (the "Icom network (LAN / Wi-Fi)"
+    /// Connection choice, Beta): the radio's "IP Address (LAN)". IPv4. The per-radio truth is
+    /// `RadioProfile::icom_lan_host` and this is the active radio's mirror. The network user's
+    /// password is never in settings: it lives in the OS keychain, one entry per radio profile.
+    #[serde(default)]
+    pub icom_lan_host: String,
+    /// The network user the radio was set up with, for the Icom network client. Not secret, but
+    /// never logged. Per-radio, as above.
+    #[serde(default)]
+    pub icom_lan_user: String,
+    /// The radio's control port (UDP) for the Icom network client: 50001 unless the operator moved
+    /// it on the radio. Per-radio, as above.
+    #[serde(default = "default_icom_lan_port")]
+    pub icom_lan_port: u16,
 
     // --- multi-radio (dual-radio) ---
     /// Configured radios. EMPTY in older settings files → migrated to a single profile 0 mirroring
@@ -3538,6 +3586,14 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_cat`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// THIS radio's address, network user and control port for the Icom network client (see
+    /// [`Settings::icom_lan_host`]). Per-radio, as above. Its password is in the OS keychain.
+    #[serde(default)]
+    pub icom_lan_host: String,
+    #[serde(default)]
+    pub icom_lan_user: String,
+    #[serde(default = "default_icom_lan_port")]
+    pub icom_lan_port: u16,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -3634,6 +3690,11 @@ pub struct RadioProfilePatch {
     /// sends it, and a payload without it must fail loudly rather than quietly turn the opt-in
     /// off on every save.
     pub flex_native_cat: bool,
+    /// See `RadioProfile::icom_lan_host`. No serde default, for the reason above: a save that
+    /// lost the address would leave the radio unreachable with nothing to say why.
+    pub icom_lan_host: String,
+    pub icom_lan_user: String,
+    pub icom_lan_port: u16,
 }
 
 impl Settings {
@@ -3695,6 +3756,9 @@ impl RadioProfilePatch {
         }
         p.flex_native_audio = self.flex_native_audio;
         p.flex_native_cat = self.flex_native_cat;
+        p.icom_lan_host = self.icom_lan_host;
+        p.icom_lan_user = self.icom_lan_user;
+        p.icom_lan_port = self.icom_lan_port;
     }
 }
 
@@ -3807,6 +3871,9 @@ impl Default for RadioProfile {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: ICOM_LAN_DEFAULT_PORT,
         }
     }
 }
@@ -4331,6 +4398,9 @@ impl Default for Settings {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: ICOM_LAN_DEFAULT_PORT,
             radios: Vec::new(), // migrated to a single profile on load()
             active_radio: 0,
             radio_pegged: false,
@@ -4644,6 +4714,9 @@ impl Settings {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
+            icom_lan_host: self.icom_lan_host.clone(),
+            icom_lan_user: self.icom_lan_user.clone(),
+            icom_lan_port: self.icom_lan_port,
         }
     }
 
@@ -5022,6 +5095,9 @@ impl Settings {
         self.flex_native_pan = p.flex_native_pan;
         self.flex_native_audio = p.flex_native_audio;
         self.flex_native_cat = p.flex_native_cat;
+        self.icom_lan_host = p.icom_lan_host;
+        self.icom_lan_user = p.icom_lan_user;
+        self.icom_lan_port = p.icom_lan_port;
     }
 
     /// Copy the flat mirror back INTO the active profile — so edits made through today's flat rig/
@@ -5064,6 +5140,9 @@ impl Settings {
             flex_native_pan,
             flex_native_audio,
             flex_native_cat,
+            icom_lan_host,
+            icom_lan_user,
+            icom_lan_port,
         ) = (
             self.ptt_method.clone(),
             self.rig_model,
@@ -5097,6 +5176,9 @@ impl Settings {
             self.flex_native_pan,
             self.flex_native_audio,
             self.flex_native_cat,
+            self.icom_lan_host.clone(),
+            self.icom_lan_user.clone(),
+            self.icom_lan_port,
         );
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == active) {
             p.ptt_method = ptt_method;
@@ -5131,6 +5213,9 @@ impl Settings {
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
             p.flex_native_cat = flex_native_cat;
+            p.icom_lan_host = icom_lan_host;
+            p.icom_lan_user = icom_lan_user;
+            p.icom_lan_port = icom_lan_port;
         }
     }
 
@@ -6054,6 +6139,9 @@ mod tests {
             )])),
             flex_native_audio: true,
             flex_native_cat: true,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -6391,6 +6479,9 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
         })
         .expect("patch serializes");
         let patch_keys: Vec<&str> = patch
@@ -6541,6 +6632,9 @@ mod tests {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
             // Added by this branch. `yaesu_rf_scope` has a UI counterpart (`yaesuRfScope?`);
             // `yaesu_fix_starts` deliberately does NOT — its own doc says nothing writes it yet
             // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
@@ -6608,6 +6702,7 @@ mod tests {
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false, "flexNativeCat": false,
+            "icomLanHost": "", "icomLanUser": "", "icomLanPort": 50001,
             "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
         let patch: RadioProfilePatch =
@@ -6796,6 +6891,9 @@ mod tests {
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            icom_lan_host: p.icom_lan_host.clone(),
+            icom_lan_user: p.icom_lan_user.clone(),
+            icom_lan_port: p.icom_lan_port,
         }
     }
 

@@ -1682,6 +1682,13 @@ impl CivDaemon {
         self.engine.is_alive()
     }
 
+    /// The engine's own handle, for reads the rigctld protocol does not carry (the radio's menu
+    /// items the network connection reads at connect).
+    #[cfg(feature = "device")]
+    pub(crate) fn engine_handle(&self) -> super::engine::CivHandle {
+        self.engine.handle()
+    }
+
     /// Can a command sent through this daemon NAME THE SUB (`L Sub …`) — i.e. is this a radio
     /// the capability table offers a Sub for, which the daemon then addresses per receiver
     /// (band-directed on an IC-7610, a held selection on an IC-9700). The radio loop reports it

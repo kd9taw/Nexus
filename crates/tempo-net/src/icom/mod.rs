@@ -2,8 +2,8 @@
 //! the capabilities reply, per-socket sequence tracking and the session, for the six Icoms with a
 //! built-in network server (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2).
 //!
-//! **The app does not use it yet.** A later change builds the daemon that runs a session for a
-//! radio and carries Nexus's native CI-V engine over it. This module knows nothing of the app.
+//! Nexus's Icom network daemon runs one session per radio on it and carries the native CI-V
+//! engine over the session's CI-V stream. This module knows nothing of the app.
 //!
 //! # Layers
 //!
@@ -15,7 +15,7 @@
 //! | [`session`] | one session, from the first probe to the last disconnect, with no I/O of its own |
 //! | [`conf`] | the session's typed configuration; the password as a [`conf::Secret`] |
 //! | [`reconnect`] | what to do when a session ends: the retry ladder |
-//! | `sim` (tests only) | a simulated radio, a fake-clock world, and the radio on loopback sockets |
+//! | `sim` (tests only; other crates' tests through the `icom-sim` feature) | a simulated radio, a fake-clock world, and the radio on loopback sockets |
 //!
 //! # Nothing here transmits
 //!
@@ -51,8 +51,8 @@ pub mod seq;
 pub mod session;
 pub mod wire;
 
-#[cfg(test)]
-mod sim;
+#[cfg(any(test, feature = "icom-sim"))]
+pub mod sim;
 
 /// The upstream repository.
 pub const UPSTREAM: &str = "https://github.com/Hamlib/Hamlib";
@@ -271,7 +271,8 @@ pub const PROVENANCE: &[Ported] = &[
         references: &[],
         tests: &[],
         differences: "a pure radio value with a thin socket wrapper; a fake-clock world; a login \
-                      it can refuse; a responder the test supplies; no spectrum or audio script",
+                      it can refuse; a responder the test supplies, and unprompted CI-V frames; \
+                      no spectrum or audio script",
         blobs: &[
             (
                 "test/icom_network_mock.c",

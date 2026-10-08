@@ -2451,6 +2451,11 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's address, network user and control port for the Icom network connection (Beta;
+   *  per-radio, as above). Its password is never here: the OS keychain holds it. */
+  icomLanHost: string
+  icomLanUser: string
+  icomLanPort: number
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio

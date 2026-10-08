@@ -859,6 +859,9 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
     flexNativeCat: s.flexNativeCat ?? false,
+    icomLanHost: s.icomLanHost ?? '',
+    icomLanUser: s.icomLanUser ?? '',
+    icomLanPort: s.icomLanPort ?? 50001,
   }
 }
 

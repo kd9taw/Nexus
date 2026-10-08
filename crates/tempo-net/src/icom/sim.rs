@@ -22,7 +22,9 @@
 //! Deliberate differences: the radio is a pure value, and the sockets are a thin wrapper around
 //! it on a thread, where upstream's mock is a thread around three sockets; the fake-clock world
 //! is Nexus's own; the radio can refuse the login (to show a refused login gives nothing back);
-//! the CI-V replies can come from a responder the test supplies; its own pings do not take a
+//! the CI-V replies can come from a responder the test supplies, and it can send CI-V frames
+//! unprompted from a source the test supplies (a front-panel change, a scope sweep); its own
+//! pings do not take a
 //! number from the CI-V sequence, and a stream close is told apart from an open; the canned
 //! frames, identities, addresses and credentials are made-up values; the spectrum frame, the
 //! audio script and the withheld audio packet are not taken (no audio at this stage).
@@ -70,34 +72,34 @@ use super::wire::{
 };
 
 /// The id the simulated radio sends under.
-pub(crate) const RADIO_ID: u32 = 0xA1A2_A3A4;
+pub const RADIO_ID: u32 = 0xA1A2_A3A4;
 /// Every rate the protocol can express, which is what an IC-7610 advertises.
-pub(crate) const ALL_RATES: u16 = 0x8b01;
+pub const ALL_RATES: u16 = 0x8b01;
 /// The canned reply to a CI-V command: a frequency read's answer.
-pub(crate) const FREQ_REPLY: [u8; 11] = [
+pub const FREQ_REPLY: [u8; 11] = [
     0xfe, 0xfe, 0xe0, 0x98, 0x03, 0x00, 0x60, 0x06, 0x14, 0x00, 0xfd,
 ];
 /// A frequency read, the command the tests send.
-pub(crate) const READ_FREQ: [u8; 6] = [0xfe, 0xfe, 0x98, 0xe0, 0x03, 0xfd];
+pub const READ_FREQ: [u8; 6] = [0xfe, 0xfe, 0x98, 0xe0, 0x03, 0xfd];
 /// The leftover a radio can flush when a stream opens: a NAK.
-pub(crate) const STALE_NAK: [u8; 6] = [0xfe, 0xfe, 0xe0, 0x98, 0xfa, 0xfd];
+pub const STALE_NAK: [u8; 6] = [0xfe, 0xfe, 0xe0, 0x98, 0xfa, 0xfd];
 /// The token the radio grants.
-pub(crate) const TOKEN: u32 = 0x9999;
+pub const TOKEN: u32 = 0x9999;
 /// The test credentials: obvious fakes.
-pub(crate) const USER: &str = "test-user";
-pub(crate) const PASSWORD: &str = "not-a-password";
+pub const USER: &str = "test-user";
+pub const PASSWORD: &str = "not-a-password";
 
 /// One radio the simulated server advertises.
 #[derive(Debug, Clone)]
-pub(crate) struct Entry {
-    pub(crate) name: String,
-    pub(crate) civ: u8,
-    pub(crate) rx: u16,
-    pub(crate) tx: u16,
+pub struct Entry {
+    pub name: String,
+    pub civ: u8,
+    pub rx: u16,
+    pub tx: u16,
 }
 
 impl Entry {
-    pub(crate) fn new(name: &str, civ: u8) -> Entry {
+    pub fn new(name: &str, civ: u8) -> Entry {
         Entry {
             name: name.to_string(),
             civ,
@@ -108,67 +110,71 @@ impl Entry {
 }
 
 type Responder = Box<dyn FnMut(&[u8]) -> Option<Vec<u8>> + Send>;
+type Source = Box<dyn FnMut() -> Vec<Vec<u8>> + Send>;
 
 /// The simulated radio. Behaviours are public fields a test sets; records are public fields a
 /// test reads.
-pub(crate) struct SimRadio {
+pub struct SimRadio {
     // ── behaviours ──
-    pub(crate) radios: Vec<Entry>,
+    pub radios: Vec<Entry>,
     /// The CI-V and audio ports the status reply names.
-    pub(crate) civ_port: u16,
-    pub(crate) audio_port: u16,
-    pub(crate) no_audio_port: bool,
+    pub civ_port: u16,
+    pub audio_port: u16,
+    pub no_audio_port: bool,
     /// Answer the connection request with this error (0 = success).
-    pub(crate) status_error: u32,
+    pub status_error: u32,
     /// Answer the login with this error (0 = accepted).
-    pub(crate) login_error: u32,
+    pub login_error: u32,
     /// Number the control replies and idles as tracked packets, keep them, answer retransmits.
-    pub(crate) ctrl_tracked: bool,
+    pub ctrl_tracked: bool,
     /// Ignore a login, token or connection request whose sequence was already received.
-    pub(crate) ctrl_ignore_resends: bool,
+    pub ctrl_ignore_resends: bool,
     /// Lose this many login replies (each still takes its number).
-    pub(crate) drop_login_replies: u32,
+    pub drop_login_replies: u32,
     /// Lose this many capabilities replies.
-    pub(crate) drop_capabilities_replies: u32,
+    pub drop_capabilities_replies: u32,
     /// Idles on the CI-V socket this often, numbered with the CI-V frames (0 = none).
-    pub(crate) civ_idle_ms: u64,
-    pub(crate) civ_duplicate_reply: bool,
+    pub civ_idle_ms: u64,
+    pub civ_duplicate_reply: bool,
     /// Send nothing on the CI-V socket while the control socket carries on.
-    pub(crate) civ_silent: bool,
-    pub(crate) civ_no_ping_reply: bool,
+    pub civ_silent: bool,
+    pub civ_no_ping_reply: bool,
     /// The CI-V port refuses packets.
-    pub(crate) refuse_civ: bool,
+    pub refuse_civ: bool,
     /// Answer nothing at all.
-    pub(crate) go_silent: bool,
+    pub go_silent: bool,
     /// Send an unsolicited disconnect, once.
-    pub(crate) announce_disconnect: bool,
+    pub announce_disconnect: bool,
     /// Ask for a retransmit of this CI-V sequence, once.
-    pub(crate) ask_retransmit: Option<u16>,
+    pub ask_retransmit: Option<u16>,
     /// Ping the client on the CI-V socket, once.
-    pub(crate) ask_ping: bool,
+    pub ask_ping: bool,
     /// Flush a leftover NAK when the CI-V stream opens.
-    pub(crate) stale_nak: bool,
+    pub stale_nak: bool,
     /// Skip this many CI-V sequence numbers before the next reply, once.
-    pub(crate) civ_sequence_jump: u16,
+    pub civ_sequence_jump: u16,
     /// Reply with a frame of this many bytes (0 = the canned reply).
-    pub(crate) civ_reply_length: usize,
+    pub civ_reply_length: usize,
     /// Answers CI-V commands when set; `None` from it sends no reply.
-    pub(crate) responder: Option<Responder>,
+    pub responder: Option<Responder>,
+    /// CI-V frames the radio sends without being asked, as a radio does when the operator turns
+    /// its dial or while its scope streams: asked every tick once the CI-V stream is open.
+    pub unprompted: Option<Source>,
     // ── records ──
-    pub(crate) received: Vec<(Role, Vec<u8>)>,
-    pub(crate) connection_info: Option<Vec<u8>>,
-    pub(crate) logins: Vec<Vec<u8>>,
-    pub(crate) token_removes: u32,
-    pub(crate) ctrl_disconnects: u32,
-    pub(crate) civ_disconnects: u32,
-    pub(crate) audio_disconnects: u32,
-    pub(crate) civ_closes: u32,
-    pub(crate) civ_commands: Vec<Vec<u8>>,
-    pub(crate) ctrl_retransmit_requests: u32,
-    pub(crate) civ_retransmit_requests: u32,
-    pub(crate) saw_ping_reply: bool,
+    pub received: Vec<(Role, Vec<u8>)>,
+    pub connection_info: Option<Vec<u8>>,
+    pub logins: Vec<Vec<u8>>,
+    pub token_removes: u32,
+    pub ctrl_disconnects: u32,
+    pub civ_disconnects: u32,
+    pub audio_disconnects: u32,
+    pub civ_closes: u32,
+    pub civ_commands: Vec<Vec<u8>>,
+    pub ctrl_retransmit_requests: u32,
+    pub civ_retransmit_requests: u32,
+    pub saw_ping_reply: bool,
     /// Datagrams carrying the sequence a retransmit was asked for.
-    pub(crate) retransmit_replies: u32,
+    pub retransmit_replies: u32,
     // ── state ──
     ctrl_seq: u16,
     civ_seq: u16,
@@ -183,9 +189,15 @@ pub(crate) struct SimRadio {
     civ_client: Option<u32>,
 }
 
+impl Default for SimRadio {
+    fn default() -> SimRadio {
+        SimRadio::new()
+    }
+}
+
 impl SimRadio {
     /// One IC-7610 offering every rate, as real hardware reports.
-    pub(crate) fn new() -> SimRadio {
+    pub fn new() -> SimRadio {
         SimRadio {
             radios: vec![Entry::new("IC-7610", 0x98)],
             civ_port: wire::PORT_CIV,
@@ -210,6 +222,7 @@ impl SimRadio {
             civ_sequence_jump: 0,
             civ_reply_length: 0,
             responder: None,
+            unprompted: None,
             received: Vec::new(),
             connection_info: None,
             logins: Vec::new(),
@@ -263,7 +276,7 @@ impl SimRadio {
     }
 
     /// A datagram from the client on the socket `role`; returns what the radio sends back.
-    pub(crate) fn receive(&mut self, role: Role, bytes: &[u8], _now: u64) -> Vec<(Role, Vec<u8>)> {
+    pub fn receive(&mut self, role: Role, bytes: &[u8], _now: u64) -> Vec<(Role, Vec<u8>)> {
         self.received.push((role, bytes.to_vec()));
         let mut out = Vec::new();
         if self.go_silent || (role == Role::Civ && (self.civ_silent || self.refuse_civ)) {
@@ -476,7 +489,7 @@ impl SimRadio {
     }
 
     /// What the radio sends unprompted by now.
-    pub(crate) fn tick(&mut self, now: u64) -> Vec<(Role, Vec<u8>)> {
+    pub fn tick(&mut self, now: u64) -> Vec<(Role, Vec<u8>)> {
         let mut out = Vec::new();
         if self.go_silent {
             return out;
@@ -534,13 +547,22 @@ impl SimRadio {
                 self.ping_seq = seq.wrapping_add(1);
                 out.push((Role::Civ, wire::ping(false, 0x1234, seq, Self::ids(client))));
             }
+            let frames = self
+                .unprompted
+                .as_mut()
+                .map(|next| next())
+                .unwrap_or_default();
+            for frame in frames {
+                let p = self.civ_packet(&frame, 0xc1, client);
+                out.push((Role::Civ, p));
+            }
         }
         out
     }
 }
 
 /// The test configuration: a documentation address, made-up credentials.
-pub(crate) fn config(model: Model) -> Config {
+pub fn config(model: Model) -> Config {
     let login = Login {
         user: User::new(USER).expect("a user name"),
         password: Secret::new(PASSWORD.into()).expect("a password"),
@@ -549,7 +571,7 @@ pub(crate) fn config(model: Model) -> Config {
 }
 
 /// The local addresses the pure world's session is given: loopback, made-up ports.
-pub(crate) fn locals() -> Locals {
+pub fn locals() -> Locals {
     let at = |port| SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
     Locals {
         control: at(51001),
@@ -560,24 +582,24 @@ pub(crate) fn locals() -> Locals {
 
 /// A session and a radio on one fake clock. Every datagram arrives at once; time moves in 5 ms
 /// steps, each step ticking the radio and polling the session.
-pub(crate) struct World {
-    pub(crate) session: Session,
-    pub(crate) radio: SimRadio,
-    pub(crate) now: u64,
+pub struct World {
+    pub session: Session,
+    pub radio: SimRadio,
+    pub now: u64,
     /// Every datagram the session sent, in order.
-    pub(crate) sent: Vec<Datagram>,
+    pub sent: Vec<Datagram>,
     /// When each one went.
-    pub(crate) sent_at: Vec<u64>,
-    pub(crate) delivered: Vec<Vec<u8>>,
-    pub(crate) events: Vec<Event>,
-    pub(crate) redirects: Vec<(Role, u16)>,
+    pub sent_at: Vec<u64>,
+    pub delivered: Vec<Vec<u8>>,
+    pub events: Vec<Event>,
+    pub redirects: Vec<(Role, u16)>,
     /// Every frame the test handed to the session.
-    pub(crate) handed: Vec<Vec<u8>>,
+    pub handed: Vec<Vec<u8>>,
     /// When the session last had a datagram on each socket.
-    pub(crate) last_heard: [Option<u64>; 3],
+    pub last_heard: [Option<u64>; 3],
 }
 
-pub(crate) const STEP_MS: u64 = 5;
+pub const STEP_MS: u64 = 5;
 
 /// The most actions one [`World::perform`] carries out. The largest real exchange (the radio
 /// asking for every stored packet on both sockets, and answering what comes back) is a few
@@ -585,7 +607,7 @@ pub(crate) const STEP_MS: u64 = 5;
 const PERFORM_BUDGET: u32 = 100_000;
 
 /// Well-formed packets of the kinds the radio sends.
-pub(crate) fn valid_from_radio() -> Vec<(Role, Vec<u8>)> {
+pub fn valid_from_radio() -> Vec<(Role, Vec<u8>)> {
     let ids = Ids {
         sender: RADIO_ID,
         receiver: 0,
@@ -611,7 +633,7 @@ pub(crate) fn valid_from_radio() -> Vec<(Role, Vec<u8>)> {
 }
 
 impl World {
-    pub(crate) fn start(radio: SimRadio, config: Config) -> World {
+    pub fn start(radio: SimRadio, config: Config) -> World {
         let (session, actions) = Session::start(config, locals(), 0);
         let mut w = World {
             session,
@@ -638,7 +660,7 @@ impl World {
     /// Carries out the session's actions, and the radio's answers, until nothing is left. An
     /// exchange that never settles (each side answering the other for ever, with no time
     /// passing) fails the test rather than growing the queue until the process runs out of memory.
-    pub(crate) fn perform(&mut self, actions: Vec<Action>) {
+    pub fn perform(&mut self, actions: Vec<Action>) {
         let mut queue: VecDeque<Action> = actions.into();
         let mut budget = PERFORM_BUDGET;
         while let Some(action) = queue.pop_front() {
@@ -671,13 +693,13 @@ impl World {
     }
 
     /// A datagram straight into the session, as if from the radio.
-    pub(crate) fn inject(&mut self, role: Role, bytes: &[u8]) {
+    pub fn inject(&mut self, role: Role, bytes: &[u8]) {
         let actions = self.pass_to_session(role, bytes);
         self.perform(actions);
     }
 
     /// Advances the clock by `ms`, in steps.
-    pub(crate) fn step(&mut self, ms: u64) {
+    pub fn step(&mut self, ms: u64) {
         let end = self.now + ms;
         while self.now < end {
             self.now = (self.now + STEP_MS).min(end);
@@ -691,14 +713,14 @@ impl World {
     }
 
     /// Moves the clock by `ms` at once, with nothing in between, then polls once.
-    pub(crate) fn jump(&mut self, ms: u64) {
+    pub fn jump(&mut self, ms: u64) {
         self.now += ms;
         let actions = self.session.poll(self.now);
         self.perform(actions);
     }
 
     /// Steps until `done` holds, for at most `max_ms`. Returns whether it held.
-    pub(crate) fn run_until(&mut self, max_ms: u64, done: impl Fn(&World) -> bool) -> bool {
+    pub fn run_until(&mut self, max_ms: u64, done: impl Fn(&World) -> bool) -> bool {
         let end = self.now + max_ms;
         while !done(self) {
             if self.now >= end {
@@ -709,21 +731,21 @@ impl World {
         true
     }
 
-    pub(crate) fn connected(&self) -> bool {
+    pub fn connected(&self) -> bool {
         self.events.iter().any(|e| matches!(e, Event::Connected(_)))
     }
 
-    pub(crate) fn closed(&self) -> bool {
+    pub fn closed(&self) -> bool {
         self.events.contains(&Event::Closed)
     }
 
     /// Runs the handshake; true once connected.
-    pub(crate) fn connect(&mut self) -> bool {
+    pub fn connect(&mut self) -> bool {
         self.run_until(15_000, World::connected)
     }
 
     /// Hands the session a frame.
-    pub(crate) fn civ(&mut self, frame: &[u8]) -> Result<(), CivError> {
+    pub fn civ(&mut self, frame: &[u8]) -> Result<(), CivError> {
         let actions = self.session.send_civ(frame, self.now)?;
         self.handed.push(frame.to_vec());
         self.perform(actions);
@@ -731,7 +753,7 @@ impl World {
     }
 
     /// A frequency read and the frame delivered for it, if one comes within a second.
-    pub(crate) fn roundtrip(&mut self) -> Option<Vec<u8>> {
+    pub fn roundtrip(&mut self) -> Option<Vec<u8>> {
         let before = self.delivered.len();
         self.civ(&READ_FREQ).ok()?;
         self.run_until(1000, |w| w.delivered.len() > before);
@@ -739,14 +761,14 @@ impl World {
     }
 
     /// Closes the session and runs until it says it has closed.
-    pub(crate) fn close(&mut self) -> bool {
+    pub fn close(&mut self) -> bool {
         let actions = self.session.close(self.now);
         self.perform(actions);
         self.run_until(2000, World::closed)
     }
 
     /// The loss the session reported, if any.
-    pub(crate) fn loss(&self) -> Option<super::session::Loss> {
+    pub fn loss(&self) -> Option<super::session::Loss> {
         self.events.iter().find_map(|e| match e {
             Event::Lost(loss) => Some(*loss),
             _ => None,
@@ -754,7 +776,7 @@ impl World {
     }
 
     /// Everything the radio received on `role` that decodes.
-    pub(crate) fn radio_saw(&self, role: Role) -> Vec<Packet> {
+    pub fn radio_saw(&self, role: Role) -> Vec<Packet> {
         self.radio
             .received
             .iter()
@@ -763,7 +785,7 @@ impl World {
             .collect()
     }
 
-    pub(crate) fn state(&self) -> State {
+    pub fn state(&self) -> State {
         self.session.state()
     }
 }
@@ -776,15 +798,15 @@ fn millis(start: Instant) -> u64 {
 
 /// The simulated radio on three UDP sockets bound to ephemeral loopback ports, on its own
 /// thread. Dropping it stops the thread.
-pub(crate) struct SocketRadio {
-    pub(crate) radio: Arc<Mutex<SimRadio>>,
-    pub(crate) control_port: u16,
+pub struct SocketRadio {
+    pub radio: Arc<Mutex<SimRadio>>,
+    pub control_port: u16,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl SocketRadio {
-    pub(crate) fn start(mut radio: SimRadio) -> SocketRadio {
+    pub fn start(mut radio: SimRadio) -> SocketRadio {
         let bind = || {
             let s = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("an ephemeral port");
             s.set_nonblocking(true).expect("non-blocking");
@@ -842,7 +864,7 @@ impl SocketRadio {
         }
     }
 
-    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut SimRadio) -> T) -> T {
+    pub fn with<T>(&self, f: impl FnOnce(&mut SimRadio) -> T) -> T {
         f(&mut self.radio.lock().expect("the radio"))
     }
 }
@@ -857,18 +879,18 @@ impl Drop for SocketRadio {
 }
 
 /// A session on three real UDP sockets, driven from the test's thread.
-pub(crate) struct SocketClient {
-    pub(crate) session: Session,
+pub struct SocketClient {
+    pub session: Session,
     sockets: [UdpSocket; 3],
     start: Instant,
-    pub(crate) delivered: Vec<Vec<u8>>,
-    pub(crate) events: Vec<Event>,
+    pub delivered: Vec<Vec<u8>>,
+    pub events: Vec<Event>,
     /// Errors the sockets reported, as the session was told them.
-    pub(crate) errors: Vec<(Role, SocketError)>,
+    pub errors: Vec<(Role, SocketError)>,
 }
 
 impl SocketClient {
-    pub(crate) fn connect(radio: &SocketRadio, config: Config) -> io::Result<SocketClient> {
+    pub fn connect(radio: &SocketRadio, config: Config) -> io::Result<SocketClient> {
         let open = || -> io::Result<UdpSocket> {
             let s = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
             s.connect((Ipv4Addr::LOCALHOST, radio.control_port))?;
@@ -933,7 +955,7 @@ impl SocketClient {
     }
 
     /// Reads whatever has arrived, then polls.
-    pub(crate) fn pump(&mut self) {
+    pub fn pump(&mut self) {
         let mut buf = [0u8; 2048];
         for role in [Role::Control, Role::Civ, Role::Audio] {
             loop {
@@ -957,11 +979,7 @@ impl SocketClient {
     }
 
     /// Pumps until `done` holds, for at most `max`.
-    pub(crate) fn run_until(
-        &mut self,
-        max: Duration,
-        done: impl Fn(&SocketClient) -> bool,
-    ) -> bool {
+    pub fn run_until(&mut self, max: Duration, done: impl Fn(&SocketClient) -> bool) -> bool {
         let end = Instant::now() + max;
         while !done(self) {
             if Instant::now() >= end {
@@ -973,14 +991,14 @@ impl SocketClient {
         true
     }
 
-    pub(crate) fn send_civ(&mut self, frame: &[u8]) -> Result<(), CivError> {
+    pub fn send_civ(&mut self, frame: &[u8]) -> Result<(), CivError> {
         let now = self.now();
         let actions = self.session.send_civ(frame, now)?;
         self.perform(actions);
         Ok(())
     }
 
-    pub(crate) fn close(&mut self) -> bool {
+    pub fn close(&mut self) -> bool {
         let now = self.now();
         let actions = self.session.close(now);
         self.perform(actions);
