@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -25,6 +25,14 @@ import {
   resolveDomainValue,
   type DomainValue,
 } from '../features/contestDomains'
+import {
+  countyLineDomain,
+  isCountyLine,
+  lastCountyPart,
+  readCountyLine,
+  resolveCountyLine,
+  withLastCountyPart,
+} from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
@@ -78,8 +86,18 @@ function fdRcvd(row: FieldDayQso, key: string): string {
 
 /** Why this slot is not loggable yet — Field Day's own two sentences for Field Day's
  *  two slots, and a generic pair naming the field for anything else. */
-function fdVerdict(spec: ContestFieldSpec, raw: string): string {
+function fdVerdict(spec: ContestFieldSpec, raw: string, line?: string): string {
   const v = raw.trim()
+  // A COUNTY LINE says which part stops it, because one bad part refuses the whole line.
+  if (line && isCountyLine(v)) {
+    const read = readCountyLine(line, v)
+    if (!read.ok) {
+      if (read.why === 'unknown') return t('logEntry.countyLine.unknown', { value: read.part })
+      if (read.why === 'repeated') return t('logEntry.countyLine.repeated', { value: read.part })
+      if (read.why === 'tooMany') return t('logEntry.countyLine.tooMany', { max: read.max })
+      return t('logEntry.countyLine.incomplete', { max: read.max })
+    }
+  }
   // ⚠️ Field Day's two sentences, byte for byte, INCLUDING the em-dash placeholder a
   // blank Section has always shown. "Section \"—\" isn't a known ARRL/RAC section" reads
   // oddly and is what shipped; a strip that started saying something better here would
@@ -114,15 +132,20 @@ function fdVerdict(spec: ContestFieldSpec, raw: string): string {
  *  nothing and the box keeps exactly what was typed. It is ONE function because the
  *  verdict below, the suggestion list and the value that is logged must agree — a strip
  *  that shows a value good and logs a different one is the screen lying about what was
- *  written. */
-function fdSlotValue(spec: ContestFieldSpec, raw: string): string {
+ *  written.
+ *
+ *  `line` is the county list this box takes a COUNTY LINE from (`features/countyLine`), when it
+ *  takes one: a box holding `Cook/DuPage` then means `COOK/DUPG`, part by part. */
+function fdSlotValue(spec: ContestFieldSpec, raw: string, line?: string): string {
   const v = raw.trim().toUpperCase()
+  if (line && isCountyLine(v)) return resolveCountyLine(line, v)
   return resolveDomainValue(spec.domains, v) ?? v
 }
 
-function fdFieldOk(spec: ContestFieldSpec, raw: string): boolean {
-  const v = fdSlotValue(spec, raw)
+function fdFieldOk(spec: ContestFieldSpec, raw: string, line?: string): boolean {
+  const v = fdSlotValue(spec, raw, line)
   if (v === '') return !spec.required
+  if (line && isCountyLine(v)) return readCountyLine(line, v).ok
   if (spec.kind === 'enum') return inDomain(spec.domain, v)
   if (spec.kind === 'number' && spec.min != null && spec.max != null) {
     return /^\d{1,3}$/.test(v) && Number(v) >= spec.min && Number(v) <= spec.max
@@ -542,13 +565,22 @@ export function LogEntry({
     values: [],
   })
   const closeFdHits = () => setFdHits((h) => (h.key === '' ? h : { key: '', values: [] }))
+  /** ⭐ The county list a box takes a COUNTY LINE from (`COOK/DUPG`, one contact per county),
+   *  or `undefined` for a box that takes one value per contact — which is every box but a
+   *  county box whose sponsor counts a county-line contact once per county.
+   *
+   *  ⚠️ Never on the satellite strip. A pass logs through `contestLogSatellite`, which takes
+   *  its band off the bird and writes one row; the county line's one-call, many-row write is
+   *  the terrestrial command's. That strip keeps one county per contact, exactly as before. */
+  const fdLineDomain = (f: ContestFieldSpec): string | undefined =>
+    exchange === 'satellite' ? undefined : countyLineDomain(f.domains)
   /** Commit a box: a typed NAME becomes the code that goes on the air, and the list
    *  closes. Called where the operator LEAVES the box (space, tab, blur) rather than on
    *  every keystroke — resolving "CO" to Coles while somebody is still typing "COOK"
    *  would fight the fingers. */
   const commitFdField = (f: ContestFieldSpec) => {
     const raw = fdValue(f)
-    const code = fdSlotValue(f, raw)
+    const code = fdSlotValue(f, raw, fdLineDomain(f))
     if (code !== raw.trim().toUpperCase()) setFdField(f.key, code)
     closeFdHits()
   }
@@ -1232,7 +1264,7 @@ export function LogEntry({
   // Field Day is the same two slots and the same two tests: CLASS non-blank, SECTION a member of
   // `fd_sections`. `FD_SECTION_CODES` above is that domain's value set, and `contestDomains.ts`
   // is where the strip and the board now read it from.
-  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f)))
+  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f), fdLineDomain(f)))
   const fdExchangeOk = fdBadField === undefined
 
   // GRID GATE. A blank grid is normal and logs fine — most HF contacts have none.
@@ -1319,12 +1351,56 @@ export function LogEntry({
       const ex = fdReceives.map(
         // The RESOLVED value, so a county typed by name reaches the log as its code —
         // the same function the verdict above used to admit it.
-        (f) => [f.key, fdSlotValue(f, fdValue(f))] as [string, string],
+        (f) => [f.key, fdSlotValue(f, fdValue(f), fdLineDomain(f))] as [string, string],
       )
       const fmode = fdMode ?? 'PH'
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
       const fsub = fmode === 'DIG' ? fdSubmode : undefined
+      // ⭐ A COUNTY LINE IS ONE ACTION AND SEVERAL CONTACTS: the same vector once per county,
+      // with that county in the line's box, in ONE engine call — so every row carries one
+      // time, band and mode, and each is dupe-checked on its own. The gate above has already
+      // refused a line with a part that is not a county.
+      const lineSlot = fdReceives.find((f) => fdLineDomain(f) && isCountyLine(fdValue(f)))
+      const lineRead = lineSlot ? readCountyLine(fdLineDomain(lineSlot)!, fdValue(lineSlot)) : undefined
+      if (lineSlot && lineRead?.ok) {
+        const exchangeWith = (county: string) =>
+          ex.map(([k, v]) => [k, k === lineSlot.key ? county : v] as [string, string])
+        const r = await withErrorToast(
+          () => contestLogManualRows(call, lineRead.counties.map(exchangeWith), fmode, fsub),
+          t('logEntry.fd.failed'),
+        )
+        if (r) {
+          const logged = lineRead.counties.filter((_, i) => r[i])
+          const dupes = lineRead.counties.filter((_, i) => !r[i])
+          if (logged.length > 0) {
+            pushToast(
+              t('logEntry.countyLine.logged', {
+                call,
+                exchange: exchangeWith(logged.join('/'))
+                  .map(([, v]) => v)
+                  .filter((v) => v !== '')
+                  .join(' '),
+                mode: fmode,
+                count: logged.length,
+              }),
+              'success',
+            )
+          }
+          // Which county was the dupe, by name — the engine refused it exactly as it refuses
+          // a single contact, and "a dupe" alone would not say which of the counties it was.
+          if (dupes.length > 0) {
+            pushToast(
+              t('logEntry.countyLine.dupe', { call, counties: dupes.join(', '), count: dupes.length }),
+              'error',
+            )
+          }
+          // The contact is in the log once any county entered it; a line that was all dupes
+          // leaves the entry on screen, as a refused single contact does.
+          if (logged.length > 0) reset()
+        }
+        return
+      }
       // ⭐ THE SATELLITE EXCHANGE TAKES ITS BAND OFF THE PASS, NOT THE DIAL. The
       // ordinary command stamps the band the radio is on at the moment you type, which
       // for a bird is whatever HF run the club went back to after LOS. `exchange` is
@@ -1702,8 +1778,16 @@ export function LogEntry({
                 onChange={(e) => {
                   setFdField(f.key, e.target.value)
                   // The list is offered from every universe this slot draws on, which for
-                  // a QSO party's one QTH box is counties AND states.
-                  setFdHits({ key: f.key, values: domainSuggestions(f.domains, e.target.value) })
+                  // a QSO party's one QTH box is counties AND states — and, inside a county
+                  // line, for the part being typed and from the county list alone.
+                  const line = fdLineDomain(f)
+                  setFdHits({
+                    key: f.key,
+                    values:
+                      line && isCountyLine(e.target.value)
+                        ? domainSuggestions([line], lastCountyPart(e.target.value))
+                        : domainSuggestions(f.domains, e.target.value),
+                  })
                 }}
                 onKeyDown={(e) => {
                   const next = fdReceives[i + 1]
@@ -1734,7 +1818,12 @@ export function LogEntry({
                         type="button"
                         onMouseDown={(e) => {
                           e.preventDefault() // pick before the input's onBlur closes the list
-                          setFdField(f.key, v.code)
+                          // Inside a county line the pick completes the part being typed.
+                          const line = fdLineDomain(f)
+                          setFdField(
+                            f.key,
+                            line && isCountyLine(fdValue(f)) ? withLastCountyPart(fdValue(f), v.code) : v.code,
+                          )
                           closeFdHits()
                         }}
                       >
@@ -1783,7 +1872,7 @@ export function LogEntry({
         <div className="le-fd-verdicts">
         {logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
-            {fdVerdict(fdBadField, fdValue(fdBadField))}
+            {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField))}
           </div>
         )}
         {fdOwnDupe && (

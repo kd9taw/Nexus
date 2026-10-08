@@ -27540,6 +27540,30 @@ async fn contest_log_manual(
     .await
 }
 
+/// ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois
+/// QSO Party counts once per county.
+///
+/// `rows` is one field vector per row, each shaped as [`contest_log_manual`]'s `fields`; the
+/// engine stamps every row with one time and one band and dupe-checks each on its own
+/// ([`Engine::contest_log_manual_rows`]). The answer is, per row, whether it entered the log:
+/// a dupe is a `false` here rather than an error, because the other counties of the same
+/// contact did log and the strip has to say which county it was. Err only when contest mode
+/// is off. Answers once the rows are in the journal on disk ([`journaled_command`]).
+#[tauri::command]
+async fn contest_log_manual_rows(
+    state: State<'_, SharedEngine>,
+    call: String,
+    rows: Vec<Vec<(String, String)>>,
+    mode: String,
+    submode: Option<String>,
+) -> Result<Vec<bool>, String> {
+    journaled_command(Arc::clone(&state), move |eng| {
+        let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        eng.contest_log_manual_rows(&call, &rows, &mode, sub)
+    })
+    .await
+}
+
 /// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites section's strip.
 ///
 /// Identical to [`contest_log_manual`] except for where the row's band and frequency
@@ -33625,6 +33649,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             clear_hunt_target,
             fd_log_manual,
             contest_log_manual,
+            contest_log_manual_rows,
             contest_log_satellite,
             contest_working,
             contest_entry_reset,
@@ -35471,6 +35496,37 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "get_scope_frame,"),
             "get_scope_frame is not registered — the scope's frame poll would fail at runtime"
+        );
+    }
+
+    /// A county line logs only if `contest_log_manual_rows` is REGISTERED: left out of
+    /// `generate_handler!` the strip's Enter fails at runtime and the contact is not logged. It
+    /// must also be the engine's many-row write, journaled before it answers, so every county
+    /// of the contact shares one time and reaches the disk before the strip says "Logged".
+    #[test]
+    fn the_county_line_command_is_registered_and_journals_the_engines_rows() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nasync fn contest_log_manual_rows(")
+            .expect("the command a county line logs through must exist")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows("),
+            "contest_log_manual_rows must journal Engine::contest_log_manual_rows"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
+            "contest_log_manual_rows is not registered — a county line would fail at runtime"
         );
     }
 

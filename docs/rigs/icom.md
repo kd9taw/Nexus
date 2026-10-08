@@ -36,14 +36,27 @@ The IC-7760 works over its **USB cable**, like the rest of the family: in **Sett
 
 Nexus can't reach an Icom over its **network port** directly. The programs that find the radio by its IP address speak
 Icom's own network protocol, and Hamlib, which Nexus uses for Icoms, doesn't. So typing the radio's IP address into Nexus
-won't find it. To run over the network anyway, put a bridge in between:
+won't find it. To run over the network anyway, put a program in between. wfview and Icom's own RS-BA1 both do the job,
+but they hand the radio to Nexus in different ways.
+
+**With wfview, or another bridge that offers a rigctld port:**
 
 1. Run a program that speaks Icom's network protocol and offers a Hamlib rigctld port. wfview is the usual one; check
    that your version supports your radio.
 2. Turn on its rigctld server and note the port it listens on.
-3. In Nexus, pick **Rig Model: NET rigctl (remote rigctld)** and set **Network Address** to the bridge's address and
-   that port (for wfview on the same computer, `127.0.0.1:` and the port).
+3. In Nexus, set **Connection** to **Network**, pick **Rig Model: NET rigctl (remote rigctld)** and set
+   **Network Address** to the bridge's address and that port (for wfview on the same computer, `127.0.0.1:` and the
+   port).
 4. The audio travels through the bridge too: pick the bridge's audio devices in Nexus's audio settings.
+
+**With RS-BA1:** it runs no rigctld server, so NET rigctl finds nothing to talk to. RS-BA1 gives the computer a virtual
+COM port instead, and Nexus uses that port the way it uses a USB cable:
+
+1. Connect RS-BA1 to the radio.
+2. In Nexus, set **Connection** to **Serial**, pick your Icom's own **Rig Model** (Icom IC-7760, for example, not NET
+   rigctl) and set **Serial Port** to the virtual COM port RS-BA1 creates.
+3. The audio travels through RS-BA1 too: pick the audio devices RS-BA1 uses on this computer in Nexus's audio
+   settings.
 
 ## IC-9700 — VHF/UHF and 23 cm
 

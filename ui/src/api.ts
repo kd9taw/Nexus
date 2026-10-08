@@ -709,6 +709,27 @@ export async function contestLogManual(
   })
 }
 
+/** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
+ * Party counts once per county. `rows` is one field vector per row, each shaped exactly as
+ * `contestLogManual`'s `fields`. The engine stamps every row with one time and one band and
+ * dupe-checks each on its own key; the answer is, per row, whether it entered the log (`false`:
+ * refused as a dupe, as `contestLogManual` refuses one).
+ *
+ * `mode` and `submode` mean exactly what they mean there. */
+export async function contestLogManualRows(
+  call: string,
+  rows: [string, string][][],
+  mode: 'CW' | 'PH' | 'DIG',
+  submode?: string,
+): Promise<boolean[]> {
+  return invoke<boolean[]>('contest_log_manual_rows', {
+    call,
+    rows,
+    mode,
+    submode: submode ?? null,
+  })
+}
+
 /** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
  * section's strip, and the only caller.
  *
