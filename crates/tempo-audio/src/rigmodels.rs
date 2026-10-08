@@ -48,11 +48,16 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (3063, "Icom IC-7600"),
         (3081, "Icom IC-9700"),
         // IC-7760 (split control-head/RF-deck flagship). Verified index 92 in the bundled
-        // Hamlib 4.7.1 riglist.h → model 3092. Driven via Hamlib rigctld, NOT Nexus's native
-        // CI-V/scope path (that stays limited to the hardware-verified 7300-family): the 7760
-        // is typically LAN-connected, which uses Hamlib anyway, and its scope stream is
-        // unverified. Adding it here is what makes CAT work — before, the 7760 was absent from
-        // every table, so it fell through to a wrong/zero model and CAT was dead.
+        // Hamlib 4.7.1 riglist.h → model 3092. Driven via Hamlib rigctld over the controller's
+        // USB B socket (the RF deck's USB port carries I/Q only: IC-7760 Basic Manual, PDF
+        // pp. 88 and 90), NOT Nexus's native CI-V/scope path (that stays limited to the
+        // 7300-family radios `icom_scope_model` lists). On its LAN port the 7760 speaks Icom's
+        // own network protocol, and the bundled Hamlib has no model that does (4.7.1's
+        // `rigctl -l` lists no Icom network model), so a LAN-connected 7760 reaches Nexus only
+        // through a bridge: wfview's rigctld server, or the virtual COM port RS-BA1 creates.
+        // Its scope stream is documented (A7788-8EX, PDF p. 24: 0–200, 689 points) but has not
+        // been on a bench here. Adding it here is what makes CAT work — before, the 7760 was
+        // absent from every table, so it fell through to a wrong/zero model and CAT was dead.
         (3092, "Icom IC-7760"),
         // IC-7300MKII — `RIG_MODEL_IC7300MK2 = RIG_MAKE_MODEL(RIG_ICOM, 94)` in the bundled
         // 4.7.0 riglist.h → 3094 (`rigctl -l` names it `IC-7300MK2`, Beta). Driven via rigctld,
