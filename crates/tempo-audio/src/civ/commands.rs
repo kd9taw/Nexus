@@ -691,16 +691,19 @@ pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
 /// | IC-9700 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7508-3EX-4, PDF p. 19 |
 /// | IC-705 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7560-8EX-6, PDF p. 23 |
 /// | IC-905 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7711-9EX-2, PDF p. 24 |
+/// | IC-7760 | 3 | 00 = Data mode OFF, 01 = DATA1, 02 = DATA2, 03 = DATA3 | CI-V Reference Guide A7788-8EX-2, PDF p. 23 |
+/// | IC-7300MK2 | 1 | 00 = OFF, 01 = ON (SSB/AM/FM; CW/RTTY: 00 only) | CI-V Reference Guide rev 0, PDF p. 22 |
 ///
 /// No wildcard arm, so a model added to [`IcomModel`] has to be read against its own guide
-/// first: the IC-7760, for one, has three, like the IC-7610 (A7788-8EX-2, PDF p. 23).
+/// first.
 pub fn data_mode_count(model: IcomModel) -> u8 {
     match model {
-        IcomModel::Ic7610 => 3,
-        IcomModel::Ic7300 | IcomModel::Ic9700 | IcomModel::Ic705 | IcomModel::Ic905 => 1,
-        // Not yet read against their own guides: the choice goes out as it did before this cap,
-        // as for a radio the caller did not name.
-        IcomModel::Ic7760 | IcomModel::Ic7300Mk2 => 3,
+        IcomModel::Ic7610 | IcomModel::Ic7760 => 3,
+        IcomModel::Ic7300
+        | IcomModel::Ic9700
+        | IcomModel::Ic705
+        | IcomModel::Ic905
+        | IcomModel::Ic7300Mk2 => 1,
     }
 }
 
@@ -1576,6 +1579,42 @@ mod tests {
         // The IC-7300 has no network connection, so nothing is read from it.
         assert_eq!(time_out_timer_item(IcomModel::Ic7300), None);
         assert_eq!(mod_input(IcomModel::Ic7300), None);
+    }
+
+    /// THE DATA MODES A DATA WRITE MAY SELECT ARE THE DATA MOD INPUTS THE MENU LISTS. Each network
+    /// radio's guide gives both: the DATA values of `1A 06` ([`data_mode_count`]) and the DATA MOD
+    /// items of its MOD Input menu ([`mod_input`]). The connect-time probe reads the DATA MOD item
+    /// for the operator's D1/D2/D3 from the second while the DATA write is capped by the first, so
+    /// they must agree, or the connection status names the input of a DATA mode the radio is never
+    /// put in.
+    #[test]
+    fn each_network_radios_data_modes_are_its_data_mod_items() {
+        let rows: Vec<(IcomModel, usize, usize)> = [
+            IcomModel::Ic7610,
+            IcomModel::Ic9700,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+            IcomModel::Ic7760,
+            IcomModel::Ic7300Mk2,
+        ]
+        .into_iter()
+        .map(|m| {
+            let items = mod_input(m).expect("a network radio").data.len();
+            (m, usize::from(data_mode_count(m)), items)
+        })
+        .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (IcomModel::Ic7610, 3, 3),
+                (IcomModel::Ic9700, 1, 1),
+                (IcomModel::Ic705, 1, 1),
+                (IcomModel::Ic905, 1, 1),
+                (IcomModel::Ic7760, 3, 3),
+                (IcomModel::Ic7300Mk2, 1, 1),
+            ],
+            "(model, DATA modes a DATA write may select, DATA MOD items)"
+        );
     }
 
     /// A reply is read only for the item it names.

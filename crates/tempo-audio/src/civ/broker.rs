@@ -3344,6 +3344,38 @@ mod tests {
         assert_eq!(sent, want, "the DATA mode each radio was sent");
     }
 
+    /// The two radios driven only over the network, each against its own guide's `1A 06`. The
+    /// IC-7760 has DATA1, DATA2 and DATA3 (CI-V Reference Guide A7788-8EX-2, PDF p. 23), so D1, D2
+    /// and D3 each go out as chosen. The IC-7300MK2 has one DATA mode, `01` = ON (its CI-V
+    /// Reference Guide, rev 0, PDF p. 22), so it is sent `01` whatever is saved.
+    #[test]
+    fn the_network_icoms_are_sent_the_data_modes_their_own_guides_define() {
+        let mut sent = Vec::new();
+        for (addr, model) in [(0xB2u8, IcomModel::Ic7760), (0xB6, IcomModel::Ic7300Mk2)] {
+            for d in [1u8, 2, 3] {
+                let (_e, b, regs) = backend_with_data_mode(addr, Some(model), d);
+                let n = regs.lock().unwrap().wire.len();
+                assert!(b.set_mode("PKTUSB", 0), "{model:?}, D{d}: PKTUSB refused");
+                sent.push((model, d, hex_frames(&regs.lock().unwrap().wire[n..])));
+            }
+        }
+        let usb_d = |addr: u8, d: u8| {
+            vec![
+                format!("FE FE {addr:02X} E0 06 01 FD"),
+                format!("FE FE {addr:02X} E0 1A 06 {d:02X} 01 FD"),
+            ]
+        };
+        let want = vec![
+            (IcomModel::Ic7760, 1, usb_d(0xB2, 1)),
+            (IcomModel::Ic7760, 2, usb_d(0xB2, 2)),
+            (IcomModel::Ic7760, 3, usb_d(0xB2, 3)),
+            (IcomModel::Ic7300Mk2, 1, usb_d(0xB6, 1)),
+            (IcomModel::Ic7300Mk2, 2, usb_d(0xB6, 1)),
+            (IcomModel::Ic7300Mk2, 3, usb_d(0xB6, 1)),
+        ];
+        assert_eq!(sent, want, "the DATA mode each network Icom was sent");
+    }
+
     /// ⭐ A DIAL READ THAT TIMES OUT SERVES MAIN'S LAST READING — never the engine's cache,
     /// which also folds what the radio pushes, and a push reports the SELECTED band.
     ///
