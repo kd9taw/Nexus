@@ -6320,6 +6320,8 @@ export const JA: PartialCatalog = {
   "shell.lane.parsecStop.what.tune": "Tune",
   "shell.lane.slotKeyRefused.message": "PTT 拒否 — 送信停止",
   "shell.lane.slotKeyRefused.detail": "{{time}} UTC に無線機が PTT を受け付けませんでした（{{why}}）。そのためこの送信は出ず、TX はオフになりました。PTT方式と CAT／ポートを確認してから、TX をもう一度オンにしてください。",
+  "shell.lane.slotKeyRefused.flex.notYetDax": "{{time}} UTC、Nexus はこの {{mode}} の送信をキーイングしませんでした。FlexネイティブDAXオーディオはオンですが、無線機はまだ送信オーディオを Nexus の DAX から受けていませんでした。何も送信されず、TX はオフになりました。Nexus はまもなく無線機の準備を終えます。そのあと TX をもう一度オンにしてください。",
+  "shell.lane.slotKeyRefused.flex.daxUnfed": "{{time}} UTC、Nexus はこの {{mode}} の送信をキーイングしませんでした。FlexネイティブDAXオーディオはオフですが、無線機は Nexus が設定したとおり、まだ送信オーディオを DAX から受けていて、いまは DAX に何も送られていません。何も送信されず、TX はオフになりました。Nexus はまもなく無線機をマイク入力に戻します。そのあと TX をもう一度オンにしてください。",
   "shell.lane.slotUnkeyFailed.message": "PTT オフ失敗 — 送信停止",
   "shell.lane.slotUnkeyFailed.detail": "{{time}} UTC に無線機が PTT オフを受け付けませんでした（{{why}}）。そのため TX はオフになりました。まだ送信している可能性があります。今すぐ無線機を確認してください。Nexus は無線機が受け付けるまで PTT オフを送り続けます。無線機が受信に戻ったら、TX をもう一度オンにしてください。",
   "shell.lane.clockRepairHold.message": "時計の修復中 — TX保留",

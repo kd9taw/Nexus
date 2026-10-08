@@ -6377,6 +6377,8 @@ export const FR: PartialCatalog = {
   "shell.lane.parsecStop.what.tune": "Tune",
   "shell.lane.slotKeyRefused.message": "PTT REFUSÉ — TX ARRÊTÉ",
   "shell.lane.slotKeyRefused.detail": "La radio n’a pas accepté le PTT à {{time}} UTC ({{why}}), donc ce passage n’a pas été émis et le TX a été coupé. Vérifiez votre méthode PTT et le CAT/port, puis réactivez le TX.",
+  "shell.lane.slotKeyRefused.flex.notYetDax": "Nexus n’a pas passé en émission le passage {{mode}} à {{time}} UTC : l’audio DAX Flex natif est actif, mais la radio ne prenait pas encore son audio d’émission depuis Nexus par DAX. Rien n’a été émis et le TX a été coupé. Nexus finit de préparer la radio dans un instant ; réactivez ensuite le TX.",
+  "shell.lane.slotKeyRefused.flex.daxUnfed": "Nexus n’a pas passé en émission le passage {{mode}} à {{time}} UTC : l’audio DAX Flex natif est désactivé, mais la radio prenait encore son audio d’émission par DAX, comme Nexus l’avait réglée, et plus rien n’alimente DAX. Rien n’a été émis et le TX a été coupé. Nexus remet la radio sur son entrée micro dans un instant ; réactivez ensuite le TX.",
   "shell.lane.slotUnkeyFailed.message": "ÉCHEC DE LA COUPURE DU PTT — TX ARRÊTÉ",
   "shell.lane.slotUnkeyFailed.detail": "La radio n’a pas accepté la coupure du PTT à {{time}} UTC ({{why}}), donc le TX a été coupé. Elle émet peut-être encore : vérifiez la radio maintenant. Nexus continue de couper le PTT jusqu’à ce que la radio l’accepte. Réactivez le TX quand la radio est revenue en réception.",
   "shell.lane.clockRepairHold.message": "RÉPARATION DE L'HORLOGE — TX EN ATTENTE",

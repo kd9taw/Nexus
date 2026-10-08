@@ -1515,6 +1515,43 @@ fn a_digital_over_is_refused_on_the_mic() {
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
+/// ⭐ NEVER A SILENT OVER: native audio turned off while the radio still takes its transmit audio
+/// from the DAX Nexus set, so nothing feeds it. `T 1` is refused, in the shim's words, until the
+/// operator's own setting (the mic) is back. The control: once it is, the same verb keys.
+#[test]
+fn a_key_is_refused_while_nothing_feeds_the_dax_nexus_set() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    eventually("the echo", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    d.set_native_audio(false);
+    let asked = Instant::now();
+    let answer = c.ask("T 1", 1);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        format!(
+            "answer={answer:?} xmit1={} refused={:?}",
+            count(&sim, "xmit 1"),
+            d.key_refused_since(asked)
+        ),
+        "answer=\"RPRT -1\\n\" xmit1=0 refused=Some((\"not keying a DIGU over: native audio is \
+         off, and the radio still takes its transmit audio from the DAX Nexus set, which nothing \
+         feeds until its mic input is back\", FlexAudioRefusal { mode: \"DIGU\", cause: DaxUnfed \
+         }))"
+    );
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    eventually("the mic", || {
+        (d.session().snapshot().model.transmit.dax == Some(false)).then_some(())
+    });
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
 /// with the radio still reporting USB and the mic as the source, `T 1` is refused.
 #[test]

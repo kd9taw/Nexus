@@ -245,13 +245,22 @@ fn native_audio_on_the_client_carries_both_ways_on_one_session() {
         s.state.dax_last_audio.is_some(),
         "DAX receive audio reached the decoder"
     );
+    // The DAX source is written at the loop's next quiet point (`RadioLoop::tx_routing_quiet`),
+    // not with the tee: a transmit stream created in the last tick before a slot boundary's guard
+    // puts the tee in inside the guard, and the flag waits for the guard after the boundary, about
+    // two seconds later. A digital over in between is refused on the mic (`flex::shim`).
+    run_until(&mut s, "the radio was never told to take DAX", |s| {
+        s.log()
+            .iter()
+            .any(|(_, e)| command(e, "transmit set dax=1"))
+    });
+    s.run(200);
     let log = s.log();
     let connections = log
         .iter()
         .filter(|(_, e)| matches!(e, SimEvent::Connected { .. }))
         .count();
     assert_eq!(connections, 1, "one session per radio");
-    assert!(log.iter().any(|(_, e)| command(e, "transmit set dax=1")));
     assert!(s.engine.lock().unwrap().snapshot().radio.flex_dax_tx);
     // Off: back to the sound card, the operator's mic back on the radio, the cockpit told.
     s.set_native_audio(false);
@@ -267,6 +276,69 @@ fn native_audio_on_the_client_carries_both_ways_on_one_session() {
     }
     s.run(200);
     assert!(!s.engine.lock().unwrap().snapshot().radio.flex_dax_tx);
+}
+
+/// The bundled session, with the radio's transmitter already taking its audio from DAX when Nexus
+/// connects, as SmartSDR's own DAX switch leaves it (the flag is radio-wide).
+fn radio_on_dax() -> SimSession {
+    let mut s = SimSession::v4_gui_client();
+    for (pattern, rules) in &mut s.rules {
+        if *pattern == Pattern::Exact("sub tx all".to_string()) {
+            for item in rules.iter_mut().flat_map(|r| r.items.iter_mut()) {
+                if let Item::Send(line) = item {
+                    if line.starts_with("S0|transmit ") {
+                        *line = line.replace(" dax=0 ", " dax=1 ");
+                    }
+                }
+            }
+        }
+    }
+    s
+}
+
+/// ⭐ A RADIO ALREADY ON DAX GETS NEXUS'S TRANSMIT STREAM. The flag the routing follows the mode
+/// with is radio-wide, and SmartSDR's own DAX switch sets it, so a radio can already take its
+/// transmit audio from DAX when Nexus connects. Nothing needs writing then, but Nexus's own
+/// transmit stream still has to exist: without it the tee never goes in and the client refuses
+/// every digital over. One create, the tee in, a queued over keys and its audio leaves as DAX TX,
+/// and the flag is never written (the operator's own setting stands, so nothing is owed back).
+#[test]
+fn a_radio_already_on_dax_gets_the_transmit_stream_and_keys() {
+    let mut s = FlexScene::with_session(true, radio_on_dax());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.backend.tee.lock().unwrap().is_none() && Instant::now() < deadline {
+        s.run(100);
+    }
+    let tee = s.backend.tee.lock().unwrap().is_some();
+    let (_, played) = one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_500.0,
+        &mut |_, _| {},
+    );
+    let log = s.log();
+    let count = |want: &str| log.iter().filter(|(_, e)| command(e, want)).count();
+    let dax_tx_audio = log
+        .iter()
+        .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1));
+    let writes = log
+        .iter()
+        .filter(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("transmit set dax")))
+        .count();
+    let tx_enabled = s.engine.lock().unwrap().tx_enabled();
+    assert_eq!(
+        format!(
+            "dax_tx_creates={} tee={tee} xmit1={} played={} dax_tx_audio={dax_tx_audio} \
+             dax_writes={writes} tx_enabled={tx_enabled}",
+            count("stream create type=dax_tx"),
+            count("xmit 1"),
+            played.is_some(),
+        ),
+        "dax_tx_creates=1 tee=true xmit1=1 played=true dax_tx_audio=true dax_writes=0 \
+         tx_enabled=true"
+    );
 }
 
 /// The control for the test above: native audio off, nothing about DAX on the wire, the sound
@@ -1348,6 +1420,274 @@ fn first_boundary() -> f64 {
     first
 }
 
+/// The engine's refusal on screen, if any, and whether TX is on.
+fn refusal(s: &FlexScene) -> (Option<tempo_app::dto::SlotKeyRefused>, bool) {
+    let e = s.engine.lock().unwrap();
+    (e.snapshot().radio.slot_key_refused, e.tx_enabled())
+}
+
+/// ⭐ THE CLIENT'S OWN REASON REACHES THE SCREEN. A digital over the client keeps off the air for
+/// the audio route halts TX like any refused key, but the rigctld wire carries only `RPRT -1`:
+/// the refusal on screen carries the client's reason instead. Native audio comes on 900 ms before
+/// a boundary, inside the routing's guard, so at the boundary the radio still takes its transmit
+/// audio from its mic input and Nexus's transmit stream does not exist yet.
+#[test]
+fn a_refusal_for_the_audio_route_says_why_on_screen() {
+    let mut s = FlexScene::new(false);
+    s.run(1_500);
+    let mut toggled = false;
+    let mut during = |sc: &mut FlexScene, rel: f64| {
+        if !toggled && rel >= -900.0 {
+            toggled = true;
+            sc.set_native_audio(true);
+            // A Settings save clears the queued over (`apply_settings`); the CQ run goes on.
+            let mut e = sc.engine.lock().unwrap();
+            e.broadcast("CQ TEST W9XYZ EN37");
+            let _ = e.take_immediate_tx();
+        }
+    };
+    let (_, played) = one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_000.0,
+        &mut during,
+    );
+    let (refused, tx_enabled) = refusal(&s);
+    assert!(
+        played.is_none() && keys(&s) == 0 && !tx_enabled,
+        "the premise: the client refused the key, nothing played, TX off"
+    );
+    assert_eq!(
+        refused.map(|r| (r.why, r.flex_audio)),
+        Some((
+            "not keying a DIGU over: the radio takes its transmit audio from its mic input and \
+             Nexus's DAX transmit stream does not exist yet"
+                .to_string(),
+            Some(tempo_app::dto::FlexAudioRefusal {
+                mode: "DIGU".to_string(),
+                cause: tempo_app::dto::FlexAudioCause::NotYetDax,
+            })
+        ))
+    );
+}
+
+/// The scene with native audio on, the DAX source written for the slice's digital mode and the
+/// tee in: the station a run of DAX overs starts from.
+fn on_dax() -> FlexScene {
+    let mut s = FlexScene::new(true);
+    run_until(&mut s, "settle: the tee and the DAX source", |s| {
+        s.backend.tee.lock().unwrap().is_some()
+            && s.log()
+                .iter()
+                .any(|(_, e)| command(e, "transmit set dax=1"))
+    });
+    s.run(300);
+    s
+}
+
+/// What came of an over, read by value: whether it keyed and played, whether DAX TX audio reached
+/// the radio, whether TX is on, whether the operator's mic was back before the `boundary`, and the
+/// refusal on screen (its words, and its cause as the UI receives it).
+fn over_outcome(s: &FlexScene, boundary: Instant, played: Option<Instant>) -> String {
+    let log = s.log();
+    let mic_back = log
+        .iter()
+        .find(|(_, e)| command(e, "transmit set dax=0"))
+        .is_some_and(|(t, _)| *t < boundary);
+    let dax_tx_audio = log
+        .iter()
+        .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1));
+    let (refused, tx_enabled) = refusal(s);
+    let flex_audio = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap()["radio"]
+        ["slotKeyRefused"]["flexAudio"]
+        .clone();
+    format!(
+        "xmit1={} played={} dax_tx_audio={dax_tx_audio} tx_enabled={tx_enabled} \
+         mic_back_before_boundary={mic_back} why={:?} flex_audio={flex_audio}",
+        keys(s),
+        played.is_some(),
+        refused.map(|r| r.why),
+    )
+}
+
+/// The over a station on DAX keys after its operator turned native audio off `offset` ms from the
+/// boundary, with the CQ queued again (a Settings save clears the queued over).
+fn native_audio_off_at(offset: f64) -> String {
+    let mut s = on_dax();
+    let mut toggled = false;
+    let mut during = |sc: &mut FlexScene, rel: f64| {
+        if !toggled && rel >= offset {
+            toggled = true;
+            sc.set_native_audio(false);
+            let mut e = sc.engine.lock().unwrap();
+            e.broadcast("CQ TEST W9XYZ EN37");
+            let _ = e.take_immediate_tx();
+        }
+    };
+    let (at, played) = one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_000.0,
+        &mut during,
+    );
+    over_outcome(&s, at, played)
+}
+
+/// The refusal for an over the radio would have taken from a DAX nothing feeds, as
+/// [`over_outcome`] reads it.
+const DAX_UNFED: &str = "xmit1=0 played=false dax_tx_audio=false tx_enabled=false \
+     mic_back_before_boundary=false why=Some(\"not keying a DIGU over: native audio is off, and \
+     the radio still takes its transmit audio from the DAX Nexus set, which nothing feeds until \
+     its mic input is back\") flex_audio={\"cause\":\"daxUnfed\",\"mode\":\"DIGU\"}";
+
+/// ⭐⭐ NEVER A SILENT OVER (operator ruling, 2026-10-07, "Refuse that over"). Native audio goes
+/// off inside the routing's guard before a boundary: the tee comes out at once, but the operator's
+/// own setting (the mic) comes back only at the next quiet point, after the boundary, so the radio
+/// would key that over on the DAX Nexus wrote with nothing feeding it. The client refuses the key,
+/// in its own words: nothing keys, nothing is played to the sound card or the radio, and TX is off,
+/// as for any refused key. The control: turned off before the guard, the mic is back first and
+/// the over keys on the sound card.
+#[test]
+fn native_audio_off_inside_the_guard_refuses_the_over_it_would_leave_silent() {
+    let offsets = [-900.0, -400.0, -40.0, 0.0, -1_300.0];
+    let got: Vec<String> = offsets
+        .iter()
+        .map(|o| format!("off at {o:+}: {}", native_audio_off_at(*o)))
+        .collect();
+    let want: Vec<String> = offsets
+        .iter()
+        .map(|o| {
+            let outcome = if *o < -ROUTING_GUARD_MS {
+                "xmit1=1 played=true dax_tx_audio=false tx_enabled=true \
+                 mic_back_before_boundary=true why=None flex_audio=null"
+            } else {
+                DAX_UNFED
+            };
+            format!("off at {o:+}: {outcome}")
+        })
+        .collect();
+    assert_eq!(got.join("\n"), want.join("\n"));
+}
+
+/// ⭐ The receive floor's fallback is the other way native audio goes off (no DAX receive audio
+/// for `DAX_STARVE_AFTER`: back to the sound card, said on screen), and inside the guard it leaves
+/// the radio on the DAX Nexus wrote in the same way: the over is refused for the same reason, and
+/// the Phone cockpit's "mic disconnected" (`flex_dax_tx`) holds until the radio has the mic back.
+/// The receive stream is withheld here, and the floor's clock kept fresh until the chosen moment,
+/// 900 ms before the boundary.
+#[test]
+fn a_receive_floor_fallback_inside_the_guard_refuses_the_over_too() {
+    let mut s = FlexScene::with_faults(
+        true,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::Vita {
+            stream_id: 0x0400_0001,
+            drop: (0..8_000).collect(),
+            swap: Vec::new(),
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(s.backend.tee.lock().unwrap().is_some()
+        && s.log()
+            .iter()
+            .any(|(_, e)| command(e, "transmit set dax=1")))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "settle: the tee and the DAX source"
+        );
+        s.state.dax_last_audio = Some(Instant::now());
+        s.run(100);
+    }
+    let mut fired = false;
+    let mut mic_off: Vec<(f64, bool)> = Vec::new();
+    let mut during = |sc: &mut FlexScene, rel: f64| {
+        if fired {
+        } else if rel >= -900.0 {
+            fired = true;
+            sc.state.dax_last_audio = Some(Instant::now() - DAX_STARVE_AFTER);
+        } else {
+            sc.state.dax_last_audio = Some(Instant::now());
+        }
+        mic_off.push((rel, sc.engine.lock().unwrap().snapshot().radio.flex_dax_tx));
+    };
+    let (at, played) = one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_000.0,
+        &mut during,
+    );
+    let mic_off_at = |when: f64| mic_off.iter().find(|(rel, _)| *rel >= when).map(|m| m.1);
+    assert_eq!(
+        format!(
+            "{} audio_error={} mic_off: -800={:?} -100={:?} +900={:?}",
+            over_outcome(&s, at, played),
+            s.engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .audio_error
+                .is_some(),
+            mic_off_at(-800.0),
+            mic_off_at(-100.0),
+            mic_off_at(900.0),
+        ),
+        format!(
+            "{DAX_UNFED} audio_error=true mic_off: -800=Some(true) -100=Some(true) \
+             +900=Some(false)"
+        )
+    );
+}
+
+/// The Phone cockpit's "mic disconnected" (`flex_dax_tx`) follows the radio, not the toggle:
+/// native audio off 900 ms before a boundary leaves the radio on DAX until the operator's own
+/// setting comes back after it, and the mic reads disconnected until then.
+#[test]
+fn the_mic_reads_disconnected_until_the_radio_has_it_back() {
+    let mut s = on_dax();
+    let mut toggled = false;
+    let mut seen: Vec<(f64, bool, Option<bool>)> = Vec::new();
+    let mut during = |sc: &mut FlexScene, rel: f64| {
+        if !toggled && rel >= -900.0 {
+            toggled = true;
+            sc.set_native_audio(false);
+        }
+        let mic_off = sc.engine.lock().unwrap().snapshot().radio.flex_dax_tx;
+        let dax = sc
+            .state
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .and_then(|d| d.session().snapshot().model.transmit.dax);
+        seen.push((rel, mic_off, dax));
+    };
+    one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_500.0,
+        &mut during,
+    );
+    let at = |when: f64| {
+        seen.iter()
+            .find(|(rel, _, _)| *rel >= when)
+            .map(|(_, mic_off, dax)| format!("mic_off={mic_off} dax={dax:?}"))
+    };
+    assert_eq!(
+        format!("{:?} {:?}", at(-100.0), at(1_400.0)),
+        "Some(\"mic_off=true dax=Some(true)\") Some(\"mic_off=false dax=Some(false)\")"
+    );
+}
+
 /// ⭐⭐ THE KEYING PATH NEVER CARRIES THE FLAG (operator ruling, 2026-10-03: "write the flag when
 /// the mode or the TX slice changes, never between the slot boundary and `xmit 1`"). FT8 with TX
 /// enabled and an over queued every TX period, while the operator turns native audio off and on at
@@ -1355,7 +1695,9 @@ fn first_boundary() -> f64 {
 /// across overs. Every `transmit set dax` the radio receives is checked against every over: never
 /// between that over's boundary and its `xmit 1`, never while it is keyed (from `xmit 1` to the
 /// radio's READY naming no transmitter), and never within the loop's guard of a boundary, either
-/// side. The flag does change: the writes happen, between overs.
+/// side. The flag does change: the writes happen, between overs. And a toggle inside the guard
+/// before a boundary has that over refused, whichever way it went: never keyed on the mic, never
+/// keyed on a DAX nothing feeds.
 #[test]
 fn the_dax_source_is_written_only_at_quiet_points() {
     let mut s = FlexScene::new(true);
@@ -1396,13 +1738,30 @@ fn the_dax_source_is_written_only_at_quiet_points() {
             .filter(|(_, e)| command(e, "xmit 1"))
             .map(|(t, _)| *t)
             .nth(xmits_before);
-        // A toggle to native audio just before the boundary leaves the radio taking its transmit
-        // audio from the mic input until the quiet point writes the DAX source, so the client
-        // refuses that over's key. A refused slot key plays nothing and halts TX, as WSJT-X halts
-        // on a rig failure (`slot::slot_key_failure`); the next trial's CQ arms TX again.
-        if xmit.is_none() {
+        // A toggle inside the guard before the boundary leaves the radio's source as it was until
+        // the quiet point after the boundary, so the client refuses that over's key: native audio
+        // just on, the radio still takes its transmit audio from its mic input; just off, from
+        // DAX, which nothing feeds then. A refused slot key plays nothing and halts TX, as WSJT-X
+        // halts on a rig failure (`slot::slot_key_failure`); the next trial's CQ arms TX again.
+        // After the boundary the over may have keyed first.
+        let (refused, tx_enabled) = refusal(&s);
+        if (-ROUTING_GUARD_MS..=0.0).contains(offset) {
+            let cause = format!("{:?}", refused.and_then(|r| r.flex_audio).map(|f| f.cause));
+            let want = if native {
+                "Some(NotYetDax)"
+            } else {
+                "Some(DaxUnfed)"
+            };
+            assert_eq!(
+                (xmit.is_none(), played.is_none(), tx_enabled, cause.as_str()),
+                (true, true, false, want),
+                "toggle {offset:+} (native audio {}): the client must refuse the key, play \
+                 nothing and leave TX off",
+                if native { "on" } else { "off" }
+            );
+        } else if xmit.is_none() {
             assert!(
-                played.is_none() && !s.engine.lock().unwrap().tx_enabled(),
+                played.is_none() && !tx_enabled,
                 "toggle {offset:+}: the client refused the key, and the over was played or TX \
                  left on"
             );
@@ -1460,8 +1819,11 @@ fn the_dax_source_is_written_only_at_quiet_points() {
             )
         })
         .collect();
+    // The six toggles inside the guard are refused (asserted above); the one before it and the
+    // two well after the boundary always key, and the one at +15 ms when the boundary's tick
+    // comes first.
     assert!(
-        keyed_overs >= 4,
+        keyed_overs >= 3,
         "only {keyed_overs} overs keyed: the scene is not exercising the path\n{}",
         trace.join("\n")
     );
