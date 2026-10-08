@@ -237,10 +237,12 @@ Conditions in the main window there is none: click back into Nexus and press Esc
 an operating cockpit (Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8), so the time, the bands
 and who hears you stay in view while you operate. It is off until you turn it on: tick
 **Dashboard rail** in the cockpit's **⊞ Panels** menu, or press **Dashboard** at the right end
-of the Now-Bar. Each cockpit remembers its own choice. The rail opens with the **Clock**,
-**Bands for you**, **Space Wx** and **Getting Out**; each box has the same picker as a Conditions
-slot, so any pane can take its place, its **✕** closes it, and the **⊞ Panels** menu in the
-rail's head brings a closed box back or resets the rail. A box's **⋯** sets its own text size
+of the Now-Bar. Each cockpit remembers its own choice, and its own boxes: the rail beside FT can
+show different boxes from the rail beside Phone. The rail opens with the **Clock**, **Bands for
+you**, **Space Wx** and **Getting Out** (after an update, each cockpit's rail starts as the rail you
+had); each box has the same picker as a Conditions slot, so any pane can take its place, its **✕**
+closes it, and the **⊞ Panels** menu in the rail's head brings a closed box back or resets that
+cockpit's rail. A box's **⋯** sets its own text size
 there as on Conditions (tabs stay Conditions'), and the rail's Reset puts every box back at 100%.
 Drag the rail's left edge to make it wider or narrower (200–720 px), or the line between two
 boxes to share the height between them; both also work from the keyboard, and a double-click

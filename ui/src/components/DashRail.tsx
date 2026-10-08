@@ -18,6 +18,11 @@
 // box's ⋯ menu offers its own text size and its manual link, as on Connect; tabs and their rotation
 // are Connect's alone (the dashboard window and the TV page), so the rail offers neither.
 //
+// ITS RECORDS ARE APP'S, ONE PER COCKPIT (the operator's "Per cockpit", 2026-10-07): which box is in each
+// slot, and which slots show with their splits and text sizes, are the cockpit's own once the operator changes
+// them beside it; until then it reads the rail every cockpit shared before (features/dashRail). App owns them
+// (`useDashRail`) beside the cockpits' own records and hands the rail the one beside the cockpit on screen.
+//
 // A CRASH IN A BOX COSTS THE RAIL, NOT THE COCKPIT: the boundary is inside the rail's own box, so the
 // cockpit keeps its width and its controls, and the panel's way out turns the rail off.
 //
@@ -50,17 +55,20 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { DASH_PANELS, MIN_SHARE, usePanelLayout } from '../features/panelState'
 import {
   DASH_SLOT_IDS,
+  dashRailInstance,
   fitRailWidth,
   loadRailWidth,
   railWidthMax,
   saveRailWidth,
   stepRailWidth,
   useDashSlots,
+  type DashRailSection,
   type DashSlotId,
+  type DashSlotsApi,
 } from '../features/dashRail'
 import type { PaneId } from '../features/connectConfig'
 import { RAIL_MIN } from '../features/connectRails'
-import { surfaceGet } from '../features/windowScope'
+import { surfaceGet, windowInstance } from '../features/windowScope'
 import { effWidth } from '../usePaneWidths'
 
 /** Where each slot sits, in words — a ⊞ entry names the box AND where it comes back. */
@@ -72,6 +80,59 @@ const SLOT_WHERE: Record<DashSlotId, () => string> = {
 }
 
 const INTENTS: readonly MapIntent[] = ['dx', 'pota', 'casual', 'vhf']
+
+/** A cockpit's rail panel record: which slots are shown, their splits and their text sizes. */
+export type DashRailPanels = ReturnType<typeof usePanelLayout<DashSlotId>>
+
+/**
+ * THE RAIL'S RECORDS, as App owns them (the operator's "Per cockpit", 2026-10-07: FT's rail can differ from
+ * Phone's, and each starts from today's rail): the window's placement record, whose `slotsOf` is a cockpit's
+ * own slots or the shared rail's, and a panel record per cockpit, each reading the window's shared one until
+ * the cockpit has its own (features/dashRail `dashRailInstance`). Owned above the rail, by App, so the cockpit
+ * beside it and the rail read one record for what is on screen. One record per cockpit, all mounted, as App
+ * owns each cockpit's own panel record: a cockpit switch reads the next one, it never reloads one in place.
+ */
+export function useDashRail(): { slots: DashSlotsApi; panels: Record<DashRailSection, DashRailPanels> } {
+  const slots = useDashSlots()
+  const shared = windowInstance()
+  const operate = usePanelLayout(DASH_PANELS, dashRailInstance('operate'), shared)
+  const phone = usePanelLayout(DASH_PANELS, dashRailInstance('phone'), shared)
+  const cw = usePanelLayout(DASH_PANELS, dashRailInstance('cw'), shared)
+  const rtty = usePanelLayout(DASH_PANELS, dashRailInstance('rtty'), shared)
+  const psk = usePanelLayout(DASH_PANELS, dashRailInstance('psk'), shared)
+  const sstv = usePanelLayout(DASH_PANELS, dashRailInstance('sstv'), shared)
+  const aprs = usePanelLayout(DASH_PANELS, dashRailInstance('aprs'), shared)
+  const js8 = usePanelLayout(DASH_PANELS, dashRailInstance('js8'), shared)
+  return { slots, panels: { operate, phone, cw, rtty, psk, sstv, aprs, js8 } }
+}
+
+/** One cockpit's rail, from its records: what the rail draws and every change it can make. */
+export interface DashRailRecords {
+  /** Which box each slot shows. */
+  slots: Record<DashSlotId, PaneId>
+  /** A slot's pick: that box in that slot. */
+  assignPane: (slot: DashSlotId, pane: PaneId) => void
+  /** Every slot back to its stock box (⊞ Reset). */
+  resetSlots: () => void
+  /** A whole placement back (⊞ Undo after a Reset). */
+  restoreSlots: (slots: Record<DashSlotId, PaneId>) => void
+  /** The slots' visibility, splits and text sizes. */
+  panels: DashRailPanels
+}
+
+/** A cockpit's rail records (`useDashRail`), for the rail beside it. */
+export function dashRailRecords(
+  rail: { slots: DashSlotsApi; panels: Record<DashRailSection, DashRailPanels> },
+  section: DashRailSection,
+): DashRailRecords {
+  return {
+    slots: rail.slots.slotsOf(section),
+    assignPane: (slot, pane) => rail.slots.assignPane(section, slot, pane),
+    resetSlots: () => rail.slots.resetSlots(section),
+    restoreSlots: (slots) => rail.slots.restoreSlots(section, slots),
+    panels: rail.panels[section],
+  }
+}
 
 export interface DashRailProps {
   /** The section beside it: a crashed box is retried when the operator moves to another. */
@@ -92,6 +153,8 @@ export interface DashRailProps {
   spotsFeed?: SpotsFeed
   otaBoard?: OtaBoard
   neededBoard?: NeededBoard
+  /** The rail beside this cockpit: its own records (`dashRailRecords`), which App owns. */
+  rail: DashRailRecords
   /** Turn the rail off for this section: its ✕, and the crash panel's way out. */
   onHide: () => void
   /** The UI scale, so a zoom change re-fits the width (usePaneWidths' reason). */
@@ -183,8 +246,7 @@ export function DashRail(props: DashRailProps) {
 const keepShare = (v: number) => Math.min(2 - MIN_SHARE, Math.max(MIN_SHARE, v))
 
 function DashRailBody(p: DashRailProps) {
-  const { slots, assignPane, resetSlots, restoreSlots } = useDashSlots()
-  const panels = usePanelLayout(DASH_PANELS)
+  const { slots, assignPane, resetSlots, restoreSlots, panels } = p.rail
   // ⊞ Reset puts the stock boxes back as well as the stock visibility; the placement it replaced is
   // held for the SAME Undo press (Connect's rule), and dropped by the next change of any kind.
   const beforeReset = useRef<Record<DashSlotId, PaneId> | null>(null)

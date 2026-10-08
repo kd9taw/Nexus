@@ -73,7 +73,7 @@ vi.mock('./prop/ClockPane', async (importOriginal) => {
   }
 })
 
-import { DashRail } from './DashRail'
+import { OwnedDashRail } from './DashRail.testkit'
 import { publishDashRailSwitch } from './dashRailSwitch'
 import { PANE_IDS } from '../features/connectConfig'
 import { APP_SNAPSHOT } from '../appCockpits.testkit'
@@ -97,7 +97,7 @@ const NEED = {
   headline: 'New band — United States 20m', mode: 'CW', freqMhz: 14.025,
 } as unknown as NeedAlert
 
-const props = (over: Partial<Parameters<typeof DashRail>[0]> = {}) => ({
+const props = (over: Partial<Parameters<typeof OwnedDashRail>[0]> = {}) => ({
   section: 'operate',
   myGrid: 'EN52',
   theme: 'dark' as const,
@@ -127,13 +127,13 @@ beforeEach(() => {
 
 describe('the stock rail', () => {
   it('shows the operator’s four boxes, top to bottom, each in its own slot', () => {
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     expect(boxes()).toEqual(['clock', 'bandTiles', 'spacewx', 'getout'])
     expect(rail().getAttribute('aria-label')).toBe('Dashboard rail')
   })
 
   it('a box’s ✕ closes its slot and the rail’s own ⊞ brings the same box back', () => {
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     fireEvent.click(within(rail()).getByRole('button', { name: 'Hide Space Wx' }))
     expect(boxes()).toEqual(['clock', 'bandTiles', 'getout'])
     fireEvent.click(within(rail()).getByRole('button', { name: /⊞ Panels · 1 hidden/ }))
@@ -145,14 +145,14 @@ describe('the stock rail', () => {
     // Its ✕ is the off switch here; a row turning the rail off from inside the rail would be a second
     // copy of it, reading like a box.
     publishDashRailSwitch({ on: true, fits: true, set: () => {} })
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     fireEvent.click(within(rail()).getByRole('button', { name: /^⊞ Panels/ }))
     expect(within(rail()).queryByRole('checkbox', { name: 'Dashboard rail' }), 'the rail offers its own switch').toBeNull()
     expect(within(rail()).getByRole('checkbox', { name: 'Clock · top' })).toBeTruthy()
   })
 
   it('every closed slot still leaves the way back on screen', () => {
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     for (const name of ['Hide Clock', 'Hide Bands for you', 'Hide Space Wx', 'Hide Getting Out']) {
       fireEvent.click(within(rail()).getByRole('button', { name }))
     }
@@ -181,7 +181,7 @@ describe('the rail renders no transmit control, whichever box is in which slot',
       'nexus.dashrail.config',
       JSON.stringify({ slots: { rail1: slots[0], rail2: slots[1], rail3: slots[2], rail4: slots[3] } }),
     )
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     await act(async () => {})
     expect(boxes(), 'the rail did not place the boxes asked for').toEqual(slots)
     // A box that crashed would show the crash panel and no controls at all — a pass proving nothing.
@@ -208,7 +208,7 @@ describe('the Needed box beside a cockpit', () => {
       JSON.stringify({ slots: { rail1: 'clock', rail2: 'needed', rail3: 'spacewx', rail4: 'getout' } }),
     )
     const p = props()
-    render(<DashRail {...p} />)
+    render(<OwnedDashRail {...p} />)
     await act(async () => {})
     const row = [...rail().querySelectorAll<HTMLElement>('[data-pane="needed"] .np-row')].find((r) =>
       r.querySelector('.np-call')?.textContent?.includes('K1CW'),
@@ -238,18 +238,18 @@ describe('a box’s own text size in the rail — ⋯ ▸ A− / A+', () => {
   }
 
   it('A+ grows that box’s words and no other’s, and the rail remembers it', () => {
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     expect(factor('rail3'), 'control: a box opens at the app’s size').toBe('')
     larger('rail3')
     expect(factor('rail3'), 'A+ did not reach the rail’s box').toBe('1.1')
     expect(factor('rail2'), 'A+ reached another box').toBe('')
     cleanup()
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     expect(factor('rail3'), 'the size did not survive a remount').toBe('1.1')
   })
 
   it('the rail’s own Reset puts every box back at the app’s size, and its Undo brings the size back', () => {
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     larger('rail1')
     expect(factor('rail1')).toBe('1.1')
     fireEvent.click(within(rail()).getByRole('button', { name: /^⊞ Panels/ }))
@@ -265,7 +265,7 @@ describe('the width divider', () => {
   const width = () => rail().style.getPropertyValue('--dash-rail-w')
 
   it('opens at the default and moves the way the arrows point, stored as the preference', () => {
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     expect(width()).toBe('300px')
     expect(seam().getAttribute('aria-valuenow')).toBe('300')
     // Its handle is on the rail's LEFT edge: the left arrow widens the rail.
@@ -284,14 +284,14 @@ describe('the width divider', () => {
   it('a width stored on a wide window is fitted on a narrower one, and the preference is kept', () => {
     localStorage.setItem('nexus.dashrail.width', '700')
     Object.defineProperty(window, 'innerWidth', { value: 1607, configurable: true })
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     expect(width()).toBe('402px')
     expect(localStorage.getItem('nexus.dashrail.width'), 'the fit rewrote the stored preference').toBe('700')
   })
 
   it('re-fits when the window is resized', async () => {
     localStorage.setItem('nexus.dashrail.width', '700')
-    render(<DashRail {...props()} />)
+    render(<OwnedDashRail {...props()} />)
     expect(width()).toBe('700px')
     Object.defineProperty(window, 'innerWidth', { value: 1607, configurable: true })
     act(() => {
@@ -307,7 +307,7 @@ describe('a crash in a box costs the rail, not the cockpit', () => {
     const onHide = vi.fn()
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      render(<DashRail {...props({ onHide })} />)
+      render(<OwnedDashRail {...props({ onHide })} />)
       expect(rail(), 'the crash took the rail’s box with it').not.toBeNull()
       expect(rail().style.getPropertyValue('--dash-rail-w')).toBe('300px')
       expect(screen.getByRole('alert').textContent).toContain('The dashboard rail hit an error')

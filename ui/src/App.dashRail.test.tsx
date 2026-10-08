@@ -150,6 +150,30 @@ describe('one click from ⊞ Panels or the NOW bar, remembered per section', () 
   })
 })
 
+describe('each cockpit keeps its own rail, and each starts from today’s', () => {
+  // The operator's "Per cockpit" (2026-10-07): FT's rail can differ from Phone's, and each starts from the
+  // rail every cockpit shared before. The records are App's (components/DashRail `useDashRail`).
+  const railBoxes = () => [...railEl()!.querySelectorAll<HTMLElement>('.dash-rail-col > .pane-frame')].map((f) => f.dataset.pane)
+  it('a pick and a close in Phone’s rail stay in Phone’s; CW’s still shows today’s rail, and both survive a relaunch', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ phone: true, cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: { rail1: 'clock', rail2: 'spacewx', rail3: 'needed', rail4: 'getout' } }))
+    await mountOn('phone')
+    await waitFor(() => expect(railEl()).not.toBeNull())
+    expect(railBoxes(), 'Phone’s first open is not today’s rail').toEqual(['clock', 'spacewx', 'needed', 'getout'])
+    fireEvent.change(railEl()!.querySelectorAll('select.pane-pick')[1], { target: { value: 'selection' } })
+    fireEvent.click(within(railEl()!.querySelector<HTMLElement>('[data-pane="getout"]')!).getByRole('button', { name: /^Hide/ }))
+    await act(async () => {})
+    expect(railBoxes()).toEqual(['clock', 'selection', 'needed'])
+    navTo('CW')
+    await waitFor(() => expect(document.querySelector('main.cw-cockpit')).not.toBeNull())
+    await waitFor(() => expect(railBoxes()).toEqual(['clock', 'spacewx', 'needed', 'getout']))
+    cleanup()
+    await mountOn('phone')
+    await waitFor(() => expect(railEl()).not.toBeNull())
+    expect(railBoxes(), 'Phone’s own rail did not survive a relaunch').toEqual(['clock', 'selection', 'needed'])
+  })
+})
+
 describe('never on a small window', () => {
   it('below lg: no rail, no NOW bar switch, and the ⊞ row keeps the choice and says why', async () => {
     localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))

@@ -91,7 +91,7 @@ import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { isDashRailSection, useDashRailSections, type DashRailSection } from './features/dashRail'
-import { DashRail } from './components/DashRail'
+import { DashRail, dashRailRecords, useDashRail } from './components/DashRail'
 import type { BoxSource } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
@@ -326,6 +326,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // whether it does. Off everywhere until the operator turns it on.
   const viewportClass = useViewportClass()
   const dashRail = useDashRailSections()
+  // Its contents, per cockpit (each starting from the rail every cockpit shared before), owned here with the
+  // cockpits' own records, so the two can share one reading of what is on screen.
+  const dashRailRec = useDashRail()
   const railFits = viewportClass === 'lg' || viewportClass === 'xl'
   // Density (row heights / padding) and text size (#215) — both chosen in Settings ▸ Workspace.
   const [density, setDensity] = useDensity()
@@ -3797,6 +3800,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             section={railSection}
             // Everything its boxes are lent, exactly as the cockpits' boxes are (`boxSource`, above).
             {...boxSource}
+            rail={dashRailRecords(dashRailRec, railSection)}
             onHide={() => setRailOn(railSection, false)}
             scale={scale}
           />
