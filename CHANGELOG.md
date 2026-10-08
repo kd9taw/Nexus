@@ -161,6 +161,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new dial (200 to 3000 Hz above it), the over on the air stops and TX turns off. The QSO stays
   where it was; turn TX on again to carry on in the new mode. A switch that leaves your Tx
   frequency on the waterfall, a switch into WSPR, and a turn of the VFO knob leave TX as it was.
+- **Switching into or out of FT2, Tempo Fast (FT1) or Tempo Deep (DX1) in the middle of a QSO
+  turns TX off too when the dial moves away from your Tx frequency.** FT8 to FT2 on 20 m moves the
+  dial from 14.074 to 14.084, and until now TX stayed on, so the next over went out in FT2 to a
+  station still on FT8. FT8 to Tempo Fast and back did the same. These switches now follow the same
+  rule as FT8 to FT4: when the frequency you were transmitting on is off the waterfall at the new
+  dial, the over on the air stops and TX turns off. The QSO stays where it was; turn TX on again to
+  carry on in the new mode. A switch that leaves your Tx frequency on the waterfall, Tempo Fast to
+  Tempo Deep (they share one channel), and a switch into WSPR leave TX as it was.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
