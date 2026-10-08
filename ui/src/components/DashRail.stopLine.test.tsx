@@ -35,7 +35,7 @@ vi.mock('./Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" />
 
 import App from '../App'
 import { COCKPIT_MAIN } from '../appCockpits.testkit'
-import { DASH_RAIL_SECTIONS, type DashRailSection } from '../features/dashRail'
+import { DASH_RAIL_FOLDS, DASH_RAIL_SECTIONS, type DashRailSection } from '../features/dashRail'
 
 // Each case mounts the real App (this file mounts it more than once per case); under the full suite's
 // load that outruns vitest's default 5 s per test, which is a budget, not a claim about the app.
@@ -60,18 +60,18 @@ const CASES: Record<DashRailSection, Array<[string, RegExp]>> = {
 
 const railEl = () => document.querySelector<HTMLElement>('.dash-rail')
 
-async function mountOn(view: string): Promise<void> {
+async function mountOn(view: string, viewport = 'lg'): Promise<void> {
   localStorage.setItem('nexus.workspace', 'dx')
   window.location.hash = `#${view}`
   render(<App />)
   await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull())
-  await waitFor(() => expect(document.documentElement.getAttribute('data-viewport')).toBe('lg'))
+  await waitFor(() => expect(document.documentElement.getAttribute('data-viewport')).toBe(viewport))
   await act(async () => {})
 }
 
 /** Each listed control: on screen at all, operable, and whether any copy of it is inside the rail. */
 async function stops(list: Array<[string, RegExp]>) {
-  const out = new Map<string, { present: boolean; enabled: boolean; inRail: boolean }>()
+  const out = new Map<string, { present: boolean; enabled: boolean; inRail: boolean; inBox: boolean }>()
   for (const [label, name] of list) {
     // Findable once the cockpit's own state has arrived (a latch draws after the cockpit reads it).
     await waitFor(() => expect(screen.queryAllByRole('button', { name }).length, `${label} never drew`).toBeGreaterThan(0), {
@@ -82,6 +82,8 @@ async function stops(list: Array<[string, RegExp]>) {
       present: found.length > 0,
       enabled: found.some((b) => !b.disabled),
       inRail: found.some((b) => railEl()?.contains(b) ?? false),
+      // In one of the rail's boxes standing in the cockpit's columns (below lg).
+      inBox: found.some((b) => b.closest('.pane-frame[data-pane^="rail"]') != null),
     })
   }
   return out
@@ -137,6 +139,34 @@ describe('the stop line beside the dashboard rail, in every operating cockpit', 
       expect(s.present, `${label} is gone beside the rail`).toBe(true)
       if (was.enabled) expect(s.enabled, `${label} is disabled beside the rail`).toBe(true)
       expect(s.inRail, `${label} was found inside the rail`).toBe(false)
+    }
+  })
+})
+
+describe('the stop line with the rail’s boxes in the cockpit’s columns, on a window too small for the rail', () => {
+  // Beside FT, Phone, CW and JS8, below lg the rail's boxes stand at the foot of the cockpit's column (the
+  // operator's "They move into the columns"); FT draws its arranged columns for them. Every control on the
+  // cockpit's list is still on screen and no more disabled than with the rail off at the same size, and none is
+  // in one of those boxes, which are Conditions boxes and hold no transmit control.
+  it.each(DASH_RAIL_FOLDS.map((s) => [s]))('%s', async (section) => {
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+    const list = CASES[section]
+    await mountOn(section, 'md')
+    const base = await stops(list)
+    for (const [label, st] of base) expect(st.present, `${label} is not on screen with the rail OFF — nothing to compare`).toBe(true)
+    cleanup()
+
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ [section]: true }))
+    await mountOn(section, 'md')
+    expect(railEl(), 'the rail rendered below lg').toBeNull()
+    await waitFor(() => expect(document.querySelectorAll('.pane-frame[data-pane^="rail"]').length, 'the rail’s boxes are not in the columns').toBe(4))
+    const folded = await stops(list)
+    for (const [label, st] of folded) {
+      const was = base.get(label)!
+      expect(st.present, `${label} is gone with the rail’s boxes in the columns`).toBe(true)
+      if (was.enabled) expect(st.enabled, `${label} is disabled with the rail’s boxes in the columns`).toBe(true)
+      expect(st.inBox, `${label} was found inside one of the rail’s boxes`).toBe(false)
     }
   })
 })

@@ -17,6 +17,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release: that first download asked for too little, and each download after it carried on from
   there, so older confirmations never arrived. Your logged contacts and the confirmations on them
   are not changed.
+- **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
+  **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
+  its own, and a click works the station as it does on the Needed screen, moving the radio and
+  opening its cockpit. Nothing transmits. Beside a cockpit, a click selects the station in the rail
+  only, never the station your cockpit is working. In a box narrower than its columns the list
+  scrolls sideways inside the box. On Nexus Remote the box says the list is not available there.
+- **Boxes in Phone, CW and JS8: any Conditions pane among the cockpit's own.** In ⊞ Panels ▸
+  Arrange, every column, and Phone's left side, ends with **+ Add a box**: up to six boxes, each
+  showing any pane of Conditions (the Clock, Space Wx, POTA/SOTA, the Spots and Needed boards and
+  the rest), picked from the box's title. A pane shows once on a screen: picking one that is already
+  showing moves it into the box. Boxes move like panes, and hiding or moving one ends nothing. A
+  click in a box never changes the station you are working, and nothing in a box transmits. No box
+  shows until you add one, so nobody's screen changes on update, and Reset layout hides them again.
+  Not on Nexus Remote.
+- **FT8 and FT4: arrange the panes, and add boxes.** In ⊞ Panels ▸ Arrange, the panes of the FT
+  layout you are in move between its columns: Band Activity, Rx Frequency, the Tx messages, Stations
+  and the callsign card among Column 1, Column 2 and the side rail in Classic; the Call Roster, Band
+  Activity, Rx Frequency and the card between the main column and the side rail in Roster. Each
+  layout can also show the other's panes: tick the Call Roster in Classic's ⊞ Panels, or the Tx
+  messages or Stations in Roster's, and it stands in that layout, to move like the rest; its ✕ takes
+  it out of that layout only. Classic and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
+  Conditions pane, as Phone, CW and JS8 do. Moving a pane changes nothing it does: a double-click
+  still answers the station, and Band Activity keeps its decodes. In an arranged column the callsign
+  card keeps its size, and a crowded column scrolls instead. Nothing moves until you move it, so
+  nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
+  Nexus Remote.
+
+### Changed
+
+- **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
+  boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
+  that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each
+  cockpit's rail starts as the rail you had.
+- **A pane shows once across a cockpit and its dashboard rail.** While the rail shows a pane, a box in
+  the cockpit that holds the same pane shows another. Picking a pane that is already showing, in the
+  rail or in a box, moves it there, and the other side takes what it showed.
+- **On a small window the dashboard rail's boxes move into the cockpit.** Beside FT, Phone, CW and
+  JS8, on a window too small for the rail, its boxes now stand at the foot of the cockpit's columns
+  (FT's side rail, the first column in the others) instead of disappearing, and go back into the
+  rail when the window is wide enough. The Now-Bar's **Dashboard** button switches them there too.
+- **POTA/SOTA: one fetch a minute per window, however many lists show it.** The POTA/SOTA screen, a
+  Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
+  themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
+  of them, and a failed fetch says so once.
 
 ### Fixed
 
@@ -159,6 +203,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
   file again does not add them twice.
+- **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
+  Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
+  list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
+  what it is waiting for, as the other boxes do: where to set up a rotator or an amplifier, that no
+  needed station is being heard yet, or that the contest calendar appears once Nexus is online.
 
 ## [1.17.0] — 2026-10-07
 

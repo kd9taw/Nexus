@@ -32,7 +32,7 @@ vi.mock('../api', async (importOriginal) => {
 
 import * as api from '../api'
 import { ConnectView } from './ConnectView'
-import { DashRail } from './DashRail'
+import { OwnedDashRail } from './DashRail.testkit'
 import { pastTheSwitch } from './ConnectView.testkit'
 
 const FEEDS = ['getGettingOut', 'getBandOutlook', 'getSpaceWxScales', 'getKc2gMuf', 'getXrayNow', 'getDxpedWindows'] as const
@@ -86,7 +86,7 @@ describe('Connect and the dashboard rail on screen together', () => {
             onSelectCall={() => {}}
             needByCall={new Map()}
           />
-          <DashRail section="operate" myGrid="EN52" theme="dark" stations={[]} prop={null} needByCall={new Map()} onHide={() => {}} />
+          <OwnedDashRail section="operate" myGrid="EN52" theme="dark" stations={[]} prop={null} needByCall={new Map()} onHide={() => {}} />
         </>,
       )
       await act(async () => {})
@@ -116,7 +116,7 @@ describe('Connect and the dashboard rail on screen together', () => {
           onSelectCall={() => {}}
           needByCall={new Map()}
         />
-        <DashRail section="operate" myGrid="EN52" theme="dark" stations={[]} prop={LIVE} needByCall={new Map()} onHide={() => {}} />
+        <OwnedDashRail section="operate" myGrid="EN52" theme="dark" stations={[]} prop={LIVE} needByCall={new Map()} onHide={() => {}} />
       </>,
     )
     await act(async () => {})

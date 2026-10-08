@@ -2,8 +2,9 @@
 // (get_contests → parse_contest_rss). Self-fetching like SatPassesPane, but the
 // concrete loader is injected so this file stays decoupled from api.ts (which is
 // wired separately). Rows are grouped now / soon / this week / later; already-
-// ended contests drop out. Honesty: null data → the pane renders nothing and
-// PaneFrame falls back to the Basic hint (never a fabricated empty schedule).
+// ended contests drop out. Honesty: null data → the box's one line (its Basic hint),
+// never a fabricated empty schedule. It is drawn here: the frame is handed this
+// component and never sees a null from it.
 import { useEffect, useState } from 'react'
 import { t, type MessageKey } from '../i18n'
 
@@ -107,10 +108,10 @@ export function ContestCalendarPane({
     }
   }, [load])
 
-  if (!contests) return null // → PaneFrame's honest Basic hint
+  if (!contests) return <p className="pane-basic">{t('connect.pane.contests.basic')}</p>
   const now = Date.now() / 1000
   const up = upcomingContests(contests, now)
-  if (up.length === 0) return null
+  if (up.length === 0) return <p className="pane-basic">{t('connect.pane.contests.basic')}</p>
 
   const shown = up.slice(0, 20)
   const byBucket = new Map<ContestBucket, ContestEvent[]>()

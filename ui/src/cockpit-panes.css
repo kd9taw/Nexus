@@ -86,8 +86,9 @@
      THE SWEEPS DO NOT MATCH THAT CENSUS ONE FOR ONE, and the claim that they did was false
      for four of the five swept cockpits. Swept: Phone — PTT, Stop TX, Tune. CW — Stop TX,
      Tune. RTTY — Stop TX, the Esc/Stop macro, the latch. SSTV — Stop, the latch (the one
-     exact match). Operate's guard list is not a stop-control list at all: it is the whole
-     TX/sequencer surface of the strip, presence-only. Census-only, and outside both sweeps by
+     exact match). Operate — Stop TX, Tune, in both layouts (since 2026-10-07); its structure
+     test also holds the whole TX/sequencer surface of the strip, which is not a stop-control
+     list. Census-only, and outside both sweeps by
      construction: Phone's Space and CW's/Operate's Esc (keyboard-only, no accessible name)
      and RTTY's sequencer Abort (conditionally rendered). What is checkable in minutes is that
      each swept list is a non-empty subset of its cockpit's census.
@@ -167,14 +168,13 @@
      · NAMES: panelState.test.ts, over ALL_PANEL_VOCABULARIES (which is itself checked
        against every vocabulary the module exports, so a sixth cockpit is covered by being
        exported). No id may be NAMED for a stop control. It cannot see wiring.
-     · WIRING: components/stop-line.test.tsx renders Phone/CW/RTTY/SSTV with the REAL
-       header, with the props App passes them, and drives every vocabulary id — singly and
-       all at once — through the real hide path, requiring every stop control ON THAT
+     · WIRING: components/stop-line.test.tsx renders Phone/CW/RTTY/PSK/SSTV/JS8 and FT with the
+       REAL header or QSO strip, with the props App passes them, and drives every vocabulary
+       id — singly and all at once — through the real hide path, requiring every stop control ON THAT
        COCKPIT'S LIST to still be in the document BY ACCESSIBLE NAME and no more disabled than
        it was with nothing hidden. The list is the outside-every-pane set and only that: the
        keyer's ■ Stop and RTTY's Auto toggle are deliberately absent (forbidden item 4).
-       Operate is swept in OperateCockpit.structure.test.tsx, presence-only (see below).
-       Neither can see names.
+       The cockpits that arrange are swept over fifty placements each too. Neither can see names.
 
    WHAT THESE GUARDS DO NOT PROVE. Written down rather than chased with more guards, because
    a guard that overclaims is worse than a gap somebody can see:
@@ -191,10 +191,6 @@
        it the way there is for the name guard — a sixth cockpit with a pane whose hide ends
        something would ship silent, and nothing here would say so. It costs courtesy, not
        the guarantee.
-     · Operate's sweep is presence-only: every protected control is in `.cockpit-qso` with
-       every id removed. It takes no baseline, compares no `disabled` state and does not hide
-       ids one at a time. It is NOT the equivalent of the four-cockpit sweep and must not be
-       described as one.
      · NEITHER SWEEP CAN SEE A KEYBOARD-ONLY OR CONDITIONALLY RENDERED STOP. Both look for
        BUTTONS by accessible name, in one fixed fixture state, so Phone's Space bar, CW's and
        Operate's Esc and RTTY's sequencer Abort are census-only by construction. They are real
@@ -582,6 +578,33 @@
   gap: var(--space-2);
 }
 
+/* FT'S ARRANGED COLUMNS (⊞ Panels ▸ Arrange, 2026-10-07: the operator's "Arrange on FT's grid"). FT keeps
+   its own grid (styles.css `.cockpit-lower`: Classic's three tracks, Roster's two, the dividers between
+   the columns, the rail side and the narrow stack, all positional), and until the operator arranges
+   anything it draws exactly the tree it always drew (OperateCockpit's stock branch). Once a pane is moved
+   or a box added, each of its columns is one of these: a flex stack of role-typed frames (the arranged
+   branch, each frame's flex from `paneRoleStyle`, as a pane frame's is), and the interposed scroller those
+   frames need. The column scrolls — the pane contract's second legal fate — so nothing it holds is ever
+   clipped: the Tx1–Tx6 machine and the callsign card are their own height (the card capped by
+   `.cockpit-recall` wherever it stands), and a feed floors at the bounded flow's yielding 10em, which is
+   legal here only because this scrolls behind it. FT's own gap (8 px), not the pane grid's.
+   The rail stands first while it is on the left (`.op-stack-lead`), by `order` as the stock rail does, so
+   no pane changes its place in the tree. No transmit control is in any of them: the QSO strip with Stop TX
+   stands above the grid, and no placement can name it. */
+.op-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  --cockpit-fill-min: min(10em, 100%);
+}
+.op-stack-lead {
+  order: -1;
+}
+
 /* Action cluster in a pane head (pop-out / remove / pane-supplied buttons). The head is
    `justify-content: space-between`, so grouping the buttons keeps them together at the
    right edge instead of spreading across the title row. */
@@ -643,6 +666,19 @@
   flex: 0 1 auto;
   max-height: min(14em, 33%);
   overflow-y: auto;
+}
+
+/* THE CARD IN FT'S ARRANGED COLUMNS KEEPS ITS SIZE (the operator's pick, 2026-10-07: "Card keeps its
+   size"). An arranged column (`.op-stack`, above) floors its feeds and boxes at a yielding 10em, which
+   left the card the only item that could shrink: in a crowded column it gave up its whole height before
+   the column scrolled, down to its padding (22 px at 1024×768 in the operator's own example layout, a
+   card answering "who is this" in one line). There the card keeps the stock bound above, `min(14em, 33%)`
+   of its column, and never shrinks; the column is a scroller, so it scrolls instead. A second flat
+   class, added by the host only in the arranged branch (RecallPanel `kept`), so the stock screens and
+   the Phone and CW log panes are untouched. It changes the shrink and nothing else: the ceiling and the
+   card's own scroll are `.cockpit-recall`'s, and it is never a floor. */
+.cockpit-recall-kept {
+  flex: 0 0 auto;
 }
 
 /* The hosted observer adds session chrome above the FT shell. At pinned zoom

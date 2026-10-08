@@ -222,11 +222,12 @@ describe('OperateCockpit — the reclaimed space', () => {
 })
 
 describe('⊞ Panels menu', () => {
-  it('lists only the panels the current layout renders, and unticking removes one', () => {
+  it('lists the panels the current layout can show, the other layout’s unticked, and unticking removes one', () => {
     const { panels } = renderCockpit({}, 'classic')
     fireEvent.click(screen.getByRole('button', { name: /panels/i }))
-    // Classic has no Call Roster pane, so offering it would tick a panel into nowhere.
-    expect(screen.queryByLabelText('Call Roster')).toBeNull()
+    // Every FT pane can stand in both layouts: Classic offers the Call Roster, unticked until added
+    // there, though the record says it is docked (it is, in Roster).
+    expect((screen.getByLabelText('Call Roster') as HTMLInputElement).checked).toBe(false)
     fireEvent.click(screen.getByLabelText('Waterfall'))
     expect(panels.setPanelState).toHaveBeenCalledWith('waterfall', 'removed')
   })

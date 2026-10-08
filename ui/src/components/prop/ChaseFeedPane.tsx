@@ -32,7 +32,8 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
   // The Chase pane's row, and its line under the first for an entity with no room (chaseSplit).
   const list = useRef<HTMLUListElement>(null)
   useChaseSplit(list, items.length > 0)
-  if (items.length === 0) return null // PaneFrame falls back to the basic() line
+  // Nothing chase-worthy: the box's one line, drawn here (the Chase pane's reason).
+  if (items.length === 0) return <p className="pane-basic">{t('chase.feed.empty')}</p>
 
   const rows = items
   return (

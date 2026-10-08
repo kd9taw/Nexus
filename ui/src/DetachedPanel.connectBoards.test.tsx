@@ -169,6 +169,31 @@ describe("the dashboard window's Spots box works a spot through this window's ow
   }
 })
 
+describe("the dashboard window's Needed box works a need through this window's own Needed work", () => {
+  it('the same backend traffic as the Needed pop-out working it, and no transmit command', async () => {
+    state.needs = [{ ...spotNeed(SPOTS.find((s) => s.call === 'K1CW')!), tags: ['NewEntity'] }]
+    localStorage.setItem(
+      'nexus.connect.config',
+      JSON.stringify({
+        slots: { left1: 'needed', left2: 'bandTiles', right1: 'pota', right2: 'outlook', bottom1: 'openings', bottom2: 'spacewx', bottom3: 'getout' },
+        overlays: {},
+      }),
+    )
+    const boxNeed = () =>
+      ([...(document.querySelector('.pane-frame[data-pane="needed"]')?.querySelectorAll('.np-row:not(.np-header)') ?? [])] as HTMLElement[]).find(
+        (r) => r.querySelector('.np-call')?.textContent?.startsWith('K1CW'),
+      ) ?? null
+    const fromBox = await clickAndRecord('connect', boxNeed)
+    expect(writes(fromBox)).toEqual([
+      ['selectPeer', ['K1CW']],
+      ['workSpot', ['cw', 14.025, '20m', 'K1CW', undefined]],
+    ])
+    const fromBoard = await clickAndRecord('needed', neededRow('K1CW'))
+    expect(writes(fromBox), "the box worked it exactly as this window's board does").toEqual(writes(fromBoard))
+    for (const verb of TX_VERBS) expect(fromBox.some(([n]) => n === verb), `the box called ${verb}`).toBe(false)
+  })
+})
+
 describe("the dashboard window's POTA/SOTA box hunts through this window's own POTA/SOTA hunt", () => {
   it('the same tag and QSY as the POTA/SOTA pop-out, and no transmit command', async () => {
     const hunt = () => {

@@ -10,17 +10,25 @@ import {
   DASH_RAIL_SECTIONS,
   DASH_RAIL_DEFAULT_PX,
   FLOOR_EFFECTIVE_W,
+  coerceDashConfig,
   coerceDashSlots,
   coerceRailSections,
+  dashRailInstance,
   fitRailWidth,
+  loadDashConfig,
   loadDashSlots,
   loadRailSections,
   parseRailWidth,
+  railOnScreen,
   railWidthMax,
+  slotsOf,
   stepRailWidth,
   useDashRailSections,
   useDashSlots,
 } from './dashRail'
+import { DASH_PANELS, panelStorageKey, usePanelLayout } from './panelState'
+import { windowInstance } from './windowScope'
+import { isDurable } from './durableStore'
 import { RAIL_MAX, RAIL_MIN } from './connectRails'
 import { pickInitialZoom } from '../useScale'
 
@@ -75,11 +83,98 @@ describe('the stock boxes, and a column that stays a permutation', () => {
 
   it('picking a box already in another slot swaps the two, and the pick is stored', () => {
     const { result } = renderHook(() => useDashSlots())
-    act(() => result.current.assignPane('rail1', 'getout'))
-    expect(result.current.slots).toEqual({ rail1: 'getout', rail2: 'bandTiles', rail3: 'spacewx', rail4: 'clock' })
-    expect(loadDashSlots()).toEqual(result.current.slots)
-    act(() => result.current.resetSlots())
+    act(() => result.current.assignPane('operate', 'rail1', 'getout'))
+    expect(result.current.slotsOf('operate')).toEqual({ rail1: 'getout', rail2: 'bandTiles', rail3: 'spacewx', rail4: 'clock' })
+    expect(loadDashConfig().sections.operate).toEqual(result.current.slotsOf('operate'))
+    act(() => result.current.resetSlots('operate'))
+    expect(loadDashConfig().sections.operate).toEqual(DASH_DEFAULT_SLOTS)
+  })
+})
+
+// THE RAIL PER COCKPIT (the operator's "Per cockpit", 2026-10-07: FT's rail can differ from Phone's, and each
+// starts from today's rail). The placement record keeps the window's shared rail — the one every cockpit had
+// before, and the only part an older build reads — and each cockpit's own once it changes its rail; the panel
+// record (which slots show, their splits, their text sizes) is one per cockpit, reading the window's shared
+// one until the cockpit has its own. Computed on the real records, as panelState.layouts.test.ts does FT's.
+describe('each cockpit’s rail: its own boxes, starting from today’s rail', () => {
+  const TODAY = { rail1: 'needed', rail2: 'clock', rail3: 'spacewx', rail4: 'pota' }
+  const seedToday = () => localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: TODAY }))
+
+  it('a cockpit with no rail of its own shows today’s: every cockpit’s first open is the rail it had', () => {
+    seedToday()
+    const { result } = renderHook(() => useDashSlots())
+    for (const section of DASH_RAIL_SECTIONS) expect(result.current.slotsOf(section), section).toEqual(TODAY)
+  })
+
+  it('a change is that cockpit’s own: FT’s rail and Phone’s differ, and today’s rail is written back as it was', () => {
+    seedToday()
+    const { result } = renderHook(() => useDashSlots())
+    act(() => result.current.assignPane('operate', 'rail4', 'getout'))
+    expect(result.current.slotsOf('operate')).toEqual({ ...TODAY, rail4: 'getout' })
+    expect(result.current.slotsOf('phone'), 'a change in FT reached Phone').toEqual(TODAY)
+    const stored = JSON.parse(localStorage.getItem('nexus.dashrail.config')!)
+    expect(stored.slots, 'the shared rail moved: a cockpit opened later would not inherit today’s').toEqual(TODAY)
+    expect(Object.keys(stored.sections)).toEqual(['operate'])
+    // A reload reads both back.
+    expect(slotsOf(loadDashConfig(), 'operate').rail4).toBe('getout')
+    expect(slotsOf(loadDashConfig(), 'cw')).toEqual(TODAY)
+  })
+
+  it('Reset and Undo’s restore are a cockpit’s own, and Reset is the stock four, not today’s rail', () => {
+    seedToday()
+    const { result } = renderHook(() => useDashSlots())
+    act(() => result.current.resetSlots('phone'))
+    expect(result.current.slotsOf('phone')).toEqual(DASH_DEFAULT_SLOTS)
+    expect(result.current.slotsOf('operate')).toEqual(TODAY)
+    act(() => result.current.restoreSlots('phone', { rail1: 'getout', rail2: 'getout' } as never))
+    expect(new Set(Object.values(result.current.slotsOf('phone'))).size, 'a restore is coerced: never a duplicate').toBe(4)
+  })
+
+  it('coerces a stored record: each placement repaired, and only the operating cockpits keep a rail', () => {
+    const c = coerceDashConfig({
+      slots: { rail1: 'nope' },
+      sections: { operate: { rail1: 'getout', rail2: 'getout' }, settings: { rail1: 'clock' }, phone: 'junk', js8: [] },
+    })
+    expect(new Set(Object.values(c.slots)).size).toBe(4)
+    expect(c.slots.rail1).toBe('clock')
+    expect(Object.keys(c.sections)).toEqual(['operate'])
+    expect(new Set(Object.values(c.sections.operate!)).size).toBe(4)
+    for (const junk of [null, 'x', [], 7, { sections: 'x' }]) {
+      expect(coerceDashConfig(junk), JSON.stringify(junk)).toEqual({ slots: DASH_DEFAULT_SLOTS, sections: {} })
+    }
+  })
+
+  it('an older build reads today’s rail and nothing else, beside every cockpit', () => {
+    seedToday()
+    const { result } = renderHook(() => useDashSlots())
+    act(() => result.current.assignPane('operate', 'rail1', 'getout'))
+    act(() => result.current.assignPane('phone', 'rail2', 'contests'))
+    // The reader before rails were per cockpit, verbatim: `slots`, coerced.
+    const olderRead = coerceDashSlots((JSON.parse(localStorage.getItem('nexus.dashrail.config')!) as { slots?: unknown }).slots)
+    expect(olderRead).toEqual(TODAY)
+    // A fresh install reads the stock four everywhere.
+    localStorage.clear()
+    expect(slotsOf(loadDashConfig(), 'operate')).toEqual(DASH_DEFAULT_SLOTS)
     expect(loadDashSlots()).toEqual(DASH_DEFAULT_SLOTS)
+  })
+
+  it('which slots show is per cockpit too, each reading the window’s shared record until it has its own', () => {
+    // Today's visibility: Getting Out's slot closed, on the one shared record.
+    localStorage.setItem(panelStorageKey('dashrail'), JSON.stringify({ v: 2, state: { rail4: 'removed' }, share: {} }))
+    const ft = renderHook(() => usePanelLayout(DASH_PANELS, dashRailInstance('operate'), windowInstance()))
+    const phone = renderHook(() => usePanelLayout(DASH_PANELS, dashRailInstance('phone'), windowInstance()))
+    expect(ft.result.current.stateOf('rail4'), 'FT’s first open is not today’s rail').toBe('removed')
+    act(() => ft.result.current.setPanelState('rail2', 'removed'))
+    expect(ft.result.current.stateOf('rail2')).toBe('removed')
+    expect(phone.result.current.stateOf('rail2'), 'a close in FT’s rail closed Phone’s').toBe('docked')
+    expect(phone.result.current.stateOf('rail4')).toBe('removed')
+    // FT's record is its own, on the main window a durable one like every main-window layout; the shared one
+    // is untouched, so a cockpit opened later still starts from today's.
+    const key = panelStorageKey('dashrail', dashRailInstance('operate'))
+    expect(key).toBe('nexus.panels.dashrail.operate.main')
+    expect(isDurable(key)).toBe(true)
+    expect(JSON.parse(localStorage.getItem(key)!).state).toEqual({ rail4: 'removed', rail2: 'removed' })
+    expect(JSON.parse(localStorage.getItem(panelStorageKey('dashrail'))!).state).toEqual({ rail4: 'removed' })
   })
 })
 
@@ -122,5 +217,29 @@ describe('the width: a stored preference fitted into the window, the cockpit kee
   it('a junk stored width is "never sized"', () => {
     for (const raw of [null, '', 'wide', '-3', '0', 'NaN', 'Infinity']) expect(parseRailWidth(raw), String(raw)).toBeNull()
     expect(parseRailWidth('333.6')).toBe(334)
+  })
+})
+
+describe('what the rail shows on a screen (once per screen across the cockpit and its rail)', () => {
+  // The cockpit's own boards come first (Phone's and CW's Spots and Needed panes): a slot holding one shows the
+  // first entry of the shared list not on screen instead, and gets its own back when the pane goes. Hidden slots
+  // show nothing and take nothing.
+  const RAIL = { rail1: 'clock', rail2: 'needed', rail3: 'spacewx', rail4: 'getout' } as const
+
+  it('every slot on screen, in order, with its own box', () => {
+    expect(railOnScreen(RAIL, ['rail1', 'rail2', 'rail3', 'rail4'])).toEqual([
+      { slot: 'rail1', pane: 'clock', entry: 'clock' },
+      { slot: 'rail2', pane: 'needed', entry: 'neededBoard' },
+      { slot: 'rail3', pane: 'spacewx', entry: 'spacewx' },
+      { slot: 'rail4', pane: 'getout', entry: 'getout' },
+    ])
+  })
+
+  it('a slot whose board the cockpit shows as its own shows another, and a hidden slot nothing', () => {
+    const on = railOnScreen(RAIL, ['rail1', 'rail2', 'rail4'], ['neededBoard'])
+    expect(on.map((b) => b.slot)).toEqual(['rail1', 'rail2', 'rail4'])
+    expect(on[1].entry, 'the Needed board is on the screen twice').not.toBe('neededBoard')
+    expect(new Set(on.map((b) => b.entry)).size, 'the substitute is on screen already').toBe(3)
+    expect(on.some((b) => b.entry === 'neededBoard')).toBe(false)
   })
 })

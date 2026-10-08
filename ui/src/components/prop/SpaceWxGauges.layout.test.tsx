@@ -22,7 +22,7 @@ vi.mock('../../api', async (importOriginal) => ({
   getSolarIndices: vi.fn(() => new Promise(() => {})),
 }))
 
-import { PaneFrame } from '../connect/PaneFrame'
+import { PaneBody, PaneFrame } from '../connect/PaneFrame'
 import type { PaneContext } from '../connect/paneContext'
 
 const sheet = (name: string) =>
@@ -79,5 +79,43 @@ describe('the Space Wx gauges in a Connect box', () => {
     const { strip } = box('app')
     expect(won(strip, 'display')?.value).toBe('flex')
     expect(won(strip.querySelector('.swx-head')!, 'flex-wrap'), 'a gauge head outside Connect wraps').toBeNull()
+  })
+})
+
+describe('the Space Wx gauges in a box inside a cockpit (any pane in any area, 2026-10-07)', () => {
+  /** The box as a cockpit draws it: the cockpit pane frame, its body, and the box's own wrapper. */
+  function cockpitBox(wrapped: boolean) {
+    const { container } = render(
+      <div className="app">
+        <section className="pane-frame">
+          <div className="pane-body">
+            {wrapped ? (
+              <div className="box-body">
+                <PaneBody pane="spacewx" ctx={LIVE} />
+              </div>
+            ) : (
+              <PaneBody pane="spacewx" ctx={LIVE} />
+            )}
+          </div>
+        </section>
+      </div>,
+    )
+    const strip = container.querySelector('.swx-strip')!
+    expect(strip, 'control: the gauges are drawn').not.toBeNull()
+    return strip
+  }
+
+  it('read as they do on Conditions: two to a row, the unit and the value free to go under', () => {
+    const strip = cockpitBox(true)
+    expect(won(strip, 'display')?.value, `display is won by "${won(strip, 'display')?.rule.selector}"`).toBe('grid')
+    expect(won(strip, 'grid-template-columns')?.value).toBe('repeat(2, 1fr)')
+    expect(won(strip.querySelector('.swx-vu')!, 'flex-wrap')?.value).toBe('wrap')
+    expect(won(strip.querySelector('.swx-head')!, 'flex-wrap')?.value).toBe('wrap')
+    // …and the strip is a flattened panel there, as in a Connect box: no card inside the box's frame.
+    expect(won(strip, 'border-top-width', 'border')?.value ?? '').toMatch(/^0/)
+  })
+
+  it('control: a cockpit pane that is no box is still outside the rule', () => {
+    expect(won(cockpitBox(false), 'display')?.value).toBe('flex')
   })
 })

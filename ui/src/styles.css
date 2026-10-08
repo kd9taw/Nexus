@@ -2316,8 +2316,10 @@ button.nb-chip:hover {
   font-size: var(--fs-label);
   line-height: 1.45;
 }
-/* Flatten the verbatim inner panels so we don't get card-in-card (inner JSX/CSS unchanged). */
-.pane-body > .panel {
+/* Flatten the verbatim inner panels so we don't get card-in-card (inner JSX/CSS unchanged). A box in a
+   cockpit (`.box-body`, components/panes/CockpitBox) holds the same panels one level down. */
+.pane-body > .panel,
+.pane-body > .box-body > .panel {
   border: 0;
   box-shadow: none;
   background: transparent;
@@ -2328,8 +2330,11 @@ button.nb-chip:hover {
    cockpit pane grids now, and these are ~250px-RAIL adaptations (columns stripped,
    direction/people hidden). A cockpit pane that ever hosts BandAdvisor/SpaceWx would
    have been silently column-stripped by the global spelling (fix-round D7, 2026-07-31). */
+/* A BOX inside a cockpit (`.box-body`, 2026-10-07) is a Connect box, and reads as one; the cockpit's
+   own panes are still outside. */
 .connect .pane-body .swx-strip,
-.dash-boxes .pane-body .swx-strip {
+.dash-boxes .pane-body .swx-strip,
+.pane-body > .box-body .swx-strip {
   /* The strip is also a `.panel`, and the `.panel` rule's flex display comes later in the sheet
      than `.swx-strip`'s grid at the same specificity, so it won and the gauges stood one per row.
      This selector outranks both, in a Connect box and in the dashboard rail beside the cockpits
@@ -2340,14 +2345,16 @@ button.nb-chip:hover {
 /* Two to a row, a column in the 200 px rail is ~77 px: the solar-wind speed's unit drops under its
    value there instead of running past the column's edge, and stays beside it in a wider column. */
 .connect .pane-body .swx-vu,
-.dash-boxes .pane-body .swx-vu {
+.dash-boxes .pane-body .swx-vu,
+.pane-body > .box-body .swx-vu {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 /* …and so does a gauge's value under its name where the two do not fit side by side: in Spanish
    "VIENTO 487" ran past a 77 px column, and past a 65 px one at the dashboard rail's floor. */
 .connect .pane-body .swx-head,
-.dash-boxes .pane-body .swx-head {
+.dash-boxes .pane-body .swx-head,
+.pane-body > .box-body .swx-head {
   flex-wrap: wrap;
 }
 /* ── The Amplifier pane ────────────────────────────────────────────────────────────────
@@ -2427,25 +2434,31 @@ button.nb-chip:hover {
 }
 /* The dashboard rail beside the cockpits (`.dash-boxes`, components/DashRail) is the same kind of
    narrow rail of Connect boxes, so the Band Advisor's rail fits reach it too, at the same (0,3,0).
-   Cockpit pane grids are still outside both. */
+   So does a box inside a cockpit (`.box-body`, 2026-10-07): it reads as it does on Conditions. The
+   cockpit pane grids' own panes are still outside all three. */
 .connect .pane-body .ba-row,
-.dash-boxes .pane-body .ba-row {
+.dash-boxes .pane-body .ba-row,
+.pane-body > .box-body .ba-row {
   grid-template-columns: 40px 1fr 78px;
 }
 .connect .pane-body .ba-dir,
 .connect .pane-body .ba-people,
 .dash-boxes .pane-body .ba-dir,
-.dash-boxes .pane-body .ba-people {
+.dash-boxes .pane-body .ba-people,
+.pane-body > .box-body .ba-dir,
+.pane-body > .box-body .ba-people {
   display: none;
 }
 .connect .pane-body .ba-reason,
-.dash-boxes .pane-body .ba-reason {
+.dash-boxes .pane-body .ba-reason,
+.pane-body > .box-body .ba-reason {
   grid-column: 1 / -1;
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
 .connect .pane-body .ba-rows,
-.dash-boxes .pane-body .ba-rows {
+.dash-boxes .pane-body .ba-rows,
+.pane-body > .box-body .ba-rows {
   max-height: 100%; /* the pane body is the scroller now; no fixed 44vh cap */
   overflow-y: auto;
 }
@@ -2657,9 +2670,10 @@ body.resizing-row {
 
 /* Words whose chip or row already has a border in the state colour: the ink only. The Space Wx scale
    chips' borders are fixed colours that read 1.9:1 (R) and 3.1:1 (G) on the light page, so they take
-   the theme's warning and critical colours. Satellite chips are Connect's own here: on Connect and in
-   the dashboard rail beside the cockpits, whose boxes are Connect's (`.dash-boxes`). Need chips take the
-   same treatment everywhere in the app (with the need chip's own rules). */
+   the theme's warning and critical colours. Satellite chips are Connect's own here: on Connect, in
+   the dashboard rail beside the cockpits, whose boxes are Connect's (`.dash-boxes`), and in a box inside
+   a cockpit (`.box-body`). Need chips take the same treatment everywhere in the app (with the need
+   chip's own rules). */
 [data-theme='light'] .cp-mode.good,
 [data-theme='light'] .cp-mode.fair,
 [data-theme='light'] .swsc-chip.swsc-minor,
@@ -2674,7 +2688,10 @@ body.resizing-row {
 [data-theme='light'] .connect .sat-chip.stale,
 [data-theme='light'] .dash-boxes .sat-chip.alive,
 [data-theme='light'] .dash-boxes .sat-chip.dead,
-[data-theme='light'] .dash-boxes .sat-chip.stale {
+[data-theme='light'] .dash-boxes .sat-chip.stale,
+[data-theme='light'] .box-body .sat-chip.alive,
+[data-theme='light'] .box-body .sat-chip.dead,
+[data-theme='light'] .box-body .sat-chip.stale {
   color: var(--text);
 }
 [data-theme='light'] .swsc-chip.swsc-minor {
@@ -16935,6 +16952,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
   cursor: default;
 }
+/* "+ Add a box" at the foot of each place (2026-10-07): a quiet button under the place's panes, in the
+   arrows' face, its border dashed because it adds rather than moves. */
+.panels-arrange-add {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0 var(--space-1);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.panels-arrange-add:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.panels-arrange-add:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
 /* ⊞ Panels ▸ Layout — Connect's layout presets (ConnectView), above the entries. A column of
    full-width choices rather than a chip row: the popover is 220px wide, where three chips side by
    side wrap at Large text or in German. The one on screen is FILLED — a change of form, not of
@@ -18446,6 +18485,20 @@ button.cq-skiptx1.on {
 .pane-body > .np-pane--stacked {
   min-height: 16em;
 }
+/* ── A BOX IN A COCKPIT (any pane in any area, 2026-10-07; components/panes/CockpitBox) ────────────
+   A Conditions box standing in Phone's, CW's or JS8's columns, or on Phone's left side: the cockpit
+   pane frame, and in its body the box's own wrapper, `.box-body`, which takes the Conditions box's
+   content as a Connect slot or the dashboard rail does (the flatten above, and the Space Wx, Band
+   Advisor and satellite-chip rules scoped to `.connect` and `.dash-boxes`, which name it too).
+   IN THE STACKING FLOW the region is content height and scrolls, and a fill frame is its content's
+   height, so a list box — the Getting Out list, the Spots board — would stand every row of its list
+   in the column above the log form. There, and only there, a list box is capped and scrolls inside
+   itself, at the height Phone's own feeds take in the same flow (`.np-pane--stacked`). At the bounded
+   tiers the pane body is its scroller, and a cap would only make a second one. */
+.pane-body > .box-body--stacked {
+  max-height: 16em;
+  overflow-y: auto;
+}
 .np-board {
   flex: 1 1 0;
   min-height: 0;
@@ -18576,6 +18629,20 @@ button.cq-skiptx1.on {
 .cn-spots[data-fit='s'] [data-col='spotter'],
 .cn-spots[data-fit='s'] [data-col='comment'] {
   display: none;
+}
+/* ── THE NEEDED BOARD AS A CONNECT BOX (components/connect/NeededBox.tsx) ─────────────────
+   The same board as a pane (`.np-board`, above), in a Connect slot or in the dashboard rail, under the
+   Spots box's first rule and for its reason. Measured in Chrome (2026-10-07): with the pane's zero-
+   basis grid, the rail's Needed box was 2 px of list, drawing its count and its Filter button and no
+   row at all. So the board takes its natural height, the pane body scrolls it, and the grid is no
+   scroller of its own (its sticky column headings stick to the pane body). Its columns stay the
+   pane's, so a box narrower than they are scrolls sideways inside its own body. */
+.cn-needed .np-board,
+.cn-needed .np-board > .np-grid {
+  flex: none;
+}
+.cn-needed .np-board > .np-grid {
+  overflow: visible;
 }
 .sp-state {
   color: var(--text-dim);
@@ -23624,7 +23691,8 @@ button.sat-chip:disabled {
    overlap), so a divider is centred in the gap between its neighbours and takes nothing from the
    column. Each rule names the gap it gives back: the cockpit shells' and the pane grid's columns'
    (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
-   a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px).
+   a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px),
+   and FT's arranged columns (`.op-stack`, 8 px, in cockpit-panes.css: their dividers carry `in-op-stack`).
    Phone's scope divider carries `in-column` too since its left side (2026-10-03): it stands in the
    stage (cockpit-panes.css), whose gap is the shell's, so a shell-child selector cannot reach it.
    Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
@@ -23639,7 +23707,8 @@ button.sat-chip:disabled {
 }
 .cockpit-body > .pane-splitter.horizontal,
 .cockpit-side > .pane-splitter.horizontal,
-.cockpit-qsocol > .pane-splitter.horizontal {
+.cockpit-qsocol > .pane-splitter.horizontal,
+.pane-splitter.horizontal.in-op-stack {
   margin-block: calc(-0.5 * var(--space-2) - var(--space-1));
 }
 

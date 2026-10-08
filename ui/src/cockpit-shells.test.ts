@@ -794,6 +794,14 @@ describe('a y divider costs its column nothing: its margins give back the gap it
     ['.operate-cockpit .cockpit-body', BODY, BODY, ['pane-splitter', 'horizontal']],
     ['.operate-cockpit .cockpit-side', SIDE, SIDE, ['pane-splitter', 'horizontal', 'seam']],
     ['.operate-cockpit .cockpit-qsocol', QSOCOL, QSOCOL, ['pane-splitter', 'horizontal']],
+    // FT'S ARRANGED COLUMNS (2026-10-07) are cockpit-panes.css's (`.op-stack`, FT's own 8 px gap), which this
+    // sheet may not name, so the divider between two of their feeds gives the gap back by `in-op-stack`.
+    [
+      '.operate-cockpit .op-stack',
+      null,
+      [...BODY, new Set(['cockpit-lower', 'roster']), new Set(['op-stack'])],
+      ['pane-splitter', 'horizontal', 'seam', 'in-op-stack'],
+    ],
   ]
   /** `.cockpit-stage`'s gap, read where it lives (cockpit-panes.css, a flat selector), as the
    *  pane grid's columns' is. */
@@ -803,10 +811,23 @@ describe('a y divider costs its column nothing: its margins give back the gap it
     for (const m of sheet.matchAll(/(^|})\s*\.cockpit-stage\s*\{([^}]*)\}/g)) v = gapOf(m[2]) ?? v
     return v == null ? null : { value: v, selector: '.cockpit-stage (cockpit-panes.css)' }
   }
+  /** FT's arranged columns' gap, read where it lives (cockpit-panes.css, a flat selector). */
+  const opStackGap = (): { value: string; selector: string } | null => {
+    const sheet = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    let v: string | null = null
+    for (const m of sheet.matchAll(/(^|})\s*\.op-stack\s*\{([^}]*)\}/g)) v = gapOf(m[2]) ?? v
+    return v == null ? null : { value: v, selector: '.op-stack (cockpit-panes.css)' }
+  }
   for (const [what, columnChain, parent, own] of CASES) {
     it(`${what}: a divider's height, both margins and the column's gap sum to zero`, () => {
       const chain = [...parent, new Set(own)]
-      const gap = columnChain ? winningValue(columnChain, gapOf) : what.includes('left side') ? stageGap() : columnGap()
+      const gap = columnChain
+        ? winningValue(columnChain, gapOf)
+        : what.includes('left side')
+          ? stageGap()
+          : what.includes('op-stack')
+            ? opStackGap()
+            : columnGap()
       const height = winningValue(chain, blockLonghand('height'))
       const top = winningValue(chain, blockMargin('top'))
       const bottom = winningValue(chain, blockMargin('bottom'))

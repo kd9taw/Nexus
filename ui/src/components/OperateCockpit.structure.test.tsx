@@ -2,7 +2,8 @@
 //
 // Rendered-structure guards for the DECODE-FIRST Classic rebuild (2026-08):
 //   - the dock law as a rendered assertion: every protected TX control renders inside
-//     the merged .cockpit-qso strip even with EVERY panel id 'removed';
+//     the merged .cockpit-qso strip, and is no more disabled than with nothing hidden, with every
+//     panel id 'removed' singly and all at once, in both layouts, with the rail on either side;
 //   - Band Activity and the promoted Rx Frequency pane receive the SAME click-model
 //     function identities (the decodeClickProps spread) — a future fork of the click
 //     model goes red here instead of shipping two divergent click behaviours;
@@ -14,8 +15,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, within } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
-import { OPERATE_PANEL_IDS, OPERATE_PANELS, panelStateIn } from '../features/panelState'
-import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
+import { BOX_IDS, OPERATE_PANEL_IDS, OPERATE_PANELS, panelStateIn } from '../features/panelState'
+import type { OperatePanelId, PanelLayout, PanelLayoutApi, PanelState } from '../features/panelState'
 import * as OD from './OperateDecodes'
 
 vi.mock('./Waterfall', () => ({
@@ -53,8 +54,15 @@ vi.mock('../api', () => {
     setVfo: vi.fn(nothing),
     getSpectrumRow: vi.fn(nothing),
     setDecodeDepth: vi.fn(nothing),
+    // The callsign card (a station is selected where the sweep below needs it on screen).
+    resolveEntity: vi.fn(async () => 'United States'),
+    qrzLookup: vi.fn(nothing),
+    askLog: vi.fn(nothing),
   }
 })
+// A box's body is a Conditions box (DashRail.test.tsx sweeps every one for a transmit control); its
+// frame, picker and ✕ are real.
+vi.mock('./panes/BoxBody', () => ({ BoxBody: () => <div data-testid="box-body-stub" /> }))
 
 // Capture every OperateDecodes render's props so prop IDENTITY can be asserted —
 // the factory owns the array (vi.mock hoists above module-scope lets).
@@ -108,8 +116,11 @@ function makeSnap(over: { transmitting?: boolean; atu?: boolean | null } = {}): 
   } as unknown as AppSnapshot
 }
 
-function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLayoutApi<OperatePanelId> {
-  const layout = { v: 1 as const, state, share: {} }
+function panelsApi(
+  state: Partial<Record<OperatePanelId, PanelState>>,
+  places?: PanelLayout<OperatePanelId>['places'],
+): PanelLayoutApi<OperatePanelId> {
+  const layout: PanelLayout<OperatePanelId> = places ? { v: 2, state, share: {}, places } : { v: 1, state, share: {} }
   return {
     layout,
     // The vocabulary's own reading of an absent entry: docked, but for the panes it ships hidden
@@ -134,6 +145,14 @@ function cockpitElement(
     layoutMode?: 'classic' | 'roster'
     fdActive?: boolean
     fdRuleset?: import('../api').FdRulesetDto | null
+    /** A station selected, so the callsign card is on screen. */
+    selectedCall?: string
+    /** What App lends the boxes on the desktop. */
+    boxes?: import('./panes/CockpitBox').BoxSource
+    /** The cockpit on screen (it draws boxes only then). */
+    active?: boolean
+    /** Where the panes stand, per layout (⊞ Arrange). */
+    places?: PanelLayout<OperatePanelId>['places']
   } = {},
 ) {
   const noop = () => {}
@@ -162,12 +181,13 @@ function cockpitElement(
       onHaltTx={noop}
       roster={<div data-testid="stations-roster" />}
       needByCall={new Map()}
-      selectedCall={null}
+      selectedCall={over.selectedCall ?? null}
       onSelect={noop}
       layoutMode={over.layoutMode ?? 'classic'}
       onLayoutMode={noop}
-      panels={panelsApi(state)}
-      active={false}
+      panels={panelsApi(state, over.places)}
+      active={over.active ?? false}
+      boxes={over.boxes}
     />
   )
   return { element, onCall }
@@ -186,6 +206,9 @@ beforeEach(() => {
   captured.length = 0
 })
 afterEach(() => cleanup())
+
+/** What App lends the boxes on the desktop. */
+const BOX_SOURCE: import('./panes/CockpitBox').BoxSource = { myGrid: 'EN61', theme: 'dark', stations: [], prop: null, needByCall: new Map() }
 
 const PROTECTED = [
   /call cq/i,
@@ -331,12 +354,12 @@ describe('the merged operating strip is the un-removable TX surface', () => {
   // `voiceKeyer` and RTTY's `stream`). Five of Operate's seven panes are SENDERS and all five
   // are hideable — the rule is indifferent.
   //
-  // IT IS WEAKER THAN THAT FILE'S SWEEP AND IS NOT ITS EQUIVALENT. This is PRESENCE-ONLY:
-  // every id removed at once, no baseline capture, no `disabled` comparison, no one-id-at-a-
-  // time pass. It catches a control that VANISHES with a hide; it would not catch one left
-  // mounted and disabled, nor one taken out by a single id while surviving the full sweep.
-  // Bringing it up to the four-cockpit shape means rendering Operate's real strip against a
-  // nothing-hidden baseline — worth doing, not done here, and not claimed.
+  // THE FIRST TEST BELOW IS PRESENCE-ONLY (every id removed at once). The per-layout sweep after it
+  // has had the four-cockpit shape since 2026-10-07, when ⊞ Arrange came to FT: a nothing-hidden
+  // baseline (the RF scope pane, the six boxes and the callsign card on screen too), then every id
+  // hidden singly and all at once, each protected control still in the strip and no more disabled
+  // than it was. Stop TX and Tune are also swept by components/stop-line.test.tsx's FT cases, with the
+  // other cockpits, and over FT's arrangements by stop-line.operate.<layout>.test.tsx.
   it('every protected control renders INSIDE .cockpit-qso with every panel id removed', () => {
     const { container } = renderCockpit(ALL_REMOVED)
     for (const name of PROTECTED) {
@@ -355,36 +378,56 @@ describe('the merged operating strip is the un-removable TX surface', () => {
     expect(container.querySelector('.cockpit-status')).toBeNull()
   })
 
-  // …AND OVER OPERATE'S LAYOUTS (layout L3's stop-line ruling for Operate). Operate has no pane
-  // placement; what it arranges is its two layouts and the side its rail stands on (layout L5). Each
-  // of the four, with nothing hidden and with every id hidden: the whole surface still in the strip.
-  // Presence-only, like the sweep above.
+  // …AND OVER OPERATE'S LAYOUTS AND EVERY HIDE (layout L3's stop-line ruling for Operate; the
+  // four-cockpit shape since 2026-10-07). FT's two layouts and the side its rail stands on (layout L5),
+  // each with EVERY id shown — so the RF scope pane, the six boxes (lent as App lends them) and the
+  // callsign card are on screen and every hide below is a real one — then each id hidden singly, then
+  // all at once: every protected control still in the strip, and exactly as disabled as with nothing
+  // hidden (mounted and dead is the same loss as gone).
   it.each([
     ['classic', 'right'],
     ['classic', 'left'],
     ['roster', 'right'],
     ['roster', 'left'],
-  ] as const)('%s layout, rail on the %s: every protected control is in the strip, hidden panes or not', (layoutMode, side) => {
-    for (const state of [{}, ALL_REMOVED]) {
-      localStorage.setItem('nexus.operate.railSide', side)
-      // In a `finally`: a red here must not leave the rail on the left for the tests after it.
-      try {
-        const { container } = renderCockpit(state, { layoutMode })
-        // The layout and the side really took (the side with the rail on screen), or this would sweep
-        // one layout four times.
-        expect(container.querySelector('.cockpit-lower')?.classList.contains(layoutMode), `${layoutMode}: the layout did not apply`).toBe(true)
-        if (Object.keys(state).length === 0)
-          expect(container.querySelector('.cockpit-lower')?.getAttribute('data-rail') ?? 'right', `${layoutMode}: the rail side did not apply`).toBe(side)
-        for (const name of PROTECTED) {
-          const btn = screen.getByRole('button', { name })
-          expect(btn.closest('.cockpit-qso'), `${layoutMode}, rail ${side}: ${String(name)} left the strip`).not.toBeNull()
+  ] as const)('%s layout, rail on the %s: every protected control stays in the strip, no more disabled, every id hidden singly and all at once', (layoutMode, side) => {
+    const SHOWN: Partial<Record<OperatePanelId, PanelState>> = Object.fromEntries(OPERATE_PANEL_IDS.map((id) => [id, 'docked' as PanelState]))
+    const over = { layoutMode, selectedCall: 'W1ABC', boxes: BOX_SOURCE, active: true }
+    const look = () =>
+      new Map(
+        PROTECTED.map((name) => {
+          const btn = screen.getByRole('button', { name }) as HTMLButtonElement
+          return [String(name), { inStrip: btn.closest('.cockpit-qso') != null, disabled: btn.disabled }] as const
+        }),
+      )
+    localStorage.setItem('nexus.operate.railSide', side)
+    // In a `finally`: a red here must not leave the rail on the left for the tests after it.
+    try {
+      const { container } = renderCockpit(SHOWN, over)
+      // The layout and the side really took, and everything is on screen, or this sweeps less than it says.
+      expect(container.querySelector('.cockpit-lower')?.classList.contains(layoutMode), `${layoutMode}: the layout did not apply`).toBe(true)
+      expect(container.querySelector('.cockpit-lower')?.getAttribute('data-rail') ?? 'right', `${layoutMode}: the rail side did not apply`).toBe(side)
+      expect(container.querySelectorAll('.pane-frame[data-pane^="box"]').length, `${layoutMode}: the boxes are not on screen`).toBe(BOX_IDS.length)
+      expect(container.querySelector('.recall-card'), `${layoutMode}: the card is not on screen`).not.toBeNull()
+      expect(container.querySelector('[data-pane="rfScope"]'), `${layoutMode}: the RF scope pane is not on screen`).not.toBeNull()
+      const baseline = look()
+      for (const [name, v] of baseline) expect(v.inStrip, `${layoutMode}, rail ${side}: ${name} is not in the strip`).toBe(true)
+      cleanup()
+      for (const removed of [...OPERATE_PANEL_IDS.map((id) => [id]), [...OPERATE_PANEL_IDS]]) {
+        renderCockpit({ ...SHOWN, ...Object.fromEntries(removed.map((id) => [id, 'removed' as PanelState])) }, over)
+        for (const [name, v] of look()) {
+          const where = `${layoutMode}, rail ${side}, hiding {${removed.join(', ')}}`
+          expect(v.inStrip, `${where}: ${name} left the strip`).toBe(true)
+          expect(v.disabled, `${where}: ${name} is not as it was with nothing hidden`).toBe(baseline.get(name)!.disabled)
         }
-      } finally {
         cleanup()
-        localStorage.removeItem('nexus.operate.railSide')
       }
+    } finally {
+      cleanup()
+      localStorage.removeItem('nexus.operate.railSide')
     }
-  })
+    // Seventeen mounts of the whole FT screen with its boxes and card: 1.1–1.4 s each alone, 12.1–15.4 s
+    // at a tenth of a CPU (2026-10-07), past the 5 s default.
+  }, 40_000)
 
   it('the strip carries the TX-state cap (the ▲ TRANSMITTING pulse lives here now)', () => {
     renderCockpit({}, { transmitting: true })
@@ -416,6 +459,23 @@ describe('both decode panes share one click model (prop identity, never a fork)'
     // …and the work-station path is the cockpit's onCall prop — no new sequencing path.
     expect(rx!.onCall).toBe(onCall)
     expect(rx!.compact).toBe(true)
+  })
+
+  it('arranged (⊞ Arrange, 2026-10-07), they still share it: one click model wherever the panes stand', () => {
+    // Band Activity moved over the Call Roster in Roster's main column: the arranged branch draws it.
+    const { onCall, container } = renderCockpit({}, { layoutMode: 'roster', places: { roster: { bandActivity: { col: 'a', order: 0 }, callRoster: { col: 'a', order: 1 } } } })
+    expect(container.querySelector('.cockpit-lower')?.hasAttribute('data-arranged'), 'fixture: the arranged branch did not draw').toBe(true)
+    const rx = [...captured].reverse().find((p) => p.lockedFilter === 'rx')
+    const band = [...captured].reverse().find((p) => p.lockedFilter === undefined)
+    expect(rx && band, 'a decode pane did not render').toBeTruthy()
+    expect(rx!.onSelectDecode).toBe(band!.onSelectDecode)
+    expect(rx!.onSetRx).toBe(band!.onSetRx)
+    expect(rx!.onToggleIgnore).toBe(band!.onToggleIgnore)
+    expect(rx!.onCall).toBe(band!.onCall)
+    expect(rx!.onCall).toBe(onCall)
+    // …and the country exclusion still stops at the chase list.
+    expect(rx!.hideExcludedCountries).toBe(false)
+    expect(band!.hideExcludedCountries).toBeUndefined()
   })
 })
 

@@ -52,6 +52,10 @@ interface Props {
    *  unchanged — their pane body is already the card's scroller and the operator asked for
    *  the full card there (2026-07-31). Default false. */
   bounded?: boolean
+  /** In FT's ARRANGED columns (the operator's "Card keeps its size", 2026-10-07): the bounded card
+   *  also never shrinks, and its column scrolls instead (`.cockpit-recall-kept`, cockpit-panes.css).
+   *  Only with `bounded`; the stock screens pass nothing. Default false. */
+  kept?: boolean
   /** Does the HOST offer a callbook Lookup button? The empty-QTH line is an instruction
    *  ("Tab or press Lookup for name / QTH") and it names a control that exists in the log
    *  strip and nowhere else. The FT cockpit resolves a call by itself and has no such
@@ -157,7 +161,14 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
+/** The card's classes: `.cockpit-recall` where it is bounded in a rail it shares (`bounded`), and
+ *  `.cockpit-recall-kept` as well in FT's arranged columns (`kept`). One spelling, for this card and
+ *  the hosted page's placeholder that stands in its place. */
+export function recallCardClass(bounded?: boolean, kept?: boolean): string {
+  return `recall-card${bounded ? ' cockpit-recall' : ''}${bounded && kept ? ' cockpit-recall-kept' : ''}`
+}
+
+export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -261,7 +272,7 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
   )
 
   return (
-    <div className={`recall-card${bounded ? ' cockpit-recall' : ''}`}>
+    <div className={recallCardClass(bounded, kept)}>
       <div className="recall-head">
         {/* Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
             and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built

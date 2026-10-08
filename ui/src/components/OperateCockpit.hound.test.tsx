@@ -27,6 +27,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot, Settings } from '../types'
+import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall-canvas" /> }))
@@ -109,7 +110,7 @@ function makeSnap(): AppSnapshot {
 function panelsApi(): PanelLayoutApi<OperatePanelId> {
   return {
     layout: { v: 1, state: {} as Partial<Record<OperatePanelId, PanelState>>, share: {} },
-    stateOf: () => 'docked' as PanelState,
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, { v: 1, state: {}, share: {} }, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

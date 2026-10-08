@@ -39,13 +39,14 @@ import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import {
   panelHost,
   NO_DSP_FUNCS_REASON,
   NO_DSP_LEVELS_REASON,
   NOTHING_SENT_REASON,
 } from '../features/panelHost'
-import { CW_PANEL_IDS, CW_PANELS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
+import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
@@ -280,7 +281,15 @@ interface Props {
   spotsBoard?: Omit<SpotsPanelProps, 'spots' | 'pane'>
   /** The Needed board exactly as App wires the Needed VIEW. Absent ⇒ no Needed pane. */
   neededBoard?: Omit<NeededPanelProps, 'pane' | 'onPopOut'>
+  /** What the window lends this cockpit's BOXES (2026-10-07) — exactly what it lends the dashboard
+   *  rail. Absent ⇒ no box is drawn or offered, whatever the record says: the hosted Remote page keeps
+   *  its own panes (Phone's rule). */
+  boxes?: BoxSource
 }
+
+/** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
+ *  box" and its own ✕, never a tick (Phone's rule). */
+const CW_MENU = CW_PANEL_IDS.filter((id) => !isBoxId(id))
 
 /** CW's Spots pane: CW spots on the radio's band, Phone's pane with CW for voice (#345, plan H8).
  *  `mode` is the backend's frequency-derived class and `submode` a skimmer's token (see Phone's
@@ -296,7 +305,7 @@ const CW_NEEDED_MODES: readonly ModeClass[] = ['CW']
 
 /** Display labels for the CW removable panels (the ⊞ Panels menu). Resolved when the menu is
  *  BUILT — a module constant would freeze the first locale loaded. */
-const cwPanelLabels = (): Record<CwPanelId, string> => ({
+const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   // The strip itself — the CW-narrow audio view (or the rig's RF panadapter when one
   // streams). `scopeCtl` right below commands the RADIO's scope and is a separate pane in
   // the region; the two entries sit adjacent in the menu, so the labels have to distinguish
@@ -429,6 +438,7 @@ export function CwCockpit({
   panels,
   spotsBoard,
   neededBoard,
+  boxes,
 }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
@@ -710,12 +720,17 @@ export function CwCockpit({
   // The SUB row rides the RX DSP box too (see `hasSubRow`), so a radio drawing one has something
   // behind that box even when it reports no NR/AGC — and its ⊞ entry must not say otherwise.
   const subRowHere = subRowShown({ catOk, receivers: snap.radio.receivers })
+  // THE BOXES (2026-10-07): what each box on screen shows, none where the window lends them nothing
+  // (Phone's rule), each named for what it shows.
+  // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
+  const entries = panels && boxes ? boxEntries(CW_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
+  const labels = { ...cwPanelLabels(), ...boxLabels(entries) }
   const host = panels
     ? panelHost(panels, {
-        menu: CW_PANEL_IDS,
+        menu: CW_MENU,
         side: [],
         main: 'decode',
-        labels: cwPanelLabels(),
+        labels,
         notes: {
           scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           dsp: cwDspFuncs.length > 0 ? undefined : NO_DSP_FUNCS_REASON,
@@ -1121,14 +1136,16 @@ export function CwCockpit({
   // head of the middle column, and counts for that column's track.
   const place = panels?.layout.place
   const paneShown = (id: CwPanelId): boolean =>
-    ({
-      decode: hasDecodePane,
-      sent: hasSentPane,
-      bandActivity: hasBandPane,
-      copilot: hasCopilotPane,
-      spots: hasSpotsPane,
-      needed: hasNeededPane,
-    })[id as string] ?? false
+    isBoxId(id)
+      ? entries[id] != null
+      : (({
+          decode: hasDecodePane,
+          sent: hasSentPane,
+          bandActivity: hasBandPane,
+          copilot: hasCopilotPane,
+          spots: hasSpotsPane,
+          needed: hasNeededPane,
+        })[id as string] ?? false)
   const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
   // BELOW THREE TRACKS the leading and middle columns are one (regionGroups): column a then b once
   // anything is arranged, and on the stock placement `stockMerged`, the two feeds after every strip
@@ -1141,13 +1158,20 @@ export function CwCockpit({
     (id) => !placed3[0].ids.includes(id) || (stockPlace && (id === 'spots' || id === 'needed')),
   )
   const rigAt = midAt < 0 ? merged.length : midAt
-  const leadCount = placed3[0].ids.length
+  // The DASHBOARD RAIL'S boxes, on a window too small for the rail (the operator's "They move into the
+  // columns"), stand at the foot of the leading column, where CW's own boxes stand until placed.
+  const folded = boxes?.rail?.folded?.boxes ?? []
+  const leadCount = placed3[0].ids.length + folded.length
   const midCount = placed3[1].ids.length + (hasRigCtlPane ? 1 : 0)
   // Stock, this is exactly the rule it replaced (the lead column's decode + sent, and the middle's
   // rig controls, Band Activity and copilot, each present or not).
-  const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
+  // A box counts for the column it stands in, like any pane there (placed3 holds it).
+  const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
     leadCount > 0 && midCount > 0 ? 3 : leadCount + midCount > 0 ? 2 : 1,
   )
+  // The boxes' selection: the cockpit's own, shared by its boxes and never the window's (CockpitBox).
+  // ⛔ In CW above all: the selected station is the one a macro's `!` sends.
+  const boxSel = useBoxSelection()
   // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
   const mainColRef = useRef<HTMLDivElement>(null)
   const auxColRef = useRef<HTMLDivElement>(null)
@@ -1639,6 +1663,30 @@ export function CwCockpit({
     spots: spotsPane,
     needed: neededPane,
   }
+  // THE BOXES (2026-10-07), as Phone's: each one on screen, its picker marking what is on screen
+  // elsewhere — the other boxes' entries and the boards CW shows as its own panes (`sharedAs`).
+  const onScreen = new Set<string>([
+    ...Object.values(entries),
+    ...(Object.entries(CW_PANELS.sharedAs ?? {}) as [CwPanelId, string][]).filter(([own]) => shown(own)).map(([, e]) => e),
+    // …and what the dashboard rail beside it shows.
+    ...(boxes?.rail?.shows ?? []),
+  ])
+  for (const b of BOX_IDS) {
+    const entry = entries[b]
+    if (entry == null || !boxes || !panels) continue
+    paneEls[b] = (
+      <CockpitBox
+        box={b}
+        entry={entry}
+        source={boxes}
+        selection={boxSel}
+        onScreen={(e) => onScreen.has(e)}
+        onPick={(e) => pickForBox(panels.setBox, boxes, b, e, entry)}
+        onRemove={() => panels.setPanelState(b, 'removed')}
+        stacked={flow === 'stack'}
+      />
+    )
+  }
   const placedPane = (id: CwPanelId) => (
     <Fragment key={id}>
       {paneEls[id]}
@@ -1694,8 +1742,11 @@ export function CwCockpit({
                     spec={CW_PANELS.arrange!}
                     layout={panels.layout}
                     shown={paneShown}
-                    labels={cwPanelLabels()}
+                    labels={labels}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                    // "+ Add a box" only where the window lends them (never the hosted Remote page).
+                    onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
+                    boxesFull={BOX_IDS.every((b) => shown(b))}
                   />
                 ) : undefined
               }
@@ -2084,6 +2135,7 @@ export function CwCockpit({
           <>
             <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
               {placed3[0].ids.map(placedPane)}
+              {foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
             </div>
             <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux" ref={auxColRef}>
               {[rigCtlSlot, ...placed3[1].ids.map(placedPane)]}
@@ -2097,6 +2149,7 @@ export function CwCockpit({
             {leadCount + midCount > 0 && (
               <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
                 {[...merged.slice(0, rigAt).map(placedPane), rigCtlSlot, ...merged.slice(rigAt).map(placedPane)]}
+                {foldedRailBoxes(boxes, boxSel, (e) => onScreen.has(e), flow === 'stack')}
               </div>
             )}
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>

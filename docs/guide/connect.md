@@ -237,23 +237,36 @@ Conditions in the main window there is none: click back into Nexus and press Esc
 an operating cockpit (Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8), so the time, the bands
 and who hears you stay in view while you operate. It is off until you turn it on: tick
 **Dashboard rail** in the cockpit's **⊞ Panels** menu, or press **Dashboard** at the right end
-of the Now-Bar. Each cockpit remembers its own choice. The rail opens with the **Clock**,
-**Bands for you**, **Space Wx** and **Getting Out**; each box has the same picker as a Conditions
-slot, so any pane can take its place, its **✕** closes it, and the **⊞ Panels** menu in the
-rail's head brings a closed box back or resets the rail. A box's **⋯** sets its own text size
+of the Now-Bar. Each cockpit remembers its own choice, and its own boxes: the rail beside FT can
+show different boxes from the rail beside Phone. The rail opens with the **Clock**, **Bands for
+you**, **Space Wx** and **Getting Out** (after an update, each cockpit's rail starts as the rail you
+had); each box has the same picker as a Conditions slot, so any pane can take its place, its **✕**
+closes it, and the **⊞ Panels** menu in the rail's head brings a closed box back or resets that
+cockpit's rail. A box's **⋯** sets its own text size
 there as on Conditions (tabs stay Conditions'), and the rail's Reset puts every box back at 100%.
 Drag the rail's left edge to make it wider or narrower (200–720 px), or the line between two
 boxes to share the height between them; both also work from the keyboard, and a double-click
 puts the default back. The rail shows only
 on a large window, about 1600 px wide at your zoom (a 1366×768 laptop at its usual 85 %
 qualifies), and the cockpit beside it is never narrower than it is on a 1024×768 screen, so a
-saved width is trimmed to fit. On a smaller window the rail stays hidden, and the ⊞ Panels entry
-keeps your choice and says why. The rail has no transmit control, and clicking a station in it
-selects that station in the rail only, never the station your cockpit is working. A **Spots** or
-**POTA / SOTA** box works a spot there as it does on Conditions: a click on a spot, or on **HUNT**,
-moves the radio to the station and opens its screen. Nothing transmits. The rail reads the
+saved width is trimmed to fit. On a smaller window, beside FT, Phone, CW and JS8, the rail's boxes
+stand at the foot of the cockpit's columns instead (FT's side rail, the first column in the others),
+where their picker still changes them, and they go back into the rail when the window is wide
+enough; beside RTTY, PSK, SSTV and APRS the rail stays hidden there. The ⊞ Panels entry keeps your
+choice and says which. The rail has no transmit control, and clicking a station in it
+selects that station in the rail only, never the station your cockpit is working. A **Spots**,
+**Needed** or **POTA / SOTA** box works a station there as it does on Conditions: a click on a spot
+or a need, or on **HUNT**, moves the radio to the station and opens its screen. Nothing transmits. The rail reads the
 same live data Conditions does, and within a window the two share each request, so nothing is
 fetched twice.
+
+**Inside a cockpit: boxes.** In Phone, CW and JS8 the same panes can also stand among the cockpit's
+own, in up to six boxes: ⊞ Panels ▸ **Arrange** ▸ **+ Add a box** at the foot of a column (and of
+Phone's left side). A box has the same picker, and a pane shows once on a screen, the dashboard rail
+beside the cockpit included: choosing one that is already showing moves it, and the place it left
+takes what you had there. While the rail shows a pane, a box that holds it shows another until the
+rail lets it go. Like the rail, a box selects a station in the boxes only and has no
+transmit control. See [Phone](phone.md) for the details.
 
 The panes you can assign:
 
@@ -287,14 +300,18 @@ The panes you can assign:
 | Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
 | Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |
 | POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
+| Needed | the [Needed](needed-dx.md) board's list of the stations you still need that are on the air now, with its filters; a click works the station exactly as it does there |
 
-The **Spots** and **POTA / SOTA** boxes are those screens' own lists, so a click on a spot or on
-**HUNT** does what it does there, and nothing transmits. In Conditions' own window (**⧉ Pop out**)
-they work the same way, through that window's own Needed and POTA/SOTA boards, and the main
-window follows to the screen the station needs. Each box keeps its own filters, apart from
+The **Spots**, **Needed** and **POTA / SOTA** boxes are those screens' own lists, so a click on a
+spot, a need or **HUNT** does what it does there, and nothing transmits. In Conditions' own window
+(**⧉ Pop out**) they work the same way, through that window's own Needed and POTA/SOTA boards, and
+the main window follows to the screen the station needs. Each box keeps its own filters, apart from
 the screen's. In a narrow box the Spots list shows the call, the frequency and the mode, adds the
 age, the country and the comment as the box widens, and shows every column from about 640 px;
-the list scrolls inside the box. The wall display (the TV page) shows no spot list, and each box says so there.
+the list scrolls inside the box. The Needed list keeps all its columns and, in a box narrower than
+they are (about 315 px), scrolls sideways inside the box. The wall display (the TV page) shows no
+spot or need list, and each box says so there; so does the Needed box on Nexus Remote. However
+many POTA / SOTA lists a window shows, it fetches them once a minute between them.
 
 The default layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,

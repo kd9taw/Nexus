@@ -2909,6 +2909,8 @@ export const EN = {
   'chase.open.marginal': '{{band}} marginal',
   'chase.open.closed': '{{band}} closed now · best {{window}}',
   'chase.open.best': ' · best {{window}}',
+  // The Chase box's one line when nothing needed is being heard.
+  'chase.empty': 'No needed stations being heard right now — call CQ or wait for spots.',
 
   'chase.feed.dxped.label': 'DXP',
   'chase.feed.dxped.title': 'DXpedition',
@@ -7945,6 +7947,7 @@ export const EN = {
   'dashRail.slot.where.rail3': 'lower middle',
   'dashRail.slot.where.rail4': 'bottom',
   'dashRail.menu.small': 'Needs a larger window (or a smaller zoom) to show. Remembered for this section.',
+  'dashRail.menu.folded': 'On this window its boxes stand at the foot of this screen\'s columns; the rail comes back beside them on a larger window (or a smaller zoom). Remembered for this section.',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
@@ -8059,6 +8062,8 @@ export const EN = {
   'connect.pane.spots.title': 'Spots',
   'connect.pane.spots.basic': "The spot list isn't available on this screen.",
   'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
+  'connect.pane.needed.title': 'Needed',
+  'connect.pane.needed.basic': "The Needed list isn't available on this screen.",
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',
@@ -8603,6 +8608,12 @@ export const EN = {
   'operate.seam.railRoster.label': 'Side rail / Call Roster',
   'operate.panels.railLeft.label': 'Side rail on the left',
   'operate.panels.railLeft.note': 'Stations in Classic; Band Activity and Rx Frequency in Roster',
+  'operate.arrange.main': 'Main column',
+  'operate.arrange.main.add.aria': 'Add a box to the main column',
+  'operate.arrange.rail': 'Side rail',
+  'operate.arrange.rail.add.aria': 'Add a box to the side rail',
+  'operate.arrange.narrow': 'On a narrower window, the columns stand one above the other.',
+  'operate.seam.pair.label': '{{above}} / {{below}}',
 
   // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
   // built rather than at import (the registry-by-getter rule, batch 3).
@@ -10559,8 +10570,22 @@ export const EN = {
     one: '{{panes}} stands here on a window about 1280 px wide or wider. On this one it is in its usual column.',
     other: '{{panes}} stand here on a window about 1280 px wide or wider. On this one they are in their usual columns.',
   },
+  // The boxes as one item of the list above ("Band Activity, Spots, Needed or a box").
+  'panels.arrange.side.aBox': 'a box',
   'panels.arrange.toSide.aria': 'Move {{pane}} to the left side',
   'panels.arrange.fromSide.aria': 'Move {{pane}} from the left side back to its column',
+  // THE BOXES (any pane in any area): up to six on a cockpit's screen, each showing one Conditions box.
+  // `{{title}}` is that box's own name.
+  'panels.box.add': '+ Add a box',
+  'panels.box.add.a.aria': 'Add a box to column 1',
+  'panels.box.add.b.aria': 'Add a box to column 2',
+  'panels.box.add.log.aria': 'Add a box to the log column',
+  'panels.box.add.side.aria': 'Add a box to the left side',
+  'panels.box.full': 'All six boxes are on this screen.',
+  'panels.box.name': 'Box',
+  'panels.box.pick.aria': 'Choose what the {{title}} box shows',
+  'panels.box.pick.title': 'Choose what this box shows',
+  'panels.box.pick.onScreen': '{{title}} (on screen)',
 
   // ── The cockpit pane frame ──────────────────────────────────────────────────────────
   // `{{title}}` is the pane's own name, supplied by the cockpit.

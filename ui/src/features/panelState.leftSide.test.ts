@@ -45,8 +45,8 @@ describe('what a record may put on the left side', () => {
     for (const raw of [undefined, null, 'spots', { spots: true }, [], 42]) expect(coerceLeftSide(SPEC, raw)).toBeUndefined()
   })
 
-  it('Phone’s list is its three feeds, none of them pinned, all of them region panes', () => {
-    expect([...SPEC.leftSide!].sort()).toEqual(['bandActivity', 'needed', 'spots'])
+  it('Phone’s list is its three feeds and its six boxes, none of them pinned, all of them region panes', () => {
+    expect([...SPEC.leftSide!].sort()).toEqual(['bandActivity', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6', 'needed', 'spots'])
     for (const id of SPEC.leftSide!) {
       expect(SPEC.pinned, `${id} is pinned: a pane that changes parent at a window's width would be remounted`).not.toContain(id)
       expect([...SPEC.columns.a, ...SPEC.columns.b]).toContain(id)

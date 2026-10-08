@@ -58,7 +58,7 @@ vi.mock('../api', async (importOriginal) => {
   }
 })
 
-import { DashRail } from './DashRail'
+import { OwnedDashRail } from './DashRail.testkit'
 import { PanelsMenu } from './PanelsMenu'
 import { PaneFrame } from './connect/PaneFrame'
 import type { PaneContext } from './connect/paneContext'
@@ -82,7 +82,7 @@ const SPOT = {
 
 const mountRail = (prop: PropagationSnapshot = LIVE) =>
   render(
-    <DashRail
+    <OwnedDashRail
       section="cw"
       myGrid="EN52"
       theme="dark"

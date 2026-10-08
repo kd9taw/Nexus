@@ -564,20 +564,24 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     )
   }
 
+  // THIS WINDOW'S NEEDED BOARD, one object for the Needed window below and the dashboard window's
+  // Needed box, as App shares its own: a box can never be wired differently from its board.
+  const neededBoard = {
+    // Full un-gated list — the board's own mode toggles decide what shows.
+    alerts: needAlerts,
+    bandPlan,
+    selectedCall: selected,
+    myGrid: snap?.mygrid ?? '',
+    onQsy: (a: NeedAlert) => qsyBand(a.band, a.freqMhz ?? undefined),
+    onSelect,
+    // Full work path from the pop-out too (`workNeed`, above).
+    onWork: workNeed,
+  }
+
   if (panel === 'needed') {
     return (
       <DetachedShell>
-        <NeededPanel
-          // Full un-gated list — the board's own mode toggles decide what shows.
-          alerts={needAlerts}
-          bandPlan={bandPlan}
-          selectedCall={selected}
-          myGrid={snap?.mygrid ?? ''}
-          onQsy={(a) => qsyBand(a.band, a.freqMhz ?? undefined)}
-          onSelect={onSelect}
-          // Full work path from the pop-out too (`workNeed`, above).
-          onWork={workNeed}
-        />
+        <NeededPanel {...neededBoard} />
       </DetachedShell>
     )
   }
@@ -650,11 +654,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
-          // The Spots and POTA/SOTA boxes, with THIS window's board paths (`workNeed`,
-          // `huntOta`): the Spots box a spot as a need, as App's handleWorkSpot does, and the
-          // board's own feeds — the spot poll above, and the same band-scoped needs App hands its
-          // Spots board for Hide worked's rescue. The POTA/SOTA box waits for the first snapshot,
-          // as this window's POTA/SOTA arm does.
+          // The Spots, POTA/SOTA and Needed boxes, with THIS window's board paths (`workNeed`,
+          // `huntOta`, its Needed board above): the Spots box a spot as a need, as App's
+          // handleWorkSpot does, and the board's own feeds — the spot poll above, and the same
+          // band-scoped needs App hands its Spots board for Hide worked's rescue. The POTA/SOTA box
+          // waits for the first snapshot, as this window's POTA/SOTA arm does.
           spotsFeed={{
             rows: allSpots,
             board: {
@@ -667,6 +671,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             },
           }}
           otaBoard={snap ? { snap, onHunt: huntOta, onSnap: setSnap } : undefined}
+          neededBoard={neededBoard}
           // A slot's tabs may rotate here, the dashboard window, and on the TV page — never in the
           // main window's Connect (the operator's pick: "Auto-rotating boxes on the dashboard/TV").
           autoRotate

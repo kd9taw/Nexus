@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// CONNECT'S SPOTS AND POTA/SOTA BOXES ARE THE TWO BOARDS THEMSELVES (plan piece H8).
+// CONNECT'S SPOTS, POTA/SOTA AND NEEDED BOXES ARE THE BOARDS THEMSELVES (plan piece H8; Needed 2026-10-07).
 //
 // The REAL ConnectView, the REAL SpotsPanel and the REAL PotaSotaView are mounted; only the backend
 // is stubbed. A stubbed box would prove that a prop reaches it, and nothing about what is on screen:
@@ -13,7 +13,7 @@
 // what IS here is the width class a box stamps from its own width, and the thresholds.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { AppSnapshot, OtaSpot, SpotRow } from '../types'
+import type { AppSnapshot, NeedAlert, OtaSpot, SpotRow } from '../types'
 import { t } from '../i18n'
 
 const api = vi.hoisted(() => ({
@@ -47,7 +47,7 @@ import { SpotsPanel } from './SpotsPanel'
 import { PotaSotaView } from './PotaSotaView'
 import { classifyBoxFit } from './connect/SpotsBox'
 import { DEFAULT_SLOTS, type PaneId, type SlotId } from '../features/connectConfig'
-import type { OtaBoard, SpotsFeed } from './connect/paneContext'
+import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
 import { pastTheSwitch } from './ConnectView.testkit'
 
 const spot = (call: string, band: string, freqMhz: number, mode: string, submode: string | null = null): SpotRow =>
@@ -85,6 +85,20 @@ const baseProps = {
 function board(): SpotsFeed['board'] {
   return { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: vi.fn(), onWork: vi.fn(), needAlerts: [] }
 }
+// Two needs in two modes on two bands: the box opens, as the Needed view does, on every mode.
+const need = (call: string, band: string, freqMhz: number, mode: string): NeedAlert =>
+  ({
+    call, entity: 'Somewhere', band, zone: 5, tags: ['NewBand'], priority: 50,
+    headline: `New band — Somewhere ${band}`, mode, freqMhz,
+  }) as NeedAlert
+const NEEDS: NeedAlert[] = [need('K1CW', '20m', 14.025, 'CW'), need('W2SSB', '40m', 7.2, 'SSB')]
+function neededBoard(): NeededBoard {
+  return { alerts: NEEDS, bandPlan: [], selectedCall: null, myGrid: 'EN52', onQsy: vi.fn(), onSelect: vi.fn(), onWork: vi.fn() }
+}
+const needRows = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('.np-row')]
+const needCallsIn = (el: HTMLElement) =>
+  needRows(el).flatMap((r) => NEEDS.filter((n) => r.querySelector('.np-call')?.textContent?.includes(n.call)).map((n) => n.call))
+
 function otaBoard(): OtaBoard {
   return { snap: { hunt: null, radio: { dialMhz: 14.285 }, logTick: 1 } as unknown as AppSnapshot, onHunt: vi.fn(), onSnap: vi.fn() }
 }
@@ -256,17 +270,61 @@ describe('the POTA/SOTA box', () => {
   })
 })
 
+describe('the Needed box', () => {
+  it("is the Needed board in the slot: its rows, every mode, its own filter bar, none of the view's chrome", async () => {
+    seed({ left1: 'needed' })
+    const { container } = await mount({ neededBoard: neededBoard() })
+    const box = frameOf(container, 'needed')
+    expect(box, 'the Needed box is in the slot it was put in').not.toBeNull()
+    expect(box!.getAttribute('data-slot')).toBe('left1')
+    expect(box!.querySelector('.cn-needed .np-board'), 'the board, hosted as a pane').not.toBeNull()
+    expect(needCallsIn(box!).sort()).toEqual(['K1CW', 'W2SSB'])
+    expect(within(box!).getByRole('button', { name: new RegExp(t('needed.filter.toggle.idle')) })).toBeTruthy()
+    // The frame's head names it, and a box is not a view: no heading, no pop-out.
+    expect(box!.querySelector('h2')).toBeNull()
+    expect(within(box!).queryByRole('button', { name: new RegExp(t('needed.popOut.label')) })).toBeNull()
+  })
+
+  it("keeps its own copy of the board's filters: a mode chip in the box leaves the Needed view as it was", async () => {
+    seed({ left1: 'needed' })
+    const { container } = await mount({ neededBoard: neededBoard() })
+    const box = frameOf(container, 'needed')!
+    fireEvent.click(within(box).getByRole('button', { name: new RegExp(t('needed.filter.toggle.idle')) }))
+    fireEvent.click(within(box).getByRole('button', { name: 'CW' }))
+    // A mode chip turns its mode off (the board opens with every mode on).
+    expect(needCallsIn(box), 'the chip narrowed the box').toEqual(['W2SSB'])
+    expect(localStorage.getItem('nexus.connect.neededFilters'), "the box's own record").not.toBeNull()
+    expect(localStorage.getItem('neededFilters'), "the view's own record was never written").toBeNull()
+  })
+
+  it("works a row through the board's own handlers: the select, then the Work", async () => {
+    seed({ left1: 'needed' })
+    const lent = neededBoard()
+    const { container } = await mount({ neededBoard: lent })
+    const box = frameOf(container, 'needed')!
+    const row = needRows(box).find((r) => r.querySelector('.np-call')?.textContent?.includes('K1CW'))!
+    fireEvent.click(row)
+    expect(lent.onSelect).toHaveBeenCalledWith('K1CW')
+    expect(lent.onWork).toHaveBeenCalledWith(NEEDS[0])
+  })
+
+  it('on a screen with no Needed board to lend it says so in one line, and draws no list and no Work', async () => {
+    seed({ left1: 'needed' })
+    const { container } = await mount()
+    const box = frameOf(container, 'needed')!
+    expect(box.querySelector('.pane-basic')?.textContent).toBe(t('connect.pane.needed.basic'))
+    expect(box.querySelector('.np-board')).toBeNull()
+  })
+})
+
 describe('the default layout does not change', () => {
-  it('neither box is in a default slot: both are one pick away in every slot', async () => {
-    expect(Object.values(DEFAULT_SLOTS)).not.toContain('spots')
-    expect(Object.values(DEFAULT_SLOTS)).not.toContain('pota')
-    const { container } = await mount({ spotsFeed: { rows: ROWS, board: board() }, otaBoard: otaBoard() })
+  it('no board is in a default slot: each is one pick away in every slot', async () => {
+    for (const p of ['spots', 'pota', 'needed']) expect(Object.values(DEFAULT_SLOTS)).not.toContain(p)
+    const { container } = await mount({ spotsFeed: { rows: ROWS, board: board() }, otaBoard: otaBoard(), neededBoard: neededBoard() })
     for (const pick of container.querySelectorAll('select.pane-pick')) {
       const values = [...(pick as HTMLSelectElement).options].map((o) => o.value)
-      expect(values).toContain('spots')
-      expect(values).toContain('pota')
+      expect(values).toEqual(expect.arrayContaining(['spots', 'pota', 'needed']))
     }
-    expect(frameOf(container, 'spots')).toBeNull()
-    expect(frameOf(container, 'pota')).toBeNull()
+    for (const p of ['spots', 'pota', 'needed']) expect(frameOf(container, p)).toBeNull()
   })
 })
