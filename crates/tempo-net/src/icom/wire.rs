@@ -40,8 +40,10 @@
 //! each sequence twice, which both readings agree on); the credential cipher refuses more than 16
 //! characters and any character outside printable ASCII, where upstream truncates and encodes
 //! whatever it is given; the connection-info request carries receive-enable 1 and
-//! transmit-enable 0 as constants, with no parameter for either; the audio packet and the codec
-//! geometry are not taken yet, and the capabilities reader and the rate bitmaps are in `caps`.
+//! transmit-enable 0 as constants, with no parameter for either; the login builder takes the
+//! password as a `conf::Secret`, by value, and drops it once the field is encoded; the audio
+//! packet and the codec geometry are not taken yet, and the capabilities reader and the rate
+//! bitmaps are in `caps`.
 //! The passcode substitution table is a protocol constant, the same value for value as
 //! kappanhang's `passcode.go` (MIT), whose README credits W6EL with the algorithm.
 //! The protocol knowledge descends from kappanhang (https://github.com/nonoo/kappanhang, MIT), as the
@@ -74,6 +76,7 @@
 use std::fmt;
 
 use super::caps::{self, Capabilities};
+use super::conf::Secret;
 
 /// The radio's default control port; the radio assigns the CI-V and audio ports at connect.
 pub const PORT_CONTROL: u16 = 50001;
@@ -124,7 +127,7 @@ const OFF_SENDER: usize = 0x08; // be32 (upstream `local_id` on what it sends)
 const OFF_RECEIVER: usize = 0x0c; // be32 (upstream `remote_id`)
 
 // The type field.
-const TYPE_DATA: u16 = 0x0000;
+pub(crate) const TYPE_DATA: u16 = 0x0000;
 const TYPE_RETRANSMIT: u16 = 0x0001;
 const TYPE_PING: u16 = 0x0007;
 
@@ -960,10 +963,11 @@ pub struct LoginFields<'a> {
     pub ids: Ids,
 }
 
-/// The login request.
-pub fn login(user: &str, password: &str, fields: LoginFields<'_>) -> Result<Vec<u8>, WireError> {
+/// The login request. The password is taken by value and dropped here, once its field is
+/// encoded.
+pub fn login(user: &str, password: Secret, fields: LoginFields<'_>) -> Result<Vec<u8>, WireError> {
     let user = passcode(user)?;
-    let password = passcode(password)?;
+    let password = passcode(password.expose())?;
     let mut b = packet(LOGIN_LEN, TYPE_DATA, fields.seq, fields.ids);
     put_be32(&mut b, REQ_OFF_PAYLOAD_SIZE, 0x70);
     b[REQ_OFF_REQUEST_REPLY] = 0x01;
@@ -1501,6 +1505,10 @@ pub(crate) mod tests {
         }
     }
 
+    fn secret(text: &str) -> Secret {
+        Secret::new(text.into()).expect("a test password")
+    }
+
     fn login_fields() -> LoginFields<'static> {
         LoginFields {
             client_name: "Nexus",
@@ -1515,7 +1523,7 @@ pub(crate) mod tests {
     // upstream: test_login_layout
     #[test]
     fn login_layout() {
-        let b = login("test", "test", login_fields()).unwrap();
+        let b = login("test", secret("test"), login_fields()).unwrap();
         assert_eq!(b.len(), 0x80);
         // the payload size, big-endian 0x70, at 0x10
         assert_eq!(b[0x10..0x14], [0x00, 0x00, 0x00, 0x70]);
@@ -1534,11 +1542,11 @@ pub(crate) mod tests {
         let mut long = login_fields();
         long.client_name = "a client name over sixteen";
         assert_eq!(
-            login("test", "test", long),
+            login("test", secret("test"), long),
             Err(WireError::Field("client name"))
         );
         assert_eq!(
-            login("seventeen-chars-x", "test", login_fields()),
+            login("seventeen-chars-x", secret("test"), login_fields()),
             Err(WireError::Field("credential"))
         );
     }
@@ -1761,7 +1769,7 @@ pub(crate) mod tests {
             (Role::Control, make_fixed(0x14, 0)),
             (
                 Role::Control,
-                login("user", "pass", login_fields()).unwrap(),
+                login("user", secret("pass"), login_fields()).unwrap(),
             ),
             (Role::Control, connection_info(&request(), 2, ids).unwrap()),
             (Role::Control, capabilities_of(2)),
@@ -1846,7 +1854,9 @@ pub(crate) mod tests {
             let frame = rng.bytes(n);
             let wanted: Vec<u16> = (0..rng.below(8)).map(|_| rng.next() as u16).collect();
             let _ = passcode(&text);
-            let _ = login(&text, &other, login_fields());
+            if let Ok(password) = Secret::new(other.clone()) {
+                let _ = login(&text, password, login_fields());
+            }
             let _ = civ(&frame, 0xc1, 1, 1, IDS);
             let _ = retransmit(&wanted, IDS);
             let identity = [0u8; 16];
@@ -1864,7 +1874,12 @@ pub(crate) mod tests {
 
     #[test]
     fn a_wire_error_names_the_field_never_the_value() {
-        let e = login("secret-user-name-too-long", "secret", login_fields()).unwrap_err();
+        let e = login(
+            "secret-user-name-too-long",
+            secret("secret"),
+            login_fields(),
+        )
+        .unwrap_err();
         let text = format!("{e} {e:?}");
         assert!(!text.contains("secret"), "{text}");
     }

@@ -1,6 +1,6 @@
 //! The Icom network (LAN / Wi-Fi) client's protocol core: the packets and the login passcode,
-//! the capabilities reply, and per-socket sequence tracking, for the six Icoms with a built-in
-//! network server (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2).
+//! the capabilities reply, per-socket sequence tracking and the session, for the six Icoms with a
+//! built-in network server (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2).
 //!
 //! **The app does not use it yet.** A later change builds the daemon that runs a session for a
 //! radio and carries Nexus's native CI-V engine over it. This module knows nothing of the app.
@@ -12,11 +12,21 @@
 //! | [`wire`] | every datagram, built and parsed strictly as typed packets; the login passcode |
 //! | [`caps`] | the capabilities reply, choosing a radio, the rate bitmaps, the six network models |
 //! | [`seq`] | the replay buffer and the receive gap tracker |
+//! | [`session`] | one session, from the first probe to the last disconnect, with no I/O of its own |
+//! | [`conf`] | the session's typed configuration; the password as a [`conf::Secret`] |
+//! | [`reconnect`] | what to do when a session ends: the retry ladder |
+//! | `sim` (tests only) | a simulated radio, a fake-clock world, and the radio on loopback sockets |
 //!
 //! # Nothing here transmits
 //!
 //! This core carries CAT and the scope only.
 //!
+//! - The session never originates a CI-V command. The only CI-V packets it sends carry a frame
+//!   its owner handed to [`session::Session::send_civ`], or are that very packet again when the
+//!   radio asks for its sequence; everything else it sends is control, ping, idle, retransmit,
+//!   open/close and the handshake's requests. A property test
+//!   (`no_input_makes_the_session_send_a_civ_command`) drives a session with random input in
+//!   every state and reads back what reaches the wire.
 //! - The connection-info request always carries transmit-enable 0: [`wire::connection_info`] has
 //!   no field for it, so no transmit audio path is ever reserved.
 //! - No audio stream is started, and audio packets are not decoded.
@@ -31,11 +41,18 @@
 //! read for facts only, the upstream tests translated with it, its deliberate differences and the
 //! git blob id of every upstream file at the pin. Every ported file's header says the same and
 //! carries the converted upstream notice, and the repo-root NOTICE names every upstream file. A
-//! test holds the three together in both directions, and checks the README credit.
+//! test holds the three together in both directions, and checks the README credit. `conf` and
+//! `reconnect` are Nexus's own.
 
 pub mod caps;
+pub mod conf;
+pub mod reconnect;
 pub mod seq;
+pub mod session;
 pub mod wire;
+
+#[cfg(test)]
+mod sim;
 
 /// The upstream repository.
 pub const UPSTREAM: &str = "https://github.com/Hamlib/Hamlib";
@@ -167,6 +184,102 @@ pub const PROVENANCE: &[Ported] = &[
             (
                 "test/test_icom_network_seqbuf.c",
                 "6cd79edc18cf16b2ab5444641061707e9632ac8e",
+            ),
+        ],
+    },
+    Ported {
+        file: "session.rs",
+        upstream: &["rigs/icom/network_session.c", "rigs/icom/network_session.h"],
+        references: &[
+            "rigs/icom/ICOM.md",
+            "rigs/icom/network_conf.c",
+            "rigs/icom/icom_network.c",
+        ],
+        tests: &[
+            "test/test_icom_network_session.c",
+            "test/test_icom_network_reconnect.c",
+            "test/test_icom_network_conf.c",
+        ],
+        differences: "one owner with time passed in, returning actions; no reconnect inside; \
+                      liveness fixed at 5000 ms; transmit-enable 0 and no audio; frames never \
+                      truncated; a frame refused before a sequence is used; one advertised radio \
+                      with another name is a warning; the control replay buffer purged at 10 s",
+        blobs: &[
+            (
+                "rigs/icom/network_session.c",
+                "eb5178896e494592f23cf33f7750e49068d5d502",
+            ),
+            (
+                "rigs/icom/network_session.h",
+                "3e25eda753ad5890b31ebda6ae5faeefbe2c1206",
+            ),
+            (
+                "rigs/icom/ICOM.md",
+                "08793f6ab6ae9880622acb7f27e6b7c58af8c236",
+            ),
+            (
+                "rigs/icom/network_conf.c",
+                "543cca9d48c62cefa3626885a7d891b0de291a96",
+            ),
+            (
+                "rigs/icom/icom_network.c",
+                "9172b8c802af09735d714eb42043388da06e043b",
+            ),
+            (
+                "test/test_icom_network_session.c",
+                "b55bf19eea5c3ddbfbe0630cb46de71bcd8504e8",
+            ),
+            (
+                "test/test_icom_network_reconnect.c",
+                "0de39e963e04572507ca74f92b30ddadb18363ae",
+            ),
+            (
+                "test/test_icom_network_conf.c",
+                "a37af74efc1e3d4ed3f410da60fa3ae80d9b6553",
+            ),
+        ],
+    },
+    Ported {
+        file: "session/tests.rs",
+        upstream: &[
+            "test/test_icom_network_session.c",
+            "test/test_icom_network_reconnect.c",
+            "test/test_icom_network_conf.c",
+        ],
+        references: &[],
+        tests: &[],
+        differences: "a fake clock in place of sleeps; expectations follow the session's own \
+                      differences; the reconnect cases against Nexus's policy; typed configuration",
+        blobs: &[
+            (
+                "test/test_icom_network_session.c",
+                "b55bf19eea5c3ddbfbe0630cb46de71bcd8504e8",
+            ),
+            (
+                "test/test_icom_network_reconnect.c",
+                "0de39e963e04572507ca74f92b30ddadb18363ae",
+            ),
+            (
+                "test/test_icom_network_conf.c",
+                "a37af74efc1e3d4ed3f410da60fa3ae80d9b6553",
+            ),
+        ],
+    },
+    Ported {
+        file: "sim.rs",
+        upstream: &["test/icom_network_mock.c", "test/icom_network_mock.h"],
+        references: &[],
+        tests: &[],
+        differences: "a pure radio value with a thin socket wrapper; a fake-clock world; a login \
+                      it can refuse; a responder the test supplies; no spectrum or audio script",
+        blobs: &[
+            (
+                "test/icom_network_mock.c",
+                "fa7107ba1a8c6f5f2e3d104e6cce83bb27beb71e",
+            ),
+            (
+                "test/icom_network_mock.h",
+                "744cccb9ac189e34ddba386e194e6c023227bf46",
             ),
         ],
     },

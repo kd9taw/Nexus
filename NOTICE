@@ -264,11 +264,16 @@ that pull request**, translated from C to Rust:
   (`rigs/icom/network_proto.c`, `rigs/icom/network_proto.h`);
 - the sequence tracking and retransmit buffer (`rigs/icom/network_seqbuf.c`,
   `rigs/icom/network_seqbuf.h`);
-- the matching tests (`test/test_icom_network_proto.c`, `test/test_icom_network_seqbuf.c`).
+- the session: handshake, keepalive, retransmit requests, per-socket liveness and teardown
+  (`rigs/icom/network_session.c`, `rigs/icom/network_session.h`);
+- the simulated radio the tests run against (`test/icom_network_mock.c`, `test/icom_network_mock.h`);
+- the matching tests (`test/test_icom_network_proto.c`, `test/test_icom_network_seqbuf.c`,
+  `test/test_icom_network_session.c`, `test/test_icom_network_reconnect.c`,
+  `test/test_icom_network_conf.c`).
 
-Read for protocol facts only, with no code taken: `rigs/icom/ICOM.md` and the six model files
-(`rigs/icom/ic7610net.c`, `rigs/icom/ic9700net.c`, `rigs/icom/ic705net.c`, `rigs/icom/ic905net.c`,
-`rigs/icom/ic7760net.c`, `rigs/icom/ic7300mk2net.c`).
+Read for protocol facts only, with no code taken: `rigs/icom/ICOM.md`, `rigs/icom/network_conf.c`,
+`rigs/icom/icom_network.c` and the six model files (`rigs/icom/ic7610net.c`, `rigs/icom/ic9700net.c`,
+`rigs/icom/ic705net.c`, `rigs/icom/ic905net.c`, `rigs/icom/ic7760net.c`, `rigs/icom/ic7300mk2net.c`).
 
 Nexus does not port Hamlib's backend glue, its configuration tokens, its streaming subsystem or its CI-V
 command layer. The CI-V layer the client carries is Nexus's own, written from Icom's CI-V reference guides
