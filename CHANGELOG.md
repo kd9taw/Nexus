@@ -20,12 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only.** Settings ▸ Radio ▸ Rig &
-  CAT offered it on the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or
-  D3 picked there put a value Icom does not define for those radios into the command that sets
-  their DATA mode for the digital modes. If you picked D2 or D3 on one of them, Nexus still sends
-  it, and the picker stays on screen until you set it back to D1. NEEDS-BENCH: what these radios
-  do with a D2 or D3 has not been checked on a radio.
+- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only, and the IC-9700, IC-705 and
+  IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT offered the picker on
+  the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put
+  a value Icom does not define for those radios into the command that sets their DATA mode for the
+  digital modes. On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA
+  mode ON whatever was picked; a D2 or D3 you picked stays in your settings but is not sent. The
+  IC-7610 still gets the D1, D2 or D3 you choose. NEEDS-BENCH on an IC-9700, IC-705 or IC-905 that
+  had D2 or D3 picked: a digital mode should put the radio in USB-D, with its transmit audio from
+  the DATA MOD source.
 - **The Connection help no longer sends RS-BA1 users to NET rigctl.** For an Icom on its LAN port,
   the help under Connection in Settings ▸ Radio ▸ Rig & CAT said to point Nexus at a rigctld
   server with Rig Model NET rigctl, whether the program in between was wfview or RS-BA1. RS-BA1

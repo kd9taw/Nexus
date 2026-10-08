@@ -631,14 +631,36 @@ pub fn set_rptr_offset(radio: u8, hz: u64) -> Frame {
 /// SELECTS D1/D2/D3 (A7380-7EX-4, PDF p. 13), and passing a hard 1 is why that radio always
 /// landed on D1 — an IC-7610 operator with USB audio wired to D2 found the radio moved back
 /// under them on every mode assert (report, 2026-08-19). `mode` is clamped to 1..=3 so a bad
-/// setting can never put a value outside that range on the bus; a 2 or 3 still goes to a
-/// single-DATA radio as given, and Settings offers the choice on the IC-7610 alone.
+/// setting can never put a value outside that range on the bus. Which of those a radio may be
+/// sent is its own count ([`data_mode_count`]), and the daemon caps the operator's choice at it
+/// before it gets here, so a single-DATA radio is only ever sent `01`.
 ///
 /// The filter byte keeps the rig's current selection when `None`.
 pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
     let m = mode.clamp(1, 3);
     let fil = filter.unwrap_or(0x01);
     Frame::command(radio, 0x1A, &[0x06, m, fil])
+}
+
+/// How many DATA modes this radio has: the highest first byte its own guide defines for
+/// `1A 06` ("Data mode with filter width settings") with DATA on, and so the most a DATA write
+/// may select.
+///
+/// | Model | DATA modes | `1A 06` first byte | Source |
+/// |---|---|---|---|
+/// | IC-7610 | 3 | 00 = OFF, 01 = DATA1, 02 = DATA2, 03 = DATA3 | CI-V Reference Guide A7380-7EX-4, PDF p. 13 |
+/// | IC-7300 | 1 | 00 = Data mode OFF, 01 = Data mode ON | Full Manual A7292-4EX-12, PDF p. 168 |
+/// | IC-9700 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7508-3EX-4, PDF p. 19 |
+/// | IC-705 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7560-8EX-6, PDF p. 23 |
+/// | IC-905 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7711-9EX-2, PDF p. 24 |
+///
+/// No wildcard arm, so a model added to [`IcomModel`] has to be read against its own guide
+/// first: the IC-7760, for one, has three, like the IC-7610 (A7788-8EX-2, PDF p. 23).
+pub fn data_mode_count(model: IcomModel) -> u8 {
+    match model {
+        IcomModel::Ic7610 => 3,
+        IcomModel::Ic7300 | IcomModel::Ic9700 | IcomModel::Ic705 | IcomModel::Ic905 => 1,
+    }
 }
 
 /// DATA mode on/off, selecting D1 when on — the long-standing behaviour, kept for the callers
