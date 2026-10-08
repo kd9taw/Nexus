@@ -76,6 +76,22 @@ pub struct Bonus {
     pub points: u32,
 }
 
+/// ⭐ **One of a contest's OBJECTIVES** — Winter Field Day's thirteen (the sponsor's 2027
+/// rules, p.6-7 and the worksheet on p.11), each worth an objective multiplier (OM).
+///
+/// Not a [`Bonus`]: a bonus ADDS points and an objective MULTIPLIES them — *"Total score =
+/// (total QSO points) x (OM+1)"* (p.7). `implies` names the objectives that come with this
+/// one: *"Achieving this objective qualifies you for the 'Operate station equipment on
+/// alternative power' objective"* (p.6). `id` is the stable settings key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Objective {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub multiplier: u32,
+    /// The other objectives this one earns with it, each counted once.
+    pub implies: &'static [&'static str],
+}
+
 /// ⭐ **A bonus the LOG earns, not one the operator claims** — a station worth points
 /// to whoever works it.
 ///
@@ -233,9 +249,17 @@ pub struct FdRuleset {
     /// SSTV legal as Digital; ARRL FD bans none. Advisory data for a UI guard —
     /// scoring and dupes never consult it.
     pub banned_modes: &'static [&'static str],
-    /// Display-only objectives menu (WFD; empty today — WFD reuses the bonus
-    /// menu, and a real WFD objectives table flows through this field later).
+    /// The OLD display-only objectives list: still parsed, and never populated. A build
+    /// that predates [`objective_menu`](Self::objective_menu) counts each id in it as one
+    /// objective whatever it is worth, so the real menu rides a key of its own.
     pub objectives: &'static [Bonus],
+    /// ⭐ **The objectives this contest scores by** ([`Objective`]) — Winter Field Day's
+    /// thirteen since the sponsor's 2027 rules, and empty for every other ruleset.
+    ///
+    /// ⚠️ **A key of its own, not values in [`objectives`](Self::objectives) or
+    /// [`bonuses`](Self::bonuses), because the rules file reaches installed builds.** 1.14
+    /// to 1.17 ignore an unknown key, and score neither old list as the sponsor does.
+    pub objective_menu: &'static [Objective],
     /// Domains this ruleset DECLARES in the rules file. The reserved derived
     /// ids ([`arrl_sections_domain`], [`fd_sections_domain`]) are NOT in here —
     /// they are computed from the top-level section list, and a file that tries
@@ -342,6 +366,62 @@ impl FdRuleset {
     /// Total points for a set of claimed bonus ids (unknown ids score nothing).
     pub fn bonus_points(&self, claimed: &[String]) -> u32 {
         claimed.iter().filter_map(|id| self.bonus(id)).sum()
+    }
+
+    /// The objective this id names, when the menu has one.
+    pub fn objective(&self, id: &str) -> Option<&'static Objective> {
+        self.objective_menu.iter().find(|o| o.id == id)
+    }
+
+    /// ⭐ **The objectives a set of ticked ids EARNS**, in menu order: each ticked objective
+    /// and every objective it implies, each once however many ticks reach it — the walk over
+    /// the MENU is what counts each once. An id the menu does not name — an ARRL bonus, a
+    /// typo — earns nothing.
+    pub fn objectives_earned(&self, ticked: &[String]) -> Vec<&'static Objective> {
+        let reached: Vec<&str> = ticked
+            .iter()
+            .filter_map(|id| self.objective(id))
+            .flat_map(|o| std::iter::once(o.id).chain(o.implies.iter().copied()))
+            .collect();
+        self.objective_menu
+            .iter()
+            .filter(|o| reached.contains(&o.id))
+            .collect()
+    }
+
+    /// ⭐ **The objective multiplier (OM)** a set of ticked ids earns: the sum over
+    /// [`objectives_earned`](Self::objectives_earned).
+    pub fn objective_multiplier(&self, ticked: &[String]) -> u32 {
+        self.objectives_earned(ticked)
+            .iter()
+            .fold(0u32, |om, o| om.saturating_add(o.multiplier))
+    }
+
+    /// ⭐ **The sponsor's total for an objectives contest**: QSO points × (OM + 1), *"The +1
+    /// is for participating"* (Winter Field Day 2027 rules, p.7).
+    pub fn objective_total(&self, qso_points: u32, ticked: &[String]) -> u32 {
+        qso_points.saturating_mul(self.objective_multiplier(ticked).saturating_add(1))
+    }
+
+    /// ⭐ **The whole claimed total, the ONE formula every surface asks** — the snapshot, the
+    /// club line, the spectator board and the Cabrillo `CLAIMED-SCORE`.
+    ///
+    /// `scored` is [`Scoring::score`](crate::contest::Scoring::score)'s total (power tier and
+    /// multipliers applied) and `bonus` the claimed and earned bonus points. A ruleset with
+    /// an objective menu is the sponsor's objectives formula over the raw QSO points instead;
+    /// every other ruleset is `scored + bonus`, exactly as before the menu existed.
+    pub fn claimed_total(
+        &self,
+        qso_points: u32,
+        scored: u32,
+        bonus: u32,
+        objectives: &[String],
+    ) -> u32 {
+        if self.objective_menu.is_empty() {
+            scored + bonus
+        } else {
+            self.objective_total(qso_points, objectives) + bonus
+        }
     }
 
     /// ⭐ **Points this LOG earns from the contest's bonus stations** — once per
@@ -878,6 +958,13 @@ struct RulesetSpec {
     score_note_key: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+    /// The objectives this contest scores by — see [`FdRuleset::objective_menu`].
+    ///
+    /// ⚠️ `#[serde(default)]` for the `score_note_key` reason: absent is `[]`, "no objective
+    /// menu", which is what every ruleset written before this key means. A menu that IS
+    /// present is validated in full.
+    #[serde(default)]
+    objective_menu: Vec<ObjectiveSpec>,
     /// ⭐ **The sponsor's own Cabrillo template, where it asks for more than the
     /// structural one** — CQ WW RTTY's fixed exchange columns, its optional headers and
     /// its LOCATION spellings.
@@ -1445,6 +1532,16 @@ struct BonusSpec {
     id: String,
     label: String,
     points: u32,
+}
+
+/// One [`Objective`] in the rules file. Every field is REQUIRED: a file that forgot
+/// `implies` must not load as though the sponsor had said the objective brings nothing.
+#[derive(Debug, serde::Deserialize)]
+struct ObjectiveSpec {
+    id: String,
+    label: String,
+    multiplier: u32,
+    implies: Vec<String>,
 }
 
 /// One [`BonusStation`] in the rules file.
@@ -2222,6 +2319,52 @@ mode class ({})",
             }
             ids.push(&b.id);
         }
+        // ⭐ THE OBJECTIVE MENU. Each refusal is an objective that would load and then score
+        // wrong: worth nothing, indistinguishable from another, bringing with it one that does
+        // not exist, or multiplying a score its contest does not multiply.
+        if !r.objective_menu.is_empty() {
+            if r.scoring.model != "objectives" {
+                return Err(format!(
+                    "{tag}: an objective menu needs scoring model \"objectives\", not {:?}",
+                    r.scoring.model
+                ));
+            }
+            if !r.bonuses.is_empty() {
+                return Err(format!(
+                    "{tag}: carries both a bonus menu and an objective menu (a contest scores \
+                     by one)"
+                ));
+            }
+        }
+        let mut objective_ids: Vec<&str> = Vec::new();
+        for o in &r.objective_menu {
+            if o.id.is_empty() {
+                return Err(format!("{tag}: empty objective id"));
+            }
+            if objective_ids.contains(&o.id.as_str()) {
+                return Err(format!("{tag}: duplicate objective id {:?}", o.id));
+            }
+            objective_ids.push(&o.id);
+            if o.label.trim().is_empty() {
+                return Err(format!("{tag}: objective {:?} has no label", o.id));
+            }
+            if o.multiplier == 0 {
+                return Err(format!("{tag}: objective {:?} has multiplier 0", o.id));
+            }
+        }
+        for o in &r.objective_menu {
+            for i in &o.implies {
+                if *i == o.id {
+                    return Err(format!("{tag}: objective {:?} implies itself", o.id));
+                }
+                if !objective_ids.contains(&i.as_str()) {
+                    return Err(format!(
+                        "{tag}: objective {:?} implies {i:?}, which is not on the menu",
+                        o.id
+                    ));
+                }
+            }
+        }
         // ⭐ BONUS STATIONS. Each refusal is a bonus that would load and then never
         // fire — the silent 100 points an entrant's submitted score is short.
         let mut bonus_calls: Vec<&str> = Vec::new();
@@ -2335,6 +2478,20 @@ fn leak_opt_tag(t: String) -> Option<&'static str> {
     } else {
         Some(leak_str(t))
     }
+}
+
+fn leak_objectives(v: Vec<ObjectiveSpec>) -> &'static [Objective] {
+    Box::leak(
+        v.into_iter()
+            .map(|o| Objective {
+                id: leak_str(o.id),
+                label: leak_str(o.label),
+                multiplier: o.multiplier,
+                implies: leak_keys(o.implies),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
 }
 
 fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
@@ -2707,6 +2864,7 @@ fn build(spec: FileSpec) -> RulesTable {
                         .into_boxed_slice(),
                 ),
                 objectives: leak_bonuses(r.objectives),
+                objective_menu: leak_objectives(r.objective_menu),
                 assistance: AssistancePolicy {
                     spotting_allowed: r.assistance.spotting_allowed,
                     cluster_allowed: r.assistance.cluster_allowed,
@@ -3450,6 +3608,81 @@ mod tests {
             ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).bonus("satellite"),
             None,
             "ARRL's satellite bonus leaked into Winter Field Day's menu"
+        );
+    }
+
+    /// `key: ['a', 'b']` from the same row shape — the quoted items of a one-line array.
+    fn ts_list_field<'a>(line: &'a str, key: &str) -> Option<Vec<&'a str>> {
+        let pat = format!("{key}: [");
+        let i = line.find(&pat)?;
+        let rest = &line[i + pat.len()..];
+        let body = &rest[..rest.find(']')?];
+        Some(
+            body.split(',')
+                .map(|item| item.trim().trim_matches('\''))
+                .filter(|item| !item.is_empty())
+                .collect(),
+        )
+    }
+
+    /// The first way the TS objectives table differs from `menu`, or `None` when it matches
+    /// row for row: id, label, multiplier and `implies`, in order.
+    fn objectives_mirror_drift(ts_src: &str, menu: &[Objective]) -> Option<String> {
+        let head = "export const WFD_OBJECTIVES";
+        let Some(start) = ts_src.find(head) else {
+            return Some(format!("no `{head}` in the TS file"));
+        };
+        let body = &ts_src[start..];
+        let Some(open) = body.find("= [") else {
+            return Some("the table has no initializer".into());
+        };
+        let body = &body[open + 3..];
+        let body = &body[..body.find("\n]").unwrap_or(body.len())];
+        let rows: Vec<(&str, &str, u32, Vec<&str>)> = body
+            .lines()
+            .filter_map(|l| {
+                Some((
+                    ts_str_field(l, "id")?,
+                    ts_str_field(l, "label")?,
+                    ts_num_field(l, "multiplier")?,
+                    ts_list_field(l, "implies")?,
+                ))
+            })
+            .collect();
+        if rows.len() != menu.len() {
+            return Some(format!(
+                "{} TS rows for {} objectives on the menu",
+                rows.len(),
+                menu.len()
+            ));
+        }
+        for (i, (row, o)) in rows.iter().zip(menu).enumerate() {
+            let want = (o.id, o.label, o.multiplier, o.implies.to_vec());
+            if *row != want {
+                return Some(format!("objective #{i}: TS {row:?}, seed {want:?}"));
+            }
+        }
+        None
+    }
+
+    /// ⭐ THE OBJECTIVES MIRROR: `ui/src/features/wfdObjectives.ts` against the seed's WFD
+    /// `objective_menu`. The checklist ticks ids from the TS table and the score multiplies
+    /// by the seed's, so an id, a multiplier or an `implies` that differs is a box that
+    /// scores something other than what it says. The labels are compared as well: both sides
+    /// carry the sponsor's worksheet names verbatim (2027 rules, p.11).
+    #[test]
+    fn the_typescript_objectives_mirror_matches_the_seed() {
+        let ts_src = include_str!("../../../ui/src/features/wfdObjectives.ts");
+        let menu = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).objective_menu;
+        assert_eq!(objectives_mirror_drift(ts_src, menu), None);
+        assert_eq!(menu.len(), 13, "the sponsor's thirteen, both sides");
+        // POSITIVE CONTROL: a copy with QRP's ×4 changed is drift, so the `None` above is the
+        // two tables agreeing and not a parser that read nothing.
+        let drifted = ts_src.replacen("multiplier: 4", "multiplier: 5", 1);
+        assert_ne!(drifted, ts_src, "the control changed nothing");
+        assert!(
+            objectives_mirror_drift(&drifted, menu).is_some(),
+            "a drifted multiplier went unnoticed"
         );
     }
 

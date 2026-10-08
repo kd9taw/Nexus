@@ -20,7 +20,7 @@
     },
     "wfd_window": "WFD's window rule is the sponsor's own sentence for 2027 (https://winterfieldday.org/queries/query_rules.php, the rules text sop.php loads, read 2026-10-08): \"Winter Field Day is held the 4th full weekend in January. For 2027, it will be held on January 23rd and 24th. The 30-hour operational period starts at 1600 UTC on Saturday (11 am EST), the 23rd, and ends at 21:59 UTC on Sunday, the 24th (4:59 pm EST).\" Carried as month 1, nth_full n=4, start_hour_utc 16, duration 30. ⚠️ IT CHANGED: the 2025 rules (https://winterfieldday.org/downloads/2025-rules.pdf) said \"Winter Field Day is held the last full weekend in January. For 2025, it will be held on January 25th and 26th.\", which this file carried as last_full. The two readings part only in a January with five full weekends, and 2027 is the first such year since: last_full put it on 30-31 January, a week late. Checked year by year against the stated rule (the first Saturday whose Sunday is also in January, then the fourth): 2026 24-25 (the 2026 event, where both readings agree), 2027 23-24 (the sponsor's own dates), 2028 22-23 (last_full would say 29-30), 2029 27-28, 2030 26-27, 2031 25-26, 2032 24-25, 2033 22-23 (last_full 29-30); pinned by winter_field_day_is_the_fourth_full_weekend_of_january. The sponsor publishes a date one year at a time, so re-read it each year; a year the sponsor moves is a window.overrides entry.",
     "banned_modes": "WFD 2026 WSJT-suite ban carried over verbatim from the fd_rules.rs consts landed in c76f5242 (RTTY and SSTV explicitly legal as Digital). FT2 added from the sponsor's 2027 list (https://winterfieldday.org/queries/query_rules.php, read 2026-10-08): \"All modes, except WSJT modes\" may be used, and \"WSJT modes include: FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W, and Echo.\" Advisory like the rest: the strip warns, nothing is refused.",
-    "objectives": "WFD runs its OWN objectives, never ARRL's bonus menu, which it borrowed until the 2027 rules (the sponsor's 2027 rules PDF, \"Version 3, 04 OCT 2026\", https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08; the same text on https://winterfieldday.org/queries/query_rules.php). p.5: \"an Objective Multiplier (OM) has been assigned to each objective. We will add 1 to your objective multiplier, so you still get your QSO points if you do not complete any objectives. To calculate your overall score, we will take your OM+1 and multiply that number by your total QSO points.\" p.7: \"When you submit your log, we will ask you to select your completed objectives. For those who like to track your points, the total points formula is: Total score = (total QSO points) x (OM+1) The +1 is for participating.\" So wfd.bonuses is [] from rules year 2027: an ARRL bonus ticked under WFD scores nothing. p.3 lists the year's changes: \"Several objectives have been added.\", \"Satellite objectives are gone\".",
+    "objectives": "WFD runs its OWN objectives, never ARRL's bonus menu, which it borrowed until the 2027 rules (the sponsor's 2027 rules PDF, \"Version 3, 04 OCT 2026\", https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08; the same text on https://winterfieldday.org/queries/query_rules.php). p.5: \"an Objective Multiplier (OM) has been assigned to each objective. We will add 1 to your objective multiplier, so you still get your QSO points if you do not complete any objectives. To calculate your overall score, we will take your OM+1 and multiply that number by your total QSO points.\" p.7: \"When you submit your log, we will ask you to select your completed objectives. For those who like to track your points, the total points formula is: Total score = (total QSO points) x (OM+1) The +1 is for participating.\" So wfd.bonuses is [] from rules year 2027: an ARRL bonus ticked under WFD scores nothing. p.3 lists the year's changes: \"Several objectives have been added.\", \"Satellite objectives are gone\". wfd.objective_menu is the thirteen, labelled as the p.11 worksheet names them, with the multipliers p.6-7 give: \"Operate station equipment on alternative power\" 1, \"Operate 100% on alternative Power\" 2, \"Operate away from home\" 3, \"Deploy multiple antennas\" 1, \"Send and receive the WFD SSTV image\" 2, \"Make at least three contacts on a cross-band repeater\" 3, \"Send and receive at least one Winlink email\" 1, \"Copy the Winter Field Day Special Bulletin\" 1, \"Make at least 3 contacts on at least 6 different bands\" 6, \"Make at least 3 contacts on at least 12 different bands\" 6, \"Use multiple modes\" 2, \"Operate the event QRP\" 4, \"Operate six continuous hours during the event\" 2 (34 together). implies: p.6, of 100% alternative power, \"Achieving this objective qualifies you for the 'Operate station equipment on alternative power' objective\"; p.7, of twelve bands, \"The six bands from the previous objective count toward this one\", read as twelve bands earning the six-band objective too, a reading worth confirming with the sponsor. The objectives ride objective_menu, a key 1.14 to 1.17 ignore, never the old objectives list, which those builds would count as one each whatever its multiplier.",
     "exchange": "Class letters are PER EVENT and the two sets are disjoint. arrlfd uses ^[0-9]{1,2}[ABCDEF]$ (ARRL Field Day classes A-F). wfd uses ^[0-9]{1,2}[HIOM]$, from winterfieldday.org/downloads/2026-rules-v3.pdf (the sponsor's own 2026 rules, stamped \"V3 9.8.25\"), read in full 2026-09-07: \"Class Options: H - Home station... I - Indoor station... O - Outdoor station... M - Mobile / Mobile Stationary\", with the worked example \"If you have two stations and you are mobile in East Pennsylvania, you are 2M EPA.\" This CORRECTS a real shipped bug: both events previously used ABCDEF, so no legal WFD class satisfied the required CLASS slot and the RTTY auto-sequencer could not complete a single Winter Field Day contact. The earlier guess of HIOM lived only in a code comment, which is not a source; the sponsor page was unreachable on 2026-08-29 (see the assistance entry) and the PDF is the first-party text that was missing then. Do not change these letters without a verbatim quote + URL + read-date recorded here.",
     "exchange_section_domain": "Both events' SECTION slot uses the derived `fd_sections` domain (the 83 ARRL/RAC sections plus MX and DX). Corroborated for WFD by the same PDF, \"Location Identifier\": \"US and Canadian stations will use the ARRL / RAC Section as designated by those organizations. Mexico stations will use MX, and all other stations outside of the US will use DX.\"",
     "adif_sent_tags": "Every exchange field's adif.sent was \"\" through batch 5 because a grep of crates/, src-tauri/ and ui/src found MY_CNTY / MY_STATE / MY_ARRL_SECT nowhere (positive control: MY_GRIDSQUARE returns hits, so the grep worked and the zeros were real) — but an absence from OUR tree is not an absence from ADIF. Batch 6 read the source: ADIF Specification V 3.1.7, https://adif.org/317/ADIF_317.htm, stamped \"Released ADIF Version 3.1.7, updated 2026-03-22\", fetched and searched in full 2026-09-09. MY_ARRL_SECT IS a QSO field there - \"the logging station's ARRL section\" - so SECTION's adif.sent is now MY_ARRL_SECT. CLASS's stays \"\": CLASS is a real ADIF field (\"contest class (e.g. for ARRL Field Day)\") but it is the CONTACTED station's, and MY_CLASS does not exist in the field list (zero anchors, alongside MY_CHECK, MY_PRECEDENCE, MY_QTH and the invented control names MY_COUNTY and MY_SECTION), so the class I send rides the private carrier (spec §3.5). A name that does not check out stays \"\" - an invented ADIF field ships into other people's logbooks and cannot be recalled.",
@@ -324,6 +324,90 @@
       },
       "enforcement": "warn",
       "objectives": [],
+      "objective_menu": [
+        {
+          "id": "wfd-alt-power-equipment",
+          "label": "Operate station equipment on alternative power",
+          "multiplier": 1,
+          "implies": []
+        },
+        {
+          "id": "wfd-alt-power-100",
+          "label": "Operate 100% on alternative Power",
+          "multiplier": 2,
+          "implies": [
+            "wfd-alt-power-equipment"
+          ]
+        },
+        {
+          "id": "wfd-away-from-home",
+          "label": "Operate away from home",
+          "multiplier": 3,
+          "implies": []
+        },
+        {
+          "id": "wfd-multiple-antennas",
+          "label": "Deploy multiple antennas",
+          "multiplier": 1,
+          "implies": []
+        },
+        {
+          "id": "wfd-sstv-image",
+          "label": "Send and receive the WFD SSTV image",
+          "multiplier": 2,
+          "implies": []
+        },
+        {
+          "id": "wfd-crossband-repeater",
+          "label": "Make at least three contacts on a cross-band repeater",
+          "multiplier": 3,
+          "implies": []
+        },
+        {
+          "id": "wfd-winlink-email",
+          "label": "Send and receive at least one Winlink email",
+          "multiplier": 1,
+          "implies": []
+        },
+        {
+          "id": "wfd-bulletin",
+          "label": "Copy the Winter Field Day Special Bulletin",
+          "multiplier": 1,
+          "implies": []
+        },
+        {
+          "id": "wfd-six-bands",
+          "label": "Make at least 3 contacts on at least 6 different bands",
+          "multiplier": 6,
+          "implies": []
+        },
+        {
+          "id": "wfd-twelve-bands",
+          "label": "Make at least 3 contacts on at least 12 different bands",
+          "multiplier": 6,
+          "implies": [
+            "wfd-six-bands"
+          ]
+        },
+        {
+          "id": "wfd-multiple-modes",
+          "label": "Use multiple modes",
+          "multiplier": 2,
+          "implies": []
+        },
+        {
+          "id": "wfd-qrp",
+          "label": "Operate the event QRP",
+          "multiplier": 4,
+          "implies": []
+        },
+        {
+          "id": "wfd-six-hours",
+          "label": "Operate six continuous hours during the event",
+          "multiplier": 2,
+          "implies": []
+        }
+      ],
       "cabrillo": {
         "headers": [
           "CLAIMED-SCORE",

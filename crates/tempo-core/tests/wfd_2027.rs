@@ -130,3 +130,101 @@ fn wfd_cabrillo_names_the_entrant() {
         assert!(!cab.contains(tag), "ARRL Field Day wrote {tag}\n{cab}");
     }
 }
+
+/// Objective ids as the settings hold them.
+fn ticked(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|id| id.to_string()).collect()
+}
+
+/// The shared fixture's ticks: 100% alternative power (×2, which brings "station equipment
+/// on alternative power", ×1, with it) and QRP (×4) — OM 7.
+const TICKED: [&str; 2] = ["wfd-alt-power-100", "wfd-qrp"];
+
+/// ⭐ **The thirteen objectives are the sponsor's, at the sponsor's multipliers** — the
+/// worksheet on p.11, OM 1, 2, 3, 1, 2, 3, 1, 1, 6, 6, 2, 4, 2. Two bring another with them:
+/// 100% alternative power *"qualifies you for the 'Operate station equipment on alternative
+/// power' objective"* (p.6), and of twelve bands *"The six bands from the previous objective
+/// count toward this one"* (p.7).
+#[test]
+fn the_objectives_are_the_sponsors_thirteen() {
+    let rs = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
+    let menu: Vec<(&str, u32)> = rs
+        .objective_menu
+        .iter()
+        .map(|o| (o.id, o.multiplier))
+        .collect();
+    assert_eq!(
+        menu,
+        [
+            ("wfd-alt-power-equipment", 1),
+            ("wfd-alt-power-100", 2),
+            ("wfd-away-from-home", 3),
+            ("wfd-multiple-antennas", 1),
+            ("wfd-sstv-image", 2),
+            ("wfd-crossband-repeater", 3),
+            ("wfd-winlink-email", 1),
+            ("wfd-bulletin", 1),
+            ("wfd-six-bands", 6),
+            ("wfd-twelve-bands", 6),
+            ("wfd-multiple-modes", 2),
+            ("wfd-qrp", 4),
+            ("wfd-six-hours", 2),
+        ]
+    );
+    let implies: Vec<(&str, Vec<&str>)> = rs
+        .objective_menu
+        .iter()
+        .filter(|o| !o.implies.is_empty())
+        .map(|o| (o.id, o.implies.to_vec()))
+        .collect();
+    assert_eq!(
+        implies,
+        [
+            ("wfd-alt-power-100", vec!["wfd-alt-power-equipment"]),
+            ("wfd-twelve-bands", vec!["wfd-six-bands"]),
+        ]
+    );
+}
+
+/// ⭐ **The objective multiplier counts what a ticked objective comes with, once, and the total
+/// is the sponsor's formula** — *"Total score = (total QSO points) x (OM+1)"* (p.7): the shared
+/// fixture's 5 QSO points × (7 + 1) = 40.
+#[test]
+fn the_objective_total_is_the_sponsors_formula() {
+    let rs = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
+    let om = |ids: &[&str]| rs.objective_multiplier(&ticked(ids));
+    let all: Vec<&str> = rs.objective_menu.iter().map(|o| o.id).collect();
+    assert_eq!(
+        (
+            om(&TICKED),
+            om(&["wfd-alt-power-100", "wfd-alt-power-equipment", "wfd-qrp"]),
+            om(&all),
+            om(&["wfd-twelve-bands"]),
+            om(&["emergency-power", "satellite"]),
+            om(&["not-an-objective"]),
+        ),
+        (7, 7, 34, 12, 0, 0),
+        "(the fixture's ticks, the same with the implied one ticked too, all thirteen, twelve \
+         bands alone, two ARRL bonus ids, an unknown id)"
+    );
+    assert_eq!(
+        (
+            rs.objective_total(5, &ticked(&TICKED)),
+            rs.claimed_total(5, 5, 0, &ticked(&TICKED)),
+            rs.objective_total(5, &[]),
+        ),
+        (40, 40, 5),
+        "(the fixture's total, the same through the one formula every surface asks, and \
+         nothing ticked: \"The +1 is for participating\")"
+    );
+    // CONTROL: ARRL Field Day has no objectives, and its claimed total is still its powered
+    // points plus its bonuses, whatever objective ids the settings hold.
+    let arrl = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
+    assert_eq!(
+        (
+            arrl.objective_menu.len(),
+            arrl.claimed_total(5, 10, 100, &ticked(&TICKED))
+        ),
+        (0, 110)
+    );
+}
