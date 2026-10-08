@@ -321,6 +321,20 @@ describe('⊞ Arrange in FT', () => {
     expect(stacks().map(seamsIn)).toEqual([['Call Roster / Rx Frequency'], []])
   })
 
+  it('the callsign card keeps its size in the arranged columns, and only there: the column scrolls instead', async () => {
+    // The operator's "Card keeps its size": a second flat class on the card (cockpit-panes.css computes
+    // what it does), added in the arranged branch only, so today's tree keeps the card it always drew.
+    const card = () => document.querySelector('.cockpit-lower .recall-card')!
+    render(<Live layoutMode="classic" selectedCall="W1ABC" />)
+    await settle()
+    expect(card().classList.contains('cockpit-recall'), 'fixture: the bounded card is on screen').toBe(true)
+    expect(card().classList.contains('cockpit-recall-kept'), 'today’s tree changed').toBe(false)
+    move('stations', 'up', 'classic')
+    await settle()
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    expect([...card().classList]).toEqual(expect.arrayContaining(['recall-card', 'cockpit-recall', 'cockpit-recall-kept']))
+  })
+
   it('a decode window’s rows come back after a move: its history is the cockpit’s, not the pane’s', async () => {
     const view = render(<Live layoutMode="roster" snapOver={{ recentDecodes: [decode({})] }} />)
     await settle()

@@ -109,8 +109,9 @@ Activity can stand over Rx Frequency in Classic. Classic and Roster keep separat
 switching layouts brings each back as you left it. Two feeds stacked in one column get a divider
 between them; the side rail keeps the side you put it on, and a column you empty is not drawn.
 Moving a pane changes nothing it does: a double-click still answers the station, and Band Activity
-keeps its decodes. Nothing moves until you move it, and **Reset layout** puts both layouts back as
-they shipped.
+keeps its decodes. In an arranged column the callsign card keeps its size; when the column holds more
+than fits, the column scrolls. Nothing moves until you move it, and **Reset layout** puts both layouts
+back as they shipped.
 
 **Boxes.** Any pane of [Conditions](connect.md) — the Clock, Space Wx, POTA / SOTA, the Spots and
 Needed boards and the rest — can also stand in these columns, in up to six boxes. In ⊞ Panels ▸

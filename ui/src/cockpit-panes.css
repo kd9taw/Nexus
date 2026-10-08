@@ -668,6 +668,19 @@
   overflow-y: auto;
 }
 
+/* THE CARD IN FT'S ARRANGED COLUMNS KEEPS ITS SIZE (the operator's pick, 2026-10-07: "Card keeps its
+   size"). An arranged column (`.op-stack`, above) floors its feeds and boxes at a yielding 10em, which
+   left the card the only item that could shrink: in a crowded column it gave up its whole height before
+   the column scrolled, down to its padding (22 px at 1024×768 in the operator's own example layout, a
+   card answering "who is this" in one line). There the card keeps the stock bound above, `min(14em, 33%)`
+   of its column, and never shrinks; the column is a scroller, so it scrolls instead. A second flat
+   class, added by the host only in the arranged branch (RecallPanel `kept`), so the stock screens and
+   the Phone and CW log panes are untouched. It changes the shrink and nothing else: the ceiling and the
+   card's own scroll are `.cockpit-recall`'s, and it is never a floor. */
+.cockpit-recall-kept {
+  flex: 0 0 auto;
+}
+
 /* The hosted observer adds session chrome above the FT shell. At pinned zoom
    its lower grid can otherwise collapse to zero and leave the rail outside
    even the shell's scroll range. Reserve a yielding content region, following

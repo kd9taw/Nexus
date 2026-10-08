@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Activity, Rx Frequency and the card between the main column and the side rail in Roster. Classic
   and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
   Conditions pane, as Phone, CW and JS8 do. Moving a pane changes nothing it does: a double-click
-  still answers the station, and Band Activity keeps its decodes. Nothing moves until you move it, so
+  still answers the station, and Band Activity keeps its decodes. In an arranged column the callsign
+  card keeps its size, and a crowded column scrolls instead. Nothing moves until you move it, so
   nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
   Nexus Remote.
 

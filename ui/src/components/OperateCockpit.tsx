@@ -1152,9 +1152,10 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
+  // In the arranged columns the card keeps its size and the column scrolls (`.cockpit-recall-kept`).
   const recallCard = shownRecallCall && shown('recall') ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} {...closeProps('recall')} paneTitle={labels.recall} />
-    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded {...closeProps('recall')} paneTitle={labels.recall} />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
   ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
@@ -2168,6 +2169,7 @@ function OperateRecall({
   call,
   mode,
   fdActive,
+  kept,
   onOpenLog,
   onShowCall,
   onRemove,
@@ -2179,6 +2181,8 @@ function OperateRecall({
   mode: string
   /** Is a contest session running? The card's contest-scoped dupe badge depends on it. */
   fdActive?: boolean
+  /** The card stands in an arranged column, where it keeps its size (RecallPanel `kept`). */
+  kept?: boolean
   /** The card's own ✕ — #204 made the card a ⊞ entry (`recall`); this is the same tick. */
   onRemove?: () => void
   hideNote?: string
@@ -2308,6 +2312,7 @@ function OperateRecall({
       // The rail is SHARED with the Stations roster; unbounded this card took it down to
       // ~2 rows at 1024x768 and off-screen at 175 % zoom. See `.cockpit-recall`.
       bounded
+      kept={kept}
       onOpenLog={onOpenLog}
       // #204: the station this one is calling, when its last frame named one.
       calling={station?.calling ?? null}
