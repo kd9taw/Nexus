@@ -157,6 +157,35 @@ fn dax_waits_for_our_transmit_stream() {
     assert_eq!(r.step(&v, true, false, 0), MIC);
 }
 
+/// A radio already taking DAX (SmartSDR's own DAX switch sets the same radio-wide flag) still gets
+/// Nexus's transmit stream: there is nothing to write, but without the stream nothing carries the
+/// over. Nothing is written then, so nothing is owed back.
+#[test]
+fn a_radio_already_on_dax_still_gets_our_transmit_stream() {
+    let mut r = Routing::default();
+    let mut v = view(true, "DIGU");
+    v.dax_tx_stream = false;
+    assert_eq!(r.step(&v, true, false, 0), Some(Step::CreateDaxTx));
+    assert_eq!(
+        r.step(&v, true, false, 0),
+        Some(Step::CreateDaxTx),
+        "until it exists"
+    );
+    assert_eq!(
+        r.step(&view(true, "DIGU"), true, false, 0),
+        None,
+        "already on DAX: nothing to write"
+    );
+    assert_eq!(r.operator(), Some(true), "the operator's own setting");
+    assert_eq!(
+        r.restore_on_disconnect(&view(true, "DIGU")),
+        Restore::Nothing
+    );
+    // Native audio off: Nexus feeds nothing over DAX, so it asks for no stream.
+    let mut r = Routing::default();
+    assert_eq!(r.step(&v, false, false, 0), None);
+}
+
 #[test]
 fn native_audio_off_puts_back_only_what_nexus_changed() {
     let mut r = Routing::default();

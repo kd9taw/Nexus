@@ -278,6 +278,69 @@ fn native_audio_on_the_client_carries_both_ways_on_one_session() {
     assert!(!s.engine.lock().unwrap().snapshot().radio.flex_dax_tx);
 }
 
+/// The bundled session, with the radio's transmitter already taking its audio from DAX when Nexus
+/// connects, as SmartSDR's own DAX switch leaves it (the flag is radio-wide).
+fn radio_on_dax() -> SimSession {
+    let mut s = SimSession::v4_gui_client();
+    for (pattern, rules) in &mut s.rules {
+        if *pattern == Pattern::Exact("sub tx all".to_string()) {
+            for item in rules.iter_mut().flat_map(|r| r.items.iter_mut()) {
+                if let Item::Send(line) = item {
+                    if line.starts_with("S0|transmit ") {
+                        *line = line.replace(" dax=0 ", " dax=1 ");
+                    }
+                }
+            }
+        }
+    }
+    s
+}
+
+/// ⭐ A RADIO ALREADY ON DAX GETS NEXUS'S TRANSMIT STREAM. The flag the routing follows the mode
+/// with is radio-wide, and SmartSDR's own DAX switch sets it, so a radio can already take its
+/// transmit audio from DAX when Nexus connects. Nothing needs writing then, but Nexus's own
+/// transmit stream still has to exist: without it the tee never goes in and the client refuses
+/// every digital over. One create, the tee in, a queued over keys and its audio leaves as DAX TX,
+/// and the flag is never written (the operator's own setting stands, so nothing is owed back).
+#[test]
+fn a_radio_already_on_dax_gets_the_transmit_stream_and_keys() {
+    let mut s = FlexScene::with_session(true, radio_on_dax());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.backend.tee.lock().unwrap().is_none() && Instant::now() < deadline {
+        s.run(100);
+    }
+    let tee = s.backend.tee.lock().unwrap().is_some();
+    let (_, played) = one_over(
+        &mut s,
+        first_boundary(),
+        1_500.0,
+        false,
+        1_500.0,
+        &mut |_, _| {},
+    );
+    let log = s.log();
+    let count = |want: &str| log.iter().filter(|(_, e)| command(e, want)).count();
+    let dax_tx_audio = log
+        .iter()
+        .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1));
+    let writes = log
+        .iter()
+        .filter(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("transmit set dax")))
+        .count();
+    let tx_enabled = s.engine.lock().unwrap().tx_enabled();
+    assert_eq!(
+        format!(
+            "dax_tx_creates={} tee={tee} xmit1={} played={} dax_tx_audio={dax_tx_audio} \
+             dax_writes={writes} tx_enabled={tx_enabled}",
+            count("stream create type=dax_tx"),
+            count("xmit 1"),
+            played.is_some(),
+        ),
+        "dax_tx_creates=1 tee=true xmit1=1 played=true dax_tx_audio=true dax_writes=0 \
+         tx_enabled=true"
+    );
+}
+
 /// The control for the test above: native audio off, nothing about DAX on the wire, the sound
 /// card keeps both directions, and the loop runs as before.
 #[test]

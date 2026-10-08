@@ -101,7 +101,8 @@ pub struct View {
 pub enum Step {
     /// `transmit set dax=<value>`, and why.
     Write { dax: bool, why: Why },
-    /// `stream create type=dax_tx`: DAX is wanted and our transmit stream does not exist yet.
+    /// `stream create type=dax_tx`: DAX is wanted and our transmit stream does not exist yet,
+    /// whether or not the radio already takes DAX.
     CreateDaxTx,
 }
 
@@ -247,6 +248,12 @@ impl Routing {
                 }
             }
         };
+        // DAX for Nexus's own audio: its transmit stream first, whatever the flag says now. A
+        // radio already on DAX (SmartSDR's own DAX switch sets the same radio-wide flag) still
+        // needs it, or nothing carries the over.
+        if native_audio && target && !view.dax_tx_stream {
+            return Some(Step::CreateDaxTx);
+        }
         if target == radio {
             self.applied = true;
             return None;

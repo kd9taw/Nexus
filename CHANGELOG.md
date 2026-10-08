@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
+  client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
+  when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
+  a radio that way, for every program on it. Nexus then refused every FT8 or other digital over and
+  turned TX off. It now opens its transmit stream whatever that setting already is, and the overs
+  go out over DAX. The setting itself is left as Nexus found it. NEEDS-BENCH on a FLEX radio.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of
