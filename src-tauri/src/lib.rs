@@ -43727,8 +43727,7 @@ mod tests {
         );
 
         let before = engine.stored_records();
-        let ticked: Vec<crate::TickedLineDto> =
-            found[1..].iter().flat_map(|dto| decisive(dto)).collect();
+        let ticked: Vec<crate::TickedLineDto> = found[1..].iter().flat_map(decisive).collect();
         let (made, durability) =
             crate::applied_from(&checks, session, &ticked, &engine, CHECKED_AT);
         durability
