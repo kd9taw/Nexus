@@ -6381,6 +6381,8 @@ export const ES: PartialCatalog = {
   "shell.lane.slotKeyRefused.flex.daxUnfed": "Nexus no puso en el aire el turno de {{mode}} a las {{time}} UTC: el audio DAX nativo de Flex está desactivado, pero la radio aún tomaba su audio de transmisión por DAX, como Nexus la había configurado, y ahora nada alimenta DAX. No se envió nada y TX se apagó. Nexus vuelve a poner la radio en su entrada de micrófono en un momento; luego vuelve a activar TX.",
   "shell.lane.slotUnkeyFailed.message": "FALLO AL DESACTIVAR EL PTT — TX DETENIDO",
   "shell.lane.slotUnkeyFailed.detail": "La radio no aceptó la desactivación del PTT a las {{time}} UTC ({{why}}), así que TX se apagó. Puede que siga transmitiendo: revisa la radio ahora. Nexus sigue desactivando el PTT hasta que la radio lo acepte. Vuelve a activar TX cuando la radio esté recibiendo.",
+  "shell.lane.slotAudioLost.message": "TURNO TERMINADO — TX DETENIDO",
+  "shell.lane.slotAudioLost.detail": "El audio DAX nativo de Flex se desactivó a las {{time}} UTC en medio de un turno, así que el resto de ese turno habría salido en silencio. Nexus terminó el turno ahí y apagó TX. Vuelve a activar TX para continuar.",
   "shell.lane.clockRepairHold.message": "REPARACIÓN DEL RELOJ — TX EN ESPERA",
   "shell.lane.clockRepairHold.detail": "Nexus está reparando el reloj de este ordenador. Ninguna transmisión empieza hasta que termine la reparación, dos minutos como máximo, para que el reloj no se mueva en mitad de una pasada.",
   "shell.lane.txPowerZero.detail": "El equipo indica 0% de potencia y la transmisión está armada — activará el PTT y no saldrá nada al aire. Revisa el deslizador Pwr y la potencia del propio equipo para ESTE modo: los Yaesu guardan un nivel distinto para SSB, DATA, CW y AM.",

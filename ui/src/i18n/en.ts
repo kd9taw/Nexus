@@ -10181,6 +10181,13 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
+  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
+  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
+  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
+  // on again.
+  'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
+  'shell.lane.slotAudioLost.detail':
+    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.

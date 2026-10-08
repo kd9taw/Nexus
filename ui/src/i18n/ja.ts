@@ -6324,6 +6324,8 @@ export const JA: PartialCatalog = {
   "shell.lane.slotKeyRefused.flex.daxUnfed": "{{time}} UTC、Nexus はこの {{mode}} の送信をキーイングしませんでした。FlexネイティブDAXオーディオはオフですが、無線機は Nexus が設定したとおり、まだ送信オーディオを DAX から受けていて、いまは DAX に何も送られていません。何も送信されず、TX はオフになりました。Nexus はまもなく無線機をマイク入力に戻します。そのあと TX をもう一度オンにしてください。",
   "shell.lane.slotUnkeyFailed.message": "PTT オフ失敗 — 送信停止",
   "shell.lane.slotUnkeyFailed.detail": "{{time}} UTC に無線機が PTT オフを受け付けませんでした（{{why}}）。そのため TX はオフになりました。まだ送信している可能性があります。今すぐ無線機を確認してください。Nexus は無線機が受け付けるまで PTT オフを送り続けます。無線機が受信に戻ったら、TX をもう一度オンにしてください。",
+  "shell.lane.slotAudioLost.message": "送信打ち切り — 送信停止",
+  "shell.lane.slotAudioLost.detail": "{{time}} UTC、送信の途中で FlexネイティブDAXオーディオがオフになったため、その送信の残りは無音で出るところでした。Nexus はそこで送信を終了し、TX をオフにしました。続けるには TX をもう一度オンにしてください。",
   "shell.lane.clockRepairHold.message": "時計の修復中 — TX保留",
   "shell.lane.clockRepairHold.detail": "Nexusがこのコンピューターの時計を修復しています。修復が終わるまで（最長2分）送信は始まりません。送信の途中で時計が動かないようにするためです。",
   "shell.lane.prop.offline.message": "伝搬: ライブデータなし",

@@ -1688,6 +1688,197 @@ fn the_mic_reads_disconnected_until_the_radio_has_it_back() {
     );
 }
 
+/// The scene of [`on_dax`] on a radio whose DAX receive audio never arrives: the receive floor's
+/// clock is kept fresh by hand, so the floor gives up on DAX only when a test lets it go stale.
+fn on_dax_without_receive_audio() -> FlexScene {
+    let mut s = FlexScene::with_faults(
+        true,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::Vita {
+            stream_id: 0x0400_0001,
+            drop: (0..8_000).collect(),
+            swap: Vec::new(),
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(s.backend.tee.lock().unwrap().is_some()
+        && s.log()
+            .iter()
+            .any(|(_, e)| command(e, "transmit set dax=1")))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "settle: the tee and the DAX source"
+        );
+        s.state.dax_last_audio = Some(Instant::now());
+        s.run(100);
+    }
+    s
+}
+
+/// When a test takes an over's audio route away, from the virtual times of its key and its
+/// deadline.
+type When = fn(f64, f64) -> f64;
+
+/// An over on DAX, keyed at an even boundary, whose audio route goes at the virtual time
+/// `when(key, deadline)` names: the operator turns native audio off, or (`floor`) the receive
+/// floor gives up on DAX. Read by value: whether it keyed and its audio reached the radio as DAX,
+/// whether any DAX audio reached the radio 100 ms or more after the route went, when it unkeyed
+/// (`tick+N`: N loop ticks after the first tick that ran with the route gone; `own end`: at its
+/// own deadline, keyed until then), whether TX is on, what the status lane got (as the UI receives
+/// it), and whether the receive floor's banner is up.
+fn route_gone_mid_over(floor: bool, when: When) -> String {
+    let mut s = if floor {
+        on_dax_without_receive_audio()
+    } else {
+        on_dax()
+    };
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.broadcast("CQ TEST W9XYZ EN37");
+        // The boundary path, as every over after the first in a run keys.
+        let _ = e.take_immediate_tx();
+    }
+    s.state.prev_slot_was_tx = true;
+    let boundary = first_boundary();
+    let w0 = Instant::now();
+    let start_v = boundary - 1_500.0;
+    let mut keyed: Option<f64> = None;
+    let mut deadline = 0.0;
+    let mut gone: Option<(usize, Instant, f64)> = None;
+    let mut unkeyed: Option<(usize, f64)> = None;
+    for tick in 0.. {
+        let v = start_v + w0.elapsed().as_secs_f64() * 1000.0;
+        if gone.is_none() {
+            if keyed.is_some_and(|k| v >= when(k, deadline)) {
+                gone = Some((tick, Instant::now(), v));
+                if floor {
+                    s.state.dax_last_audio = Some(Instant::now() - DAX_STARVE_AFTER);
+                } else {
+                    s.set_native_audio(false);
+                }
+            } else if floor {
+                s.state.dax_last_audio = Some(Instant::now());
+            }
+        }
+        s.step(v);
+        if keyed.is_none() && s.state.tx_until_ms.is_some() {
+            // From the key on the wire: the boundary's tick can take a while to return.
+            keyed = Some(start_v + w0.elapsed().as_secs_f64() * 1000.0);
+            deadline = s.state.slot_tx_until_ms;
+        } else if keyed.is_some() && unkeyed.is_none() && s.state.tx_until_ms.is_none() {
+            unkeyed = Some((tick, v));
+        }
+        let settled = gone
+            .zip(unkeyed)
+            .is_some_and(|((_, _, g), _)| v > g + 300.0);
+        if settled || v > boundary + 14_000.0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (gone_tick, gone_at, _) = gone.expect("the over keyed and its route went");
+    let log = s.log();
+    let dax: Vec<Instant> = log
+        .iter()
+        .filter(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1))
+        .map(|(t, _)| *t)
+        .collect();
+    let unkey = match unkeyed {
+        Some((_, v)) if v >= deadline => "own end".to_string(),
+        Some((tick, _)) => format!("tick+{}", tick - gone_tick),
+        None => "none".to_string(),
+    };
+    let e = s.engine.lock().unwrap();
+    let lane = serde_json::to_value(e.snapshot()).unwrap()["radio"]["slotAudioLost"]["at"].is_u64();
+    format!(
+        "xmit1={} audio_on_dax={} dax_audio_after={} unkey={unkey} tx_enabled={} lane={} \
+         floor_banner={}",
+        log.iter().filter(|(_, e)| command(e, "xmit 1")).count(),
+        dax.iter().any(|t| *t < gone_at),
+        dax.iter()
+            .any(|t| t.saturating_duration_since(gone_at) >= Duration::from_millis(100)),
+        e.tx_enabled(),
+        if lane { "slotAudioLost" } else { "none" },
+        e.snapshot().radio.audio_error.is_some(),
+    )
+}
+
+/// ⭐⭐ NEVER A SILENT OVER, PART WAY THROUGH EITHER (operator ruling, 2026-10-08, "End the over").
+/// Native audio going off in the middle of an over takes the DAX tee out with the over's audio
+/// in it, and the radio stays keyed with nothing to send: the rest of the over was dead air, ending
+/// only at its own deadline, 11–13 s later, with TX still on. Now the over ends in the tick after
+/// the one that saw the route go, TX is off, and the status lane says why: at 100, 509 and 2,000 ms
+/// into the over when the operator turns native audio off, and at 2,000 ms when the receive floor
+/// gives up on DAX (its own banner stays up beside the lane). DAX audio stops either way, at once.
+#[test]
+fn native_audio_off_mid_over_ends_the_over() {
+    let trials: [(&str, bool, When); 4] = [
+        ("off +100", false, |k, _| k + 100.0),
+        ("off +509", false, |k, _| k + 509.0),
+        ("off +2000", false, |k, _| k + 2_000.0),
+        ("floor +2000", true, |k, _| k + 2_000.0),
+    ];
+    let got: Vec<String> = trials
+        .iter()
+        .map(|(name, floor, when)| format!("{name}: {}", route_gone_mid_over(*floor, *when)))
+        .collect();
+    let want: Vec<String> = trials
+        .iter()
+        .map(|(name, floor, _)| {
+            format!(
+                "{name}: xmit1=1 audio_on_dax=true dax_audio_after=false unkey=tick+{} \
+                 tx_enabled=false lane=slotAudioLost floor_banner={floor}",
+                // The receive floor turns native audio off in the tick that takes the tee out;
+                // the toggle is read after that tick's tee is settled, so the tee goes a tick on.
+                if *floor { 0 } else { 1 }
+            )
+        })
+        .collect();
+    assert_eq!(got.join("\n"), want.join("\n"));
+}
+
+/// The control: native audio off once the over's audio has ended, 100 ms into the PTT tail before
+/// its unkey, changes nothing. The over unkeys at its own deadline, as every over does, TX stays
+/// on, and the lane gets nothing: the over was whole.
+#[test]
+fn native_audio_off_in_an_overs_tail_changes_nothing() {
+    assert_eq!(
+        route_gone_mid_over(false, |_, deadline| deadline - crate::slot::TX_TAIL_MS
+            + 100.0),
+        "xmit1=1 audio_on_dax=true dax_audio_after=false unkey=own end tx_enabled=true \
+         lane=none floor_banner=false"
+    );
+}
+
+/// The rule above ends a SLOT over (FT8, FT4, JS8 and the other timed-slot modes), as the
+/// refused-key and failed-unkey halts are a slot over's. Another over Nexus plays over DAX, here a
+/// recorded message, is left as it was when native audio goes off under it: TX stays on and the
+/// lane gets nothing. Halting TX there would leave the Phone screen, where the voice keyer lives,
+/// with no TX switch to turn it back on.
+#[test]
+fn native_audio_off_mid_message_leaves_the_voice_keyer_as_it_was() {
+    let mut s = on_dax();
+    s.engine.lock().unwrap().send_voice(message()).unwrap();
+    run_until(&mut s, "the message never keyed", |s| keys(s) == 1);
+    s.run(300);
+    assert!(
+        s.log()
+            .iter()
+            .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1)),
+        "premise: the message went out as DAX"
+    );
+    s.set_native_audio(false);
+    s.run(1_500);
+    let e = s.engine.lock().unwrap();
+    let lane = serde_json::to_value(e.snapshot()).unwrap()["radio"]["slotAudioLost"].is_object();
+    assert_eq!(
+        format!("tx_enabled={} lane={lane}", e.tx_enabled()),
+        "tx_enabled=true lane=false"
+    );
+}
+
 /// ⭐⭐ THE KEYING PATH NEVER CARRIES THE FLAG (operator ruling, 2026-10-03: "write the flag when
 /// the mode or the TX slice changes, never between the slot boundary and `xmit 1`"). FT8 with TX
 /// enabled and an over queued every TX period, while the operator turns native audio off and on at

@@ -1118,6 +1118,15 @@ pub struct SlotUnkeyFailed {
     pub why: String,
 }
 
+/// A slot over Nexus ended part way through because its audio stopped reaching the radio
+/// ([`RadioStatus::slot_audio_lost`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotAudioLost {
+    /// When, in Unix seconds.
+    pub at: u64,
+}
+
 /// Current radio / slot-timing status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1400,6 +1409,13 @@ pub struct RadioStatus {
     /// happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_unkey_failed: Option<SlotUnkeyFailed>,
+    /// A slot over (FT8, FT4, JS8 and the other timed-slot modes) lost its audio part way through:
+    /// Flex native DAX audio went off under it (the operator, or the receive floor giving up on
+    /// DAX), or its DAX transmit route went. Nexus ended the over there, rather than leave the
+    /// radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling TX.
+    /// ABSENT until it happens, so every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_audio_lost: Option<SlotAudioLost>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]

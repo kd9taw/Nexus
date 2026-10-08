@@ -176,6 +176,7 @@ import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
+import { slotAudioLostLane } from './features/slotAudioLost'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
@@ -717,6 +718,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('slotUnkeyFailed', remote ? null : slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
   }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why, remote])
+
+  // …and one the station ended part way through because its audio stopped reaching the radio (Flex
+  // native DAX audio went off under it): TX halted the same way, and the lane says so until TX is
+  // turned on again; not on the Remote page either.
+  useEffect(() => {
+    setStatus('slotAudioLost', remote ? null : slotAudioLostLane(snap?.radio.slotAudioLost))
+  }, [snap?.radio.slotAudioLost?.at, remote])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on

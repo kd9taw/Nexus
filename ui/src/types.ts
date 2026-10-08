@@ -1542,6 +1542,10 @@ export interface RadioStatus {
    *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
    *  it. */
   slotUnkeyFailed?: SlotUnkeyFailed | null
+  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: Flex native DAX audio went off
+   *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
+   *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
+  slotAudioLost?: SlotAudioLost | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -4595,6 +4599,13 @@ export interface SlotUnkeyFailed {
   at: number
   /** What came back for the unkey, in the rig link's own words: data, never translated. */
   why: string
+}
+
+/** A slot over the station ended part way through because its audio stopped reaching the radio
+ *  (mirror of the Rust SlotAudioLost). The words are the UI's, in features/slotAudioLost.ts. */
+export interface SlotAudioLost {
+  /** When it happened (unix seconds). */
+  at: number
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the
