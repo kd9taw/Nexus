@@ -1,0 +1,132 @@
+//! ⭐ **Winter Field Day 2027, as its sponsor wrote it.**
+//!
+//! Every number here is the sponsor's own, from the 2027 rules PDF (*"Version 3, 04 OCT
+//! 2026"*, <https://winterfieldday.org/downloads/2027-rules-v3.pdf>, read 2026-10-08), cited
+//! by page. Every callsign is an example call.
+//!
+//! The shared fixture is one station, W9XYZ sending `3O WI`, with three contacts: CW K1ABC on
+//! 20 m, phone N0XYZ on 40 m and RTTY N7OUT on 80 m — 2 + 1 + 2 = **5 QSO points** (p.5:
+//! *"Phone contacts count as one point each, and all CW and digital modes count as two
+//! points each"*).
+use tempo_core::contest::{CabrilloEntrant, ContestSession, StationData};
+use tempo_core::fd_rules::{active_rules_year, ruleset, ruleset_by_id, CURRENT_RULES_YEAR};
+use tempo_core::fieldday::{FdEvent, FieldDayLog};
+
+/// Sat 23 January 2027, 18:00Z: two hours into the event (p.3: *"starts at 1600 UTC on
+/// Saturday … the 23rd"*).
+const DURING: u64 = 1_800_727_200;
+
+/// The station, as `Engine::set_mode` reads it out of Settings.
+fn station(class: &str, power: &str) -> StationData {
+    StationData {
+        mycall: "W9XYZ".into(),
+        mygrid: "EN52".into(),
+        fd_class: class.into(),
+        fd_section: "WI".into(),
+        contest_category_power: power.into(),
+        ..Default::default()
+    }
+}
+
+/// A session built the way mode entry builds one: `for_ruleset` over the station data.
+fn session(event: &str, class: &str, power: &str) -> ContestSession {
+    let rs = ruleset_by_id(event, CURRENT_RULES_YEAR).expect("a shipped ruleset");
+    ContestSession::for_ruleset(rs, &station(class, power)).expect("the session starts")
+}
+
+/// The shared fixture's log under `event`. The worked stations send classes legal for that
+/// event, so a control under ARRL Field Day is the same three contacts.
+fn fixture(event: &str, power: &str) -> FieldDayLog {
+    let (mine, theirs) = if event == "wfd" {
+        ("3O", ["2O", "1H", "4I"])
+    } else {
+        ("3A", ["2A", "1D", "4A"])
+    };
+    let mut log = FieldDayLog::new("W9XYZ", session(event, mine, power), "20m");
+    for ((call, section, band, mode, submode), class) in [
+        ("K1ABC", "CT", "20m", "CW", ""),
+        ("N0XYZ", "MN", "40m", "PH", ""),
+        ("N7OUT", "AZ", "80m", "DIG", "RTTY"),
+    ]
+    .into_iter()
+    .zip(theirs)
+    {
+        log.band = band.into();
+        assert!(
+            log.log_submode_at(call, class, section, mode, submode, 0, DURING),
+            "{call} logs under {event}"
+        );
+    }
+    log
+}
+
+/// ⭐ **The WFD ruleset is the 2027 one** — and the newest rules year is 2027, which is what
+/// silences January's "Rules data is from 2026 — check for updates" hint on a station that
+/// has the update.
+#[test]
+fn wfd_rules_are_2027() {
+    // One comparison, so a red names both values rather than only the first to flip.
+    assert_eq!(
+        (
+            ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).rules_year,
+            active_rules_year()
+        ),
+        (2027, 2027),
+        "(the WFD ruleset's year, the newest rules year): a station holding these rules \
+         would otherwise be told in January 2027 that its data is old"
+    );
+}
+
+/// ⭐ **Winter Field Day runs its own objectives and carries no copy of ARRL's bonus menu.**
+///
+/// p.5: *"an Objective Multiplier (OM) has been assigned to each objective"*; p.7: *"Total
+/// score = (total QSO points) x (OM+1)"*. An ARRL bonus is not a WFD objective, so ticking
+/// one under WFD scores nothing.
+#[test]
+fn wfd_carries_no_bonus_menu() {
+    let rs = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
+    assert_eq!(rs.bonuses.len(), 0, "WFD's bonus menu: {:?}", rs.bonuses);
+    assert_eq!(
+        rs.bonus_points(&["emergency-power".to_string()]),
+        0,
+        "an ARRL bonus ticked under Winter Field Day"
+    );
+    // CONTROL: ARRL Field Day keeps its menu, so the zero above is WFD's, not the lookup's.
+    assert_eq!(
+        ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR).bonus_points(&["emergency-power".to_string()]),
+        100
+    );
+}
+
+/// ⭐ **The WFD Cabrillo names the entrant the way the sponsor's example does** (p.10:
+/// `CLUB`, `OPERATORS`, `NAME` and `EMAIL` in the header).
+#[test]
+fn wfd_cabrillo_names_the_entrant() {
+    let me = CabrilloEntrant {
+        name: "Test Operator".into(),
+        email: "op@example.org".into(),
+        club: "Test Club".into(),
+        operators: "KB9QRS".into(),
+        ..Default::default()
+    };
+    let cab = fixture("wfd", "LOW")
+        .cabrillo_with(14_000, &me)
+        .expect("one entry");
+    let missing: Vec<&str> = [
+        "NAME: Test Operator\n",
+        "EMAIL: op@example.org\n",
+        "CLUB: Test Club\n",
+        "OPERATORS: KB9QRS\n",
+    ]
+    .into_iter()
+    .filter(|line| !cab.contains(line))
+    .collect();
+    assert_eq!(missing, Vec::<&str>::new(), "lines missing from:\n{cab}");
+    // CONTROL: ARRL Field Day's ruleset lists none of these, so the same entrant writes none.
+    let cab = fixture("arrlfd", "LOW")
+        .cabrillo_with(14_000, &me)
+        .expect("one entry");
+    for tag in ["NAME:", "EMAIL:", "CLUB:", "OPERATORS:"] {
+        assert!(!cab.contains(tag), "ARRL Field Day wrote {tag}\n{cab}");
+    }
+}

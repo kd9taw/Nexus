@@ -1126,11 +1126,12 @@ mod tests {
         assert_eq!(v["score"]["model"], "objectives");
         assert_eq!(v["score"]["qso_points"], 6);
         // Headline is RAW qso points; the ×(n+1) projection is a labelled
-        // secondary (n = 2 valid claimed objectives → ×3).
+        // secondary. The fixture's claimed ids are ARRL bonuses, which are not
+        // WFD objectives since the 2027 rules, so none counts: n = 0, ×1.
         assert_eq!(v["score"]["total"], 6);
-        assert_eq!(v["score"]["objectives_claimed"], 2);
-        assert_eq!(v["score"]["projected_at_submission"], 18);
-        assert_eq!(v["score"]["bonus_points"], 150);
+        assert_eq!(v["score"]["objectives_claimed"], 0);
+        assert_eq!(v["score"]["projected_at_submission"], 6);
+        assert_eq!(v["score"]["bonus_points"], 0);
         assert_eq!(v["event"]["kind"], "wfd");
         assert_eq!(v["event"]["name"], "Winter Field Day");
 
@@ -1301,12 +1302,12 @@ mod tests {
         assert_eq!(menu.len(), rs.bonuses.len());
         assert_eq!(v["scoring_model"], "powered");
         assert_eq!(v["rules_year"], rs.rules_year);
-        // WFD tags its model; its menu is the bonus menu until fd_rules grows
-        // a real objectives table (then this follows automatically).
+        // WFD tags its model, and carries no copy of ARRL's bonus menu since the
+        // sponsor's 2027 rules.
         let (w, wnow) = fixture(FdEvent::WinterFd);
         let mv = parse(&build_meta(&w, wnow));
         assert_eq!(mv["scoring_model"], "objectives");
-        assert!(!mv["bonuses"].as_array().unwrap().is_empty());
+        assert_eq!(mv["bonuses"].as_array().unwrap().len(), 0);
     }
 
     // -- the cached source -------------------------------------------------

@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
   themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
   of them, and a failed fetch says so once.
+- **Winter Field Day runs on the sponsor's 2027 rules.** The rules data now says 2027, so a station
+  that has it is no longer told in January to check for rules updates. Winter Field Day no longer
+  carries a copy of ARRL Field Day's bonus list: those bonuses are not part of Winter Field Day,
+  and one ticked there now scores nothing. Its Cabrillo file gains the lines the sponsor's example
+  log has: your name (Settings ▸ Station), the email for contest logs, the club and the other
+  operators (Settings ▸ Contesting ▸ Contest), each where you have set it.
 
 ### Fixed
 

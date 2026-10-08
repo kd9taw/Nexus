@@ -43152,11 +43152,12 @@ mod tests {
     /// proved against ARRL Field Day alone.
     ///
     /// WFD scores on the `Objectives` model, so `powered == qso_pts` — there is
-    /// no on-air power multiplier — while the bonus menu is the one it shares
-    /// with ARRL FD today. Classes here are WFD's own (H/I/O/M), which is what
-    /// a real WFD log contains.
+    /// no on-air power multiplier. Since the sponsor's 2027 rules it carries no
+    /// copy of ARRL's bonus menu either, so two ARRL bonuses ticked under WFD are
+    /// worth nothing (this test pinned them at 150 while WFD borrowed that menu).
+    /// Classes here are WFD's own (H/I/O/M), which is what a real WFD log contains.
     #[test]
-    fn wfd_score_is_byte_identical_after_the_ruleset_refactor() {
+    fn wfd_scores_raw_points_and_no_arrl_bonus() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         {
             let mut s = e.settings().clone();
@@ -43165,7 +43166,7 @@ mod tests {
             s.fd_class = "3O".into();
             s.fd_section = "WI".into();
             s.fd_power_mult = 5; // ignored by the Objectives model
-            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // 100 + 50
+            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // not WFD's
             e.apply_settings(s);
         }
         e.set_mode("fieldday-run").unwrap();
@@ -43176,22 +43177,23 @@ mod tests {
         assert!(e.fd_log_manual("W1AW", "1M", "CT", "PH").unwrap());
         assert!(e.fd_log_manual("K5ABC", "3O", "STX", "PH").unwrap());
 
-        // Objectives: powered == qso_pts, and the power tier does NOT multiply.
+        // Objectives: powered == qso_pts, the power tier does NOT multiply, and
+        // ARRL's bonuses add nothing.
         assert_eq!(
             e.fd_score(),
-            Some((6, 6, 150)),
-            "WFD scores raw QSO points — the ×5 tier must not apply"
+            Some((6, 6, 0)),
+            "WFD scores raw QSO points — the ×5 tier and ARRL's bonuses must not apply"
         );
         let fd = e.snapshot().field_day.expect("master on → FD chrome");
         assert_eq!(fd.points, 6);
         assert_eq!(fd.powered_points, 6);
-        assert_eq!(fd.bonus_points, 150);
-        assert_eq!(fd.total_score, 156);
+        assert_eq!(fd.bonus_points, 0);
+        assert_eq!(fd.total_score, 6);
         // WFD's window is 30 h (the ARRL leg pins 27 h) — the two events read
         // genuinely different window data through the same path.
         assert_eq!(fd.event_end_unix - fd.event_start_unix, 30 * 3600);
         assert!(fd.event_start_unix > 0);
-        assert_eq!(fd.rules_year, 2026);
+        assert_eq!(fd.rules_year, 2027);
         assert!(!fd.rules_generated.is_empty());
     }
 

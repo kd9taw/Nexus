@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated": "2026-10-08T17:00:00Z",
+  "generated": "2026-10-08T23:00:00Z",
   "_provenance": {
     "qso_parties": "The four state QSO parties (TNQP, OhQP, CQP, TXQP) were written from each sponsor's own current page or PDF, all read 2026-09-09. TNQP: https://tnqp.org/rules/ renders only navigation (an EmbedPress wrapper), so the source is the PDF that page embeds, https://tnqp.org/wp-content/uploads/2026/08/Tennessee-QSO-Party-2026-Rules.pdf, \"Tennessee QSO Party 2026 Rules\". OhQP: https://www.ohqp.org/index.php/rules/ plus /official-list-of-mults-for-ohio-stations/ and /official-list-of-mults-for-non-ohio-stations/. CQP: https://www.cqp.org/Rules.html (Last Update 19-July-2026, 61st running) plus https://www.cqp.org/cqp_multipliers.html. TXQP: https://www.txqp.net/?page_id=23 plus https://www.txqp.net/?page_id=90 (the previously-cited https://www.txqp.net/index.php/rules/operating-rules is DEAD, HTTP 404 — the sponsor rebuilt the site). Each county list was PARSED off the sponsor's own table and its size counted, never read off a stated total: 95 TN, 88 OH (+62 non-county codes = 150), 58 CA (+63 state/province codes), 254 TX.",
     "txqp_county_codes": "⚠️ THE SPONSOR'S PROSE AND THE SPONSOR'S LIST DISAGREE, AND THE LIST WINS. txqp.net/?page_id=23 says \"Log submissions must use the approved four-letter county abbreviation for the exchange.\" The official list on ?page_id=90 has 254 entries, of which TWO ARE THREE LETTERS: BEE (Bee) and LEE (Lee). A domain or validator written to the prose (len == 4) rejects two real Texas counties, and a Texas mobile operating in either one produces an unsubmittable log for every QSO made from it. The domain below is the sponsor's 254 codes verbatim. Do not normalise, pad or \"fix\" BEE and LEE, and do not generate codes from county names — the scheme is irregular (Brazoria=BZIA, Brazos=BZOS, Cameron=CMRN, Collin=COLN, Collingsworth=COLW, Comal=COML, Comanche=COMA, Dallam=DALM, Dallas=DALS).",
@@ -16,11 +16,11 @@
     "qso_party_bands": "TNQP and TXQP both exclude bands — TNQP \"All amateur bands are valid, with the exception of 60, 30, 17 and 12 meters\", TXQP \"Operation on all Amateur bands is permitted, except on 60 meters, 30 meters, 17 meters and 12 meters\" — and OhQP restricts to 160/80/40/20/15/10. A ruleset has `banned_modes` and, since cqww_rtty, an advisory `bands` list of the bands a contest runs on; none of these three restrictions is expressed in it yet (TNQP's and TXQP's are exclusions, OhQP's an allow-list). No score or dupe depends on any of it.",
     "assistance": {
       "arrlfd": "arrl.org/field-day-rules read 2026-08-29 (2026 rules, rev. 2026-03-01): no restriction language on spotting networks / DX cluster / assistance found in any of the 9 sections — spotting_allowed/cluster_allowed stay true (dormant advisory).",
-      "wfd": "winterfieldday.org rules text (sop.php) unreachable on 2026-08-29 (page serves navigation only to a fetcher) — NOT verified; shipped dormant (allowed) until the real rules text is read. Do not flip these flags without a verbatim quote + URL recorded here."
+      "wfd": "The sponsor's 2027 rules PDF (\"Version 3, 04 OCT 2026\", https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08), p.8: \"Spotting: You may spot yourself and others only via amateur RF.\" and \"QSOs may be solicited only over amateur RF during the event.\" RECEIVING spots is not restricted, so spotting_allowed and cluster_allowed stay true: the rule limits where a spot is POSTED, which neither flag says."
     },
     "wfd_window": "WFD's window rule is the sponsor's own sentence for 2027 (https://winterfieldday.org/queries/query_rules.php, the rules text sop.php loads, read 2026-10-08): \"Winter Field Day is held the 4th full weekend in January. For 2027, it will be held on January 23rd and 24th. The 30-hour operational period starts at 1600 UTC on Saturday (11 am EST), the 23rd, and ends at 21:59 UTC on Sunday, the 24th (4:59 pm EST).\" Carried as month 1, nth_full n=4, start_hour_utc 16, duration 30. ⚠️ IT CHANGED: the 2025 rules (https://winterfieldday.org/downloads/2025-rules.pdf) said \"Winter Field Day is held the last full weekend in January. For 2025, it will be held on January 25th and 26th.\", which this file carried as last_full. The two readings part only in a January with five full weekends, and 2027 is the first such year since: last_full put it on 30-31 January, a week late. Checked year by year against the stated rule (the first Saturday whose Sunday is also in January, then the fourth): 2026 24-25 (the 2026 event, where both readings agree), 2027 23-24 (the sponsor's own dates), 2028 22-23 (last_full would say 29-30), 2029 27-28, 2030 26-27, 2031 25-26, 2032 24-25, 2033 22-23 (last_full 29-30); pinned by winter_field_day_is_the_fourth_full_weekend_of_january. The sponsor publishes a date one year at a time, so re-read it each year; a year the sponsor moves is a window.overrides entry.",
     "banned_modes": "WFD 2026 WSJT-suite ban carried over verbatim from the fd_rules.rs consts landed in c76f5242 (RTTY and SSTV explicitly legal as Digital). FT2 added from the sponsor's 2027 list (https://winterfieldday.org/queries/query_rules.php, read 2026-10-08): \"All modes, except WSJT modes\" may be used, and \"WSJT modes include: FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W, and Echo.\" Advisory like the rest: the strip warns, nothing is refused.",
-    "objectives": "WFD reuses the ARRL bonus menu today (the pre-data modelling); a real WFD objectives table flows through this field later.",
+    "objectives": "WFD runs its OWN objectives, never ARRL's bonus menu, which it borrowed until the 2027 rules (the sponsor's 2027 rules PDF, \"Version 3, 04 OCT 2026\", https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08; the same text on https://winterfieldday.org/queries/query_rules.php). p.5: \"an Objective Multiplier (OM) has been assigned to each objective. We will add 1 to your objective multiplier, so you still get your QSO points if you do not complete any objectives. To calculate your overall score, we will take your OM+1 and multiply that number by your total QSO points.\" p.7: \"When you submit your log, we will ask you to select your completed objectives. For those who like to track your points, the total points formula is: Total score = (total QSO points) x (OM+1) The +1 is for participating.\" So wfd.bonuses is [] from rules year 2027: an ARRL bonus ticked under WFD scores nothing. p.3 lists the year's changes: \"Several objectives have been added.\", \"Satellite objectives are gone\".",
     "exchange": "Class letters are PER EVENT and the two sets are disjoint. arrlfd uses ^[0-9]{1,2}[ABCDEF]$ (ARRL Field Day classes A-F). wfd uses ^[0-9]{1,2}[HIOM]$, from winterfieldday.org/downloads/2026-rules-v3.pdf (the sponsor's own 2026 rules, stamped \"V3 9.8.25\"), read in full 2026-09-07: \"Class Options: H - Home station... I - Indoor station... O - Outdoor station... M - Mobile / Mobile Stationary\", with the worked example \"If you have two stations and you are mobile in East Pennsylvania, you are 2M EPA.\" This CORRECTS a real shipped bug: both events previously used ABCDEF, so no legal WFD class satisfied the required CLASS slot and the RTTY auto-sequencer could not complete a single Winter Field Day contact. The earlier guess of HIOM lived only in a code comment, which is not a source; the sponsor page was unreachable on 2026-08-29 (see the assistance entry) and the PDF is the first-party text that was missing then. Do not change these letters without a verbatim quote + URL + read-date recorded here.",
     "exchange_section_domain": "Both events' SECTION slot uses the derived `fd_sections` domain (the 83 ARRL/RAC sections plus MX and DX). Corroborated for WFD by the same PDF, \"Location Identifier\": \"US and Canadian stations will use the ARRL / RAC Section as designated by those organizations. Mexico stations will use MX, and all other stations outside of the US will use DX.\"",
     "adif_sent_tags": "Every exchange field's adif.sent was \"\" through batch 5 because a grep of crates/, src-tauri/ and ui/src found MY_CNTY / MY_STATE / MY_ARRL_SECT nowhere (positive control: MY_GRIDSQUARE returns hits, so the grep worked and the zeros were real) — but an absence from OUR tree is not an absence from ADIF. Batch 6 read the source: ADIF Specification V 3.1.7, https://adif.org/317/ADIF_317.htm, stamped \"Released ADIF Version 3.1.7, updated 2026-03-22\", fetched and searched in full 2026-09-09. MY_ARRL_SECT IS a QSO field there - \"the logging station's ARRL section\" - so SECTION's adif.sent is now MY_ARRL_SECT. CLASS's stays \"\": CLASS is a real ADIF field (\"contest class (e.g. for ARRL Field Day)\") but it is the CONTACTED station's, and MY_CLASS does not exist in the field list (zero anchors, alongside MY_CHECK, MY_PRECEDENCE, MY_QTH and the invented control names MY_COUNTY and MY_SECTION), so the class I send rides the private carrier (spec §3.5). A name that does not check out stays \"\" - an invented ADIF field ships into other people's logbooks and cannot be recalled.",
@@ -216,7 +216,7 @@
     },
     {
       "event": "wfd",
-      "rules_year": 2026,
+      "rules_year": 2027,
       "contest_id": "WFD",
       "window": {
         "month": 1,
@@ -301,83 +301,7 @@
           }
         ]
       },
-      "bonuses": [
-        {
-          "id": "emergency-power",
-          "label": "100% emergency power",
-          "points": 100
-        },
-        {
-          "id": "media-publicity",
-          "label": "Media publicity",
-          "points": 100
-        },
-        {
-          "id": "public-location",
-          "label": "Public location",
-          "points": 100
-        },
-        {
-          "id": "public-info-table",
-          "label": "Public information table",
-          "points": 100
-        },
-        {
-          "id": "nts-message",
-          "label": "Message to ARRL SM/SEC",
-          "points": 100
-        },
-        {
-          "id": "w1aw-bulletin",
-          "label": "W1AW bulletin copied",
-          "points": 100
-        },
-        {
-          "id": "natural-power",
-          "label": "Natural power QSOs",
-          "points": 100
-        },
-        {
-          "id": "site-visit-official",
-          "label": "Site visit: elected official",
-          "points": 100
-        },
-        {
-          "id": "site-visit-agency",
-          "label": "Site visit: agency representative",
-          "points": 100
-        },
-        {
-          "id": "gota",
-          "label": "GOTA station max",
-          "points": 100
-        },
-        {
-          "id": "youth",
-          "label": "Youth participation",
-          "points": 100
-        },
-        {
-          "id": "web-submission",
-          "label": "Web submission",
-          "points": 50
-        },
-        {
-          "id": "safety-officer",
-          "label": "Safety officer",
-          "points": 100
-        },
-        {
-          "id": "social-media",
-          "label": "Social media",
-          "points": 100
-        },
-        {
-          "id": "educational",
-          "label": "Educational activity",
-          "points": 100
-        }
-      ],
+      "bonuses": [],
       "banned_modes": [
         "FT2",
         "FST4",
@@ -399,7 +323,18 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "headers": [
+          "CLAIMED-SCORE",
+          "EMAIL",
+          "NAME"
+        ],
+        "entry_headers": [
+          "CLUB",
+          "OPERATORS"
+        ]
+      }
     },
     {
       "event": "tnqp",
