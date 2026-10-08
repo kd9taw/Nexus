@@ -25349,8 +25349,15 @@ mod tests {
     fn a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_cuts_the_over() {
         // Mid-over on 20 m FT8 with TX on. FT8 -> FT4 moves the dial to 14.080 and leaves the
         // Tx frequency, 14.0755, off the FT4 waterfall, so the next iteration cuts the over as
-        // Stop TX does (WSJT-X 3.0.2 halts it there). A knob QSY inside the band does not.
-        for (what, cut) in [("a knob QSY to 14.076", false), ("FT8 -> FT4", true)] {
+        // Stop TX does (WSJT-X 3.0.2 halts it there). FT8 -> FT2 (14.084) and FT8 -> FT1
+        // (14.0905) do the same by the same rule. A knob QSY inside the band does not.
+        for (what, to) in [
+            ("a knob QSY to 14.076", None),
+            ("FT8 -> FT4", Some(Tier::Ft4)),
+            ("FT8 -> FT2", Some(Tier::Ft2)),
+            ("FT8 -> FT1", Some(Tier::TempoFast)),
+        ] {
+            let cut = to.is_some();
             let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
             engine.lock().unwrap().set_tx_enabled(true);
             let mut backend = MockBackend::new();
@@ -25358,8 +25365,8 @@ mod tests {
             let _ = rig.ptt(true);
             let mut state = loop_state();
             state.tx_until_ms = Some(9_999_999.0); // long hold — would NOT expire on its own
-            if cut {
-                engine.lock().unwrap().set_tier(Tier::Ft4);
+            if let Some(tier) = to {
+                engine.lock().unwrap().set_tier(tier);
             } else {
                 engine.lock().unwrap().observe_rig_freq(14_076_000);
             }
