@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the transmitter keyed until the decode finished. The decode now runs while the radio loop carries
   on. If the next period's decodes land before it finishes, its result is left out; press Decode
   again for the period on screen.
+- **Working a station, Call CQ, and changing band, mode or radio no longer hold up the radio
+  while a decode runs.** Each of these clears part of what the decoder carries from one period to
+  the next, or swaps the decoder for another mode's, and until now it first waited for any decode
+  still running to finish, with the radio loop (the part of Nexus that keys and unkeys the radio)
+  waiting behind it. That covered a double-click to work, a logger's Reply (GridTracker,
+  JTAlert), Chat's coordinated QSY, a tier, band or radio change (made in Nexus or on the rig's
+  own dial), working a spot on another band, an ATU tune-up and the end of a Tune: on a slow
+  computer or a long decode it could keep the transmitter keyed, or the tune carrier on, past the
+  moment it should have stopped. Each now takes effect at once. What the decoder carries is
+  cleared when the running decode finishes, before the next one starts, so the decodes you see are
+  the same as before.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
