@@ -3499,12 +3499,10 @@ struct RadioLoop {
     yaesu_wf_mode_seen: Option<(u8, u8, i64)>,
     /// The span code last REQUESTED in FIX, and when — see `YAESU_WF_SPAN_ASK_MS`.
     yaesu_wf_span_asked: Option<(u8, f64)>,
-    /// Whether the DAX TX-audio tee is currently installed in the backend — installed when the Flex
-    /// client's transmit route comes up, cleared when it goes, so TX audio routes over DAX exactly
-    /// while that route is up.
-    dax_tee_set: bool,
-    /// Which tee is installed (its address): a replaced Flex client's tee is a different one, and
-    /// a dead client's must not stay the route.
+    /// Which DAX TX-audio tee is installed in the backend (its address), if any — installed when the
+    /// Flex client's transmit route comes up, cleared when it goes, so TX audio routes over DAX
+    /// exactly while that route is up. A replaced Flex client's tee is a different one, and a dead
+    /// client's must not stay the route.
     dax_tee_id: Option<usize>,
     /// Native audio through Nexus's own Flex client (Beta): on while the operator's
     /// `flex_native_audio` is on for a radio the client serves. Its DAX audio, from the client's
@@ -4014,7 +4012,6 @@ impl RadioLoop {
             spectrum_src_key: None,
             dax_started: None,
             dax_last_audio: None,
-            dax_tee_set: false,
             dax_tee_id: None,
             flex_client_audio: false,
             flex_client_audio_failed: false,
@@ -5888,15 +5885,10 @@ impl RadioLoop {
                     d.set_native_audio(false);
                 }
             }
-            if self.dax_tee_set {
-                backend.set_tx_tee(None);
-                self.dax_tee_set = false;
-                self.dax_tee_id = None;
-                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
-                // Not "the mic is the operator's again": Nexus's own write can leave the radio on
-                // DAX until the routing's next quiet point. The tee-sync block below, this tick,
-                // tells the engine what the radio reports.
-            }
+            // The tee-sync block below takes the tee out, this tick, and ends a slot over it was
+            // carrying. Not "the mic is the operator's again" either: Nexus's own write can leave
+            // the radio on DAX until the routing's next quiet point, and that block tells the
+            // engine what the radio reports.
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
                     let mut eng = engine_lock(engine);
@@ -5941,7 +5933,21 @@ impl RadioLoop {
             .as_ref()
             .map(|t| Arc::as_ptr(t) as *const () as usize);
         if want_id != self.dax_tee_id {
-            self.dax_tee_set = want_tee.is_some();
+            // ⛔ NEVER A SILENT OVER, PART WAY THROUGH EITHER (operator ruling, 2026-10-08, "End
+            // the over"). A slot over hands its whole waveform to the tee at its key, so the tee
+            // going takes the rest of that over with it, whatever took it (native audio turned
+            // off, the receive floor above, the route gone), while the radio stays keyed on a DAX
+            // nothing feeds. The over ends instead: halted as Stop TX halts it, so the hard stop
+            // below unkeys and flushes in this same tick, with the reason on screen. Only while
+            // its audio is still going out: in the PTT tail after it the over is whole. Only a
+            // slot over, as for the refused-key and failed-unkey halts: halting TX under another
+            // over would leave the Phone screen with no TX switch to turn it back on.
+            if self.dax_tee_id.is_some()
+                && self.holds_slot_over()
+                && now < self.slot_tx_until_ms - crate::slot::TX_TAIL_MS
+            {
+                engine_lock(engine).halt_tx_for_lost_slot_audio();
+            }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
@@ -10332,8 +10338,24 @@ impl RadioLoop {
                 // `ptt_plain`, not `ptt`: this is the operator talking into the radio's own
                 // microphone (or a broker client's key), so a Rear/Data radio (#381) keys it as it
                 // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
+                let asked = Instant::now();
                 let ptt_failed = rig.ptt_plain(ptt).is_err();
-                self.report_ptt(engine, ptt && ptt_failed);
+                if ptt {
+                    // A press Nexus's own Flex client kept off the air because the radio still
+                    // takes its transmit audio from the DAX Nexus set, not the mic (`flex::shim`):
+                    // the status lane says so, in place of the PTT and CAT advice, which would be
+                    // wrong. Each press answers anew.
+                    let mic_not_back = ptt_failed
+                        .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                        .flatten()
+                        .and_then(|d| d.key_refused_since(asked))
+                        .filter(|(_, r)| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
+                        .map(|(_, r)| r.mode);
+                    engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
+                    self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
+                } else {
+                    self.report_ptt(engine, false);
+                }
                 self.manual_ptt_applied = ptt;
             }
             // ⚠️ THE LEVEL PUSHES FROM HERE ON (power, mic gain, the receive levels, NR, notch,

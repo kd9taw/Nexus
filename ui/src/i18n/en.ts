@@ -10289,6 +10289,20 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
+  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
+  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
+  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
+  // on again.
+  'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
+  'shell.lane.slotAudioLost.detail':
+    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+  // The operator's PTT press that Nexus's own Flex client kept off the air: right after a digital
+  // mode, or native audio going off, the radio still took its transmit audio from the DAX Nexus had
+  // set, not the mic, so the voice would not have gone out. TX stays on; the next press answers anew.
+  // `{{mode}}` is the radio's own mode word (USB), as data.
+  'shell.lane.pttRefused.message': 'PTT REFUSED',
+  'shell.lane.pttRefused.detail':
+    'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.

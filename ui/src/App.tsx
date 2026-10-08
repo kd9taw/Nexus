@@ -179,6 +179,8 @@ import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
+import { slotAudioLostLane } from './features/slotAudioLost'
+import { pttRefusedLane } from './features/pttRefused'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
@@ -723,6 +725,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('slotUnkeyFailed', remote ? null : slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
   }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why, remote])
+
+  // …and one the station ended part way through because its audio stopped reaching the radio (Flex
+  // native DAX audio went off under it): TX halted the same way, and the lane says so until TX is
+  // turned on again; not on the Remote page either.
+  useEffect(() => {
+    setStatus('slotAudioLost', remote ? null : slotAudioLostLane(snap?.radio.slotAudioLost))
+  }, [snap?.radio.slotAudioLost?.at, remote])
+
+  // The operator's PTT press that Nexus's own Flex client kept off the air, the radio still on the
+  // DAX Nexus set and not on its mic: the lane says so, in place of the PTT advice, until a press
+  // keys; not on the Remote page either.
+  useEffect(() => {
+    setStatus('pttRefused', remote ? null : pttRefusedLane(snap?.radio.pttRefused))
+  }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode, remote])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on

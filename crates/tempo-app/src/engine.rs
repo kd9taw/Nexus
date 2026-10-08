@@ -2754,6 +2754,14 @@ pub struct Engine {
     /// The slot over whose unkey the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
     slot_unkey_failed: Option<crate::dto::SlotUnkeyFailed>,
+    /// The slot over Nexus ended part way through because its audio stopped reaching the radio,
+    /// which halted TX ([`Engine::halt_tx_for_lost_slot_audio`]). Kept until the operator turns TX
+    /// on again.
+    slot_audio_lost: Option<crate::dto::SlotAudioLost>,
+    /// The operator's PTT press Nexus's own Flex client kept off the air because the radio still
+    /// took its transmit audio from the DAX Nexus set, not its mic ([`Engine::set_ptt_refused`]).
+    /// Kept until a press keys, or fails for another reason.
+    ptt_refused: Option<crate::dto::PttRefused>,
     /// Unix-secs when the current unattended-transmit run began (first TX after the
     /// last operator action), or `None` if not transmitting. The watchdog trips on
     /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
@@ -5370,6 +5378,8 @@ impl Engine {
             tx_watchdog: false,
             slot_key_refused: None,
             slot_unkey_failed: None,
+            slot_audio_lost: None,
+            ptt_refused: None,
             tx_watchdog_start: None,
             cq_pause_until: None,
             recent_dt: VecDeque::new(),
@@ -9550,6 +9560,18 @@ impl Engine {
             return;
         }
         self.manual_ptt = on && self.tx_enabled && self.tx_allowed();
+    }
+
+    /// What came of the operator's PTT press, as the radio loop keyed it, for the status lane:
+    /// `Some(mode)` when Nexus's own Flex client kept it off the air because the radio still took
+    /// its transmit audio from the DAX Nexus set, not its mic (operator ruling, 2026-10-08, "Same
+    /// rule for Phone"); `None` for a press that keyed, or failed for another reason, so each press
+    /// answers anew. `mode` is the transmit slice's, in the radio's own word.
+    pub fn set_ptt_refused(&mut self, mode: Option<&str>) {
+        self.ptt_refused = mode.map(|mode| crate::dto::PttRefused {
+            at: now_unix_secs(),
+            mode: mode.to_string(),
+        });
     }
 
     /// Whether the operator is holding manual PTT (live phone) — read by the loop. Also
@@ -14783,6 +14805,37 @@ Pick the one you operate from on the Contesting tab in Settings.",
         });
     }
 
+    /// Halt TX because the slot over on the air (FT8, FT4, JS8 and the other timed-slot modes)
+    /// lost its audio part way through, and keep the reason on screen until the operator turns TX
+    /// on again ([`Self::set_tx_enabled`]). Nexus's own Flex client carries an over to the radio
+    /// as DAX, all of it handed over at the key; native audio going off under it (the operator, or
+    /// the receive floor giving up on DAX) or its DAX transmit route going takes the rest with it,
+    /// and the radio would stay keyed with nothing to send until the over's own end. Operator
+    /// ruling, 2026-10-08, "End the over": the over ends there and TX turns off.
+    /// [`Self::halt_tx`] is that end, the Stop TX: its slot abort has the radio loop unkey and
+    /// flush in the same tick.
+    ///
+    /// One event, one line in the log, and no stop for a voice memory, as
+    /// [`Self::halt_tx_for_refused_key`]: nothing here started one.
+    pub fn halt_tx_for_lost_slot_audio(&mut self) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over: its audio stopped reaching the radio part way through (Flex native DAX \
+                 audio went off), so it was ended; transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_audio_lost = Some(crate::dto::SlotAudioLost {
+            at: now_unix_secs(),
+        });
+    }
+
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing and queued frames are dropped — but an
     /// over already in flight completes (operator spec 2026-07-31: "TX Off should
@@ -15006,6 +15059,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.slot_key_refused = None;
             // …and a failed slot unkey's, the same way.
             self.slot_unkey_failed = None;
+            // …and a slot over ended for its lost audio, the same way.
+            self.slot_audio_lost = None;
         } else {
             // A SLOT over already in flight is NOT cut here. Operator (2026-07-31):
             // "TX Off should disable TX for the next cycle, but allow any ongoing
@@ -21499,6 +21554,8 @@ contact yourself."
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.slot_key_refused = self.slot_key_refused.clone();
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
+        s.radio.slot_audio_lost = self.slot_audio_lost.clone();
+        s.radio.ptt_refused = self.ptt_refused.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
@@ -33820,6 +33877,64 @@ mod tests {
         assert!(
             e.take_voice_mem_halt(),
             "the operator's Stop TX lost its voice-memory stop"
+        );
+    }
+
+    #[test]
+    fn a_slot_over_that_lost_its_audio_halts_tx_as_stop_tx_does_and_says_so_until_tx_is_on_again() {
+        // Operator ruling, 2026-10-08, "End the over": a slot over whose DAX audio goes part way
+        // through ends there, TX turns off, and the status lane says why.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(!e.poll_tx(0).is_empty(), "baseline: the QSO transmits");
+        e.take_slot_tx_abort();
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        assert_eq!(
+            radio(&e).get("slotAudioLost"),
+            None,
+            "absent until it happens, so every earlier snapshot is byte-identical"
+        );
+
+        e.halt_tx_for_lost_slot_audio();
+        assert!(!e.tx_enabled(), "TX is off, as Stop TX leaves it");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to cut and unkey, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(2).is_empty() && e.poll_tx(4).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        assert!(
+            !e.take_voice_mem_halt(),
+            "nothing asks the radio to stop a voice memory it may be playing"
+        );
+        let lost = e
+            .snapshot()
+            .radio
+            .slot_audio_lost
+            .expect("the reason is kept for the operator");
+        assert!(lost.at > 0, "with the time it happened");
+        assert!(radio(&e)["slotAudioLost"]["at"].is_u64());
+        assert_eq!(
+            (
+                e.snapshot().radio.slot_key_refused,
+                e.snapshot().radio.slot_unkey_failed
+            ),
+            (None, None),
+            "neither a refused key nor a failed unkey"
+        );
+
+        e.set_tx_enabled(false);
+        assert!(
+            e.snapshot().radio.slot_audio_lost.is_some(),
+            "TX Off is not an answer to it"
+        );
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_audio_lost,
+            None,
+            "turning TX on again is, and clears it"
         );
     }
 

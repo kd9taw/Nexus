@@ -572,6 +572,11 @@ const MIGRATED = [
   'features/slotKeyRefused.ts',
   // …and of a slot over whose unkey the radio did not take — migrated from birth, the same way.
   'features/slotUnkeyFailed.ts',
+  // …and of a slot over the station ended when its audio stopped reaching the radio — migrated
+  // from birth.
+  'features/slotAudioLost.ts',
+  // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
+  'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
 ]

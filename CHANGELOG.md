@@ -113,6 +113,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio. Nexus now holds that over back, turns TX off and says why in the status lane, then puts
   the radio back on its mic input within a moment. The Phone screen's "mic off (DAX)" now stays up
   until the radio has its mic back. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: an over whose Flex native DAX audio goes off part way through ends there.** With
+  the Flex native client (Beta), Flex native DAX audio turned off in the middle of an FT8 or other
+  digital over (by you, or by Nexus when no DAX audio was arriving) stopped the over's audio at
+  once but left the radio keyed with nothing to send until the over's own end, ten seconds or more
+  of dead air. Nexus now ends the over at once, turns TX off and says why in the status lane; turn
+  TX on again to carry on. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: no silent Phone over right after a digital mode.** With the Flex native client
+  (Beta), PTT pressed as you switched from FT8 or another digital mode to Phone, or held through
+  the switch, keyed the radio while it still took its transmit audio from DAX, as Nexus had set it
+  for the digital mode, and not from your mic: the whole over went out silent. The same went for
+  PTT pressed as Flex native DAX audio went off. Nexus now holds that key back and says why in the
+  status lane; let go of PTT, and the radio has its mic back within a moment. NEEDS-BENCH on a
+  FLEX radio.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of

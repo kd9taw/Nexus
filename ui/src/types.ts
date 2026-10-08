@@ -1542,6 +1542,15 @@ export interface RadioStatus {
    *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
    *  it. */
   slotUnkeyFailed?: SlotUnkeyFailed | null
+  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: Flex native DAX audio went off
+   *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
+   *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
+  slotAudioLost?: SlotAudioLost | null
+  /** The operator's last PTT press did not key: right after the transmit slice left a digital mode,
+   *  or native audio went off, the radio still took its transmit audio from the DAX Nexus set, not
+   *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
+   *  keys or fails for another reason; absent otherwise, and from a station older than it. */
+  pttRefused?: PttRefused | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -4607,8 +4616,20 @@ export interface FlexAudioRefusal {
   mode: string
   /** `notYetDax`: native audio is on, and the radio does not take its transmit audio from Nexus's
    *  DAX yet. `daxUnfed`: native audio is off, and the radio still takes its transmit audio from
-   *  the DAX Nexus set, which nothing feeds until its mic input is back. */
-  cause: 'notYetDax' | 'daxUnfed'
+   *  the DAX Nexus set, which nothing feeds until its mic input is back. `micNotBack`: a voice
+   *  over, and the radio still takes its transmit audio from the DAX Nexus set in place of its
+   *  mic input (the PTT press's, in PttRefused). */
+  cause: 'notYetDax' | 'daxUnfed' | 'micNotBack'
+}
+
+/** The operator's PTT press Nexus's own Flex client kept off the air because the radio still took
+ *  its transmit audio from the DAX Nexus set, not its mic (mirror of the Rust PttRefused). The
+ *  words are the UI's, in features/pttRefused.ts. */
+export interface PttRefused {
+  /** When it happened (unix seconds). */
+  at: number
+  /** The transmit slice's mode, in the radio's own word (USB): data, never translated. */
+  mode: string
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words
@@ -4618,6 +4639,13 @@ export interface SlotUnkeyFailed {
   at: number
   /** What came back for the unkey, in the rig link's own words: data, never translated. */
   why: string
+}
+
+/** A slot over the station ended part way through because its audio stopped reaching the radio
+ *  (mirror of the Rust SlotAudioLost). The words are the UI's, in features/slotAudioLost.ts. */
+export interface SlotAudioLost {
+  /** When it happened (unix seconds). */
+  at: number
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the
