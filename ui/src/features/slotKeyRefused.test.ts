@@ -23,4 +23,35 @@ describe('the status lane after a refused slot key', () => {
     expect(lane!.detail).toContain(WHY)
     expect(lane!.detail).not.toMatch(/\{\{/)
   })
+
+  it('says Nexus kept the key off the air itself for the Flex audio route, without PTT advice', () => {
+    const lane = slotKeyRefusedLane({
+      at: AT,
+      why: 'not keying a DIGU over: the radio takes its transmit audio from its mic input',
+      flexAudio: { mode: 'DIGU', cause: 'notYetDax' },
+    })
+    expect(lane!.tier).toBe('critical')
+    expect(lane!.message).toBe(EN['shell.lane.slotKeyRefused.message'])
+    expect(lane!.detail).toBe(
+      EN['shell.lane.slotKeyRefused.flex.notYetDax']
+        .replace('{{mode}}', 'DIGU')
+        .replace('{{time}}', '14:32:05'),
+    )
+    expect(lane!.detail).not.toContain('CAT/port')
+  })
+
+  it('says the radio was still on the DAX Nexus set once native audio was off, in its own sentence', () => {
+    const lane = slotKeyRefusedLane({
+      at: AT,
+      why: 'not keying a DIGU over: native audio is off, and the radio still takes its transmit audio from the DAX Nexus set, which nothing feeds until its mic input is back',
+      flexAudio: { mode: 'DIGU', cause: 'daxUnfed' },
+    })
+    expect(lane!.tier).toBe('critical')
+    expect(lane!.message).toBe(EN['shell.lane.slotKeyRefused.message'])
+    expect(lane!.detail).toBe(
+      EN['shell.lane.slotKeyRefused.flex.daxUnfed']
+        .replace('{{mode}}', 'DIGU')
+        .replace('{{time}}', '14:32:05'),
+    )
+  })
 })

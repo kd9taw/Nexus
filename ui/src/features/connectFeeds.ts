@@ -6,7 +6,9 @@
 // a selection. Each used to be a `useEffect` in whichever component drew it, and three of them had
 // TWO pollers in one window: App polls the X-ray lane, the DXpedition windows and the Kp forecast
 // for its own alerts while Connect (or its Kp box) polled the same three, so opening Connect asked
-// for each twice a cycle. The dashboard rail beside the cockpits would have made a third.
+// for each twice a cycle. The dashboard rail beside the cockpits would have made a third. The
+// POTA/SOTA board's two lists are feeds here too (2026-10-07): the view, a Conditions box and the
+// rail's box each fetched them once a minute for themselves, and now ask once between them.
 //
 // A MODULE STORE, NOT A PROP (bandConditions.ts's reasoning; features/logSource's shape): a feed is
 // WANTED while at least one surface shows it — Connect, the dashboard rail, the pop-out, or one of
@@ -33,6 +35,7 @@ import {
   getGettingOut,
   getKc2gMuf,
   getKpForecast,
+  getOtaSpots,
   getPathOutlook,
   getSolarIndices,
   getSpaceWxScales,
@@ -46,9 +49,12 @@ import type {
   KpForecast,
   MufStation,
   NoaaScalesView,
+  OtaSpot,
   PathPrediction,
   XrayNow,
 } from '../types'
+import { t } from '../i18n'
+import { withErrorToast } from '../toast'
 
 /** A polled feed. `everyMs: null` is asked once per stretch of being shown and never polled. */
 export interface Feed<T> {
@@ -98,6 +104,28 @@ export const KP_FORECAST: Feed<KpForecast> = { name: 'kpForecast', load: () => g
 /** The outlook along the path to the selected station's grid, asked once per selection. */
 export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid) }
 
+/** A programme's activators on the air now, with when the answer came (the board's "Updated" line). */
+export interface OtaAnswer {
+  readonly spots: OtaSpot[]
+  readonly at: number
+}
+/** pota.app's or SOTAwatch's list, a plain minute (the board's own timer before it was a feed); one feed
+ *  per programme, so a board on Both and a board on POTA share the POTA poll. A failed fetch says so in a
+ *  toast, once a window, and answers an EMPTY list: what the board has always shown after one, so this
+ *  feed answers where the others keep their last value. */
+function otaSpots(program: 'POTA' | 'SOTA'): Feed<OtaAnswer> {
+  return {
+    name: `otaSpots:${program}`,
+    load: async () => ({
+      spots: (await withErrorToast(() => getOtaSpots(program), t('ota.spots.failed', { program }))) ?? [],
+      at: Date.now(),
+    }),
+    everyMs: 60_000,
+  }
+}
+export const POTA_SPOTS = otaSpots('POTA')
+export const SOTA_SPOTS = otaSpots('SOTA')
+
 interface Entry<T> {
   held: Held<T>
   wants: number
@@ -109,6 +137,10 @@ interface Entry<T> {
   /** Moves when the last surface lets go, so an answer asked for before that is dropped. */
   gen: number
   listeners: Set<() => void>
+  /** Requests on their way now, and who hears it go between none and some (`useFeedAsking`). Apart from
+   *  `listeners`, because a watcher hears every notice there as a new answer. */
+  asking: number
+  askingListeners: Set<() => void>
 }
 
 const NOTHING: Held<never> = Object.freeze({ value: undefined, settled: false })
@@ -119,7 +151,10 @@ let keyed = new Map<KeyedFeed<unknown>, Map<string, Feed<unknown>>>()
 function entryOf<T>(feed: Feed<T>): Entry<T> {
   let e = entries.get(feed as Feed<unknown>)
   if (!e) {
-    e = { held: NOTHING, wants: 0, timer: null, asked: 0, shown: 0, gen: 0, listeners: new Set() }
+    e = {
+      held: NOTHING, wants: 0, timer: null, asked: 0, shown: 0, gen: 0, listeners: new Set(),
+      asking: 0, askingListeners: new Set(),
+    }
     entries.set(feed as Feed<unknown>, e)
   }
   return e as Entry<T>
@@ -130,7 +165,16 @@ function publish<T>(e: Entry<T>, held: Held<T>): void {
   for (const l of [...e.listeners]) l()
 }
 
-function ask<T>(feed: Feed<T>, e: Entry<T>): void {
+/** Set how many requests are on their way, telling the asking listeners only when that goes between
+ *  none and some. */
+function setAsking<T>(e: Entry<T>, n: number): void {
+  const was = e.asking > 0
+  e.asking = n
+  if (was !== n > 0) for (const l of [...e.askingListeners]) l()
+}
+
+/** One request. Resolves once it has settled, with an answer or a failure. */
+function ask<T>(feed: Feed<T>, e: Entry<T>): Promise<void> {
   const gen = e.gen
   const n = (e.asked += 1)
   let answer: Promise<T>
@@ -140,17 +184,30 @@ function ask<T>(feed: Feed<T>, e: Entry<T>): void {
     // A host with no bridge throws before it returns a promise: a failure like any other.
     answer = Promise.reject(err)
   }
-  answer.then(
+  setAsking(e, e.asking + 1)
+  // Counted back in only within its own stretch: the last release already counted nothing on its way.
+  const landed = () => {
+    if (gen === e.gen) setAsking(e, e.asking - 1)
+  }
+  return answer.then(
     (value) => {
-      if (gen !== e.gen || n <= e.shown) return
-      e.shown = n
-      publish(e, { value, settled: true })
+      try {
+        if (gen === e.gen && n > e.shown) {
+          e.shown = n
+          publish(e, { value, settled: true })
+        }
+      } finally {
+        landed()
+      }
     },
     () => {
       // A failure changes no value, so it never marks one shown: an older answer landing after it
       // is still newer than what is on screen.
-      if (gen !== e.gen) return
-      if (!e.held.settled) publish(e, { value: e.held.value, settled: true })
+      try {
+        if (gen === e.gen && !e.held.settled) publish(e, { value: e.held.value, settled: true })
+      } finally {
+        landed()
+      }
     },
   )
 }
@@ -177,7 +234,33 @@ export function wantFeed<T>(feed: Feed<T>): () => void {
     e.asked = 0
     e.shown = 0
     publish(e, NOTHING)
+    setAsking(e, 0)
   }
+}
+
+/** Ask a feed NOW — a board's Refresh — and share the answer with every surface showing it, as a poll's
+ *  is shared; the poll's own timer is left as it was. A feed nobody shows asks nothing. Resolves once this
+ *  request has settled. */
+export function refreshFeed<T>(feed: Feed<T>): Promise<void> {
+  const e = entries.get(feed as Feed<unknown>) as Entry<T> | undefined
+  return e && e.wants > 0 ? ask(feed, e) : Promise.resolve()
+}
+
+/** Whether a feed has a request on its way: what a board's Refresh spins and greys on — the first
+ *  request, each poll and each refresh, as a board that fetched for itself showed. `null` never is. */
+export function useFeedAsking(feed: Feed<unknown> | null): boolean {
+  const subscribe = useCallback(
+    (l: () => void) => {
+      if (!feed) return () => {}
+      const e = entryOf(feed)
+      e.askingListeners.add(l)
+      return () => {
+        e.askingListeners.delete(l)
+      }
+    },
+    [feed],
+  )
+  return useSyncExternalStore(subscribe, () => (feed ? (entries.get(feed)?.asking ?? 0) > 0 : false))
 }
 
 /** What a feed holds right now: the same object until it changes (useSyncExternalStore's rule). */

@@ -1542,6 +1542,15 @@ export interface RadioStatus {
    *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
    *  it. */
   slotUnkeyFailed?: SlotUnkeyFailed | null
+  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: Flex native DAX audio went off
+   *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
+   *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
+  slotAudioLost?: SlotAudioLost | null
+  /** The operator's last PTT press did not key: right after the transmit slice left a digital mode,
+   *  or native audio went off, the radio still took its transmit audio from the DAX Nexus set, not
+   *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
+   *  keys or fails for another reason; absent otherwise, and from a station older than it. */
+  pttRefused?: PttRefused | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -2103,6 +2112,22 @@ export interface MeterReadout {
   cwToneHz: number | null
 }
 
+/** The period a band or mode change caught while it was being decoded, which WSJT-X shows and so
+ *  does Nexus: display only, under the band, dial and mode it was heard on, never the new ones. */
+export interface LateDecodes {
+  /** The band it was received on ('' off the bands). */
+  band: string
+  /** The dial it was received on (MHz). */
+  dialMhz: number
+  /** The mode it was received in. */
+  tier: Tier
+  /** The received period's start, Unix ms — what its separator shows. */
+  periodStartMs: number
+  /** Where it sorts among the panes' rows: its boundary in the CURRENT mode's slot numbering. */
+  slot: number
+  rows: DecodeRow[]
+}
+
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
 export interface DecodeRow {
   from: string | null
@@ -2557,6 +2582,10 @@ export interface NeedAlert {
    * the matching cockpit and drives the row's mode badge. 'RTTY' is a Digital submode label
    * (RBN skimmer spots only) that routes to the RTTY cockpit; it filters as Digital. */
   mode: string
+  /** The mode the station was heard in, folded as `modeKey` folds it ('FT8', 'SSB'), or absent/null
+   * when its source named only a class (a cluster spot placed by its frequency). A NewMode need is a
+   * need for THIS mode, so its chip shows only where the surface is that mode (`tagsForSurface`). */
+  exactMode?: string | null
   /** Exact spot frequency in MHz when known (cluster/RBN), else null (band-level
    * reception needs). Lets click-to-work QSY to the spot, not just the band default. */
   freqMhz: number | null
@@ -4497,6 +4526,9 @@ export interface AppSnapshot {
   fieldDay: FieldDayStatus | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
+  /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
+   *  unless there is one, until the first period of the new band or mode decodes. */
+  lateDecodes?: LateDecodes
   /** JTAlert-style UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
@@ -4580,6 +4612,32 @@ export interface SlotKeyRefused {
   at: number
   /** What came back for the key, in the rig link's own words: data, never translated. */
   why: string
+  /** Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
+   *  its transmit audio from: the lane then says that in its own words. Absent otherwise. */
+  flexAudio?: FlexAudioRefusal | null
+}
+
+/** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
+ *  FlexAudioRefusal). */
+export interface FlexAudioRefusal {
+  /** The transmit slice's mode, in the radio's own word (DIGU): data, never translated. */
+  mode: string
+  /** `notYetDax`: native audio is on, and the radio does not take its transmit audio from Nexus's
+   *  DAX yet. `daxUnfed`: native audio is off, and the radio still takes its transmit audio from
+   *  the DAX Nexus set, which nothing feeds until its mic input is back. `micNotBack`: a voice
+   *  over, and the radio still takes its transmit audio from the DAX Nexus set in place of its
+   *  mic input (the PTT press's, in PttRefused). */
+  cause: 'notYetDax' | 'daxUnfed' | 'micNotBack'
+}
+
+/** The operator's PTT press Nexus's own Flex client kept off the air because the radio still took
+ *  its transmit audio from the DAX Nexus set, not its mic (mirror of the Rust PttRefused). The
+ *  words are the UI's, in features/pttRefused.ts. */
+export interface PttRefused {
+  /** When it happened (unix seconds). */
+  at: number
+  /** The transmit slice's mode, in the radio's own word (USB): data, never translated. */
+  mode: string
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words
@@ -4589,6 +4647,13 @@ export interface SlotUnkeyFailed {
   at: number
   /** What came back for the unkey, in the rig link's own words: data, never translated. */
   why: string
+}
+
+/** A slot over the station ended part way through because its audio stopped reaching the radio
+ *  (mirror of the Rust SlotAudioLost). The words are the UI's, in features/slotAudioLost.ts. */
+export interface SlotAudioLost {
+  /** When it happened (unix seconds). */
+  at: number
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the

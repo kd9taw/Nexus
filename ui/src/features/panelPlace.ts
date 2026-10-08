@@ -34,6 +34,18 @@
 // 1280 px, where the stored choice is kept and never rewritten — and where ▶ takes it back. ◀ from the
 // first column puts a listed pane there. Never the voice keyer, never the log form: a pane that
 // changes parent is remounted, and the side comes and goes with the window's width.
+//
+// THE BOXES (2026-10-07: any pane in any area): a cockpit's six box slots (ArrangeSpec `boxes`), each
+// showing an entry of the shared list. A box is listed in `columns` (its stock column) and moves like
+// a pane, but where boxes stand is no part of the stock grouping: the cockpit's own panes keep their
+// stock tiers whatever the boxes do (`isStockPlacement`), and below three tracks each box stands right
+// after the own pane above it in its column (`regionGroups`), so adding one moves none of them.
+//
+// FEWER THAN THREE COLUMNS, AND COLUMNS IN ANOTHER ORDER (2026-10-07, the FT cockpit): a cockpit may have
+// only some of the three (`cols`: FT's Roster layout is its main column and the side rail), and then a
+// place in a column it does not have is dropped on load and ◀ ▶ never reach one. ◀ ▶ go to the
+// neighbouring column ON SCREEN, so a cockpit whose columns stand in another order on this window (FT's
+// side rail on the left) passes that order with the move.
 
 /** The columns of a grid cockpit's pane region, in their stock order on screen. */
 export type PaneColumn = 'a' | 'b' | 'log'
@@ -62,6 +74,21 @@ export interface ArrangeSpec<P extends string> {
    *  must be a pane whose remount loses nothing in flight, because the side shows and goes with the
    *  window's width — so never a pinned pane. */
   readonly leftSide?: readonly P[]
+  /** The cockpit's BOXES (see the header), each also listed in `columns`. Absent: it has none. */
+  readonly boxes?: readonly P[]
+  /** The columns the cockpit has, in their stock order on screen (see the header). Absent: all three.
+   *  A column it does not have lists no pane in `columns`. */
+  readonly cols?: readonly PaneColumn[]
+  /** The panes a layout lists but does not draw until the operator adds them there (FT's "Every FT pane
+   *  in both", 2026-10-07: the Call Roster in Classic, the Tx messages and Stations in Roster). Each is
+   *  listed in `columns` like any pane, which is where it stands once added, and moves like one; which
+   *  of them a layout shows is the panel record's `extras`. Absent: the layout draws every pane it lists. */
+  readonly extra?: readonly P[]
+}
+
+/** The columns a cockpit has, in their stock order on screen. */
+export function columnsOf<P extends string>(spec: ArrangeSpec<P>): readonly PaneColumn[] {
+  return spec.cols ?? PANE_COLUMNS
 }
 
 /** Every pane an ArrangeSpec lists, in stock order (a, then b, then log). */
@@ -81,18 +108,21 @@ function isColumn(v: unknown): v is PaneColumn {
 
 /**
  * A valid placement from any input, or undefined for "nothing arranged". Only listed panes keep a
- * place; a pinned pane is held in its stock column; each column's orders are re-numbered 0..n in
- * the order they were stored (ties broken by the stock order), so a hand-edited or foreign record
- * cannot leave a gap, a duplicate or a pane in a column it may not stand in.
+ * place; a pinned pane is held in its stock column; a place in a column the cockpit does not have is
+ * dropped (the pane stands in its stock column); each column's orders are re-numbered 0..n in the order
+ * they were stored (ties broken by the stock order), so a hand-edited or foreign record cannot leave a
+ * gap, a duplicate or a pane in a column it may not stand in.
  */
 export function coercePlacement<P extends string>(spec: ArrangeSpec<P>, raw: unknown): PanePlacement<P> | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const src = raw as Record<string, unknown>
   const ids = arrangeIds(spec)
+  const has = columnsOf(spec)
   const kept: Array<{ id: P; col: PaneColumn; order: number; stock: number }> = []
   ids.forEach((id, stock) => {
     const v = src[id] as { col?: unknown; order?: unknown } | undefined
     if (!v || typeof v !== 'object' || !isColumn(v.col) || typeof v.order !== 'number' || !Number.isFinite(v.order)) return
+    if (!has.includes(v.col)) return
     const col = spec.pinned.includes(id) ? stockColumn(spec, id)! : v.col
     kept.push({ id, col, order: v.order, stock })
   })
@@ -155,11 +185,28 @@ export function regionGroups<P extends string>(
   const cols = placedColumns(spec, place)
   const keep = (ids: readonly P[]) => ids.filter(shown)
   if (tracks === 3) return PANE_COLUMNS.map((c) => ({ col: c, ids: keep(cols[c]) }))
-  const merged = spec.stockMerged && isStockPlacement(spec, place) ? spec.stockMerged : [...cols.a, ...cols.b]
+  const merged = spec.stockMerged && isStockPlacement(spec, place) ? mergeBoxes(spec, cols, spec.stockMerged) : [...cols.a, ...cols.b]
   return [
     { col: 'a', ids: keep(merged) },
     { col: 'log', ids: keep(cols.log) },
   ]
+}
+
+/** The stock merged column with the boxes of columns a and b in it: each box right after the own pane
+ *  above it in its column (boxes under the same pane in their order), a box at the top of its column
+ *  before that column's first own pane. The own panes keep the stock order exactly. */
+function mergeBoxes<P extends string>(spec: ArrangeSpec<P>, cols: Record<PaneColumn, P[]>, stock: readonly P[]): P[] {
+  const boxes = spec.boxes ?? []
+  const out = stock.filter((id) => !boxes.includes(id))
+  for (const c of ['a', 'b'] as const) {
+    const first = out.indexOf(cols[c].find((id) => !boxes.includes(id)) as P)
+    let at = first < 0 ? out.length - 1 : first - 1
+    for (const id of cols[c]) {
+      if (boxes.includes(id)) out.splice(++at, 0, id)
+      else at = out.indexOf(id)
+    }
+  }
+  return out
 }
 
 export type PaneMove = 'up' | 'down' | 'left' | 'right'
@@ -176,8 +223,9 @@ function materialize<P extends string>(cols: Record<PaneColumn, P[]>): PanePlace
  * The placement after one move of `id`, or null when the move does nothing (a pane already at the top
  * of its column moving up, a pinned pane moving sideways, a column with no neighbour that way). Up
  * and down step past panes that are hidden, so every move changes what is on screen; left and right
- * go to the neighbouring column on screen (`colOrder`, stock a | b | log) and put the pane at the
- * foot of it. The result names every listed pane.
+ * go to the neighbouring column on screen (`colOrder`, else the cockpit's columns in their stock order,
+ * a | b | log for a cockpit with all three) and put the pane at the foot of it. The result names every
+ * listed pane.
  */
 export function movePane<P extends string>(
   spec: ArrangeSpec<P>,
@@ -202,7 +250,7 @@ export function movePane<P extends string>(
     return materialize(cols)
   }
   if (spec.pinned.includes(id)) return null
-  const order = colOrder ?? PANE_COLUMNS
+  const order = colOrder ?? columnsOf(spec)
   const to = order[order.indexOf(from) + (move === 'left' ? -1 : 1)]
   if (!to) return null
   cols[from] = cols[from].filter((x) => x !== id)
@@ -227,11 +275,22 @@ export function stockPlacement<P extends string>(spec: ArrangeSpec<P>): PanePlac
   return materialize(placedColumns(spec, undefined))
 }
 
-/** Whether a placement is the stock one (in effect), so the menu can say nothing has been arranged. */
+/** Whether a placement is the stock one (in effect), so the menu can say nothing has been arranged.
+ *  The boxes are no part of it (see the header): only the cockpit's own panes are compared. */
 export function isStockPlacement<P extends string>(spec: ArrangeSpec<P>, place: PanePlacement<P> | undefined): boolean {
   if (place == null) return true
   const now = placedColumns(spec, place)
-  return PANE_COLUMNS.every((c) => now[c].join('\u0000') === spec.columns[c].join('\u0000'))
+  const own = (ids: readonly P[]) => ids.filter((id) => !spec.boxes?.includes(id)).join('\u0000')
+  return PANE_COLUMNS.every((c) => own(now[c]) === own(spec.columns[c]))
+}
+
+/** The placement with `id` at the foot of column `col`, every other pane where it was: where "+ Add a
+ *  box" puts a box. The result names every listed pane. */
+export function placeAtFoot<P extends string>(spec: ArrangeSpec<P>, place: PanePlacement<P> | undefined, id: P, col: PaneColumn): PanePlacement<P> {
+  const cols = placedColumns(spec, place)
+  for (const c of PANE_COLUMNS) cols[c] = cols[c].filter((x) => x !== id)
+  cols[col].push(id)
+  return materialize(cols)
 }
 
 // ── THE LEFT SIDE ────────────────────────────────────────────────────────────────────────────────
@@ -263,6 +322,9 @@ export interface Arrangement<P extends string> {
  * it at the foot of the side; and every other move is `movePane` among the panes in the columns.
  * While it does not show, its panes stand in their columns and move there like any other, and the
  * side itself is kept exactly as stored — no move reaches it.
+ *
+ * `order` is the columns' order on this window when it is not their stock one (FT's side rail on the
+ * left: see the header); ◀ ▶ follow it.
  */
 export function moveArranged<P extends string>(
   spec: ArrangeSpec<P>,
@@ -271,10 +333,11 @@ export function moveArranged<P extends string>(
   move: PaneMove,
   shown: (id: P) => boolean,
   sideShows: boolean,
+  order?: readonly PaneColumn[],
 ): Arrangement<P> | null {
   const side = arr.leftSide ?? []
   const keep = (place: PanePlacement<P> | null): Arrangement<P> | null => (place ? { ...arr, place } : null)
-  if (!sideShows || !spec.leftSide) return keep(movePane(spec, arr.place, undefined, id, move, shown))
+  if (!sideShows || !spec.leftSide) return keep(movePane(spec, arr.place, order, id, move, shown))
   if (side.includes(id)) {
     if (move === 'left') return null
     if (move === 'right') {
@@ -293,7 +356,7 @@ export function moveArranged<P extends string>(
   if (move === 'left' && spec.leftSide.includes(id) && placedColumns(spec, arr.place)[PANE_COLUMNS[0]].includes(id)) {
     return { ...arr, leftSide: [...side, id] }
   }
-  return keep(movePane(spec, arr.place, undefined, id, move, (x) => shown(x) && !side.includes(x)))
+  return keep(movePane(spec, arr.place, order, id, move, (x) => shown(x) && !side.includes(x)))
 }
 
 /** Whether a move would do anything — what the ⊞ Arrange buttons' `disabled` reads. */
@@ -304,6 +367,7 @@ export function canMoveArranged<P extends string>(
   move: PaneMove,
   shown: (id: P) => boolean,
   sideShows: boolean,
+  order?: readonly PaneColumn[],
 ): boolean {
-  return moveArranged(spec, arr, id, move, shown, sideShows) != null
+  return moveArranged(spec, arr, id, move, shown, sideShows, order) != null
 }

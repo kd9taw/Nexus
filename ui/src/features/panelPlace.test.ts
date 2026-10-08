@@ -19,10 +19,12 @@ import {
   type ArrangeSpec,
   type PanePlacement,
 } from './panelPlace'
-import { PHONE_PANELS, RTTY_PANELS, coercePanelLayout, panelStorageKey, usePanelLayout, type PanelLayout, type PhonePanelId } from './panelState'
+import { BOX_IDS, PHONE_PANELS, RTTY_PANELS, coercePanelLayout, panelStorageKey, usePanelLayout, type PanelLayout, type PhonePanelId } from './panelState'
 
 const SPEC = PHONE_PANELS.arrange!
 const all = () => true
+// The cockpit's own panes on screen and its boxes hidden, as every box ships (features/panelState).
+const stockShown = (id: PhonePanelId) => !(BOX_IDS as readonly string[]).includes(id)
 
 describe('the placement a record may carry', () => {
   it('keeps a place only for the panes the cockpit arranges: an id outside it, or no id at all, is dropped', () => {
@@ -79,7 +81,8 @@ describe('the columns a placement gives', () => {
   it('puts every pane in exactly one column, and one the record does not name at the end of its stock column', () => {
     const cols = placedColumns(SPEC, { needed: { col: 'a', order: 0 }, bandActivity: { col: 'log', order: 0 } })
     expect(cols).toEqual({
-      a: ['needed', 'voiceKeyer', 'spots'],
+      // The boxes too stand at the end of their stock column, the record naming none of them.
+      a: ['needed', 'voiceKeyer', 'spots', ...BOX_IDS],
       b: ['rigscope', 'receiver', 'transmitter'],
       log: ['bandActivity'],
     })
@@ -92,7 +95,7 @@ describe('the groups each tier renders', () => {
   const shownOf = (hidden: PhonePanelId[]) => (id: PhonePanelId) => !hidden.includes(id)
 
   it('three tracks: a | b | log, only what is shown', () => {
-    expect(regionGroups(SPEC, undefined, 3, shownOf(['spots', 'needed']))).toEqual([
+    expect(regionGroups(SPEC, undefined, 3, shownOf(['spots', 'needed', ...BOX_IDS]))).toEqual([
       { col: 'a', ids: ['bandActivity', 'voiceKeyer'] },
       { col: 'b', ids: ['rigscope', 'receiver', 'transmitter'] },
       { col: 'log', ids: [] },
@@ -101,7 +104,7 @@ describe('the groups each tier renders', () => {
 
   it('fewer tracks, nothing arranged: the stock merged order, the feeds after the rig strips — as today', () => {
     for (const tracks of [1, 2] as const)
-      expect(regionGroups(SPEC, undefined, tracks, all)).toEqual([
+      expect(regionGroups(SPEC, undefined, tracks, stockShown)).toEqual([
         { col: 'a', ids: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'] },
         { col: 'log', ids: [] },
       ])
@@ -109,12 +112,12 @@ describe('the groups each tier renders', () => {
 
   it('fewer tracks, arranged: column b simply follows column a', () => {
     const place = movePane(SPEC, undefined, undefined, 'receiver', 'left', all)!
-    expect(regionGroups(SPEC, place, 2, all)[0].ids).toEqual(['bandActivity', 'voiceKeyer', 'spots', 'receiver', 'rigscope', 'transmitter', 'needed'])
+    expect(regionGroups(SPEC, place, 2, stockShown)[0].ids).toEqual(['bandActivity', 'voiceKeyer', 'spots', 'receiver', 'rigscope', 'transmitter', 'needed'])
   })
 
   it('a placement written out in full but equal to the stock one still renders the stock merged order', () => {
     expect(isStockPlacement(SPEC, stockPlacement(SPEC))).toBe(true)
-    expect(regionGroups(SPEC, stockPlacement(SPEC), 2, all)[0].ids).toEqual(SPEC.stockMerged)
+    expect(regionGroups(SPEC, stockPlacement(SPEC), 2, stockShown)[0].ids).toEqual(SPEC.stockMerged)
   })
 })
 
@@ -136,7 +139,7 @@ describe('a move', () => {
 
   it('left and right go to the neighbouring column on screen, at its foot', () => {
     const toA = movePane(SPEC, undefined, undefined, 'transmitter', 'left', all)!
-    expect(placedColumns(SPEC, toA).a).toEqual(['bandActivity', 'voiceKeyer', 'spots', 'transmitter'])
+    expect(placedColumns(SPEC, toA).a).toEqual(['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS, 'transmitter'])
     const toLog = movePane(SPEC, undefined, undefined, 'needed', 'right', all)!
     expect(placedColumns(SPEC, toLog).log).toEqual(['needed'])
     expect(movePane(SPEC, undefined, undefined, 'bandActivity', 'left', all), 'no column left of a').toBeNull()
@@ -150,7 +153,7 @@ describe('a move', () => {
     expect(movePane(SPEC, undefined, undefined, 'voiceKeyer', 'left', all)).toBeNull()
     expect(movePane(SPEC, undefined, undefined, 'voiceKeyer', 'right', all)).toBeNull()
     const up = movePane(SPEC, undefined, undefined, 'voiceKeyer', 'up', all)!
-    expect(placedColumns(SPEC, up).a).toEqual(['voiceKeyer', 'bandActivity', 'spots'])
+    expect(placedColumns(SPEC, up).a).toEqual(['voiceKeyer', 'bandActivity', 'spots', ...BOX_IDS])
   })
 
   it('writes every pane’s place, so only a pane added later is ever missing from the record', () => {
@@ -255,9 +258,12 @@ describe('Phone’s arrange list', () => {
     expect([...ids].sort()).toEqual([...region].sort())
   })
 
-  it('pins the voice keyer (D9), and its stock merged order is every pane once', () => {
+  it('pins the voice keyer, and its stock merged order is every pane of its own once', () => {
     expect(SPEC.pinned).toEqual(['voiceKeyer'])
-    expect([...(SPEC.stockMerged ?? [])].sort()).toEqual([...SPEC.columns.a, ...SPEC.columns.b].sort())
+    // The boxes are not in it: each joins the merged column where it stands (regionGroups).
+    expect(SPEC.boxes).toEqual([...BOX_IDS])
+    const own = [...SPEC.columns.a, ...SPEC.columns.b].filter((id) => !SPEC.boxes!.includes(id))
+    expect([...(SPEC.stockMerged ?? [])].sort()).toEqual(own.sort())
   })
 
   it('a spec whose pinned pane moved columns would be caught by the coercion (control)', () => {

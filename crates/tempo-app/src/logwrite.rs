@@ -826,5 +826,229 @@ pub fn park_states(
     (Err(station::LOG_BUSY.into()), Durability::default())
 }
 
+/// ★ Logbook ▸ Check confirmations' changes, as the operator ticked them: each contact still
+/// holding what its lines showed takes their change (`tempo_core::reconcile::check::uncheck`), a
+/// confirmation taken off with the credit codes its line names, or LoTW's upload mark cleared, in
+/// one change planned with the Engine lock released and made under it
+/// ([`station::unchecked_pairs`]). A contact changed since the check is left as it is. Nothing
+/// else about a contact moves, a paper card included, and nothing goes to a connector. How many
+/// contacts changed: fewer than the lines name when one changed since the check listed it.
+///
+/// `Key` when a line takes a confirmation off, for the reason [`park_states`] is `Key`: it
+/// REMOVES what a fold may have counted (a state or an entity's band slot confirmed), so the
+/// confirmations left are not a superset of the ones before, and no fold may keep an answer from
+/// before it. A change that only clears upload marks is a `Stamp`, as every upload mark is.
+///
+/// ⚠️ It reads the store: call it with no lock held.
+pub fn confirmation_repairs(
+    engine: &Mutex<Engine>,
+    lines: &[tempo_core::reconcile::check::CheckLine],
+) -> (Result<usize, String>, Durability) {
+    use tempo_core::reconcile::check::Mark;
+    if lines.is_empty() {
+        return (Ok(0), Durability::default());
+    }
+    let class = if lines
+        .iter()
+        .any(|l| matches!(l.mark, Mark::Confirmation(_)))
+    {
+        tempo_core::logbook::OpClass::Key
+    } else {
+        tempo_core::logbook::OpClass::Stamp
+    };
+    let ids: Vec<RecordId> = lines.iter().filter_map(|l| l.contact.id).collect();
+    for _ in 0..PLANS {
+        let plan = crate::engine::log_plan(engine);
+        let rows = match plan.rows(&ids) {
+            Ok(rows) => rows,
+            Err(e) => return (Err(e), Durability::default()),
+        };
+        #[cfg(test)]
+        tests::race();
+        let pairs = station::unchecked_pairs(&rows, lines);
+        let n = pairs.len();
+        if n == 0 {
+            return (Ok(0), Durability::default());
+        }
+        let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
+            e.station_mut()
+                .commit_planned(
+                    &plan,
+                    class,
+                    pairs,
+                    true,
+                    Vec::new(),
+                    "confirmation_repairs",
+                )
+                .is_ok()
+        });
+        if ok {
+            return (Ok(n), durability);
+        }
+    }
+    (Err(station::LOG_BUSY.into()), Durability::default())
+}
+
+/// What Apply in Check confirmations made ([`apply_confirmation_check`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ConfirmationsApplied {
+    /// Contacts whose LoTW confirmation was taken off.
+    pub confirmations: usize,
+    /// Contacts whose LoTW upload mark was cleared.
+    pub uploads: usize,
+    /// The download merged, as a sync merges it: what it added.
+    pub merged: tempo_core::reconcile::ReconcileSummary,
+    /// The file holding the contacts about to change as they were, beside `log.adi`: an import
+    /// of it puts each change back. `None` when no ticked contact still held what its line showed.
+    pub before_file: Option<std::path::PathBuf>,
+}
+
+/// ★ Apply in Logbook ▸ Check confirmations: `lines` are the lines the operator ticked, each with
+/// the contact as the check read it, and `report` is the confirmation download the check read
+/// (LoTW's; the check holds it, and nothing else does). In this order, each step only once the
+/// one before it is made:
+///
+/// 1. **The before-file**: each contact a ticked line will change, as it is now, written to a new
+///    file beside `log.adi` ([`before_file_name`]) and flushed to disk before anything changes.
+///    An ADIF import of it puts every change back: the import matches each contact on its exact
+///    call, band, mode and second, and adds back what the change took off (a confirmation, its
+///    codes, an upload mark), which is all an import does. Not written, nothing changes.
+/// 2. **The gains**: the download merged as a sync merges it ([`merge_lotw_report`]), so each
+///    contact it confirms that lacks the confirmation gains it. No sync cursor moves. An import
+///    does not undo these: they are LoTW's own confirmations of those contacts.
+/// 3. **The confirmations** the ticked lines take off ([`confirmation_repairs`], `Key`).
+/// 4. **The upload marks** the ticked lines clear ([`confirmation_repairs`], `Stamp`): those
+///    contacts are owed to LoTW again, and go in the operator's next upload.
+///
+/// Nothing is uploaded and no connector is called. What it made, and the durability of every
+/// change it made, for the command to wait on with no lock held.
+///
+/// ⚠️ It reads the store and writes a file: call it with no lock held.
+pub fn apply_confirmation_check(
+    engine: &Mutex<Engine>,
+    report: &str,
+    lines: &[tempo_core::reconcile::check::CheckLine],
+    now_unix: u64,
+) -> (Result<ConfirmationsApplied, String>, Durability) {
+    use tempo_core::reconcile::check::{CheckLine, Mark};
+    let before_file = match write_before_file(engine, lines, now_unix) {
+        Ok(file) => file,
+        Err(e) => return (Err(e), Durability::default()),
+    };
+    let (merged, mut durability) = until_written(|| merge_lotw_report(engine, report));
+    let merged = match merged {
+        Ok(merged) => merged,
+        Err(e) => return (Err(e), durability),
+    };
+    if durability.turned_back(crate::logstore::DURABLE_WAIT) {
+        return (Err(station::LOG_BUSY.into()), durability);
+    }
+    let (confirmations, uploads): (Vec<CheckLine>, Vec<CheckLine>) = lines
+        .iter()
+        .cloned()
+        .partition(|l| l.mark != Mark::LotwUpload);
+    let confirmations = match repaired(engine, &confirmations, &mut durability) {
+        Ok(made) => made,
+        Err(e) => return (Err(e), durability),
+    };
+    let uploads = match repaired(engine, &uploads, &mut durability) {
+        Ok(made) => made,
+        Err(e) => return (Err(e), durability),
+    };
+    (
+        Ok(ConfirmationsApplied {
+            confirmations,
+            uploads,
+            merged,
+            before_file,
+        }),
+        durability,
+    )
+}
+
+/// One of Apply's changes ([`confirmation_repairs`]), made again while the store turns it back
+/// ([`until_written`]), its durability added to `durability`. How many contacts it changed; a
+/// change the store turned back every time is `LogBusy`.
+fn repaired(
+    engine: &Mutex<Engine>,
+    lines: &[tempo_core::reconcile::check::CheckLine],
+    durability: &mut Durability,
+) -> Result<usize, String> {
+    let (made, d) = until_written(|| confirmation_repairs(engine, lines));
+    let busy = d.turned_back(crate::logstore::DURABLE_WAIT);
+    *durability = std::mem::take(durability).and(d);
+    let made = made?;
+    if busy {
+        return Err(station::LOG_BUSY.into());
+    }
+    Ok(made)
+}
+
+/// The before-file's name for an Apply made at `now_unix`: `log.adi`'s folder holds it, under a
+/// name of its own that says what it is and when, which Import ADIF's picker shows (`.adi`).
+pub fn before_file_name(now_unix: u64) -> String {
+    let (y, mo, d, h, mi, s) = tempo_core::logbook::datetime_utc(now_unix);
+    format!("confirmations-before-check-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}Z.adi")
+}
+
+/// Step 1 of [`apply_confirmation_check`]: each contact a ticked line will change, read from the
+/// store as it is now, written as the operator's own ADIF
+/// ([`tempo_core::logbook::adif_record_own_log`]) to a new file beside `log.adi`, and flushed to
+/// disk. Never over an existing file: a second Apply in the same second takes the next free name.
+/// `None` when no contact will change.
+fn write_before_file(
+    engine: &Mutex<Engine>,
+    lines: &[tempo_core::reconcile::check::CheckLine],
+    now_unix: u64,
+) -> Result<Option<std::path::PathBuf>, String> {
+    use std::io::Write;
+    let ids: Vec<RecordId> = lines.iter().filter_map(|l| l.contact.id).collect();
+    let plan = crate::engine::log_plan(engine);
+    let rows = plan.rows(&ids)?;
+    let changing = station::unchecked_pairs(&rows, lines);
+    if changing.is_empty() {
+        return Ok(None);
+    }
+    let log = engine_lock(engine)
+        .log_path()
+        .map(std::path::Path::to_path_buf);
+    let folder = log.as_deref().and_then(std::path::Path::parent).ok_or(
+        "The logbook has no folder to keep a copy of these contacts in, so nothing changed.",
+    )?;
+    let mut text = tempo_core::logbook::adif_header();
+    for (before, _) in &changing {
+        text.push_str(&tempo_core::logbook::adif_record_own_log(before));
+    }
+    let name = before_file_name(now_unix);
+    let stem = name.trim_end_matches(".adi");
+    let unsaved = |e: std::io::Error| {
+        format!("A copy of these contacts could not be saved, so nothing changed: {e}")
+    };
+    let mut n = 1;
+    let (path, mut file) = loop {
+        let path = match n {
+            1 => folder.join(&name),
+            n => folder.join(format!("{stem}-{n}.adi")),
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => break (path, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(unsaved(e)),
+        }
+    };
+    file.write_all(text.as_bytes()).map_err(unsaved)?;
+    file.sync_all().map_err(unsaved)?;
+    // The folder's entry too, so the file survives a power cut the change after it survives.
+    #[cfg(unix)]
+    if let Ok(dir) = std::fs::File::open(folder) {
+        let _ = dir.sync_all();
+    }
+    Ok(Some(path))
+}
+
 #[cfg(test)]
 mod tests;

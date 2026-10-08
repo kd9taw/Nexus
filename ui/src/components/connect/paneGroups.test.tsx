@@ -16,7 +16,7 @@ import type { PaneContext } from './paneContext'
 const WANT: Array<[string, PaneId[]]> = [
   ['Bands', ['advisory', 'bandAdvisor', 'bandTiles', 'outlook', 'openings', 'openingsLog', 'bestband', 'beacons', 'bandHours', 'esNowcast']],
   ['Space weather', ['kpOutlook', 'spacewx', 'insights', 'greyline', 'measuredMuf']],
-  ['Activity', ['selection', 'getout', 'activity', 'chase', 'chaseFeed', 'satPasses', 'contests', 'spots', 'pota']],
+  ['Activity', ['selection', 'getout', 'activity', 'chase', 'chaseFeed', 'satPasses', 'contests', 'spots', 'pota', 'needed']],
   ['Station', ['rotor', 'amp', 'scope', 'clock']],
 ]
 const titleOf = (id: PaneId) => PANES.find((p) => p.id === id)!.title

@@ -3499,12 +3499,10 @@ struct RadioLoop {
     yaesu_wf_mode_seen: Option<(u8, u8, i64)>,
     /// The span code last REQUESTED in FIX, and when — see `YAESU_WF_SPAN_ASK_MS`.
     yaesu_wf_span_asked: Option<(u8, f64)>,
-    /// Whether the DAX TX-audio tee is currently installed in the backend — installed when the Flex
-    /// client's transmit route comes up, cleared when it goes, so TX audio routes over DAX exactly
-    /// while that route is up.
-    dax_tee_set: bool,
-    /// Which tee is installed (its address): a replaced Flex client's tee is a different one, and
-    /// a dead client's must not stay the route.
+    /// Which DAX TX-audio tee is installed in the backend (its address), if any — installed when the
+    /// Flex client's transmit route comes up, cleared when it goes, so TX audio routes over DAX
+    /// exactly while that route is up. A replaced Flex client's tee is a different one, and a dead
+    /// client's must not stay the route.
     dax_tee_id: Option<usize>,
     /// Native audio through Nexus's own Flex client (Beta): on while the operator's
     /// `flex_native_audio` is on for a radio the client serves. Its DAX audio, from the client's
@@ -4014,7 +4012,6 @@ impl RadioLoop {
             spectrum_src_key: None,
             dax_started: None,
             dax_last_audio: None,
-            dax_tee_set: false,
             dax_tee_id: None,
             flex_client_audio: false,
             flex_client_audio_failed: false,
@@ -5094,6 +5091,16 @@ impl RadioLoop {
         }
     }
 
+    /// Nexus's own Flex client kept the slot key asked for at `asked` off the air for the audio
+    /// route: its words and its cause go on the refusal that key's halt put on screen, in place of
+    /// the rigctld answer, `RPRT -1`, which carries no reason. Anything else: nothing.
+    fn explain_flex_refusal(&self, eng: &mut Engine, asked: Instant) {
+        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+        if let Some((why, cause)) = flex.and_then(|d| d.key_refused_since(asked)) {
+            eng.explain_refused_key(&why, cause);
+        }
+    }
+
     /// Whether this loop already holds the transmitter: an over's PTT hold, or the operator's own
     /// PTT. A key that fails then is not a new key refused ([`KeyUp::Held`]); the slot overs ask
     /// the same question ([`crate::slot::key_slot_transmitter`]).
@@ -5878,16 +5885,10 @@ impl RadioLoop {
                     d.set_native_audio(false);
                 }
             }
-            if self.dax_tee_set {
-                backend.set_tx_tee(None);
-                self.dax_tee_set = false;
-                self.dax_tee_id = None;
-                self.flex_mic_off_pushed = Some(false);
-                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
-                // The mic is the operator's again — see the tee-sync block below for why this
-                // transition has to reach the engine from BOTH places that clear the tee.
-                engine_lock(engine).observe_flex_dax_tx(false);
-            }
+            // The tee-sync block below takes the tee out, this tick, and ends a slot over it was
+            // carrying. Not "the mic is the operator's again" either: Nexus's own write can leave
+            // the radio on DAX until the routing's next quiet point, and that block tells the
+            // engine what the radio reports.
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
                     let mut eng = engine_lock(engine);
@@ -5915,21 +5916,38 @@ impl RadioLoop {
         // The flag follows the TX slice's mode (operator ruling, 2026-10-03), so Phone at the
         // shack keeps the mic and the stream's browser voice takes DAX. Pushed on the TRANSITION
         // only (no per-tick engine lock), and from the radio's own report rather than the
-        // `flex_native_audio` setting. The Phone cockpit renders it; nothing gates on it.
-        let client = self
-            .rigctld_proc
-            .as_ref()
-            .and_then(CatDaemon::flex)
-            .filter(|_| self.flex_client_audio);
+        // `flex_native_audio` setting: with native audio off too, while Nexus's own write still
+        // has the radio on DAX (the toggle, or the receive floor above, takes the tee out at once;
+        // the routing puts the mic back at its next quiet point). The Phone cockpit renders it;
+        // nothing gates on it.
+        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+        let client = flex.filter(|_| self.flex_client_audio);
         let want_tee: Option<crate::backend::TxTeeHandle> = client
             .filter(|d| d.tx_route_ready())
             .and_then(crate::flex::FlexDaemon::tx_tee);
-        let mic_off = client.is_some_and(|d| d.radio_dax() == Some(true));
+        let mic_off = match client {
+            Some(d) => d.radio_dax() == Some(true),
+            None => flex.is_some_and(crate::flex::FlexDaemon::leaves_dax),
+        };
         let want_id = want_tee
             .as_ref()
             .map(|t| Arc::as_ptr(t) as *const () as usize);
         if want_id != self.dax_tee_id {
-            self.dax_tee_set = want_tee.is_some();
+            // ⛔ NEVER A SILENT OVER, PART WAY THROUGH EITHER (operator ruling, 2026-10-08, "End
+            // the over"). A slot over hands its whole waveform to the tee at its key, so the tee
+            // going takes the rest of that over with it, whatever took it (native audio turned
+            // off, the receive floor above, the route gone), while the radio stays keyed on a DAX
+            // nothing feeds. The over ends instead: halted as Stop TX halts it, so the hard stop
+            // below unkeys and flushes in this same tick, with the reason on screen. Only while
+            // its audio is still going out: in the PTT tail after it the over is whole. Only a
+            // slot over, as for the refused-key and failed-unkey halts: halting TX under another
+            // over would leave the Phone screen with no TX switch to turn it back on.
+            if self.dax_tee_id.is_some()
+                && self.holds_slot_over()
+                && now < self.slot_tx_until_ms - crate::slot::TX_TAIL_MS
+            {
+                engine_lock(engine).halt_tx_for_lost_slot_audio();
+            }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
@@ -10320,8 +10338,24 @@ impl RadioLoop {
                 // `ptt_plain`, not `ptt`: this is the operator talking into the radio's own
                 // microphone (or a broker client's key), so a Rear/Data radio (#381) keys it as it
                 // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
+                let asked = Instant::now();
                 let ptt_failed = rig.ptt_plain(ptt).is_err();
-                self.report_ptt(engine, ptt && ptt_failed);
+                if ptt {
+                    // A press Nexus's own Flex client kept off the air because the radio still
+                    // takes its transmit audio from the DAX Nexus set, not the mic (`flex::shim`):
+                    // the status lane says so, in place of the PTT and CAT advice, which would be
+                    // wrong. Each press answers anew.
+                    let mic_not_back = ptt_failed
+                        .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                        .flatten()
+                        .and_then(|d| d.key_refused_since(asked))
+                        .filter(|(_, r)| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
+                        .map(|(_, r)| r.mode);
+                    engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
+                    self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
+                } else {
+                    self.report_ptt(engine, false);
+                }
                 self.manual_ptt_applied = ptt;
             }
             // ⚠️ THE LEVEL PUSHES FROM HERE ON (power, mic gain, the receive levels, NR, notch,
@@ -11503,6 +11537,7 @@ impl RadioLoop {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
                         let held = self.holds_tx();
+                        let asked = Instant::now();
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`).
                         if crate::slot::key_slot_transmitter(&mut eng, rig, backend, held) {
@@ -11534,6 +11569,8 @@ impl RadioLoop {
                             self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                             self.last_slot = Some(slot_now); // slot handled; skip the boundary
                             self.prev_slot_was_tx = true;
+                        } else {
+                            self.explain_flex_refusal(&mut eng, asked);
                         }
                     }
                 }
@@ -11632,7 +11669,9 @@ impl RadioLoop {
                         emit_rx_decodes(sinks, &eng, &mut station.psk_spots, now, cur_dial);
                     }
                 }
-                DecodeApplied::Stale => {}
+                // A period heard on the band or mode just left: on screen only. It is never a
+                // TX decision, and WSJT-X sends it to neither a logger nor PSK Reporter.
+                DecodeApplied::Late { .. } | DecodeApplied::Stale => {}
             }
         }
 
@@ -12105,6 +12144,7 @@ impl RadioLoop {
         // a failed key while this loop already holds the transmitter is not one
         // (`slot::slot_key_failure`).
         let held = self.holds_tx();
+        let asked = Instant::now();
         let action = crate::slot::slot_tx_phase(
             eng,
             rig,
@@ -12117,6 +12157,7 @@ impl RadioLoop {
             prebuilt,
             held,
         );
+        self.explain_flex_refusal(eng, asked);
         if let Some(t) = action.tx_until_ms {
             self.tx_until_ms = Some(t);
             // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
@@ -25341,6 +25382,55 @@ mod tests {
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
+    }
+
+    #[test]
+    fn a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_cuts_the_over() {
+        // Mid-over on 20 m FT8 with TX on. FT8 -> FT4 moves the dial to 14.080 and leaves the
+        // Tx frequency, 14.0755, off the FT4 waterfall, so the next iteration cuts the over as
+        // Stop TX does (WSJT-X 3.0.2 halts it there). FT8 -> FT2 (14.084) and FT8 -> FT1
+        // (14.0905) do the same by the same rule. A knob QSY inside the band does not.
+        for (what, to) in [
+            ("a knob QSY to 14.076", None),
+            ("FT8 -> FT4", Some(Tier::Ft4)),
+            ("FT8 -> FT2", Some(Tier::Ft2)),
+            ("FT8 -> FT1", Some(Tier::TempoFast)),
+        ] {
+            let cut = to.is_some();
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            engine.lock().unwrap().set_tx_enabled(true);
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let _ = rig.ptt(true);
+            let mut state = loop_state();
+            state.tx_until_ms = Some(9_999_999.0); // long hold — would NOT expire on its own
+            if let Some(tier) = to {
+                engine.lock().unwrap().set_tier(tier);
+            } else {
+                engine.lock().unwrap().observe_rig_freq(14_076_000);
+            }
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+
+            assert_eq!(
+                (rig.keyed, state.tx_until_ms.is_some()),
+                (!cut, !cut),
+                "{what}: (PTT keyed, TX hold set)"
+            );
+        }
     }
 
     #[test]

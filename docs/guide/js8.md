@@ -48,6 +48,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
   someone else until they collect them (store and forward). Mark read, delete.
 - **Log** — the log strip, prefilled from the station you last addressed. A JS8 QSO logs
   as `MFSK` / `JS8` in ADIF.
+- **Boxes** — up to six panes of [Conditions](connect.md) among these, from ⊞ Panels ▸
+  **Arrange** ▸ **+ Add a box** at the foot of a column, each closed by its own **✕** (see
+  [Phone](phone.md)). Nothing in a box transmits.
 
 **The TX dock**, pinned under the panes. The **To** box (blank = everyone, a callsign,
 `@ALLCALL`, or a `@GROUP` you belong to), the composer, a frame estimate ("3 frames ·

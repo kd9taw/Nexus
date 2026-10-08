@@ -1,4 +1,4 @@
-import type { DecodeRow, Tier } from './types'
+import type { DecodeRow, LateDecodes, Tier } from './types'
 
 // Pure model behind the Band Activity / Rx Frequency panes (OperateDecodes).
 // Kept DOM-free so the WSJT-X-critical behaviors — chronological flow, the
@@ -18,6 +18,9 @@ export interface DecodeEntry extends DecodeRow {
   at: number
   /** Stable dedupe key (slot-scoped) — doubles as the React row key. */
   id: string
+  /** Set on a row of a period heard before a band or mode change ({@link DecodeHistory.ingestLate}):
+   *  what it was received on. Such a row is shown under these and never worked. */
+  heard?: Omit<LateDecodes, 'slot' | 'rows'>
 }
 
 /**
@@ -252,6 +255,23 @@ export class DecodeHistory {
       const drop = m.size - MAX_HISTORY
       const it = m.keys()
       for (let i = 0; i < drop; i++) m.delete(it.next().value as string)
+    }
+  }
+
+  /**
+   * Ingest the period a band or mode change caught while it was decoding (the snapshot's
+   * `lateDecodes`), as WSJT-X shows it: after the wipe the change made, under its own slot, with
+   * the band, mode, dial and period it was heard on kept on every row.
+   */
+  ingestLate(late: LateDecodes, now: number = Date.now()): void {
+    const heard = { band: late.band, dialMhz: late.dialMhz, tier: late.tier, periodStartMs: late.periodStartMs }
+    for (const d of late.rows) {
+      const id = `late|${late.slot}|${d.message}|${Math.round(d.freqHz / 5)}`
+      this.map.set(id, { ...d, slot: late.slot, at: this.map.get(id)?.at ?? now, id, heard })
+    }
+    if (this.map.size > MAX_HISTORY) {
+      const it = this.map.keys()
+      for (let i = this.map.size - MAX_HISTORY; i > 0; i--) this.map.delete(it.next().value as string)
     }
   }
 

@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
+import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const startCq = vi.fn(async () => null)
@@ -109,7 +110,7 @@ function panelsApi(): PanelLayoutApi<OperatePanelId> {
   const state: Partial<Record<OperatePanelId, PanelState>> = {}
   return {
     layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

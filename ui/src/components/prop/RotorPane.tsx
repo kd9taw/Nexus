@@ -2,9 +2,9 @@
 // plumbing shipped earlier: point/point-at-call/read; this adds the cockpit).
 // Compass rose with the LIVE azimuth needle (polled while mounted), click-the-
 // rose or type to slew, STOP, and the WMM magnetic heading beside true so a
-// compass-zeroed controller reads the same number. Renders nothing when no
-// rotator is CONFIGURED (PaneFrame falls back to the Basic hint) — honesty:
-// a needle with no rotctld behind it would be an ornament. A configured rotator
+// compass-zeroed controller reads the same number. Draws only its box's one
+// line when no rotator is CONFIGURED — honesty: a needle with no rotctld behind
+// it would be an ornament. A configured rotator
 // that does not report its position keeps the pane, with "—" where the needle
 // would be: pointing and STOP do not depend on the readback.
 //
@@ -149,11 +149,12 @@ export function RotorPane() {
   // `get_position` in the bundled Hamlib at all: it answers `p` with `RPRT -11` for ever while
   // taking every `P` perfectly. Its owner had no compass, no slew and no stop.
   //
-  // So the two states are separated: no rotator CONFIGURED renders nothing (most stations, and
-  // the pane frame's Basic hint takes over), while a rotator that is configured but not
-  // reporting keeps its whole control surface with an honest "—" where the needle would be. A
-  // fake needle would be the dishonest half; a missing STOP button is the dangerous one.
-  if (az == null && !configured) return null
+  // So the two states are separated: no rotator CONFIGURED draws only the box's one line (most
+  // stations; drawn here, since the frame never sees a null from this component), while a rotator
+  // that is configured but not reporting keeps its whole control surface with an honest "—" where
+  // the needle would be. A fake needle would be the dishonest half; a missing STOP button is the
+  // dangerous one.
+  if (az == null && !configured) return <p className="pane-basic">{t('connect.pane.rotor.basic')}</p>
 
   const slew = (deg: number) => {
     const d = ((Math.round(deg) % 360) + 360) % 360

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
-import { CW_PANELS, panelStorageKey, usePanelLayout, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
+import { BOX_IDS, CW_PANELS, panelStorageKey, usePanelLayout, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { arrangeIds, isStockPlacement, placedColumns, type PaneMove } from '../features/panelPlace'
 
 const decodeState = {
@@ -177,7 +177,10 @@ async function mount() {
  *  (Phone's rule, `stockMerged`). */
 function expected(tracks: number) {
   const place = api!.layout.place
-  const c = placedColumns(CW_PANELS.arrange!, place)
+  // The boxes (2026-10-07) ship hidden and none is added here: the columns without them.
+  const all = placedColumns(CW_PANELS.arrange!, place)
+  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id))
+  const c = { a: own(all.a), b: own(all.b), log: own(all.log) }
   const mid = ['rigctl', ...c.b]
   if (tracks === 3) return [[...c.a], mid, [...c.log, 'log']]
   if (isStockPlacement(CW_PANELS.arrange!, place)) {

@@ -245,7 +245,7 @@ describe('the fence: styles.css never names a structural class', () => {
   // size, from the sheet that has lost every one of these fights before.
   // The RF scope pane's modifier on FT's waterfall strip (2026-10-04) too: the strip's direction is
   // structure, and the styles.css `.panel` it overrides is exactly the kind of rule that wins a tie.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -415,6 +415,30 @@ describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and
     // Centred on the gap between the side and the stage: half the row's gap, then half its own width.
     const gap = classWinner('cockpit-leftrow', blockDecl('gap'))!.value
     expect(d('right')).toBe(`calc(${gap} / -2 - ${Number(w![1]) / 2}px)`)
+  })
+})
+
+describe("FT'S ARRANGED COLUMNS (2026-10-07): stacks that scroll, FT's gap, and the rail first only by its own class", () => {
+  // FT keeps its own grid; once the operator arranges anything, each of its columns is an `.op-stack`
+  // (OperateCockpit's arranged branch). Its frames are content-sized strips and floored feeds, so the
+  // column itself must be the scroller behind them, or the Tx1–Tx6 machine's tail is past a clip edge.
+  it('each column is a flex column that scrolls, and a feed in it floors at a yielding 10em', () => {
+    const y = classWinner('op-stack', blockOverflowY)
+    expect(y && SCROLLS(y.value), `an arranged column does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('op-stack', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('op-stack', blockDecl('flex-direction'))?.value).toBe('column')
+    expect(classWinner('op-stack', blockDecl('min-height'))?.value, 'a column that cannot shrink to its track').toBe('0')
+    expect(classWinner('op-stack', blockDecl('min-width'))?.value).toBe('0')
+    expect(classWinner('op-stack', blockVar('--cockpit-fill-min'))?.value).toMatch(/^min\(10em, ?100%\)$/)
+  })
+
+  it("its frames stack with FT's own gap, the stock rail's", () => {
+    expect(classWinner('op-stack', blockDecl('gap'))?.value).toBe(classWinner('cockpit-side', blockDecl('gap'))?.value)
+  })
+
+  it('the rail goes first by `order` only, through its own class, never every arranged column', () => {
+    expect(classWinner('op-stack-lead', blockDecl('order'))?.value).toBe('-1')
+    expect(classWinner('op-stack', blockDecl('order')), 'every arranged column would stand first').toBeNull()
   })
 })
 
@@ -613,6 +637,76 @@ describe('the rail-bound callsign card is a CEILING, and a small one', () => {
 
   it('scrolls inside itself past the ceiling, so the tail is reachable rather than clipped', () => {
     expect(blockOverflowY(recall()[0].body)).toBe('auto')
+  })
+})
+
+describe("in FT's arranged columns the card keeps its size, and the column scrolls instead", () => {
+  // The operator's pick (2026-10-07, "Card keeps its size"): an arranged column floors its feeds and boxes
+  // at a yielding 10em (`.op-stack`), which left the card the only item that could shrink, so in a crowded
+  // column it gave up its whole height, down to its padding, before the column scrolled. The host adds a
+  // second flat class to the card in the arranged branch only: the card keeps its stock bound and never
+  // shrinks, and the column, which is a scroller, takes the overflow. Computed for the element the arranged
+  // branch draws, which carries both classes (`recall-card cockpit-recall cockpit-recall-kept`).
+  const CARD = ['recall-card', 'cockpit-recall', 'cockpit-recall-kept']
+  const kept = () => RULES.filter((r) => r.selector === '.cockpit-recall-kept')
+
+  /** Cascade winner for an element carrying all of `classes`: a rule applies when its subject is made of
+   *  those classes only (this sheet's rules are one class each), by specificity, then the later sheet and
+   *  the later rule (classWinner's order). */
+  function cardWinner<T>(blockValue: (body: string) => T | null): { value: T; selector: string } | null {
+    const candidates = [
+      ...STYLES_RULES.map((r) => ({ r, rank: 0 })),
+      ...RULES.map((r) => ({ r, rank: 1 })),
+    ]
+    let win: { value: T; selector: string; spec: number; key: number } | null = null
+    for (const { r, rank } of candidates) {
+      const parts = r.selector.split(/\s*[>+~]\s*|\s+/)
+      const subject = parts[parts.length - 1]
+      if (parts.length !== 1 || !/^(\.[a-z][a-z0-9-]*)+$/.test(subject)) continue
+      if (!subject.slice(1).split('.').every((c) => CARD.includes(c))) continue
+      const v = blockValue(r.body)
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      const key = rank * 1e6 + r.order
+      if (!win || spec > win.spec || (spec === win.spec && key >= win.key)) win = { value: v, selector: r.selector, spec, key }
+    }
+    return win && { value: win.value, selector: win.selector }
+  }
+
+  /** The flex-shrink a block computes: the longhand, or the shorthand's second number (`flex: 0 0 auto`). */
+  const blockShrink = (body: string): string | null => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      const long = /^\s*flex-shrink\s*:\s*(\S+)\s*$/.exec(decl)
+      if (long) v = long[1]
+      const short = /^\s*flex\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+      if (short) {
+        const parts = short[1].trim().split(/\s+/)
+        v = parts[0] === 'none' ? '0' : parts.length > 1 && /^[\d.]+$/.test(parts[1]) ? parts[1] : '1'
+      }
+    }
+    return v
+  }
+
+  it('is one flat class, declared once', () => {
+    expect(kept(), 'the arranged card lost its rule: it shrinks to its padding in a crowded column again').toHaveLength(1)
+  })
+
+  it('never shrinks: its flex-shrink wins over the stock bound’s', () => {
+    const shrink = cardWinner(blockShrink)
+    expect(shrink?.selector).toBe('.cockpit-recall-kept')
+    expect(shrink?.value).toBe('0')
+  })
+
+  it('keeps the stock ceiling and its own scroll: the kept class bounds nothing differently', () => {
+    expect(cardWinner(blockDecl('max-height'))?.value).toBe(blockDecl('max-height')(RULES.find((r) => r.selector === '.cockpit-recall')!.body))
+    expect(cardWinner(blockOverflowY)?.value).toBe('auto')
+  })
+
+  it('is never a floor: no min-height and no height, from either sheet', () => {
+    expect(/(^|[;{\s])(min-)?height\s*:/.test(kept()[0]?.body ?? ''), 'a floor in a column is the crush mechanism reborn').toBe(false)
+    expect(cardWinner(blockDecl('min-height')), 'something gives the card a floor').toBeNull()
+    expect(cardWinner(blockDecl('height')), 'something gives the card a fixed height').toBeNull()
   })
 })
 
@@ -953,8 +1047,9 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
       '.layout.single.sstv-view',
     ])
     // …and Phone's LEFT SIDE (2026-10-03), whose column IS the scroller its frames sit in
-    // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above).
-    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col'])
+    // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above), and FT's arranged
+    // columns (2026-10-07), the same: `.op-stack` scrolls (computed in its block above).
+    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col', '.op-stack'])
     const offenders = [
       ...STYLES_RULES.filter(
         (r) => /--cockpit-fill-min\s*:/.test(r.body) && !ALLOWED_KNOB.has(r.selector),

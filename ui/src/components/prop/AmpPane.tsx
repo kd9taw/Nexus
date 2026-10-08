@@ -7,8 +7,9 @@
 //
 // TWO STATES, and keeping them apart is the whole honesty argument (settings.rs, `amp_port`:
 // "unconfigured shows nothing, configured-and-silent shows '—'"):
-//   • no amplifier CONFIGURED → `amp == null` → return null, and PaneFrame falls back to the
-//     Basic hint. A readout with no amplifier behind it would be an ornament.
+//   • no amplifier CONFIGURED → `amp == null` → no readout, only the box's one line saying where
+//     one is set up. A readout with no amplifier behind it would be an ornament. The line is
+//     drawn here: the frame is handed this component and never sees a null from it.
 //   • configured and NOT ANSWERING → the pane STAYS, every reading '—', with the reason named.
 //     RotorPane.tsx records what the other choice costs: `if (az == null) return null` deleted
 //     the rose, the slew and the STOP button the moment a readback failed.
@@ -108,8 +109,8 @@ function Cell({
 }
 
 export function AmpPane({ amp }: { amp: AmpStatus | null | undefined }) {
-  // No amplifier configured on the active radio. The Basic hint takes over.
-  if (amp == null) return null
+  // No amplifier configured on the active radio: the box's one line, and no readout.
+  if (amp == null) return <p className="pane-basic">{t('connect.pane.amp.basic')}</p>
 
   const linked = amp.linked
   // ⭐ EVERY READING IS GATED ON `linked`, not merely on its own presence. The backend already

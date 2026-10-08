@@ -23,6 +23,7 @@ import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 import { ParkStateReview } from './ParkStateReview'
+import { ConfirmationReview } from './ConfirmationReview'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -421,6 +422,10 @@ export function Logbook({
   // "Check park states": the operator-run review of hunted contacts whose park names another
   // state (ParkStateReview). Opened only by its button; it changes nothing until Apply.
   const [showParkStates, setShowParkStates] = useState(false)
+  // "Check confirmations": the operator-run review of LoTW confirmations and upload marks that LoTW's
+  // own records give another contact (ConfirmationReview). Opened only by its button; it downloads
+  // nothing until Check, and changes nothing until Apply.
+  const [showConfirmations, setShowConfirmations] = useState(false)
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for an irreversible wipe.
   const [showPurge, setShowPurge] = useState(false)
@@ -1841,6 +1846,16 @@ export function Logbook({
               {t('logbook.parkStates.button')}
             </button>
           )}
+          {!remoteLog && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => setShowConfirmations(true)}
+              title={t('logbook.confirmations.buttonTitle')}
+            >
+              {t('logbook.confirmations.button')}
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"
@@ -3124,6 +3139,7 @@ export function Logbook({
           the row that opened it can be recycled out from under the view while it is open. */}
       <QsoDetail qso={viewing} onClose={() => setViewing(null)} />
       <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
+      <ConfirmationReview open={showConfirmations} onClose={() => setShowConfirmations(false)} onApplied={load} />
     </section>
   )
 }

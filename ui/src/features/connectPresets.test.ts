@@ -136,9 +136,9 @@ describe('Frame + bar — the default view to try', () => {
       bottom2: ['rotor', 'amp'],
     })
     expect(A().slots.bottom3).toBe('scope')
-    // Placed, shown or behind a tab: all but the two boards, which are whole screens of their own.
+    // Placed, shown or behind a tab: all but the three boards, which are whole screens of their own.
     const placed = SLOT_IDS.flatMap((s) => slotBoxes({ slots: A().slots, tabs: A().tabs as Partial<Record<SlotId, PaneId[]>> }, s))
-    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota'])
+    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota', 'needed'])
   })
 
   it('reads back as itself whichever tab a slot shows: showing a tab is not an arrangement change', () => {
@@ -260,9 +260,9 @@ describe('the TV page’s Frame + bar: A without the boxes the page can never fi
   const A = CONNECT_PRESETS.frameBar
   // What the TV page is never served (tempo-app connect_web.rs RPC_ALLOWLIST), so the boxes that can never
   // fill there: the needs board (Chase, Chase Feed), a click-through (Selection), the contest calendar
-  // (get_contests), the station's devices (rotor, amplifier, band scope), and the two boards the page lends
-  // none of (tv/ConnectTv passes no spotsFeed and no otaBoard).
-  const NEVER_FILLS: readonly PaneId[] = ['chase', 'chaseFeed', 'selection', 'contests', 'rotor', 'amp', 'scope', 'spots', 'pota']
+  // (get_contests), the station's devices (rotor, amplifier, band scope), and the three boards the page lends
+  // none of (tv/ConnectTv passes no spotsFeed, no otaBoard and no neededBoard).
+  const NEVER_FILLS: readonly PaneId[] = ['chase', 'chaseFeed', 'selection', 'contests', 'rotor', 'amp', 'scope', 'spots', 'pota', 'needed']
   const placed = (l: ConnectLayout) =>
     SLOT_IDS.flatMap((s) => slotBoxes({ slots: { ...l.slots }, tabs: { ...(l.tabs as Partial<Record<SlotId, PaneId[]>>) } }, s))
 

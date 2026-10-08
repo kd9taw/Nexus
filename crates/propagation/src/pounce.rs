@@ -187,6 +187,7 @@ mod tests {
             call: call.to_string(),
             band: band.to_string(),
             mode: mode.to_string(),
+            exact_mode: None,
             freq_mhz: Some(14.025),
             tags,
             entity: "Bouvet Island".to_string(),

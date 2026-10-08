@@ -13,15 +13,17 @@
 //! * **A band change.** `band_changed` (`:12071-12076`) leaves the decoder's a7 table alone and
 //!   hides a7 decodes for 1.5 periods instead (`no_a7_decodes`, read in `readFromStdout` at
 //!   `:6184-6185`), "because they can be leftovers from the previous band". Nexus clears the
-//!   table, so no a7 decode from the old band reaches the next period here either.
-//! * **A mode change.** `switch_mode` (`:11662-11666`) does the same for "the previous mode".
+//!   table AND hides them, so no a7 decode from the old band reaches the next period here either.
+//! * **A mode change.** `switch_mode` (`:11662-11666`) does the same for "the previous mode",
+//!   after ANY mode switch: FT8 → FT4 → FT8 on one band shows no a7 decode until the hide ends.
 //!   The next period is decoded by the new mode's decoder.
+//! * **The period in flight** at a band or mode change is shown, as `readFromStdout` shows every
+//!   line it reads, coloured for the band it was received on (`m_currentBandPeriod`, held 0.6
+//!   periods after a dial change, `:4156-4165`). It reaches nothing else: WSJT-X sends it to no
+//!   logger or PSK Reporter (`:13401`, `:7458-7459`), and here it never reaches the sequencer, so
+//!   no line from the band or mode left starts, advances or logs a contact.
 //! * **FT1's IR-HARQ buffers** are Nexus's own; WSJT-X has nothing like them. What must hold is
 //!   that a reset asked for during a decode is made before the next FT1 decode reads them.
-//!
-//! Where Nexus differs, and did before: on a band or mode change it drops the decodes of the
-//! period in flight (its slot numbering and band belong to the context being left), where WSJT-X
-//! shows them.
 //!
 //! The decode in flight is a real one: the recorded off-air FT8 period in
 //! `crates/ft8/tests/fixtures/ft8_sample.wav`. The a7 table is shown carried, or cleared, with
@@ -32,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::dto::Tier;
+use tempo_app::dto::{LateDecodes, Tier};
 use tempo_app::engine::{
     engine_lock, run_decode_job, DecodeApplied, DecodePass, DecodeResult, Engine,
 };
@@ -220,6 +222,10 @@ struct Outcome {
     /// The period in flight's decodes, and what folding them in did.
     in_flight: Vec<Row>,
     applied: DecodeApplied,
+    /// What the screen then has: the live feed's messages, and a period shown from before a band
+    /// or mode change.
+    live: Vec<String>,
+    late: Option<LateDecodes>,
 }
 
 /// Run the period `audio` as `slot` with `act` made on the engine `when` asked.
@@ -252,11 +258,30 @@ fn period_with(
     };
     let in_flight = rows(&result);
     let applied = engine_lock(e).apply_decode_result(result);
+    let snap = engine_lock(e).snapshot();
     Outcome {
         held,
         in_flight,
         applied,
+        live: snap.recent_decodes.into_iter().map(|d| d.message).collect(),
+        late: snap.late_decodes,
     }
+}
+
+/// The messages of a period shown from before a band or mode change.
+fn late_messages(late: &Option<LateDecodes>) -> Vec<String> {
+    late.iter()
+        .flat_map(|l| l.rows.iter().map(|d| d.message.clone()))
+        .collect()
+}
+
+/// The messages of `rows` but its a7 decodes: what WSJT-X shows of a period in the 1.5 periods
+/// after a band or mode change.
+fn without_a7(rows: &[Row]) -> Vec<String> {
+    rows.iter()
+        .filter(|(_, nap)| *nap != 7)
+        .map(|(m, _)| m.clone())
+        .collect()
 }
 
 /// The continuation slot 3 carries: outside the 2000-2900 Hz search band, so only the a7 replay
@@ -360,6 +385,14 @@ fn a_double_click_during_a_decode_leaves_that_period_and_the_next_as_wsjtx_has_t
     assert_eq!(during.next, idle.next);
     assert_eq!(during.tx_after, idle.tx_after);
     assert!(during.tx_after.is_some(), "the QSO is running");
+    // On screen: a double-click is no band or mode change, so the period in flight is the live
+    // feed itself, not a period shown from before one.
+    assert!(
+        during.period.live.iter().any(|m| m == "CQ F5RXL IN94") && during.period.late.is_none(),
+        "the period in flight is the live feed: live {:?}, late {:?}",
+        during.period.live,
+        during.period.late
+    );
 }
 
 #[test]
@@ -382,9 +415,25 @@ fn a_band_change_during_a_decode_clears_the_a7_table_before_the_next_decode() {
         "control: {:?}",
         stayed.next_a7
     );
-    // That period: dropped, as before (WSJT-X shows it).
-    assert!(matches!(during.period.applied, DecodeApplied::Stale));
-    assert!(matches!(idle.period.applied, DecodeApplied::Stale));
+    // That period: shown, as WSJT-X shows it, under the band, dial and mode it was heard on and
+    // never under 40 m; and only there, so nothing of it is in the live feed of 40 m.
+    for o in [&during.period, &idle.period] {
+        let late = o.late.as_ref().expect("the period in flight is shown");
+        assert_eq!(
+            (late.band.as_str(), late.dial_mhz, late.tier),
+            ("20m", 14.074, Tier::Ft8),
+            "the period in flight is tagged with what it was heard on"
+        );
+        assert_eq!((late.period_start_ms, late.slot), (15_000, 2));
+        assert_eq!(late_messages(&o.late), without_a7(&o.in_flight));
+        assert!(
+            late_messages(&o.late).iter().any(|m| m == "CQ F5RXL IN94")
+                && matches!(o.applied, DecodeApplied::Late { n } if n >= 18),
+            "the recorded period is shown in full: {:?}",
+            late_messages(&o.late)
+        );
+        assert!(o.live.is_empty(), "20 m lines in 40 m's feed: {:?}", o.live);
+    }
     // The next period: no a7 decode from the band left behind, as WSJT-X shows none.
     assert!(
         !during.next_a7.iter().any(|(m, _)| m == CONTINUATION),
@@ -402,31 +451,250 @@ fn a_tier_change_during_a_decode_decodes_the_next_period_with_the_new_decoder() 
         wipe_process_modem_state();
         let e = Arc::new(Mutex::new(operator()));
         let period = period_with(&e, &ft8_recorded(), 2, when, |e| e.set_tier(Tier::Ft4));
-        let (next, _) = decode(&e, &ft4_recorded(), 5);
-        (period, next)
+        // The capture under way at the change was cut in two and is dropped; the FT4 period after
+        // it is the first of the new mode.
+        engine_lock(&e).begin_slot_capture();
+        let (next, applied) = decode(&e, &ft4_recorded(), 5);
+        assert!(matches!(applied, DecodeApplied::Boundary { .. }));
+        let gave_way = engine_lock(&e).snapshot().late_decodes.is_none();
+        (period, next, gave_way)
     };
-    let (during, during_next) = run(When::DuringTheDecode);
-    let (idle, idle_next) = run(When::DecoderIdle);
+    let (during, during_next, during_gave_way) = run(When::DuringTheDecode);
+    let (idle, idle_next, _) = run(When::DecoderIdle);
 
     assert!(
         during.held < NO_WAIT,
         "the tier change held the Engine lock {:?} while the decode ran",
         during.held
     );
-    // The FT8 period in flight was decoded by the FT8 decoder, then dropped, as before.
+    // The FT8 period in flight was decoded by the FT8 decoder, and is shown under FT8 on 20 m at
+    // 14.074 (not under FT4, whose dial is 14.080), sorting among the FT4 rows by its boundary in
+    // FT4's slot numbering. Only there: none of it is in FT4's live feed.
     assert!(
         during.in_flight.iter().any(|(m, _)| m == "CQ F5RXL IN94"),
         "the FT8 decoder finished the FT8 period: {:?}",
         during.in_flight
     );
-    assert!(matches!(during.applied, DecodeApplied::Stale));
-    assert!(matches!(idle.applied, DecodeApplied::Stale));
+    let late = during
+        .late
+        .as_ref()
+        .expect("the FT8 period in flight is shown");
+    assert_eq!(
+        (late.band.as_str(), late.dial_mhz, late.tier),
+        ("20m", 14.074, Tier::Ft8)
+    );
+    assert_eq!((late.period_start_ms, late.slot), (15_000, 4));
+    assert!(late.rows.iter().all(|r| r.tier == Tier::Ft8));
+    // Made with the decoder idle, the change puts the FT4 decoder in before the FT8 period is
+    // decoded, so that run shows whatever the FT4 decoder made of it, and only as a late period.
+    for o in [&during, &idle] {
+        assert_eq!(late_messages(&o.late), without_a7(&o.in_flight));
+        assert!(matches!(o.applied, DecodeApplied::Late { .. }));
+        assert!(o.live.is_empty(), "FT8 lines in FT4's feed: {:?}", o.live);
+    }
+    assert!(during_gave_way, "the first FT4 period replaces the FT8 one");
     // The next period is FT4, and the FT4 decoder is the one that decodes it.
     assert!(
         during_next.len() >= 14 && during_next.iter().any(|(m, _)| m == "CQ RU N9OY EN43"),
         "the FT4 period decodes in full: {during_next:?}"
     );
     assert_eq!(during_next, idle_next);
+}
+
+/// WSJT-X 3.0.2 hides a7 decodes for 1.5 periods after ANY mode switch (`switch_mode`,
+/// `widgets/mainwindow.cpp:11664-11666`), an FT8 → FT4 → FT8 change on one band included, where
+/// Nexus used to leave the a7 table, and what it replays, alone. The table here still holds slot
+/// 1's W1AW, so the next FT8 period's continuation comes back through the a7 replay. The engine
+/// that decodes it searches 2000-2900 Hz, so the a7 replay is its only way to that line, and what
+/// it then shows is what the hide decides.
+#[test]
+fn an_ft8_ft4_ft8_switch_hides_a7_decodes_for_one_and_a_half_periods() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (wide, narrow) = session_audio();
+    // What the decoder found in the next FT8 period, and what the screen then shows, after
+    // `switch` on the engine that decodes it.
+    let next_period = |switch: &dyn Fn(&mut Engine)| -> (Vec<Row>, Vec<String>) {
+        wipe_process_modem_state();
+        let seed = Arc::new(Mutex::new(operator()));
+        let e = Arc::new(Mutex::new(chain("KD9TAW", 2000, 2900)));
+        let (slot1, _) = decode(&seed, &wide, 1);
+        assert!(
+            slot1.iter().any(|(m, _)| m == "KD9TAW W1AW FN31"),
+            "slot 1 decodes directly: {slot1:?}"
+        );
+        {
+            let mut e = engine_lock(&e);
+            switch(&mut e);
+            // The next capture begins after the switch, as the radio loop's next boundary has it.
+            e.begin_slot_capture();
+        }
+        let (decoded, applied) = decode(&e, &narrow, 3);
+        assert!(matches!(applied, DecodeApplied::Boundary { .. }));
+        let shown = engine_lock(&e)
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .map(|d| d.message)
+            .collect();
+        (decoded, shown)
+    };
+    let ft8_ft4_ft8 = |e: &mut Engine| {
+        e.set_tier(Tier::Ft4);
+        e.set_tier(Tier::Ft8);
+    };
+
+    // The control: with no switch the a7 continuation is decoded and shown.
+    let (decoded, shown) = next_period(&|_| {});
+    assert!(has_a7_continuation(&decoded), "control: {decoded:?}");
+    assert!(
+        shown.iter().any(|m| m == CONTINUATION),
+        "control: {shown:?}"
+    );
+    // FT8 → FT4 → FT8 inside 1.5 periods: the decoder still finds it, and the screen does not
+    // show it, as 3.0.2's does not.
+    let (decoded, shown) = next_period(&ft8_ft4_ft8);
+    assert!(
+        has_a7_continuation(&decoded),
+        "the decoder found it: {decoded:?}"
+    );
+    assert!(
+        !shown.iter().any(|m| m == CONTINUATION),
+        "an a7 decode WSJT-X 3.0.2 hides is on screen: {shown:?}"
+    );
+    // On 3.0.2's clock the first timer to fire ends the hide: here the FT4 switch's, 1.5 FT4
+    // periods (11.25 s) after it, not 1.5 FT8 periods after the switch back. Still hidden 5 s
+    // before it (the margin covers the decode's own length)…
+    let (decoded, shown) = next_period(&|e| {
+        ft8_ft4_ft8(e);
+        e.age_a7_hide(Duration::from_millis(11_250 - 5_000));
+    });
+    assert!(has_a7_continuation(&decoded), "{decoded:?}");
+    assert!(
+        !shown.iter().any(|m| m == CONTINUATION),
+        "the a7 decode was shown before 1.5 FT4 periods: {shown:?}"
+    );
+    // …and shown again once it has fired.
+    let (decoded, shown) = next_period(&|e| {
+        ft8_ft4_ft8(e);
+        e.age_a7_hide(Duration::from_millis(11_250));
+    });
+    assert!(has_a7_continuation(&decoded), "{decoded:?}");
+    assert!(
+        shown.iter().any(|m| m == CONTINUATION),
+        "the a7 decode stayed hidden after 1.5 FT4 periods: {shown:?}"
+    );
+}
+
+/// The QSO as the screen shows it (state, DX call, next message), how many contacts were logged,
+/// and whether TX is enabled.
+type QsoNow = (Option<(String, Option<String>, Option<String>)>, u32, bool);
+
+fn qso_now(e: &Engine) -> QsoNow {
+    let s = e.snapshot();
+    (
+        s.qso.map(|q| (q.state, q.dxcall, q.tx_now)),
+        s.logged_tick,
+        e.tx_enabled(),
+    )
+}
+
+/// WSJT-X's auto-sequencer reads every line it shows (`auto_sequence`, `:7434`), so after a knob
+/// QSY, where nothing turns Enable Tx off (`band_changed` does only for a band picked from its
+/// menu, `:12089-12097`), it would answer, advance or log from a line heard on the band left.
+/// That part is not built: the period in flight is shown, and nothing else reads it.
+#[test]
+fn no_line_from_the_band_or_mode_left_starts_advances_or_logs_a_qso() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    type Act = fn(&mut Engine);
+    // What the line does, the line the operator worked W1AW from (decoded the period before), how
+    // the QSO got there, and the line heard in the period in flight.
+    let cases: [(&str, Option<&str>, Act, &str); 3] = [
+        (
+            "starts",
+            None,
+            |e| e.set_mode("qso-run").expect("Call CQ"),
+            "KD9TAW W1AW FN31",
+        ),
+        (
+            "advances",
+            Some("CQ W1AW FN31"),
+            |e| {
+                e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-10), Some(1500.0))
+                    .expect("working W1AW");
+            },
+            "KD9TAW W1AW -10",
+        ),
+        (
+            "logs",
+            Some("KD9TAW W1AW -10"),
+            |e| {
+                e.call_station_ctx(
+                    "W1AW",
+                    None,
+                    Some("KD9TAW W1AW -10"),
+                    Some(-12),
+                    Some(1500.0),
+                )
+                .expect("working W1AW");
+            },
+            "KD9TAW W1AW RR73",
+        ),
+    ];
+    let changes: [(&str, Act); 2] = [
+        ("a band change", |e| e.set_frequency(7.074, "40m", "USB")),
+        ("a mode change", |e| e.set_tier(Tier::Ft4)),
+    ];
+    for (does, worked_from, setup, line) in cases {
+        let audio = frame(line, 1500.0, 0x0057_A47D);
+        // The QSO before the period's fold (after the change, if any) and after it, and the
+        // period's outcome.
+        let run = |change: Option<Act>| {
+            wipe_process_modem_state();
+            let e = Arc::new(Mutex::new(operator()));
+            if let Some(heard) = worked_from {
+                let (rows, applied) = decode(&e, &frame(heard, 1500.0, 0x2452_1057), 1);
+                assert!(
+                    rows.iter().any(|(m, _)| m == heard)
+                        && matches!(applied, DecodeApplied::Boundary { .. }),
+                    "premise: {heard} is decoded and folded: {rows:?}"
+                );
+            }
+            setup(&mut engine_lock(&e));
+            let mut before = None;
+            // W1AW's next over, two periods on, as a station on the other T/R period sends it.
+            let o = period_with(&e, &audio, 3, When::DuringTheDecode, |e| {
+                if let Some(change) = change {
+                    change(e);
+                }
+                before = Some(qso_now(e));
+            });
+            let after = qso_now(&engine_lock(&e));
+            (before.expect("the action ran"), after, o)
+        };
+        // The control: with no change the line does what it says.
+        let (before, after, o) = run(None);
+        assert!(
+            o.in_flight.iter().any(|(m, _)| m == line),
+            "premise: {line} decodes: {:?}",
+            o.in_flight
+        );
+        assert_ne!(
+            before, after,
+            "control: with no change, {line} {does} a QSO"
+        );
+        for (what, change) in changes {
+            let (before, after, o) = run(Some(change));
+            assert!(
+                late_messages(&o.late).iter().any(|m| m == line),
+                "after {what}, {line} is shown: {:?}",
+                o.late
+            );
+            assert_eq!(
+                before, after,
+                "after {what}, {line}, heard before it, {does} a QSO"
+            );
+        }
+    }
 }
 
 /// An FT1 RV0 frame too weak to decode alone and the RV1 retransmission that recovers it through

@@ -38,6 +38,12 @@
 //!   beside the app's diagnostic log for a crash. A clean disconnect writes it back
 //!   ([`Routing::restore_on_disconnect`]) unless the operator has changed the flag since; the next
 //!   connect to the same radio writes it back first if it was not ([`Routing::step`]).
+//! - **Never a silent over.** Native audio turned off inside the guard before a boundary leaves
+//!   the radio on the DAX Nexus wrote until the next quiet point, with nothing feeding it
+//!   ([`Routing::leaves_dax`]); the shim refuses a digital key until the operator's setting is
+//!   back (`super::shim`). A voice key the same way, as long as the radio is on that DAX in place
+//!   of the mic the routing wants back ([`Routing::leaves_voice_on_dax`]): right after a digital
+//!   mode as well.
 //!
 //! Nexus's own design, not a port.
 
@@ -101,7 +107,8 @@ pub struct View {
 pub enum Step {
     /// `transmit set dax=<value>`, and why.
     Write { dax: bool, why: Why },
-    /// `stream create type=dax_tx`: DAX is wanted and our transmit stream does not exist yet.
+    /// `stream create type=dax_tx`: DAX is wanted and our transmit stream does not exist yet,
+    /// whether or not the radio already takes DAX.
     CreateDaxTx,
 }
 
@@ -247,6 +254,12 @@ impl Routing {
                 }
             }
         };
+        // DAX for Nexus's own audio: its transmit stream first, whatever the flag says now. A
+        // radio already on DAX (SmartSDR's own DAX switch sets the same radio-wide flag) still
+        // needs it, or nothing carries the over.
+        if native_audio && target && !view.dax_tx_stream {
+            return Some(Step::CreateDaxTx);
+        }
         if target == radio {
             self.applied = true;
             return None;
@@ -306,6 +319,24 @@ impl Routing {
             Some(_) => Restore::Nothing,
             None => Restore::Later,
         }
+    }
+
+    /// Whether Nexus's own write (this connection's, or one a previous session left) has the
+    /// radio taking its transmit audio from DAX in place of the operator's own setting, its mic:
+    /// what a disconnect now would put back. With native audio off nothing feeds that DAX, so a
+    /// digital over keyed then would go out silent (`super::shim`).
+    pub fn leaves_dax(&self, view: &View) -> bool {
+        self.restore_on_disconnect(view) == Restore::Write(false)
+    }
+
+    /// Whether a voice over keyed now would leave on DAX in place of the operator's mic: Nexus's
+    /// own write still has the radio on DAX ([`Self::leaves_dax`]), and the routing does not want
+    /// DAX for voice. It does with native audio on while the stream's browser voice is live, as at
+    /// its last decision ([`wanted_source`]): that voice rides DAX. So right after the transmit
+    /// slice leaves a digital mode for Phone, or native audio goes off, until the mic's write.
+    pub fn leaves_voice_on_dax(&self, view: &View, native_audio: bool) -> bool {
+        let browser_voice = self.decided.as_ref().is_some_and(|i| i.browser_voice);
+        self.leaves_dax(view) && !(native_audio && browser_voice)
     }
 }
 
