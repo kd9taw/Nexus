@@ -1083,11 +1083,38 @@ use tempo_core::message::{same_call, Msg};
 /// (`get_snapshot`) and the radio loop (waterfall feed) during the ~1–2 s decode.
 ///
 /// The `Arc`/`Mutex` is created ONCE per [`Engine`] and never replaced; a tier /
-/// source switch swaps the boxed contents *under the lock* (waiting for any decode
-/// in flight). That one stable lock is the single serialization point for ALL
-/// process-global decode FFI state (the WSJT-X a7 table, the packjt77 hash table,
-/// and the FT1 IR-HARQ buffers), so nothing races the C decoder.
+/// source switch swaps the boxed contents *under the lock* — at once when no decode
+/// holds it, else by that decode as it lets go (`NextSource`). That one stable lock
+/// is the single serialization point for ALL process-global decode FFI state (the
+/// WSJT-X a7 table, the packjt77 hash table, and the FT1 IR-HARQ buffers), so nothing
+/// races the C decoder.
 pub type SharedSource = Arc<Mutex<Box<dyn SignalSource>>>;
+
+/// A decoder the engine asked for while a decode held [`SharedSource`]'s lock. That
+/// decode swaps it in before it lets go of the lock (see [`run_decode_job`]), the point
+/// the swap was made when the engine waited for the lock itself — with the Engine lock
+/// held, which stopped the radio loop, the thing that unkeys the radio, for the rest
+/// of the decode.
+type NextSource = Arc<Mutex<Option<Box<dyn SignalSource>>>>;
+
+/// An FT1 IR-HARQ reset asked for while a decode held the decoder or the modem. The next
+/// native decode makes it before it reads the buffers. Process-wide, as the buffers are.
+static HARQ_RESET_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The same for the FT8 a7 table.
+static A7_RESET_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Clear the FT8 a7 table now when no decode is in the modem, else leave the clear to the next
+/// native decode, which makes it before it reads the table — never waiting for the decode. Every
+/// local path that clears the table (a band, radio or tier change, the end of a Tune, an ATU
+/// tune-up) passes this where it passed `modes::reset_ft8_a7`, which waited for the modem with
+/// the Engine lock held.
+fn reset_ft8_a7_without_waiting() {
+    match modes::Ft8A7ResetGuard::try_acquire() {
+        Some(modem) => modem.reset(),
+        None => A7_RESET_OWED.store(true, std::sync::atomic::Ordering::SeqCst),
+    }
+}
 
 /// Lock a [`SharedSource`], RECOVERING from poison instead of propagating it —
 /// the same strategy as `tempo_fast_sys::modem_lock()` and the audio-device
@@ -1104,9 +1131,25 @@ pub fn source_lock(s: &SharedSource) -> std::sync::MutexGuard<'_, Box<dyn Signal
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// [`source_lock`] without waiting: `None` while a decode holds the decoder.
+fn try_source_lock(s: &SharedSource) -> Option<std::sync::MutexGuard<'_, Box<dyn SignalSource>>> {
+    match s.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+/// Lock a [`NextSource`], recovering from poison as [`source_lock`] does.
+fn next_source_lock(n: &NextSource) -> std::sync::MutexGuard<'_, Option<Box<dyn SignalSource>>> {
+    n.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The serialized decoder effects of a native operating transition. Remote
-/// commits already own this mutex; local verbs acquire it at the same points
-/// they always have. Neither path skips the reset or replaces the shared mutex.
+/// commits already own this mutex; local verbs ask for it at the same points
+/// they always have, and leave the effect to a decode holding it rather than wait
+/// ([`Engine::install_source`], [`Engine::harq_reset_locked`]). Neither path skips
+/// the reset or replaces the shared mutex.
 enum DecoderMutation {
     Install(Box<dyn SignalSource>),
     ResetHarq,
@@ -1565,6 +1608,9 @@ enum DecodeBranch {
 /// [`DecodeResult`] so the engine can fold it (`process_decodes` / WAV) with no copy.
 pub struct DecodeJob {
     source: SharedSource,
+    /// A decoder asked for while this or an earlier decode held the lock: swapped in
+    /// before the decode and again before the lock is let go.
+    next_source: NextSource,
     frame: Vec<f32>,
     branch: DecodeBranch,
     // A-priori request context — native branch only (tempodeep/companion ignore it).
@@ -1859,6 +1905,7 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
 fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
     let DecodeJob {
         source,
+        next_source,
         frame,
         branch,
         nfa,
@@ -1882,6 +1929,12 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
     // against the engine thread's harq_reset / seed_hash_table / source swaps.
     let mut src = source_lock(&source);
+    // A decoder left for a decode that never reached its hand-over below (a contained
+    // panic unwinds past it) decodes this one, rather than the decoder it replaced.
+    let waiting = next_source_lock(&next_source).take();
+    if let Some(decoder) = waiting {
+        *src = decoder;
+    }
     // The decode itself. Run directly when the job carries no per-chain context
     // (the single-radio path, unchanged), or inside `DecoderCtx::scoped` when it
     // does — see the `match ctx` below.
@@ -1900,9 +1953,15 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         }
         DecodeBranch::Native => {
             // IR-HARQ off (or non-FT1 mode): clear buffered RV0 so nothing
-            // cross-frame-combines. Exactly where decode_frame reset it.
-            if harq_reset {
+            // cross-frame-combines. Exactly where decode_frame reset it. A reset an
+            // operator action asked for while a decode ran is made here too, before
+            // this decode reads the buffers; likewise the a7 table's.
+            let owed = HARQ_RESET_OWED.swap(false, std::sync::atomic::Ordering::SeqCst);
+            if harq_reset || owed {
                 tempo_fast::harq_reset();
+            }
+            if A7_RESET_OWED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                modes::reset_ft8_a7();
             }
             let iwave = channel::capture_to_i16(&frame);
             let req = modes::DecodeRequest {
@@ -1945,7 +2004,15 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         // and pre-existing in shape, but it must be closed before two chains transmit.
         Some(ctx) => ctx.lock().unwrap_or_else(|e| e.into_inner()).scoped(decode),
     };
+    // A decoder asked for while this decode ran takes over before the lock is let go.
+    // The lock on it is held until the decoder's is released, so one asked for in
+    // between finds the decoder free and is swapped in by the asker instead.
+    let mut next = next_source_lock(&next_source);
+    if let Some(decoder) = next.take() {
+        *src = decoder;
+    }
     drop(src);
+    drop(next);
     DecodeResult {
         decodes,
         frame,
@@ -2498,6 +2565,9 @@ pub struct Engine {
     /// is stable for the engine's lifetime; a tier/source switch swaps the boxed
     /// contents under the lock.
     source: SharedSource,
+    /// The decoder a switch asked for while a decode held [`source`](Self::source)'s
+    /// lock, for that decode to swap in as it lets go. See [`Engine::install_source`].
+    next_source: NextSource,
     /// The decoder's display label, CACHED so [`snapshot`](Engine::snapshot) never
     /// touches [`source`](Self::source)'s lock. Written ONLY by
     /// [`install_source`](Engine::install_source) — see there for why.
@@ -5158,6 +5228,7 @@ impl Engine {
             harq_rescues: 0,
             // Default native source = FT8 (matches the default link tier).
             source: Arc::new(Mutex::new(Box::new(default_source))),
+            next_source: NextSource::default(),
             source_label: default_source_label,
             decode_epoch: 0,
             capture_epoch: 0,
@@ -6031,8 +6102,8 @@ impl Engine {
         if self.source_kind == SourceKind::Native && self.tier_mode_kind(self.tier()) != kind_before
         {
             if let Some(kind) = self.tier_mode_kind(self.tier()) {
-                // Swap UNDER the lock (waits out any decode in flight) and clear the
-                // context, exactly as `set_tier` does — same reasons. The epoch bump
+                // Swap UNDER the lock (now, or by a decode in flight as it lets go) and
+                // clear the context, exactly as `set_tier` does — same reasons. The epoch bump
                 // inside is the load-bearing part: a decode already dispatched at the
                 // OLD period would otherwise land after the swap and be folded in
                 // with slot indices that no longer mean anything.
@@ -6369,13 +6440,13 @@ impl Engine {
     /// `apply_settings`), so swinging radios mid-session never resets the operator to Chat. No-op if
     /// `id` isn't a configured radio or is already active.
     pub fn set_active_radio(&mut self, id: u32) {
-        self.set_active_radio_with_reset(id, modes::reset_ft8_a7);
+        self.set_active_radio_with_reset(id, reset_ft8_a7_without_waiting);
     }
 
     /// The same native handoff after its owner has acquired decoder serialization
     /// without waiting. The owner must separately validate Remote authority and
     /// hardware completion; the decoder guard grants neither. Local selection
-    /// retains its existing blocking reset at the same point in the lifecycle.
+    /// makes the same reset at the same point, without waiting for a decode.
     pub fn set_active_radio_with_decoder_guard(&mut self, id: u32, guard: modes::Ft8A7ResetGuard) {
         self.set_active_radio_with_reset(id, || guard.reset());
     }
@@ -6686,7 +6757,7 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
-        self.tune_dial_with_reset(dial_mhz, band, mode, origin, modes::reset_ft8_a7);
+        self.tune_dial_with_reset(dial_mhz, band, mode, origin, reset_ft8_a7_without_waiting);
     }
 
     fn tune_dial_with_reset(
@@ -7021,7 +7092,7 @@ impl Engine {
                 self.app.clear_stations();
                 // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
                 // them as AP hypotheses on the new band would seed wrong-call decodes.
-                modes::reset_ft8_a7();
+                reset_ft8_a7_without_waiting();
                 // Context halt, exactly like the app-commanded band change above: spinning
                 // the rig's own VFO across a band edge must not take the operator's mic away.
                 self.halt_tx_for_context_change("band change at the rig");
@@ -7702,7 +7773,7 @@ impl Engine {
     /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
     /// bands, and the TX lockout guards the air regardless.
     pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
-        self.pick_band_with_reset(band, mode, modes::reset_ft8_a7);
+        self.pick_band_with_reset(band, mode, reset_ft8_a7_without_waiting);
     }
 
     fn pick_band_with_reset(&mut self, band: &str, mode: Option<&str>, reset: impl FnMut()) {
@@ -7758,7 +7829,12 @@ impl Engine {
     // Remote entry shares every native section/memory/power decision but cannot
     // acquire transmit authority as a side effect. Local entry keeps its latch.
     fn set_operating_mode_with_arming(&mut self, mode: &str, follow_freq: bool, arm_manual: bool) {
-        self.set_operating_mode_with_reset(mode, follow_freq, arm_manual, modes::reset_ft8_a7);
+        self.set_operating_mode_with_reset(
+            mode,
+            follow_freq,
+            arm_manual,
+            reset_ft8_a7_without_waiting,
+        );
     }
 
     fn set_operating_mode_with_reset(
@@ -8094,7 +8170,7 @@ impl Engine {
             band,
             split_up_khz,
             arm_manual,
-            modes::reset_ft8_a7,
+            reset_ft8_a7_without_waiting,
         );
     }
 
@@ -10211,7 +10287,7 @@ impl Engine {
     /// Still at the command rather than at its end: the tune-up is one rig command whose end
     /// Nexus never sees. Other sections are untouched, for the reasons given at the Tune release.
     pub fn note_atu_tune_started(&mut self) {
-        self.note_atu_tune_started_with_reset(modes::reset_ft8_a7);
+        self.note_atu_tune_started_with_reset(reset_ft8_a7_without_waiting);
     }
 
     fn note_atu_tune_started_with_reset(&mut self, reset: impl FnOnce()) {
@@ -12971,7 +13047,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         area: &str,
         decoder: impl FnMut(&mut Self, DecoderMutation),
     ) {
-        self.set_area_with_decoder_and_reset(area, decoder, modes::reset_ft8_a7);
+        self.set_area_with_decoder_and_reset(area, decoder, reset_ft8_a7_without_waiting);
     }
 
     fn set_area_with_decoder_and_reset(
@@ -13350,11 +13426,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// `tempo_fast::harq_reset()` serialized behind the decoder lock, so it can never race
     /// the worker thread's in-flight decode (which uses the same process-global FT1
-    /// IR-HARQ buffers). Ordinary engine-thread resets acquire here; a native
+    /// IR-HARQ buffers). Ordinary engine-thread resets come here; a native
     /// transition already holding the guard uses `harq_reset_serialized`. The
     /// decode path's reset runs under this same lock in [`run_decode_job`].
+    ///
+    /// ⛔ NEVER WAITS FOR THE DECODE. A decode holds the decoder lock, and the modem lock
+    /// inside it, for its whole length, and every caller holds the Engine lock: a
+    /// double-click, Call CQ, and on the radio loop's own thread a logger's UDP Reply and a
+    /// Chat QSY. Waiting here stopped the radio loop, the only thing that unkeys the radio,
+    /// for the rest of the decode. So the reset is made now when both locks are free, and
+    /// otherwise owed to the next native decode, which makes it before it reads the buffers:
+    /// no decode reads them in between, so every decode sees what it saw when this waited.
     fn harq_reset_locked(&self) {
-        Self::harq_reset_serialized(&source_lock(&self.source));
+        let decoder = try_source_lock(&self.source);
+        match (decoder, modes::Ft8A7ResetGuard::try_acquire()) {
+            (Some(_decoder), Some(mut modem)) => modem.reset_tempo_harq_held(),
+            _ => HARQ_RESET_OWED.store(true, std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     fn harq_reset_serialized(_source: &std::sync::MutexGuard<'_, Box<dyn SignalSource>>) {
@@ -13834,7 +13922,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tier: Tier,
         install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
     ) {
-        self.set_tier_with_installer_and_reset(tier, install, modes::reset_ft8_a7);
+        self.set_tier_with_installer_and_reset(tier, install, reset_ft8_a7_without_waiting);
     }
 
     fn set_tier_with_installer_and_reset(
@@ -13993,9 +14081,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // clobber it; the tier still updates for TX / display.
         if self.source_kind == SourceKind::Native {
             if let Some(kind) = self.tier_mode_kind(tier) {
-                // Swap the boxed decoder UNDER the lock (waits for any decode in
-                // flight) so the stable serialization mutex is preserved and no
-                // job can be reading the old mode as it's replaced.
+                // Swap the boxed decoder UNDER the lock (now, or by a decode in
+                // flight as it lets go) so the stable serialization mutex is preserved
+                // and no job can be reading the old mode as it's replaced.
                 install(self, Box::new(NativeSource::from_kind(kind)));
             }
         }
@@ -14069,11 +14157,34 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// Routing every swap through here is what keeps the cache honest: the label
     /// is derived from the box that is about to be installed, so a new swap site
-    /// cannot forget it. The lock IS taken here — this is the swap path, which
-    /// already waits out any decode in flight, and that is unchanged.
+    /// cannot forget it.
+    ///
+    /// ⛔ AND THE SWAP NEVER WAITS FOR A DECODE. This used to take the decoder lock and
+    /// so wait out any decode in flight, with the Engine lock held by every caller (a
+    /// tier, source or area change, a settings save that changes the mode, a JS8 speed
+    /// change): the radio loop, the only thing that unkeys the radio, stood still for
+    /// the rest of the decode. Now the box is swapped at once when the lock is free, and
+    /// otherwise left in [`NextSource`] for the decode holding the lock to swap in before
+    /// it lets go — the moment the swap used to land, with nothing waiting for it. Every
+    /// caller also clears the decode context, so the decode in flight lands stale either
+    /// way, as it always did.
     fn install_source(&mut self, src: Box<dyn SignalSource>) {
         let source = Arc::clone(&self.source);
-        self.install_source_into(&mut source_lock(&source), src);
+        let next_source = Arc::clone(&self.next_source);
+        // Held while the decoder lock is tried: a decode letting go takes this lock
+        // before it releases the decoder (`run_decode_job`), so it cannot miss a box
+        // left here.
+        let mut next = next_source_lock(&next_source);
+        match try_source_lock(&source) {
+            Some(mut slot) => {
+                drop(next);
+                self.install_source_into(&mut slot, src);
+            }
+            None => {
+                self.source_label = src.label();
+                *next = Some(src);
+            }
+        };
     }
 
     fn install_source_into(
@@ -14082,6 +14193,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         src: Box<dyn SignalSource>,
     ) {
         self.source_label = src.label();
+        // Newer than any box still waiting for a decode to let go.
+        *next_source_lock(&self.next_source) = None;
         *slot = src;
     }
 
@@ -16516,7 +16629,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn set_tune(&mut self, on: bool) {
-        self.set_tune_with_reset(on, modes::reset_ft8_a7);
+        self.set_tune_with_reset(on, reset_ft8_a7_without_waiting);
     }
 
     fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
@@ -22647,6 +22760,7 @@ contact yourself."
 
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
+        let next_source = self.next_source.clone();
         // The epoch stamped here decides whether the RESULT still applies (see
         // `apply_decode_result`). Boundary/Early decode the slot capture in progress,
         // which began under `capture_epoch` — a mid-slot band change bumps
@@ -22665,6 +22779,7 @@ contact yourself."
         if self.source_kind == SourceKind::Companion {
             return DecodeJob {
                 source,
+                next_source,
                 frame,
                 branch: DecodeBranch::Companion,
                 nfa: 0,
@@ -22689,6 +22804,7 @@ contact yourself."
             // DX1 full-passband acquisition — its own robust path, no AP context.
             return DecodeJob {
                 source,
+                next_source,
                 frame,
                 branch: DecodeBranch::TempoDeep,
                 nfa: 0,
@@ -22799,6 +22915,7 @@ contact yourself."
         };
         DecodeJob {
             source,
+            next_source,
             frame,
             branch: DecodeBranch::Native,
             nfa,
@@ -60052,5 +60169,357 @@ mod dedup_gate_tests {
             e.stored_log().last().unwrap().ota.their_ref.as_deref(),
             Some("US-0001")
         );
+    }
+}
+
+/// Nothing the operator does waits for a decode in flight with the Engine lock held.
+///
+/// The radio loop takes the Engine lock on every tick and is the only thing that drops PTT, so an
+/// action that waits under that lock for the decoder holds the unkey for as long as the decode
+/// has left to run. Each test here runs one action while a decode is in flight on another thread
+/// (its job holding the decoder lock, and the modem lock held inside it as the real decoder's FFI
+/// call holds it for the whole decode), and measures how long the action held the Engine lock.
+#[cfg(test)]
+mod decode_in_flight_tests {
+    use super::tests::dec_snr;
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// How long the decode in flight runs when nothing ends it, and so what an action that waits
+    /// for it holds the Engine lock for.
+    const DECODE_MS: u64 = 600;
+    /// An action that does not wait for the decode is done well inside this.
+    const NO_WAIT: Duration = Duration::from_millis(100);
+
+    /// A decode in flight: holds the modem lock as the FFI decode does, says when it is decoding,
+    /// and decodes nothing until `go` arrives or its sender is dropped.
+    struct DecodeInFlight {
+        decoding: mpsc::Sender<()>,
+        go: mpsc::Receiver<()>,
+    }
+
+    impl SignalSource for DecodeInFlight {
+        fn label(&self) -> String {
+            "decode in flight".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            // The a7 reset guard is the modem lock itself.
+            let _modem = loop {
+                match modes::Ft8A7ResetGuard::try_acquire() {
+                    Some(modem) => break modem,
+                    None => std::thread::sleep(Duration::from_millis(1)),
+                }
+            };
+            let _ = self.decoding.send(());
+            let _ = self.go.recv();
+            Vec::new()
+        }
+    }
+
+    /// Run `act` on `e` while a decode is in flight, the way a command or the radio loop runs it
+    /// under the Engine lock, and return how long it took (how long it held that lock) with the
+    /// decode's result. The decode ends when `act` returns, or after [`DECODE_MS`] if `act` is
+    /// still waiting for it.
+    fn during_a_decode(e: &mut Engine, act: impl FnOnce(&mut Engine)) -> (Duration, DecodeResult) {
+        let (decoding, decoding_rx) = mpsc::channel();
+        let (go, go_rx) = mpsc::channel();
+        e.install_source(Box::new(DecodeInFlight {
+            decoding,
+            go: go_rx,
+        }));
+        e.begin_slot_capture();
+        let job = e.build_decode_job(vec![0.0; 1024], 9, DecodePass::Boundary);
+        let decode = std::thread::spawn(move || run_decode_job(job));
+        decoding_rx.recv().expect("the decode is in flight");
+        let late = go.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(DECODE_MS));
+            let _ = late.send(());
+        });
+        let t0 = Instant::now();
+        act(e);
+        let held = t0.elapsed();
+        let _ = go.send(());
+        (held, decode.join().expect("the decode ends"))
+    }
+
+    fn ft8() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e
+    }
+
+    /// Double-click to work, and a logger's WSJT-X UDP Reply, which the radio loop handles on its
+    /// own thread: both run `call_station_ctx`, whose IR-HARQ reset used to wait for the decode.
+    #[test]
+    fn working_a_caller_never_waits_for_the_decode() {
+        let mut e = ft8();
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN31", -5)], 3);
+        let (held, result) = during_a_decode(&mut e, |e| {
+            e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-5), Some(1500.0))
+                .expect("the double-click starts the QSO");
+        });
+        assert_eq!(e.qso_dxcall(), Some("W1AW"), "the QSO started");
+        assert!(
+            !matches!(e.apply_decode_result(result), DecodeApplied::Stale),
+            "the period in flight is still folded in, as before"
+        );
+        assert!(
+            held < NO_WAIT,
+            "working a caller held the Engine lock {held:?} while a decode ran"
+        );
+    }
+
+    /// Call CQ enters the running QSO mode, whose IR-HARQ reset used to wait for the decode.
+    #[test]
+    fn calling_cq_never_waits_for_the_decode() {
+        let mut e = ft8();
+        let (held, _) = during_a_decode(&mut e, |e| {
+            e.set_mode("qso-run").expect("Call CQ");
+        });
+        assert!(
+            held < NO_WAIT,
+            "Call CQ held the Engine lock {held:?} while a decode ran"
+        );
+    }
+
+    /// A tier change used to swap the decoder under its lock, waiting the decode out. The decode
+    /// in flight is still dropped (its period belongs to the tier being left), and the new
+    /// decoder is in place before anything decodes again.
+    #[test]
+    fn a_tier_change_never_waits_for_the_decode_and_swaps_the_decoder_when_it_ends() {
+        let mut e = ft8();
+        let (held, result) = during_a_decode(&mut e, |e| e.set_tier(Tier::Ft4));
+        assert!(
+            held < NO_WAIT,
+            "the tier change held the Engine lock {held:?} while a decode ran"
+        );
+        assert!(
+            matches!(e.apply_decode_result(result), DecodeApplied::Stale),
+            "the FT8 period in flight is dropped, as before"
+        );
+        assert_eq!(
+            source_lock(&e.source).label(),
+            "Native (FT4)",
+            "the FT4 decoder is in place for the next period"
+        );
+        assert_eq!(e.snapshot().radio.source_label, "Native (FT4)");
+    }
+
+    /// Chat's coordinated QSY runs from `plan_tx` on the radio loop's thread: the move to the new
+    /// channel (here across bands, so the a7 table is cleared too) and the IR-HARQ reset used to
+    /// wait for the decode there.
+    #[test]
+    fn a_chat_qsy_never_waits_for_the_decode() {
+        let mut e = Engine::new("KA9AAA", "EN52", 0);
+        e.set_tx_enabled(true);
+        e.qsy_configure(vec!["20m".into(), "40m".into()], 1);
+        e.select_peer("KB9BBB");
+        e.qsy_set_enabled(true);
+        e.ingest_decodes_for_test(&[dec_snr("KA9AAA KB9BBB EN52", -5)], 0);
+        let _ = e.poll_tx(2);
+        let at = e
+            .snapshot()
+            .qsy
+            .and_then(|q| q.next_slot)
+            .expect("the move is scheduled");
+        let (held, _) = during_a_decode(&mut e, |e| {
+            let _ = e.plan_tx(at);
+        });
+        assert_eq!(e.snapshot().radio.band, "40m", "the station moved");
+        assert!(
+            held < NO_WAIT,
+            "the Chat QSY held the Engine lock {held:?} while a decode ran"
+        );
+    }
+
+    /// Every other local action that resets the decoder's carried state or swaps the decoder: none
+    /// waits for the decode. Each row is one place the reset or the swap is asked for.
+    #[test]
+    fn no_decoder_reset_or_swap_waits_for_the_decode() {
+        type Step = fn(&mut Engine);
+        let rows: &[(&str, Step, Step)] = &[
+            (
+                "a band change",
+                |_| {},
+                |e| e.set_frequency(7.074, "40m", "USB"),
+            ),
+            (
+                "a knob QSY across bands, on the radio loop's thread",
+                |e| e.observe_rig_freq(14_074_000),
+                |e| e.observe_rig_freq(7_074_000),
+            ),
+            ("a band pick", |_| {}, |e| e.pick_band("40m", None)),
+            (
+                "working a spot on another band",
+                |_| {},
+                |e| e.work_spot("digital", 7.074, "40m"),
+            ),
+            (
+                "releasing Tune",
+                |e| {
+                    e.set_tx_enabled(true);
+                    e.set_tune(true);
+                },
+                |e| e.set_tune(false),
+            ),
+            (
+                "an ATU tune-up reaching the radio",
+                |_| {},
+                |e| e.note_atu_tune_started(),
+            ),
+            (
+                "a radio handoff",
+                |e| {
+                    e.apply_restored_settings(Settings {
+                        radios: vec![
+                            crate::settings::RadioProfile {
+                                id: 0,
+                                ..Default::default()
+                            },
+                            crate::settings::RadioProfile {
+                                id: 1,
+                                ..Default::default()
+                            },
+                        ],
+                        active_radio: 0,
+                        ..Settings::default()
+                    });
+                    e.set_tier(Tier::Ft8);
+                },
+                |e| e.set_active_radio(1),
+            ),
+            (
+                "a section change from 2 m FM simplex to the FT8 channel",
+                |e| {
+                    e.set_operating_mode("phone", false);
+                    e.set_frequency(146.52, "2m", "FM");
+                },
+                |e| e.set_operating_mode("digital", true),
+            ),
+            (
+                "a tier change that leaves the band",
+                |_| {},
+                |e| e.set_tier(Tier::Msk144),
+            ),
+            (
+                "entering Chat from a band FT1 has no channel on",
+                |e| e.set_frequency(5.357, "60m", "USB"),
+                |e| e.set_area("msg"),
+            ),
+            (
+                "Chat mode from FT8",
+                |_| {},
+                |e| {
+                    e.set_mode("chat").expect("chat");
+                },
+            ),
+            (
+                "a source change",
+                |_| {},
+                |e| e.set_source(SourceKind::Native).expect("native"),
+            ),
+            (
+                "a change to a WSJT-X companion source",
+                |e| e.settings.companion_addr = "127.0.0.1:0".into(),
+                |e| e.set_source(SourceKind::Companion).expect("companion"),
+            ),
+            (
+                "a settings save that changes the mode's period",
+                |e| e.set_tier(Tier::Q65),
+                |e| {
+                    let mut s = e.settings().clone();
+                    s.q65_period_s = if s.q65_period_s == 60 { 30 } else { 60 };
+                    e.apply_settings(s);
+                },
+            ),
+            (
+                "a JS8 speed change",
+                |e| e.set_tier(Tier::Js8),
+                |e| {
+                    let next = (e.settings().js8_speed + 1) % 4;
+                    e.js8_set_speed(next).expect("speed");
+                },
+            ),
+        ];
+        let mut waited = Vec::new();
+        for (what, setup, act) in rows {
+            let mut e = ft8();
+            setup(&mut e);
+            let (held, _) = during_a_decode(&mut e, *act);
+            if held >= NO_WAIT {
+                waited.push(format!("{what}: {held:?}"));
+            }
+        }
+        assert!(
+            waited.is_empty(),
+            "held the Engine lock while a decode ran: {waited:#?}"
+        );
+    }
+
+    /// A decoder that panics as it decodes, once it is told to go or after [`DECODE_MS`]: a
+    /// decode that never reaches its hand-over.
+    struct PanicsInFlight {
+        decoding: mpsc::Sender<()>,
+        go: mpsc::Receiver<()>,
+    }
+
+    impl SignalSource for PanicsInFlight {
+        fn label(&self) -> String {
+            "panics in flight".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            let _ = self.decoding.send(());
+            let _ = self.go.recv_timeout(Duration::from_millis(DECODE_MS));
+            panic!("a decoder fault");
+        }
+    }
+
+    /// The decode in flight swaps in the decoder asked for while it ran just before it lets go
+    /// of the lock. One that panics never gets there, so the next decode puts the decoder in
+    /// before it decodes, unless a newer one was put in first.
+    #[test]
+    fn a_decoder_asked_for_while_a_decode_panicked_is_put_in_by_the_next_decode() {
+        for (then, want) in [(None, "Native (FT4)"), (Some(Tier::Ft2), "Native (FT2)")] {
+            let mut e = ft8();
+            let (decoding, decoding_rx) = mpsc::channel();
+            let (go, go_rx) = mpsc::channel();
+            e.install_source(Box::new(PanicsInFlight {
+                decoding,
+                go: go_rx,
+            }));
+            e.begin_slot_capture();
+            let job = e.build_decode_job(vec![0.0; 1024], 9, DecodePass::Boundary);
+            let decode = std::thread::spawn(move || run_decode_job(job));
+            decoding_rx.recv().expect("the decode is in flight");
+            let t0 = Instant::now();
+            e.set_tier(Tier::Ft4);
+            let held = t0.elapsed();
+            drop(go);
+            let result = decode.join().expect("the panic is contained");
+            assert!(result.failed, "premise: the decode panicked");
+            assert!(
+                held < NO_WAIT,
+                "the tier change held the Engine lock {held:?} while a decode ran"
+            );
+            if let Some(tier) = then {
+                e.set_tier(tier);
+            }
+            e.begin_slot_capture();
+            let frame = vec![0.0; e.active_frame_samples()];
+            let _ = run_decode_job(e.build_decode_job(frame, 10, DecodePass::Boundary));
+            assert_eq!(
+                source_lock(&e.source).label(),
+                want,
+                "the next decode ran on the wrong decoder (after {then:?})"
+            );
+        }
     }
 }

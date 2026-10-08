@@ -3826,7 +3826,7 @@ export const JA: PartialCatalog = {
   "settings.rigControl.conn.network": "ネットワーク（host:port — SDRソフト、またはリモートの無線機）",
   "settings.rigControl.conn.omnirig": "OmniRig（無線機はOmniRig側で設定）",
   "settings.rigControl.conn.omnirig.unavailable": "OmniRig — Windows専用",
-  "settings.rigControl.conn.hint": "USB/COMポート接続の無線機はシリアルを選びます（Xieguを含むほとんどの機種）。TCPでCATを提供するものはネットワークを選びます: このPC上のSDRソフト（Thetis、PowerSDR、SmartSDR CAT、piHPSDR）や、リモートのrigctldなど。話すCAT方言を決めるのは引き続き<b>無線機モデル</b>です — SDRの場合は、無線機内部のボードではなく起動したプログラムを選んでください。Icomの<b>LANポート</b>接続もこの方式です: Icomのネットワークプロトコルは独自仕様のため、wfview（またはRS-BA1）を無線機に接続し、Nexusをwfviewのrigctldサーバーに向けて、無線機モデルを<b>NET rigctl</b>にしてください。",
+  "settings.rigControl.conn.hint": "USB/COMポート接続の無線機はシリアルを選びます（Xieguを含むほとんどの機種）。TCPでCATを提供するものはネットワークを選びます: このPC上のSDRソフト（Thetis、PowerSDR、SmartSDR CAT、piHPSDR）や、リモートのrigctldなど。話すCAT方言を決めるのは引き続き<b>無線機モデル</b>です — SDRの場合は、無線機内部のボードではなく起動したプログラムを選んでください。Icomの<b>LANポート</b>に接続するには、Icomのネットワークプロトコルが独自仕様のため、間に入るプログラムが必要です。wfviewの場合は、そのrigctldサーバーを有効にし、ネットワークと無線機モデル<b>NET rigctl</b>でNexusをそこに向けてください。RS-BA1の場合は、シリアルを選び、無線機モデルにはお使いのIcomの機種を、シリアルポートにはRS-BA1が作成する仮想COMポートを選んでください。",
   "settings.rigControl.conn.omnirig.hint": "<b>OmniRig</b>は無線機の制御をVE3NEAのOmniRigサーバーに任せます。Windowsの多くのロギング/コンテストソフトが既に使っているものです。無線機の設定 — 機種、COMポート、ボーレート — は<em>OmniRig側で</em>行い、Nexusはそこと通信します。そのため上の無線機モデル、シリアルポート、ボーレートは使用されません。{{availability}}",
   "settings.rigControl.conn.omnirig.unavailable.why": "OmniRigはWindows用プログラムで、この環境はWindowsではないため、ここではグレー表示になっています。",
   "settings.rigControl.conn.omnirig.install": "先にOmniRigをインストールして起動しておいてください。OmniRigなしではNexusは起動しません。",

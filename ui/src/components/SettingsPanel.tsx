@@ -12,7 +12,7 @@ import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
-import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, dataModePickerShown, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -5702,10 +5702,11 @@ export function SettingsPanel({
                   </label>
                 )}
 
-              {/* WHICH Icom data mode. Only for the radios that have more than one, and only
-                  through the native CI-V engine — Hamlib's PKT modes always select D1, so
-                  offering the choice on that path would be a control that does nothing. */}
-              {MULTI_DATA_MODE_ICOMS.includes(form.rigModel) && (
+              {/* WHICH Icom data mode. Only for the radios that have more than one (or one still
+                  holding a D2/D3 — see dataModePickerShown), and only through the native CI-V
+                  engine — Hamlib's PKT modes always select D1, so offering the choice on that
+                  path would be a control that does nothing. */}
+              {dataModePickerShown(form.rigModel, form.icomDataMode ?? 1) && (
                 <label className="settings-field">
                   <span className="settings-label">Data mode</span>
                   <select
