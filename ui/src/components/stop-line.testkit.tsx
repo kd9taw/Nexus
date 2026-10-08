@@ -34,11 +34,13 @@ import { arrangeIds, coerceLeftSide, coercePlacement, moveArranged, movePane, ty
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 /** A panel record with every id shown but `removed`, and the placement given: the record's own, or, for a
- *  cockpit arranged per layout (FT), that layout's (`layoutName`). */
-export function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>, leftSide?: P[], layoutName?: string): PanelLayoutApi<P> {
+ *  cockpit arranged per layout (FT), that layout's (`layoutName`), with `extras` (the other layout's panes)
+ *  added to that layout. */
+export function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>, leftSide?: P[], layoutName?: string, extras?: readonly P[]): PanelLayoutApi<P> {
   const placed = place ? (layoutName != null ? { places: { [layoutName]: place } } : { place }) : {}
+  const added = extras?.length && layoutName != null ? { extras: { [layoutName]: [...extras] } } : {}
   return {
-    layout: place || leftSide ? { v: 2, state: {}, share: {}, ...placed, ...(leftSide ? { leftSide } : {}) } : { v: 1, state: {}, share: {} },
+    layout: place || leftSide || extras?.length ? { v: 2, state: {}, share: {}, ...placed, ...(leftSide ? { leftSide } : {}), ...added } : { v: 1, state: {}, share: {} },
     stateOf: (id) => (removed.includes(id) ? 'removed' : 'docked'),
     setPanelState: () => {},
     shareOf: () => 1,
@@ -552,11 +554,18 @@ export function arrangementRuns(c: Case<any>) {
 export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
   const spec = (c.arrange ?? ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)!.arrange!) as ArrangeSpec<string>
   const order = c.order ?? (() => [...document.querySelectorAll('.cockpit-panes .pane-frame')].map((f) => f.getAttribute('data-pane')))
+  // A layout's `extra` panes (FT: the Call Roster in Classic, the Tx messages and Stations in Roster) are added
+  // to it in every placement, so the sweep places them in every column and hides them with every other id.
+  const extras = spec.extra
   c.render(panelsWith<string>([]))
   await settle()
-  const stock = order()
   const shown = stopsOnScreen(c.stopControls)
   const baseline = new Map(c.stopControls.map(([label]) => [label, shown.get(label)!.some((e) => !e.disabled)]))
+  cleanup()
+  // The order a placement is compared with: the stock arrangement with the same panes added.
+  c.render(panelsWith<string>([], undefined, undefined, c.layout, extras))
+  await settle()
+  const stock = order()
   cleanup()
   let differs = 0
   const placements = randomPlacements(spec, 50, 20260929)
@@ -565,9 +574,11 @@ export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
     const i = k * 10 + j
     const combos: Array<readonly string[]> = [[], ...c.ids.map((id: string) => [id]), [...c.ids]]
     for (const removed of combos) {
-      c.render(panelsWith(removed, place, undefined, c.layout))
+      c.render(panelsWith(removed, place, undefined, c.layout, extras))
       await settle()
       if (removed.length === 0 && order().join() !== stock.join()) differs++
+      // The added panes are on screen with nothing hidden, wherever the placement put them.
+      if (removed.length === 0) for (const id of extras ?? []) expect(order(), `${c.cockpit}, placement #${i}: ${id} was added but is not on screen`).toContain(id)
       const on = stopsOnScreen(c.stopControls)
       for (const [label] of c.stopControls) {
         const els = on.get(label)!
@@ -596,7 +607,10 @@ export const ARRANGEMENT_RUN_BUDGET_MS = 240_000
  *  (its fifteen ids hidden singly, then none and all), each with the QSO strip, the header, the callsign
  *  card and six boxes, and one accessible-name pass. The first run of each layout (the heaviest) took,
  *  alone, 12.6 s for Classic and 8.9 s for Roster; at a fifth of a CPU 43.9 s and 43.7 s; at a tenth
- *  113.9 s and 93.4 s — CW's figures, and the same 240 s keeps the same headroom. */
+ *  113.9 s and 93.4 s — CW's figures, and the same 240 s keeps the same headroom.
+ *  Re-measured 2026-10-08, when each layout's mounts gained the other layout's panes (Classic the Call
+ *  Roster, Roster the Tx messages and Stations): the heaviest run is now placements 31–40, alone 13.7 s for
+ *  Classic and 14.0 s for Roster, and Roster's at a tenth of a CPU 104.8 s, so 240 s still leaves 2.3×. */
 export const OPERATE_RUN_BUDGET_MS = 240_000
 
 /** `n` arrangements of Phone's spec with its LEFT SIDE in play (2026-10-03), alternately menu-built

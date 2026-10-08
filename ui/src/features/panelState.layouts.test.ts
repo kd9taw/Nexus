@@ -15,13 +15,14 @@ import {
   arrangeSpecOf,
   boxIdsOf,
   coercePanelLayout,
+  extrasIn,
   panelStorageKey,
   placeOf,
   usePanelLayout,
   type OperatePanelId,
   type PanelVocabulary,
 } from './panelState'
-import { canMoveArranged, coercePlacement, columnsOf, moveArranged, movePane, placedColumns, stockPlacement } from './panelPlace'
+import { arrangeIds, canMoveArranged, coercePlacement, columnsOf, moveArranged, movePane, placedColumns, stockPlacement } from './panelPlace'
 import { __resetDurableForTest } from './durableStore'
 
 vi.mock('../api', () => ({
@@ -40,12 +41,21 @@ const all = () => true
 const KEY = panelStorageKey('operate')
 const last = <T,>(xs: readonly T[]): T | undefined => xs[xs.length - 1]
 
-describe('FT is arranged per layout, over each layout’s own panes', () => {
-  it('the stock arrangements are the columns FT has always drawn', () => {
-    const own = (c: Record<string, OperatePanelId[]>) =>
-      Object.fromEntries(Object.entries(c).map(([k, ids]) => [k, ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id))]))
-    expect(own(placedColumns(CLASSIC, undefined))).toEqual({ a: ['bandActivity'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations'] })
-    expect(own(placedColumns(ROSTER, undefined))).toEqual({ a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq'] })
+describe('FT is arranged per layout, over every FT pane', () => {
+  it('the stock arrangements are the columns FT has always drawn, with the other layout’s panes listed but not drawn', () => {
+    const own = (c: Record<string, OperatePanelId[]>, extra: readonly OperatePanelId[] = []) =>
+      Object.fromEntries(Object.entries(c).map(([k, ids]) => [k, ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && !extra.includes(id))]))
+    // What each layout draws until the operator adds a pane: today's columns.
+    expect(own(placedColumns(CLASSIC, undefined), CLASSIC.extra)).toEqual({ a: ['bandActivity'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations'] })
+    expect(own(placedColumns(ROSTER, undefined), ROSTER.extra)).toEqual({ a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq'] })
+    // "Every FT pane in both": the Call Roster under Band Activity in Classic, the Tx messages and Stations in
+    // Roster's rail under Rx Frequency, and nothing else is another layout's.
+    expect(own(placedColumns(CLASSIC, undefined))).toEqual({ a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations'] })
+    expect(own(placedColumns(ROSTER, undefined))).toEqual({ a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq', 'txmsgs', 'stations'] })
+    expect(CLASSIC.extra).toEqual(['callRoster'])
+    expect(ROSTER.extra).toEqual(['txmsgs', 'stations'])
+    const panes = (spec: typeof CLASSIC) => arrangeIds(spec).filter((id) => !(BOX_IDS as readonly string[]).includes(id)).sort()
+    expect(panes(CLASSIC), 'both layouts place every FT pane').toEqual(panes(ROSTER))
     expect(columnsOf(CLASSIC)).toEqual(['a', 'b', 'log'])
     expect(columnsOf(ROSTER), 'Roster has its main column and the side rail').toEqual(['a', 'log'])
   })
@@ -75,15 +85,15 @@ describe('the record keeps a placement per layout', () => {
       share: {},
       place: { rxfreq: { col: 'a', order: 0 } },
       places: {
-        roster: { rxfreq: { col: 'a', order: 5 }, txmsgs: { col: 'a', order: 0 }, ptt: { col: 'a', order: 1 } },
-        classic: { callRoster: { col: 'b', order: 0 }, stations: { col: 'a', order: 9 } },
+        roster: { rxfreq: { col: 'a', order: 5 }, waterfall: { col: 'a', order: 0 }, ptt: { col: 'a', order: 1 } },
+        classic: { txmeters: { col: 'b', order: 0 }, stations: { col: 'a', order: 9 } },
         wide: { rxfreq: { col: 'a', order: 0 } },
       },
     })
-    // Roster: Rx Frequency in the main column; the Tx messages (not a Roster pane) and a stop control's
+    // Roster: Rx Frequency in the main column; the waterfall (outside the region) and a stop control's
     // name are no panes of it.
     expect(rec.places?.roster).toEqual({ rxfreq: { col: 'a', order: 0 } })
-    // Classic: Stations in column 1; the Call Roster is not one of Classic's panes.
+    // Classic: Stations in column 1; the TX meters have no place in any layout.
     expect(rec.places?.classic).toEqual({ stations: { col: 'a', order: 0 } })
     expect(Object.keys(rec.places ?? {}).sort()).toEqual(['classic', 'roster'])
     expect(rec.place, 'FT keeps no single placement').toBeUndefined()
@@ -119,10 +129,10 @@ describe('the hook moves and adds in the layout it is told, and nowhere else', (
     expect(result.current.layout.places, 'Undo left a placement').toBeUndefined()
   })
 
-  it('a move with no layout, or a pane the layout does not have, is no step at all', () => {
+  it('a move with no layout, or a pane no layout places, is no step at all', () => {
     const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
     act(() => result.current.movePane!('rxfreq', 'left', all))
-    act(() => result.current.movePane!('callRoster', 'right', all, false, { layout: 'classic' }))
+    act(() => result.current.movePane!('waterfall', 'right', all, false, { layout: 'classic' }))
     expect(result.current.layout.places).toBeUndefined()
     expect(result.current.canUndo).toBe(false)
   })
@@ -146,6 +156,96 @@ describe('the hook moves and adds in the layout it is told, and nowhere else', (
     act(() => result.current.reset())
     expect(result.current.layout.places).toBeUndefined()
     expect(BOX_IDS.map((b) => result.current.stateOf(b))).toEqual(BOX_IDS.map(() => 'removed'))
+  })
+})
+
+describe('every FT pane in both layouts: the other layout’s panes are added to a layout, and to it only', () => {
+  // The operator's "Every FT pane in both" (2026-10-07). A layout's `extra` panes (the Call Roster in Classic,
+  // the Tx messages and Stations in Roster) are on screen there once added (the record's `extras`) and not
+  // hidden; visibility stays one record for both layouts, so a hide anywhere hides them.
+  const inLayout = (layout: Parameters<typeof extrasIn>[1], name: string, id: OperatePanelId) => extrasIn(OPERATE_PANELS, layout, name, id)
+
+  it('nothing added is each layout as it shipped: the other layout’s panes read hidden there, their own as ever', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    const rec = result.current.layout
+    expect(inLayout(rec, 'classic', 'callRoster')).toBe('removed')
+    expect(inLayout(rec, 'roster', 'callRoster')).toBe('docked')
+    expect(['txmsgs', 'stations'].map((id) => inLayout(rec, 'roster', id as OperatePanelId))).toEqual(['removed', 'removed'])
+    expect(['txmsgs', 'stations'].map((id) => inLayout(rec, 'classic', id as OperatePanelId))).toEqual(['docked', 'docked'])
+  })
+
+  it('adding the Call Roster to Classic shows it there, writes Classic’s stock placement, and leaves Roster alone', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setExtra!('classic', 'callRoster', true))
+    expect(inLayout(result.current.layout, 'classic', 'callRoster')).toBe('docked')
+    // Where Classic's stock arrangement lists it: under Band Activity in column 1. The placement is written,
+    // so Classic keeps its arranged columns until Reset (a box's rule).
+    expect(placedColumns(CLASSIC, placeOf(OPERATE_PANELS, result.current.layout, 'classic')).a).toEqual(['bandActivity', 'callRoster'])
+    expect(result.current.layout.places?.roster, 'the add reached Roster').toBeUndefined()
+    expect(JSON.parse(localStorage.getItem(KEY)!).extras).toEqual({ classic: ['callRoster'] })
+    // Taken out of Classic, it is gone from Classic only: Roster's main column keeps it.
+    act(() => result.current.setExtra!('classic', 'callRoster', false))
+    expect(inLayout(result.current.layout, 'classic', 'callRoster')).toBe('removed')
+    expect(inLayout(result.current.layout, 'roster', 'callRoster')).toBe('docked')
+    expect(result.current.layout.extras).toBeUndefined()
+    // One undoable step each.
+    act(() => result.current.undo())
+    expect(inLayout(result.current.layout, 'classic', 'callRoster')).toBe('docked')
+  })
+
+  it('a pane placed before keeps its place when it is added again', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setExtra!('roster', 'stations', true))
+    act(() => result.current.movePane!('stations', 'left', all, false, { layout: 'roster' }))
+    act(() => result.current.setExtra!('roster', 'stations', false))
+    act(() => result.current.setExtra!('roster', 'stations', true))
+    expect(placedColumns(ROSTER, placeOf(OPERATE_PANELS, result.current.layout, 'roster')).a).toEqual(['callRoster', 'stations'])
+  })
+
+  it('a hide anywhere hides it in both; adding it again shows it in both', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setExtra!('roster', 'stations', true))
+    act(() => result.current.setPanelState('stations', 'removed'))
+    expect(inLayout(result.current.layout, 'roster', 'stations')).toBe('removed')
+    expect(inLayout(result.current.layout, 'classic', 'stations')).toBe('removed')
+    act(() => result.current.setExtra!('roster', 'stations', true))
+    expect(inLayout(result.current.layout, 'roster', 'stations')).toBe('docked')
+    expect(inLayout(result.current.layout, 'classic', 'stations')).toBe('docked')
+  })
+
+  it('a change that changes nothing, or a pane the layout draws anyway, is no step at all', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setExtra!('classic', 'callRoster', false))
+    act(() => result.current.setExtra!('classic', 'stations', true))
+    act(() => result.current.setExtra!('wide', 'callRoster', true))
+    expect(result.current.canUndo).toBe(false)
+    expect(result.current.layout.extras).toBeUndefined()
+  })
+
+  it('the record keeps a layout’s own `extra` panes only, each once; Reset clears them', () => {
+    const rec = coercePanelLayout(OPERATE_PANELS, {
+      v: 2,
+      state: {},
+      share: {},
+      extras: { classic: ['callRoster', 'callRoster', 'stations', 'ptt', 7], roster: ['txmsgs', 'waterfall'], wide: ['callRoster'] },
+    })
+    expect(rec.extras).toEqual({ classic: ['callRoster'], roster: ['txmsgs'] })
+    expect(coercePanelLayout(OPERATE_PANELS, { v: 2, state: {}, share: {}, extras: 'junk' }).extras).toBeUndefined()
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setExtra!('roster', 'txmsgs', true))
+    act(() => result.current.reset())
+    expect(result.current.layout.extras).toBeUndefined()
+    expect(inLayout(result.current.layout, 'roster', 'txmsgs')).toBe('removed')
+  })
+
+  it('an older build reads the record without them: each layout draws what it always drew', () => {
+    const OLDER: PanelVocabulary<string> = {
+      view: 'operate',
+      panelIds: ['waterfall', 'rfScope', 'bandActivity', 'callRoster', 'rxfreq', 'txmsgs', 'stations', 'txmeters', 'recall'],
+      defaultRemoved: ['rfScope'],
+    }
+    const newer = { v: 2, state: { stations: 'docked' }, share: {}, extras: { classic: ['callRoster'], roster: ['txmsgs', 'stations'] } }
+    expect(coercePanelLayout(OLDER, newer)).toEqual({ v: 2, state: { stations: 'docked' }, share: {} })
   })
 })
 

@@ -245,6 +245,7 @@ import {
   moveArranged,
   placeAtFoot,
   stockColumn,
+  stockPlacement,
   type ArrangeSpec,
   type PaneColumn,
   type PaneMove,
@@ -304,6 +305,14 @@ export interface PanelLayout<P extends string> {
    *  cockpit with one layout. Absent, or a layout absent, is that layout's stock arrangement. An older
    *  build's coercion never reads it, so FT opens on its stock columns there and loses nothing else. */
   places?: Partial<Record<string, PanePlacement<P>>>
+  /** THE OTHER LAYOUT'S PANES ADDED TO A LAYOUT (FT's "Every FT pane in both", 2026-10-07): by the
+   *  layout's name, the panes of its ArrangeSpec `extra` the operator added there (the Call Roster to
+   *  Classic, the Tx messages or Stations to Roster). Such a pane is on screen in that layout while it is
+   *  listed here and its `state` is not 'removed', so a hide in either layout hides it, as every FT pane's
+   *  does, and taking it out of a layout leaves the other layout alone (`extrasIn`). Absent is none, which
+   *  is each layout as it shipped; Reset clears it. An older build's coercion never reads it, so those
+   *  panes stay where each layout always drew them there and nothing else is lost. */
+  extras?: Partial<Record<string, P[]>>
 }
 
 /** A grid cockpit's column widths, as its column dividers write them (PanelLayout.cols):
@@ -420,6 +429,55 @@ export function boxIdsOf<P extends string>(spec: PanelVocabulary<P>): readonly P
   return spec.arrange?.boxes ?? (spec.arrangeBy ? Object.values(spec.arrangeBy)[0]?.boxes : undefined) ?? []
 }
 
+/** A pane's state in a layout, for the layout on screen: a pane the layout lists in its ArrangeSpec
+ *  `extra` is 'removed' there until the operator adds it to that layout (the record's `extras`), and then
+ *  reads as every pane does: `stateOf`, the record's own reading (`panelStateIn`) unless a host gives its
+ *  own, as for `boxEntries`. */
+export function extrasIn<P extends string>(
+  spec: PanelVocabulary<P>,
+  layout: PanelLayout<P>,
+  layoutName: string,
+  id: P,
+  stateOf: (id: P) => PanelState = (id) => panelStateIn(spec, layout, id),
+): PanelState {
+  const extra = arrangeSpecOf(spec, layoutName)?.extra
+  if (extra?.includes(id) && !layout.extras?.[layoutName]?.includes(id)) return 'removed'
+  return stateOf(id)
+}
+
+/**
+ * The record with one of a layout's `extra` panes added to it (`on`) or taken out. Added, it is shown,
+ * which a hide in the other layout may have cleared, and stands where the layout's placement puts it:
+ * where it was, or at the foot of its column in the layout's stock arrangement, which is then written,
+ * so the layout keeps its columns until Reset (a box's rule). Taken out, only that layout loses it.
+ * Null for a pane the layout does not list in `extra`, and for a change that changes nothing.
+ */
+export function withExtra<P extends string>(
+  spec: PanelVocabulary<P>,
+  layout: PanelLayout<P>,
+  layoutName: string,
+  id: P,
+  on: boolean,
+): PanelLayout<P> | null {
+  const arrange = arrangeSpecOf(spec, layoutName)
+  if (!arrange?.extra?.includes(id)) return null
+  const had = layout.extras?.[layoutName] ?? []
+  if (on === had.includes(id) && (!on || panelStateIn(spec, layout, id) !== 'removed')) return null
+  const extras: Partial<Record<string, P[]>> = { ...layout.extras }
+  const ids = on ? [...had.filter((x) => x !== id), id] : had.filter((x) => x !== id)
+  if (ids.length > 0) extras[layoutName] = ids
+  else delete extras[layoutName]
+  const { extras: _was, ...rest } = layout
+  let next: PanelLayout<P> = Object.keys(extras).length > 0 ? { ...rest, extras } : rest
+  if (on) {
+    const state: Partial<Record<P, PanelState>> = { ...next.state }
+    if (panelStateIn(spec, next, id) === 'removed') state[id] = 'docked'
+    next = { ...next, v: 2, state }
+    if (!placeOf(spec, next, layoutName)) next = withPlace(spec, next, layoutName, stockPlacement(arrange))
+  }
+  return next
+}
+
 /** `nexus.panels.<view>.<instance>` — one record per SURFACE (see windowScope).
  *
  *  Built here rather than via `surfaceKey`, and deliberately: this key shipped in 0.15.0
@@ -444,7 +502,7 @@ export function coercePanelLayout<P extends string>(
 ): PanelLayout<P> {
   const out = emptyPanelLayout<P>()
   if (!raw || typeof raw !== 'object') return out
-  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; leftSide?: unknown; scale?: unknown; boxes?: unknown; places?: unknown }
+  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; leftSide?: unknown; scale?: unknown; boxes?: unknown; places?: unknown; extras?: unknown }
   if (obj.state && typeof obj.state === 'object') {
     const src = obj.state as Record<string, unknown>
     for (const id of spec.panelIds) {
@@ -495,6 +553,19 @@ export function coercePanelLayout<P extends string>(
       if (place) places[name] = place
     }
     if (Object.keys(places).length > 0) out.places = places
+  }
+  // The other layout's panes added to a layout: by that layout's `extra` only, each once.
+  if (spec.arrangeBy && obj.extras && typeof obj.extras === 'object') {
+    const src = obj.extras as Record<string, unknown>
+    const extras: Partial<Record<string, P[]>> = {}
+    for (const [name, arrange] of Object.entries(spec.arrangeBy)) {
+      const allowed: readonly string[] = arrange.extra ?? []
+      const v = src[name]
+      if (!Array.isArray(v)) continue
+      const ids = [...new Set(v)].filter((id): id is P => typeof id === 'string' && allowed.includes(id))
+      if (ids.length > 0) extras[name] = ids
+    }
+    if (Object.keys(extras).length > 0) out.extras = extras
   }
   // A box's text size (Connect's A− / A+), clamped on read into the range the menu writes; a factor
   // of 1 is no entry at all, and junk is dropped rather than guessed at.
@@ -687,6 +758,10 @@ export interface PanelLayoutApi<P extends string> {
   /** A box's picker: show `entry` in `box` (`showInBox`) — an entry on screen moves here. ONE undoable
    *  step. Optional, as `addBox`. */
   setBox?: (box: P, entry: string) => void
+  /** One of a layout's `extra` panes added to that layout or taken out of it (`withExtra`): the ⊞ tick
+   *  and the ✕ of the Call Roster in Classic, and of the Tx messages or Stations in Roster. ONE undoable
+   *  step, and none at all when it changes nothing. Optional: only a vocabulary arranged per layout. */
+  setExtra?: (layoutName: string, id: P, on: boolean) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
@@ -850,6 +925,10 @@ export function usePanelLayout<P extends string>(
     [boxStep, spec],
   )
   const setBox = useCallback((box: P, entry: string) => boxStep((cur) => showInBox(spec, cur, box, entry)), [boxStep, spec])
+  const setExtra = useCallback(
+    (layoutName: string, id: P, on: boolean) => boxStep((cur) => withExtra(spec, cur, layoutName, id, on)),
+    [boxStep, spec],
+  )
   const reset = useCallback(() => apply(() => emptyPanelLayout<P>()), [apply])
   const setLayout = useCallback(
     (next: PanelLayout<P>) => apply(() => coercePanelLayout(spec, next)),
@@ -893,6 +972,7 @@ export function usePanelLayout<P extends string>(
     movePane: spec.arrange || spec.arrangeBy ? movePane : undefined,
     addBox: boxIdsOf(spec).length > 0 ? addBox : undefined,
     setBox: boxIdsOf(spec).length > 0 ? setBox : undefined,
+    setExtra: spec.arrangeBy ? setExtra : undefined,
     undo,
     canUndo: hist.prev != null,
     undoRemoves,
@@ -974,6 +1054,12 @@ export type OperateLayout = 'classic' | 'roster'
  * Nothing is pinned: no FT pane holds a transmission or a half-typed contact in its own state — the
  * decode windows' history and the Tx1–Tx6 texts are the cockpit's — so a pane that changes column loses
  * only its sort (the Stations list, its filter too).
+ * EVERY FT PANE IN BOTH LAYOUTS (the operator's pick, 2026-10-07): each layout also lists the panes only the
+ * other draws (`extra`): Classic the Call Roster, under Band Activity; Roster the Tx messages and Stations,
+ * in the side rail under Rx Frequency. Each layout's ⊞ Panels offers them unticked, so each layout opens
+ * exactly as it always drew; ticked, one stands there and moves like any pane (the record's `extras`). The
+ * Tx messages start a transmission (Tx6 is Call CQ) wherever they stand, as they always could, and hold no
+ * stop control; Stop TX stays in the QSO strip, which no layout lists.
  * THE BOXES stand at the foot of the side rail until ⊞ Arrange puts them elsewhere.
  *
  * THE STOP LINE is not near any of this: Stop TX, Tune and the rest of the QSO strip have no id, so no
@@ -981,15 +1067,17 @@ export type OperateLayout = 'classic' | 'roster'
  */
 export const OPERATE_ARRANGE: Readonly<Record<OperateLayout, ArrangeSpec<OperatePanelId>>> = {
   classic: {
-    columns: { a: ['bandActivity'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations', ...BOX_IDS] },
+    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations', ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
+    extra: ['callRoster'],
   },
   roster: {
-    columns: { a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq', ...BOX_IDS] },
+    columns: { a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
     cols: ['a', 'log'],
+    extra: ['txmsgs', 'stations'],
   },
 }
 

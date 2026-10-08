@@ -83,11 +83,13 @@ import {
   OPERATE_PANELS,
   WATERFALL_DETACHED_KEY,
   boxEntries,
+  extrasIn,
   isBoxId,
   placeOf,
   type BoxId,
   type OperatePanelId,
   type PanelLayoutApi,
+  type PanelState,
 } from '../features/panelState'
 import { columnsOf, placedColumns, type PaneColumn } from '../features/panelPlace'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
@@ -323,11 +325,13 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   recall: t('operate.panel.recall'),
 })
 
-/** What each layout actually renders — the menu lists only these, so a panel the
- *  current layout has no place for can't be ticked into nowhere. */
+/** What each layout can render — the menu lists only these, so a panel the current layout has no
+ *  place for can't be ticked into nowhere. Since every FT pane can stand in both layouts (the operator's
+ *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
+ *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'recall', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'recall', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'txmeters'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'txmeters'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -717,6 +721,15 @@ export function OperateCockpit({
     ? [...CLASSIC_COLUMNS.slice(0, 2), ['recall', 'stations']]
     : CLASSIC_COLUMNS
   const { stateOf, setPanelState } = panels
+  // EVERY FT PANE IN BOTH LAYOUTS (2026-10-07): a pane only the other layout draws in stock
+  // (OPERATE_ARRANGE `extra`) is on screen here once the operator adds it to this layout (the record's
+  // `extras`); its ⊞ tick and its ✕ add it to this layout or take it out and leave the other layout as it
+  // is. A hide in either layout still hides it, as for every FT pane. Every other pane reads and writes as
+  // ever, so with nothing added each layout's menu and screen are what they always were.
+  const extra: readonly OperatePanelId[] = OPERATE_ARRANGE[layoutMode].extra ?? []
+  const layoutStateOf = (id: OperatePanelId) => extrasIn(OPERATE_PANELS, panels.layout, layoutMode, id, stateOf)
+  const layoutSetPanelState = (id: OperatePanelId, s: PanelState) =>
+    extra.includes(id) && panels.setExtra ? panels.setExtra(layoutMode, id, s !== 'removed') : setPanelState(id, s)
   // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
   // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
   // the Conditions feeds while it is mounted, and a hidden FT must not keep them asking (JS8's rule).
@@ -731,10 +744,11 @@ export function OperateCockpit({
     // readings dimmed between overs, so the entry says WHEN it is populated rather than
     // leaving an operator to guess mid-menu (the same words the strip shows when idle).
     notes: { txmeters: TX_METERS_WHEN },
-    shipsHidden: OPERATE_PANELS.defaultRemoved,
+    // The other layout's panes ship hidden here as well: unticked, they are this layout as it shipped.
+    shipsHidden: [...(OPERATE_PANELS.defaultRemoved ?? []), ...extra],
     ...(layoutMode === 'classic' ? { columns: classicColumns } : {}),
   }
-  const { shown, sideShown, dataCols, menuItems, closeProps } = panelHost(panels, panelSpec)
+  const { shown, sideShown, dataCols, menuItems, closeProps } = panelHost({ stateOf: layoutStateOf, setPanelState: layoutSetPanelState }, panelSpec)
   const wfState = stateOf('waterfall')
 
   // ⊞ PANELS ▸ ARRANGE (2026-10-07: the operator's "Arrange on FT's grid" and "Two saved arrangements"):
@@ -750,9 +764,11 @@ export function OperateCockpit({
   const place = placeOf(OPERATE_PANELS, panels.layout, layoutMode)
   // A box arranges only a window that lends boxes: in the pop-out and on the hosted page a box in the record,
   // or a box's place, leaves today's tree, so there only a pane placed in this layout arranges it.
-  const arranged = boxes
-    ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
-    : place != null && Object.keys(place).some((id) => !isBoxId(id))
+  // The other layout's panes stand only in the arranged columns, so one added here arranges FT too.
+  const arranged =
+    (boxes
+      ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
+      : place != null && Object.keys(place).some((id) => !isBoxId(id))) || extra.some(shown)
   const cardOn = shownRecallCall != null && shown('recall')
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
   // a station), and a box only where the window lends it one.
@@ -1472,7 +1488,7 @@ export function OperateCockpit({
             </div>
             <PanelsMenu
               items={menuItems}
-              onToggle={(id, show) => setPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
+              onToggle={(id, show) => layoutSetPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
               onUndo={panels.undo}
               canUndo={panels.canUndo}
               onReset={panels.reset}

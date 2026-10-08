@@ -79,6 +79,11 @@ export interface ArrangeSpec<P extends string> {
   /** The columns the cockpit has, in their stock order on screen (see the header). Absent: all three.
    *  A column it does not have lists no pane in `columns`. */
   readonly cols?: readonly PaneColumn[]
+  /** The panes a layout lists but does not draw until the operator adds them there (FT's "Every FT pane
+   *  in both", 2026-10-07: the Call Roster in Classic, the Tx messages and Stations in Roster). Each is
+   *  listed in `columns` like any pane, which is where it stands once added, and moves like one; which
+   *  of them a layout shows is the panel record's `extras`. Absent: the layout draws every pane it lists. */
+  readonly extra?: readonly P[]
 }
 
 /** The columns a cockpit has, in their stock order on screen. */

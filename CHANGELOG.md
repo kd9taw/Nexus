@@ -34,8 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FT8 and FT4: arrange the panes, and add boxes.** In ⊞ Panels ▸ Arrange, the panes of the FT
   layout you are in move between its columns: Band Activity, Rx Frequency, the Tx messages, Stations
   and the callsign card among Column 1, Column 2 and the side rail in Classic; the Call Roster, Band
-  Activity, Rx Frequency and the card between the main column and the side rail in Roster. Classic
-  and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
+  Activity, Rx Frequency and the card between the main column and the side rail in Roster. Each
+  layout can also show the other's panes: tick the Call Roster in Classic's ⊞ Panels, or the Tx
+  messages or Stations in Roster's, and it stands in that layout, to move like the rest; its ✕ takes
+  it out of that layout only. Classic and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
   Conditions pane, as Phone, CW and JS8 do. Moving a pane changes nothing it does: a double-click
   still answers the station, and Band Activity keeps its decodes. In an arranged column the callsign
   card keeps its size, and a crowded column scrolls instead. Nothing moves until you move it, so

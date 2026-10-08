@@ -105,7 +105,12 @@ Roster when you're scanning a busy band for the one call worth working.
 under the column it stands in: Column 1, Column 2 and the side rail in Classic, the main column and
 the side rail in Roster. **▲ ▼** move a pane up or down in its column and **◀ ▶** move it into the
 column beside it, so the Call Roster and Rx Frequency can share Roster's main column, or Band
-Activity can stand over Rx Frequency in Classic. Classic and Roster keep separate arrangements, and
+Activity can stand over Rx Frequency in Classic. Each layout can show the other's panes too: Classic's
+⊞ Panels lists the Call Roster, and Roster's the Tx messages and Stations, unticked. Tick one and it
+stands in that layout (the Call Roster under Band Activity, the Tx messages and Stations under Rx
+Frequency), where the arrows move it like the rest; its **✕** takes it out of that layout and leaves the
+other alone. The Tx messages work wherever they stand: Tx6 still calls CQ, and **Stop TX** stays in the
+strip above the columns. Classic and Roster keep separate arrangements, and
 switching layouts brings each back as you left it. Two feeds stacked in one column get a divider
 between them; the side rail keeps the side you put it on, and a column you empty is not drawn.
 Moving a pane changes nothing it does: a double-click still answers the station, and Band Activity

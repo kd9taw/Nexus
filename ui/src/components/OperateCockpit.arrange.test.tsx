@@ -31,6 +31,7 @@ import type { OperateLayout, OperatePanelId, PanelLayoutApi } from '../features/
 import { arrangeIds, type PaneMove } from '../features/panelPlace'
 import type { BoxSource } from './panes/CockpitBox'
 import { t } from '../i18n'
+import { startCq } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
   // Derived from the real module (stop-line.api.testkit.ts says why); null answers, as the other FT
@@ -462,6 +463,92 @@ describe('⊞ Arrange in FT', () => {
         cleanup()
       }
     }
+  })
+})
+
+describe('every FT pane in both layouts (the operator’s pick)', () => {
+  // Classic can place the Call Roster, and Roster the Tx messages and Stations, in any column. Each layout's
+  // ⊞ Panels offers them unticked, so each layout opens as it always did; ticked, one stands where that
+  // layout's stock arrangement lists it and moves like any pane; its ✕ takes it out of that layout only.
+  const tick = (label: string) => {
+    fireEvent.click(screen.getByRole('button', { name: /panels/i }))
+    const box = screen.getByLabelText(label) as HTMLInputElement
+    const was = box.checked
+    fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: /panels/i }))
+    return was
+  }
+
+  it('Classic: the Call Roster, unticked until added, stands under Band Activity, moves, and leaves with its ✕', async () => {
+    const onCall = vi.fn()
+    const view = render(<Live layoutMode="classic" onCall={onCall} />)
+    await settle()
+    expect(`## classic\n${treeOf(lower())}\n`, 'Classic changed before anything was added').toBe(goldenSection('classic'))
+    expect(tick('Call Roster'), 'Classic offered the Call Roster ticked').toBe(false)
+    await settle()
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    expect(rendered()).toEqual([['bandActivity', 'callRoster'], ['rxfreq', 'txmsgs'], ['stations']])
+    // It is the Call Roster: a double-click on a station calls through the cockpit's own handler.
+    fireEvent.doubleClick(within(pane('callRoster')!).getByText('W1ABC'))
+    expect(onCall).toHaveBeenCalled()
+    expect(onCall.mock.calls[0][0]).toBe('W1ABC')
+    move('callRoster', 'right', 'classic')
+    await settle()
+    expect(rendered()).toEqual([['bandActivity'], ['rxfreq', 'txmsgs', 'callRoster'], ['stations']])
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Call Roster' }))
+    await settle()
+    expect(rendered()).toEqual([['bandActivity'], ['rxfreq', 'txmsgs'], ['stations']])
+    // Taken out of Classic only: Roster's main column still holds it.
+    view.rerender(<Live layoutMode="roster" />)
+    await settle()
+    expect(document.querySelector('.cockpit-roster-main'), 'the ✕ in Classic hid the Call Roster in Roster').not.toBeNull()
+  })
+
+  it('Roster: the Tx messages and Stations stand in the rail under Rx Frequency, and Tx6 calls CQ from there', async () => {
+    const view = render(<Live layoutMode="roster" />)
+    await settle()
+    expect(`## roster\n${treeOf(lower())}\n`, 'Roster changed before anything was added').toBe(goldenSection('roster'))
+    expect(tick('Tx Messages')).toBe(false)
+    expect(tick('Stations')).toBe(false)
+    await settle()
+    expect(rendered()).toEqual([['callRoster'], ['bandActivity', 'rxfreq', 'txmsgs', 'stations']])
+    // The Tx messages start a transmission wherever they stand, as they always could; no stop control is in
+    // them (Stop TX stays in the QSO strip, which no layout lists).
+    expect(within(pane('txmsgs')!).queryByRole('button', { name: /^stop tx$/i })).toBeNull()
+    expect(document.querySelector('.cockpit-qso')?.querySelector('.op-btn.stop'), 'Stop TX left the QSO strip').not.toBeNull()
+    vi.mocked(startCq).mockClear()
+    fireEvent.click(within(pane('txmsgs')!).getByTitle('Call CQ (Alt+6)'))
+    await settle()
+    expect(startCq).toHaveBeenCalled()
+    move('txmsgs', 'left', 'roster')
+    await settle()
+    expect(rendered()).toEqual([['callRoster', 'txmsgs'], ['bandActivity', 'rxfreq', 'stations']])
+    // Classic is untouched: it was never arranged, and draws its own Tx messages and Stations as it always did.
+    view.rerender(<Live layoutMode="classic" />)
+    await settle()
+    expect(`## classic\n${treeOf(lower())}\n`).toBe(goldenSection('classic'))
+  })
+
+  it('a stored record that adds a pane and places nothing still draws it, in the arranged columns', async () => {
+    localStorage.setItem(panelStorageKey('operate'), JSON.stringify({ v: 2, state: {}, share: {}, extras: { classic: ['callRoster'] } }))
+    render(<Live layoutMode="classic" />)
+    await settle()
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    expect(rendered()).toEqual([['bandActivity', 'callRoster'], ['rxfreq', 'txmsgs'], ['stations']])
+  })
+
+  it('Reset takes both layouts back as they shipped, the added panes with them', async () => {
+    const view = render(<Live layoutMode="roster" />)
+    await settle()
+    tick('Stations')
+    await settle()
+    act(() => api!.reset())
+    await settle()
+    expect(lower().hasAttribute('data-arranged')).toBe(false)
+    expect(`## roster\n${treeOf(lower())}\n`).toBe(goldenSection('roster'))
+    view.rerender(<Live layoutMode="classic" />)
+    await settle()
+    expect(`## classic\n${treeOf(lower())}\n`).toBe(goldenSection('classic'))
   })
 })
 
