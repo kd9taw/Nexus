@@ -37,3 +37,6 @@ tempo-core = { path = "../tempo-core", features = ["test-util"] }
 # sockets may sit in TIME_WAIT — the rebind needs SO_REUSEADDR, which std does
 # not expose. Test-only; socket2 is already in the tree via tempo-net.
 socket2 = "0.6"
+# This crate with `test-util`, for its own integration tests: the hook that ages the a7 hide
+# after a band or mode change (`Engine::age_a7_hide`). The same self-dependency tempo-sstv uses.
+tempo-app = { path = ".", features = ["test-util"] }

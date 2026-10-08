@@ -2821,6 +2821,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       />
       <OperateDecodes
         decodes={snap.recentDecodes}
+        late={snap.lateDecodes}
         slot={snap.radio.slot}
         rxOffsetHz={snap.radio.rxOffsetHz}
         band={snap.radio.band}

@@ -11647,7 +11647,9 @@ impl RadioLoop {
                         emit_rx_decodes(sinks, &eng, &mut station.psk_spots, now, cur_dial);
                     }
                 }
-                DecodeApplied::Stale => {}
+                // A period heard on the band or mode just left: on screen only. It is never a
+                // TX decision, and WSJT-X sends it to neither a logger nor PSK Reporter.
+                DecodeApplied::Late { .. } | DecodeApplied::Stale => {}
             }
         }
 
@@ -25358,6 +25360,48 @@ mod tests {
         assert!(!rig.keyed, "PTT dropped immediately on Stop TX");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued TX audio was flushed");
+    }
+
+    #[test]
+    fn a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_cuts_the_over() {
+        // Mid-over on 20 m FT8 with TX on. FT8 -> FT4 moves the dial to 14.080 and leaves the
+        // Tx frequency, 14.0755, off the FT4 waterfall, so the next iteration cuts the over as
+        // Stop TX does (WSJT-X 3.0.2 halts it there). A knob QSY inside the band does not.
+        for (what, cut) in [("a knob QSY to 14.076", false), ("FT8 -> FT4", true)] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            engine.lock().unwrap().set_tx_enabled(true);
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let _ = rig.ptt(true);
+            let mut state = loop_state();
+            state.tx_until_ms = Some(9_999_999.0); // long hold — would NOT expire on its own
+            if cut {
+                engine.lock().unwrap().set_tier(Tier::Ft4);
+            } else {
+                engine.lock().unwrap().observe_rig_freq(14_076_000);
+            }
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+
+            assert_eq!(
+                (rig.keyed, state.tx_until_ms.is_some()),
+                (!cut, !cut),
+                "{what}: (PTT keyed, TX hold set)"
+            );
+        }
     }
 
     #[test]

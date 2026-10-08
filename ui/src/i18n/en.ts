@@ -8753,6 +8753,11 @@ export const EN = {
     '{{count}} decodes in history are hidden by the current filter — pick another chip to see them.',
   // `{{time}}` is the period's UTC start, formatted invariantly by decodeHistory.
   'operate.decodes.period.aria': 'Period {{time}} UTC',
+  // A period heard before a band or mode change, which WSJT-X shows: its separator names what it
+  // was received on. `{{mode}}` is the mode token (FT8, FT4…); `{{dial}}` is formatted invariantly.
+  'operate.decodes.period.heard': '{{band}} · {{mode}} · {{dial}} MHz',
+  'operate.decodes.period.heard.aria': 'Period {{time}} UTC, heard on {{band}} {{mode}} before the change',
+  'operate.decodes.row.heard.title': 'Heard on {{band}} {{mode}} before the band or mode change. Shown only: it cannot be worked from here.',
 
   // A row, read aloud. Everything in it is data; the two optional clauses are interpolated
   // whole, each carrying its own separator, so no language is served four fragments.
