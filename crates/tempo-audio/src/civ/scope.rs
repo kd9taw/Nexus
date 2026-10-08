@@ -157,8 +157,13 @@ fn parse_waveform(data: &[u8]) -> Option<(u32, u32, Option<SweepHeader>, &[u8])>
             // Center: center frequency ± span (the span value is the ± half-width).
             (a - b, a + b)
         } else {
-            // Fixed: lower edge, upper edge.
-            (a, b)
+            // Fixed: lower edge, upper edge. An `F` in the lower edge's 1 GHz digit, the high
+            // nibble of its fifth byte, means the edge is NEGATIVE and the other digits are its
+            // absolute value: A7380-7EX-4 (IC-7610) PDF p. 15, the IC-7300 Full Manual
+            // A7292-4EX-12 PDF p. 172, A7560-8EX-6 (IC-705) PDF p. 29. `bcd_to_freq` reads the F
+            // as 0, so `a` is already that absolute value; only the sign was being lost.
+            let lo = if data[9] >> 4 == 0x0F { -a } else { a };
+            (lo, b)
         };
         let header = SweepHeader {
             lo_hz: lo,
@@ -327,6 +332,48 @@ mod tests {
         let sweep = asm.push(&wf_frame(2, 2, &[10, 20])).expect("complete");
         assert_eq!(sweep.lo_hz, 144_000_000.0);
         assert_eq!(sweep.hi_hz, 144_500_000.0);
+    }
+
+    /// A NEGATIVE LOWER EDGE. In the Fixed and Scroll-F modes the radio sends the two edges, and
+    /// an `F` in the lower edge's 1 GHz digit means the edge is below 0 Hz, its other digits the
+    /// absolute value. Read as a 0, the F put the sweep over a positive span the radio was not
+    /// showing.
+    #[test]
+    fn an_f_in_the_lower_edges_1_ghz_digit_is_a_negative_edge() {
+        // −20 kHz: the absolute value, 20 kHz, with the 1 GHz digit (the fifth byte's high
+        // nibble) set to F.
+        let mut lower = freq_to_bcd(20_000);
+        lower[4] |= 0xF0;
+        assert_eq!(lower, [0x00, 0x00, 0x02, 0x00, 0xF0]);
+        for mode in [0x01u8, 0x03] {
+            // Fixed, and Scroll-F (fixed-style edges).
+            let mut hdr = vec![mode];
+            hdr.extend_from_slice(&lower);
+            hdr.extend_from_slice(&freq_to_bcd(480_000));
+            hdr.push(0x00);
+            let mut asm = ScopeAssembler::new(Some(IcomModel::Ic7300));
+            assert!(asm.push(&wf_frame(1, 2, &hdr)).is_none());
+            let sweep = asm.push(&wf_frame(2, 2, &[0, 80, 160])).expect("complete");
+            assert_eq!(
+                (sweep.lo_hz, sweep.hi_hz),
+                (-20_000.0, 480_000.0),
+                "mode {mode:02X}"
+            );
+            assert_eq!(sweep.row, [0.0, 0.5, 1.0], "mode {mode:02X}");
+        }
+        // Control: a 1 GHz digit that is a digit. An IC-9700's 23 cm fixed scope keeps the
+        // positive edges it has.
+        let mut hdr = vec![0x01];
+        hdr.extend_from_slice(&freq_to_bcd(1_240_000_000));
+        hdr.extend_from_slice(&freq_to_bcd(1_300_000_000));
+        hdr.push(0x00);
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
+        assert!(asm.push(&wf_frame(1, 2, &hdr)).is_none());
+        let sweep = asm.push(&wf_frame(2, 2, &[10, 20])).expect("complete");
+        assert_eq!(
+            (sweep.lo_hz, sweep.hi_hz),
+            (1_240_000_000.0, 1_300_000_000.0)
+        );
     }
 
     #[test]

@@ -171,8 +171,10 @@ pub struct CivBackend {
     main_hz: Mutex<Option<u64>>,
     main_mode: Mutex<Option<(Mode, Option<u8>)>>,
     /// Which Icom DATA mode to select for digital operating (1..=3, default 1 = today's
-    /// behaviour). Atomic because a settings save must move it under a RUNNING daemon: the
-    /// alternative is a CI-V restart to change a menu choice, which drops CAT mid-session.
+    /// behaviour), as the operator saved it; what goes on the wire is
+    /// [`Self::data_mode_on_wire`]. Atomic because a settings save must move it under a
+    /// RUNNING daemon: the alternative is a CI-V restart to change a menu choice, which drops
+    /// CAT mid-session.
     data_mode: std::sync::atomic::AtomicU8,
     /// Split state the UI/`s` verb reads back (the rig's `0F` read is skipped — the
     /// last commanded state is authoritative for the session, like the Hamlib cache).
@@ -251,6 +253,17 @@ impl CivBackend {
     /// model keeps the behaviour it always had.
     fn has_delta_tx(&self) -> bool {
         self.model.is_none_or(commands::has_delta_tx)
+    }
+
+    /// The DATA mode a DATA-on write selects: the operator's choice ([`Self::data_mode`])
+    /// capped at the DATA modes this radio has ([`commands::data_mode_count`]). A one-DATA Icom
+    /// is always sent `01`, the only ON its guide defines. The saved choice itself is left
+    /// alone, so it would come back into force if the table were ever found wrong. A radio the
+    /// caller did not name is sent the choice as it always was.
+    fn data_mode_on_wire(&self) -> u8 {
+        let n = self.data_mode.load(std::sync::atomic::Ordering::Relaxed);
+        self.model
+            .map_or(n, |m| n.min(commands::data_mode_count(m)))
     }
 
     /// Does this radio read and write Main's dial and mode BY NAME
@@ -1173,7 +1186,7 @@ impl RigBackend for CivBackend {
             // IC-7610: MAIN's mode by name — ONE `26 00` frame that leaves the radio where the
             // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
             // off and its default filter, a DATA mode with the operator's D1–D3 and FIL1.
-            let n = data.then(|| self.data_mode.load(std::sync::atomic::Ordering::Relaxed));
+            let n = data.then(|| self.data_mode_on_wire());
             return self.ack(commands::set_band_mode(
                 self.addr,
                 commands::BAND_MAIN,
@@ -1184,10 +1197,10 @@ impl RigBackend for CivBackend {
         let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
         // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
         // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
-        // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n`. Turning
-        // data OFF is still just off.
+        // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n` — capped
+        // at what this radio has (`data_mode_on_wire`). Turning data OFF is still just off.
         let data_ok = if data {
-            let n = self.data_mode.load(std::sync::atomic::Ordering::Relaxed);
+            let n = self.data_mode_on_wire();
             self.ack(commands::set_data_mode_n(self.addr, n, None))
         } else {
             self.ack(commands::set_data_mode(self.addr, false, None))
@@ -2752,6 +2765,16 @@ mod tests {
         addr: u8,
         model: Option<IcomModel>,
     ) -> (CivEngine, Arc<CivBackend>, Arc<Mutex<Regs>>) {
+        backend_with_data_mode(addr, model, 1)
+    }
+
+    /// [`backend_on`], with the operator's DATA mode choice (`icom_data_mode`) set to
+    /// `data_mode` instead of D1.
+    fn backend_with_data_mode(
+        addr: u8,
+        model: Option<IcomModel>,
+        data_mode: u8,
+    ) -> (CivEngine, Arc<CivBackend>, Arc<Mutex<Regs>>) {
         let (radio, _push) = FakeRadio::new(addr);
         let regs = radio.regs();
         let engine = CivEngine::start(Box::new(radio), addr, model);
@@ -2759,7 +2782,7 @@ mod tests {
             engine.handle(),
             addr,
             Arc::new(AtomicBool::new(false)),
-            1,
+            data_mode,
             model,
         ));
         // The engine's own first frame is scope-off housekeeping (`27 11 00`), sent
@@ -3165,6 +3188,61 @@ mod tests {
                 "{model:?}: the dial and mode writes moved"
             );
         }
+    }
+
+    /// ⛔ A RADIO WITH ONE DATA MODE IS SENT THAT ONE, WHATEVER IS SAVED. `1A 06`'s first byte
+    /// selects DATA1, DATA2 or DATA3 on the IC-7610; the IC-7300, IC-9700, IC-705 and IC-905
+    /// define `00` (OFF) and `01` (ON) and nothing more ([`commands::data_mode_count`] has the
+    /// pages). A D2 or D3 saved on one of them went out as `1A 06 02 01` or `1A 06 03 01` on
+    /// every DATA write, a value its own guide does not define. The IC-7610 still gets the
+    /// operator's choice, by name (`26 00`), and a radio the caller did not name keeps the
+    /// choice as it always did.
+    #[test]
+    fn a_data_write_never_selects_a_data_mode_the_radio_does_not_have() {
+        let mut sent = Vec::new();
+        for (addr, model) in [
+            (0x94u8, Some(IcomModel::Ic7300)),
+            (0xA2, Some(IcomModel::Ic9700)),
+            (0xA4, Some(IcomModel::Ic705)),
+            (0xAC, Some(IcomModel::Ic905)),
+            (0x98, Some(IcomModel::Ic7610)),
+            (0x94, None),
+        ] {
+            for d in [2u8, 3] {
+                let (_e, b, regs) = backend_with_data_mode(addr, model, d);
+                let n = regs.lock().unwrap().wire.len();
+                assert!(b.set_mode("PKTUSB", 0), "{model:?}, D{d}: PKTUSB refused");
+                sent.push((model, d, hex_frames(&regs.lock().unwrap().wire[n..])));
+            }
+        }
+        let usb_d = |addr: u8, d: u8| {
+            vec![
+                format!("FE FE {addr:02X} E0 06 01 FD"),
+                format!("FE FE {addr:02X} E0 1A 06 {d:02X} 01 FD"),
+            ]
+        };
+        let mut want = Vec::new();
+        for (addr, model) in [
+            (0x94u8, IcomModel::Ic7300),
+            (0xA2, IcomModel::Ic9700),
+            (0xA4, IcomModel::Ic705),
+            (0xAC, IcomModel::Ic905),
+        ] {
+            for d in [2u8, 3] {
+                want.push((Some(model), d, usb_d(addr, 1)));
+            }
+        }
+        for d in [2u8, 3] {
+            want.push((
+                Some(IcomModel::Ic7610),
+                d,
+                vec![format!("FE FE 98 E0 26 00 01 {d:02X} 01 FD")],
+            ));
+        }
+        for d in [2u8, 3] {
+            want.push((None, d, usb_d(0x94, d)));
+        }
+        assert_eq!(sent, want, "the DATA mode each radio was sent");
     }
 
     /// ⭐ A DIAL READ THAT TIMES OUT SERVES MAIN'S LAST READING — never the engine's cache,

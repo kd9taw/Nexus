@@ -5702,11 +5702,11 @@ export function SettingsPanel({
                   </label>
                 )}
 
-              {/* WHICH Icom data mode. Only for the radios that have more than one (or one still
-                  holding a D2/D3 — see dataModePickerShown), and only through the native CI-V
+              {/* WHICH Icom data mode. Only for the radios that have more than one (see
+                  dataModePickerShown), and only through the native CI-V
                   engine — Hamlib's PKT modes always select D1, so offering the choice on that
                   path would be a control that does nothing. */}
-              {dataModePickerShown(form.rigModel, form.icomDataMode ?? 1) && (
+              {dataModePickerShown(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">Data mode</span>
                   <select
