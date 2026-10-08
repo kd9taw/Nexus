@@ -1480,7 +1480,7 @@ impl CivDaemon {
         data_mode: u8,
         model: Option<IcomModel>,
     ) -> std::io::Result<CivDaemon> {
-        let engine = CivEngine::start(io, civ_addr);
+        let engine = CivEngine::start(io, civ_addr, model);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -1797,6 +1797,81 @@ mod tests {
         line.clear();
         rd.read_line(&mut line).unwrap();
         assert_eq!(line, "0\n");
+    }
+
+    /// One scope sweep as a radio sends it over USB: a header-only first division (centre
+    /// 14.100 MHz ± 50 kHz, in range), then the points, `per` to a division.
+    fn usb_sweep(from: u8, points: &[u8], per: usize) -> Vec<u8> {
+        let bcd = |v: usize| (((v / 10) << 4) | (v % 10)) as u8;
+        let chunks: Vec<&[u8]> = points.chunks(per).collect();
+        let total = chunks.len() + 1;
+        let frame = |seq: usize, body: &[u8]| {
+            let mut data = vec![0x00, 0x00, bcd(seq), bcd(total)];
+            data.extend_from_slice(body);
+            Frame {
+                to: 0xE0,
+                from,
+                cmd: 0x27,
+                data,
+            }
+            .to_bytes()
+        };
+        let mut header = vec![0x00]; // centre mode
+        header.extend_from_slice(&super::super::frame::freq_to_bcd(14_100_000));
+        header.extend_from_slice(&super::super::frame::freq_to_bcd(50_000));
+        header.push(0x00); // in range
+        let mut bytes = frame(1, &header);
+        for (i, c) in chunks.iter().enumerate() {
+            bytes.extend(frame(i + 2, c));
+        }
+        bytes
+    }
+
+    /// A SWEEP IS SCALED TO ITS OWN RADIO'S RANGE. Icom's IC-7610 guide (A7380-7EX-4, PDF p. 15,
+    /// "Scope waveform data", `27 00` item 7) gives "Data range: 00 ~ C8 (0 ~ 200)" and "Data
+    /// length: 689", sent over USB as 15 divisions: header only, then 50 points in each of the
+    /// next 13 and 39 in the last (its 15 / 53 / 42-byte table). Read against the 0–160 of the
+    /// IC-7300, 9700, 705 and 905, every point above 160 drew at full height, so the strongest
+    /// fifth of the 7610's scale came out flat. The burst goes in through the daemon a 7610 is
+    /// started as, because that is the road the model has to travel to reach the assembler.
+    #[test]
+    fn a_scope_sweep_is_scaled_to_its_own_radios_range() {
+        let row_from = |addr: u8, model: Option<IcomModel>, points: &[u8]| -> Vec<f32> {
+            let (radio, push) = FakeRadio::new(addr);
+            let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, model).unwrap();
+            push.lock().unwrap().extend(usb_sweep(addr, points, 50));
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(s) = d.take_scope_row() {
+                    return s.row;
+                }
+                assert!(std::time::Instant::now() < deadline, "{model:?}: no sweep");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        let mut points = vec![0u8; 689];
+        points[340] = 100;
+        points[600] = 160;
+        points[688] = 0xC8; // 200, the guide's top
+        let row = row_from(0x98, Some(IcomModel::Ic7610), &points);
+        assert_eq!(row.len(), 689, "Icom's data length, all 15 divisions");
+        assert_eq!(
+            [row[0], row[340], row[600], row[688]],
+            [0.0, 0.5, 0.8, 1.0],
+            "0, 100, 160 and 200 on the 7610's 0–200"
+        );
+
+        // Controls: 0–160 and 475 points over 11 divisions (IC-9700 guide A7508-3EX-4, PDF
+        // p. 26), on a radio the daemon was told and on one it was not.
+        let mut points = vec![0u8; 475];
+        points[237] = 80;
+        points[474] = 160;
+        for (addr, model) in [(0xA2, Some(IcomModel::Ic9700)), (0x94, None)] {
+            let row = row_from(addr, model, &points);
+            assert_eq!(row.len(), 475, "{model:?}");
+            assert_eq!([row[0], row[237], row[474]], [0.0, 0.5, 1.0], "{model:?}");
+        }
     }
 
     /// ⭐ ISSUE #275: A SCOPE SPAN THE RADIO REFUSES HAS TO COME BACK AS A REFUSAL. The daemon
@@ -2371,7 +2446,7 @@ mod tests {
     fn fm_d_is_the_fm_mode_byte_plus_the_data_flag_and_plain_fm_still_turns_data_off() {
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
-        let engine = CivEngine::start(Box::new(radio), 0xA2);
+        let engine = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
         let backend = CivBackend::new(
             engine.handle(),
             0xA2,
@@ -2424,7 +2499,7 @@ mod tests {
         // "the operator tuned away" (a silent pass-killer). The band lock must
         // make the select-write-restore sequence atomic against every reader.
         let (radio, _push) = FakeRadio::new(0xA2);
-        let engine = CivEngine::start(Box::new(radio), 0xA2);
+        let engine = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
         let backend = Arc::new(CivBackend::new(
             engine.handle(),
             0xA2,
@@ -2473,7 +2548,7 @@ mod tests {
     fn monitor_attenuator_and_preamp_reach_the_wire_and_read_back() {
         let (radio, _push) = FakeRadio::new(0x98);
         let regs = radio.regs();
-        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let engine = CivEngine::start(Box::new(radio), 0x98, Some(IcomModel::Ic7610));
         let backend = CivBackend::new(
             engine.handle(),
             0x98,
@@ -2631,7 +2706,7 @@ mod tests {
     fn an_unknown_model_offers_no_attenuator_or_preamp_at_all() {
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
-        let engine = CivEngine::start(Box::new(radio), 0xA2);
+        let engine = CivEngine::start(Box::new(radio), 0xA2, None);
         let backend = CivBackend::new(
             engine.handle(),
             0xA2,
@@ -2679,7 +2754,7 @@ mod tests {
     ) -> (CivEngine, Arc<CivBackend>, Arc<Mutex<Regs>>) {
         let (radio, _push) = FakeRadio::new(addr);
         let regs = radio.regs();
-        let engine = CivEngine::start(Box::new(radio), addr);
+        let engine = CivEngine::start(Box::new(radio), addr, model);
         let b = Arc::new(CivBackend::new(
             engine.handle(),
             addr,
@@ -3005,7 +3080,7 @@ mod tests {
         // The operator's DATA mode rides the frame: D2 here, as `1A 06 02 01` carried it.
         let (radio, _push) = FakeRadio::new(0x98);
         let regs2 = radio.regs();
-        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let engine = CivEngine::start(Box::new(radio), 0x98, Some(IcomModel::Ic7610));
         let b2 = CivBackend::new(
             engine.handle(),
             0x98,
@@ -3105,7 +3180,7 @@ mod tests {
     fn an_ic7610_dial_read_that_times_out_serves_mains_last_reading_not_a_pushed_sub_dial() {
         let (radio, push) = FakeRadio::new(0x98);
         let regs = radio.regs();
-        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let engine = CivEngine::start(Box::new(radio), 0x98, Some(IcomModel::Ic7610));
         let b = CivBackend::new(
             engine.handle(),
             0x98,

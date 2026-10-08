@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
+  CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
+  0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full
+  height, so the strongest signals on the band all looked the same. The IC-7610 is now read on its
+  own scale; the other radios are unchanged. NEEDS-BENCH on an IC-7610: a strong carrier should no
+  longer sit flat against the top, and heights should follow the radio's own scope.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of
