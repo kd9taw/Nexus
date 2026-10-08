@@ -8449,6 +8449,33 @@ select optgroup {
   color: var(--state-good);
   border: 1px solid color-mix(in srgb, var(--state-good) 40%, transparent);
 }
+/* "Check confirmations" (ConfirmationReview) renders on the park-states box, rows and notes above.
+   Each row adds a second line, under the call: why it is listed, and what the change keeps or
+   costs. The group heading names the service; the counts under the list are what it leaves alone. */
+.confirm-review-group {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 800;
+  color: var(--text-faint);
+}
+.confirm-review-why {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding-left: calc(1em + var(--space-3));
+  font-size: calc(12px * var(--text-scale));
+}
+.confirm-review-badge {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: calc(11px * var(--text-scale));
+  border: 1px solid var(--border);
+}
+.confirm-review-counts {
+  margin-top: var(--space-3);
+}
 .logconfirm-sub.danger {
   color: var(--state-weak);
   font-weight: 800;
