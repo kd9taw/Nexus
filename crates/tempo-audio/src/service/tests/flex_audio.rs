@@ -245,13 +245,22 @@ fn native_audio_on_the_client_carries_both_ways_on_one_session() {
         s.state.dax_last_audio.is_some(),
         "DAX receive audio reached the decoder"
     );
+    // The DAX source is written at the loop's next quiet point (`RadioLoop::tx_routing_quiet`),
+    // not with the tee: a transmit stream created in the last tick before a slot boundary's guard
+    // puts the tee in inside the guard, and the flag waits for the guard after the boundary, about
+    // two seconds later. A digital over in between is refused on the mic (`flex::shim`).
+    run_until(&mut s, "the radio was never told to take DAX", |s| {
+        s.log()
+            .iter()
+            .any(|(_, e)| command(e, "transmit set dax=1"))
+    });
+    s.run(200);
     let log = s.log();
     let connections = log
         .iter()
         .filter(|(_, e)| matches!(e, SimEvent::Connected { .. }))
         .count();
     assert_eq!(connections, 1, "one session per radio");
-    assert!(log.iter().any(|(_, e)| command(e, "transmit set dax=1")));
     assert!(s.engine.lock().unwrap().snapshot().radio.flex_dax_tx);
     // Off: back to the sound card, the operator's mic back on the radio, the cockpit told.
     s.set_native_audio(false);
