@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Connection help no longer sends RS-BA1 users to NET rigctl.** For an Icom on its LAN port,
+  the help under Connection in Settings ▸ Radio ▸ Rig & CAT said to point Nexus at a rigctld
+  server with Rig Model NET rigctl, whether the program in between was wfview or RS-BA1. RS-BA1
+  runs no rigctld server, so an RS-BA1 user who followed it found nothing to connect to. It now
+  says: with RS-BA1, choose Serial, your Icom's model and the virtual COM port RS-BA1 creates. With
+  wfview, turn on its rigctld server and use Network and NET rigctl, as before.
 - **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
   CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
   0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full
