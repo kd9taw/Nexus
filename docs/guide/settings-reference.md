@@ -2099,9 +2099,11 @@ one section up. Contacts logged while the network is down are re-sent
 automatically on reconnect, and if the host PC dies you can enable hosting on
 any other position — everyone re-joins and nothing is lost. The host's Field
 Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
-deduplicated log. Club sync runs for ARRL Field Day and Winter Field Day only:
-with another contest selected, this section says so and the station neither
-hosts nor joins.
+deduplicated log. Club sync runs the contest picked above, under its own rules,
+and every position must pick the same one. It does not run a contest with a
+serial number in the exchange (Sweepstakes, CQ WPX, the California QSO Party)
+or CQ World-Wide: with one of those selected, this section says why and the
+station neither hosts nor joins.
 ![The Field Day Club Sync group: "Host a club event" switched off, Event name reading "N9WH Field Day 2026", Host port 42073, an empty "Join event at" box showing a host:port placeholder, a "Find club events" button, and Spectator scoreboard switched off.](../img/manual/settings-field-day-club-sync.webp)
 
 *Field Day Club Sync in Nexus 1.10.3, with hosting off. One position at the site

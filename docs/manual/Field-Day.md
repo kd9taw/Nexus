@@ -241,7 +241,8 @@ Submit the Cabrillo file to the ARRL online submission system. ADIF can be impor
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
-- **Club sync runs for ARRL Field Day and Winter Field Day only.** With any other contest selected a station neither hosts nor joins, and the contest screen and Settings say so. For a state QSO party, log on each position by itself and merge the Cabrillo files afterwards (see the Illinois QSO Party checklist below).
+- **Club sync does not run a serial-number contest or CQ World-Wide.** It runs every other contest on the picker under that contest's own rules. With Sweepstakes, CQ WPX, the California QSO Party or CQ WW selected a station neither hosts nor joins, and the contest screen and Settings say why: one entry's serial numbers must run in a single sequence, and CQ WW's log must say which transmitter made each contact. Log those on each position by itself.
+- **The spectator scoreboard is Field Day only.** It scores by Field Day's rules, so for a club running any other contest its page shows no club.
 - **Desktop-only** (Tauri v2); no mobile companion.
 
 ---
@@ -277,10 +278,31 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
   - **Power category** QRP, for a QRP entry. The file then says `QRP-COMPETITION: YES`.
 
   All of these are read when you export, so you can set them after the party. The address lines in the sponsor's sample are not written; add them by hand if you want them.
-- **Club sync does not run for this party.** It runs only for ARRL Field Day and Winter Field Day, so with the Illinois QSO Party selected a station neither hosts nor joins a club event, and the contest screen and Settings say so. A club logs on each position by itself and merges the files afterwards, with the checklist below.
+- **Club sync runs this party.** One position hosts and the others join, as at Field Day, and the club log keeps the party's rules: every contact's county, CW and digital as one mode, a mobile's new county as a new contact, the Illinois multipliers with the five-country cap, the two bonus calls once for the whole club. A position typing a station another position already worked from that county is warned before it logs. The host's **Club Cabrillo** is the file to send: `CONTEST: ILLINOIS QSO PARTY`, `CATEGORY-OPERATOR: MULTI-OP`, the host's Entry class, Club and `IL-COUNTY`, an `OPERATORS` line naming everyone set as Operator at the key on any position (then the host's Other operators), and both counties on every QSO line. Every position must have the Illinois QSO Party picked: a position logging another contest is refused when it joins, and its club chip says so. Try it on two of your own PCs first (the checklist below); if anything there does not work, log on each position by itself and merge the files, with the second checklist.
 - **Logs are due by midnight Central Time on 4 November 2026**, by email to n9jf@arrl.net, as a Cabrillo file. The sponsor asks for Cabrillo only: do not send an `.adi` or `.adif` file.
 
-**Running the Illinois QSO Party as a club, with each position logging on its own:**
+**Running the Illinois QSO Party as a club with club sync:**
+
+Before the party, on every laptop:
+
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again).
+- [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's.
+- [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
+- [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.
+- [ ] One laptop: an **Event name** for the party and **Host a club event** on. The others: **Find club events**, or the host's address in **Join event at**. Allow Nexus through the Windows firewall on Private networks.
+- [ ] Every clock set from one source, to the second.
+- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on the host, any `fd_event_*.ilqp.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's, or the rehearsal's contacts come back into the party's logs.
+
+During the party:
+
+- [ ] One transmitted signal per position. Every club chip reads **Synced**; a chip reading Offline or Behind catches up by itself when the network is back.
+- [ ] Whoever takes a seat sets **Operator at the key** first.
+
+After the party, on the host:
+
+- [ ] **Club Cabrillo**, then read the header: `ENTRY-CLASS`, `CLUB`, `OPERATORS`, `IL-COUNTY`. Add your address lines if you want them, and send that one file to n9jf@arrl.net by midnight Central Time on 4 November 2026. Export every position's own Cabrillo too, and keep them as a backup.
+
+**Running the Illinois QSO Party as a club, with each position logging on its own** (if club sync is not used):
 
 Before the party, on every laptop:
 
