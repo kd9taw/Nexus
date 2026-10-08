@@ -41,7 +41,7 @@ import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/re
 import { useState } from 'react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot, QrzLookup } from '../types'
-import { OPERATE_PANEL_IDS } from '../features/panelState'
+import { OPERATE_PANEL_IDS, OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const resolved: QrzLookup = {
@@ -139,7 +139,7 @@ function useLivePanels(): PanelLayoutApi<OperatePanelId> {
   const [state, setState] = useState<Partial<Record<OperatePanelId, PanelState>>>({})
   return {
     layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id),
     setPanelState: (id, s) => setState((cur) => ({ ...cur, [id]: s })),
     shareOf: () => 1,
     setShare: () => {},
@@ -230,14 +230,18 @@ describe('Operate — every removable pane carries its own ✕', () => {
       renderCockpit(layout)
       const close = await screen.findByRole('button', { name: `Hide ${label}` })
       expect(stateOf(id)).toBe('docked')
+      // Every other entry as it stands before the click: docked, or hidden where the vocabulary
+      // ships it hidden (the RF scope pane and the six boxes).
+      const before = Object.fromEntries(OPERATE_PANEL_IDS.map((other) => [other, stateOf(other)]))
       fireEvent.click(close)
       // (2) THE RECORD MOVED. An inert ✕ — `onClick={() => {}}`, the mutation neither
       // stop-line sweep can see — dies here and nowhere else in the suite.
       expect(stateOf(id)).toBe('removed')
       // (3) …and only that entry. A ✕ wired to the wrong id would pass (1) and (2).
       for (const other of OPERATE_PANEL_IDS) {
-        if (other !== id) expect(stateOf(other), other).toBe('docked')
+        if (other !== id) expect(stateOf(other), other).toBe(before[other])
       }
+      expect(Object.values(before).filter((s) => s === 'docked').length, 'control: most entries start docked').toBeGreaterThan(5)
       // (1b) THE PANE IS GONE FROM THE SCREEN, not merely flagged: its own ✕ went with it.
       await waitFor(() => expect(screen.queryByRole('button', { name: `Hide ${label}` })).toBeNull())
     })

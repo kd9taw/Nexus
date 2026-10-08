@@ -29,6 +29,22 @@ import type { CSSProperties, ReactNode, Ref } from 'react'
 import { t } from '../../i18n'
 import { PaneCloseButton } from './PaneCloseButton'
 
+/** A frame's placement in its column, from its ROLE — CockpitPaneFrame's own inline style (its props
+ *  below say what each input is). Exported for the panes that draw their own head and so cannot sit in
+ *  this frame, but must take a column's room exactly as a frame does: FT's arranged columns (2026-10-07).
+ *  A placement input like the frame's own, never a size a pane declares. */
+export function paneRoleStyle({ fit, weight, share, split }: { fit?: 'content'; weight?: number; share?: number; split?: number }): CSSProperties {
+  return fit === 'content'
+    ? { flex: '0 0 auto' }
+    : share != null || split != null
+      ? ({
+          ...(share != null ? { '--pane-share': share } : {}),
+          flex: `var(--cockpit-pane-flex, var(--pane-share, ${weight ?? 1}) 1 0)`,
+          minHeight: `min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, ${split ?? 1}) / ${split ?? 1}), 100%)`,
+        } as CSSProperties)
+      : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 'var(--cockpit-fill-min, 0)' }
+}
+
 export function CockpitPaneFrame({
   title,
   paneId,
@@ -111,17 +127,7 @@ export function CockpitPaneFrame({
       aria-label={title}
       // Inline, not a class: a per-pane styling hook is what this component refuses to
       // have, and an inline placement cannot be outranked or forked in either sheet.
-      style={
-        fit === 'content'
-          ? { flex: '0 0 auto' }
-          : share != null || split != null
-            ? ({
-                ...(share != null ? { '--pane-share': share } : {}),
-                flex: `var(--cockpit-pane-flex, var(--pane-share, ${weight ?? 1}) 1 0)`,
-                minHeight: `min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, ${split ?? 1}) / ${split ?? 1}), 100%)`,
-              } as CSSProperties)
-            : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 'var(--cockpit-fill-min, 0)' }
-      }
+      style={paneRoleStyle({ fit, weight, share, split })}
     >
       <header className="pane-head">
         <span className="pane-title">{title}</span>

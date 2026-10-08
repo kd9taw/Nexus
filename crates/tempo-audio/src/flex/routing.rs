@@ -41,7 +41,9 @@
 //! - **Never a silent over.** Native audio turned off inside the guard before a boundary leaves
 //!   the radio on the DAX Nexus wrote until the next quiet point, with nothing feeding it
 //!   ([`Routing::leaves_dax`]); the shim refuses a digital key until the operator's setting is
-//!   back (`super::shim`).
+//!   back (`super::shim`). A voice key the same way, as long as the radio is on that DAX in place
+//!   of the mic the routing wants back ([`Routing::leaves_voice_on_dax`]): right after a digital
+//!   mode as well.
 //!
 //! Nexus's own design, not a port.
 
@@ -325,6 +327,16 @@ impl Routing {
     /// digital over keyed then would go out silent (`super::shim`).
     pub fn leaves_dax(&self, view: &View) -> bool {
         self.restore_on_disconnect(view) == Restore::Write(false)
+    }
+
+    /// Whether a voice over keyed now would leave on DAX in place of the operator's mic: Nexus's
+    /// own write still has the radio on DAX ([`Self::leaves_dax`]), and the routing does not want
+    /// DAX for voice. It does with native audio on while the stream's browser voice is live, as at
+    /// its last decision ([`wanted_source`]): that voice rides DAX. So right after the transmit
+    /// slice leaves a digital mode for Phone, or native audio goes off, until the mic's write.
+    pub fn leaves_voice_on_dax(&self, view: &View, native_audio: bool) -> bool {
+        let browser_voice = self.decided.as_ref().is_some_and(|i| i.browser_voice);
+        self.leaves_dax(view) && !(native_audio && browser_voice)
     }
 }
 

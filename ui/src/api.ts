@@ -487,6 +487,10 @@ export interface FdRulesetDto {
   problem?: string
   /** The W/VE warning (never a refusal) these settings would start the contest with. */
   locationWarning?: import('./types').ContestLocationWarning
+  /** The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order: what Settings
+   *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
+   *  tokens: the sponsor's names, never translated. */
+  entryClasses?: string[]
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
@@ -700,6 +704,27 @@ export async function contestLogManual(
   return invoke<AppSnapshot>('contest_log_manual', {
     call,
     fields,
+    mode,
+    submode: submode ?? null,
+  })
+}
+
+/** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
+ * Party counts once per county. `rows` is one field vector per row, each shaped exactly as
+ * `contestLogManual`'s `fields`. The engine stamps every row with one time and one band and
+ * dupe-checks each on its own key; the answer is, per row, whether it entered the log (`false`:
+ * refused as a dupe, as `contestLogManual` refuses one).
+ *
+ * `mode` and `submode` mean exactly what they mean there. */
+export async function contestLogManualRows(
+  call: string,
+  rows: [string, string][][],
+  mode: 'CW' | 'PH' | 'DIG',
+  submode?: string,
+): Promise<boolean[]> {
+  return invoke<boolean[]>('contest_log_manual_rows', {
+    call,
+    rows,
     mode,
     submode: submode ?? null,
   })
@@ -1052,6 +1077,90 @@ export async function applyParkStates(
   changes: { id: string; state: string | null; parkState: string }[],
 ): Promise<number> {
   return invoke<number>('apply_park_states', { changes })
+}
+
+/** One line of "Check confirmations": a contact holding LoTW's confirmation (`lotw`), or its LoTW
+ *  upload mark (`lotwUpload`), that LoTW's own downloads give another contact, or none. */
+export interface ConfirmationLine {
+  id: string
+  mark: 'lotw' | 'lotwUpload'
+  /** `moved`: the row it rests on pairs with another contact, the sibling; `contradicted`: LoTW
+   *  holds this contact itself, unconfirmed; `orphan`: the row pairs with no contact. */
+  class: 'moved' | 'contradicted' | 'orphan'
+  call: string
+  whenUnix: number
+  timeKnown: boolean
+  band: string
+  mode: string
+  /** The time of the row the line rests on. */
+  rowUnix: number
+  siblingId: string | null
+  siblingUnix: number | null
+  /** LoTW's own unconfirmed record of this contact (`contradicted` only). */
+  ownUnix: number | null
+  /** The evidence decides it: the line starts ticked. */
+  decisive: boolean
+  /** Why it starts unticked. */
+  unticked: 'dateOnly' | 'notReplayed' | 'tie' | 'orphan' | 'insideWindow' | 'notToTheMinute' | null
+  /** The credit codes the change takes off. */
+  removeGranted: string[]
+  removeSubmitted: string[]
+  /** A paper card it keeps, with its award credit. */
+  cardHeld: boolean
+  /** Owed to LoTW once every line listed for this contact is applied. */
+  owedAfter: boolean
+}
+
+/** What "Check confirmations" found: its lines, newest first, and what it leaves alone. */
+export interface ConfirmationCheck {
+  /** This check, which its Apply names. */
+  session: number
+  lines: ConfirmationLine[]
+  /** Contacts LoTW confirms that lack its confirmation: Apply adds it. */
+  gains: number
+  /** LoTW confirmations it leaves alone: no LoTW row within a day of them, or logged under
+   *  another call than the one LoTW was asked about. */
+  unreached: number
+  outOfScope: number
+  /** LoTW upload marks it leaves alone, the same two ways. */
+  uploadsUnreached: number
+  uploadsOutOfScope: number
+}
+
+/** What Apply in "Check confirmations" made. */
+export interface ConfirmationApplied {
+  /** The lines ticked. */
+  ticked: number
+  /** Contacts whose LoTW confirmation was taken off, and whose upload mark was cleared: fewer than
+   *  ticked when a contact changed after the check. */
+  confirmations: number
+  uploads: number
+  /** What merging the download added. */
+  newlyConfirmed: number
+  newlyCredited: number
+  /** The changed contacts as they were: Logbook ▸ Import ADIF puts them back. */
+  beforeFile: string | null
+}
+
+/** The Logbook's "Check confirmations": LoTW's whole confirmation history and own-QSO list,
+ *  downloaded once (minutes, on a long history) and checked against the log. It changes nothing:
+ *  the download is held at the station for this check's Apply, or its Cancel. */
+export async function confirmationCheck(): Promise<ConfirmationCheck> {
+  return invoke<ConfirmationCheck>('confirmation_check')
+}
+
+/** Apply check `session`'s ticked lines, each only while its contact still holds what the check
+ *  read, after merging the held download. Nothing is uploaded. */
+export async function applyConfirmationCheck(
+  session: number,
+  ticked: { id: string; mark: ConfirmationLine['mark'] }[],
+): Promise<ConfirmationApplied> {
+  return invoke<ConfirmationApplied>('apply_confirmation_check', { session, ticked })
+}
+
+/** Drop the check the station holds, and one still downloading. Nothing changes. */
+export async function cancelConfirmationCheck(): Promise<void> {
+  await invoke<void>('cancel_confirmation_check')
 }
 
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award

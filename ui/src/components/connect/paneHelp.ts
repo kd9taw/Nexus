@@ -54,6 +54,7 @@ export const PANE_HELP: Partial<Record<PaneId, PaneHelp>> = {
   clock: GRID,
   spots: GRID,
   pota: GRID,
+  needed: GRID,
 }
 
 /** The manual page for a pane, or null when the manual does not describe it. */

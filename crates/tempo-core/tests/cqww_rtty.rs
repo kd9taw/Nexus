@@ -623,6 +623,7 @@ fn the_headers_declare_the_entry() {
     let me = CabrilloEntrant {
         name: "EXAMPLE OPERATOR".into(),
         email: "op@example.com".into(),
+        ..Default::default()
     };
     let cab = log.cabrillo_with(14_080, &me).expect("one entry");
     // Points 2 + 3; zones {4, 25}, countries {Canada, Japan}, QTH {ON} → 5 × 5.

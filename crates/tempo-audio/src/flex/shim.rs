@@ -12,7 +12,7 @@
 //!
 //! | rigctld | Typed command or intent | Gate |
 //! |---|---|---|
-//! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX |
+//! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it |
 //! | `T 0` | `TxStop::Unkey` → `xmit 0` | never gated; sent only while something of ours may be keyed |
 //! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback) |
 //! | `b <text>` | `TxStart::CwxSend` → `cwx send` | admission (refuses today: no readback) |
@@ -49,6 +49,16 @@
 //! for a digital transmit slice while Nexus's own write still has the radio on DAX
 //! ([`super::routing::Routing::leaves_dax`]), the same way, with its own reason (operator ruling,
 //! 2026-10-07, "Refuse that over").
+//!
+//! ## Nor a voice over on DAX
+//! Phone the same way (operator ruling, 2026-10-08, "Same rule for Phone"): right after the
+//! transmit slice leaves a digital mode for a voice mode, or native audio goes off, the radio
+//! still takes its transmit audio from the DAX Nexus set until the routing's next quiet point puts
+//! the operator's mic back, and a key held from then on holds that quiet point off, so the voice
+//! would not reach the air for the whole over. `T 1` is refused for a voice transmit slice while
+//! Nexus's own write still has the radio on DAX in place of the mic
+//! ([`super::routing::Routing::leaves_voice_on_dax`]), with its own reason; not while the stream's
+//! browser voice is live with native audio on, which rides DAX.
 //!
 //! Nexus's own design, not a port.
 
@@ -218,8 +228,9 @@ impl FlexShim {
 
     /// Why a key must not go out on the audio route as it stands, if it must not: a digital
     /// over while the radio would take its audio from its mic input, or, with native audio off,
-    /// from a DAX nothing feeds (see the module header). In the shim's words, for the log and the
-    /// refusal on screen, and as a cause, for the UI's own.
+    /// from a DAX nothing feeds, and a voice over while it would take its audio from DAX in place
+    /// of the mic (see the module header). In the shim's words, for the log and the refusal on
+    /// screen, and as a cause, for the UI's own.
     pub(crate) fn audio_refuses_key(&self) -> Option<(String, FlexAudioRefusal)> {
         let native = self.state.native_audio.load(Ordering::Relaxed);
         let conn = self.conn.upgrade()?;
@@ -233,7 +244,31 @@ impl FlexShim {
             return None;
         };
         let mode = effective_mode(&snap.model, slice, &self.state)?;
-        if mode_class(&mode) != ModeClass::Digital {
+        let class = mode_class(&mode);
+        if class == ModeClass::Phone {
+            // The operator's mic carries a voice over, unless the browser voice rides DAX.
+            let view = routing_view(&snap, &self.state);
+            let routing = self
+                .state
+                .routing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if !routing.leaves_voice_on_dax(&view, native) {
+                return None;
+            }
+            let why = format!(
+                "not keying a {mode} over: the radio still takes its transmit audio from the DAX \
+                 Nexus set, not its mic input, until Nexus puts the mic back"
+            );
+            return Some((
+                why,
+                FlexAudioRefusal {
+                    mode,
+                    cause: FlexAudioCause::MicNotBack,
+                },
+            ));
+        }
+        if class != ModeClass::Digital {
             return None;
         }
         if !native {

@@ -1182,6 +1182,98 @@ export const EN = {
     other: '{{count}} contacts now hold their park’s state',
   },
   'logbook.parkStates.failed': 'Could not check park states',
+  // "Check confirmations" (ConfirmationReview): contacts holding a LoTW confirmation or upload mark
+  // that LoTW's own records give another contact, or none. LoTW, calls, bands and modes are
+  // invariant tokens. `{{time}}` is a UTC time (HH:MM, with its date when that is not the line's
+  // own), `{{codes}}` ADIF award credit names, `{{path}}` a file path: data, never translated.
+  'logbook.confirmations.button': 'Check confirmations',
+  'logbook.confirmations.buttonTitle':
+    'Download your whole LoTW history and list the contacts holding a LoTW confirmation or upload mark that LoTW gives another contact, or none, for you to tick and take off',
+  'logbook.confirmations.title': 'Check confirmations',
+  'logbook.confirmations.intro':
+    'Earlier versions of Nexus could put the LoTW confirmation of one contact, or the mark that LoTW holds its upload, on another contact with the same station, band and mode on the same UTC day. Check downloads your whole LoTW history once, which can take several minutes, and lists each contact holding a LoTW confirmation or upload mark that LoTW’s own records give another contact, or none. A line starts ticked only when those records decide it. Nothing changes until you press the button, nothing is uploaded, and no paper card is touched.',
+  'logbook.confirmations.check': 'Check',
+  'logbook.confirmations.checking': 'Downloading your whole LoTW history…',
+  'logbook.confirmations.none':
+    'LoTW’s records back every LoTW confirmation and upload mark this check can judge.',
+  'logbook.confirmations.change': 'LoTW ✓ → —',
+  'logbook.confirmations.changeUpload': 'LoTW: on file → not uploaded',
+  'logbook.confirmations.why.moved': 'LoTW’s confirmation is your {{time}} contact’s',
+  'logbook.confirmations.why.contradicted': 'LoTW holds this contact unconfirmed',
+  'logbook.confirmations.why.orphan': 'LoTW confirms a {{time}} QSO that is not in your log',
+  'logbook.confirmations.why.uploadMoved': 'The upload LoTW holds is your {{time}} contact’s',
+  'logbook.confirmations.why.uploadOrphan': 'LoTW holds a {{time}} upload that is not in your log',
+  'logbook.confirmations.why.dateOnly': 'no time of day',
+  'logbook.confirmations.unticked.dateOnly':
+    'This contact, or one the check compares it with, has a date but no time of day, so LoTW’s records cannot say which contact this belongs to. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.notReplayed':
+    'Earlier versions could not have put this confirmation here by taking the wrong contact, so it came some other way: an import, an older call, or a paper card an older Nexus filed as LoTW. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.uploadNotReplayed':
+    'Earlier versions could not have marked this contact by taking the wrong one, so the mark came some other way, such as an import. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.tie':
+    'LoTW’s record is exactly as near your other contact as this one, so the check cannot tell which it belongs to. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.orphan':
+    'No contact in your log is within 30 minutes of LoTW’s record: the QSO may be missing from your log, or this contact’s time may be more than 30 minutes off. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.insideWindow':
+    'LoTW’s record is within 30 minutes of this contact too, so it may be this contact’s. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.notToTheMinute':
+    'LoTW’s unconfirmed record is near this contact but not on its minute, so it may be another QSO’s. Tick it only if you are sure.',
+  'logbook.confirmations.badge.card': 'paper card — keeps award credit',
+  'logbook.confirmations.badge.credit': 'credit {{codes}} removed',
+  'logbook.confirmations.badge.submitted': 'submitted credit {{codes}} removed',
+  'logbook.confirmations.badge.owed': 'never uploaded — goes in your next LoTW upload',
+  'logbook.confirmations.badge.owedTitle':
+    'LoTW holds no upload of this contact. Once it is changed, Upload to LoTW sends it, and so does the automatic LoTW upload if you turned that on.',
+  'logbook.confirmations.gains': {
+    one: '{{count}} contact gains the confirmation LoTW holds for it.',
+    other: '{{count}} contacts gain the confirmation LoTW holds for them.',
+  },
+  'logbook.confirmations.unreached': {
+    one: '{{count}} contact holds a LoTW confirmation that LoTW does not list within a day of it; this check leaves it alone.',
+    other:
+      '{{count}} contacts hold a LoTW confirmation that LoTW does not list within a day of them; this check leaves them alone.',
+  },
+  'logbook.confirmations.outOfScope': {
+    one: '{{count}} contact with a LoTW confirmation was logged under another call than the one in Settings; this check leaves it alone.',
+    other:
+      '{{count}} contacts with a LoTW confirmation were logged under another call than the one in Settings; this check leaves them alone.',
+  },
+  'logbook.confirmations.uploadsUnreached': {
+    one: '{{count}} contact marked as uploaded has no upload LoTW lists within a day of it; this check leaves it alone.',
+    other:
+      '{{count}} contacts marked as uploaded have no upload LoTW lists within a day of them; this check leaves them alone.',
+  },
+  'logbook.confirmations.uploadsOutOfScope': {
+    one: '{{count}} contact marked as uploaded was logged under another call than the one in Settings; this check leaves it alone.',
+    other:
+      '{{count}} contacts marked as uploaded were logged under another call than the one in Settings; this check leaves them alone.',
+  },
+  'logbook.confirmations.cancel': 'Cancel',
+  'logbook.confirmations.apply': {
+    one: 'Change {{count}} contact',
+    other: 'Change {{count}} contacts',
+  },
+  'logbook.confirmations.done.confirmations': {
+    one: 'Took LoTW’s confirmation off {{count}} contact.',
+    other: 'Took LoTW’s confirmation off {{count}} contacts.',
+  },
+  'logbook.confirmations.done.uploads': {
+    one: 'Marked {{count}} contact as not uploaded to LoTW.',
+    other: 'Marked {{count}} contacts as not uploaded to LoTW.',
+  },
+  'logbook.confirmations.done.gained': {
+    one: '{{count}} contact gained the confirmation LoTW holds for it.',
+    other: '{{count}} contacts gained the confirmation LoTW holds for them.',
+  },
+  'logbook.confirmations.done.skipped': {
+    one: '{{count}} ticked line was left alone: its contact changed after the check.',
+    other: '{{count}} ticked lines were left alone: their contacts changed after the check.',
+  },
+  'logbook.confirmations.done.beforeFile':
+    'The changed contacts, as they were, are in {{path}}. Logbook ▸ Import ADIF puts them back.',
+  'logbook.confirmations.done.nothing': 'Nothing changed.',
+  'logbook.confirmations.failed': 'Could not check confirmations',
+  'logbook.confirmations.applyFailed': 'Could not change the ticked contacts',
   'logbook.pota.title':
     'Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records.',
   'logbook.pota.failed': 'POTA import failed',
@@ -1762,6 +1854,21 @@ export const EN = {
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
+  // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
+  // joined by "/" (COOK/DUPG) and logged as one contact per county. The county codes are
+  // invariant tokens; {{exchange}} is the exchange as logged.
+  'logEntry.countyLine.logged': {
+    one: 'Logged {{call}} {{exchange}} ({{mode}})',
+    other: 'Logged {{call}} {{exchange}} ({{mode}}): {{count}} contacts, one per county',
+  },
+  'logEntry.countyLine.dupe': {
+    one: '{{call}} in {{counties}} is a dupe on this band/mode, not logged again',
+    other: '{{call}} in {{counties}} are dupes on this band/mode, not logged again',
+  },
+  'logEntry.countyLine.unknown': "{{value}} is not a county on the sponsor's list, so this county line cannot be logged.",
+  'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
+  'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
+  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
   'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.hint': 'Did you mean {{codes}}?',
@@ -2909,6 +3016,8 @@ export const EN = {
   'chase.open.marginal': '{{band}} marginal',
   'chase.open.closed': '{{band}} closed now · best {{window}}',
   'chase.open.best': ' · best {{window}}',
+  // The Chase box's one line when nothing needed is being heard.
+  'chase.empty': 'No needed stations being heard right now — call CQ or wait for spots.',
 
   'chase.feed.dxped.label': 'DXP',
   'chase.feed.dxped.title': 'DXpedition',
@@ -3875,6 +3984,8 @@ export const EN = {
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
   'fieldDay.club.error': 'Host: {{msg}}',
+  'fieldDay.club.refused.chip': 'Not syncing',
+  'fieldDay.club.refused.body': 'Club sync works only for ARRL Field Day and Winter Field Day for now. With {{contest}} selected, this station does not host or join a club event. Each position keeps its own log, so export every position\'s Cabrillo file afterwards and merge them into one.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -3941,6 +4052,12 @@ export const EN = {
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
     'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
+  'settings.contestPick.entryClass.label': 'Entry class',
+  'settings.contestPick.entryClass.hint': 'The class the sponsor scores your entry in, from this contest\'s own rules, written on the ENTRY-CLASS line of the Cabrillo log. In the Illinois QSO Party a club running more than one transmitter at once enters UNLIMITED, and the high and low power classes split at 100 watts PEP. To certify a QRP entry, pick QRP under Power category.',
+  'settings.contestPick.club.label': 'Club',
+  'settings.contestPick.club.hint': 'Your contest club, for the CLUB line of the Cabrillo log when the contest\'s rules have one (the Illinois QSO Party). Leave it blank to leave the line out.',
+  'settings.contestPick.operators.label': 'Other operators',
+  'settings.contestPick.operators.hint': 'The OPERATORS line of the Cabrillo log lists everyone who was set as Operator at the key when they logged a contact. Add anyone else here, as callsigns separated by spaces or commas.',
   'settings.contestStation.legend': 'Your station data',
   'settings.contestStation.note': 'What your station sends when a contest asks for it. Fill in the ones your contest uses — a QSO party wants your county or your state, Sweepstakes wants your check. Nothing here is guessed: an exchange that goes on the air has to be one you typed.',
   'settings.contestStation.county.label': 'County',
@@ -7945,6 +8062,7 @@ export const EN = {
   'dashRail.slot.where.rail3': 'lower middle',
   'dashRail.slot.where.rail4': 'bottom',
   'dashRail.menu.small': 'Needs a larger window (or a smaller zoom) to show. Remembered for this section.',
+  'dashRail.menu.folded': 'On this window its boxes stand at the foot of this screen\'s columns; the rail comes back beside them on a larger window (or a smaller zoom). Remembered for this section.',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
@@ -8059,6 +8177,8 @@ export const EN = {
   'connect.pane.spots.title': 'Spots',
   'connect.pane.spots.basic': "The spot list isn't available on this screen.",
   'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
+  'connect.pane.needed.title': 'Needed',
+  'connect.pane.needed.basic': "The Needed list isn't available on this screen.",
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',
@@ -8603,6 +8723,12 @@ export const EN = {
   'operate.seam.railRoster.label': 'Side rail / Call Roster',
   'operate.panels.railLeft.label': 'Side rail on the left',
   'operate.panels.railLeft.note': 'Stations in Classic; Band Activity and Rx Frequency in Roster',
+  'operate.arrange.main': 'Main column',
+  'operate.arrange.main.add.aria': 'Add a box to the main column',
+  'operate.arrange.rail': 'Side rail',
+  'operate.arrange.rail.add.aria': 'Add a box to the side rail',
+  'operate.arrange.narrow': 'On a narrower window, the columns stand one above the other.',
+  'operate.seam.pair.label': '{{above}} / {{below}}',
 
   // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
   // built rather than at import (the registry-by-getter rule, batch 3).
@@ -10186,6 +10312,20 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
+  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
+  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
+  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
+  // on again.
+  'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
+  'shell.lane.slotAudioLost.detail':
+    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+  // The operator's PTT press that Nexus's own Flex client kept off the air: right after a digital
+  // mode, or native audio going off, the radio still took its transmit audio from the DAX Nexus had
+  // set, not the mic, so the voice would not have gone out. TX stays on; the next press answers anew.
+  // `{{mode}}` is the radio's own mode word (USB), as data.
+  'shell.lane.pttRefused.message': 'PTT REFUSED',
+  'shell.lane.pttRefused.detail':
+    'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.
@@ -10559,8 +10699,22 @@ export const EN = {
     one: '{{panes}} stands here on a window about 1280 px wide or wider. On this one it is in its usual column.',
     other: '{{panes}} stand here on a window about 1280 px wide or wider. On this one they are in their usual columns.',
   },
+  // The boxes as one item of the list above ("Band Activity, Spots, Needed or a box").
+  'panels.arrange.side.aBox': 'a box',
   'panels.arrange.toSide.aria': 'Move {{pane}} to the left side',
   'panels.arrange.fromSide.aria': 'Move {{pane}} from the left side back to its column',
+  // THE BOXES (any pane in any area): up to six on a cockpit's screen, each showing one Conditions box.
+  // `{{title}}` is that box's own name.
+  'panels.box.add': '+ Add a box',
+  'panels.box.add.a.aria': 'Add a box to column 1',
+  'panels.box.add.b.aria': 'Add a box to column 2',
+  'panels.box.add.log.aria': 'Add a box to the log column',
+  'panels.box.add.side.aria': 'Add a box to the left side',
+  'panels.box.full': 'All six boxes are on this screen.',
+  'panels.box.name': 'Box',
+  'panels.box.pick.aria': 'Choose what the {{title}} box shows',
+  'panels.box.pick.title': 'Choose what this box shows',
+  'panels.box.pick.onScreen': '{{title}} (on screen)',
 
   // ── The cockpit pane frame ──────────────────────────────────────────────────────────
   // `{{title}}` is the pane's own name, supplied by the cockpit.

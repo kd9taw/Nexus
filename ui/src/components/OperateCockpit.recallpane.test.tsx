@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot, QrzLookup } from '../types'
+import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const resolved: QrzLookup = {
@@ -123,7 +124,7 @@ function panelsApi(initial: Partial<Record<OperatePanelId, PanelState>> = {}): P
   const state: Partial<Record<string, PanelState>> = { ...initial }
   return {
     layout: { v: 1, state, share: {} },
-    stateOf: (id: string) => state[id] ?? 'docked',
+    stateOf: (id: string) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id as OperatePanelId),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

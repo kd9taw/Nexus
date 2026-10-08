@@ -14,7 +14,7 @@ import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // Nothing that stops or keys a transmission is in this file: Operate's stop line is Stop TX
 // and Tune in `OperateQsoStrip.tsx` (both deferred, see that file's header) plus the Esc
 // binding below, which is a keyboard handler with no string of its own.
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { engagedInQso } from '../alerts'
@@ -74,7 +74,24 @@ import { RecallPanel } from './RecallPanel'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
-import { OPERATE_PANELS, WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
+import { ArrangePanes } from './panes/ArrangePanes'
+import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
+import { paneRoleStyle } from './panes/CockpitPaneFrame'
+import {
+  BOX_IDS,
+  OPERATE_ARRANGE,
+  OPERATE_PANELS,
+  WATERFALL_DETACHED_KEY,
+  boxEntries,
+  extrasIn,
+  isBoxId,
+  placeOf,
+  type BoxId,
+  type OperatePanelId,
+  type PanelLayoutApi,
+  type PanelState,
+} from '../features/panelState'
+import { columnsOf, placedColumns, stockColumn, type PaneColumn } from '../features/panelPlace'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
   CLASSIC_FLOOR,
@@ -212,6 +229,10 @@ interface Props {
    * navigation (so Band Activity keeps accumulating in the background); this flag
    * pauses the waterfall's render loop while it's hidden. */
   active?: boolean
+  /** What the window lends this cockpit's BOXES (2026-10-07) — exactly what it lends the dashboard
+   *  rail. Absent ⇒ no box is drawn or offered, whatever the record says (Phone's rule): the hosted
+   *  Remote page and the pop-out lend none. */
+  boxes?: BoxSource
 }
 
 /** Mode chips, in the order the cockpit presents them (popular modes first). */
@@ -290,8 +311,9 @@ const NO_MACROS: string[] = []
 const NO_CALLS: string[] = []
 
 /** Operator-facing names for the removable panels (the ⊞ Panels menu). Resolved when the
- *  menu is BUILT — a module constant would freeze the first locale loaded. */
-const panelLabels = (): Record<OperatePanelId, string> => ({
+ *  menu is BUILT — a module constant would freeze the first locale loaded. The boxes are named
+ *  by what they show (CockpitBox `boxLabels`). */
+const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   waterfall: t('operate.panel.waterfall'),
   rfScope: t('rfScope.title'),
   bandActivity: t('operate.panel.bandActivity'),
@@ -303,11 +325,13 @@ const panelLabels = (): Record<OperatePanelId, string> => ({
   recall: t('operate.panel.recall'),
 })
 
-/** What each layout actually renders — the menu lists only these, so a panel the
- *  current layout has no place for can't be ticked into nowhere. */
+/** What each layout can render — the menu lists only these, so a panel the current layout has no
+ *  place for can't be ticked into nowhere. Since every FT pane can stand in both layouts (the operator's
+ *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
+ *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'recall', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'recall', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'txmeters'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'txmeters'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -339,6 +363,32 @@ const CLASSIC_COLUMNS: readonly (readonly OperatePanelId[])[] = [
   ['rxfreq', 'txmsgs'],
   ['stations'],
 ]
+
+/** ⊞ ARRANGE'S FILL PANES (2026-10-07): the four feeds, which share their column's height by weight in the
+ *  arranged columns. The Tx1–Tx6 machine and the callsign card are content-sized there, as everywhere. */
+const FILL_PANES = ['bandActivity', 'rxfreq', 'callRoster', 'stations'] as const
+type FillPane = (typeof FILL_PANES)[number]
+const isFillPane = (id: OperatePanelId): id is FillPane => (FILL_PANES as readonly string[]).includes(id)
+
+/** A fill pane's weight: the share the stock layouts give it beside another — Band Activity's 1.6 : 1
+ *  over Rx Frequency in Roster's rail, Stations' 1.8 in Classic's — and 1 for the others. */
+const FILL_WEIGHT: Partial<Record<OperatePanelId, number>> = { bandActivity: 1.6, stations: 1.8 }
+const weightOf = (id: OperatePanelId): number => FILL_WEIGHT[id] ?? 1
+
+/** The dividers of one arranged column (Phone's rule: a divider stands between two fill panes that are
+ *  adjacent in a column). Taken top to bottom, each pane in one pair at most, so each divider moves only its
+ *  own two panes and keeps their stock total (PaneSeam `scale`, CockpitPaneFrame `split`). */
+function fillPairs(ids: readonly OperatePanelId[]): Array<[FillPane, FillPane]> {
+  const out: Array<[FillPane, FillPane]> = []
+  for (let i = 0; i + 1 < ids.length; i++) {
+    const [a, b] = [ids[i], ids[i + 1]]
+    if (isFillPane(a) && isFillPane(b)) {
+      out.push([a, b])
+      i++
+    }
+  }
+  return out
+}
 
 /**
  * The Operate cockpit — the nerve center's primary operating surface. The
@@ -396,6 +446,7 @@ export function OperateCockpit({
   superFoxCalls = NO_CALLS,
   onOpenSettings,
   wheelSensitivity,
+  boxes,
 }: Props) {
   const control = useStationControl()
   const rotatorControl = useStationCapability('rotator')
@@ -431,6 +482,18 @@ export function OperateCockpit({
   const rosterSideRef = useRef<HTMLElement>(null)
   // Classic's Tx1–Tx6 machine, which the divider above it sizes (layout L5).
   const txRef = useRef<HTMLElement>(null)
+  // ⊞ ARRANGE (2026-10-07): the fill panes of the arranged columns, for the divider between two of them
+  // to measure (PaneSeam), and the boxes' selection — the cockpit's own, never the window's (CockpitBox).
+  const fillRefs = useMemo(
+    () => ({
+      bandActivity: createRef<HTMLDivElement>(),
+      rxfreq: createRef<HTMLDivElement>(),
+      callRoster: createRef<HTMLDivElement>(),
+      stations: createRef<HTMLDivElement>(),
+    }),
+    [],
+  )
+  const boxSel = useBoxSelection()
   // Only apply a stored share; an un-dragged pane keeps the CSS default proportions.
   const shareStyle = (id: OperatePanelId): React.CSSProperties | undefined => {
     const s = panels.layout.share[id]
@@ -658,7 +721,21 @@ export function OperateCockpit({
     ? [...CLASSIC_COLUMNS.slice(0, 2), ['recall', 'stations']]
     : CLASSIC_COLUMNS
   const { stateOf, setPanelState } = panels
-  const labels = panelLabels()
+  // EVERY FT PANE IN BOTH LAYOUTS (2026-10-07): a pane only the other layout draws in stock
+  // (OPERATE_ARRANGE `extra`) is on screen here once the operator adds it to this layout (the record's
+  // `extras`); its ⊞ tick and its ✕ add it to this layout or take it out and leave the other layout as it
+  // is. A hide in either layout still hides it, as for every FT pane. Every other pane reads and writes as
+  // ever, so with nothing added each layout's menu and screen are what they always were.
+  const extra: readonly OperatePanelId[] = OPERATE_ARRANGE[layoutMode].extra ?? []
+  const layoutStateOf = (id: OperatePanelId) => extrasIn(OPERATE_PANELS, panels.layout, layoutMode, id, stateOf)
+  const layoutSetPanelState = (id: OperatePanelId, s: PanelState) =>
+    extra.includes(id) && panels.setExtra ? panels.setExtra(layoutMode, id, s !== 'removed') : setPanelState(id, s)
+  // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
+  // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
+  // the Conditions feeds while it is mounted, and a hidden FT must not keep them asking (JS8's rule).
+  // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
+  const entries = boxes && active ? boxEntries(OPERATE_PANELS, panels.layout, stateOf, boxes.rail?.shows) : {}
+  const labels = { ...panelLabels(), ...boxLabels(entries) }
   const panelSpec: PanelHostSpec<OperatePanelId> = {
     menu: LAYOUT_PANELS[layoutMode],
     side: sidePanels,
@@ -668,11 +745,51 @@ export function OperateCockpit({
     // readings dimmed between overs, so the entry says WHEN it is populated rather than
     // leaving an operator to guess mid-menu (the same words the strip shows when idle).
     notes: { txmeters: TX_METERS_WHEN },
-    shipsHidden: OPERATE_PANELS.defaultRemoved,
+    // The other layout's panes ship hidden here as well: unticked, they are this layout as it shipped.
+    shipsHidden: [...(OPERATE_PANELS.defaultRemoved ?? []), ...extra],
     ...(layoutMode === 'classic' ? { columns: classicColumns } : {}),
   }
-  const { shown, sideShown, dataCols, menuItems, closeProps } = panelHost(panels, panelSpec)
+  const { shown, sideShown, dataCols, menuItems, closeProps } = panelHost({ stateOf: layoutStateOf, setPanelState: layoutSetPanelState }, panelSpec)
   const wfState = stateOf('waterfall')
+
+  // ⊞ PANELS ▸ ARRANGE (2026-10-07: the operator's "Arrange on FT's grid" and "Two saved arrangements"):
+  // where this layout's panes stand (features/panelState OPERATE_ARRANGE, one placement per layout).
+  // UNTIL THE OPERATOR ARRANGES SOMETHING — a pane moved in this layout, or a box on screen — the region is
+  // drawn exactly as it always was (the stock branch below, untouched), so nobody's FT screen changes on
+  // the update: OperateCockpit.arrange.test.tsx holds it to a golden of the tree as it was. Once arranged,
+  // each column is a keyed stack of role-typed frames (the arranged branch; cockpit-panes.css "FT'S
+  // ARRANGED COLUMNS"), and a pane moved up or down in its column is moved, not remounted. The first
+  // arranging act remounts the region's panes once, which loses a sort; the decode windows' history is
+  // this cockpit's, so their rows come back.
+  const arrangeSpec = OPERATE_ARRANGE[layoutMode]
+  const place = placeOf(OPERATE_PANELS, panels.layout, layoutMode)
+  // A box arranges only a window that lends boxes: in the pop-out and on the hosted page a box in the record,
+  // or a box's place, leaves today's tree, so there only a pane placed in this layout arranges it.
+  // THE DASHBOARD RAIL'S BOXES, on a window too small for the rail (the operator's "They move into the
+  // columns"): they stand at the foot of the column FT's own boxes stand in until placed, the side rail.
+  const folded = boxes?.rail?.folded?.boxes ?? []
+  const foldCol = stockColumn(arrangeSpec, BOX_IDS[0]) ?? 'log'
+  // The other layout's panes, and the rail's boxes, stand only in the arranged columns, so either arranges
+  // FT too.
+  const arranged =
+    (boxes
+      ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
+      : place != null && Object.keys(place).some((id) => !isBoxId(id))) ||
+    extra.some(shown) ||
+    folded.length > 0
+  const cardOn = shownRecallCall != null && shown('recall')
+  // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
+  // a station), and a box only where the window lends it one.
+  const arrangedOn = (id: OperatePanelId): boolean => (isBoxId(id) ? entries[id] != null : id === 'recall' ? cardOn : shown(id))
+  // What ⊞ Arrange lists and steps past: the same, but the card whether or not a station is selected, so
+  // the operator can place it before it has anything to show.
+  const arrangeListed = (id: OperatePanelId): boolean => (isBoxId(id) ? entries[id] != null : shown(id))
+  const arrangedCols = placedColumns(arrangeSpec, place)
+  const arrangedShown = columnsOf(arrangeSpec).filter((c) => arrangedCols[c].some(arrangedOn) || (c === foldCol && folded.length > 0))
+  // The populated-column count and whether the rail stands, from whichever branch draws the region: the
+  // column collapse, the rail side and the dividers between the columns read them, positional as ever.
+  const lowerCols = arranged ? (['one', 'one', 'two', 'three'] as const)[Math.max(1, arrangedShown.length)] : dataCols
+  const railShown = arranged ? arrangedShown.includes('log') : sideShown
 
   // THE COLUMN DIVIDERS (layout L5): absolutely positioned children of the lower grid, each placed
   // on the gap before its track (styles.css `.op-colseam`), so none takes a track, a cell or a
@@ -680,9 +797,9 @@ export function OperateCockpit({
   // two. Each divider moves only its own pair — Classic's paint a pair at its own total
   // (features/operateColumns) — and the rail side only reverses which column is where. The rail
   // is on the left only while it and at least one other column are on screen.
-  const railOnLeft = railLeft && sideShown && dataCols !== 'one'
+  const railOnLeft = railLeft && railShown && lowerCols !== 'one'
   let columnSeams: React.ReactNode = null
-  if (layoutMode === 'roster' && dataCols === 'two') {
+  if (layoutMode === 'roster' && lowerCols === 'two') {
     columnSeams = (
       <PaneSeam
         above={railOnLeft ? rosterSideRef : rosterMainRef}
@@ -700,7 +817,7 @@ export function OperateCockpit({
         label={railOnLeft ? t('operate.seam.railRoster.label') : t('operate.seam.rosterRail.label')}
       />
     )
-  } else if (layoutMode === 'classic' && dataCols === 'three') {
+  } else if (layoutMode === 'classic' && lowerCols === 'three') {
     const widths = classicWidths(panels.layout)
     const cols = [decodesRef, qsocolRef, classicSideRef]
     const order = railOnLeft ? [2, 0, 1] : [0, 1, 2]
@@ -1059,9 +1176,10 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
+  // In the arranged columns the card keeps its size and the column scrolls (`.cockpit-recall-kept`).
   const recallCard = shownRecallCall && shown('recall') ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} {...closeProps('recall')} paneTitle={labels.recall} />
-    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded {...closeProps('recall')} paneTitle={labels.recall} />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
   ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
@@ -1075,6 +1193,220 @@ export function OperateCockpit({
     if (expectedQso === undefined) onSetMode(mode)
     else onSetMode(mode, expectedQso)
   }
+
+  // ── THE ARRANGED BRANCH (⊞ Arrange, 2026-10-07) ─────────────────────────────────────────────────────
+  // Each pane exactly as the stock branch draws it in this layout — the same props, so the same click
+  // model (one `decodeClickProps`, the cockpit's `onCall`: a double-click calls the station wherever the
+  // pane stands) — in a frame typed by its ROLE (CockpitPaneFrame's own placement, `paneRoleStyle`): a feed
+  // fills its column by its weight, the Tx1–Tx6 machine is its own height, and the card keeps its bound
+  // (`.cockpit-recall`). Two fill panes adjacent in a column share a divider, which writes their shares as
+  // the Roster rail's always has.
+  const boxOnScreen = new Set<string>([...Object.values(entries), ...(boxes?.rail?.shows ?? [])])
+  const arrangedPane = (id: OperatePanelId, split: number | undefined): ReactNode => {
+    const share = panels.layout.share[id]
+    const fill = (cls: string, body: ReactNode) => (
+      <div
+        className={`${cls} panel`}
+        ref={fillRefs[id as FillPane]}
+        data-pane={id}
+        style={paneRoleStyle({ weight: weightOf(id), split, share: split != null && share != null ? share * split : undefined })}
+      >
+        {body}
+      </div>
+    )
+    switch (id) {
+      case 'bandActivity':
+        return fill(
+          layoutMode === 'roster' ? 'cockpit-decodes-side' : 'cockpit-decodes',
+          <OperateDecodes
+            {...closeProps('bandActivity')}
+            paneTitle={labels.bandActivity}
+            history={bandHistRef.current}
+            decodes={snap.recentDecodes}
+            slot={snap.radio.slot}
+            rxOffsetHz={snap.radio.rxOffsetHz}
+            band={snap.radio.band}
+            tier={tier}
+            harqRescues={snap.harqRescues}
+            onCall={onCall}
+            needAlertsByCall={needAlertsByCall}
+            needScopes={needScopes}
+            myGrid={snap.mygrid}
+            {...decodeClickProps}
+            partnerCall={partnerCall}
+            onErase={() => notifyErase(0)}
+            {...(layoutMode === 'roster' ? { title: t('operate.decodes.title') } : {})}
+          />,
+        )
+      case 'rxfreq':
+        return fill(
+          'cockpit-rxfreq',
+          <OperateDecodes
+            {...closeProps('rxfreq')}
+            paneTitle={labels.rxfreq}
+            history={rxHistRef.current}
+            decodes={snap.recentDecodes}
+            slot={snap.radio.slot}
+            rxOffsetHz={snap.radio.rxOffsetHz}
+            band={snap.radio.band}
+            tier={tier}
+            harqRescues={snap.harqRescues}
+            onCall={onCall}
+            needAlertsByCall={needAlertsByCall}
+            needScopes={needScopes}
+            myGrid={snap.mygrid}
+            {...decodeClickProps}
+            partnerCall={partnerCall}
+            onErase={() => notifyErase(1)}
+            lockedFilter="rx"
+            hideExcludedCountries={false}
+            compact
+            title={t('operate.decodes.rxFreq.title', { hz: Math.round(snap.radio.rxOffsetHz) })}
+          />,
+        )
+      case 'callRoster':
+        return fill(
+          'cockpit-roster-main',
+          <OperateRoster
+            {...closeProps('callRoster')}
+            paneTitle={labels.callRoster}
+            stations={snap.stations}
+            myGrid={snap.mygrid}
+            currentSlot={snap.radio.slot}
+            needByCall={needByCall}
+            needAlertsByCall={needAlertsByCall}
+            band={snap.radio.band}
+            feedMode={tier}
+            selectedCall={selectedCall}
+            workingCall={snap.qso?.dxcall ?? null}
+            onSelect={handleSelectStation}
+            onCall={onCall}
+            ignoredCalls={ignored}
+            onToggleIgnore={handleToggleIgnore}
+            onSpot={(call) => openSpot(call)}
+          />,
+        )
+      case 'stations':
+        return fill('cockpit-roster', roster)
+      case 'txmsgs':
+        return (
+          <div data-pane="txmsgs" style={paneRoleStyle({ fit: 'content' })}>
+            <TxPanel
+              {...closeProps('txmsgs')}
+              paneTitle={labels.txmsgs}
+              compact
+              dxCall={dxCall}
+              dxGrid={dxGrid}
+              onDxCall={setDxCall}
+              onDxGrid={setDxGrid}
+              messages={msgs}
+              tx5={tx5}
+              onTx5={handleTx5}
+              tx6={tx6}
+              onTx6={handleTx6}
+              nextIndex={nextIndex}
+              onTx={doTx}
+              onGenerate={handleGenerate}
+              onClear={clearDx}
+              qsoMacros={qsoMacros}
+            />
+          </div>
+        )
+      case 'recall':
+        return recallCard
+      default: {
+        const entry = isBoxId(id) ? entries[id] : undefined
+        return entry != null && boxes && isBoxId(id) ? (
+          <CockpitBox
+            box={id}
+            entry={entry}
+            source={boxes}
+            selection={boxSel}
+            onScreen={(e) => boxOnScreen.has(e)}
+            onPick={(e) => pickForBox(panels.setBox, boxes, id, e, entry)}
+            onRemove={() => setPanelState(id, 'removed')}
+            stacked={false}
+          />
+        ) : null
+      }
+    }
+  }
+  // Each column KEYED by its place, each pane by its id, a pair's divider right after the pane above it.
+  // The column elements carry the refs the dividers between the columns measure, so those stay positional.
+  const arrangedRegion = arrangedShown.map((c) => {
+    const ids = arrangedCols[c].filter(arrangedOn)
+    const splitOf = new Map<OperatePanelId, number>()
+    const seamAfter = new Map<OperatePanelId, ReactNode>()
+    for (const [a, b] of fillPairs(ids)) {
+      const split = (weightOf(a) + weightOf(b)) / 2
+      splitOf.set(a, split)
+      splitOf.set(b, split)
+      seamAfter.set(
+        a,
+        <PaneSeam
+          above={fillRefs[a]}
+          below={fillRefs[b]}
+          varName="--pane-share"
+          scale={split}
+          onCommit={(av, bv) => panels.setShares({ [a]: av, [b]: bv } as Partial<Record<OperatePanelId, number>>)}
+          onReset={() => panels.setShares({ [a]: null, [b]: null } as Partial<Record<OperatePanelId, null>>)}
+          label={t('operate.seam.pair.label', { above: labels[a], below: labels[b] })}
+          className="in-op-stack"
+        />,
+      )
+    }
+    const body = [
+      ...ids.map((id) => (
+        <Fragment key={id}>
+          {arrangedPane(id, splitOf.get(id))}
+          {seamAfter.get(id)}
+        </Fragment>
+      )),
+      // The rail's boxes, below lg, at the foot of the column the boxes stand in.
+      ...(c === foldCol ? foldedRailBoxes(boxes, boxSel, (e) => boxOnScreen.has(e), false) : []),
+    ]
+    if (c === 'log')
+      return (
+        <aside key="log" className={`op-stack${railOnLeft ? ' op-stack-lead' : ''}`} ref={layoutMode === 'roster' ? rosterSideRef : classicSideRef}>
+          {body}
+        </aside>
+      )
+    return (
+      <div key={c} className="op-stack" ref={c === 'a' ? (layoutMode === 'roster' ? rosterMainRef : decodesRef) : qsocolRef}>
+        {body}
+      </div>
+    )
+  })
+  // ⊞ Arrange's columns as they stand on screen, the rail first while it stands on the left.
+  const colOrder: readonly PaneColumn[] = railOnLeft
+    ? ['log', ...columnsOf(arrangeSpec).filter((c) => c !== 'log')]
+    : columnsOf(arrangeSpec)
+  const columnNames: Record<PaneColumn, { name: string; addAria: string }> =
+    layoutMode === 'roster'
+      ? {
+          a: { name: t('operate.arrange.main'), addAria: t('operate.arrange.main.add.aria') },
+          b: { name: t('panels.arrange.column.b'), addAria: t('panels.box.add.b.aria') },
+          log: { name: t('operate.arrange.rail'), addAria: t('operate.arrange.rail.add.aria') },
+        }
+      : {
+          a: { name: t('panels.arrange.column.a'), addAria: t('panels.box.add.a.aria') },
+          b: { name: t('panels.arrange.column.b'), addAria: t('panels.box.add.b.aria') },
+          log: { name: t('operate.arrange.rail'), addAria: t('operate.arrange.rail.add.aria') },
+        }
+  const arrangeMenu = panels.movePane ? (
+    <ArrangePanes
+      spec={arrangeSpec}
+      layout={{ ...panels.layout, place }}
+      shown={arrangeListed}
+      labels={labels}
+      onMove={(id, move) => panels.movePane?.(id, move, arrangeListed, false, { layout: layoutMode, order: colOrder })}
+      // "+ Add a box" only where the window lends them (never the hosted Remote page or the pop-out).
+      onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, layoutMode, boxes.rail?.shows) : undefined}
+      boxesFull={BOX_IDS.every((b) => shown(b))}
+      columns={colOrder.map((col) => ({ col, ...columnNames[col] }))}
+      narrow={t('operate.arrange.narrow')}
+    />
+  ) : null
 
   return (
     <main className="layout single operate-cockpit">
@@ -1168,24 +1500,28 @@ export function OperateCockpit({
             </div>
             <PanelsMenu
               items={menuItems}
-              onToggle={(id, show) => setPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
+              onToggle={(id, show) => layoutSetPanelState(id as OperatePanelId, show ? 'docked' : 'removed')}
               onUndo={panels.undo}
               canUndo={panels.canUndo}
               onReset={panels.reset}
               // The rail side (layout L5), where the operator already arranges this cockpit: in
               // the header it wrapped the row at 1024×768 and took 44 px from the decode lists.
               lead={
-                <div className="panels-menu-item">
-                  <div className="panels-menu-row">
-                    <label className="panels-menu-check">
-                      <input type="checkbox" checked={railLeft} onChange={toggleRail} aria-describedby={railNoteId} />
-                      <span>{t('operate.panels.railLeft.label')}</span>
-                    </label>
+                <>
+                  <div className="panels-menu-item">
+                    <div className="panels-menu-row">
+                      <label className="panels-menu-check">
+                        <input type="checkbox" checked={railLeft} onChange={toggleRail} aria-describedby={railNoteId} />
+                        <span>{t('operate.panels.railLeft.label')}</span>
+                      </label>
+                    </div>
+                    <span className="panels-menu-why" id={railNoteId}>
+                      {t('operate.panels.railLeft.note')}
+                    </span>
                   </div>
-                  <span className="panels-menu-why" id={railNoteId}>
-                    {t('operate.panels.railLeft.note')}
-                  </span>
-                </div>
+                  {/* ⊞ Arrange (2026-10-07): where this layout's panes stand. Undo and Reset cover it. */}
+                  {arrangeMenu}
+                </>
               }
             />
           </>
@@ -1578,12 +1914,13 @@ export function OperateCockpit({
             removed panel's space is never actually reclaimed. */}
         <div
           className={`cockpit-lower ${layoutMode}${control ? '' : ' remote-cockpit-lower'}`}
-          data-cols={dataCols}
+          data-cols={lowerCols}
           data-rail={railOnLeft ? 'left' : undefined}
+          data-arranged={arranged ? '' : undefined}
           ref={lowerRef}
           style={layoutMode === 'classic' ? classicStyle(panels.layout) : rosterStyle(panels.layout)}
         >
-          {layoutMode === 'roster' ? (
+          {arranged ? arrangedRegion : layoutMode === 'roster' ? (
             <>
               {/* Roster layout (GridTracker-style): the full sortable Call Roster is
                   the centerpiece; Band Activity + Rx Frequency move to a side rail. */}
@@ -1864,6 +2201,7 @@ function OperateRecall({
   call,
   mode,
   fdActive,
+  kept,
   onOpenLog,
   onShowCall,
   onRemove,
@@ -1875,6 +2213,8 @@ function OperateRecall({
   mode: string
   /** Is a contest session running? The card's contest-scoped dupe badge depends on it. */
   fdActive?: boolean
+  /** The card stands in an arranged column, where it keeps its size (RecallPanel `kept`). */
+  kept?: boolean
   /** The card's own ✕ — #204 made the card a ⊞ entry (`recall`); this is the same tick. */
   onRemove?: () => void
   hideNote?: string
@@ -2004,6 +2344,7 @@ function OperateRecall({
       // The rail is SHARED with the Stations roster; unbounded this card took it down to
       // ~2 rows at 1024x768 and off-screen at 175 % zoom. See `.cockpit-recall`.
       bounded
+      kept={kept}
       onOpenLog={onOpenLog}
       // #204: the station this one is calling, when its last frame named one.
       calling={station?.calling ?? null}

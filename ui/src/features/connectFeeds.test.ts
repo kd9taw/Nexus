@@ -13,7 +13,9 @@ import { createElement } from 'react'
 import {
   __resetConnectFeedsForTests,
   peekFeed,
+  refreshFeed,
   useFeed,
+  useFeedAsking,
   useKeyedFeed,
   wantFeed,
   watchFeed,
@@ -277,6 +279,122 @@ describe('a keyed feed (the path outlook for a selection) is asked once per key,
     render(createElement(Reader))
     await settle()
     expect(load).not.toHaveBeenCalled()
+  })
+})
+
+describe('refreshFeed and useFeedAsking — a board’s Refresh button and its spinner', () => {
+  /** A feed whose every request waits until the test answers it, so "on its way" lasts as long as the test says. */
+  function waiting() {
+    const pending: Array<(v: { n: number }) => void> = []
+    let n = 0
+    const load = vi.fn(() => new Promise<{ n: number }>((resolve) => pending.push(resolve)))
+    const answer = () => pending.shift()!({ n: ++n })
+    const feed: Feed<{ n: number }> = { name: 'waiting', load, everyMs: 1000 }
+    return { feed, load, answer, pending }
+  }
+  /** Mount a component that reads `feed`'s asking state; returns what it last rendered. */
+  function askingOf(feed: Feed<{ n: number }>) {
+    const seen: boolean[] = []
+    function Probe() {
+      seen.push(useFeedAsking(feed))
+      return null
+    }
+    render(createElement(Probe))
+    return () => seen[seen.length - 1]
+  }
+
+  it('a refresh asks now, and every surface showing the feed gets its answer', async () => {
+    const { feed, load } = counting()
+    const a = wantFeed(feed)
+    const b = wantFeed(feed)
+    await settle()
+    expect(load).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await refreshFeed(feed)
+    })
+    expect(load, 'the refresh asked once, for both surfaces').toHaveBeenCalledTimes(2)
+    expect(peekFeed(feed).value).toEqual({ n: 2 })
+    a()
+    b()
+  })
+
+  it('a feed nobody shows asks nothing on a refresh', async () => {
+    const { feed, load } = counting()
+    await act(async () => {
+      await refreshFeed(feed)
+    })
+    expect(load).not.toHaveBeenCalled()
+    // …and a feed shown and then let go asks nothing either.
+    const release = wantFeed(feed)
+    await settle()
+    release()
+    await act(async () => {
+      await refreshFeed(feed)
+    })
+    expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('is asking exactly while a request is on its way: the first, each poll, and a refresh', async () => {
+    const { feed, answer } = waiting()
+    const asking = askingOf(feed)
+    expect(asking(), 'nothing asked yet').toBe(false)
+    const release = wantFeed(feed)
+    await settle()
+    expect(asking(), 'the first request').toBe(true)
+    await act(async () => answer())
+    expect(asking(), 'answered').toBe(false)
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(asking(), 'the poll').toBe(true)
+    await act(async () => answer())
+    expect(asking()).toBe(false)
+    let done = false
+    await act(async () => {
+      void refreshFeed(feed).then(() => (done = true))
+    })
+    expect(asking(), 'the refresh').toBe(true)
+    await act(async () => answer())
+    expect(asking()).toBe(false)
+    expect(done, 'the refresh settles with its answer').toBe(true)
+    release()
+  })
+
+  it('a failed request stops asking too, and two on their way ask until the last lands', async () => {
+    const { feed, load, state } = counting()
+    const asking = askingOf(feed)
+    state.fail = true
+    const release = wantFeed(feed)
+    await settle()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(asking(), 'a failure is an answer for this').toBe(false)
+    release()
+    const w = waiting()
+    const asking2 = askingOf(w.feed)
+    const r2 = wantFeed(w.feed)
+    await settle()
+    await act(async () => {
+      void refreshFeed(w.feed)
+    })
+    expect(w.pending.length, 'two requests on their way').toBe(2)
+    await act(async () => w.answer())
+    expect(asking2(), 'one is still on its way').toBe(true)
+    await act(async () => w.answer())
+    expect(asking2()).toBe(false)
+    r2()
+  })
+
+  it('the last surface letting go mid-request leaves nothing asking, and the late answer moves nothing', async () => {
+    const { feed, answer } = waiting()
+    const asking = askingOf(feed)
+    const release = wantFeed(feed)
+    await settle()
+    expect(asking()).toBe(true)
+    await act(async () => release())
+    expect(asking(), 'nobody shows it, so nothing is asking for anyone').toBe(false)
+    await act(async () => answer())
+    expect(asking()).toBe(false)
+    expect(peekFeed(feed).value, 'the late answer is dropped').toBeUndefined()
   })
 })
 

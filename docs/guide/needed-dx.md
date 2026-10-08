@@ -144,6 +144,15 @@ look sparse: RBN auto-spots only CW and digital, so SSB needs come from the
 human DX cluster — see which cluster nodes are working, or list your own, in
 [Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
 
+### As a box on Conditions or beside your cockpit
+
+The board can also stand in a [Conditions](connect.md) slot, or in the dashboard rail beside any
+operating cockpit: pick **Needed** in a box's picker. It is the same list, with filters of its own,
+so a chip in the box leaves this screen's alone, and a click works the station as it does here.
+Nothing transmits. Beside a cockpit, a click selects the station in the rail only, never the
+station your cockpit is working. On Nexus Remote the box says the list is not available there;
+the Needed screen itself is.
+
 ### Pop it out to a second monitor
 
 The board tears off into its own OS window. A header checkbox, **"open at

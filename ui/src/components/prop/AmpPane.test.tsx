@@ -8,6 +8,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { AmpPane } from './AmpPane'
+import { t } from '../../i18n'
 import type { AmpStatus } from '../../types'
 
 afterEach(cleanup)
@@ -35,13 +36,16 @@ const live = (over: Partial<AmpStatus> = {}): AmpStatus => ({
 })
 
 describe('the amplifier pane tells the truth about a kilowatt', () => {
-  it('renders NOTHING when no amplifier is configured — an empty frame would be an ornament', () => {
+  it('renders NO READOUT when no amplifier is configured — only the line saying where to set one up', () => {
+    // A readout with no amplifier behind it would be an ornament, and an empty box reads as broken.
     const { container } = render(<AmpPane amp={null} />)
-    expect(container.innerHTML).toBe('')
+    expect(container.querySelector('.amp-pane')).toBeNull()
+    expect(container.textContent).toBe(t('connect.pane.amp.basic'))
     // The other absence spelling the wire can produce.
     cleanup()
     const u = render(<AmpPane amp={undefined} />)
-    expect(u.container.innerHTML).toBe('')
+    expect(u.container.querySelector('.amp-pane')).toBeNull()
+    expect(u.container.textContent).toBe(t('connect.pane.amp.basic'))
   })
 
   it('KEEPS the pane when the amplifier is configured and silent, and says why', () => {

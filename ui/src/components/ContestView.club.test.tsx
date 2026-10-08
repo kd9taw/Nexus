@@ -5,8 +5,9 @@
 // warning, and the host-only club export buttons. The whole section is gated on
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, act } from '@testing-library/react'
 import { ContestView } from './ContestView'
+import { getSettings } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FdClubStatus, FieldDayStatus } from '../types'
 
@@ -132,5 +133,48 @@ describe('ContestView club sync section', () => {
     render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} onSetMode={() => {}} />)
     expect(screen.getByText('Club Cabrillo')).toBeTruthy()
     expect(screen.getByText('Club ADIF')).toBeTruthy()
+  })
+})
+
+// ⭐ CLUB SYNC SWITCHED ON FOR A CONTEST IT CANNOT RUN. The engine refuses it (the club log
+// runs a Field Day event's rules; hosting the Illinois QSO Party used to build an ARRL Field
+// Day club log in silence), so no club block arrives — and the screen says why instead of
+// going quiet about a switch the operator turned on. The view reads its settings once, on
+// mount; every case below waits the same two microtasks for them, so an absence is measured
+// at the moment the presence case finds its text.
+describe('club sync switched on for a contest that is not a Field Day', () => {
+  async function renderWith(settings: Record<string, unknown>) {
+    vi.mocked(getSettings).mockResolvedValueOnce({ ...defaultSettings, ...settings } as never)
+    render(<ContestView fieldDay={fd(undefined)} onSetMode={() => {}} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('says it is not syncing, and why, where the club block would be', async () => {
+    await renderWith({ fdEvent: 'ilqp', fdHostEnable: true })
+    expect(screen.getByText('Not syncing')).toBeTruthy()
+    expect(
+      screen.getByText(/With Illinois QSO Party selected, this station does not host or join/),
+    ).toBeTruthy()
+  })
+
+  it('says the same for a join address', async () => {
+    await renderWith({ fdEvent: 'ilqp', fdHostEnable: false, fdJoinAddr: '192.168.1.10:42073' })
+    expect(screen.getByText('Not syncing')).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: ARRL Field Day and Winter Field Day with hosting on say nothing of it', async () => {
+    for (const fdEvent of ['arrlfd', 'wfd', '']) {
+      await renderWith({ fdEvent, fdHostEnable: true })
+      expect(screen.queryByText('Not syncing')).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('POSITIVE CONTROL: the party with club sync never switched on says nothing either', async () => {
+    await renderWith({ fdEvent: 'ilqp', fdHostEnable: false, fdJoinAddr: '' })
+    expect(screen.queryByText('Not syncing')).toBeNull()
   })
 })

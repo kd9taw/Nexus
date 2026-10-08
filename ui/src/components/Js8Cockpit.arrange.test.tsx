@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import type { AppSnapshot, Js8State } from '../types'
-import { JS8_PANELS, usePanelLayout, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
+import { BOX_IDS, JS8_PANELS, usePanelLayout, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
 import { arrangeIds, placedColumns, type PaneMove } from '../features/panelPlace'
 
 const js8Fixture = (): Js8State => ({
@@ -159,7 +159,10 @@ async function tier(width: number) {
   await frame()
 }
 function expected(tracks: number) {
-  const c = placedColumns(JS8_PANELS.arrange!, api!.layout.place)
+  // The boxes (2026-10-07) ship hidden and none is added here: the columns without them.
+  const all = placedColumns(JS8_PANELS.arrange!, api!.layout.place)
+  const own = (ids: readonly Js8PanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id))
+  const c = { a: own(all.a), b: own(all.b), log: own(all.log) }
   const groups = tracks === 3 ? [c.a, c.b, c.log] : c.log.length === 0 && tracks === 2 ? [c.a, c.b] : [[...c.a, ...c.b], c.log]
   return groups.filter((g, i) => tracks === 3 || g.length > 0 || i === -1).map((g) => [...g])
 }

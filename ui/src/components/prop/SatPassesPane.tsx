@@ -4,12 +4,13 @@
 // birds (⭐, persisted) sort first; the rest rank by next AOS. The ★/All chip
 // filters to the chase set (default ★; zero stars = inert) — a choice the 2-D
 // map and globe satellite layers share via ONE surface-scoped key (satChase).
-// Honesty: null data (no/stale elements) → the pane renders nothing and
-// PaneFrame falls back to the Basic line; elements older than 14 days carry a
-// stale badge. Geometry only — a pass says the bird is above your horizon, not
-// that its transponder is on — so a bird SatNOGS calls dead is MARKED on its
-// row, and a ★ bird the view could not place at all is NAMED under the list
-// rather than dropped (an absent bird reads as "no pass this window", which is
+// Honesty: null data (no/stale elements) → the box's one line (its Basic hint),
+// drawn here, because the frame is handed this component and never sees a null
+// from it; elements older than 14 days carry a stale badge. Geometry only — a
+// pass says the bird is above your horizon, not that its transponder is on — so
+// a bird SatNOGS calls dead is MARKED on its row, and a ★ bird the view could
+// not place at all is NAMED under the list rather than dropped (an absent bird
+// reads as "no pass this window", which is
 // a different and much more encouraging claim than "no current elements").
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
@@ -97,7 +98,7 @@ export function SatPassesPane() {
     return () => window.removeEventListener(SAT_CHASE_EVENT, onChange)
   }, [])
 
-  if (!sats) return null // PaneFrame falls back to the honest Basic line
+  if (!sats) return <p className="pane-basic">{t('connect.pane.satPasses.basic')}</p>
   const now = Date.now() / 1000
   const upcoming = sats.passes.filter((p) => p.losUnix > now)
   // ★ birds the view could not place at all. STARRED ONLY: the catalog knows
@@ -105,8 +106,9 @@ export function SatPassesPane() {
   // problem until they star one.
   const missing = (sats.excluded ?? []).filter((e) => isSatChased(e.name, e.norad, keys))
   // A ★ bird with nothing but an exclusion is exactly the case that used to
-  // disappear — the pane returned null and PaneFrame showed the Basic line.
-  if (upcoming.length === 0 && missing.length === 0) return null
+  // disappear — the pane drew only its one line, as it does when there is nothing.
+  if (upcoming.length === 0 && missing.length === 0)
+    return <p className="pane-basic">{t('connect.pane.satPasses.basic')}</p>
 
   // ★/All chip — the choice is shared with the map + globe satellite layers
   // (one surface-scoped key; see satFavOnly). Zero stars = the filter is inert.

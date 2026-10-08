@@ -28,6 +28,7 @@ import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import { RecallPanel } from './RecallPanel'
 import { distanceLabel, bearingLabel } from '../grid'
 import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
+import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
@@ -200,7 +201,7 @@ function panelsApi(): PanelLayoutApi<OperatePanelId> {
   const state: Partial<Record<OperatePanelId, PanelState>> = {}
   return {
     layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

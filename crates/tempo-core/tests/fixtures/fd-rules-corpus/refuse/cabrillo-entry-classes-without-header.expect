@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: cabrillo names entry_classes but never writes ENTRY-CLASS

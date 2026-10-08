@@ -250,6 +250,44 @@ fn nexus_leaves_the_radio_on_dax_from_its_own_write_until_the_mic_is_back() {
     assert!(!r.leaves_dax(&view(false, "DIGU")));
 }
 
+/// A voice over keyed while Nexus's own write has the radio on DAX would leave on DAX, not on the
+/// operator's mic: right after the transmit slice goes from a digital mode to Phone, with native
+/// audio on or off, until the mic's write. Not while the stream's browser voice is live with native
+/// audio on: Phone wants DAX then, and that voice rides it.
+#[test]
+fn a_voice_over_would_leave_on_the_dax_nexus_set_until_the_mics_write() {
+    let mut r = Routing::default();
+    assert_eq!(r.step(&view(false, "DIGU"), true, false, 0), DAX);
+    r.written(true, Why::FollowMode, 0);
+    assert_eq!(
+        r.step(&view(true, "USB"), true, false, 10),
+        Some(Step::Write {
+            dax: false,
+            why: Why::FollowMode
+        })
+    );
+    assert!(r.leaves_voice_on_dax(&view(true, "USB"), true));
+    assert!(
+        r.leaves_voice_on_dax(&view(true, "USB"), false),
+        "native audio off"
+    );
+    r.written(false, Why::FollowMode, 10);
+    assert!(
+        !r.leaves_voice_on_dax(&view(true, "USB"), true),
+        "the mic's write is on its way"
+    );
+    // The stream's browser voice: Phone wants DAX, and that voice rides it.
+    let mut r = Routing::default();
+    assert_eq!(r.step(&view(false, "DIGU"), true, true, 0), DAX);
+    r.written(true, Why::FollowMode, 0);
+    assert_eq!(r.step(&view(true, "USB"), true, true, 10), None);
+    assert!(!r.leaves_voice_on_dax(&view(true, "USB"), true));
+    assert!(
+        r.leaves_voice_on_dax(&view(true, "USB"), false),
+        "native audio off: nothing feeds DAX, browser voice or not"
+    );
+}
+
 #[test]
 fn a_previous_sessions_change_is_put_back_at_the_next_connect_first() {
     // The last session wrote DAX over the operator's mic and never restored it (a crash).

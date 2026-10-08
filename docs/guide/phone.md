@@ -130,6 +130,22 @@ the dock below it never move, and **Tune** and **Stop TX** stay in the strip
 right under the scope, at the same height: with the left side showing, the scope
 gets narrower and keeps its height. **Reset layout** empties the left side.
 
+**Boxes.** Any pane of [Conditions](connect.md) — the Clock, Space Wx, Getting Out, POTA / SOTA,
+the Spots and Needed boards and the rest — can also stand among this screen's panes, in up to six
+boxes. In ⊞ Panels ▸ **Arrange**, each column, and the left side while it can show, ends with
+**+ Add a box**: it puts a box at the foot of that column, showing the first pane that is not
+already on the screen. The picker in the box's title lists every Conditions pane in the Conditions
+groups. A pane already on the screen is marked there, and choosing it moves it into this box;
+choosing **Spots** or **Needed** while this screen's own Spots or Needed pane shows hides that pane,
+because the board is then in the box. **▲ ▼ ◀ ▶** in Arrange move a box like any other pane, and
+its **✕** hides it. Hiding or moving a box ends nothing: the voice keyer keeps its message and a
+half-typed log entry stays as it is. On a small window, where the panes stack, a box with a long
+list keeps to its own height and scrolls inside. Clicking a station in a box selects it in the
+boxes only, never the station you are working; a box's **Work** and **HUNT** move the radio and
+open its screen, and nothing in a box transmits. With six boxes on the screen, **+ Add a box** is
+greyed and says so. No box shows until you add one, and **Reset layout** hides them all again.
+Boxes are not shown on Nexus Remote.
+
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 
 ## Core workflows

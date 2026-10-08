@@ -1959,6 +1959,18 @@ the Cabrillo headers.
   about your entry. The NAME line is your operator name from the
   [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
   not your ClubLog account email, and Remote never sees it.
+- **Entry class.** Shown only for a contest whose rules list the sponsor's own
+  entry classes: the Illinois QSO Party's eight, from its 2026 rules. It goes on
+  the ENTRY-CLASS line of the Cabrillo log. A club running more than one
+  transmitter at once in the Illinois QSO Party enters `UNLIMITED`. For a QRP
+  entry, set **Power category** to QRP too, which writes `QRP-COMPETITION: YES`.
+- **Club.** Your contest club, for the CLUB line of the Cabrillo log when the
+  contest's rules have one (the Illinois QSO Party). Leave it blank to leave the
+  line out.
+- **Other operators.** The OPERATORS line lists everyone who was set as
+  **Operator at the key** when they logged a contact. Type anyone else here, as
+  callsigns separated by spaces or commas. All three are read when you export the
+  log, so you can fill them in after the contest.
 
 ### Your station data
 
@@ -2087,7 +2099,9 @@ one section up. Contacts logged while the network is down are re-sent
 automatically on reconnect, and if the host PC dies you can enable hosting on
 any other position — everyone re-joins and nothing is lost. The host's Field
 Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
-deduplicated log.
+deduplicated log. Club sync runs for ARRL Field Day and Winter Field Day only:
+with another contest selected, this section says so and the station neither
+hosts nor joins.
 ![The Field Day Club Sync group: "Host a club event" switched off, Event name reading "N9WH Field Day 2026", Host port 42073, an empty "Join event at" box showing a host:port placeholder, a "Find club events" button, and Spectator scoreboard switched off.](../img/manual/settings-field-day-club-sync.webp)
 
 *Field Day Club Sync in Nexus 1.10.3, with hosting off. One position at the site

@@ -238,13 +238,12 @@ export function nativeCivBlockedReason(rigModel: number, rigConn: string): strin
 export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078]
 
 /**
- * Does Settings show the D1/D2/D3 picker for this radio? On a radio with more than one DATA mode,
- * always. On another native Icom only while it still holds a D2 or D3 (saved when the picker was
- * offered there by mistake, or while the radio was set up as an IC-7610): the native daemon sends
- * that choice on every DATA write, so the picker stays until it is set back to D1 rather than go
- * away with the choice still in force.
+ * Does Settings show the D1/D2/D3 picker for this radio? Only on a radio with more than one DATA
+ * mode. A D2 or D3 saved on another native Icom (while the picker was offered there by mistake, or
+ * while the radio was set up as an IC-7610) needs no picker to undo it: the native daemon caps the
+ * choice at the radio's own count (`data_mode_count` in tempo-audio's `civ/commands.rs`), so that
+ * radio is sent its one DATA mode whatever is saved.
  */
-export function dataModePickerShown(rigModel: number, icomDataMode: number): boolean {
-  if (MULTI_DATA_MODE_ICOMS.includes(rigModel)) return true
-  return NATIVE_CIV_MODELS.includes(rigModel) && icomDataMode > 1
+export function dataModePickerShown(rigModel: number): boolean {
+  return MULTI_DATA_MODE_ICOMS.includes(rigModel)
 }

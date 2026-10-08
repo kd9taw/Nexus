@@ -42,8 +42,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import { PhoneCockpit, VOICE_KEYER_STOPS_ON_HIDE, VOICE_KEYER_UNDO_ENDS } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
-import { PHONE_PANELS, PHONE_PANEL_IDS, usePanelLayout } from '../features/panelState'
+import { BOX_IDS, PHONE_PANELS, PHONE_PANEL_IDS, usePanelLayout } from '../features/panelState'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
+import type { BoxSource } from './panes/CockpitBox'
 
 // vi.hoisted, not a bare const: the vi.mock factory below is hoisted above every
 // top-level binding, so a plain const would be in its temporal dead zone when it runs.
@@ -106,6 +107,17 @@ vi.mock('./PhoneScope', () => ({ PhoneScope: () => <div data-testid="scope-stub"
 vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stub" /> }))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
+// A box's body is a Conditions box: it reaches the Conditions feeds and never the voice wires this
+// file watches, so it is stubbed; the boxes themselves — their frames and their ✕ — are real, and on
+// screen in every view below, so each box's hide is a real one.
+vi.mock('./panes/BoxBody', () => ({ BoxBody: () => <div data-testid="box-body-stub" /> }))
+
+/** What App lends the boxes on the desktop (any pane in any area, 2026-10-07). */
+const BOX_SOURCE: BoxSource = { myGrid: 'EN52', theme: 'dark', stations: [], prop: null, needByCall: new Map() }
+const isBox = (id: string) => (BOX_IDS as readonly string[]).includes(id)
+/** The ⊞ menu's entries: the vocabulary without its boxes, which come and go through ⊞ Arrange's
+ *  "+ Add a box" and their own ✕. */
+const MENU_IDS = PHONE_PANEL_IDS.filter((id) => !isBox(id))
 // VoiceKeyer is deliberately NOT mocked — its unmount cleanup is the behaviour under test.
 
 afterEach(() => {
@@ -179,6 +191,7 @@ const view = (removed: PhonePanelId[] = [], transmitting = false) => (
     onWorkSpot={() => {}}
     spots={[]}
     panels={fakePanels(removed)}
+    boxes={BOX_SOURCE}
   />
 )
 
@@ -444,18 +457,26 @@ describe('hiding the Phone voice keyer', () => {
     const noteFor = async (id: PhonePanelId) => {
       render(view())
       await act(async () => {})
+      // A BOX is hidden by its own ✕ (it has no ⊞ entry), so its note is the one its ✕ carries.
+      if (isBox(id)) {
+        const close = document.querySelector(`.pane-frame[data-pane="${id}"] .pane-head button[aria-label]`)
+        expect(close, `the box "${id}" is not on screen, so its hide would sweep nothing`).not.toBeNull()
+        const text = descriptionOf(close!)
+        cleanup()
+        return text
+      }
       fireEvent.click(screen.getByRole('button', { name: /Panels/ }))
       // Scoped to the popover: the cockpit has other checkboxes (the PTT row's hands-free
       // Lock), and a bare getAllByRole would index into them.
       const menu = screen.getByRole('group', { name: /panels on this screen/i })
       const boxes = within(menu).getAllByRole('checkbox') as HTMLInputElement[]
-      // The menu is built from PHONE_PANEL_IDS in order, so the id's box is at its index —
-      // asserted, not assumed, or a reordering would silently read the wrong entry's note
-      // and this guard would go quietly vacuous.
-      expect(boxes.length, 'the ⊞ menu no longer lists exactly the Phone vocabulary').toBe(
-        PHONE_PANEL_IDS.length,
+      // The menu is built from the vocabulary's own panes in order, so the id's box is at its
+      // index — asserted, not assumed, or a reordering would silently read the wrong entry's
+      // note and this guard would go quietly vacuous.
+      expect(boxes.length, 'the ⊞ menu no longer lists exactly the Phone vocabulary’s own panes').toBe(
+        MENU_IDS.length,
       )
-      const box = boxes[PHONE_PANEL_IDS.indexOf(id)]
+      const box = boxes[MENU_IDS.indexOf(id)]
       const whyId = box.getAttribute('aria-describedby')
       const text = whyId ? (document.getElementById(whyId)?.textContent ?? '') : ''
       cleanup()
