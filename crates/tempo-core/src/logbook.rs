@@ -2703,6 +2703,13 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         rec.extra
             .retain(|(k, _)| !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF"));
     }
+    // The same, for a mode. A SUBMODE the reader does not promote rides in `extra` (fldigi's PSK31
+    // under MODE=PSK, Log4OM's USB under SSB, a VARA variant under DYNAMIC) and describes the mode
+    // the row HAD. An edit that changes the mode takes it along, or the row is written as
+    // `MODE=CW SUBMODE=PSK31` ([`submode_for_new_mode`]).
+    if !rec.mode.trim().eq_ignore_ascii_case(old.mode.trim()) {
+        submode_for_new_mode(&mut rec);
+    }
     // An edit that did not touch the TIME OF DAY must not fabricate
     // time-knowledge onto an imported, time-less record — keyed on
     // the time-of-day, not the whole timestamp, so a DATE fix on a
@@ -3573,6 +3580,32 @@ fn psk_parent(r: &QsoRecord) -> Option<&'static str> {
     let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
     (psk_submode(&r.mode).is_some() && sub.trim().eq_ignore_ascii_case(r.mode.trim()))
         .then_some("PSK")
+}
+
+/// The passthrough SUBMODE of a row an edit has just given a new mode ([`edited`]). A PSK submode
+/// follows the row to its new PSK mode, so an fldigi PSK31 contact corrected to PSK63 is still
+/// written `MODE=PSK SUBMODE=PSK63` ([`psk_parent`]). Any other is kept only while this file's
+/// tables still make it a submode of the new mode (USB under SSB, PSK31 under a bare PSK).
+/// Otherwise it goes: a record with no SUBMODE is valid ADIF, and one whose SUBMODE contradicts
+/// its MODE is not.
+fn submode_for_new_mode(rec: &mut QsoRecord) {
+    let Some(at) = rec.extra.iter().position(|(k, _)| k == "SUBMODE") else {
+        return;
+    };
+    let mode = rec.mode.trim();
+    let sub = rec.extra[at].1.trim();
+    if psk_submode(sub).is_some() {
+        if let Some(new) = psk_submode(mode) {
+            rec.extra[at].1 = new.to_string();
+            return;
+        }
+    }
+    let still_its_submode = adif_submode(sub)
+        .is_some_and(|(parent, _)| parent.eq_ignore_ascii_case(mode))
+        || (mode.eq_ignore_ascii_case("PSK") && psk_submode(sub).is_some());
+    if !still_its_submode {
+        rec.extra.remove(at);
+    }
 }
 
 fn ota_fields(
@@ -6008,6 +6041,117 @@ mod tests {
             let again = &parse_adif(&out)[0];
             assert_eq!(again.ota, r.ota, "{out}");
             assert_eq!(again.extra, r.extra, "{out}");
+        }
+    }
+
+    /// ⭐ AN EDIT THAT CHANGES THE MODE TAKES ALONG A SUBMODE THE NEW MODE DOES NOT HAVE. A SUBMODE
+    /// the reader does not promote rides in `extra` (fldigi's PSK31 under MODE=PSK, Log4OM's USB
+    /// under SSB) and describes the mode the row HAD. Left behind, an fldigi PSK31 contact corrected
+    /// to CW went out as `MODE=CW SUBMODE=PSK31`, a record that contradicts itself, in the file and
+    /// in every upload. A PSK submode follows the row to its new PSK mode instead, so the contact
+    /// keeps the shape it was imported in.
+    #[test]
+    fn an_edit_that_changes_the_mode_takes_along_a_submode_the_new_mode_does_not_have() {
+        let row = |mode: &str, sub: Option<&str>| {
+            let sub = sub.map_or(String::new(), |s| format!("<SUBMODE:{}>{s}", s.len()));
+            format!(
+                "<CALL:5>C56YK<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                 <MODE:{}>{mode}{sub}<EOR>\n",
+                mode.len()
+            )
+        };
+        // An edit as the Logbook form sends one: every field, and no passthrough fields.
+        let edit_in = |lb: &mut Logbook, change: &dyn Fn(&mut QsoRecord)| {
+            let mut r = lb.records()[0].as_ref().clone();
+            r.extra = Vec::new();
+            change(&mut r);
+            assert!(lb.update_record(0, r));
+            lb.adif()
+        };
+        let edit = |text: &str, change: &dyn Fn(&mut QsoRecord)| {
+            let mut lb = Logbook::new();
+            lb.import_adif(text);
+            edit_in(&mut lb, change)
+        };
+        let submodes = |out: &str| out.matches("<SUBMODE:").count();
+        let to = |mode: &'static str| move |r: &mut QsoRecord| r.mode = mode.into();
+
+        // fldigi's PSK31, corrected to CW: a CW contact, with no SUBMODE.
+        let out = edit(&row("PSK", Some("PSK31")), &to("CW"));
+        assert!(out.contains("<MODE:2>CW<"), "{out}");
+        assert_eq!(
+            submodes(&out),
+            0,
+            "a CW contact names no PSK31 submode: {out}"
+        );
+
+        // Corrected to PSK63: still MODE=PSK, with the new submode.
+        let out = edit(&row("PSK", Some("PSK31")), &to("PSK63"));
+        assert!(out.contains("<MODE:3>PSK<"), "{out}");
+        assert!(out.contains("<SUBMODE:5>PSK63<"), "{out}");
+        assert_eq!(submodes(&out), 1, "{out}");
+        assert_eq!(parse_adif(&out)[0].mode, "PSK63", "{out}");
+
+        // A row an earlier build imported, stored as PSK with its SUBMODE beside it, is mended by
+        // its next edit as well.
+        let mut old = parse_adif(&row("PSK", Some("PSK31"))).remove(0);
+        old.mode = "PSK".into();
+        for (mode, tag, sub) in [
+            ("CW", "<MODE:2>CW<", None),
+            ("PSK63", "<MODE:3>PSK<", Some("<SUBMODE:5>PSK63<")),
+        ] {
+            let mut form = old.clone();
+            form.extra = Vec::new();
+            form.mode = mode.into();
+            let out = adif_record_own_log(&edited(&old, form));
+            assert!(out.contains(tag), "{mode}: {out}");
+            assert_eq!(submodes(&out), usize::from(sub.is_some()), "{mode}: {out}");
+            assert!(sub.is_none_or(|s| out.contains(s)), "{mode}: {out}");
+        }
+
+        // Corrected to a bare PSK: PSK31 is still a submode of it, and stays.
+        let out = edit(&row("PSK", Some("PSK31")), &to("PSK"));
+        assert!(out.contains("<MODE:3>PSK<"), "{out}");
+        assert!(out.contains("<SUBMODE:5>PSK31<"), "{out}");
+        assert_eq!(submodes(&out), 1, "{out}");
+
+        // Log4OM's sideband goes when the mode leaves phone, and stays when a generic phone mode
+        // is corrected to the one it is a submode of.
+        let out = edit(&row("SSB", Some("USB")), &to("CW"));
+        assert_eq!(submodes(&out), 0, "{out}");
+        let out = edit(&row("PH", Some("USB")), &to("SSB"));
+        assert!(out.contains("<MODE:3>SSB<"), "{out}");
+        assert!(out.contains("<SUBMODE:3>USB<"), "{out}");
+        assert_eq!(submodes(&out), 1, "{out}");
+
+        // The PSK cockpit's own contact carries no SUBMODE, and gains none.
+        let out = edit(&row("PSK31", None), &to("PSK63"));
+        assert!(out.contains("<MODE:5>PSK63<"), "{out}");
+        assert_eq!(submodes(&out), 0, "{out}");
+
+        // CONTROLS — an edit of any other field leaves the SUBMODE exactly as it was, and the
+        // pairs the writer derives (FT4 and JS8 under MFSK) are untouched.
+        let named = |r: &mut QsoRecord| r.name = Some("Hiram".into());
+        for (text, keep) in [
+            (row("PSK", Some("PSK31")), "<MODE:3>PSK<"),
+            (row("SSB", Some("USB")), "<MODE:3>SSB<"),
+            (row("MFSK", Some("FT4")), "<MODE:4>MFSK<SUBMODE:3>FT4<"),
+            (row("MFSK", Some("JS8")), "<MODE:4>MFSK<SUBMODE:3>JS8<"),
+            // A submode none of this file's tables knows: an edit of the mode would drop it, an
+            // edit of anything else must not.
+            (row("OLIVIA", Some("OLIVIA 8/250")), "<MODE:6>OLIVIA<"),
+        ] {
+            let mut lb = Logbook::new();
+            lb.import_adif(&text);
+            let before = lb.adif();
+            let out = edit_in(&mut lb, &named);
+            assert!(out.contains(keep), "{out}");
+            assert_eq!(submodes(&out), 1, "{out}");
+            assert_eq!(
+                out.replace("<NAME:5>Hiram", ""),
+                before,
+                "only the name moved: {out}"
+            );
         }
     }
 

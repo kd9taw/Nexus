@@ -166,6 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in your exports and in what goes to LoTW, QRZ and the other services, exactly as fldigi wrote
   it. Contacts logged on the PSK screen are written as before. Contacts imported before this
   release keep PSK, and importing the same file again does not add them twice.
+- **Changing the mode of an imported contact no longer leaves its old submode behind.** A contact
+  imported from another logger can carry a submode Nexus keeps exactly as it was written, such as
+  fldigi's PSK31 or Log4OM's USB. Changing that contact's mode in the Logbook kept the old submode,
+  so a PSK31 contact corrected to CW was written to your log and your exports as CW with a PSK31
+  submode. Now a mode edit drops a submode the new mode does not have, and a PSK contact moved to
+  another PSK mode takes the new one with it (corrected to PSK63, it is written as PSK with PSK63,
+  as fldigi writes it). Editing any other field leaves the submode as it was.
 - **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
   An activator's own row on the Needed board still asked only whether you had worked the country in
   CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever
