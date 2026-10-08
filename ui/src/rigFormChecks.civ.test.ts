@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dataModePickerShown, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason } from './rigFormChecks'
+import { dataModePickerShown, ICOM_LAN_MODELS, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason } from './rigFormChecks'
 
 const RUST = fileURLToPath(
   new URL('../../crates/tempo-audio/src/rigmodels.rs', import.meta.url),
@@ -40,16 +40,18 @@ describe('native CI-V model list', () => {
 })
 
 // THE D1/D2/D3 PICKER BELONGS TO THE RADIOS THAT HAVE D2 AND D3. Each radio's own CI-V reference, "Data mode
-// with filter width settings" (`1A 06`), first data byte: the IC-7610 has DATA1, DATA2 and DATA3 (A7380-7EX-4,
-// PDF p. 13); the IC-9700 (A7508-3EX-4, PDF p. 19), IC-705 (A7560-8EX-6, PDF p. 23), IC-905 (A7711-9EX-2,
-// PDF p. 24) and IC-7300 (Full Manual A7292-4EX-12, PDF p. 168) have "Data mode ON" and nothing more. The
-// picker was offered on the 9700, 705 and 905 too, where a D2 or D3 is a value Icom does not define.
+// with filter width settings" (`1A 06`), first data byte: the IC-7610 (A7380-7EX-4, PDF p. 13) and the IC-7760
+// (A7788-8EX-2, PDF p. 23) have DATA1, DATA2 and DATA3; the IC-9700 (A7508-3EX-4, PDF p. 19), IC-705
+// (A7560-8EX-6, PDF p. 23), IC-905 (A7711-9EX-2, PDF p. 24), IC-7300 (Full Manual A7292-4EX-12, PDF p. 168) and
+// IC-7300MK2 (rev 0, PDF p. 22) have "Data mode ON" and nothing more. The picker was offered on the 9700, 705
+// and 905 too, where a D2 or D3 is a value Icom does not define.
 describe('the D1/D2/D3 picker', () => {
   // A D2 or D3 saved on a one-DATA Icom is not sent (the daemon caps it at the radio's own count), so it needs no
   // picker to set it back. `SettingsPanel.datamode.test.tsx` renders that case.
-  it('is offered on the IC-7610 alone, the one native Icom with more than one DATA mode', () => {
-    expect([...MULTI_DATA_MODE_ICOMS]).toEqual([3078])
+  it('is offered on the IC-7610 and the IC-7760, the two Icoms Nexus drives that have more than one DATA mode', () => {
+    expect([...MULTI_DATA_MODE_ICOMS]).toEqual([3078, 3092])
     expect(NATIVE_CIV_MODELS.filter((m) => dataModePickerShown(m))).toEqual([3078])
+    expect(ICOM_LAN_MODELS.filter((m) => dataModePickerShown(m)), 'over the Icom network connection').toEqual([3078, 3092])
     expect(dataModePickerShown(1042), 'never on a radio Nexus does not drive natively').toBe(false)
   })
 })

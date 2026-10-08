@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
   RS-BA1 and wfview use, with no bridge program in between, and runs its own CI-V control over it:
   frequency and mode both ways, the dial followed as you turn it, the meters, and the radio's own
-  panadapter (one frame a sweep over the network, so no CI-V baud applies). **Nothing transmits on
+  panadapter (one frame a sweep over the network, so no CI-V baud applies). On the IC-7610 and
+  IC-7760, which have three DATA modes, the Data mode picker (D1, D2 or D3) in Rig & CAT works on
+  this connection too; the other four have one and are always sent it. **Nothing transmits on
   this connection yet**: every transmit path (FT, Tune, CW, the voice keyer, PTT, APRS, RTTY, PSK,
   SSTV and another program's PTT through Nexus) says so and stops before the radio is keyed, and the
   radio is never sent a key. There is no audio over it yet: keep the USB cable for audio. The
@@ -138,8 +140,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates), at the next launch.
 - **FT2 is on Winter Field Day's banned-mode list**, as the sponsor's 2027 list has it. The
   warning is advisory, as before: the log strip warns and nothing is refused.
-- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only, and the IC-9700, IC-705 and
-  IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT offered the picker on
+- **The Data mode picker (D1/D2/D3) is offered only on the Icoms that have D2 and D3, and the
+  IC-9700, IC-705 and IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT
+  offered the picker on
   the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put
   a value Icom does not define for those radios into the command that sets their DATA mode for the
   digital modes. On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA

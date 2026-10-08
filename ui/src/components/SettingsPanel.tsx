@@ -3504,6 +3504,10 @@ export function SettingsPanel({
   // Why native CI-V cannot be offered for THIS radio, or null when it can. Derived rather than
   // inlined so the control and its explanation can never disagree about the condition.
   const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
+  // Does Nexus's own CI-V engine drive this radio here, and so apply its D1/D2/D3? Always on the Icom
+  // network connection; over a cable only through the native switch, on a radio that has one.
+  const civAppliesDataMode =
+    form.rigConn === 'icomlan' || (!!form.icomNativeCat && NATIVE_CIV_MODELS.includes(form.rigModel))
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -5859,16 +5863,17 @@ export function SettingsPanel({
                 )}
 
               {/* WHICH Icom data mode. Only for the radios that have more than one (see
-                  dataModePickerShown), and only through the native CI-V
-                  engine — Hamlib's PKT modes always select D1, so offering the choice on that
-                  path would be a control that does nothing. */}
+                  dataModePickerShown), and only through Nexus's own CI-V engine (the native
+                  switch, or the Icom network connection, which always uses it): Hamlib's PKT
+                  modes always select D1, so offering the choice on that path would be a control
+                  that does nothing. */}
               {dataModePickerShown(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">Data mode</span>
                   <select
                     className="settings-input"
                     value={String(form.icomDataMode ?? 1)}
-                    disabled={remote || (!form.icomNativeCat)}
+                    disabled={remote || !civAppliesDataMode}
                     onChange={(e) => updateNum('icomDataMode', Number(e.target.value))}
                   >
                     <option value="1">D1</option>
@@ -5876,9 +5881,11 @@ export function SettingsPanel({
                     <option value="3">D3</option>
                   </select>
                   <span className="settings-hint">
-                    {form.icomNativeCat
+                    {civAppliesDataMode
                       ? 'Which DATA mode this radio is put into for digital operating. Pick the one your USB audio is wired to — D1 unless you changed it on the radio. Needs a bench check on a real radio before it is trusted.'
-                      : 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'}
+                      : NATIVE_CIV_MODELS.includes(form.rigModel)
+                        ? 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'
+                        : 'Needs the Icom network connection: through Hamlib the radio always lands on D1.'}
                   </span>
                 </label>
               )}

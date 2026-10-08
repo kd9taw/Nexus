@@ -280,13 +280,16 @@ export function nativeCivBlockedReason(rigModel: number, rigConn: string): strin
  * | IC-705 (3085) | CI-V Reference Guide A7560-8EX-6, PDF p. 23 | 00 = Data mode OFF, 01 = Data mode ON |
  * | IC-905 (3090) | CI-V Reference Guide A7711-9EX-2, PDF p. 24 | 00 = Data mode OFF, 01 = Data mode ON |
  * | IC-7300 (3073) | Full Manual A7292-4EX-12, PDF p. 168 | 00 = Data mode OFF, 01 = Data mode ON |
+ * | IC-7760 (3092) | CI-V Reference Guide A7788-8EX-2, PDF p. 23 | 00 = Data mode OFF, 01 = DATA1, 02 = DATA2, 03 = DATA3 |
+ * | IC-7300MK2 (3094) | CI-V Reference Guide rev 0, PDF p. 22 | 00 = OFF, 01 = ON |
  *
- * So the IC-7610 is the only one with a choice to make. The IC-9700, IC-705 and IC-905 were listed
- * here too, and on them a D2 or D3 is a value Icom does not define. The selector defaults to D1,
- * so an operator who never touched it is unaffected either way. ⚠️ NEEDS BENCH: what an IC-9700,
- * 705 or 905 does with `1A 06 02` or `03` has not been seen on a radio here.
+ * So the IC-7610 and the IC-7760 are the ones with a choice to make; the IC-7760 is driven by
+ * Nexus's own CI-V only over the Icom network connection. The IC-9700, IC-705 and IC-905 were
+ * listed here too, and on them a D2 or D3 is a value Icom does not define. The selector defaults
+ * to D1, so an operator who never touched it is unaffected either way. ⚠️ NEEDS BENCH: what an
+ * IC-9700, 705 or 905 does with `1A 06 02` or `03` has not been seen on a radio here.
  */
-export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078]
+export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078, 3092]
 
 /**
  * Does Settings show the D1/D2/D3 picker for this radio? Only on a radio with more than one DATA
