@@ -325,3 +325,25 @@ fn a_dxpedition_that_names_no_mode_is_judged_by_class() {
     voice_only.add("C56YK", "20m", "SSB", None, None, true);
     assert_eq!(card_need(&voice_only, &[]), Some(NeedKind::NewMode));
 }
+
+/// A PSK31 STATION HEARD AFTER AN FLDIGI PSK31 IMPORT IS NOT A NEW MODE. fldigi logs ADIF 3's
+/// `MODE=PSK SUBMODE=PSK31`, and the reader kept only the PSK, so the board read every PSK31
+/// station as a new mode against a log full of PSK31 contacts. Read through the real reader, as
+/// the log is, so the import and the board cannot disagree.
+#[cfg(feature = "live")]
+#[test]
+fn a_psk31_station_heard_after_an_fldigi_psk31_import_is_not_a_new_mode() {
+    let adif = "<CALL:5>C56YK<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                <MODE:3>PSK<SUBMODE:5>PSK31<EOR>";
+    let mut n = LogNeeds::new();
+    for q in tempo_core::logbook::parse_adif(adif) {
+        n.add(&q.call, &q.band, &q.mode, None, None, true);
+    }
+    let a = heard(&n, "C5R", "20m", "PSK31");
+    assert!(!is_new_mode(&a), "worked on PSK31: {a:?}");
+    let other = heard(&n, "C5R", "20m", "PSK63");
+    assert!(
+        is_new_mode(&other),
+        "control: PSK63 is still new: {other:?}"
+    );
+}

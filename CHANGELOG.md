@@ -159,6 +159,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
   file again does not add them twice.
+- **A contact imported from fldigi keeps its PSK mode.** fldigi logs PSK31 as PSK with PSK31 as
+  the submode, and the same for PSK63, QPSK31 and its other PSK modes. Nexus kept only the PSK, so
+  a PSK31 station read as a new mode against a log full of PSK31 contacts. The logbook and the
+  "new mode" need now see PSK31, PSK63, QPSK31 and the rest. Each contact is still written back,
+  in your exports and in what goes to LoTW, QRZ and the other services, exactly as fldigi wrote
+  it. Contacts logged on the PSK screen are written as before. Contacts imported before this
+  release keep PSK, and importing the same file again does not add them twice.
 - **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
   An activator's own row on the Needed board still asked only whether you had worked the country in
   CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever

@@ -1104,10 +1104,16 @@ impl Logbook {
             // as "MFSK" — while the same source row now parses as "FT4". Without
             // this probe, re-importing an already-imported file would double-log
             // every FT4/Q65/FST4/FST4W row. The stored MFSK copy stays as-is;
-            // the incoming promoted twin counts as the duplicate it is.
-            let legacy_twin = promoted_submode(&rec.mode).is_some().then(|| {
+            // the incoming promoted twin counts as the duplicate it is. fldigi's
+            // "MODE=PSK + SUBMODE=PSK31" is the same story, with PSK as the parent.
+            let legacy_parent = if promoted_submode(&rec.mode).is_some() {
+                Some("MFSK")
+            } else {
+                psk_submode(&rec.mode).map(|_| "PSK")
+            };
+            let legacy_twin = legacy_parent.map(|parent| {
                 let mut k = dedup_key(&rec);
-                k.2 = "MFSK".to_string();
+                k.2 = parent.to_string();
                 k
             });
             let key = dedup_key(&rec);
@@ -3004,7 +3010,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
             out.push_str(&field("APP_TEMPO_MODE", &r.mode));
         }
         None if r.mode.trim().is_empty() => {}
-        None => out.push_str(&field("MODE", &r.mode)),
+        None => out.push_str(&field("MODE", psk_parent(r).unwrap_or(&r.mode))),
     }
     out.push_str(&field("QSO_DATE", &format!("{y:04}{mo:02}{d:02}")));
     // NEVER assert a time nobody measured: an imported record with no time of
@@ -3460,6 +3466,7 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
 /// back IN — i.e. exactly those whose next export re-emits a valid parent `MODE` + `SUBMODE`
 /// pair through [`adif_submode`]. Anything not here stays as its parent MODE, because
 /// re-emitting an unregistered value as a bare `<MODE>` is what TQSL rejects outright.
+/// fldigi's PSK submodes are adopted too, by [`psk_submode`], which has its own way back out.
 ///
 /// `pub(crate)` for the contest journal, which faced the identical read-side loss: see
 /// `fieldday::FieldDayLog::merge_adif`.
@@ -3479,6 +3486,93 @@ pub(crate) fn promoted_submode(sub: &str) -> Option<&'static str> {
         "FST4W" => Some("FST4W"),
         _ => None,
     }
+}
+
+/// The submodes of `PSK` in the ADIF Mode enumeration (3.1.6), in its spelling. fldigi, where most
+/// PSK contacts are logged, writes each of its PSK modes as `MODE=PSK` plus one of these.
+const ADIF_PSK_SUBMODES: [&str; 60] = [
+    "8PSK125",
+    "8PSK125F",
+    "8PSK125FL",
+    "8PSK250",
+    "8PSK250F",
+    "8PSK250FL",
+    "8PSK500",
+    "8PSK500F",
+    "8PSK1000",
+    "8PSK1000F",
+    "8PSK1200F",
+    "FSK31",
+    "PSK10",
+    "PSK31",
+    "PSK63",
+    "PSK63F",
+    "PSK63RC4",
+    "PSK63RC5",
+    "PSK63RC10",
+    "PSK63RC20",
+    "PSK63RC32",
+    "PSK125",
+    "PSK125C12",
+    "PSK125R",
+    "PSK125RC10",
+    "PSK125RC12",
+    "PSK125RC16",
+    "PSK125RC4",
+    "PSK125RC5",
+    "PSK250",
+    "PSK250C6",
+    "PSK250R",
+    "PSK250RC2",
+    "PSK250RC3",
+    "PSK250RC5",
+    "PSK250RC6",
+    "PSK250RC7",
+    "PSK500",
+    "PSK500C2",
+    "PSK500C4",
+    "PSK500R",
+    "PSK500RC2",
+    "PSK500RC3",
+    "PSK500RC4",
+    "PSK800C2",
+    "PSK800RC2",
+    "PSK1000",
+    "PSK1000C2",
+    "PSK1000R",
+    "PSK1000RC2",
+    "PSKAM10",
+    "PSKAM31",
+    "PSKAM50",
+    "PSKFEC31",
+    "QPSK31",
+    "QPSK63",
+    "QPSK125",
+    "QPSK250",
+    "QPSK500",
+    "SIM31",
+];
+
+/// A submode of `PSK` ([`ADIF_PSK_SUBMODES`]) in the enumeration's spelling, or `None`.
+///
+/// ⭐ NOT IN [`promoted_submode`], ON PURPOSE. A row read as `MODE=PSK SUBMODE=PSK31` is stored as
+/// PSK31, the mode it was, but the PSK cockpit stores its own contacts as PSK31 and QPSK31 too, and
+/// writes them as a bare `<MODE:5>PSK31`. A pair in [`adif_submode`] would move every one of those
+/// as well. So the imported row keeps its own SUBMODE (in `extra`, verbatim, as before), and the
+/// writer puts `MODE=PSK` back for a row whose SUBMODE still names its mode ([`psk_parent`]): the
+/// export, and every upload, carry the contact in the shape it arrived in.
+fn psk_submode(sub: &str) -> Option<&'static str> {
+    let up = sub.trim().to_ascii_uppercase();
+    ADIF_PSK_SUBMODES.into_iter().find(|s| *s == up)
+}
+
+/// `PSK` for a row stored as a PSK submode whose own SUBMODE names that mode: one read as
+/// `MODE=PSK` plus the submode ([`psk_submode`]), written back under its parent as it came. A row
+/// with no SUBMODE, as the PSK cockpit logs them, keeps its bare MODE.
+fn psk_parent(r: &QsoRecord) -> Option<&'static str> {
+    let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
+    (psk_submode(&r.mode).is_some() && sub.trim().eq_ignore_ascii_case(r.mode.trim()))
+        .then_some("PSK")
 }
 
 fn ota_fields(
@@ -4309,6 +4403,17 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             submode
                 .as_deref()
                 .and_then(promoted_submode)
+                .map(str::to_string)
+        })
+        // fldigi's PSK modes: `MODE=PSK` and the mode itself in SUBMODE. The SUBMODE is kept below
+        // (it is not promoted, and the writer derives none for it), which is what writes this row
+        // back as `MODE=PSK` ([`psk_parent`]).
+        .or_else(|| {
+            mode_field
+                .as_deref()
+                .filter(|m| m.trim().eq_ignore_ascii_case("PSK"))
+                .and(submode.as_deref())
+                .and_then(psk_submode)
                 .map(str::to_string)
         })
         .or_else(|| mode_field.clone())
@@ -5589,6 +5694,9 @@ mod tests {
             ("SSB", "<MODE:3>SSB"),
             ("RTTY", "<MODE:4>RTTY"),
             ("PSK31", "<MODE:5>PSK31"),
+            // The PSK cockpit's other sub-mode. Neither carries a SUBMODE when the cockpit logs
+            // it, so neither is written under PSK (see `psk_submode`).
+            ("QPSK31", "<MODE:6>QPSK31"),
             ("SSTV", "<MODE:4>SSTV"),
             ("MFSK", "<MODE:4>MFSK"),
             ("Q65", "<MODE:4>MFSK<SUBMODE:3>Q65"),
@@ -5619,6 +5727,40 @@ mod tests {
                 usize::from(golden.contains("<SUBMODE:")),
                 "{mode}: {adif}"
             );
+        }
+    }
+
+    /// ⭐ FLDIGI'S PSK CONTACTS ARE STORED AS THE MODE THEY WERE, AND WRITTEN BACK AS FLDIGI WROTE
+    /// THEM. fldigi logs ADIF 3's `<MODE:3>PSK <SUBMODE:5>PSK31`, and the reader kept only the PSK,
+    /// so the "new mode" need read a PSK31 station as new against a PSK31 contact. Stored as PSK31
+    /// now, the contact still leaves in the shape it came in: the operator's own file and what an
+    /// upload sends both carry `MODE=PSK` and the submode, once each, so a service receives it in
+    /// the form it always did.
+    #[test]
+    fn an_fldigi_psk_contact_is_stored_as_its_submode_and_written_back_as_fldigi_wrote_it() {
+        for sub in ["PSK31", "PSK63", "PSK125", "QPSK31", "8PSK125F"] {
+            let src = format!(
+                "<CALL:5>C56YK<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                 <MODE:3>PSK<SUBMODE:{}>{sub}<EOR>",
+                sub.len()
+            );
+            let got = parse_adif(&(adif_header() + &src));
+            assert_eq!(got.len(), 1, "{src}");
+            assert_eq!(got[0].mode, sub, "stored as the submode");
+            for out in [adif_record(&got[0]), adif_record_own_log(&got[0])] {
+                assert!(
+                    out.contains("<MODE:3>PSK<"),
+                    "MODE is the PSK parent: {out}"
+                );
+                let submode = format!("<SUBMODE:{}>{sub}<", sub.len());
+                assert!(out.contains(&submode), "{submode} in {out}");
+                assert_eq!(out.matches("<MODE:").count(), 1, "{out}");
+                assert_eq!(out.matches("<SUBMODE:").count(), 1, "{out}");
+                // Read back, it is the same contact, and it writes the same bytes again.
+                let back = parse_adif(&(adif_header() + &out));
+                assert_eq!(back[0].mode, sub, "{out}");
+                assert_eq!(adif_record_own_log(&back[0]), adif_record_own_log(&got[0]));
+            }
         }
     }
 
@@ -7033,15 +7175,26 @@ mod tests {
 
     #[test]
     fn reimporting_a_wsjtx_log_after_submode_promotion_adds_no_duplicates() {
-        // Rows imported by a pre-promotion build are stored as bare "MFSK";
-        // the same source row now parses as "FT4" (WSJT-X) or "JS8" (JS8Call).
-        // The legacy-twin probe must treat the promoted row as the duplicate it is.
-        for sub in ["FT4", "JS8"] {
-            let legacy =
-                "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m<MODE:4>MFSK<EOR>";
+        // Rows imported by a pre-promotion build are stored as their bare parent
+        // ("MFSK", "PSK"); the same source row now parses as "FT4" (WSJT-X), "JS8"
+        // (JS8Call) or "PSK31" (fldigi). The legacy-twin probe must treat the promoted
+        // row as the duplicate it is.
+        for (parent, sub) in [
+            ("MFSK", "FT4"),
+            ("MFSK", "JS8"),
+            ("PSK", "PSK31"),
+            ("PSK", "QPSK31"),
+        ] {
+            let legacy = format!(
+                "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
+                 <MODE:{}>{parent}<EOR>",
+                parent.len()
+            );
             let promoted = format!(
                 "<CALL:4>K1JT<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m\
-                 <MODE:4>MFSK<SUBMODE:3>{sub}<EOR>"
+                 <MODE:{}>{parent}<SUBMODE:{}>{sub}<EOR>",
+                parent.len(),
+                sub.len()
             );
             assert_eq!(
                 parse_adif(&promoted)[0].mode,
@@ -7049,7 +7202,7 @@ mod tests {
                 "premise: {sub} is promoted"
             );
             let mut lb = Logbook::new();
-            lb.import_adif(&(adif_header() + legacy));
+            lb.import_adif(&(adif_header() + &legacy));
             let (added, skipped, _) = lb.import_adif(&(adif_header() + &promoted));
             assert!(added.is_empty(), "the promoted {sub} twin is the same QSO");
             assert_eq!(skipped, 1);
