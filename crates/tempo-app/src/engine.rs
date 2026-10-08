@@ -9485,6 +9485,8 @@ impl Engine {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", CW_REFUSED_TX_OFF))
+        } else if let Some(why) = self.connection_tx_refusal() {
+            Some((why, why))
         } else if !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -10409,6 +10411,9 @@ impl Engine {
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
         if !self.tx_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
@@ -10622,6 +10627,10 @@ impl Engine {
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
             );
         }
+        if let Some(why) = self.connection_tx_refusal() {
+            tempo_core::applog::info("tx", &format!("voice-keyer message refused: {why}"));
+            return Err(why.to_string());
+        }
         if !self.tx_allowed() {
             tempo_core::applog::info(
                 "tx",
@@ -10654,6 +10663,8 @@ impl Engine {
             Some("a clock repair is in progress")
         } else if !self.tx_enabled {
             Some("transmit is off")
+        } else if let Some(why) = self.connection_tx_refusal() {
+            Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
         } else if self.flex_radio_has_mic {
@@ -17843,6 +17854,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
         if !self.tx_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
@@ -18197,6 +18211,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", APRS_REFUSED_TX_OFF))
+        } else if let Some(why) = self.connection_tx_refusal() {
+            Some((why, why))
         } else if !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -18682,6 +18698,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
             );
         }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
         if !self.tx_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
@@ -18731,6 +18750,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", PSK_REFUSED_TX_OFF))
+        } else if let Some(why) = self.connection_tx_refusal().filter(|_| in_section) {
+            Some((why, why))
         } else if in_section && !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -18987,6 +19008,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
             );
         }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
         if !self.tx_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
@@ -19100,6 +19124,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", RTTY_REFUSED_TX_OFF))
+        } else if let Some(why) = self.connection_tx_refusal().filter(|_| in_section) {
+            Some((why, why))
         } else if in_section && !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -20317,6 +20343,9 @@ contact yourself."
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
             );
         }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
         if !self.tx_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
@@ -20410,6 +20439,8 @@ contact yourself."
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", SSTV_REFUSED_TX_OFF))
+        } else if let Some(why) = self.connection_tx_refusal().filter(|_| in_section) {
+            Some((why, why))
         } else if in_section && !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -20786,7 +20817,19 @@ contact yourself."
     /// transmits it is that same judgement of the uplink, plus both sides of the carrier when
     /// Nexus commands the uplink no mode word, so the switch can only ever refuse more.
     pub fn tx_allowed(&self) -> bool {
-        self.tx_source_verdict().tx_allowed
+        self.connection_tx_refusal().is_none() && self.tx_source_verdict().tx_allowed
+    }
+
+    /// Why the active radio's CAT connection refuses every transmission, when it does: the Icom
+    /// network connection is receive and control only in this Beta
+    /// ([`crate::settings::rig_conn_is_icom_lan`]). ANDed into [`Self::tx_allowed`] and
+    /// [`Self::tx_allowed_as`], so every transmit path refuses before PTT exactly as it refuses a
+    /// frequency outside the licence, which is why this changes no timing or sequencing; carried
+    /// in the snapshot so the cockpit names the connection, not the licence. The network daemon
+    /// refuses the keying verbs again on its own side.
+    pub fn connection_tx_refusal(&self) -> Option<&'static str> {
+        crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
+            .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
     }
 
     /// THE KEY-TIME JUDGEMENT OF THE FREQUENCY THE NEXT OVER IS EMITTED ON: the whole licence
@@ -20800,6 +20843,9 @@ contact yourself."
     /// frequencies, each through `om`'s emission model. CW keyed from another section — the CW
     /// ID after an FT 73 — is judged as CW too ([`Self::poll_cw_one`]).
     fn tx_allowed_as(&self, om: crate::settings::OperatingMode) -> bool {
+        if self.connection_tx_refusal().is_some() {
+            return false;
+        }
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
@@ -21805,6 +21851,7 @@ contact yourself."
         s.radio.tx_enabled = self.tx_enabled;
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
+        s.radio.tx_refusal = self.connection_tx_refusal().map(str::to_string);
         s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
@@ -31459,6 +31506,112 @@ mod tests {
         e.set_operating_mode("cw", false);
         e.set_frequency(7.030, "40m", "USB");
         assert!(e.tx_allowed(), "Technician CW on 40 m is allowed");
+    }
+
+    /// An IC-7760 on `conn`, the active profile and the flat mirror agreeing, with TX armed.
+    fn icom_7760_on(conn: &str) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let profile = crate::settings::RadioProfile {
+            id: 0,
+            rig_model: 3092,
+            rig_conn: conn.into(),
+            icom_lan_host: "192.0.2.10".into(),
+            ..Default::default()
+        };
+        e.apply_restored_settings(Settings {
+            // The station's identity, which the FT paths validate at the keying boundary.
+            mycall: "W9XYZ".into(),
+            mygrid: "EN61".into(),
+            rig_model: 3092,
+            rig_conn: conn.into(),
+            icom_lan_host: "192.0.2.10".into(),
+            cat_broker_ptt: true,
+            radios: vec![profile],
+            active_radio: 0,
+            ..Settings::default()
+        });
+        e.set_tx_enabled(true);
+        e
+    }
+
+    /// ⭐ THE ICOM NETWORK CONNECTION KEYS NOTHING: every transmit path refuses before PTT, and
+    /// says why in the connection's words, not the licence's. The control is the same radio on its
+    /// serial connection, where every one of the same paths goes ahead exactly as before.
+    #[test]
+    fn the_icom_network_connection_refuses_every_transmit_path_before_ptt() {
+        use crate::settings::ICOM_LAN_TX_REFUSED as WHY;
+        for (conn, lan) in [("serial", false), ("icomlan", true)] {
+            let said = |r: Result<(), String>| r.err();
+            let refused = lan.then(|| WHY.to_string());
+
+            let e = icom_7760_on(conn);
+            assert_eq!(e.tx_allowed(), !lan, "{conn}: the verdict");
+            let radio = e.snapshot().radio;
+            assert_eq!(radio.tx_allowed, !lan, "{conn}: the snapshot's lock");
+            assert_eq!(radio.tx_refusal, refused, "{conn}: the snapshot's reason");
+
+            // FT: the slot plans nothing to key.
+            let mut e = icom_7760_on(conn);
+            e.set_beacon(true);
+            e.set_frequency(14.074, "20m", "USB");
+            assert_eq!(e.poll_tx(0).is_empty(), lan, "{conn}: FT slot");
+
+            // CW: nothing is handed to the keyer, and the notice names the connection.
+            let mut e = icom_7760_on(conn);
+            e.set_operating_mode("cw", false);
+            e.send_cw("TEST");
+            assert_eq!(e.poll_cw_one().is_none(), lan, "{conn}: CW");
+            assert_eq!(e.cw_keyer_error(), refused, "{conn}: CW's notice");
+
+            // Phone: manual PTT does not key.
+            let mut e = icom_7760_on(conn);
+            e.set_operating_mode("phone", false);
+            e.set_ptt(true);
+            assert_eq!(e.manual_ptt(), !lan, "{conn}: PTT");
+
+            // Tune and the radio's ATU.
+            let mut e = icom_7760_on(conn);
+            e.set_tune(true);
+            assert_eq!(e.tuning(), !lan, "{conn}: tune");
+            let mut e = icom_7760_on(conn);
+            e.observe_rig_tuner(Some(true), true);
+            assert_eq!(said(e.atu_tune_gate()), refused, "{conn}: ATU");
+
+            // Another program's PTT through Nexus's CAT broker.
+            let mut e = icom_7760_on(conn);
+            assert_eq!(e.broker_ptt(true), !lan, "{conn}: broker PTT");
+
+            // The voice keyer.
+            let mut e = icom_7760_on(conn);
+            e.set_operating_mode("phone", false);
+            assert_eq!(
+                said(e.send_voice(vec![0.1, 0.2])),
+                refused,
+                "{conn}: voice keyer"
+            );
+
+            // APRS, RTTY, PSK and SSTV refuse at their gates.
+            let mut e = icom_7760_on(conn);
+            assert_eq!(
+                said(e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[])),
+                refused,
+                "{conn}: APRS"
+            );
+            let mut e = icom_7760_on(conn);
+            e.set_operating_mode("rtty", false);
+            assert_eq!(said(e.rtty_send_text("CQ")), refused, "{conn}: RTTY");
+            let mut e = icom_7760_on(conn);
+            e.set_operating_mode("keyboard", false);
+            assert_eq!(said(e.psk_send_text("CQ")), refused, "{conn}: PSK");
+            let mut e = icom_7760_on(conn);
+            e.set_frequency(14.230, "20m", "USB");
+            e.set_operating_mode("phone", false);
+            assert_eq!(
+                said(e.sstv_send(vec![0.0f32; 12_000], "PD-120".into())),
+                refused,
+                "{conn}: SSTV"
+            );
+        }
     }
 
     /// The FT-710 scope state must not survive a RADIO SWITCH.
@@ -48843,6 +48996,9 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            icom_lan_host: p.icom_lan_host.clone(),
+            icom_lan_user: p.icom_lan_user.clone(),
+            icom_lan_port: p.icom_lan_port,
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);

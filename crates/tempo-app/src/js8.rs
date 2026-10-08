@@ -397,10 +397,11 @@ impl Engine {
             let operator = if !self.tx_enabled() || outside {
                 let (held, operator) = self.js8_station.drop_outbox();
                 if held > 0 {
-                    let why = if self.tx_enabled() {
-                        "outside the licence's privileges"
-                    } else {
+                    let why = if !self.tx_enabled() {
                         "transmit is off"
+                    } else {
+                        self.connection_tx_refusal()
+                            .unwrap_or("outside the licence's privileges")
                     };
                     tempo_core::applog::info(
                         "tx",

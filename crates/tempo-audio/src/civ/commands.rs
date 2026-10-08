@@ -1,7 +1,9 @@
 //! Icom CI-V command table — pure encoders/decoders for the CAT-parity verb set, built on
 //! [`super::frame`]. No I/O. Covers the 7300-family (IC-7300/7610/9700/705/905), whose
 //! command numbers are shared; per-model differences are the CI-V **address** (below) and a
-//! few band/mode specifics handled by the caller.
+//! few band/mode specifics handled by the caller. The IC-7760 and IC-7300MK2 share the same
+//! numbers and are driven only over their network connection (`crate::icomlan`); on USB both
+//! still go through Hamlib.
 //!
 //! A command builder returns a [`Frame`] (`.to_bytes()` for the wire); a decoder takes a
 //! *reply* frame and extracts the value. Set commands are acknowledged with a bare
@@ -19,10 +21,16 @@ pub enum IcomModel {
     Ic9700,
     Ic705,
     Ic905,
+    /// Driven only over its network connection; see the module note.
+    Ic7760,
+    /// Driven only over its network connection; see the module note.
+    Ic7300Mk2,
 }
 
 impl IcomModel {
-    /// The factory-default CI-V address for this model.
+    /// The factory-default CI-V address for this model. The IC-7760's is `B2h` (CI-V
+    /// Reference Guide A7788-8EX-2, PDF p. 3) and the IC-7300MK2's `B6h` (its reference, rev 0,
+    /// PDF p. 3).
     pub fn default_civ_addr(self) -> u8 {
         match self {
             IcomModel::Ic7300 => 0x94,
@@ -30,12 +38,16 @@ impl IcomModel {
             IcomModel::Ic9700 => 0xA2,
             IcomModel::Ic705 => 0xA4,
             IcomModel::Ic905 => 0xAC,
+            IcomModel::Ic7760 => 0xB2,
+            IcomModel::Ic7300Mk2 => 0xB6,
         }
     }
 
     /// This model's Hamlib model number — the key the dual-receiver capability table
     /// ([`crate::dualrx`]) and the rest of the curated catalogue are indexed by. The inverse
-    /// of `rigmodels::icom_scope_model`; a test holds the two in step.
+    /// of `rigmodels::icom_scope_model` for the five driven over USB, and of
+    /// `rigmodels::icom_lan_model` for the six driven over the network; tests hold each pair in
+    /// step.
     pub fn hamlib_model(self) -> u32 {
         match self {
             IcomModel::Ic7300 => 3073,
@@ -43,6 +55,8 @@ impl IcomModel {
             IcomModel::Ic9700 => 3081,
             IcomModel::Ic705 => 3085,
             IcomModel::Ic905 => 3090,
+            IcomModel::Ic7760 => 3092,
+            IcomModel::Ic7300Mk2 => 3094,
         }
     }
 
@@ -54,10 +68,14 @@ impl IcomModel {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric())
             .collect();
-        // Longest/most-specific tokens first so "ic905" doesn't shadow nothing, etc.
+        // Longest/most-specific tokens first: "IC-7300MK2" (and the catalogue's "IC-7300MKII")
+        // also contains the IC-7300's token, so the MK2 is tried before it.
         for (tok, m) in [
+            ("ic7300mk2", IcomModel::Ic7300Mk2),
+            ("ic7300mkii", IcomModel::Ic7300Mk2),
             ("ic7300", IcomModel::Ic7300),
             ("ic7610", IcomModel::Ic7610),
+            ("ic7760", IcomModel::Ic7760),
             ("ic9700", IcomModel::Ic9700),
             ("ic705", IcomModel::Ic705),
             ("ic905", IcomModel::Ic905),
@@ -255,7 +273,9 @@ pub fn set_dtx_on(radio: u8, on: bool) -> Frame {
 /// on the RECEIVER's clarifier.
 ///
 /// The other four models keep ΔTX exactly as before. Hamlib gives each of them XIT; they have
-/// not been checked here against Icom's own reference for each radio.
+/// not been checked here against Icom's own reference for each radio. The IC-7760 and the
+/// IC-7300MK2 were: each lists `21 02`, "the ∂TX setting" (A7788-8EX-2 PDF p. 16; the
+/// IC-7300MK2's reference, rev 0, PDF p. 15).
 pub fn has_delta_tx(model: IcomModel) -> bool {
     !matches!(model, IcomModel::Ic9700)
 }
@@ -287,7 +307,9 @@ pub fn stop_voice_tx(radio: u8) -> Frame {
 /// - IC-905: A7711-9EX-2 p. 16, the same;
 /// - IC-7300: the IC-7300MK2 reference (rev 0, p. 15, "Stops the Voice TX memory
 ///   transmission"), and the original's Full Manual (A7292-4EX-12, command table:
-///   "0x00=Cancel TX").
+///   "0x00=Cancel TX");
+/// - IC-7300MK2: its reference, rev 0, PDF p. 15, the same sentence;
+/// - IC-7760: A7788-8EX-2 PDF p. 17, "Transmit the Voice TX Memory (00=Stop, 01=T1 ~ 08=T8)".
 ///
 /// No wildcard arm, so a model added to [`IcomModel`] has to be checked against its own
 /// reference before it can send this.
@@ -297,7 +319,9 @@ pub fn voice_tx_stop_defined(model: IcomModel) -> bool {
         | IcomModel::Ic7610
         | IcomModel::Ic9700
         | IcomModel::Ic705
-        | IcomModel::Ic905 => true,
+        | IcomModel::Ic905
+        | IcomModel::Ic7760
+        | IcomModel::Ic7300Mk2 => true,
     }
 }
 /// Keyer speed (cmd `14 0C`): WPM 6–48 mapped onto the 0–255 level scale.
@@ -502,11 +526,17 @@ pub const FUNC_PREAMP: u8 = 0x02;
 /// (`-m 3095` returns no caps at all). An empty list renders no control, which degrades
 /// honestly; a guessed one would move the operator's front end by the wrong amount.
 /// NEEDS-BENCH (IC-905).
+///
+/// The IC-7760 and IC-7300MK2 are read from Icom's own references, like the IC-7610: the
+/// IC-7760 lists the same fifteen pads, 3 to 45 dB in 3 dB steps (A7788-8EX-2 PDF p. 4), and
+/// the IC-7300MK2 one 20 dB pad, `11 00/20` (rev 0, PDF p. 4). NEEDS-BENCH on both.
 pub fn attenuator_steps_db(model: IcomModel) -> &'static [u8] {
     match model {
-        IcomModel::Ic7300 | IcomModel::Ic705 => &[20],
+        IcomModel::Ic7300 | IcomModel::Ic705 | IcomModel::Ic7300Mk2 => &[20],
         IcomModel::Ic9700 => &[10],
-        IcomModel::Ic7610 => &[3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
+        IcomModel::Ic7610 | IcomModel::Ic7760 => {
+            &[3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45]
+        }
         IcomModel::Ic905 => &[],
     }
 }
@@ -518,9 +548,17 @@ pub fn attenuator_steps_db(model: IcomModel) -> &'static [u8] {
 /// SELECTORS carried in Hamlib's dB-labelled array — they are names, not gains. The IC-7610
 /// labels its two `12` and `20`, which really are decibels. Nothing here may treat a label
 /// as a number to send: [`preamp_index_for_db`] looks it up.
+///
+/// The IC-7760 and IC-7300MK2 take the 7300-family labels, because their references name the
+/// two positions and give no gain: "Preamp 1 ON", "Preamp 2 ON" (A7788-8EX-2 PDF p. 5) and
+/// "P.AMP1 ON", "P.AMP2 ON" (rev 0, PDF p. 6), each `16 02` with `01`/`02`.
 pub fn preamp_steps_db(model: IcomModel) -> &'static [u8] {
     match model {
-        IcomModel::Ic7300 | IcomModel::Ic705 | IcomModel::Ic9700 => &[1, 2],
+        IcomModel::Ic7300
+        | IcomModel::Ic705
+        | IcomModel::Ic9700
+        | IcomModel::Ic7760
+        | IcomModel::Ic7300Mk2 => &[1, 2],
         IcomModel::Ic7610 => &[12, 20],
         IcomModel::Ic905 => &[],
     }
@@ -653,13 +691,19 @@ pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
 /// | IC-9700 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7508-3EX-4, PDF p. 19 |
 /// | IC-705 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7560-8EX-6, PDF p. 23 |
 /// | IC-905 | 1 | 00 = Data mode OFF, 01 = Data mode ON | CI-V Reference Guide A7711-9EX-2, PDF p. 24 |
+/// | IC-7760 | 3 | 00 = Data mode OFF, 01 = DATA1, 02 = DATA2, 03 = DATA3 | CI-V Reference Guide A7788-8EX-2, PDF p. 23 |
+/// | IC-7300MK2 | 1 | 00 = OFF, 01 = ON (SSB/AM/FM; CW/RTTY: 00 only) | CI-V Reference Guide rev 0, PDF p. 22 |
 ///
 /// No wildcard arm, so a model added to [`IcomModel`] has to be read against its own guide
-/// first: the IC-7760, for one, has three, like the IC-7610 (A7788-8EX-2, PDF p. 23).
+/// first.
 pub fn data_mode_count(model: IcomModel) -> u8 {
     match model {
-        IcomModel::Ic7610 => 3,
-        IcomModel::Ic7300 | IcomModel::Ic9700 | IcomModel::Ic705 | IcomModel::Ic905 => 1,
+        IcomModel::Ic7610 | IcomModel::Ic7760 => 3,
+        IcomModel::Ic7300
+        | IcomModel::Ic9700
+        | IcomModel::Ic705
+        | IcomModel::Ic905
+        | IcomModel::Ic7300Mk2 => 1,
     }
 }
 
@@ -683,6 +727,106 @@ pub fn parse_data_mode(f: &Frame) -> Option<bool> {
         f.data.get(1).map(|&b| b != 0)
     } else {
         None
+    }
+}
+
+// ---- Menu items READ at a network connect (`1A 05`) — never written ----
+
+/// A `1A 05` menu item: the two BCD bytes that follow `1A 05` (`00 56` is item 0056).
+pub type MenuItem = [u8; 2];
+
+/// Read one menu item: `1A 05 <item>` with NO data byte. A data byte would make it a write, so
+/// this builder has no way to carry one; the radio answers `1A 05 <item> <value>`.
+pub fn read_menu_item(radio: u8, item: MenuItem) -> Frame {
+    Frame::command(radio, 0x1A, &[0x05, item[0], item[1]])
+}
+
+/// The value in a `1A 05` reply for `item`, or `None` when the frame answers anything else.
+pub fn parse_menu_item(f: &Frame, item: MenuItem) -> Option<u8> {
+    match f.data.as_slice() {
+        [0x05, hi, lo, value] if f.cmd == 0x1A && [*hi, *lo] == item => Some(*value),
+        _ => None,
+    }
+}
+
+/// The radio's time-out timer menu item, from each radio's own CI-V reference. Every one
+/// reads `00` = OFF, `01`–`05` = 3, 5, 10, 20, 30 minutes.
+///
+/// | Model | Item | Its name in the guide | Source |
+/// |---|---|---|---|
+/// | IC-7610 | `00 31` | Function > Time-Out Timer (CI-V) | A7380-7EX-4 PDF p. 6 |
+/// | IC-9700 | `00 41` | SET > Function > Time-Out Timer | A7508-3EX-4 PDF p. 7 |
+/// | IC-705 | `00 43` | the Time-Out Timer setting | A7560-8EX-6 PDF p. 7 |
+/// | IC-905 | `00 44` | the Time-Out Timer setting | A7711-9EX-2 PDF p. 7 |
+/// | IC-7760 | `00 56` | the Time-Out Timer (CI-V) setting | A7788-8EX-2 PDF p. 7 |
+/// | IC-7300MK2 | `00 32` | the Time-Out Timer (CI-V) setting | rev 0, PDF p. 7 |
+///
+/// The IC-7300 has no network connection, so nothing reads it there. On the IC-9700, IC-705 and
+/// IC-905 the guide's item is the plain "Time-Out Timer"; whether it also covers keying over the
+/// network is a bench question.
+pub fn time_out_timer_item(model: IcomModel) -> Option<MenuItem> {
+    match model {
+        IcomModel::Ic7610 => Some([0x00, 0x31]),
+        IcomModel::Ic9700 => Some([0x00, 0x41]),
+        IcomModel::Ic705 => Some([0x00, 0x43]),
+        IcomModel::Ic905 => Some([0x00, 0x44]),
+        IcomModel::Ic7760 => Some([0x00, 0x56]),
+        IcomModel::Ic7300Mk2 => Some([0x00, 0x32]),
+        IcomModel::Ic7300 => None,
+    }
+}
+
+/// Where a radio's transmit audio comes from, by mode: its MOD Input menu items and the value
+/// that selects the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModInput {
+    /// DATA OFF MOD: the source in the plain modes.
+    pub data_off: MenuItem,
+    /// The DATA MOD items, DATA1 first; one on a radio with a single DATA mode.
+    pub data: &'static [MenuItem],
+    /// The value that selects the network. On every one of these radios it is a source of its
+    /// own, never part of a "MIC, USB"-style pair, so "takes its audio from the network" is
+    /// equality with this value.
+    pub lan: u8,
+}
+
+/// Each radio's MOD Input items, from its own CI-V reference.
+///
+/// | Model | DATA OFF MOD | DATA MOD | Network value | Source |
+/// |---|---|---|---|---|
+/// | IC-7610 | `00 91` | DATA1 `00 92`, DATA2 `00 93`, DATA3 `00 94` | `05` LAN | A7380-7EX-4 PDF pp. 6–7 |
+/// | IC-9700 | `01 15` | `01 16` | `05` LAN | A7508-3EX-4 PDF p. 8 |
+/// | IC-705 | `01 18` | `01 19` | `03` WLAN | A7560-8EX-6 PDF p. 9 |
+/// | IC-905 | `01 26` | `01 27` | `03` LAN | A7711-9EX-2 PDF p. 9 |
+/// | IC-7760 | `01 29` | DATA1 `01 30`, DATA2 `01 31`, DATA3 `01 32` | `09` LAN | A7788-8EX-2 PDF p. 9 |
+/// | IC-7300MK2 | `00 84` | `00 85` | `05` LAN | rev 0, PDF p. 9 |
+///
+/// The IC-905's ATV MOD (`01 29`, LAN `05`) is for its ATV mode, which nothing here selects.
+/// The IC-7300 has no network connection, so nothing reads it there.
+pub fn mod_input(model: IcomModel) -> Option<ModInput> {
+    let m = |data_off: MenuItem, data: &'static [MenuItem], lan: u8| {
+        Some(ModInput {
+            data_off,
+            data,
+            lan,
+        })
+    };
+    match model {
+        IcomModel::Ic7610 => m(
+            [0x00, 0x91],
+            &[[0x00, 0x92], [0x00, 0x93], [0x00, 0x94]],
+            0x05,
+        ),
+        IcomModel::Ic9700 => m([0x01, 0x15], &[[0x01, 0x16]], 0x05),
+        IcomModel::Ic705 => m([0x01, 0x18], &[[0x01, 0x19]], 0x03),
+        IcomModel::Ic905 => m([0x01, 0x26], &[[0x01, 0x27]], 0x03),
+        IcomModel::Ic7760 => m(
+            [0x01, 0x29],
+            &[[0x01, 0x30], [0x01, 0x31], [0x01, 0x32]],
+            0x09,
+        ),
+        IcomModel::Ic7300Mk2 => m([0x00, 0x84], &[[0x00, 0x85]], 0x05),
+        IcomModel::Ic7300 => None,
     }
 }
 
@@ -822,6 +966,8 @@ pub const BAND_SUB: u8 = 0x01;
 /// | IC-7610 | yes | CI-V Reference Guide A7380-7EX-4 (Sep. 2025), p. 9 table row `29`, p. 15 format |
 /// | IC-9700 | **no** | CI-V Reference Guide A7508-3EX-4 (Mar. 2023): the table ends at `28` (p. 12) |
 /// | IC-7300 / IC-705 / IC-905 | no | not offered a Sub receiver at all ([`crate::dualrx`]); nothing to name |
+/// | IC-7300MK2 | no | one receiver; its `25`/`26` name the selected or unselected VFO (rev 0, PDF p. 15) |
+/// | IC-7760 | **not used here** | its reference has the form (A7788-8EX-2 PDF p. 17, the row; p. 27, the format), but [`crate::dualrx`] offers no Sub for it yet, so every command goes out plain, on the selected band, as on a one-receiver radio; its marked set is not transcribed here |
 ///
 /// For the record, since the programme's radio list names them: the IC-910H (Instruction
 /// Manual, "CONTROL COMMAND", pp. 78–79: commands `00`–`1C`) and the IC-9100 (Instruction
@@ -930,6 +1076,8 @@ pub fn band_directed_reply(f: Frame) -> Frame {
 /// | IC-7610 | yes | A7380-7EX-4 p. 13: "Main or Sub band's frequency settings" (`25`) and "Main or Sub band's operating mode and filter settings" (`26`), each `00: MAIN`, `01: SUB`; both "Send/read" (p. 9) |
 /// | IC-9700 | **no** | A7508-3EX-4 p. 24: its `25`/`26` name the SELECTED or UNSELECTED VFO, so `25 00` follows the selection — the very thing this form exists to escape |
 /// | IC-7300 / IC-705 / IC-905 | no | not offered a Sub receiver at all ([`crate::dualrx`]); nothing to name |
+/// | IC-7300MK2 | no | one receiver ([`band_directed_form`]'s row) |
+/// | IC-7760 | **not used here** | its reference has both by name (A7788-8EX-2 PDF p. 24), but no Sub is offered for it yet ([`band_directed_form`]'s row) |
 ///
 /// Neither command carries the band-directed mark (A7380-7EX-4 p. 9): the band is their OWN
 /// first data byte. That is why this is a table of its own rather than a row of
@@ -1293,6 +1441,205 @@ mod tests {
                 "{m:?}"
             );
         }
+    }
+
+    /// The IC-7300MK2's names contain the IC-7300's token, so it is tried first: before it was,
+    /// "Icom IC-7300MK2" read as an IC-7300 and would have been driven at the IC-7300's address.
+    #[test]
+    fn the_7760_and_the_7300mk2_are_recognised_and_the_mk2_is_not_a_7300() {
+        for name in ["Icom IC-7300MK2", "Icom IC-7300MKII", "ic7300mk2"] {
+            assert_eq!(
+                IcomModel::from_name(name),
+                Some(IcomModel::Ic7300Mk2),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            IcomModel::from_name("Icom IC-7760"),
+            Some(IcomModel::Ic7760)
+        );
+        assert_eq!(
+            IcomModel::from_name("Icom IC-7300"),
+            Some(IcomModel::Ic7300)
+        );
+        assert_eq!(IcomModel::Ic7760.default_civ_addr(), 0xB2);
+        assert_eq!(IcomModel::Ic7300Mk2.default_civ_addr(), 0xB6);
+    }
+
+    /// The six driven over the network round-trip `rigmodels::icom_lan_model`, and the IC-7300,
+    /// which has no network port, is not among them.
+    #[test]
+    fn the_network_models_round_trip_the_catalogue_mapping() {
+        for m in [
+            IcomModel::Ic7610,
+            IcomModel::Ic9700,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+            IcomModel::Ic7760,
+            IcomModel::Ic7300Mk2,
+        ] {
+            assert_eq!(
+                crate::rigmodels::icom_lan_model(m.hamlib_model()),
+                Some(m),
+                "{m:?}"
+            );
+        }
+        assert_eq!(crate::rigmodels::icom_lan_model(3073), None, "the IC-7300");
+        // ⛔ The serial path is unchanged: the two new models are not driven natively over USB.
+        assert_eq!(
+            crate::rigmodels::icom_scope_model(3092),
+            None,
+            "IC-7760 over USB"
+        );
+        assert_eq!(
+            crate::rigmodels::icom_scope_model(3094),
+            None,
+            "IC-7300MK2 over USB"
+        );
+    }
+
+    /// ⭐ THE MENU READS, BYTE FOR BYTE FROM EACH GUIDE, and each is a read: `1A 05 <item>` and
+    /// nothing after it, since a data byte would write the radio's menu.
+    #[test]
+    fn each_radios_time_out_timer_and_mod_input_reads_are_its_guides_items() {
+        let read =
+            |m: IcomModel, item: MenuItem| read_menu_item(m.default_civ_addr(), item).to_bytes();
+        let tot = |m: IcomModel| read(m, time_out_timer_item(m).expect("a network radio"));
+        assert_eq!(
+            tot(IcomModel::Ic7760),
+            [0xFE, 0xFE, 0xB2, 0xE0, 0x1A, 0x05, 0x00, 0x56, 0xFD]
+        );
+        assert_eq!(
+            tot(IcomModel::Ic7610),
+            [0xFE, 0xFE, 0x98, 0xE0, 0x1A, 0x05, 0x00, 0x31, 0xFD]
+        );
+        assert_eq!(
+            tot(IcomModel::Ic9700),
+            [0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x00, 0x41, 0xFD]
+        );
+        assert_eq!(
+            tot(IcomModel::Ic705),
+            [0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x05, 0x00, 0x43, 0xFD]
+        );
+        assert_eq!(
+            tot(IcomModel::Ic905),
+            [0xFE, 0xFE, 0xAC, 0xE0, 0x1A, 0x05, 0x00, 0x44, 0xFD]
+        );
+        assert_eq!(
+            tot(IcomModel::Ic7300Mk2),
+            [0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x32, 0xFD]
+        );
+        let mods = |m: IcomModel| {
+            let mi = mod_input(m).expect("a network radio");
+            let mut frames = vec![read(m, mi.data_off)];
+            frames.extend(mi.data.iter().map(|&item| read(m, item)));
+            (frames, mi.lan)
+        };
+        let f = |addr: u8, hi: u8, lo: u8| vec![0xFE, 0xFE, addr, 0xE0, 0x1A, 0x05, hi, lo, 0xFD];
+        assert_eq!(
+            mods(IcomModel::Ic7760),
+            (
+                vec![
+                    f(0xB2, 0x01, 0x29),
+                    f(0xB2, 0x01, 0x30),
+                    f(0xB2, 0x01, 0x31),
+                    f(0xB2, 0x01, 0x32)
+                ],
+                0x09
+            )
+        );
+        assert_eq!(
+            mods(IcomModel::Ic7610),
+            (
+                vec![
+                    f(0x98, 0x00, 0x91),
+                    f(0x98, 0x00, 0x92),
+                    f(0x98, 0x00, 0x93),
+                    f(0x98, 0x00, 0x94)
+                ],
+                0x05
+            )
+        );
+        assert_eq!(
+            mods(IcomModel::Ic9700),
+            (vec![f(0xA2, 0x01, 0x15), f(0xA2, 0x01, 0x16)], 0x05)
+        );
+        assert_eq!(
+            mods(IcomModel::Ic705),
+            (vec![f(0xA4, 0x01, 0x18), f(0xA4, 0x01, 0x19)], 0x03)
+        );
+        assert_eq!(
+            mods(IcomModel::Ic905),
+            (vec![f(0xAC, 0x01, 0x26), f(0xAC, 0x01, 0x27)], 0x03)
+        );
+        assert_eq!(
+            mods(IcomModel::Ic7300Mk2),
+            (vec![f(0xB6, 0x00, 0x84), f(0xB6, 0x00, 0x85)], 0x05)
+        );
+        // The IC-7300 has no network connection, so nothing is read from it.
+        assert_eq!(time_out_timer_item(IcomModel::Ic7300), None);
+        assert_eq!(mod_input(IcomModel::Ic7300), None);
+    }
+
+    /// THE DATA MODES A DATA WRITE MAY SELECT ARE THE DATA MOD INPUTS THE MENU LISTS. Each network
+    /// radio's guide gives both: the DATA values of `1A 06` ([`data_mode_count`]) and the DATA MOD
+    /// items of its MOD Input menu ([`mod_input`]). The connect-time probe reads the DATA MOD item
+    /// for the operator's D1/D2/D3 from the second while the DATA write is capped by the first, so
+    /// they must agree, or the connection status names the input of a DATA mode the radio is never
+    /// put in.
+    #[test]
+    fn each_network_radios_data_modes_are_its_data_mod_items() {
+        let rows: Vec<(IcomModel, usize, usize)> = [
+            IcomModel::Ic7610,
+            IcomModel::Ic9700,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+            IcomModel::Ic7760,
+            IcomModel::Ic7300Mk2,
+        ]
+        .into_iter()
+        .map(|m| {
+            let items = mod_input(m).expect("a network radio").data.len();
+            (m, usize::from(data_mode_count(m)), items)
+        })
+        .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (IcomModel::Ic7610, 3, 3),
+                (IcomModel::Ic9700, 1, 1),
+                (IcomModel::Ic705, 1, 1),
+                (IcomModel::Ic905, 1, 1),
+                (IcomModel::Ic7760, 3, 3),
+                (IcomModel::Ic7300Mk2, 1, 1),
+            ],
+            "(model, DATA modes a DATA write may select, DATA MOD items)"
+        );
+    }
+
+    /// A reply is read only for the item it names.
+    #[test]
+    fn a_menu_reply_is_read_only_for_its_own_item() {
+        let reply = |data: &[u8]| {
+            Frame::parse(&[&[0xFE, 0xFE, 0xE0, 0xB2, 0x1A][..], data, &[0xFD]].concat()).unwrap()
+        };
+        assert_eq!(
+            parse_menu_item(&reply(&[0x05, 0x00, 0x56, 0x03]), [0x00, 0x56]),
+            Some(0x03)
+        );
+        assert_eq!(
+            parse_menu_item(&reply(&[0x05, 0x00, 0x56, 0x03]), [0x01, 0x29]),
+            None
+        );
+        assert_eq!(
+            parse_menu_item(&reply(&[0x05, 0x00, 0x56]), [0x00, 0x56]),
+            None,
+            "no value"
+        );
+        assert_eq!(
+            parse_menu_item(&reply(&[0x06, 0x00, 0x56, 0x03]), [0x00, 0x56]),
+            None
+        );
     }
 
     /// ⭐ COMMAND `29`, AS ICOM PRINTS IT — and only where Icom prints it.

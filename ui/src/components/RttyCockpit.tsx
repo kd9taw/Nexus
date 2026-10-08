@@ -573,7 +573,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     }
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast(t('rtty.send.txLocked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('rtty.send.txLocked'), 'info', 3500)
       return
     }
     const onAir = macro ? frameForAir(expanded.text) : expanded.text

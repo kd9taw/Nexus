@@ -32,7 +32,7 @@ brand-specific page yet. If you run one and want notes added, open an issue.
 
 ---
 
-## The three connection types
+## The connection types
 
 Everything in **Settings ▸ Radio ▸ Rig & CAT** comes down to one choice — the
 **Connection** dropdown:
@@ -69,6 +69,16 @@ The same choice covers an SDR program serving CAT on your computer, such as
 Thetis or piHPSDR running a Hermes Lite 2. Rig Model then names the program,
 and Network Address is the address and port of that program's CAT server. See
 [Hermes Lite 2 and SDR Program Setup](sdr-programs.md).
+
+### Icom network (LAN / Wi-Fi) — Beta
+
+Offered only for the six Icoms with a network port built in: the IC-7610,
+IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2. Nexus logs in to the radio's
+own network server and drives CAT and the radio's panadapter over it, **receive
+and control only**: nothing transmits on this connection yet, and it carries no
+audio. You set the **Radio address**, the **Network user** and its **Network
+password** (kept in the computer's keychain), and the **Control port** if you
+moved it from 50001. See [the Icom guide](icom.md#nexuss-own-network-connection-beta).
 
 ### OmniRig (Windows only)
 

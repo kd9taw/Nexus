@@ -1378,6 +1378,22 @@ export async function clearLotwPassword(): Promise<void> {
   await invoke<void>('clear_lotw_password')
 }
 
+/** Store a radio profile's Icom network password in the OS keychain (write-only; an empty string
+ *  clears it). The radio takes 16 printable characters at most. */
+export async function setIcomLanPassword(radioId: number, password: string): Promise<void> {
+  await invoke<void>('set_icom_lan_password', { radioId, password })
+}
+
+/** Remove a radio profile's Icom network password from the OS keychain (idempotent). */
+export async function clearIcomLanPassword(radioId: number): Promise<void> {
+  await invoke<void>('clear_icom_lan_password', { radioId })
+}
+
+/** Whether a radio profile has an Icom network password saved (never the password). */
+export async function icomLanPasswordSaved(radioId: number): Promise<boolean> {
+  return invoke<boolean>('icom_lan_password_saved', { radioId })
+}
+
 /** Sync your LoTW state into the log: pull new confirmations AND mark which of your
  *  uploads LoTW now holds on file (own-echo → Pending becomes Accepted). Uses the
  *  stored username + keychain password. */
@@ -2481,6 +2497,11 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's address, network user and control port for the Icom network connection (Beta;
+   *  per-radio, as above). Its password is never here: the OS keychain holds it. */
+  icomLanHost: string
+  icomLanUser: string
+  icomLanPort: number
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio

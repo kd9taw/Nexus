@@ -17055,6 +17055,8 @@ fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, 
     // …and out of the base config too, else the picker keeps offering a radio that no longer exists.
     persist_roster_to_base(&eng.settings().radios);
     persist_routing_to_base(eng.settings());
+    // …and its Icom network password out of the keychain.
+    icom_lan_forget_removed(&OsKeychain, id);
     Ok(eng.snapshot())
 }
 
@@ -17308,7 +17310,10 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             let eng = engine_lock(&state);
             let r = eng.snapshot().radio;
             let s = eng.settings();
-            let is_network = s.rig_conn == "network" && !s.rig_addr.is_empty();
+            // The Icom network connection has no serial port to sweep: its Test CAT reports
+            // through the live session, so it is never handed to the ladder.
+            let is_network = (s.rig_conn == "network" && !s.rig_addr.is_empty())
+                || tempo_app::settings::rig_conn_is_icom_lan(&s.rig_conn);
             // The ladder applies only to a KNOWN Icom on a real serial port (it speaks
             // raw CI-V) whose CAT channel is what the failed probe actually exercised —
             // a dedicated-PTT-port failure must keep its own error, not a ladder verdict
@@ -23329,6 +23334,237 @@ fn hrdlog_keychain() -> Result<keyring::Entry, String> {
 fn wrl_keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, WRL_KEYCHAIN_USER)
         .map_err(|e| format!("keychain unavailable: {e}"))
+}
+
+// ----- The Icom network connection's password ----------------------------------------------
+// One OS keychain entry per radio profile (service "tempo" like every connector, account
+// `icom-lan-<profile id>`), never in settings.json, a log or the CI-V diagnostic file. The network
+// user and the address live in the radio profile, as the QRZ and eQSL user names do; only the
+// password is secret. It reaches the radio loop through the credential source registered at start
+// (`tempo_audio::icomlan::set_credential_source`), read at the moment of use.
+
+/// The keychain account a radio profile's Icom network password lives under.
+fn icom_lan_account(radio_id: u32) -> String {
+    format!("icom-lan-{radio_id}")
+}
+
+/// Where Icom network passwords are kept: the OS keychain in the app. The tests keep theirs in a
+/// map, so nothing they do touches a real credential.
+trait IcomLanVault: Send + Sync {
+    fn get(&self, radio_id: u32) -> Result<Option<String>, String>;
+    fn set(&self, radio_id: u32, password: &str) -> Result<(), String>;
+    fn clear(&self, radio_id: u32) -> Result<(), String>;
+}
+
+/// The OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service).
+struct OsKeychain;
+
+impl OsKeychain {
+    fn entry(radio_id: u32) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, &icom_lan_account(radio_id))
+            .map_err(|e| format!("couldn't open the system keychain: {e}"))
+    }
+}
+
+impl IcomLanVault for OsKeychain {
+    fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+        match Self::entry(radio_id)?.get_password() {
+            Ok(password) => Ok(Some(password)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            // Never the error's own rendering here: a bad encoding carries the stored bytes.
+            Err(keyring::Error::BadEncoding(_)) => {
+                Err("the stored password is not readable text".to_string())
+            }
+            Err(e) => Err(format!("couldn't read the system keychain: {e}")),
+        }
+    }
+    fn set(&self, radio_id: u32, password: &str) -> Result<(), String> {
+        Self::entry(radio_id)?
+            .set_password(password)
+            .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+    }
+    fn clear(&self, radio_id: u32) -> Result<(), String> {
+        clear_keychain_entry(&Self::entry(radio_id)?)
+    }
+}
+
+/// Store a radio profile's Icom network password, or clear it when `password` is empty. The radio
+/// takes at most 16 printable characters, so anything else is refused here, before it is stored,
+/// and the refusal never repeats what was typed.
+fn icom_lan_set_password(
+    vault: &dyn IcomLanVault,
+    radio_id: u32,
+    password: String,
+) -> Result<(), String> {
+    if password.is_empty() {
+        return vault.clear(radio_id);
+    }
+    if tempo_net::icom::wire::passcode(&password).is_err() {
+        return Err(
+            "The radio takes a network password of at most 16 characters: letters, digits and \
+             the symbols on a US keyboard"
+                .to_string(),
+        );
+    }
+    vault.set(radio_id, &password)
+}
+
+/// After a radio profile is removed, its Icom network password goes with it. A failure is
+/// reported, never the password.
+fn icom_lan_forget_removed(vault: &dyn IcomLanVault, radio_id: u32) {
+    if let Err(e) = vault.clear(radio_id) {
+        conn_log(
+            "Icom network",
+            "err",
+            format!("couldn't remove radio {radio_id}'s network password: {e}"),
+        );
+    }
+}
+
+/// Store (or, with an empty string, clear) a radio profile's Icom network password in the OS
+/// keychain. Write-only: it is never read back to the UI.
+#[tauri::command]
+fn set_icom_lan_password(radio_id: u32, password: String) -> Result<(), String> {
+    icom_lan_set_password(&OsKeychain, radio_id, password)
+}
+
+/// Remove a radio profile's Icom network password from the OS keychain (idempotent).
+#[tauri::command]
+fn clear_icom_lan_password(radio_id: u32) -> Result<(), String> {
+    OsKeychain.clear(radio_id)
+}
+
+/// Whether a radio profile has an Icom network password saved. Says only yes or no.
+#[tauri::command]
+fn icom_lan_password_saved(radio_id: u32) -> Result<bool, String> {
+    Ok(OsKeychain.get(radio_id)?.is_some())
+}
+
+#[cfg(test)]
+mod icom_lan_password_tests {
+    //! The Icom network password's path through the shell, against a map in place of the OS
+    //! keychain: nothing here touches a real credential. Made-up values only.
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    const PASSWORD: &str = "not-a-password";
+
+    #[derive(Default)]
+    struct MapVault(Mutex<BTreeMap<u32, String>>);
+
+    impl IcomLanVault for MapVault {
+        fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+            Ok(self.0.lock().unwrap().get(&radio_id).cloned())
+        }
+        fn set(&self, radio_id: u32, password: &str) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(radio_id, password.to_string());
+            Ok(())
+        }
+        fn clear(&self, radio_id: u32) -> Result<(), String> {
+            self.0.lock().unwrap().remove(&radio_id);
+            Ok(())
+        }
+    }
+
+    /// One keychain entry per radio profile, under the connectors' own service.
+    #[test]
+    fn each_radio_profile_has_its_own_keychain_entry() {
+        assert_eq!(icom_lan_account(3), "icom-lan-3");
+        assert_eq!(LOTW_KEYCHAIN_SERVICE, "tempo");
+    }
+
+    /// ⭐ THE PASSWORD IS IN THE VAULT AND NOWHERE ELSE: a station's saved settings, with the radio
+    /// on the network connection and its password set, do not hold it. The control: the same
+    /// search over the same file with the password written into it finds it.
+    #[test]
+    fn the_password_is_never_in_the_saved_settings() {
+        let vault = MapVault::default();
+        icom_lan_set_password(&vault, 0, PASSWORD.to_string()).unwrap();
+        assert_eq!(vault.get(0).unwrap().as_deref(), Some(PASSWORD));
+        let profile = tempo_app::settings::RadioProfile {
+            id: 0,
+            rig_model: 3092,
+            rig_conn: "icomlan".into(),
+            icom_lan_host: "192.0.2.10".into(),
+            icom_lan_user: "test-user".into(),
+            ..Default::default()
+        };
+        let settings = tempo_app::settings::Settings {
+            rig_model: 3092,
+            rig_conn: "icomlan".into(),
+            icom_lan_host: "192.0.2.10".into(),
+            icom_lan_user: "test-user".into(),
+            radios: vec![profile],
+            active_radio: 0,
+            ..tempo_app::settings::Settings::default()
+        };
+        let dir =
+            std::env::temp_dir().join(format!("nexus-icomlan-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        settings.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains("192.0.2.10"),
+            "precondition: this is the radio's settings file"
+        );
+        assert!(
+            !saved.contains(PASSWORD),
+            "the password is in the settings file"
+        );
+        let seeded = format!("{saved}{PASSWORD}");
+        assert!(
+            seeded.contains(PASSWORD),
+            "the control finds it once it is there"
+        );
+    }
+
+    /// What the radio cannot take is refused before it is stored, and the refusal never repeats
+    /// what was typed. An empty password clears the entry.
+    #[test]
+    fn the_password_field_refuses_what_the_radio_cannot_take() {
+        let vault = MapVault::default();
+        for bad in ["seventeen-chars!!", "caf\u{e9}", "tab\there"] {
+            let e = icom_lan_set_password(&vault, 1, bad.to_string()).unwrap_err();
+            assert!(!e.contains(bad), "{e}");
+            assert_eq!(vault.get(1).unwrap(), None, "{bad:?} was stored");
+        }
+        icom_lan_set_password(&vault, 1, PASSWORD.to_string()).unwrap();
+        icom_lan_set_password(&vault, 1, String::new()).unwrap();
+        assert_eq!(vault.get(1).unwrap(), None, "an empty password clears it");
+    }
+
+    /// ⭐ DELETING THE PROFILE CLEARS ITS ENTRY, and only its own. The command does it on every
+    /// successful removal.
+    #[test]
+    fn removing_a_radio_profile_forgets_its_password() {
+        let vault = MapVault::default();
+        vault.set(1, PASSWORD).unwrap();
+        vault.set(2, "another-fake").unwrap();
+        icom_lan_forget_removed(&vault, 1);
+        assert_eq!(vault.get(1).unwrap(), None);
+        assert_eq!(
+            vault.get(2).unwrap().as_deref(),
+            Some("another-fake"),
+            "the other radio's stays"
+        );
+        // The command: a removal that went ahead forgets the password, after it persisted.
+        let src = include_str!("lib.rs");
+        let body = &src[src.find("fn remove_radio(").expect("the command")..];
+        let body = &body[..body.find("\n}\n").expect("its end")];
+        let refused = body.find("return Err(").expect("the refusal");
+        let forget = body
+            .find("icom_lan_forget_removed(&OsKeychain, id)")
+            .expect("the forget");
+        assert!(
+            refused < forget,
+            "only a removal that happened forgets the password"
+        );
+    }
 }
 
 /// Delete a keychain entry idempotently — a missing entry counts as success
@@ -31726,6 +31962,10 @@ pub fn run() {
         icom_native_cat: settings.icom_native_cat,
         flex_native_cat: settings.flex_native_cat,
         flex_radio_ip: settings.flex_radio_ip.clone(),
+        icom_lan_host: settings.icom_lan_host.clone(),
+        icom_lan_user: settings.icom_lan_user.clone(),
+        icom_lan_port: settings.icom_lan_port,
+        radio_id: settings.active_radio,
         broker_self_port: if settings.cat_broker {
             Some(settings.cat_broker_port)
         } else {
@@ -32793,6 +33033,11 @@ fn start_on_the_logbook(
         // instance's orphans, and the identity+parent checks inside keep a LIVE sibling
         // instance's daemons untouched.
         tempo_audio::rigctld_proc::init_orphan_ledger(config_dir_for(None).join("daemon-pids"));
+        // The Icom network client reads a radio's password from the keychain at the moment it
+        // logs in, through this source; nothing else hands it the password.
+        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(|radio_id| {
+            OsKeychain.get(radio_id)
+        }));
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
             // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
@@ -33989,6 +34234,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             sync_lotw_report,
             set_lotw_password,
             clear_lotw_password,
+            set_icom_lan_password,
+            clear_icom_lan_password,
+            icom_lan_password_saved,
             download_lotw_report,
             reset_lotw_cursor,
             upload_lotw_report,

@@ -23,6 +23,11 @@ socket2 = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[features]
+# The simulated network Icom (`icom::sim`), for another crate's tests: tempo-audio's Icom network
+# daemon runs its suite against it. Test support only; nothing that ships turns it on.
+icom-sim = []
+
 [dev-dependencies]
 # The SmartSDR simulator, for the Flex session's fault suites (`flex::sim_tests`). Test support from
 # this workspace, std only; nothing outside the tests depends on it.

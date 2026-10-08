@@ -186,3 +186,7 @@ propagation = { path = "../propagation" }
 # TEST-ONLY: the SmartSDR simulator the Flex daemon's tests (`src/flex/tests.rs`) run against.
 # In-workspace, pure std and test-scoped, so the shipped dependency graph is unchanged.
 tempo-flexsim = { path = "../tempo-flexsim" }
+# TEST-ONLY: the simulated network Icom the Icom network daemon's tests (`src/icomlan/tests.rs`,
+# `tests/icomlan_leak.rs`) run against: tempo-net's `icom-sim` feature, which only test builds turn
+# on. Not a new dependency: tempo-net is already one, behind `device`.
+tempo-net = { path = "../tempo-net", features = ["icom-sim"] }

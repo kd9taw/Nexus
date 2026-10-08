@@ -3,6 +3,8 @@
 Icom rigs connect over **Serial (USB / COM)** and speak Icom's CI-V protocol,
 which Hamlib handles. Modern Icoms report their model name in the USB product
 string, so **Detect my radio** usually identifies the exact radio in one scan.
+The six with a network port built in can also connect over your LAN or Wi-Fi
+(Beta, receive and control only): see [below](#nexuss-own-network-connection-beta).
 
 ---
 
@@ -34,10 +36,50 @@ for a brand-new operator.
 The IC-7760 works over its **USB cable**, like the rest of the family: in **Settings ▸ Radio ▸ Rig & CAT**, pick
 **Rig Model: Icom IC-7760** and the radio's COM port. If **Detect** doesn't fill it in, choose it yourself.
 
-Nexus can't reach an Icom over its **network port** directly. The programs that find the radio by its IP address speak
-Icom's own network protocol, and Hamlib, which Nexus uses for Icoms, doesn't. So typing the radio's IP address into Nexus
-won't find it. To run over the network anyway, put a program in between. wfview and Icom's own RS-BA1 both do the job,
-but they hand the radio to Nexus in different ways.
+### Nexus's own network connection (Beta)
+
+Nexus can also reach the six Icoms with a network port built in, the **IC-7610, IC-9700, IC-705, IC-905, IC-7760 and
+IC-7300MK2**, straight over your LAN or Wi-Fi, with no bridge program in between. It is **Beta, and receive and control
+only**: Nexus reads and sets the frequency and mode, follows the dial, reads the meters and draws the radio's own
+panadapter, but **it does not transmit on this connection**. Tune, PTT, the FT sequencer, CW, the voice keyer and every
+other transmit path say so and stop before the radio is keyed. There is no audio over it yet either: keep the radio's
+USB cable for audio, or use a bridge (below) if you need to transmit over the network.
+
+On the radio:
+
+1. **Network Control ON** in the radio's network remote settings (on an IC-7760: MENU ▸ SET ▸ Network ▸ Remote
+   Settings). It takes effect after the radio is turned off and on.
+2. A **network user** and password in the same menu (16 characters at most each).
+3. **CI-V Transceive ON**, so Nexus follows the dial as you turn it.
+4. Note the radio's address: **IP Address (LAN)** on an IC-7760.
+
+In Nexus, **Settings ▸ Radio ▸ Rig & CAT**: pick your Icom as the **Rig Model**, then **Connection: Icom network (LAN /
+Wi-Fi) — Beta**, and fill in the **Radio address**, the **Network user** and the **Network password** (type it and press
+**Set**). The **Control port** stays at 50001 unless you moved it on the radio. **Save**, then **Test CAT**.
+
+What to know:
+
+- **One program at a time.** The radio takes one network client. Close wfview or RS-BA1 before Nexus connects. After a
+  program lets go, the radio can hold its old session for up to 3 minutes before it answers again.
+- **Your own network only.** For remote use, use a VPN. Don't forward ports to the radio: its network login is
+  scrambled on the wire, not encrypted.
+- **The password stays in your computer's keychain**, one per radio profile. It is never written to Nexus's settings,
+  its log or the CI-V diagnostic file. Removing the radio profile removes its password.
+- **What Nexus reads, and writes nothing.** At connect it reads the radio's **Time-Out Timer** and **MOD Input**
+  settings and shows them under the connection status. A later Beta that transmits over the network will ask for the
+  time-out timer on and the DATA MOD source set to LAN; nothing is changed for you.
+- **When the session drops**, Nexus says why and reconnects by itself after 1, 2, 4, 8 and 16 seconds, then every 30
+  seconds. If the radio refused the login, or another program took the radio, it waits until you press **Test CAT** or
+  save the connection again.
+- **Not yet tried on a radio** (NEEDS-BENCH): it is tested against a simulated radio only, and an IC-7760 is the
+  first real one. Please report how it goes on yours.
+- **Going back** is one setting: **Connection: Serial**.
+
+### Through a bridge
+
+To transmit or carry audio over the network today, put a program in between. Hamlib, which Nexus uses for Icoms over
+USB, doesn't speak Icom's network protocol. wfview and Icom's own RS-BA1 both do the job, but they hand the radio to
+Nexus in different ways.
 
 **With wfview, or another bridge that offers a rigctld port:**
 

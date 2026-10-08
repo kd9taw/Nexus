@@ -1511,6 +1511,10 @@ export interface RadioStatus {
   /** Whether the operator's license class permits TX at the current dial+mode. False = TX
    * hard-blocked (outside privileges); the cockpit shows a lock indicator. */
   txAllowed: boolean
+  /** Why the radio's CAT connection refuses every transmission, when it does (the Icom network
+   *  connection is receive and control only in its Beta). `txAllowed` is false with it; name this
+   *  reason rather than the licence's. */
+  txRefusal?: string | null
   /** The dial the next over would be EMITTED on — the confirmed split TX frequency when the rig
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */
@@ -3874,6 +3878,12 @@ export interface Settings {
   /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
    *  stays the default and the fallback. */
   flexNativeCat?: boolean
+  /** The radio's own address for the Icom network connection (Beta): its "IP Address (LAN)". */
+  icomLanHost?: string
+  /** The network user the radio was set up with. Not secret; the password is in the OS keychain. */
+  icomLanUser?: string
+  /** The radio's control port (UDP), 50001 unless moved on the radio. */
+  icomLanPort?: number
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
@@ -4480,6 +4490,10 @@ export interface RadioProfile {
   flexNativeAudio?: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
   flexNativeCat?: boolean
+  /** This radio's Icom network address, user and control port (Beta). */
+  icomLanHost?: string
+  icomLanUser?: string
+  icomLanPort?: number
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured

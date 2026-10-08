@@ -70,6 +70,11 @@ pub mod flex;
 #[cfg(feature = "device")]
 pub mod flexspectrum;
 pub mod frames;
+/// Nexus's own Icom network (LAN / Wi-Fi) client (Beta, opt-in per radio): one network session to
+/// the radio, the native CI-V daemon carried over it, with keying refused. Needs tempo-net, so it
+/// rides the `device` feature like the Flex client.
+#[cfg(feature = "device")]
+pub mod icomlan;
 pub mod mic_decode;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local

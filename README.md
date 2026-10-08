@@ -444,6 +444,14 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   `ui/src/waterfallHistory.ts`, `ui/src/spectrum/ring.ts`) from its `DssRenderer` /
   `WaterfallHistoryBuffer`; its `PanadapterStream` was a wire-format reference for the native Flex
   DAX/VITA path (see **[NOTICE](NOTICE)**).
+- **[Hamlib](https://github.com/Hamlib/Hamlib)'s Icom network backend** (LGPL-2.1-or-later; the copies
+  here are under the GPL, as the LGPL's section 3 allows) — **Mikael Nousiainen OH3BHX**. The protocol
+  core of Nexus's Icom network client (`crates/tempo-net/src/icom/`: the packets, the login, the session
+  and its keepalive) is ported from the backend in
+  [Hamlib pull request #2178](https://github.com/Hamlib/Hamlib/pull/2178). That work descends from
+  **[kappanhang](https://github.com/nonoo/kappanhang)** (MIT) by **Norbert Varga HA2NON** and **Akos
+  Marton ES1AKOS**, whose README credits **W6EL** with the login passcode algorithm (see
+  **[NOTICE](NOTICE)**).
 - **[fldigi](http://www.w1hkj.com/)** (GPL-3.0-or-later) — **Dave Freese W1HKJ** and **Stefan Fendt
   DL1SMF** (descended from **Tomi Manninen OH2BNS**'s gmfsk). Nexus's RTTY demodulator
   (`crates/tempo-core/src/rtty/demod.rs`) is **ported from fldigi's receive path** (`rtty.cxx` +

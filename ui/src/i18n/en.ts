@@ -6038,6 +6038,34 @@ export const EN = {
   'settings.rigControl.conn.label': 'Connection',
   'settings.rigControl.conn.serial': 'Serial (USB / COM port)',
   'settings.rigControl.conn.network': 'Network (host:port — SDR software, or a remote rig)',
+  'settings.rigControl.conn.icomlan': 'Icom network (LAN / Wi-Fi) — Beta',
+  'settings.rigControl.icomLan.hint': '<b>Beta: receive and control only.</b> Nexus does not transmit on this connection, and carries no audio over it yet. On the radio: Network Control ON (it takes effect after a restart) and CI-V Transceive ON. The radio takes one network program at a time, so close wfview or RS-BA1 first. LAN and Wi-Fi only: from another network, use a VPN.',
+  'settings.rigControl.icomLan.host.label': 'Radio address',
+  'settings.rigControl.icomLan.host.hint':
+    "The radio's own IPv4 address on your network. On an IC-7760 it is <b>IP Address (LAN)</b> in MENU ▸ SET ▸ Network.",
+  'settings.rigControl.icomLan.user.label': 'Network user',
+  'settings.rigControl.icomLan.user.hint': 'A network user set up on the radio (Network User1 or User2 in its network Remote Settings), 16 characters at most.',
+  'settings.rigControl.icomLan.password.label': 'Network password',
+  'settings.rigControl.icomLan.password.placeholder': 'Type it, then Set',
+  'settings.rigControl.icomLan.password.saved': 'A password is saved for this radio.',
+  'settings.rigControl.icomLan.password.none': 'No password is saved for this radio yet.',
+  'settings.rigControl.icomLan.password.hint':
+    "It is kept in this computer's keychain, one per radio, never in Settings or a log. The radio's login is scrambled on the wire, not encrypted, so use this connection on your own network.",
+  'settings.rigControl.icomLan.password.setDone': 'Network password saved in the keychain',
+  'settings.rigControl.icomLan.password.clearDone': 'Network password removed from the keychain',
+  'settings.rigControl.icomLan.password.saveFailed':
+    "Couldn't save the network password",
+  'settings.rigControl.icomLan.password.clearFailed':
+    "Couldn't remove the network password",
+  'settings.rigControl.icomLan.port.label': 'Control port (UDP)',
+  'settings.rigControl.icomLan.port.hint': '50001 unless you moved it on the radio.',
+  'settings.rigControl.icomNative.icomlan': 'Always on over the Icom network connection: it is how Nexus drives the radio there.',
+  'settings.radio.check.icomLanModel': 'The Icom network connection works with the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2. Pick one of those, or Serial (USB).',
+  'settings.radio.check.icomLanAddress':
+    "Enter the radio's IPv4 address, for example {{example}}.",
+  'settings.radio.check.icomLanUser': 'No network user is set, so the radio will refuse the login.',
+  'settings.radio.check.icomLanPassword': 'No network password is saved for this radio yet: type it and press Set.',
+  'operate.strip.state.connectionNoTx': 'No TX on this connection',
   'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
   'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
   'settings.rigControl.conn.hint':

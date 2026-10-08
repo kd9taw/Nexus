@@ -1084,7 +1084,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
     if (on && !snapRef.current.radio.txAllowed) {
-      pushToast(t('phone.tx.locked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('phone.tx.locked'), 'info', 3500)
       return
     }
     // …nor while a clock repair holds transmit (`Engine::hold_tx_for_clock_repair`): the engine
@@ -3118,7 +3118,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           // PhoneCockpit.structure.test.tsx.
           title={
             !snap.radio.txAllowed
-              ? 'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
+              ? snap.radio.txRefusal ??
+                'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
               : !snap.radio.txEnabled
                 ? "Transmit is switched OFF, so keying is discarded — Stop TX, the TX watchdog or a logger's Halt Tx turns it off. Click to enable transmit, then hold to talk. You talk on the rig's mic."
                 : "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys). You talk on the rig's mic."
