@@ -32,9 +32,11 @@ use super::state::CivState;
 pub trait CivIo: Read + Write + Send {}
 impl<T: Read + Write + Send> CivIo for T {}
 
-/// How long the engine waits on the wire for one request's reply before failing it.
-/// CI-V at 115200 answers in ~10–20 ms; even 19200 stays well under this.
-const REQUEST_DEADLINE: Duration = Duration::from_millis(300);
+/// How long the engine waits on a SERIAL bus for one request's reply before failing it.
+/// CI-V at 115200 answers in ~10–20 ms; even 19200 stays well under this. Another transport
+/// passes its own to [`CivEngine::start_with_deadline`]: a reply over the network rides two
+/// datagrams, maybe a retransmit, maybe Wi-Fi.
+pub const REQUEST_DEADLINE: Duration = Duration::from_millis(300);
 /// Read chunk timeout the loop expects `CivIo` reads to observe (the real port is opened
 /// with this; the loop just treats timeouts as "no data").
 pub const READ_TIMEOUT: Duration = Duration::from_millis(30);
@@ -92,6 +94,8 @@ pub struct CivHandle {
     tx: mpsc::Sender<CivRequest>,
     state: Arc<Mutex<CivState>>,
     alive: Arc<AtomicBool>,
+    /// The engine's per-request deadline ([`REQUEST_DEADLINE`] on a serial bus).
+    deadline: Duration,
 }
 
 impl CivHandle {
@@ -111,10 +115,15 @@ impl CivHandle {
                 reply_to: Some(rtx),
             })
             .map_err(|_| CivError::Gone)?;
-        // The engine enforces REQUEST_DEADLINE per request; the extra headroom here covers
+        // The engine enforces its deadline per request; the extra headroom here covers
         // requests queued behind others.
-        rrx.recv_timeout(REQUEST_DEADLINE * 4 + Duration::from_millis(100))
+        rrx.recv_timeout(self.deadline * 4 + Duration::from_millis(100))
             .map_err(|_| CivError::Timeout)?
+    }
+
+    /// How long the engine waits for one request's reply.
+    pub fn request_deadline(&self) -> Duration {
+        self.deadline
     }
 
     /// A snapshot of the live state (freq/mode/PTT/meters folded from replies + transceive).
@@ -136,9 +145,19 @@ pub struct CivEngine {
 impl CivEngine {
     /// Start the engine on `io`, talking to the radio at CI-V address `radio_addr`. `model` is
     /// which Icom that is, when known: its scope sweeps are scaled to that radio's own range
-    /// (0–200 on an IC-7610, 0–160 on the rest), which the address cannot tell, because the
-    /// operator can change it on the radio.
+    /// (0–200 on an IC-7610 or IC-7760, 0–160 on the rest), which the address cannot tell,
+    /// because the operator can change it on the radio. A serial bus: [`REQUEST_DEADLINE`].
     pub fn start(io: Box<dyn CivIo>, radio_addr: u8, model: Option<IcomModel>) -> CivEngine {
+        Self::start_with_deadline(io, radio_addr, model, REQUEST_DEADLINE)
+    }
+
+    /// [`Self::start`] with a transport's own per-request deadline.
+    pub fn start_with_deadline(
+        io: Box<dyn CivIo>,
+        radio_addr: u8,
+        model: Option<IcomModel>,
+        deadline: Duration,
+    ) -> CivEngine {
         let (tx, rx) = mpsc::channel::<CivRequest>();
         let state = Arc::new(Mutex::new(CivState::default()));
         let scope_row = Arc::new(Mutex::new(None));
@@ -158,6 +177,7 @@ impl CivEngine {
                         io,
                         radio_addr,
                         model,
+                        deadline,
                         rx,
                         state,
                         scope_row,
@@ -173,6 +193,7 @@ impl CivEngine {
                 tx,
                 state,
                 alive: alive.clone(),
+                deadline,
             },
             scope_row,
             scope_enabled,
@@ -266,6 +287,7 @@ fn engine_loop(
     mut io: Box<dyn CivIo>,
     radio_addr: u8,
     model: Option<IcomModel>,
+    deadline: Duration,
     rx: mpsc::Receiver<CivRequest>,
     state: Arc<Mutex<CivState>>,
     scope_row: Arc<Mutex<Option<ScopeSweep>>>,
@@ -313,7 +335,7 @@ fn engine_loop(
                     // native CAT including the ability to unkey a keyed radio.
                     match write_frame(&mut io, &req.frame) {
                         WriteOutcome::Ok => {
-                            pending = Some((req, Instant::now() + REQUEST_DEADLINE));
+                            pending = Some((req, Instant::now() + deadline));
                         }
                         WriteOutcome::Transient => {
                             req.resolve(Err(CivError::Timeout));
@@ -529,6 +551,11 @@ pub(crate) mod tests_support {
         pub sub_filter_raw: u8,
         /// Fault injection — NAK the next N `1A 03` commands, read or write.
         pub nak_filter_width: u32,
+        /// THE `1A 05` MENU, item → its one data byte. A read of an item held here is answered
+        /// `1A 05 <item> <value>`; a read of any other item is refused (`FA`), the way a radio
+        /// answers an item its menu does not have. A write is stored, so a test that must see
+        /// none can look at [`Self::wire`].
+        pub menus: std::collections::BTreeMap<[u8; 2], u8>,
         /// Which band each command ACTED on, in arrival order: `(on_sub, cmd, data)`. A
         /// `29`-wrapped command is recorded UNWRAPPED, under the band it named; every other
         /// command under the selection at the moment it arrived. This is the witness for
@@ -738,6 +765,19 @@ pub(crate) mod tests_support {
                     None // ack
                 }
                 None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
+            },
+            // A MENU item (`1A 05 <item>` reads, `1A 05 <item> <value>` writes) — see
+            // [`Regs::menus`].
+            (0x1A, Some(0x05)) => match data {
+                [_, hi, lo] => match r.menus.get(&[*hi, *lo]) {
+                    Some(&v) => Some((0x1A, vec![0x05, *hi, *lo, v])),
+                    None => Some((0xFA, Vec::new())),
+                },
+                [_, hi, lo, v] => {
+                    r.menus.insert([*hi, *lo], *v);
+                    None // ack
+                }
+                _ => Some((0xFA, Vec::new())),
             },
             // IF FILTER WIDTH (`1A 03`): a bare sub-command reads, one BCD byte writes — on the
             // band the command acts on, and never in FM (see [`Regs::filter_raw`]).
@@ -986,6 +1026,7 @@ pub(crate) mod tests_support {
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
                         nak_filter_width: 0,
+                        menus: std::collections::BTreeMap::new(),
                         acted: Vec::new(),
                         wire: Vec::new(),
                         log: Vec::new(),
@@ -1094,6 +1135,66 @@ mod tests {
     use super::super::frame::{freq_to_bcd, Frame};
     use super::tests_support::FakeRadio;
     use super::*;
+
+    /// A radio whose replies take `delay` to arrive after each command.
+    struct Late {
+        inner: FakeRadio,
+        delay: Duration,
+        wrote_at: Option<Instant>,
+    }
+    impl std::io::Write for Late {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.wrote_at = Some(Instant::now());
+            self.inner.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+    impl std::io::Read for Late {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.wrote_at.is_some_and(|t| t.elapsed() < self.delay) {
+                std::thread::sleep(Duration::from_millis(2));
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "no data"));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    /// ⭐ THE DEADLINE IS THE TRANSPORT'S. A serial bus keeps its 300 ms, exactly as before, and a
+    /// reply 500 ms late fails there; a transport that brings a longer one (the network's) still
+    /// takes that same late reply as the answer.
+    #[test]
+    fn the_serial_deadline_stays_300_ms_and_a_transport_can_bring_its_own() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let serial = CivEngine::start(Box::new(radio), 0xA2, None);
+        assert_eq!(
+            serial.handle().request_deadline(),
+            Duration::from_millis(300)
+        );
+        let late = |deadline: Option<Duration>| {
+            let (radio, _push) = FakeRadio::new(0xA2);
+            let io = Box::new(Late {
+                inner: radio,
+                delay: Duration::from_millis(500),
+                wrote_at: None,
+            });
+            let eng = match deadline {
+                None => CivEngine::start(io, 0xA2, None),
+                Some(d) => CivEngine::start_with_deadline(io, 0xA2, None, d),
+            };
+            eng.handle().transact(
+                read_freq(0xA2),
+                Expect::Reply {
+                    cmd: 0x03,
+                    sub: None,
+                },
+            )
+        };
+        assert_eq!(late(None), Err(CivError::Timeout), "serial: 300 ms");
+        let f = late(Some(Duration::from_millis(1_000))).expect("a 1 s deadline waits for it");
+        assert_eq!(super::super::commands::parse_freq(&f), Some(145_000_000));
+    }
 
     #[test]
     fn transact_read_and_set_against_a_fake_radio() {

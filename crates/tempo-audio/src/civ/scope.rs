@@ -3,8 +3,8 @@
 //! With waveform output enabled, the radio streams each scope sweep as a numbered burst of
 //! `27 00` frames: the first frame of a burst carries a header (center/fixed mode, the RF
 //! position, an out-of-range flag), the rest carry the waveform points (one byte each,
-//! display height up to the radio's own top: `0xA0`, or `0xC8` on an IC-7610 — see
-//! `point_max`). [`ScopeAssembler`] reassembles bursts into complete
+//! display height up to the radio's own top: `0xA0`, or `0xC8` on an IC-7610 or IC-7760 —
+//! see `point_max`). [`ScopeAssembler`] reassembles bursts into complete
 //! sweeps normalized to the waterfall's 0..1 row contract, tagged with the absolute RF span,
 //! and [`publish_sweep`] hands each one to the spectrum feed as one frame.
 //!
@@ -39,16 +39,23 @@ use super::frame::{bcd_to_freq, Frame};
 /// | IC-9700 | 160 | 475 | CI-V Reference Guide A7508-3EX-4, PDF p. 26 |
 /// | IC-705 | 160 | 475 | CI-V Reference Guide A7560-8EX-6, PDF p. 29 |
 /// | IC-905 | 160 (`A0`) | 475 | CI-V Reference Guide A7711-9EX-2, PDF p. 29 |
+/// | IC-7760 | **200** (`C8`) | 689 | CI-V Reference Guide A7788-8EX-2, PDF p. 25 |
+/// | IC-7300MK2 | 160 (`A0`) | 475 | CI-V Reference Guide rev 0, PDF p. 24 |
 ///
 /// Read against 160, every IC-7610 point from 161 to 200 drew at full height: the strongest
 /// fifth of its scale came out flat. A radio the caller did not name (`None`) keeps 160, the
-/// top of every native Icom but the 7610. No wildcard arm, so a model added to [`IcomModel`]
-/// has to be read against its own guide first: the IC-7760, for one, tops out at 200 like
-/// the 7610 (A7788-8EX, PDF p. 24).
+/// top of every native Icom but the 7610 and the 7760. No wildcard arm, so a model added to
+/// [`IcomModel`] has to be read against its own guide first.
 fn point_max(model: Option<IcomModel>) -> u8 {
     match model {
-        Some(IcomModel::Ic7610) => 200,
-        Some(IcomModel::Ic7300 | IcomModel::Ic9700 | IcomModel::Ic705 | IcomModel::Ic905)
+        Some(IcomModel::Ic7610 | IcomModel::Ic7760) => 200,
+        Some(
+            IcomModel::Ic7300
+            | IcomModel::Ic9700
+            | IcomModel::Ic705
+            | IcomModel::Ic905
+            | IcomModel::Ic7300Mk2,
+        )
         | None => 160,
     }
 }
@@ -95,11 +102,13 @@ pub fn scope_stream_frames(radio: u8, on: bool) -> Vec<Frame> {
     }
 }
 
-/// True for dual-receiver Icoms (two scopes: Main + Sub) — IC-7610 (0x98) and IC-9700 (0xA2)
-/// by CI-V default address. Their `27 14/15/19` scope-CONTROL commands take a leading Main/Sub
-/// selector byte that single-scope rigs (IC-7300/705/905) omit.
+/// True for dual-receiver Icoms (two scopes: Main + Sub) — IC-7610 (0x98), IC-9700 (0xA2) and
+/// IC-7760 (0xB2) by CI-V default address. Their `27 14/15/19` scope-CONTROL commands take a
+/// leading Main/Sub selector byte that single-scope rigs (IC-7300/705/905/7300MK2) omit; the
+/// IC-7760's `27 14`, `27 17` and `27 19` formats carry it as `00=MAIN, 01=SUB` (A7788-8EX-2 PDF
+/// pp. 25–26), and it selects its scope with `27 12` (p. 17).
 pub fn scope_is_dual(radio: u8) -> bool {
-    matches!(radio, 0x98 | 0xA2)
+    matches!(radio, 0x98 | 0xA2 | 0xB2)
 }
 
 /// One decimal from a BCD byte pair position (two digits per byte).
@@ -515,5 +524,63 @@ mod tests {
         );
         let second = newest(first.seq).expect("the next sweep is a new frame");
         assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
+    }
+
+    /// ⭐ OVER THE NETWORK A SWEEP IS ONE FRAME, and the guides give its size: "When data is sent
+    /// to the controller (PC) using the RF deck's [LAN] port, all data is sent together", one
+    /// division of 704 bytes on the IC-7760 (A7788-8EX-2 PDF p. 25), 490 on the IC-7300MK2
+    /// (rev 0, PDF p. 24): the 15 header bytes and the 689 or 475 points. The assembler takes
+    /// such a burst as it is, `seq == total == 1`, and each radio's points are read on its own
+    /// scale (200 on the 7760 and 7610, 160 on the rest).
+    #[test]
+    fn a_network_sweep_is_one_frame_read_on_each_radios_own_scale() {
+        for (model, points, top, len) in [
+            (IcomModel::Ic7760, 689usize, 200u8, 704usize),
+            (IcomModel::Ic7610, 689, 200, 704),
+            (IcomModel::Ic7300Mk2, 475, 160, 490),
+            (IcomModel::Ic9700, 475, 160, 490),
+            (IcomModel::Ic705, 475, 160, 490),
+            (IcomModel::Ic905, 475, 160, 490),
+        ] {
+            let mut body = center_header();
+            // A ramp from 0 to the radio's own top: its last point is full height.
+            body.extend((0..points).map(|i| (i * usize::from(top) / (points - 1)) as u8));
+            let f = wf_frame(1, 1, &body);
+            // The division as the guide sizes it: everything after the `00` sub-command.
+            assert_eq!(
+                f.data.len() - 1,
+                len,
+                "{model:?}: the guide's division length"
+            );
+            let sweep = ScopeAssembler::new(Some(model))
+                .push(&f)
+                .unwrap_or_else(|| panic!("{model:?}: a one-frame sweep completes"));
+            assert_eq!(sweep.row.len(), points, "{model:?}");
+            assert_eq!(
+                sweep.row.last().copied(),
+                Some(1.0),
+                "{model:?}: the top is full height"
+            );
+            let half = sweep.row[points / 2];
+            assert!(
+                (half - 0.5).abs() < 0.01,
+                "{model:?}: half way up is 0.5, got {half}"
+            );
+            assert_eq!((sweep.lo_hz, sweep.hi_hz), (144_975_000.0, 145_025_000.0));
+        }
+    }
+
+    /// The IC-7760 has two scopes, like the IC-7610: it selects one with `27 12` (A7788-8EX-2
+    /// PDF p. 17) and names Main or Sub in its scope-control formats (pp. 25–26). The
+    /// IC-7300MK2 has one: its `27 12` is "Main only" (rev 0, PDF p. 15).
+    #[test]
+    fn the_7760_pins_its_main_scope_and_the_7300mk2_has_one() {
+        let on = scope_stream_frames(0xB2, true);
+        assert_eq!(on.len(), 3);
+        assert_eq!(on[0].data, vec![0x12, 0x00]);
+        assert!(scope_is_dual(0xB2));
+        let mk2 = scope_stream_frames(0xB6, true);
+        assert_eq!(mk2.len(), 2);
+        assert!(!scope_is_dual(0xB6));
     }
 }

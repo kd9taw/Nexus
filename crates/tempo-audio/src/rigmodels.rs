@@ -599,6 +599,23 @@ pub(crate) fn icom_scope_model(model: u32) -> Option<crate::civ::commands::IcomM
     })
 }
 
+/// Map a curated Hamlib model number to the Icom Nexus drives over the radio's own network
+/// connection (the "Icom network" Connection choice): the six Icoms with a network server
+/// built in. The IC-7300 has no network port; the IC-7760 and IC-7300MK2 are driven natively
+/// here and nowhere else (on USB they still go through Hamlib).
+pub fn icom_lan_model(model: u32) -> Option<crate::civ::commands::IcomModel> {
+    use crate::civ::commands::IcomModel::*;
+    Some(match model {
+        3078 => Ic7610,
+        3081 => Ic9700,
+        3085 => Ic705,
+        3090 => Ic905,
+        3092 => Ic7760,
+        3094 => Ic7300Mk2,
+        _ => return None,
+    })
+}
+
 /// Hamlib **serial** rigs whose CAT backend answers slowly enough that the tight 700 ms
 /// serial read deadline can fire before rigctld/Hamlib finishes its own
 /// `post_write_delay + timeout × retry` (plus the internal retry-on-timeout) — producing a

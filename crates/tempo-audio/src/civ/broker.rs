@@ -42,6 +42,16 @@
 //! would move key-on timing, and an unkey must never wait behind a selection sequence. The
 //! transmit-side CONFIGURATION verbs (XIT, repeater shift and offset, CTCSS) do name the
 //! transmitting receiver, Main by default, and the radio loop withholds them from a keyed rig.
+//!
+//! ## Whether this daemon may key at all
+//!
+//! The daemon is told at its start ([`KeyingPolicy`]). Over a serial bus it keys exactly as it
+//! always has. Over the radio's network connection it refuses the three verbs that put the
+//! transmitter on the air, `T 1`, `b` (CAT CW) and `U VOX 1` (VOX keys on audio), sending
+//! nothing to the radio, so nothing reaches the transmitter through this port even from a
+//! program that never asked the engine. It refuses no unkey or stop: `T 0`, `\stop_morse`,
+//! `\stop_voice_mem`, `U VOX 0` and the key-up at teardown always go out. The engine refuses
+//! the same overs earlier, before PTT, with its own reason; this is the second layer.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -147,6 +157,34 @@ struct SatSplit {
 }
 
 /// rigctld-protocol backend that translates every verb to CI-V through the engine.
+/// Whether a daemon may key the transmitter — see the module note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyingPolicy {
+    /// Every keying verb goes to the radio: the serial bus, as it always has.
+    Allowed,
+    /// `T 1`, `b` and `U VOX 1` are refused, sending nothing, for this reason. Unkeys and stops
+    /// are never refused.
+    Refused(&'static str),
+}
+
+/// What differs between the transports a [`CivDaemon`] can run over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    /// How long the engine waits for one request's reply.
+    pub deadline: Duration,
+    pub keying: KeyingPolicy,
+}
+
+impl Link {
+    /// A serial bus: the engine's own deadline, and keying as it always was.
+    pub fn serial() -> Link {
+        Link {
+            deadline: super::engine::REQUEST_DEADLINE,
+            keying: KeyingPolicy::Allowed,
+        }
+    }
+}
+
 pub struct CivBackend {
     h: CivHandle,
     addr: u8,
@@ -201,6 +239,8 @@ pub struct CivBackend {
     /// How a per-receiver command names its receiver on this radio — see [`RxAddressing`]
     /// and [`Self::on_receiver`].
     rx_addressing: RxAddressing,
+    /// Whether the keying verbs may reach the radio — see the module note.
+    keying: KeyingPolicy,
 }
 
 /// How long a timed-out dial read may still serve the last real reading.
@@ -236,6 +276,25 @@ impl CivBackend {
                 op_satmode_off: false,
             }),
             rx_addressing: RxAddressing::for_model(model),
+            keying: KeyingPolicy::Allowed,
+        }
+    }
+
+    /// The same backend under `keying`.
+    pub fn with_keying(mut self, keying: KeyingPolicy) -> Self {
+        self.keying = keying;
+        self
+    }
+
+    /// `Some(reason)` when this daemon must not key: the verb that asked is refused, sending
+    /// nothing, and the CI-V diagnostic log says so.
+    fn keying_refused(&self, verb: &str) -> Option<&'static str> {
+        match self.keying {
+            KeyingPolicy::Allowed => None,
+            KeyingPolicy::Refused(why) => {
+                super::diag::note(&format!("{verb} refused, nothing sent: {why}"));
+                Some(why)
+            }
         }
     }
 
@@ -879,6 +938,10 @@ impl CivBackend {
         if token == "XIT" && !self.has_delta_tx() {
             return None;
         }
+        // VOX keys the transmitter on audio, so turning it ON is a key; turning it off never is.
+        if token == "VOX" && on && self.keying_refused("U VOX 1").is_some() {
+            return Some(false);
+        }
         let f = match token {
             "RIT" => commands::set_rit_on(self.addr, on),
             "XIT" => commands::set_dtx_on(self.addr, on),
@@ -1203,6 +1266,10 @@ impl RigBackend for CivBackend {
     /// `nothing_new_rides_between_the_go_and_ptt_on` and
     /// `an_unkey_never_waits_on_the_band_lock`.
     fn set_ptt(&self, on: bool) -> bool {
+        // A key is refused where the link may not key; an unkey never is.
+        if on && self.keying_refused("T 1").is_some() {
+            return false;
+        }
         self.ack(commands::set_ptt(self.addr, on))
     }
 
@@ -1260,6 +1327,9 @@ impl RigBackend for CivBackend {
     /// transmits, and a selection round trip in front of the first chunk would delay key-on.
     /// Exactly the bytes it always sent — as is `stop_morse`, an unkey that must never wait.
     fn send_morse(&self, text: &str) -> Option<bool> {
+        if self.keying_refused("b").is_some() {
+            return Some(false);
+        }
         // Chunk to the rig's per-frame CW text limit; all chunks must ack.
         let bytes: Vec<u8> = text.bytes().filter(u8::is_ascii).collect();
         if bytes.is_empty() {
@@ -1480,18 +1550,34 @@ impl CivDaemon {
         data_mode: u8,
         model: Option<IcomModel>,
     ) -> std::io::Result<CivDaemon> {
-        let engine = CivEngine::start(io, civ_addr, model);
+        Self::start_with_link(io, civ_addr, tcp_port, data_mode, model, Link::serial())
+    }
+
+    /// [`Self::start_with_io`] over a transport with its own [`Link`]: the radio's network
+    /// connection passes a longer deadline and refuses keying.
+    pub fn start_with_link(
+        io: Box<dyn super::engine::CivIo>,
+        civ_addr: u8,
+        tcp_port: u16,
+        data_mode: u8,
+        model: Option<IcomModel>,
+        link: Link,
+    ) -> std::io::Result<CivDaemon> {
+        let engine = CivEngine::start_with_deadline(io, civ_addr, model, link.deadline);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let tx_intent = Arc::new(AtomicBool::new(false));
-        let civ = Arc::new(CivBackend::new(
-            engine.handle(),
-            civ_addr,
-            tx_intent.clone(),
-            data_mode,
-            model,
-        ));
+        let civ = Arc::new(
+            CivBackend::new(
+                engine.handle(),
+                civ_addr,
+                tx_intent.clone(),
+                data_mode,
+                model,
+            )
+            .with_keying(link.keying),
+        );
         let backend: Arc<dyn RigBackend> = civ.clone();
         let tcp_stop = Arc::new(AtomicBool::new(false));
         let tcp_thread = {
@@ -1531,7 +1617,13 @@ impl CivDaemon {
                 })
                 .expect("spawn civ-daemon-tcp")
         };
-        super::diag::note("CivDaemon created (new serial engine + rigctld TCP)");
+        super::diag::note(match link.keying {
+            KeyingPolicy::Allowed => "CivDaemon created (new serial engine + rigctld TCP)",
+            KeyingPolicy::Refused(_) => {
+                "CivDaemon created (CI-V over the radio's network connection + rigctld TCP; \
+                 keying refused)"
+            }
+        });
         Ok(CivDaemon {
             engine,
             civ_addr,
@@ -4445,6 +4537,132 @@ mod tests {
                 .iter()
                 .any(|f| f.windows(5).any(|w| w == [0x29, 0x00, 0x1A, 0x03, 0x22])),
             "the band-directed form went on the wire"
+        );
+    }
+
+    // ── THE KEYING POLICY: a link that may not key refuses the keys, never an unkey ──────────
+
+    /// The frames on the wire since `from`, as `(cmd, data)`.
+    fn wire_since(regs: &Arc<Mutex<Regs>>, from: usize) -> Vec<(u8, Vec<u8>)> {
+        regs.lock().unwrap().log[from..].to_vec()
+    }
+
+    fn keys(log: &[(u8, Vec<u8>)]) -> Vec<(u8, Vec<u8>)> {
+        log.iter()
+            .filter(|(cmd, data)| {
+                (*cmd == 0x1C && data.as_slice() == [0x00, 0x01])
+                    || (*cmd == 0x17 && data.as_slice() != [0xFF])
+                    || (*cmd == 0x16 && data.as_slice() == [0x46, 0x01])
+            })
+            .cloned()
+            .collect()
+    }
+
+    const REFUSED: Link = Link {
+        deadline: super::super::engine::REQUEST_DEADLINE,
+        keying: KeyingPolicy::Refused("transmit is off on this connection"),
+    };
+
+    /// ⭐ A LINK THAT MAY NOT KEY sends no key to the radio: `T 1`, `b` and `U VOX 1` are refused
+    /// with nothing on the wire, while `T 0`, `\stop_morse`, `\stop_voice_mem` and `U VOX 0` go
+    /// out as always. The control: the same verbs on a serial link reach the radio.
+    ///
+    /// Read off the WIRE, because the fake radio refuses PTT itself (`1C` is not scripted, so it
+    /// answers `FA`): `T 1` and `T 0` say `RPRT -1` on both links, and only the wire tells a key
+    /// the radio was sent and refused from one it was never sent.
+    #[test]
+    fn a_link_that_may_not_key_refuses_every_key_and_no_unkey() {
+        let model = IcomModel::Ic7760;
+        let addr = model.default_civ_addr();
+        for link in [Link::serial(), REFUSED] {
+            let refused = link.keying != KeyingPolicy::Allowed;
+            let (radio, _push) = FakeRadio::new(addr);
+            let regs = radio.regs();
+            let daemon =
+                CivDaemon::start_with_link(Box::new(radio), addr, 0, 1, Some(model), link).unwrap();
+            let (mut c, mut rd) = client(daemon.local_addr().port());
+            let before = regs.lock().unwrap().log.len();
+            for (line, serial_reply) in [
+                ("T 1\n", "RPRT -1\n"), // the fake's own refusal, after it was sent
+                ("b CQ\n", "RPRT 0\n"),
+                ("U VOX 1\n", "RPRT 0\n"),
+            ] {
+                let want = if refused { "RPRT -1\n" } else { serial_reply };
+                assert_eq!(
+                    roundtrip(&mut c, &mut rd, line),
+                    want,
+                    "{line:?} refused={refused}"
+                );
+            }
+            let sent = keys(&wire_since(&regs, before));
+            if refused {
+                assert_eq!(
+                    sent,
+                    Vec::<(u8, Vec<u8>)>::new(),
+                    "no key reached the radio"
+                );
+            } else {
+                assert_eq!(
+                    sent,
+                    vec![
+                        (0x1C, vec![0x00, 0x01]),
+                        (0x17, b"CQ".to_vec()),
+                        (0x16, vec![0x46, 0x01]),
+                    ],
+                    "the control: a serial link keys exactly as before"
+                );
+            }
+            // Every unkey and stop goes out on both.
+            let before = regs.lock().unwrap().log.len();
+            roundtrip(&mut c, &mut rd, "T 0\n"); // refused by the fake itself, as above
+            for line in ["\\stop_morse\n", "\\stop_voice_mem\n", "U VOX 0\n"] {
+                assert_eq!(roundtrip(&mut c, &mut rd, line), "RPRT 0\n", "{line:?}");
+            }
+            assert_eq!(
+                wire_since(&regs, before),
+                vec![
+                    (0x1C, vec![0x00, 0x00]),
+                    (0x17, vec![0xFF]),
+                    (0x28, vec![0x00, 0x00]),
+                    (0x16, vec![0x46, 0x00]),
+                ],
+                "refused={refused}"
+            );
+        }
+    }
+
+    /// The teardown's key-up is an unkey, so a link that may not key still sends it.
+    #[test]
+    fn a_link_that_may_not_key_still_unkeys_at_teardown() {
+        let addr = IcomModel::Ic7610.default_civ_addr();
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let daemon = CivDaemon::start_with_link(
+            Box::new(radio),
+            addr,
+            0,
+            1,
+            Some(IcomModel::Ic7610),
+            REFUSED,
+        )
+        .unwrap();
+        let before = regs.lock().unwrap().log.len();
+        drop(daemon);
+        assert!(
+            wire_since(&regs, before).contains(&(0x1C, vec![0x00, 0x00])),
+            "the safety key-up went out"
+        );
+    }
+
+    /// The serial link is the daemon as it always was: the engine's own 300 ms and keying.
+    #[test]
+    fn the_serial_link_is_the_daemon_as_it_always_was() {
+        assert_eq!(
+            Link::serial(),
+            Link {
+                deadline: std::time::Duration::from_millis(300),
+                keying: KeyingPolicy::Allowed,
+            }
         );
     }
 }
