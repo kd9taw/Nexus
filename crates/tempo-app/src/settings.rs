@@ -1012,6 +1012,22 @@ pub struct Settings {
     /// Withheld from Remote (`query/configuration.rs`): a browser has no use for it.
     #[serde(default)]
     pub contest_email: String,
+    /// Cabrillo `CLUB` — the contest club an entry counts for, written into the header of a
+    /// contest whose rules list it (the Illinois QSO Party's club competition) and left out
+    /// when this is empty. Read at EXPORT, like [`Self::contest_email`].
+    #[serde(default)]
+    pub contest_club: String,
+    /// Cabrillo `ENTRY-CLASS` — the sponsor's own entry class, one of the names the selected
+    /// contest's rules declare (`ILLINOIS FIXED LOW POWER`, `UNLIMITED`…); empty is
+    /// undeclared. Read at EXPORT, and written only when it is one of that contest's own
+    /// classes, so a pick made for another contest claims nothing.
+    #[serde(default)]
+    pub contest_entry_class: String,
+    /// More Cabrillo `OPERATORS`, typed: callsigns separated by spaces or commas. The header
+    /// lists everyone the contest's rows name as the operator at the key ([`Self::fd_operator`],
+    /// stamped on each contact as it is logged), then these. Read at EXPORT.
+    #[serde(default)]
+    pub contest_operators: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -4271,6 +4287,9 @@ impl Default for Settings {
             contest_category_assisted: String::new(),
             contest_category_station: String::new(),
             contest_email: String::new(), // "" = no EMAIL header
+            contest_club: String::new(),
+            contest_entry_class: String::new(),
+            contest_operators: String::new(),
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.

@@ -135,6 +135,14 @@ impl Gate {
             .map_or(0, |s| s.get(&source).map_or(0, |s| s.arrivals.len()))
     }
 
+    /// How many of `source`'s connections are open now, under [`MAX_OPEN_PER_SOURCE`].
+    #[cfg(test)]
+    pub fn open(&self, source: IpAddr) -> usize {
+        self.sources
+            .lock()
+            .map_or(0, |s| s.get(&source).map_or(0, |s| s.open))
+    }
+
     /// A handshake from `source` failed: it never proved a paired key, spoke another protocol, or
     /// ran out of time. Enough of them in a minute and the address is ignored.
     pub fn failed(&self, source: IpAddr, now: Instant) {

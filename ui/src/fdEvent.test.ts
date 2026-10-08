@@ -3,7 +3,7 @@
 // WFD's final six hours). What remains here is pure labeling over a window the
 // backend supplies, so these tests feed explicit windows.
 import { describe, it, expect } from 'vitest'
-import { fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
+import { CONTESTS, clubSyncRefusal, clubSyncRefusalText, contestClubRefusal, fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
 
 // The real 2026 windows, as the Rust side computes them (pinned there in
 // crates/tempo-core/src/fd_rules.rs::event_windows_are_algorithmic_and_dodge_the_feb_spill).
@@ -80,5 +80,40 @@ describe('fdHeaderSubtitle', () => {
     const ev = fdEventFromWindow('wfd', start, start + 30 * 3600)!
     const sub = fdHeaderSubtitle(new Date(Date.UTC(2027, 0, 1)), ev)
     expect(sub).toContain('Jan 31–Feb 1')
+  })
+})
+
+// Club sync runs the picked contest's own rules and refuses only the contests whose merged log
+// would be wrong whoever built it (`Engine::club_sync_refusal`, pinned in Rust by
+// `club_sync_runs_the_pickers_contest_and_refuses_only_what_it_cannot_run`). The screen says why
+// from this, so it has to read the same settings the same way, the trim and the blank default
+// included.
+describe('clubSyncRefusal', () => {
+  it('names the reason for hosting or joining a serial-number or transmitter-column contest', () => {
+    expect(clubSyncRefusal({ fdEvent: 'arrlss_cw', fdHostEnable: true })).toBe('serial')
+    expect(clubSyncRefusal({ fdEvent: 'cqp', fdHostEnable: true })).toBe('serial')
+    expect(clubSyncRefusal({ fdEvent: 'cqww_cw', fdJoinAddr: '192.168.1.10:42073' })).toBe('transmitter')
+    expect(clubSyncRefusal({ fdEvent: ' cqww_rtty ', fdHostEnable: true })).toBe('transmitter')
+  })
+  it('is null for the Illinois QSO Party, both Field Days and the blank default — every contest the club runs', () => {
+    for (const fdEvent of ['ilqp', 'nyqp', 'tnqp', 'ohqp', 'txqp', 'arrlvhf_jun', 'arrlfd', 'wfd', '', ' wfd ', undefined]) {
+      expect(clubSyncRefusal({ fdEvent, fdHostEnable: true })).toBeNull()
+    }
+  })
+  it('is null when club sync is not switched on at all', () => {
+    expect(clubSyncRefusal({ fdEvent: 'cqww_cw', fdHostEnable: false, fdJoinAddr: '   ' })).toBeNull()
+    expect(clubSyncRefusal(null)).toBeNull()
+  })
+  it('answers for every contest on the picker, refused or not, and an inherited key is not a contest', () => {
+    const refused = CONTESTS.filter((c) => contestClubRefusal(c.id) !== null).map((c) => c.id)
+    expect(refused.sort()).toEqual(
+      ['arrlss_cw', 'arrlss_ssb', 'cqp', 'cqwpx_cw', 'cqwpx_ssb', 'cqww_cw', 'cqww_rtty', 'cqww_ssb'],
+    )
+    expect(contestClubRefusal('constructor')).toBeNull()
+  })
+  it('says the reason in the sentence it shows', () => {
+    expect(clubSyncRefusalText('serial', 'CQ WPX')).toMatch(/serial numbers must run in one sequence/)
+    expect(clubSyncRefusalText('transmitter', 'CQ WW')).toMatch(/which transmitter made each contact/)
+    expect(clubSyncRefusalText('serial', 'CQ WPX')).toContain('CQ WPX')
   })
 })

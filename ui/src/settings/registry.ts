@@ -504,7 +504,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
       'which contest', 'role', 'in state', 'out of state', 'category', 'entry category',
       'cabrillo', 'category-operator', 'single-op', 'multi-op', 'checklog', 'single op',
-      'multi op', 'check log', 'operators', 'email', 'e-mail', 'cabrillo email'],
+      'multi op', 'check log', 'operators', 'email', 'e-mail', 'cabrillo email',
+      'entry class', 'entry-class', 'unlimited', 'club', 'contest club', 'qrp-competition'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —

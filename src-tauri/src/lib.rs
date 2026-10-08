@@ -5148,7 +5148,13 @@ fn fd_backup_path_for(posid: &str) -> PathBuf {
 /// The club host's append-only event journal (one merged row per NDJSON
 /// line), beside settings.json, named by the sanitized event name so a new
 /// event gets a fresh file while a host restart mid-event replays the old.
-fn fd_event_journal_path(event_name: &str) -> PathBuf {
+///
+/// A club running a contest that is not a Field Day is named by the contest too
+/// (`fd_event_<name>.<contest>.jsonl`), so a host that ran one contest under an
+/// event name can never replay those rows into another contest's club log, whose
+/// exchange would read them as blanks. A Field Day club keeps the name it has
+/// always had, because a host upgraded mid-event must find its own journal.
+fn fd_event_journal_path(event_name: &str, contest: &str) -> PathBuf {
     let mut slug: String = event_name
         .trim()
         .to_ascii_lowercase()
@@ -5158,11 +5164,54 @@ fn fd_event_journal_path(event_name: &str) -> PathBuf {
     slug.truncate(40);
     let slug = slug.trim_matches('-');
     let slug = if slug.is_empty() { "event" } else { slug };
+    let file = if tempo_app::fdevent::is_field_day_id(contest) {
+        format!("fd_event_{slug}.jsonl")
+    } else {
+        let contest: String = contest
+            .trim()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .take(32)
+            .collect();
+        format!("fd_event_{slug}.{contest}.jsonl")
+    };
     settings_path()
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(format!("fd_event_{slug}.jsonl"))
+        .join(file)
+}
+
+#[cfg(test)]
+mod fd_event_journal_path_tests {
+    use super::*;
+
+    /// A Field Day club keeps the journal name it has always had (a host upgraded
+    /// mid-event finds its own rows), and every other contest's club journals apart, so
+    /// one contest's rows can never replay into another contest's club log.
+    #[test]
+    fn a_party_club_journals_apart_and_a_field_day_club_keeps_its_name() {
+        let name = |event: &str, contest: &str| {
+            fd_event_journal_path(event, contest)
+                .file_name()
+                .expect("a file name")
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(name("", "arrlfd"), "fd_event_event.jsonl");
+        assert_eq!(
+            name("", ""),
+            "fd_event_event.jsonl",
+            "the blank default is ARRL FD"
+        );
+        assert_eq!(
+            name("Granite ARC FD", "wfd"),
+            "fd_event_granite-arc-fd.jsonl"
+        );
+        assert_eq!(name("", "ilqp"), "fd_event_event.ilqp.jsonl");
+        assert_eq!(name("ILQP 2026", "ilqp"), "fd_event_ilqp-2026.ilqp.jsonl");
+        assert_ne!(name("", "ilqp"), name("", "nyqp"), "one file per contest");
+    }
 }
 
 /// Durable journal for the ONE QSO held by the prompt-to-log popup (beside settings.json).
@@ -8455,6 +8504,12 @@ struct FdRulesetDto {
     /// the contest starts. Absent when it does not apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     location_warning: Option<tempo_app::dto::LocationWarningDto>,
+    /// The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order, for Settings
+    /// to offer: the Illinois QSO Party's eight. Filled by the PREVIEW only and absent when
+    /// empty: the Remote field-day capture sends this DTO too, and the hosted page refuses a
+    /// key it does not know, so a capture must stay the shape every published page accepts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    entry_classes: Vec<String>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -8481,6 +8536,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         exchange: Vec::new(),
         problem: String::new(),
         location_warning: None,
+        entry_classes: Vec::new(),
     }
 }
 
@@ -8505,6 +8561,8 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
         dto.event.as_str(),
         tempo_core::fd_rules::CURRENT_RULES_YEAR,
     ) {
+        // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
+        dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
         match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
             Ok(s) => {
                 dto.role = s.role().id.to_string();
@@ -32852,31 +32910,31 @@ fn start_on_the_logbook(
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
         std::thread::spawn(move || {
-            // Running host as (port, shutdown); running client as (addr, shutdown).
-            let mut hosting: Option<(u16, Arc<AtomicBool>)> = None;
-            let mut client: Option<(String, Arc<AtomicBool>)> = None;
+            // Running host as (port, contest, shutdown); running client as (addr,
+            // contest, shutdown). The CONTEST is part of what runs: a host keeps one
+            // ruleset's club log, and a position's JOIN names the contest its rows
+            // belong to, so either moving means tearing down and starting again.
+            let mut hosting: Option<(u16, String, Arc<AtomicBool>)> = None;
+            let mut client: Option<(String, String, Arc<AtomicBool>)> = None;
             // The failed-bind half of "not hosting" (#165's lesson): retry
             // quietly on a timer instead of re-erroring every second.
             let mut bind_failed: Option<(u16, std::time::Instant)> = None;
             loop {
+                // What to run is the engine's answer (the host's own loopback join
+                // included), so sync configured for a contest the club log cannot run
+                // is refused where the sockets are made.
                 let (want_host, want_addr) = {
                     let e = engine_lock(&mgr_engine);
-                    let s = e.settings();
-                    let want_host = s.fd_host_enable.then_some(s.fd_host_port);
-                    // The host joins ITSELF over loopback; otherwise the
-                    // operator's join address (empty = no client).
-                    let want_addr = if s.fd_host_enable {
-                        Some(format!("127.0.0.1:{}", s.fd_host_port))
-                    } else {
-                        let a = s.fd_join_addr.trim().to_string();
-                        (!a.is_empty()).then_some(a)
-                    };
-                    (want_host, want_addr)
+                    let (host, addr) = e.fd_sync_targets();
+                    (
+                        host.map(|p| (p, e.fd_club_contest())),
+                        addr.map(|a| (a, e.fd_position_contest())),
+                    )
                 };
 
                 // --- host listener + beacon reconcile ---
-                if want_host != hosting.as_ref().map(|(p, _)| *p) {
-                    if let Some((_, shutdown)) = hosting.take() {
+                if want_host != hosting.as_ref().map(|(p, c, _)| (*p, c.clone())) {
+                    if let Some((_, _, shutdown)) = hosting.take() {
                         shutdown.store(true, Ordering::Relaxed);
                         engine_lock(&mgr_engine).fd_host_stop();
                         conn_log("FD sync", "info", "club hosting stopped");
@@ -32887,12 +32945,12 @@ fn start_on_the_logbook(
                             .map(|(fp, at)| fp != p || now.duration_since(at).as_secs() >= 10)
                             .unwrap_or(true)
                     };
-                    if let Some(port) = want_host.filter(|p| may_try(*p)) {
+                    if let Some((port, contest)) = want_host.filter(|(p, _)| may_try(*p)) {
                         // Journal + club log first, so the first join sees state.
                         let started = {
                             let mut e = engine_lock(&mgr_engine);
                             let name = e.settings().fd_event_name.clone();
-                            e.fd_host_start(fd_event_journal_path(&name))
+                            e.fd_host_start(fd_event_journal_path(&name, &contest))
                         };
                         let bound = started.map_err(|e| e.to_string()).and_then(|()| {
                             std::net::TcpListener::bind(("0.0.0.0", port))
@@ -32931,7 +32989,7 @@ fn start_on_the_logbook(
                                         std::thread::sleep(std::time::Duration::from_secs(1));
                                     }
                                 });
-                                hosting = Some((port, shutdown));
+                                hosting = Some((port, contest, shutdown));
                                 bind_failed = None;
                                 conn_log(
                                     "FD sync",
@@ -32962,13 +33020,13 @@ fn start_on_the_logbook(
                 }
 
                 // --- position client reconcile ---
-                if want_addr != client.as_ref().map(|(a, _)| a.clone()) {
-                    if let Some((_, shutdown)) = client.take() {
+                if want_addr != client.as_ref().map(|(a, c, _)| (a.clone(), c.clone())) {
+                    if let Some((_, _, shutdown)) = client.take() {
                         shutdown.store(true, Ordering::Relaxed);
                         let mut e = engine_lock(&mgr_engine);
                         e.fd_mirror_mut().on_link(false, now_unix() as u64);
                     }
-                    if let Some(addr) = want_addr {
+                    if let Some((addr, contest)) = want_addr {
                         // No posid yet (fresh profile that never finished
                         // startup init) = don't connect; next tick retries.
                         let ready = !engine_lock(&mgr_engine).fd_sync_identity().0.is_empty();
@@ -32981,7 +33039,7 @@ fn start_on_the_logbook(
                             std::thread::spawn(move || {
                                 tempo_net::fdsync::run_position_until(&a2, backend, sd)
                             });
-                            client = Some((addr, shutdown));
+                            client = Some((addr, contest, shutdown));
                         }
                     }
                 }
@@ -36061,6 +36119,33 @@ mod tests {
             "2026 seed is dormant"
         );
         assert!(sfd.rules_year >= 2026);
+        // The Illinois QSO Party's classes reach Settings' preview, Unlimited last…
+        let s = tempo_app::settings::Settings {
+            fd_event: "ilqp".into(),
+            ..Default::default()
+        };
+        let preview = super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s));
+        assert_eq!(
+            preview.entry_classes.len(),
+            8,
+            "{:?}",
+            preview.entry_classes
+        );
+        assert_eq!(
+            preview.entry_classes.last().map(String::as_str),
+            Some("UNLIMITED")
+        );
+        // …and never the Remote capture, whose hosted page refuses a key it does not know.
+        let capture = serde_json::to_value(super::fd_ruleset_dto("ilqp")).unwrap();
+        assert!(capture.get("entryClasses").is_none(), "{capture}");
+        // CONTROL: Field Day's preview declares none.
+        assert!(
+            super::fd_ruleset_preview(
+                &tempo_app::engine::Engine::with_settings(Default::default())
+            )
+            .entry_classes
+            .is_empty()
+        );
     }
 
     /// …and the state the command hands back reflects the arm, through the DTO the cockpit

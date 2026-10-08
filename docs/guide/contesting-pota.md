@@ -123,9 +123,9 @@ a club sync worked.*
 - Each logged contact streams to the host the moment it lands; the host merges
   everything into one club log and pushes the club totals back.
 - Every position gets a **club dupe warning while typing** — if another tent
-  already worked that call on this band and mode, you're told before you call.
-  It's a warning, not a lock (N3FJP semantics); your own log's dupes still
-  refuse.
+  already worked that call on this band and mode (and, at a QSO party, from
+  the county you have typed), you're told before you call. It's a warning, not
+  a lock (N3FJP semantics); your own log's dupes still refuse.
 - A live **band board** shows where every position is (band, mode, operator,
   rate), stale-marked the moment one goes quiet. It has its own **Club Board**
   button in the left rail under Field Day, and its own window — one click, on a
@@ -141,13 +141,47 @@ a club sync worked.*
   reconnect. If the host PC dies, enable hosting on any other position;
   everyone re-joins and nothing is lost.
 - The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
-  the rules score it (earliest contact wins).
+  the rules score it (earliest contact wins). A contest that wants repeats
+  reported, such as the New York QSO Party, keeps them in the file, scoring
+  zero.
 
 Hosting is the one time Nexus listens beyond the local computer, and only
 while the toggle is on. There is no join password — a club site LAN is
 trusted; the connection can only carry log rows, never key a transmitter or
 change a setting. The N3FJP/N1MM pushes above keep working alongside if you
 want both.
+
+**Any contest on the picker, with two exceptions.** The club log runs the
+contest the host has picked, under that contest's own rules: its exchange (a
+QSO party keeps every county, and a mobile in a new county is a new contact),
+what counts as a dupe (the Illinois QSO Party counts CW and digital as one
+mode), its scoring and multipliers, and its own Cabrillo file and header lines.
+The two exceptions are contests whose merged log would be wrong: one with a
+serial number in the exchange (Sweepstakes, CQ WPX, the California QSO Party),
+because the whole entry's numbers must run in one sequence and every position
+gives out its own, and CQ World-Wide, whose log must say which transmitter
+made each contact. For those a station neither hosts nor joins, and the contest
+screen and the Club Sync settings say why. Every position must pick the
+**same contest** as the host: a position logging another one is refused when it
+joins, and the club chip names both contests. The spectator scoreboard scores
+Field Day only, so it shows nothing for any other contest. The manual's Field
+Day page has the steps for the Illinois QSO Party.
+
+Before any club event:
+
+- **Windows asks about the firewall** the first time a PC hosts, and the first
+  time a position looks for club events. Allow Nexus on **Private** networks. If
+  Windows calls the site network Public, change it to Private, because a Public
+  network blocks all of it. The host listens on TCP port 42073 (the **Host
+  port**) and announces itself on UDP port 42074, which **Find club events**
+  listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
+  firewall rule of its own.
+- **Set every clock first.** Nexus never changes a PC's clock. A position whose
+  clock is more than 30 seconds from the host's shows a warning when it joins,
+  but the contact times in the club log and in each Cabrillo file come from each
+  position's own clock, and when two positions log the same contact the club log
+  keeps the earlier one. Set every laptop from one source, a phone for example,
+  before the event starts.
 
 ---
 
@@ -200,6 +234,9 @@ they're heard on the air.
 - **Winter Field Day shows raw counts, not a computed total** — by design.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
+- **Club sync does not run serial-number contests or CQ World-Wide.** A club
+  running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
+  position. The spectator scoreboard shows Field Day only.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
   CW and Phone strips it stays on the general log while a session runs. Not a
   design choice; not wired up yet.

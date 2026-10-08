@@ -21,6 +21,7 @@ picker; the definitive list for your installed Hamlib version is always
 | **Yaesu** | [yaesu.md](yaesu.md) | Verified on FTDX10 and FT-991A |
 | **Icom** | [icom.md](icom.md) | IC-9700 incl. 23 cm; IC-7300-class single-USB |
 | **FlexRadio** | [flexradio.md](flexradio.md) | LAN discovery verified on a FLEX-6400M; CAT chain in final verification |
+| **Hermes Lite 2 and other SDRs** | [sdr-programs.md](sdr-programs.md) | Through Thetis or piHPSDR; **not yet field-verified** |
 | **Xiegu** | [xiegu.md](xiegu.md) | Supported but **not yet field-verified** |
 | **Sound-card interfaces** | [interfaces.md](interfaces.md) | Digirig / RIGblaster; **not yet field-verified** |
 | **Rotators** | [rotators.md](rotators.md) | Dummy-verified; real az/el hardware pending |
@@ -57,12 +58,17 @@ exact download link. Review what it filled, then **Save**.
 
 <!-- TODO: capture screenshot — Settings ▸ Radio ▸ Rig & CAT with the Connection dropdown and Detect my radio button -->
 
-### Network (FlexRadio / remote)
+### Network (SDR software, or a remote rig)
 
 Choose this for a **FlexRadio** driven through SmartSDR CAT, or for any rig
 served by a **remote `rigctld`** over TCP. You set a single **Network Address**
 as `host:port` — for a Flex that's `127.0.0.1:5002`. See the
 [FlexRadio guide](flexradio.md) for the full picture.
+
+The same choice covers an SDR program serving CAT on your computer, such as
+Thetis or piHPSDR running a Hermes Lite 2. Rig Model then names the program,
+and Network Address is the address and port of that program's CAT server. See
+[Hermes Lite 2 and SDR Program Setup](sdr-programs.md).
 
 ### Icom network (LAN / Wi-Fi) — Beta
 

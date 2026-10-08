@@ -345,8 +345,11 @@ mod tests {
         let stale = window(&e);
         drop(hold);
         assert_eq!(stale, Err("applicationBusy"));
-        assert_eq!(window(&e), Ok(1), "control: once written, the read answers");
+        // "Once written" is the control's premise, so wait for the write: releasing the hold only
+        // lets the writer start, and on a loaded machine its commit can outlast the read's own
+        // wait (`READ_WAIT`), which made the control a refusal too.
         settle(&e);
+        assert_eq!(window(&e), Ok(1), "control: once written, the read answers");
     }
 
     /// ★ POSITIVE CONTROL for the fence every Remote read of the log passes: made while this

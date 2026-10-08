@@ -19,7 +19,16 @@
 //! lock** — the host keeps both rows, exports dedupe earliest-wins, and the
 //! score counts unique keys (order-independent: the key set is the same
 //! whichever row "wins"). A position's OWN-log dupe stays the hard refusal it
-//! has always been (`FieldDayLog::log_submode_at` → false).
+//! has always been (`FieldDayLog::log_submode_at` → false). A contest whose
+//! sponsor wants duplicates REPORTED ([`DupeRule::log_dupes`]) keeps every row in
+//! the export instead, the later one marked, exactly as a position's own log does.
+//!
+//! ⭐ **A club runs ONE ruleset — the host's contest — and everything is read
+//! from it**: the exchange the rows are resolved against, the dupe key, the
+//! scoring and multipliers, the Cabrillo token and headers. A position logging a
+//! different contest is refused at JOIN, by name ([`ClubLog::join_refusal`]),
+//! and a contest the club log cannot run faithfully is refused before a club is
+//! built at all ([`club_refusal`]).
 //!
 //! Pure logic, no sockets — unit-testable. Engine wiring: `Engine::fd_club_*`.
 
@@ -27,9 +36,120 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
-use tempo_core::contest::{carrier, ContestSession, DupeRule, ExchangeSpec, FieldValue};
+use tempo_core::contest::{
+    carrier, CabrilloEntrant, ContestSession, DupeRule, ExchangeSpec, FieldKind, FieldValue,
+};
+use tempo_core::fd_rules::FdRuleset;
 use tempo_core::fieldday::{FdEvent, FieldDayLog};
 use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireField, WireQso};
+
+/// Why a club cannot run a contest's ruleset — a reason the screen names, never a
+/// silent wrong log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClubRefusal {
+    /// The exchange carries a serial number. The entry's numbers must run in ONE
+    /// sequence (Sweepstakes, CQ WPX and the California QSO Party all check them), and
+    /// each position issues its own, so a merged log would send the same number twice.
+    Serial,
+    /// The sponsor's Cabrillo template carries a transmitter-id column (CQ WW, CQ WPX),
+    /// whose value must say which transmitter made each contact — a number club sync
+    /// does not assign.
+    TransmitterColumn,
+    /// The rules this build loaded have no ruleset for the contest (a downloaded rules
+    /// file that dropped one). There is nothing to run, and the Field Day fallback a
+    /// position's own session takes is not one a club may take.
+    NoRuleset,
+}
+
+impl ClubRefusal {
+    /// The code the UI keys its sentence by (`clubSyncRefusal` in `ui/src/fdEvent.ts`).
+    pub fn code(self) -> &'static str {
+        match self {
+            ClubRefusal::Serial => "serial",
+            ClubRefusal::TransmitterColumn => "transmitter",
+            ClubRefusal::NoRuleset => "unknown",
+        }
+    }
+
+    /// The same reason as words, for the host's own log line and the error a refused
+    /// `fd_host_start` returns.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            ClubRefusal::Serial => {
+                "its serial numbers must run in one sequence for the whole entry, and every \
+                 position gives out its own"
+            }
+            ClubRefusal::TransmitterColumn => {
+                "its log must say which transmitter made each contact, and club sync does not \
+                 number the transmitters"
+            }
+            ClubRefusal::NoRuleset => "the contest rules this Nexus loaded do not include it",
+        }
+    }
+}
+
+/// ⭐ **Whether the club log can run this ruleset, decided from the ruleset's own data**
+/// — `None` to run it, or the reason it cannot.
+///
+/// Data, not a list of contest names, so a rules-file row for a new QSO party gets club
+/// sync the moment it is in the table, while a contest the merged log would get wrong is
+/// refused before any club is built. Everything else a ruleset can say — its exchange,
+/// roles, dupe key, mode groups, multipliers and caps, bonus stations, Cabrillo token,
+/// headers and location slot, and whether duplicates are reported — the club log reads
+/// from the ruleset like a position's own log does. The UI mirrors the answer per
+/// contest (`CLUB_SYNC_REFUSED` in `ui/src/fdEvent.ts`), and a test holds the two
+/// together.
+pub fn club_refusal(rs: &FdRuleset) -> Option<ClubRefusal> {
+    // An arm of a `OneOf` counts: a serial is a serial in whichever slot it rides.
+    fn serial(k: &FieldKind) -> bool {
+        match k {
+            FieldKind::Serial { .. } => true,
+            FieldKind::OneOf(arms) => arms.iter().any(serial),
+            _ => false,
+        }
+    }
+    if rs.exchange.fields.iter().any(|f| serial(&f.kind)) {
+        return Some(ClubRefusal::Serial);
+    }
+    if rs.transmitter_column {
+        return Some(ClubRefusal::TransmitterColumn);
+    }
+    None
+}
+
+/// Is this rules-file id one of the two Field Day events — the contests whose club log
+/// is pinned byte for byte to what 1.x wrote?
+pub fn is_field_day_id(event_id: &str) -> bool {
+    matches!(event_id.trim(), "" | "arrlfd" | "wfd")
+}
+
+/// A rules-file id as a club compares it: trimmed, and the blank picker default read as
+/// ARRL Field Day — what `set_mode` builds for it.
+pub fn canonical_contest(event_id: &str) -> String {
+    match event_id.trim() {
+        "" => "arrlfd".to_string(),
+        id => id.to_string(),
+    }
+}
+
+/// The sponsor's contest id for a rules-file id — what a refusal names — or the id
+/// itself for one this build's rules table does not carry.
+pub fn contest_name(event_id: &str) -> String {
+    tempo_core::fd_rules::ruleset_by_id(event_id, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        .map_or_else(|| event_id.to_string(), |rs| rs.contest_id.to_string())
+}
+
+/// ⭐ **The sentence for a position logging one contest at a club running another** —
+/// one wording, whichever end finds it (the host at JOIN, or the position on a welcome).
+/// `club` is the club's contest as named; `mine` is the position's rules-file id.
+pub fn contest_mismatch(club: &str, mine: &str) -> String {
+    format!(
+        "this club is running {club}, and this Nexus is logging {mine}. Pick {club} as the \
+         contest on the Contesting tab in Settings, then rejoin. Contacts you log meanwhile \
+         stay in your own log.",
+        mine = contest_name(mine),
+    )
+}
 
 /// A field vector as it travels — the wire's and the journal's one shape.
 pub fn to_wire_fields(vs: &[FieldValue]) -> Vec<WireField> {
@@ -228,18 +348,39 @@ pub struct ClubPosition {
     pub acked: u64,
 }
 
+/// The club's claimed score, part by part ([`ClubLog::score_with`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClubScore {
+    pub qso_points: u32,
+    /// QSO points after the power tier (equal to them for an event with none).
+    pub powered: u32,
+    /// The multiplier count, caps applied — `None` for a contest with no multiplier
+    /// (both Field Days), never a `0` standing in for "not applicable".
+    pub mults: Option<u32>,
+    /// The ticked bonus menu plus the bonus stations the club worked.
+    pub bonus: u32,
+    pub total: u32,
+}
+
 /// The host-side merged club log. See the module header for the invariants.
 #[derive(Debug, Default)]
 pub struct ClubLog {
-    /// Which event this club is running (scoring + export ids).
+    /// The Field Day event, for the surfaces that only a Field Day club has (the
+    /// spectator scoreboard). For any other contest it is the enum's default and
+    /// nothing reads it: [`event_id`](Self::event_id) names the ruleset.
     pub event: FdEvent,
-    /// The Cabrillo token of the contest this club is running.
+    /// ⭐ **The rules-file id of the ruleset this club runs** (`"arrlfd"`, `"wfd"`,
+    /// `"ilqp"`) — the key every rule below is read through, as a position's own log
+    /// reads its session's.
     ///
-    /// It reads [`FdEvent::contest_id`] today, because a club can only run a Field
-    /// Day event in this build — the session that will set it independently is
-    /// batch 5's. It is here now because the JOIN gate needs it: whether an older
-    /// position may be served is a question about the CONTEST, and the refusal has
-    /// to name it.
+    /// `FdEvent` cannot be that key: it has two arms and `from_code` reads every other
+    /// id as ARRL Field Day, which is how hosting the Illinois QSO Party built an ARRL
+    /// Field Day club log in silence.
+    pub event_id: String,
+    /// The contest id of the contest this club is running (the ruleset's ADIF
+    /// `CONTEST_ID` — `"ARRL-FIELD-DAY"`, `"IL QSO Party"`), which the JOIN gate's
+    /// refusals name: whether a position may be served is a question about the
+    /// CONTEST, and the refusal has to say which.
     pub contest_id: String,
     /// The operator-facing event name (beacon + welcome).
     pub event_name: String,
@@ -281,25 +422,68 @@ fn now_unix() -> u64 {
 }
 
 impl ClubLog {
+    /// A club running one of the two Field Day events.
     pub fn new(event: FdEvent, event_name: &str) -> Self {
         ClubLog {
             event,
+            event_id: event.code().to_string(),
             contest_id: event.contest_id().to_string(),
             event_name: event_name.to_string(),
             ..Default::default()
         }
     }
 
-    /// The exchange this club's rows are read against, and the rule its dupe keys
-    /// are built by. Both come from the event because a club can only run a Field
-    /// Day event in this build (see [`contest_id`](Self::contest_id)).
-    fn exchange(&self) -> &'static ExchangeSpec {
-        tempo_core::contest::field_day(self.event)
+    /// ⭐ **A club running ANY ruleset** — the constructor the host uses for every
+    /// contest, Field Day included (a Field Day ruleset lands on exactly what
+    /// [`new`](Self::new) builds). Whether the ruleset CAN run is [`club_refusal`]'s
+    /// question, asked before this is called.
+    pub fn for_ruleset(rs: &'static FdRuleset, event_name: &str) -> Self {
+        if is_field_day_id(rs.event) {
+            return Self::new(FdEvent::from_code(rs.event), event_name);
+        }
+        ClubLog {
+            event_id: rs.event.to_string(),
+            contest_id: rs.contest_id.to_string(),
+            event_name: event_name.to_string(),
+            ..Default::default()
+        }
     }
 
+    /// The ruleset this club runs — through the RULES-FILE id, the one key that can
+    /// name a contest `FdEvent` has no arm for. The fallback only keeps a default-built
+    /// log answering; [`for_ruleset`](Self::for_ruleset) took the id from the table.
+    pub fn ruleset(&self) -> &'static FdRuleset {
+        tempo_core::fd_rules::ruleset_by_id(
+            &self.event_id,
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )
+        .unwrap_or_else(|| {
+            tempo_core::fd_rules::ruleset(self.event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        })
+    }
+
+    /// The Field Day event this club RUNS, or `None` for any other contest.
+    ///
+    /// A Field Day club's exchange stays [`contest::field_day`](tempo_core::contest::field_day)'s
+    /// and its exports stay the bytes 1.x wrote (`a_1x_host_journal_survives_the_v2_upgrade`
+    /// pins them), so the two places that differ ask this.
+    pub fn field_day_event(&self) -> Option<FdEvent> {
+        is_field_day_id(&self.event_id).then_some(self.event)
+    }
+
+    /// The exchange this club's rows are read against — the ruleset's own, and for a
+    /// Field Day club the shipped Field Day exchange it has always been.
+    fn exchange(&self) -> &'static ExchangeSpec {
+        match self.field_day_event() {
+            Some(event) => tempo_core::contest::field_day(event),
+            None => self.ruleset().exchange,
+        }
+    }
+
+    /// The rule this club's dupe keys are built by — the ruleset's own, which is
+    /// what a position running the same contest builds its keys with.
     fn dupe_rule(&self) -> DupeRule {
-        tempo_core::fd_rules::ruleset(self.event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
-            .dupe_rule
+        self.ruleset().dupe_rule
     }
 
     /// Is this club running one of the two Field Day events — the contests a v1
@@ -337,6 +521,42 @@ impl ClubLog {
             contest = self.contest_id,
             need = tempo_net::fdsync::PROTO_VERSION,
         ))
+    }
+
+    /// ⭐ **Why a joining position cannot be served, or `None` to serve it** — the
+    /// version rule ([`version_refusal`](Self::version_refusal)) first, then the CONTEST
+    /// the position says it is logging (`contest`, a rules-file id; `""` from a
+    /// position too old to send one).
+    ///
+    /// A club log reads every row against ONE ruleset, so a position logging another
+    /// contest is refused AT JOIN and BY NAME: its rows would be resolved against the
+    /// wrong exchange and keyed by the wrong rule, and a club finding that out at
+    /// submission has nothing left to fix it with. Both Field Days are contests here,
+    /// so a Winter Field Day position is refused by an ARRL Field Day club too.
+    ///
+    /// A position that names no contest is served by a Field Day club exactly as every
+    /// position before the field was, and refused by any other: it cannot say what its
+    /// rows mean, and the club cannot check.
+    pub fn join_refusal(&self, v: u32, contest: &str) -> Option<String> {
+        if let Some(msg) = self.version_refusal(v) {
+            return Some(msg);
+        }
+        let theirs = match contest.trim() {
+            "" if self.is_field_day() => return None,
+            "" => {
+                return Some(format!(
+                    "this club is running {club}, and this Nexus is too old to say which \
+                     contest it is logging. Update this Nexus and rejoin: contacts you log \
+                     meanwhile stay in your own log and go up when you do.",
+                    club = self.contest_id,
+                ))
+            }
+            id => id,
+        };
+        if canonical_contest(theirs) == self.event_id {
+            return None;
+        }
+        Some(contest_mismatch(&self.contest_id, theirs))
     }
 
     /// Open (creating if absent) the append-only journal at `path`, replaying
@@ -551,10 +771,45 @@ impl ClubLog {
         keep
     }
 
+    /// The rows the club EXPORTS, in the order it writes them.
+    ///
+    /// A Field Day club writes its earliest-wins unique rows in merge order, which is
+    /// what 1.x wrote and what its goldens pin. Every other club writes in the order the
+    /// contacts were MADE (each position's own clock, merge order breaking a tie) — a
+    /// club log is several positions' logs interleaved, and a sponsor reads it as one
+    /// station's — and a contest that wants duplicates reported
+    /// ([`DupeRule::log_dupes`]) keeps them all: the later of two is marked by the log
+    /// itself as it is written, so it scores zero and still reaches the file, where
+    /// removing it would hand the other station a not-in-log.
+    fn export_indices(&self) -> Vec<usize> {
+        if self.field_day_event().is_some() {
+            return self.earliest_unique_indices();
+        }
+        let mut keep = if self.dupe_rule().log_dupes {
+            (0..self.rows.len()).collect()
+        } else {
+            self.earliest_unique_indices()
+        };
+        keep.sort_by_key(|&i| (self.rows[i].when_unix, i));
+        keep
+    }
+
     /// The deduped (earliest-wins) club log as a [`FieldDayLog`] under the
     /// HOST's station identity — the one artifact both exports and the score
     /// derive from, so they can never disagree with each other.
     pub fn unique_log(&self, mycall: &str, class: &str, section: &str) -> FieldDayLog {
+        self.unique_log_with(
+            mycall,
+            ContestSession::field_day(self.event, class, section),
+        )
+    }
+
+    /// [`unique_log`](Self::unique_log) for any ruleset: the club's rows rebuilt under
+    /// `session`, which the caller builds from the HOST's station data for the contest
+    /// this club runs (`Engine::fd_club_session`) — the same session a position running
+    /// that contest logs under, so a club file and a position's file are written by one
+    /// exporter.
+    pub fn unique_log_with(&self, mycall: &str, mut session: ContestSession) -> FieldDayLog {
         // ⭐ BOTH sides come from the ROW. Every merged row used to be rebuilt under
         // the HOST's class and section — the same defect `cabrillo()` carried until
         // batch 3, one layer up — which is harmless for one Field Day club and wrong
@@ -565,7 +820,6 @@ impl ClubLog {
         // carries no `mex`, and what a 1.x host meant by its absence is "the club's
         // sent exchange", which is exactly right for Field Day.
         let spec = self.exchange();
-        let mut session = ContestSession::field_day(self.event, class, section);
         // ⭐ A CLUB log IS a multi-operator entry, and this is the ONE place that is
         // true by construction: these rows were worked at several positions under one
         // callsign, which is exactly what `CATEGORY-OPERATOR: MULTI-OP` declares. The
@@ -573,17 +827,34 @@ impl ClubLog {
         // user; a host merging positions is not that operator, and it says so here
         // rather than leaving the header to a picker nobody at a field site touched.
         session.entry_category = tempo_core::contest::OperatorCategory::MultiOp;
+        // ⭐ WHO LOGGED EACH CONTACT, for every club but a Field Day one. The sponsor's
+        // `OPERATORS` header is everyone the rows name (ILQP: *"make sure entry class,
+        // personal information, call sign, station location, and club affiliation are
+        // correctly shown"*), and the club file is the one the sponsor receives. A Field
+        // Day club's rows name nobody, because its exports are pinned to the bytes 1.x
+        // wrote, which carried no `OPERATOR`.
+        let names_operators = self.field_day_event().is_none();
+        let station = mycall.trim().to_ascii_uppercase();
         let mut log = FieldDayLog::new(mycall, session, "");
-        for i in self.earliest_unique_indices() {
+        for i in self.export_indices() {
             let r = &self.rows[i];
             log.band = r.band.clone();
+            if names_operators {
+                // A position with nobody named at the key sends the station's own call
+                // (`Engine::fd_sync_outbox`, for the band board), and a row's operator is
+                // never the station's own call (`LoggedQso::operator`) — so that call reads
+                // back as nobody, not as an operator somebody named.
+                let op = r.operator.trim().to_ascii_uppercase();
+                log.operator = if op == station { String::new() } else { op };
+            }
             let rx = from_wire_fields(&r.ex, spec);
             let tx = if r.mex.is_empty() {
                 log.session.my_exchange.clone()
             } else {
                 from_wire_fields(&r.mex, spec)
             };
-            // Never refused: the indices are already key-unique.
+            // Never refused: the indices are key-unique, or the ruleset logs its
+            // duplicates and marks them.
             log.log_exchange_at(&r.call, rx, tx, &r.mode_class, &r.submode, 0, r.when_unix);
         }
         log
@@ -628,12 +899,42 @@ impl ClubLog {
         power_mult: u32,
         bonuses: &[String],
     ) -> (u32, u32, u32, u32) {
-        let rs =
-            tempo_core::fd_rules::ruleset(self.event, tempo_core::fd_rules::CURRENT_RULES_YEAR);
-        let log = self.unique_log(mycall, class, section);
-        let (qso_pts, powered) = rs.scoring.qso_and_powered(log.score_rows(), power_mult);
-        let bonus = rs.bonus_points(bonuses);
-        (qso_pts, powered, bonus, powered + bonus)
+        let s = self.score_with(
+            mycall,
+            ContestSession::field_day(self.event, class, section),
+            power_mult,
+            bonuses,
+        );
+        (s.qso_points, s.powered, s.bonus, s.total)
+    }
+
+    /// ⭐ **The club's claimed score under its own ruleset** — the arithmetic a position's
+    /// own log shows (`Engine::fd_score`, `field_day_display`), over the club's rows: QSO
+    /// points, the power tier where the event has one, the multipliers with their caps,
+    /// then the ticked bonus menu plus the bonus stations the club worked (ILQP's two club
+    /// calls, *"added to the final score"*, once for the whole entry however many
+    /// positions worked them).
+    ///
+    /// For a Field Day club this is exactly [`scored`](Self::scored): neither event has a
+    /// multiplier or a bonus station, so the total is the powered points plus the menu.
+    pub fn score_with(
+        &self,
+        mycall: &str,
+        session: ContestSession,
+        power_mult: u32,
+        bonuses: &[String],
+    ) -> ClubScore {
+        let rs = self.ruleset();
+        let log = self.unique_log_with(mycall, session);
+        let (qso_points, powered, mults, scored) = rs.scoring.score(log.score_rows(), power_mult);
+        let bonus = rs.bonus_points(bonuses) + log.bonus_station_points();
+        ClubScore {
+            qso_points,
+            powered,
+            mults,
+            bonus,
+            total: scored + bonus,
+        }
     }
 
     /// The band-board rows (one per known position), stalest-last untouched —
@@ -713,6 +1014,26 @@ impl ClubLog {
     /// Club ADIF export, deduped earliest-wins (the submittable artifact).
     pub fn export_adif(&self, mycall: &str, class: &str, section: &str) -> String {
         self.unique_log(mycall, class, section).adif()
+    }
+
+    /// [`export_adif`](Self::export_adif) for any ruleset, under the club session
+    /// (see [`unique_log_with`](Self::unique_log_with)).
+    pub fn export_adif_with(&self, mycall: &str, session: ContestSession) -> String {
+        self.unique_log_with(mycall, session).adif()
+    }
+
+    /// [`export_cabrillo`](Self::export_cabrillo) for any ruleset: the club session's
+    /// contest token and headers, and the entrant's own lines (`NAME`, `EMAIL`, `CLUB`,
+    /// `ENTRY-CLASS`, `OPERATORS`), each written only where the ruleset lists it — the
+    /// position's own exporter, over the club's rows.
+    pub fn export_cabrillo_with(
+        &self,
+        mycall: &str,
+        session: ContestSession,
+        entrant: &CabrilloEntrant,
+    ) -> Result<String, String> {
+        self.unique_log_with(mycall, session)
+            .cabrillo_with(0, entrant)
     }
 
     /// Club Cabrillo export, deduped earliest-wins.
@@ -1754,5 +2075,782 @@ mod tests {
             "no club warning beats a wrong one when the triple is not the rule"
         );
         assert_eq!(st.dkeys.len(), 2, "the generalised keys still ship");
+    }
+
+    // ---- a club runs the HOST's ruleset, whatever the contest -------------
+
+    fn party(event: &str) -> &'static FdRuleset {
+        tempo_core::fd_rules::ruleset_by_id(event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+            .unwrap_or_else(|| panic!("{event} is a shipped ruleset"))
+    }
+
+    /// The HOST's session for a contest, from the station data Settings holds — what
+    /// `Engine::fd_club_session` builds for a host that is not running it live.
+    fn party_session(event: &str, state: &str, county: &str) -> ContestSession {
+        ContestSession::for_ruleset(
+            party(event),
+            &tempo_core::contest::StationData {
+                mycall: "W9XYZ".into(),
+                mygrid: "EN61".into(),
+                contest_qth_state: state.into(),
+                contest_qth_county: county.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{event} session refused: {e}"))
+    }
+
+    /// An exchange as a position sends it: each value resolved through the ruleset's
+    /// own spec (`ExchangeSpec::copied`), so the domain that matched travels with it.
+    fn party_fields(event: &str, pairs: &[(&str, &str)]) -> Vec<WireField> {
+        let spec = party(event).exchange;
+        to_wire_fields(
+            &pairs
+                .iter()
+                .filter_map(|(k, v)| spec.copied(k, v))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// One Illinois QSO Party contact as a current position streams it: the county THEY
+    /// sent, the county THIS POSITION sent, the RST each way at the digits its mode
+    /// uses, and the station call as operator (what a position with nobody named at the
+    /// key sends).
+    #[allow(clippy::too_many_arguments)] // one wire row's worth of fields
+    fn ilqp_row(
+        pos: &str,
+        seq: u64,
+        call: &str,
+        band: &str,
+        mode: &str,
+        sub: &str,
+        theirs: &str,
+        mine: &str,
+        when: u64,
+    ) -> WireQso {
+        let rst = if mode == "PH" { "59" } else { "599" };
+        WireQso {
+            pos: pos.into(),
+            seq,
+            call: call.into(),
+            class: String::new(),
+            sect: String::new(),
+            ex: party_fields("ilqp", &[("RST", rst), ("QTH", theirs)]),
+            mex: party_fields("ilqp", &[("RST", rst), ("QTH", mine)]),
+            band: band.into(),
+            mode: mode.into(),
+            sub: sub.into(),
+            when,
+            op: "W9XYZ".into(),
+            sat: String::new(),
+            sat_fm: false,
+        }
+    }
+
+    /// 1700Z, Sunday 18 October 2026 — the party's first minute.
+    const ILQP_START: u64 = 1_792_342_800;
+
+    /// ⭐ **THE REVIEW'S PROBE, as a test: an Illinois QSO Party club runs the party's own
+    /// rules.**
+    ///
+    /// Hosting the party used to build an ARRL Field Day club log in silence. These three
+    /// rows from one position — K9AAA on 40 m CW from Cook, the same station on RTTY, and
+    /// the same station on CW again from Will (a mobile that moved) — produced
+    /// `contest_id=ARRL-FIELD-DAY`, dupe keys `[K9AAA 40M CW] [K9AAA 40M DIG]` (RTTY a
+    /// second contact, the new county a dupe), merged rows with the county gone, and a
+    /// club Cabrillo headed `CONTEST: ARRL-FD` whose QSO lines carried no exchange.
+    ///
+    /// The sponsor, *"Announcing the 2026 Illinois QSO Party"* (w9awe.org, read
+    /// 2026-10-08): *"Stations may be worked once per band and mode (phone and
+    /// CW/digital) and once per band/mode/county for IL Mobile and Rover stations"*; and
+    /// its `Sample_Excel_Log` heads the file `CONTEST: ILLINOIS QSO PARTY` and writes each
+    /// county code on the QSO line — `QSO: 7000 CW 2013-10-20 1714 W9XYZ 599 JODA K9NR 599
+    /// KANK`. *"IL stations multiply points by the sum of IL counties, US states, VE
+    /// provinces and DXCC countries (maximum 5) worked."*
+    #[test]
+    fn an_illinois_qso_party_club_runs_the_partys_own_rules() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        assert_eq!(
+            (club.event_id.as_str(), club.contest_id.as_str()),
+            ("ilqp", "IL QSO Party"),
+            "the club runs the party, not ARRL Field Day"
+        );
+        assert!(club.field_day_event().is_none());
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "K9AAA",
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + 180,
+            ),
+            1,
+        );
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                2,
+                "K9AAA",
+                "40m",
+                "DIG",
+                "RTTY",
+                "COOK",
+                "MCLN",
+                ILQP_START + 240,
+            ),
+            2,
+        );
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                3,
+                "K9AAA",
+                "40m",
+                "CW",
+                "",
+                "WILL",
+                "MCLN",
+                ILQP_START + 300,
+            ),
+            3,
+        );
+        assert_eq!(club.qsos_raw(), 3, "every row merged");
+        assert_eq!(
+            club.qsos_unique(),
+            2,
+            "RTTY after CW is the same CW/digital mode; a new county is a new contact"
+        );
+        let session = party_session("ilqp", "IL", "MCLN");
+        let log = club.unique_log_with("W9XYZ", session.clone());
+        let qths: Vec<&str> = log.qsos().iter().map(|q| q.rcvd("QTH")).collect();
+        assert_eq!(
+            qths,
+            ["COOK", "WILL"],
+            "each contact keeps the county it sent"
+        );
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session.clone(), &CabrilloEntrant::default())
+            .expect("one entry");
+        assert!(cab.contains("CONTEST: ILLINOIS QSO PARTY\n"), "{cab}");
+        assert!(cab.contains("CATEGORY-OPERATOR: MULTI-OP\n"), "{cab}");
+        assert!(cab.contains("IL-COUNTY: McLean\n"), "{cab}");
+        assert!(
+            cab.contains("QSO: 7000 CW 2026-10-18 1703 W9XYZ 599 MCLN K9AAA 599 COOK\n"),
+            "the exchange columns, both sides: {cab}"
+        );
+        assert!(
+            cab.contains("QSO: 7000 CW 2026-10-18 1705 W9XYZ 599 MCLN K9AAA 599 WILL\n"),
+            "the mobile's new county is its own line: {cab}"
+        );
+        assert_eq!(
+            cab.matches("QSO:").count(),
+            2,
+            "the RTTY repeat is not a second contact: {cab}"
+        );
+        // 2 CW contacts × 2 points, × 2 counties (Cook, Will).
+        let s = club.score_with("W9XYZ", session, 1, &[]);
+        assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
+        assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+    }
+
+    /// ⭐ **Two positions logging the same station: the second is the CLUB dupe** — kept
+    /// as a row (a warning at the position, never a lock), scored once, exported once —
+    /// and the key the club ships for it is the very key the position's own log builds,
+    /// which is what the position's while-typing check compares against.
+    #[test]
+    fn the_second_position_to_work_a_station_is_the_club_dupe() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "K9BBB",
+                "20m",
+                "PH",
+                "",
+                "KANE",
+                "MCLN",
+                ILQP_START + 60,
+            ),
+            1,
+        );
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                1,
+                "K9BBB",
+                "20m",
+                "PH",
+                "",
+                "KANE",
+                "MCLN",
+                ILQP_START + 120,
+            ),
+            2,
+        );
+        assert_eq!(
+            (club.qsos_raw(), club.qsos_unique()),
+            (2, 1),
+            "both rows kept, one contact"
+        );
+        let st = club.club_state(0, 0, 0, 3);
+        assert_eq!(st.dkeys.len(), 1, "one club key");
+        assert!(st.dupes.is_empty(), "no Field Day triple for a party");
+        // The same contact in a position's OWN log, same contest, same station.
+        let mut own = FieldDayLog::new("W9XYZ", party_session("ilqp", "IL", "MCLN"), "20m");
+        assert!(own.log_fields_at(
+            "K9BBB",
+            &[
+                ("RST".to_string(), "59".to_string()),
+                ("QTH".to_string(), "KANE".to_string())
+            ],
+            "PH",
+            "",
+            0,
+            ILQP_START + 120,
+        ));
+        assert_eq!(
+            st.dkeys[0],
+            own.dupe_rule().key(&own.qsos()[0]),
+            "the club ships the key the position builds — so the second position is warned"
+        );
+        let cab = club
+            .export_cabrillo_with(
+                "W9XYZ",
+                party_session("ilqp", "IL", "MCLN"),
+                &CabrilloEntrant::default(),
+            )
+            .unwrap();
+        assert_eq!(cab.matches("QSO:").count(), 1, "earliest wins: {cab}");
+        assert!(cab.contains(" 1701 W9XYZ 59 MCLN K9BBB 59 KANE\n"), "{cab}");
+        // The board credits the earlier position with the contact.
+        let board = club.board_rows(10);
+        let uniq = |p: &str| board.iter().find(|r| r.pos == p).map(|r| r.uniq);
+        assert_eq!((uniq("aaaa"), uniq("bbbb")), (Some(1), Some(0)));
+        // CONTROL: the same station from ANOTHER county is a new contact (the mobile rule).
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                2,
+                "K9BBB",
+                "20m",
+                "PH",
+                "",
+                "DUPG",
+                "MCLN",
+                ILQP_START + 180,
+            ),
+            3,
+        );
+        assert_eq!(club.qsos_unique(), 2);
+    }
+
+    /// The party's two club stations are worth 100 each, *"added to the final score"* —
+    /// once for the ENTRY, however many positions work them.
+    #[test]
+    fn the_partys_bonus_stations_count_once_for_the_whole_club() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "W9AWE",
+                "40m",
+                "CW",
+                "",
+                "MCDN",
+                "MCLN",
+                ILQP_START + 60,
+            ),
+            1,
+        );
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                1,
+                "W9AWE",
+                "20m",
+                "PH",
+                "",
+                "MCDN",
+                "MCLN",
+                ILQP_START + 120,
+            ),
+            2,
+        );
+        let s = club.score_with("W9XYZ", party_session("ilqp", "IL", "MCLN"), 1, &[]);
+        // CW 2 + phone 1, × one county (McDonough), + 100 once.
+        assert_eq!(
+            (s.qso_points, s.mults, s.bonus, s.total),
+            (3, Some(1), 100, 103)
+        );
+    }
+
+    /// ⭐ **The club file names who logged each contact** — the sponsor's `OPERATORS`
+    /// header is everyone the rows name, plus whoever the host typed in. A position with
+    /// nobody named at the key sends the station call, and that reads as nobody: the
+    /// station call is never an operator (`LoggedQso::operator`).
+    #[test]
+    fn the_club_file_names_the_operators_its_positions_logged_under() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        let mut named = ilqp_row("aaaa", 1, "K9CCC", "40m", "CW", "", "COOK", "MCLN", 100);
+        named.op = "aa9xyz".into();
+        club.merge(&named, 1);
+        // Nobody named at the key: the wire carries the station call.
+        club.merge(
+            &ilqp_row("bbbb", 1, "K9DDD", "40m", "CW", "", "COOK", "MCLN", 200),
+            2,
+        );
+        let entrant = CabrilloEntrant {
+            entry_class: "UNLIMITED".into(),
+            club: "WESTERN ILL AMATEUR RADIO CLUB".into(),
+            operators: "W9OP1".into(),
+            ..Default::default()
+        };
+        let cab = club
+            .export_cabrillo_with("W9XYZ", party_session("ilqp", "IL", "MCLN"), &entrant)
+            .unwrap();
+        assert!(cab.contains("OPERATORS: AA9XYZ W9OP1\n"), "{cab}");
+        assert!(cab.contains("ENTRY-CLASS: UNLIMITED\n"), "{cab}");
+        assert!(
+            cab.contains("CLUB: WESTERN ILL AMATEUR RADIO CLUB\n"),
+            "{cab}"
+        );
+        assert!(
+            !cab.contains("OPERATORS: W9XYZ"),
+            "the station call is not an operator"
+        );
+    }
+
+    /// ⭐ **A contest whose sponsor wants duplicates REPORTED keeps them in the club file.**
+    /// The New York QSO Party cross-checks logs, so a repeat is logged and worth nothing
+    /// rather than removed — removing it would hand the other station a not-in-log. The
+    /// club does with a second position's repeat exactly what a position's own log does
+    /// with its own: the later row is marked, written, and scores zero.
+    #[test]
+    fn a_club_whose_contest_reports_dupes_keeps_the_repeat_and_scores_it_zero() {
+        let rs = party("nyqp");
+        assert!(rs.dupe_rule.log_dupes, "fixture: NYQP reports its dupes");
+        let mut club = ClubLog::for_ruleset(rs, "NYQP TEST");
+        let row = |pos: &str, seq: u64, when: u64| WireQso {
+            pos: pos.into(),
+            seq,
+            call: "K2AAA".into(),
+            class: String::new(),
+            sect: String::new(),
+            ex: party_fields("nyqp", &[("RST", "599"), ("QTH", "BRX")]),
+            mex: party_fields("nyqp", &[("RST", "599"), ("QTH", "ALB")]),
+            band: "20m".into(),
+            mode: "CW".into(),
+            sub: String::new(),
+            when,
+            op: String::new(),
+            sat: String::new(),
+            sat_fm: false,
+        };
+        // The LATER-merged row is the earlier contact: time order decides which is marked.
+        club.merge(&row("bbbb", 1, 2_000), 1);
+        club.merge(&row("aaaa", 1, 1_000), 2);
+        let session = party_session("nyqp", "NY", "ALB");
+        let log = club.unique_log_with("W2XYZ", session.clone());
+        let marks: Vec<(u64, bool)> = log.qsos().iter().map(|q| (q.when_unix, q.dupe)).collect();
+        assert_eq!(
+            marks,
+            [(1_000, false), (2_000, true)],
+            "both kept, in the order made, the later one marked"
+        );
+        assert_eq!(log.qso_count(), 1, "the repeat scores nothing");
+        let cab = club
+            .export_cabrillo_with("W2XYZ", session, &CabrilloEntrant::default())
+            .unwrap();
+        assert_eq!(cab.matches("QSO:").count(), 2, "both in the file: {cab}");
+        // CONTROL: the Illinois QSO Party does not report dupes — its club file keeps one.
+        let mut il = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        il.merge(
+            &ilqp_row("bbbb", 1, "K9AAA", "20m", "CW", "", "COOK", "MCLN", 2_000),
+            1,
+        );
+        il.merge(
+            &ilqp_row("aaaa", 1, "K9AAA", "20m", "CW", "", "COOK", "MCLN", 1_000),
+            2,
+        );
+        let cab = il
+            .export_cabrillo_with(
+                "W9XYZ",
+                party_session("ilqp", "IL", "MCLN"),
+                &CabrilloEntrant::default(),
+            )
+            .unwrap();
+        assert_eq!(cab.matches("QSO:").count(), 1, "{cab}");
+    }
+
+    /// ⭐ **Every contest club sync runs writes, for one position's rows, the QSO lines that
+    /// position's own log writes** — one exporter, under one session, whichever file it is.
+    /// Run over every ruleset the club log accepts, with the outbox's own row shape.
+    #[test]
+    fn a_club_of_one_position_writes_that_positions_own_qso_lines_in_every_contest_it_runs() {
+        // (contest, state, county, the received exchange of two different stations)
+        let cases: &[(&str, &str, &str, [&str; 2])] = &[
+            ("ilqp", "IL", "MCLN", ["COOK", "WILL"]),
+            ("tnqp", "TN", "ANDE", ["BEDF", "BENT"]),
+            ("ohqp", "OH", "ADAM", ["ALLE", "ASHL"]),
+            ("txqp", "TX", "ANDE", ["ANDR", "ANGE"]),
+            ("nyqp", "NY", "ALB", ["BRX", "ALL"]),
+            ("arrlvhf_jan", "", "", ["FN31", "EM12"]),
+            ("arrlvhf_jun", "", "", ["FN31", "EM12"]),
+            ("arrlvhf_sep", "", "", ["FN31", "EM12"]),
+        ];
+        let mut seen = HashSet::new();
+        for (event, state, county, theirs) in cases {
+            let rs = party(event);
+            assert_eq!(club_refusal(rs), None, "{event} is run by the club log");
+            let slot = if event.starts_with("arrlvhf") {
+                "GRID"
+            } else {
+                "QTH"
+            };
+            let mut own = FieldDayLog::new("W9XYZ", party_session(event, state, county), "20m");
+            for (i, value) in theirs.iter().enumerate() {
+                let mut fields = vec![(slot.to_string(), value.to_string())];
+                if slot == "QTH" {
+                    fields.insert(0, ("RST".to_string(), "599".to_string()));
+                }
+                let call = ["K9AAA", "N9BBB"][i];
+                assert!(
+                    own.log_fields_at(call, &fields, "CW", "", 0, ILQP_START + 60 * i as u64),
+                    "{event}: fixture contact refused"
+                );
+            }
+            // The outbox's own row shape (`Engine::fd_sync_outbox`).
+            let mut club = ClubLog::for_ruleset(rs, "TEST");
+            for q in own.qsos() {
+                club.merge(
+                    &WireQso {
+                        pos: "aaaa".into(),
+                        seq: q.seq,
+                        call: q.call.clone(),
+                        class: q.class().to_string(),
+                        sect: q.section().to_string(),
+                        ex: to_wire_fields(&q.rx),
+                        mex: to_wire_fields(&q.tx),
+                        band: q.band.clone(),
+                        mode: q.mode.clone(),
+                        sub: q.submode.clone(),
+                        when: q.when_unix,
+                        op: String::new(),
+                        sat: String::new(),
+                        sat_fm: false,
+                    },
+                    1,
+                );
+            }
+            let lines = |cab: &str| -> Vec<String> {
+                cab.lines()
+                    .filter(|l| l.starts_with("QSO:"))
+                    .map(str::to_string)
+                    .collect()
+            };
+            let mine = lines(&own.cabrillo(0).unwrap());
+            let club_cab = club
+                .export_cabrillo_with(
+                    "W9XYZ",
+                    party_session(event, state, county),
+                    &CabrilloEntrant::default(),
+                )
+                .unwrap();
+            assert_eq!(lines(&club_cab), mine, "{event}: the club's QSO lines");
+            assert_eq!(mine.len(), 2, "{event}: both contacts");
+            for v in theirs {
+                assert!(club_cab.contains(v), "{event}: {v} on a line: {club_cab}");
+            }
+            let token = tempo_core::contest::cabrillo_contest_token(rs.contest_id).to_string();
+            assert!(
+                club_cab.contains(&format!("CONTEST: {token}\n")),
+                "{event}: the contest's own token: {club_cab}"
+            );
+            seen.insert(*event);
+        }
+        // Every ruleset the club log runs is in the table above, Field Day aside (its
+        // goldens pin it byte for byte) — a contest added to the seed must be run here.
+        for event in seeded_events() {
+            if club_refusal(party(&event)).is_none() && !is_field_day_id(&event) {
+                assert!(
+                    seen.contains(event.as_str()),
+                    "{event} is run by the club log and not tested here"
+                );
+            }
+        }
+    }
+
+    /// ⭐ **The screen mirrors the contests club sync refuses.** `CLUB_SYNC_REFUSED` in
+    /// ui/src/fdEvent.ts must hold, for every seeded ruleset the club log cannot run, the
+    /// reason [`club_refusal`] gives — and nothing else — or the screen and the sockets
+    /// disagree: a "Not syncing" note over a club that runs, or silence over one that does
+    /// not.
+    #[test]
+    fn the_screen_mirrors_the_contests_club_sync_refuses() {
+        let ts = include_str!("../../../ui/src/fdEvent.ts");
+        let block = ts
+            .split("export const CLUB_SYNC_REFUSED")
+            .nth(1)
+            .expect("the table is in fdEvent.ts")
+            .split("\n}")
+            .next()
+            .unwrap();
+        let mirrored: HashMap<String, String> = block
+            .lines()
+            .filter_map(|l| {
+                let (id, why) = l.trim().split_once(':')?;
+                let id = id.trim();
+                let ok = !id.is_empty()
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+                ok.then(|| {
+                    let why = why.trim().trim_end_matches(',').trim_matches('\'');
+                    (id.to_string(), why.to_string())
+                })
+            })
+            .collect();
+        assert!(
+            mirrored.len() >= 8,
+            "parsed only {} entries — the parser is broken, not the table",
+            mirrored.len()
+        );
+        let engine: HashMap<String, String> = seeded_events()
+            .into_iter()
+            .filter_map(|e| club_refusal(party(&e)).map(|r| (e, r.code().to_string())))
+            .collect();
+        assert_eq!(mirrored, engine, "ui/src/fdEvent.ts CLUB_SYNC_REFUSED");
+        // POSITIVE CONTROL: the comparison sees one entry missing.
+        let mut short = mirrored.clone();
+        short.remove("cqp");
+        assert_ne!(short, engine);
+    }
+
+    /// ⭐ **The log strip builds the key the engine builds** —
+    /// `ui/src/features/__fixtures__/contest-dupe-keys.json` is one table of contacts and
+    /// their dupe keys, read here against the engine's own rule (from the rules seed) and its
+    /// own key builder, and in `contestDupe.keys.shared.test.ts` against the strip's. The
+    /// table's rules must be the seed's too, or the strip would be checked against a rule
+    /// no contest runs. The club's while-typing warning compares exactly these keys.
+    #[test]
+    fn the_strips_dupe_key_table_is_the_engines() {
+        let table: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../ui/src/features/__fixtures__/contest-dupe-keys.json"
+        ))
+        .expect("the table is JSON");
+        let strs = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array()
+                .expect("a list")
+                .iter()
+                .map(|s| s.as_str().expect("a string").to_string())
+                .collect()
+        };
+        let rules = table["rules"].as_object().expect("rules");
+        for (event, r) in rules {
+            let d = party(event).dupe_rule;
+            assert_eq!(r["byCall"].as_bool(), Some(d.by_call), "{event} byCall");
+            assert_eq!(r["byBand"].as_bool(), Some(d.by_band), "{event} byBand");
+            assert_eq!(
+                r["byModeClass"].as_bool(),
+                Some(d.by_mode_class),
+                "{event} byModeClass"
+            );
+            assert_eq!(
+                r["logDupes"].as_bool(),
+                Some(d.log_dupes),
+                "{event} logDupes"
+            );
+            assert_eq!(strs(&r["byFields"]), d.by_fields, "{event} byFields");
+            assert_eq!(
+                strs(&r["bySentFields"]),
+                d.by_sent_fields,
+                "{event} bySentFields"
+            );
+            let groups: Vec<Vec<String>> = r["modeClassGroups"]
+                .as_array()
+                .expect("groups")
+                .iter()
+                .map(&strs)
+                .collect();
+            let seed: Vec<Vec<String>> = d
+                .mode_class_groups
+                .iter()
+                .map(|g| g.iter().map(|m| m.to_string()).collect())
+                .collect();
+            assert_eq!(groups, seed, "{event} modeClassGroups");
+        }
+        let rows = table["rows"].as_array().expect("rows");
+        assert!(rows.len() >= 9, "parsed only {} rows", rows.len());
+        for row in rows {
+            let event = row["ruleset"].as_str().unwrap();
+            let rs = party(event);
+            let side = |v: &serde_json::Value| -> Vec<FieldValue> {
+                v.as_object()
+                    .expect("an exchange")
+                    .iter()
+                    .filter_map(|(k, raw)| rs.exchange.copied(k, raw.as_str().unwrap()))
+                    .collect()
+            };
+            let key = rs.dupe_rule.key_of(
+                row["call"].as_str().unwrap(),
+                row["band"].as_str().unwrap(),
+                row["mode"].as_str().unwrap(),
+                &side(&row["rx"]),
+                &side(&row["tx"]),
+                tempo_core::contest::SatKey::default(),
+            );
+            assert_eq!(key, strs(&row["key"]), "{event} row {row}");
+        }
+    }
+
+    /// Every contest the bundled rules table carries, by rules-file id, read from the
+    /// seed itself so a contest added there is seen here.
+    fn seeded_events() -> Vec<String> {
+        let seed: serde_json::Value =
+            serde_json::from_str(include_str!("../../tempo-core/src/fd_rules.seed.json"))
+                .expect("the seed is JSON");
+        let events: Vec<String> = seed["rulesets"]
+            .as_array()
+            .expect("the seed lists rulesets")
+            .iter()
+            .filter_map(|r| r["event"].as_str().map(str::to_string))
+            .collect();
+        assert!(events.len() >= 18, "parsed only {} rulesets", events.len());
+        events
+    }
+
+    /// ⭐ **The contests the club log cannot run, and why** — decided from each ruleset's
+    /// own data. A serial-number exchange must run in one sequence for the whole entry;
+    /// a template with a transmitter column must say which transmitter made each
+    /// contact. Everything else runs.
+    #[test]
+    fn the_contests_club_sync_refuses_are_the_serial_and_transmitter_ones() {
+        use ClubRefusal::*;
+        let expect: &[(&str, Option<ClubRefusal>)] = &[
+            ("arrlfd", None),
+            ("wfd", None),
+            ("ilqp", None),
+            ("tnqp", None),
+            ("ohqp", None),
+            ("txqp", None),
+            ("nyqp", None),
+            ("arrlvhf_jan", None),
+            ("arrlvhf_jun", None),
+            ("arrlvhf_sep", None),
+            ("cqp", Some(Serial)),
+            ("arrlss_cw", Some(Serial)),
+            ("arrlss_ssb", Some(Serial)),
+            ("cqwpx_cw", Some(Serial)),
+            ("cqwpx_ssb", Some(Serial)),
+            ("cqww_cw", Some(TransmitterColumn)),
+            ("cqww_ssb", Some(TransmitterColumn)),
+            ("cqww_rtty", Some(TransmitterColumn)),
+        ];
+        for (event, want) in expect {
+            assert_eq!(club_refusal(party(event)), *want, "{event}");
+        }
+    }
+
+    /// ⭐ **A position logging a different contest is refused at JOIN, by name** — the
+    /// club and the position's contest both named, and what to do about it. A position too
+    /// old to name one is served by a Field Day club as it always was, and refused by any
+    /// other.
+    #[test]
+    fn a_position_logging_another_contest_is_refused_by_name() {
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let party_club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        assert_eq!(
+            party_club.join_refusal(v, "ilqp"),
+            None,
+            "same contest: served"
+        );
+        let msg = party_club
+            .join_refusal(v, "arrlfd")
+            .expect("a Field Day position is refused by a party club");
+        assert_eq!(
+            msg,
+            "this club is running IL QSO Party, and this Nexus is logging ARRL-FIELD-DAY. \
+             Pick IL QSO Party as the contest on the Contesting tab in Settings, then \
+             rejoin. Contacts you log meanwhile stay in your own log."
+        );
+        let old = party_club
+            .join_refusal(v, "")
+            .expect("a position too old to name its contest cannot join a party club");
+        assert!(
+            old.contains("IL QSO Party") && old.contains("too old"),
+            "{old}"
+        );
+        // Field Day: an older position is served as before; the OTHER Field Day is not.
+        let fd = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        assert_eq!(
+            fd.join_refusal(v, ""),
+            None,
+            "an older position joins Field Day as before"
+        );
+        assert_eq!(fd.join_refusal(1, ""), None, "…a v1 one too");
+        assert_eq!(fd.join_refusal(v, "arrlfd"), None);
+        let wfd = fd
+            .join_refusal(v, "wfd")
+            .expect("Winter Field Day is another contest");
+        assert!(
+            wfd.contains("ARRL-FIELD-DAY") && wfd.contains("WFD"),
+            "{wfd}"
+        );
+        // The version rule still comes first, with its own words.
+        assert_eq!(
+            party_club.join_refusal(1, "ilqp"),
+            party_club.version_refusal(1)
+        );
+    }
+
+    /// ⭐ **Field Day through the any-ruleset constructor is the Field Day club it always
+    /// was** — the 1.x journal replayed into a club built by `for_ruleset` exports the
+    /// bytes 1.x exported, and the generic score is the shipped one.
+    #[test]
+    fn a_field_day_club_built_for_its_ruleset_is_byte_identical_to_1x() {
+        let dir = scratch("j1x-ruleset");
+        let path = dir.join("fd_event_granite.jsonl");
+        std::fs::write(&path, J1X).unwrap();
+        let mut host = ClubLog::for_ruleset(party("arrlfd"), "GRANITE ARC FD");
+        assert_eq!(host.field_day_event(), Some(FdEvent::ArrlFd));
+        host.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(host.export_cabrillo("W9ABC", "3A", "WI").unwrap(), J1X_CBR);
+        assert_eq!(host.export_adif("W9ABC", "3A", "WI"), J1X_ADI);
+        let session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        assert_eq!(
+            host.export_cabrillo_with(
+                "W9ABC",
+                session.clone(),
+                &CabrilloEntrant {
+                    name: "A NAME".into(),
+                    email: "a@example.com".into(),
+                    club: "A CLUB".into(),
+                    entry_class: "UNLIMITED".into(),
+                    operators: "W9OP1".into(),
+                },
+            )
+            .unwrap(),
+            J1X_CBR,
+            "the entrant's lines are written only where the ruleset lists them — never for Field Day"
+        );
+        assert_eq!(host.export_adif_with("W9ABC", session.clone()), J1X_ADI);
+        let s = host.score_with("W9ABC", session, 2, &[]);
+        assert_eq!(
+            (s.qso_points, s.powered, s.bonus, s.total),
+            host.scored("W9ABC", "3A", "WI", 2, &[]),
+        );
+        assert_eq!(s.mults, None, "Field Day has no multiplier");
+        let wfd = ClubLog::for_ruleset(party("wfd"), "WFD");
+        assert_eq!(
+            (wfd.event, wfd.contest_id.as_str()),
+            (FdEvent::WinterFd, "WFD")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

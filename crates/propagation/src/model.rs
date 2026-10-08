@@ -217,6 +217,43 @@ pub fn exact_mode(mode: &str) -> Option<String> {
     (!matches!(key.as_str(), "" | "PHONE" | "DIGITAL")).then_some(key)
 }
 
+/// The one mode a structured feed's mode token names, by [`mode_key`]: a POTA or SOTA activator
+/// spot's `mode`, or a mode a DXpedition announced. `None` for a token that names a class
+/// (`PHONE`, `PH`, `DATA`, `DIGI`, a voice `DV`), a family (`PSK`, a bare `MFSK`), a retired name
+/// (`FT1`, `DX1`) or nothing; such a station is judged by class, as a cluster spot placed by its
+/// frequency is.
+///
+/// A list, not a rule: judged as a mode of its own, a token no contact is ever logged under can
+/// never be worked, and its need would never clear. Each spelling here is one a contact Nexus logs
+/// or imports carries for that mode, and each is one the activator feed's own classifier names
+/// explicitly rather than placing by frequency.
+pub(crate) fn feed_mode(token: &str) -> Option<String> {
+    let m = token.trim().to_ascii_uppercase();
+    matches!(
+        m.as_str(),
+        "CW" | "SSB"
+            | "USB"
+            | "LSB"
+            | "AM"
+            | "FM"
+            | "FT8"
+            | "FT4"
+            | "FT2"
+            | "TEMPOFAST"
+            | "TEMPODEEP"
+            | "RTTY"
+            | "PSK31"
+            | "PSK63"
+            | "JT65"
+            | "JT9"
+            | "JS8"
+            | "MSK144"
+            | "OLIVIA"
+            | "SSTV"
+    )
+    .then(|| mode_key(&m))
+}
+
 /// Standard FT8 / FT4 / MSK144 DIGITAL "watering holes" (dial MHz). Checked FIRST because on
 /// VHF these sit INSIDE the SSB window (6m 50.313, 2m 144.174) and would otherwise read as
 /// voice, and on HF they pin the exact data spot regardless of band-edge fuzz. A spot of one of

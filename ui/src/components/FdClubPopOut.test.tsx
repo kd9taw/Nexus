@@ -228,6 +228,24 @@ describe('the club band board pops out', () => {
     expect(screen.getByText(/nothing has stopped/i)).toBeTruthy()
   })
 
+  it('⭐ says why when sync is switched on for a contest club sync cannot run', async () => {
+    // The engine refuses club sync for a contest the club log cannot run, so no club block
+    // ever arrives. Reading that as "the host stepped out" would tell the operator a club
+    // is running when nothing is.
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'cqwpx_cw' } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    expect(screen.getByText(/Club sync is off/i)).toBeTruthy()
+    expect(
+      screen.getByText(/Club sync does not run CQ World-Wide WPX Contest \(CW\): its serial numbers/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/nothing has stopped/i)).toBeNull()
+  })
+
   it('POSITIVE CONTROL: a station that really has not configured sync is still told how', async () => {
     vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: false, fdJoinAddr: '' } as never)
     mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {

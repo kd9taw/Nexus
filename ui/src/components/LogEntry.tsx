@@ -1585,7 +1585,17 @@ export function LogEntry({
   // folding that ILQP needs lives there with it.
   const fdTypedCall = logCall.trim().toUpperCase()
   const fdModeClass = fdMode ?? 'PH'
-  const fdDupe = contestDupe(fieldDay, fdTypedCall, snap.radio.band, fdModeClass)
+  // The exchange being typed, for a contest whose dupe key names a slot (every QSO party:
+  // a station is worked once per band and mode FROM EACH COUNTY). The received side is what
+  // the boxes hold now; the sent side is what this station is sending now, which is what the
+  // engine stamps on the row it is about to write.
+  const fdDupe = contestDupe(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+    rx: (slot) => {
+      const box = fdReceives.find((f) => f.key === slot)
+      return box ? fdValue(box) : ''
+    },
+    tx: (slot) => composingSlot(fieldDay?.composing, slot),
+  })
   const fdOwnDupe = fdDupe === 'own'
   const fdClubDupe = fdDupe === 'club'
   // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just

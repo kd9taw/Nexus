@@ -98,6 +98,70 @@ export function contestShortName(id: string | undefined): string {
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 
+/** Why club sync cannot run a contest — the two reasons the engine refuses one for. */
+export type ClubSyncRefusal = 'serial' | 'transmitter'
+
+/**
+ * ⭐ **The contests club sync cannot run, and why**, by rules-file id.
+ *
+ * The club log runs every other contest under that contest's own rules — its exchange,
+ * dupe key, multipliers and Cabrillo. The two reasons it cannot are facts about a
+ * sponsor's rules, which the engine reads off each ruleset (`club_refusal` in
+ * `crates/tempo-app/src/fdevent.rs`): a serial-number exchange must run in ONE sequence
+ * for the whole entry while every position gives out its own, and a Cabrillo template
+ * with a transmitter column must say which transmitter made each contact, which club
+ * sync does not number.
+ *
+ * ⚠️ A MIRROR, held to the engine by a Rust test that reads this table back and compares
+ * it with every seeded ruleset (`the_screen_mirrors_the_contests_club_sync_refuses`), so a
+ * contest added to the rules seed without its answer here is a red test rather than a
+ * screen that disagrees with the sockets. One line per contest, `id: 'reason',`.
+ */
+export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
+  cqp: 'serial',
+  arrlss_cw: 'serial',
+  arrlss_ssb: 'serial',
+  cqwpx_cw: 'serial',
+  cqwpx_ssb: 'serial',
+  cqww_cw: 'transmitter',
+  cqww_ssb: 'transmitter',
+  cqww_rtty: 'transmitter',
+}
+
+/**
+ * ⭐ **Club sync is switched on for a contest it cannot run, so the engine refuses it** —
+ * and why, or `null` when it runs (or is not switched on at all).
+ *
+ * Hosting the Illinois QSO Party used to build an ARRL Field Day club log in silence; the
+ * club now runs whatever contest is picked, except the ones above
+ * (`Engine::club_sync_refusal`). This reads the same settings the engine does, the trim
+ * and the blank default (ARRL Field Day) included, so the screen saying why cannot
+ * disagree with what the sockets do.
+ */
+export function clubSyncRefusal(
+  s: { fdHostEnable?: boolean; fdJoinAddr?: string; fdEvent?: string } | null | undefined,
+): ClubSyncRefusal | null {
+  if (!s) return null
+  const configured = s.fdHostEnable === true || (s.fdJoinAddr ?? '').trim() !== ''
+  return configured ? contestClubRefusal(s.fdEvent) : null
+}
+
+/** Why club sync cannot run this contest at all, switched on or not — `null` when it can. */
+export function contestClubRefusal(fdEvent: string | undefined): ClubSyncRefusal | null {
+  const id = fdEvent?.trim() || 'arrlfd'
+  return Object.prototype.hasOwnProperty.call(CLUB_SYNC_REFUSED, id) ? CLUB_SYNC_REFUSED[id] : null
+}
+
+/** The sentence a refusal shows — one place, for the three surfaces that show it. */
+export function clubSyncRefusalText(why: ClubSyncRefusal, contest: string): string {
+  switch (why) {
+    case 'serial':
+      return t('fieldDay.club.refused.serial', { contest })
+    case 'transmitter':
+      return t('fieldDay.club.refused.transmitter', { contest })
+  }
+}
+
 export interface FdEvent {
   kind: FdKind
   /** UTC start of the event (Saturday 1800 UTC for ARRL FD; 1600 UTC for WFD). */

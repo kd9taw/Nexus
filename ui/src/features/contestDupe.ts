@@ -37,6 +37,50 @@ const LEGACY_TRIPLE: DupeRule = {
  *  'none' — no contest running, no call to check, or a contact that is genuinely fresh. */
 export type ContestDupeVerdict = 'none' | 'own' | 'club'
 
+/** The exchange of the contact being typed, by slot id: what the strip's box for a RECEIVED
+ *  slot holds now, and what this station is SENDING now (the session's composing exchange). */
+export interface TypedExchange {
+  rx: (slot: string) => string
+  tx: (slot: string) => string
+}
+
+/** Rust's `norm`: trimmed, ASCII letters upper-cased, nothing else touched. */
+const norm = (s: string): string => s.trim().replace(/[a-z]+/g, (m) => m.toUpperCase())
+
+/**
+ * ⭐ **The dupe key the ENGINE builds for a terrestrial contact** — `DupeRule::key_of`
+ * (crates/tempo-core/src/contest/dupe.rs), component for component: the call, the band,
+ * the mode class folded through the rule's groups (ILQP's CW and digital are one mode), then
+ * each received slot the rule names, then each sent slot.
+ *
+ * ⚠️ A second-language copy of a key the engine already builds, and a copy is how two sides
+ * come to disagree, so both are held to ONE table: `__fixtures__/contest-dupe-keys.json`,
+ * which the engine's key is checked against in Rust and this function against here. Change
+ * the key on either side and that table goes red until both agree again.
+ */
+export function dupeKey(
+  rule: DupeRule,
+  call: string,
+  band: string,
+  modeClass: string,
+  typed: TypedExchange,
+): string[] {
+  const key: string[] = []
+  if (rule.byCall) key.push(norm(call))
+  if (rule.byBand) key.push(norm(band))
+  if (rule.byModeClass) {
+    const cls = norm(modeClass)
+    const group = rule.modeClassGroups.find((g) => g.some((m) => norm(m) === cls))
+    key.push(group && group.length > 0 ? norm(group[0]) : cls)
+  }
+  for (const slot of rule.byFields) key.push(norm(typed.rx(slot)))
+  for (const slot of rule.bySentFields) key.push(norm(typed.tx(slot)))
+  return key
+}
+
+/** One key as one string, joined on the engine's own separator (`dupe::KEY_SEP`). */
+const joined = (key: readonly string[]): string => key.join('\u0001')
+
 /**
  * The verdict for `call` on `band` in `modeClass`, against the contest log in `fieldDay`.
  *
@@ -53,6 +97,7 @@ export function contestDupe(
   call: string,
   band: string,
   modeClass: string,
+  exchange?: TypedExchange,
 ): ContestDupeVerdict {
   const typed = call.trim().toUpperCase()
   if (fieldDay == null || typed === '') return 'none'
@@ -69,12 +114,24 @@ export function contestDupe(
   // PREFIX of the key: a rover reappearing from a new grid read as already-worked and the
   // operator skipped a contact that would have scored.
   //
-  // A caller that HAS the exchange can get the exact verdict instead, by comparing a key it
-  // builds against each row's `dkey` and the club's `dkeys` — both ride the snapshot. No
-  // caller does yet: the FT cockpit answers a roster click before anything is copied, and
-  // the log strip's typed boxes are not plumbed here. Until one is, silence is the honest
-  // answer and it is the safe one.
-  if (rule.byFields.length > 0 || rule.bySentFields.length > 0) return 'none'
+  // ⭐ A caller that HAS the exchange gets the exact verdict instead: the key the engine will
+  // build ([`dupeKey`]) against each row's own `dkey` and the club's `dkeys`, both of which
+  // ride the snapshot. The log strip passes its typed boxes and the session's composing
+  // exchange; the FT cockpit answers a roster click before anything is copied, so it passes
+  // nothing and gets the honest silence.
+  //
+  // A box the rule names that is still EMPTY is not judged either: a key with a blank in it
+  // would match only a row that recorded none, and the contact being typed is not that row.
+  if (rule.byFields.length > 0 || rule.bySentFields.length > 0) {
+    if (exchange === undefined) return 'none'
+    const named = [...rule.byFields.map(exchange.rx), ...rule.bySentFields.map(exchange.tx)]
+    if (named.some((v) => v.trim() === '')) return 'none'
+    const key = joined(dupeKey(rule, typed, band, modeClass, exchange))
+    if ((fieldDay.log ?? []).some((q) => q.dkey !== undefined && joined(q.dkey) === key)) {
+      return 'own'
+    }
+    return (fieldDay.club?.dkeys ?? []).some((k) => joined(k) === key) ? 'club' : 'none'
+  }
   // `dupeModeGroups` rather than `rule.modeClassGroups`: they are the same data from the same
   // field, but the flat one also reaches a station too old to send a rule at all.
   const fold = (m: string): string =>

@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4, 8 and 16 seconds, then every 30; if the radio refused the login or another program took it,
   Nexus waits for Test CAT. USB stays the default and nothing changes unless you pick it. An older
   Nexus reads this connection as Serial. NEEDS-BENCH: not yet tried on a radio; an IC-7760 is first.
+- **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
+  Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
+  including the new Unlimited that a club running more than one transmitter at once must enter),
+  **Club** and **Other operators**, all read when you export, so you can set them after the
+  party. The OPERATORS line lists everyone who was set as Operator at the key when they logged a
+  contact, then any others you type, and a QRP entry gets `QRP-COMPETITION: YES` from its Power
+  category. Each contest contact now records the operator at the key, and the contest log's
+  backup file keeps it across a restart. Every other contest's file is unchanged.
 - **Download everything again, for LoTW confirmations an earlier download missed (#399).**
   Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
   confirmations. It asks first, then downloads your whole confirmation history once, straight away,
@@ -102,12 +110,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only.** Settings ▸ Radio ▸ Rig &
-  CAT offered it on the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or
-  D3 picked there put a value Icom does not define for those radios into the command that sets
-  their DATA mode for the digital modes. If you picked D2 or D3 on one of them, Nexus still sends
-  it, and the picker stays on screen until you set it back to D1. NEEDS-BENCH: what these radios
-  do with a D2 or D3 has not been checked on a radio.
+- **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
+  joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
+  selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station
+  counted as two contacts, a mobile's new county counted as a dupe, and a club file headed
+  `CONTEST: ARRL-FD`. The club log now runs the host's contest under its own rules: its
+  exchange, what counts as a dupe (CW and digital are one mode at the Illinois QSO Party, and a
+  mobile in a new county is a new contact), its multipliers and bonus stations, and its own
+  Cabrillo file, with the Entry class, Club and Operators lines. At a QSO party the log strip
+  warns while you type when another position, or this one, has already worked the station from
+  that county. Every position must pick the host's contest: a position logging another one,
+  or running a Nexus too old to say which, is refused when it joins, and its club chip names
+  both contests. The two Field Days count as different contests here too. Two kinds of contest
+  are refused, with the reason on the contest screen, the club board window and in Settings ▸
+  Contesting ▸ Field Day Club Sync: one with a serial number in the exchange (Sweepstakes, CQ
+  WPX, the California QSO Party), and CQ World-Wide, whose log must say which transmitter made
+  each contact. The spectator scoreboard is Field Day only. Try a club on two of your own PCs
+  before the party; the Field Day manual has a checklist.
+- **A contact queued while a club position was offline keeps the operator who logged it.** The
+  operator was read when the contact was sent rather than when it was logged, so after an outage
+  the contacts still waiting went up under whoever had sat down since, on the club board and in
+  the club file's operators.
+- **Winter Field Day 2027 is on 23 and 24 January.** The sponsor's 2027 rules put the event on
+  the fourth full weekend of January, and Nexus still used the last full weekend from the 2025
+  rules, so it counted down to 30 January, a week late. Installed copies pick the fix up from
+  the rules file once it is published (Settings ▸ Contesting ▸ Field Day Setup ▸ Check for rules
+  updates), at the next launch.
+- **FT2 is on Winter Field Day's banned-mode list**, as the sponsor's 2027 list has it. The
+  warning is advisory, as before: the log strip warns and nothing is refused.
+- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only, and the IC-9700, IC-705 and
+  IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT offered the picker on
+  the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put
+  a value Icom does not define for those radios into the command that sets their DATA mode for the
+  digital modes. On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA
+  mode ON whatever was picked; a D2 or D3 you picked stays in your settings but is not sent. The
+  IC-7610 still gets the D1, D2 or D3 you choose. NEEDS-BENCH on an IC-9700, IC-705 or IC-905 that
+  had D2 or D3 picked: a digital mode should put the radio in USB-D, with its transmit audio from
+  the DATA MOD source.
 - **The Connection help no longer sends RS-BA1 users to NET rigctl.** For an Icom on its LAN port,
   the help under Connection in Settings ▸ Radio ▸ Rig & CAT said to point Nexus at a rigctld
   server with Rig Model NET rigctl, whether the program in between was wfview or RS-BA1. RS-BA1
@@ -120,6 +159,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   height, so the strongest signals on the band all looked the same. The IC-7610 is now read on its
   own scale; the other radios are unchanged. NEEDS-BENCH on an IC-7610: a strong carrier should no
   longer sit flat against the top, and heights should follow the radio's own scope.
+- **An Icom panadapter whose lower edge is below 0 Hz is drawn over the right span.** In the Fixed
+  and Scroll-F scope modes the radio sends Nexus's own CI-V connection the scope's two edges, and
+  marks a lower edge below 0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a
+  span the radio was not showing. That edge is now read as negative. It only happens with the
+  scope's lower edge below 0 Hz, at the very bottom of the radio's range. Not yet seen on a radio.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
@@ -262,6 +306,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
   file again does not add them twice.
+- **A contact imported from fldigi keeps its PSK mode.** fldigi logs PSK31 as PSK with PSK31 as
+  the submode, and the same for PSK63, QPSK31 and its other PSK modes. Nexus kept only the PSK, so
+  a PSK31 station read as a new mode against a log full of PSK31 contacts. The logbook and the
+  "new mode" need now see PSK31, PSK63, QPSK31 and the rest. Each contact is still written back,
+  in your exports and in what goes to LoTW, QRZ and the other services, exactly as fldigi wrote
+  it. Contacts logged on the PSK screen are written as before. Contacts imported before this
+  release keep PSK, and importing the same file again does not add them twice.
+- **Changing the mode of an imported contact no longer leaves its old submode behind.** A contact
+  imported from another logger can carry a submode Nexus keeps exactly as it was written, such as
+  fldigi's PSK31 or Log4OM's USB. Changing that contact's mode in the Logbook kept the old submode,
+  so a PSK31 contact corrected to CW was written to your log and your exports as CW with a PSK31
+  submode. Now a mode edit drops a submode the new mode does not have, and a PSK contact moved to
+  another PSK mode takes the new one with it (corrected to PSK63, it is written as PSK with PSK63,
+  as fldigi writes it). Editing any other field leaves the submode as it was.
+- **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
+  An activator's own row on the Needed board still asked only whether you had worked the country in
+  CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever
+  modes it announced. So an activator or a DXpedition on FT8 in a country you had worked only on
+  FT4 showed no new mode there, while the same station decoded by your radio did. The activator row
+  now judges the mode the spot names ("New mode — FT8 … (any band) · POTA …"), and a DXpedition card
+  is a new mode while any mode the operation announced is one you have never worked that country
+  in. A spot that names only data, phone or digital, or no mode at all, and an operation that
+  announced no mode or only "PSK", keep the old rule: a new mode only when you have never worked
+  that country in any mode of that kind.
 - **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
   Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
   list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line

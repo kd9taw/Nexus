@@ -118,7 +118,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { CONTESTS, isFieldDay } from '../fdEvent'
+import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, isFieldDay } from '../fdEvent'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -3514,6 +3514,9 @@ export function SettingsPanel({
   const fdSectionRetired = fdSectionInvalid
     ? RETIRED_SECTIONS[form.fdSection.trim().toUpperCase()]
     : undefined
+  // Why club sync cannot run the picked contest at all, or null when it can — shown beside
+  // the switches before anybody turns one on.
+  const clubRefusalHere = contestClubRefusal(form.fdEvent)
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>
@@ -5855,11 +5858,11 @@ export function SettingsPanel({
                   </label>
                 )}
 
-              {/* WHICH Icom data mode. Only for the radios that have more than one (or one still
-                  holding a D2/D3 — see dataModePickerShown), and only through the native CI-V
+              {/* WHICH Icom data mode. Only for the radios that have more than one (see
+                  dataModePickerShown), and only through the native CI-V
                   engine — Hamlib's PKT modes always select D1, so offering the choice on that
                   path would be a control that does nothing. */}
-              {dataModePickerShown(form.rigModel, form.icomDataMode ?? 1) && (
+              {dataModePickerShown(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">Data mode</span>
                   <select
@@ -12113,6 +12116,61 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.contestPick.email.hint')}</span>
               </label>
+              {/* ⭐ THE SPONSOR'S OWN ENTRY LINES. A contest whose rules declare entry classes
+                  (the Illinois QSO Party, whose processing software reads the header) is
+                  offered exactly those, from the rules data and never from a list kept here;
+                  the names are the sponsor's own and are never translated. A saved class that
+                  is not one of this contest's shows as unset, which is also what the export
+                  does with it. CLUB and the extra OPERATORS are typed, and all three are read
+                  when the log is exported. */}
+              {rulesetPreview?.entryClasses?.length ? (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.entryClass.label')}</span>
+                  <select
+                    disabled={locked('contestEntryClass')}
+                    className="settings-input"
+                    value={
+                      rulesetPreview.entryClasses.includes(form.contestEntryClass ?? '')
+                        ? form.contestEntryClass
+                        : ''
+                    }
+                    onChange={(e) => update('contestEntryClass', e.target.value)}
+                  >
+                    <option value="">{t('settings.contestPick.entryAxes.unset')}</option>
+                    {rulesetPreview.entryClasses.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">{t('settings.contestPick.entryClass.hint')}</span>
+                </label>
+              ) : null}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.club.label')}</span>
+                <input
+                  disabled={locked('contestClub')}
+                  className="settings-input"
+                  type="text"
+                  value={form.contestClub ?? ''}
+                  onChange={(e) => update('contestClub', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.contestPick.club.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.operators.label')}</span>
+                <input
+                  disabled={locked('contestOperators')}
+                  className="settings-input mono"
+                  type="text"
+                  value={form.contestOperators ?? ''}
+                  onChange={(e) => update('contestOperators', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.contestPick.operators.hint')}</span>
+              </label>
             </fieldset>
           )}
 
@@ -12562,6 +12620,14 @@ export function SettingsPanel({
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day-club">
             <legend>{t('settings.fdClub.legend')}</legend>
+            {/* Club sync runs the picked contest's own rules, and the engine refuses it for a
+                contest whose merged log would be wrong whoever built it
+                (`Engine::club_sync_refusal`). Said here, where it is turned on. */}
+            {clubRefusalHere && (
+              <p className="settings-note" role="note">
+                {clubSyncRefusalText(clubRefusalHere, contestName(form.fdEvent?.trim()))}
+              </p>
+            )}
             <label className="settings-field">
               <span className="settings-label">{t('settings.fdClub.host.label')}</span>
               <button disabled={remote}

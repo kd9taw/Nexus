@@ -326,6 +326,9 @@ struct State {
     closed: AtomicBool,
     authority: Arc<Authority>,
     book: Arc<Book>,
+    /// The gate of the listener started last, for a test to read ([`Lan::open_from`]).
+    #[cfg(test)]
+    gate: Mutex<Option<Arc<gate::Gate>>>,
 }
 
 impl State {
@@ -395,6 +398,8 @@ impl Lan {
             closed: AtomicBool::new(false),
             authority: deps.authority.clone(),
             book: deps.book.clone(),
+            #[cfg(test)]
+            gate: Mutex::new(None),
         });
         // Weak: the state holds the authority, which holds this.
         let held = Arc::downgrade(&state);
@@ -514,6 +519,15 @@ impl Lan {
         status.picked = self.state.switch().address.map(|ip| ip.to_string());
         status
     }
+
+    /// How many connections from `source` the listener holds now, as its gate counts them: a
+    /// connection is let go when it ends, a refused key's only once the computer's close reaches
+    /// the shack or its drain gives up (`channel::drain`).
+    #[cfg(test)]
+    fn open_from(&self, source: std::net::IpAddr) -> usize {
+        let gate = self.state.gate.lock().ok().and_then(|gate| gate.clone());
+        gate.map_or(0, |gate| gate.open(source))
+    }
 }
 
 /// An address the operator gave: a private IPv4 address, or refused.
@@ -608,6 +622,10 @@ async fn supervise(state: Arc<State>, deps: Deps) {
                         );
                         listener.advert = advert(&deps, look.chosen(), network, want.port);
                         looks = 0;
+                        #[cfg(test)]
+                        if let Ok(mut gate) = state.gate.lock() {
+                            *gate = Some(listener.gate.clone());
+                        }
                         running = Some(listener);
                         None
                     }
@@ -682,6 +700,9 @@ struct Listener {
     firewall: Option<&'static str>,
     /// The firewall read under way, if one is. Left to end on its own when the listener stops.
     reading: Option<tokio::task::JoinHandle<Option<&'static str>>>,
+    /// Its gate, for a test to read.
+    #[cfg(test)]
+    gate: Arc<gate::Gate>,
 }
 
 impl Listener {
@@ -720,6 +741,8 @@ impl Listener {
             silence: channel::SILENCE,
         };
         let (stop, stopped) = watch::channel(false);
+        #[cfg(test)]
+        let gate = shared.gate.clone();
         let task = tokio::spawn(accept(socket, shared, stopped));
         Ok(Self {
             network,
@@ -730,6 +753,8 @@ impl Listener {
             advert: None,
             firewall: None,
             reading: None,
+            #[cfg(test)]
+            gate,
         })
     }
 

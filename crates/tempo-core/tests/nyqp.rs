@@ -714,6 +714,7 @@ fn an_in_state_entrys_cabrillo_file_is_the_sponsors_format() {
     let me = CabrilloEntrant {
         name: "EXAMPLE OPERATOR".into(),
         email: "op@example.com".into(),
+        ..Default::default()
     };
     assert_eq!(
         log.cabrillo_with(14_000, &me).expect("one entry"),

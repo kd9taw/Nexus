@@ -437,13 +437,16 @@ Baud continue across to the right.*
 - **Rig Model** — "Hamlib rig model." A curated ~50-rig list by default; tick
   **Show all models** for the full Hamlib catalog, or type a model number
   directly ("Hamlib may still support it even without a friendly name here").
-- **Connection** — "Serial for a USB/COM rig (most, incl. Xiegu); Network for a
-  FlexRadio via SmartSDR or a remote rigctld over TCP." For the six Icoms with a
-  network port (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2) there is
-  also **Icom network (LAN / Wi-Fi) — Beta**: receive and control only, with the
-  **Radio address**, **Network user**, **Network password** (stored in the
-  keychain, write-only) and **Control port (UDP)** in place of Serial Port and
-  Baud. See the [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
+- **Connection** — "Serial for a rig on a USB/COM port (most rigs, including
+  Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC
+  (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld." For a Hermes
+  Lite 2, see [Hermes Lite 2 and SDR Program Setup](../rigs/sdr-programs.md).
+  For the six Icoms with a network port (IC-7610, IC-9700, IC-705, IC-905,
+  IC-7760, IC-7300MK2) there is also **Icom network (LAN / Wi-Fi) — Beta**:
+  receive and control only, with the **Radio address**, **Network user**,
+  **Network password** (stored in the keychain, write-only) and **Control port
+  (UDP)** in place of Serial Port and Baud. See the
+  [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of
@@ -1964,6 +1967,18 @@ the Cabrillo headers.
   about your entry. The NAME line is your operator name from the
   [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
   not your ClubLog account email, and Remote never sees it.
+- **Entry class.** Shown only for a contest whose rules list the sponsor's own
+  entry classes: the Illinois QSO Party's eight, from its 2026 rules. It goes on
+  the ENTRY-CLASS line of the Cabrillo log. A club running more than one
+  transmitter at once in the Illinois QSO Party enters `UNLIMITED`. For a QRP
+  entry, set **Power category** to QRP too, which writes `QRP-COMPETITION: YES`.
+- **Club.** Your contest club, for the CLUB line of the Cabrillo log when the
+  contest's rules have one (the Illinois QSO Party). Leave it blank to leave the
+  line out.
+- **Other operators.** The OPERATORS line lists everyone who was set as
+  **Operator at the key** when they logged a contact. Type anyone else here, as
+  callsigns separated by spaces or commas. All three are read when you export the
+  log, so you can fill them in after the contest.
 
 ### Your station data
 
@@ -2092,7 +2107,11 @@ one section up. Contacts logged while the network is down are re-sent
 automatically on reconnect, and if the host PC dies you can enable hosting on
 any other position — everyone re-joins and nothing is lost. The host's Field
 Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
-deduplicated log.
+deduplicated log. Club sync runs the contest picked above, under its own rules,
+and every position must pick the same one. It does not run a contest with a
+serial number in the exchange (Sweepstakes, CQ WPX, the California QSO Party)
+or CQ World-Wide: with one of those selected, this section says why and the
+station neither hosts nor joins.
 ![The Field Day Club Sync group: "Host a club event" switched off, Event name reading "N9WH Field Day 2026", Host port 42073, an empty "Join event at" box showing a host:port placeholder, a "Find club events" button, and Spectator scoreboard switched off.](../img/manual/settings-field-day-club-sync.webp)
 
 *Field Day Club Sync in Nexus 1.10.3, with hosting off. One position at the site

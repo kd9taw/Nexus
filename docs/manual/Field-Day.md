@@ -10,10 +10,10 @@ In **Settings → Contesting ▸ Contest**, choose between:
 
 | Setting value | Event | Window |
 |---|---|---|
-| _(empty, default)_ | ARRL Field Day — 4th full weekend of June | **27 hours**: 1800 UTC Saturday → 2100 UTC Sunday |
-| `wfd` | Winter Field Day — last full Sat+Sun of January | **30 hours**: 1600 UTC Saturday → 21:59 UTC Sunday |
+| _(empty, default)_ | ARRL Field Day, the 4th full weekend of June | **27 hours**: 1800 UTC Saturday → 2100 UTC Sunday |
+| `wfd` | Winter Field Day, the 4th full weekend of January | **30 hours**: 1600 UTC Saturday → 21:59 UTC Sunday |
 
-The WFD date rule accounts for the "last full weekend" requirement: if the last Saturday of January would put Sunday in February, the code steps back one week. 2026 correctly resolves to Jan 24.
+A full weekend has both days in the month, so a Saturday whose Sunday falls in February does not count. Winter Field Day 2027 is **23 and 24 January**, the sponsor's own dates. Its rules said "the last full weekend" until 2025, and the two readings differ in a January with five full weekends: 2027 and 2028 are both such years, and in each the last full weekend is a week later than the event. If a sponsor moves a date, a rules update carries it (Settings → Contesting ▸ Field Day Setup ▸ Check for rules updates), and it applies at the next launch.
 
 ### Countdown
 
@@ -81,7 +81,7 @@ WFD scoring in Nexus is partial. QSO points and the bonus checklist are tracked.
 
 ### Winter Field Day Mode Rules
 
-The WFD rules ban the entire WSJT-X mode suite (FT8, FT4, FST4, JT4, JT9, JT65, Q65, MSK144, WSPR and friends) while explicitly keeping RTTY and SSTV legal as Digital. Nexus carries this list as advisory rules data — it does **not** block or disable any mode. Staying inside the rules is your call; what Nexus does guarantee is that a digital contact is exported and pushed under the mode actually used (an RTTY contact says RTTY, never FT8), so a legal contact can never be misreported as a banned one.
+The WFD rules ban the entire WSJT-X mode suite (FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W and Echo, the sponsor's own 2027 list) while explicitly keeping RTTY and SSTV legal as Digital. Nexus carries this list as advisory rules data. It does **not** block or disable any mode. Staying inside the rules is your call; what Nexus does guarantee is that a digital contact is exported and pushed under the mode actually used (an RTTY contact says RTTY, never FT8), so a legal contact can never be misreported as a banned one.
 
 ---
 
@@ -241,6 +241,8 @@ Submit the Cabrillo file to the ARRL online submission system. ADIF can be impor
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
+- **Club sync does not run a serial-number contest or CQ World-Wide.** It runs every other contest on the picker under that contest's own rules. With Sweepstakes, CQ WPX, the California QSO Party or CQ WW selected a station neither hosts nor joins, and the contest screen and Settings say why: one entry's serial numbers must run in a single sequence, and CQ WW's log must say which transmitter made each contact. Log those on each position by itself.
+- **The spectator scoreboard is Field Day only.** It scores by Field Day's rules, so for a club running any other contest its page shows no club.
 - **Desktop-only** (Tauri v2); no mobile companion.
 
 ---
@@ -260,13 +262,69 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
 **Illinois QSO Party** (1700Z Sunday of the third full weekend of October, for eight hours):
 
 - **Before the party**, set your **State or province** under Settings → Contesting ▸ Your station data, and your **County** as well if you are in Illinois. Illinois stations send `599` and their county; everyone else sends `599` and their state, province or **country** — this party asks DX stations for their country rather than the word `DX`, so type the country into the state box. The Contest section shows the exchange you are about to send.
+- **Use the sponsor's county abbreviations.** The sponsor has said it will stop accepting non-standard ones, and names the pairs it sees mixed up: White (`WHIT`) and Whiteside (`WTSD`), Mason (`MASN`) and Macon (`MACN`). The log strip only ever writes the sponsor's own codes, so a county typed there by name is logged the right way. Check any you type by hand elsewhere.
 - **The log strip** asks for RST and one QTH box, and that box takes the **county code or the county name**: type `Cook` and it offers `COOK`, `st clair` offers `SCLA`. Press space and the name becomes the code that goes in the log. A **half-typed name is not completed for you** and neither is one that could be several counties — `Ma` is Macon, Macoupin, Madison, Marion, Marshall, Mason and Massac — so pick from the list or finish typing. Nothing is ever guessed onto the air: the same rule is why a state name that several ARRL sections cover (New York, California) is never turned into one of them in Field Day's section box. A state, a province or a country typed there logs as it is.
 - **Bands**: 160 through 2 metres, **without the WARC bands** (the sponsor's own list excludes 60, 30, 17 and 12 m). If the rig is elsewhere the strip says so and still logs the contact.
 - **FT8 and FT4 earn no credit at all** — the sponsor's own rule, because of what an ILQP log entry has to contain. Other digital modes are encouraged; RTTY and PSK are ordinary digital contacts here. Nexus warns you and still logs.
+- **Power**: the high and low power classes split at **100 watts PEP** (it was 200 W before 2026). QRP is 5 W on CW and digital or 10 W on phone.
+- **Spotting** is encouraged, and since 2026 every entrant may spot themselves.
 - **A station counts once per band and mode, and CW and digital are ONE mode here**: work somebody on CW and the strip shows them as a dupe on RTTY on that band. Phone is separate. An Illinois mobile or rover in a new county is a new contact either way. A station **on a county line counts once per county**, two to four of them. Type its counties into the QTH box joined by `/`, the way the station sends them: `COOK/DUPG`, or up to four, like `COOK/DUPG/KANE/WILL`. Press Enter and Nexus logs one contact per county, all at the same time, band and mode. Each county can be typed as its code or its name, and the list offers the counties of the part you are typing. A county already worked on that band and mode is not logged again; Nexus logs the others and tells you which county was the dupe. A part that is not a county on the sponsor's list, such as a typo, a state or a half-typed name, stops the whole line until you fix it. Each county becomes an ordinary contact in the log, the same as one you logged on its own. The Satellites log strip still takes one county per contact. **Repeater contacts do not count.**
 - **Scoring**: phone 1 point, CW and digital 2. Illinois stations multiply by Illinois counties plus US states, Canadian provinces and up to **five** DXCC entities (Canada, Hawaii and Alaska are not DX entities here); everyone else multiplies by the Illinois counties worked. The sponsoring club's two calls, **W9AWE** and **W9OAB**, are worth **100 bonus points each, once per log**, and Nexus adds them to your score and to the Cabrillo claimed score as soon as they are in the log — there is no box to tick.
-- **The Cabrillo export** writes `CONTEST: ILLINOIS QSO PARTY`, which is what the sponsor's own sample log generates. Other loggers write `IL-QSO-PARTY` and the club plainly accepts those too, so change it if you prefer. An Illinois entry also gets `IL-COUNTY:` with your county's **name**, beside QSO lines carrying its four-letter code, exactly as the sample log does. The sample's `ENTRY-CLASS`, `QRP-COMPETITION`, `CLUB`, `OPERATORS` and address headers are **not** written: Nexus has nothing to fill them from, and a header nobody set is a claim nobody made — add them by hand if your entry needs them. The ADIF export uses ADIF's own contest name, `IL QSO Party`.
-- **The log deadline is not in the rules Nexus read** for 2026 (2025's was midnight Central on 5 November). Check the sponsor's page before you send your entry.
+- **The Cabrillo export** writes `CONTEST: ILLINOIS QSO PARTY`, which is what the sponsor's own sample log generates. Other loggers write `IL-QSO-PARTY` and the club plainly accepts those too, so change it if you prefer. An Illinois entry also gets `IL-COUNTY:` with your county's **name**, beside QSO lines carrying its four-letter code, exactly as the sample log does. The ADIF export uses ADIF's own contest name, `IL QSO Party`.
+- **The header lines the sponsor's software reads.** The 2026 rules ask you to make sure the entry class, call sign, station location and club are right in the header, because the sponsor's processing software reads them from it. Under Settings → Contesting ▸ Contest, set:
+  - **Entry class**, one of the eight in the 2026 rules: Illinois fixed high or low power, Illinois portable, mobile or rover, outside Illinois high or low power, or **Unlimited**. A club running more than one transmitter at the same time enters Unlimited. It goes on the `ENTRY-CLASS:` line.
+  - **Club**, for the `CLUB:` line.
+  - **Other operators**, for anyone who operated without being set as Operator at the key. The `OPERATORS:` line lists everyone who was set as Operator at the key when they logged a contact (Settings → Contesting ▸ Who's who at this event, or the operator box on the contest screen), then these.
+  - **Power category** QRP, for a QRP entry. The file then says `QRP-COMPETITION: YES`.
+
+  All of these are read when you export, so you can set them after the party. The address lines in the sponsor's sample are not written; add them by hand if you want them.
+- **Club sync runs this party.** One position hosts and the others join, as at Field Day, and the club log keeps the party's rules: every contact's county, CW and digital as one mode, a mobile's new county as a new contact, the Illinois multipliers with the five-country cap, the two bonus calls once for the whole club. A position typing a station another position already worked from that county is warned before it logs. The host's **Club Cabrillo** is the file to send: `CONTEST: ILLINOIS QSO PARTY`, `CATEGORY-OPERATOR: MULTI-OP`, the host's Entry class, Club and `IL-COUNTY`, an `OPERATORS` line naming everyone set as Operator at the key on any position (then the host's Other operators), and both counties on every QSO line. Every position must have the Illinois QSO Party picked: a position logging another contest is refused when it joins, and its club chip says so. Try it on two of your own PCs first (the checklist below); if anything there does not work, log on each position by itself and merge the files, with the second checklist.
+- **Logs are due by midnight Central Time on 4 November 2026**, by email to n9jf@arrl.net, as a Cabrillo file. The sponsor asks for Cabrillo only: do not send an `.adi` or `.adif` file.
+
+**Running the Illinois QSO Party as a club with club sync:**
+
+Before the party, on every laptop:
+
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again).
+- [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's.
+- [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
+- [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.
+- [ ] One laptop: an **Event name** for the party and **Host a club event** on. The others: **Find club events**, or the host's address in **Join event at**. Allow Nexus through the Windows firewall on Private networks.
+- [ ] Every clock set from one source, to the second.
+- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on the host, any `fd_event_*.ilqp.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's, or the rehearsal's contacts come back into the party's logs.
+
+During the party:
+
+- [ ] One transmitted signal per position. Every club chip reads **Synced**; a chip reading Offline or Behind catches up by itself when the network is back.
+- [ ] Whoever takes a seat sets **Operator at the key** first.
+
+After the party, on the host:
+
+- [ ] **Club Cabrillo**, then read the header: `ENTRY-CLASS`, `CLUB`, `OPERATORS`, `IL-COUNTY`. Add your address lines if you want them, and send that one file to n9jf@arrl.net by midnight Central Time on 4 November 2026. Export every position's own Cabrillo too, and keep them as a backup.
+
+**Running the Illinois QSO Party as a club, with each position logging on its own** (if club sync is not used):
+
+Before the party, on every laptop:
+
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**.
+- [ ] Your station data: State **IL** and your **County** code.
+- [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs. Your operator name is on the Station tab.
+- [ ] Field Day Setup: **Field Day mode** on. Leave **Host a club event** off and **Join event at** empty.
+- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` file left from a rehearsal in the last four days, or its contacts come back into the party's log.
+- [ ] Rehearse on each position: log a phone contact and a CW contact, log one of them again and see it refused as a dupe, then export a Cabrillo file and read its header.
+
+During the party:
+
+- [ ] One transmitted signal per position.
+- [ ] Agree out loud which band and mode each position works. Positions logging on their own get no warning when another position has already worked a station.
+- [ ] Whoever takes a seat sets **Operator at the key** first.
+
+After the party:
+
+- [ ] Export every position's Cabrillo file.
+- [ ] Make one file: keep the first file's header, add the `QSO:` lines of every other file, and end with `END-OF-LOG:`.
+- [ ] Check the header: `ENTRY-CLASS`, `CLUB`, and one `OPERATORS` line naming everyone from all the files. Add your address lines if you want them. The claimed score is one position's; correct it or delete the line, because the sponsor rescores every log.
+- [ ] Send that one file to n9jf@arrl.net by midnight Central Time on 4 November 2026.
 
 **New York QSO Party** (the third Saturday of October, 1400Z for twelve hours: 17 October 2026, 10 AM to 10 PM Eastern):
 
