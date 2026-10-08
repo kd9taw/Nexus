@@ -52,17 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
   Nexus Remote.
 
-- **Check confirmations, for LoTW confirmations earlier versions put on the wrong contact (#400).**
+- **Check confirmations, for confirmations earlier versions put on the wrong contact (#400).**
   If you worked a station twice on one band and mode in a UTC day, the earlier contact could take
-  the later one's LoTW confirmation, or LoTW's mark that it holds the later one's upload.
-  Logbook ▸ Check confirmations downloads your whole LoTW history once and lists each contact
-  holding a LoTW confirmation or upload mark that LoTW's own records give another of your contacts,
-  or none. Each line says why it is listed and what the change keeps or costs, and starts ticked
-  only when LoTW's records decide it. Nothing changes until you press Change, and nothing is
-  uploaded. The contacts it changes are first saved, as they were, to a file beside your log, and
-  importing that file with Logbook ▸ Import ADIF puts them back. A paper card is never touched,
-  and a contact that loses a false LoTW confirmation and was never uploaded goes in your next LoTW
-  upload. It checks LoTW; eQSL and QRZ confirmations are not checked.
+  the later one's LoTW, eQSL or QRZ confirmation, or LoTW's mark that it holds the later one's
+  upload. Logbook ▸ Check confirmations downloads your whole history once from each of these
+  services you have set up, and lists under each one the contacts holding its confirmation, or
+  LoTW's upload mark, that its own records give another of your contacts, or none. Each line says
+  why it is listed and what the change keeps or costs, and starts ticked only when the service's
+  records decide it. Your QRZ logbook's copies of what LoTW, eQSL and paper cards say never count
+  as QRZ's. Nothing changes until you press Change, and nothing is uploaded. The contacts it
+  changes are first saved, as they were, to a file beside your log, and importing that file with
+  Logbook ▸ Import ADIF puts them back. A paper card is never touched, and a contact that loses a
+  false LoTW confirmation and was never uploaded goes in your next LoTW upload.
 
 - **Illinois QSO Party: a station on a county line takes one entry.** The 2026 rules count a
   station on the border of two to four counties once per county. Type its counties into the QTH
