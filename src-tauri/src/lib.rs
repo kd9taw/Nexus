@@ -20607,6 +20607,67 @@ fn lotw_access(engine: &SharedEngine) -> Result<LotwAccess, String> {
     })
 }
 
+/// What a check asks eQSL with: the account, its QTH Nickname, and the call the InBox is taken to
+/// be for. Never printed or logged: it holds the password, as the request URL built from it does.
+struct EqslAccess {
+    username: String,
+    password: String,
+    /// Set for an account with several QTHs; `None` leaves it out, as a sync does.
+    qth_nickname: Option<String>,
+    /// The Settings call, which is the check's scope; `None` judges every contact.
+    owncall: Option<String>,
+}
+
+/// The account a check of eQSL asks with: the username and QTH Nickname from Settings, and the
+/// password from the keychain, read as an eQSL sync reads them ([`download_eqsl_report_impl`]),
+/// and the Settings call.
+fn eqsl_access(engine: &SharedEngine) -> Result<EqslAccess, String> {
+    let (username, qth_nickname, owncall) = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.eqsl_username.trim().to_string(),
+            s.eqsl_qth_nickname.trim().to_string(),
+            s.mycall.trim().to_string(),
+        )
+    };
+    if username.is_empty() {
+        return Err("Set your eQSL username in Settings first.".to_string());
+    }
+    let password = eqsl_keychain()?
+        .get_password()
+        .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    Ok(EqslAccess {
+        username,
+        password,
+        qth_nickname: Some(qth_nickname).filter(|n| !n.is_empty()),
+        owncall: Some(owncall).filter(|c| !c.is_empty()),
+    })
+}
+
+/// What a check asks QRZ with: the Logbook API key, and the call the book is taken to be for.
+/// Never printed or logged: the key is the account, and the request body carries it.
+struct QrzAccess {
+    key: String,
+    /// The Settings call, which is the check's scope; `None` judges every contact.
+    owncall: Option<String>,
+}
+
+/// The key a check of QRZ asks with, from the keychain as Sync from QRZ reads it
+/// ([`sync_qrz_since`]), and the Settings call.
+fn qrz_access(engine: &SharedEngine) -> Result<QrzAccess, String> {
+    let owncall = engine_lock(engine).settings().mycall.trim().to_string();
+    let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
+        "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
+         (Settings ▸ Logbook & QSL ▸ QRZ), not your QRZ password."
+            .to_string()
+    })?;
+    Ok(QrzAccess {
+        key,
+        owncall: Some(owncall).filter(|c| !c.is_empty()),
+    })
+}
+
 /// One of LoTW's downloads, whole or not at all: its report file, through to its end marker. A
 /// check of part of a history would take a confirmation whose row was cut off for a misplaced
 /// one, so a download that stops short checks nothing.
@@ -20628,17 +20689,56 @@ fn whole_lotw_download(body: String) -> Result<String, String> {
     Ok(body)
 }
 
-/// Logbook ▸ Check confirmations, read: LoTW's whole confirmation history and its whole own-QSO
+/// eQSL's InBox, whole or not at all: its log file, through to the end of its last record. A check
+/// of part of the InBox would take a card that was cut off for a misplaced one, so a download that
+/// stops short checks nothing.
+fn whole_eqsl_download(body: String) -> Result<String, String> {
+    if !tempo_core::eqsl::is_eqsl_adif(&body) {
+        return Err(
+            "eQSL answered, but not with its InBox file, so nothing was checked. Your username \
+             and password are fine; eQSL may be returning an error page, or may have changed its \
+             format. Try again shortly."
+                .to_string(),
+        );
+    }
+    if !tempo_core::eqsl::is_complete_eqsl_body(&body) {
+        return Err(
+            "eQSL's download stopped before its end, so nothing was checked. Try again."
+                .to_string(),
+        );
+    }
+    Ok(body)
+}
+
+/// QRZ's answer to the FETCH, whole or not at all: its book, every record QRZ says it sent. A
+/// check of part of the book would take a confirmation that was cut off for a misplaced one, so
+/// an answer that stops short checks nothing. A refusal is said in QRZ's own words, which may echo
+/// the request and its key: screen and session only, as [`sync_qrz`] treats them.
+fn whole_qrz_book(answer: &str) -> Result<String, String> {
+    let fetched = tempo_core::qrz::parse_fetch(answer);
+    if !fetched.ok {
+        return Err(qrz_fetch_refused(fetched.reason).message.into_string());
+    }
+    if !tempo_core::qrz::is_whole_fetch(&fetched) {
+        return Err(
+            "QRZ's logbook download stopped before its end, so nothing was checked. Try again."
+                .to_string(),
+        );
+    }
+    Ok(fetched.adif)
+}
+
+/// Logbook ▸ Check confirmations, LoTW: its whole confirmation history and its whole own-QSO
 /// list, each asked for once in the form a full re-download asks (`qso_qslsince=1900-01-01`, and
 /// `qso_qsorxsince=1900-01-01` with no start date) and fetched by `fetch`, then checked against
 /// the log read with the Engine lock released ([`tempo_app::station::check_lotw_confirmations`]).
 /// It moves no sync cursor and writes nothing. The confirmation download, which Apply merges, and
 /// the check.
-fn confirmation_check_on(
+fn lotw_check_on(
     engine: &SharedEngine,
     access: &LotwAccess,
     fetch: &dyn Fn(&str) -> Result<String, String>,
-) -> Result<(String, tempo_core::reconcile::check::ConfirmationCheck), String> {
+) -> Result<(String, tempo_app::station::ServiceCheck), String> {
     let query = tempo_core::lotw::LotwQuery {
         username: access.username.clone(),
         password: access.password.clone(),
@@ -20659,30 +20759,94 @@ fn confirmation_check_on(
     Ok((report, check))
 }
 
-/// The Logbook's Check confirmations in flight: the one check whose download is held, from the
-/// check until Apply, Cancel, a new check or the window that ran it closing. Only the newest
-/// check started is ever held: one that lands after a newer check started, or after Cancel, is
-/// dropped as it lands.
+/// Logbook ▸ Check confirmations, eQSL: its whole InBox, asked for once from 1900 (`RcvdSince`
+/// said outright as [`tempo_core::eqsl::WHOLE_INBOX_SINCE`], since eQSL documents no meaning for a
+/// request that leaves it out), with the QTH Nickname as set and no `Archive`, so the InBox and its
+/// archive both, fetched by `fetch` (eQSL's two steps), then checked against the log read with the
+/// Engine lock released ([`tempo_app::station::check_eqsl_confirmations`]). It moves no sync cursor
+/// and writes nothing. The InBox, which Apply merges, and the check.
+fn eqsl_check_on(
+    engine: &SharedEngine,
+    access: &EqslAccess,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<(String, tempo_app::station::ServiceCheck), String> {
+    let query = tempo_core::eqsl::EqslQuery {
+        username: access.username.clone(),
+        password: access.password.clone(),
+        rcvd_since: Some(tempo_core::eqsl::WHOLE_INBOX_SINCE.to_string()),
+        qth_nickname: access.qth_nickname.clone(),
+    };
+    let inbox = whole_eqsl_download(fetch(&tempo_core::eqsl::build_inbox_url(&query))?)?;
+    let plan = tempo_app::engine::log_plan(engine);
+    let check =
+        tempo_app::station::check_eqsl_confirmations(&plan, &inbox, access.owncall.as_deref())?;
+    Ok((inbox, check))
+}
+
+/// Logbook ▸ Check confirmations, QRZ: its whole book, asked for with one bare FETCH (the request
+/// Sync from QRZ sends: Nexus sends QRZ one option at a time, and paging would take two at once,
+/// which is untested) and posted by `post`, then checked against the log read with the Engine
+/// lock released ([`tempo_app::station::check_qrz_confirmations`]). The transport's time bound is
+/// Sync's. It moves no sync cursor and writes nothing. The book, which Apply merges, and the check.
+fn qrz_check_on(
+    engine: &SharedEngine,
+    access: &QrzAccess,
+    post: &dyn Fn(String) -> Result<String, String>,
+) -> Result<(String, tempo_app::station::ServiceCheck), String> {
+    let book = whole_qrz_book(&post(tempo_core::qrz::build_fetch_body(&access.key))?)?;
+    let plan = tempo_app::engine::log_plan(engine);
+    let check =
+        tempo_app::station::check_qrz_confirmations(&plan, &book, access.owncall.as_deref())?;
+    Ok((book, check))
+}
+
+/// The services Check confirmations checks, in the order the dialog lists them and Apply merges
+/// their downloads.
+const CHECKED_SERVICES: [tempo_core::reconcile::check::Channel; 3] = [
+    tempo_core::reconcile::check::Channel::Lotw,
+    tempo_core::reconcile::check::Channel::Eqsl,
+    tempo_core::reconcile::check::Channel::Qrz,
+];
+
+/// The Logbook's Check confirmations in flight: the one check whose downloads are held, from the
+/// check until Apply, Cancel, a new check or the window that ran it closing. A check is started
+/// once ([`ConfirmationChecks::start`]), and each service's download lands in it as it arrives.
+/// Only the newest check started is ever held: a service that lands after a newer check started,
+/// or after Cancel, is dropped as it lands.
 #[derive(Default)]
 struct ConfirmationChecks(std::sync::Mutex<HeldCheck>);
 
 /// Shared with the blocking pool, where a check downloads and reads.
 type SharedConfirmationChecks = Arc<ConfirmationChecks>;
 
+/// What Apply takes of a held check: each service's download, and the lines ticked.
+type TakenCheck = (
+    Vec<(tempo_core::reconcile::check::Channel, String)>,
+    Vec<tempo_core::reconcile::check::CheckLine>,
+);
+
 #[derive(Default)]
 struct HeldCheck {
-    /// The newest check started: what a check that lands must still be, to be held.
+    /// The newest check started.
     newest: u64,
     /// The window it was started from.
     window: Option<String>,
+    /// The newest check, while it is open: its services, as each landed.
     held: Option<CheckSession>,
 }
 
 /// One check, held for its Apply.
 struct CheckSession {
     session: u64,
-    /// LoTW's confirmation download as it arrived, which Apply merges as a sync merges it. In
-    /// memory only, and never written anywhere.
+    /// Each service checked, as it landed.
+    services: Vec<HeldService>,
+}
+
+/// One service's check, held for its Apply.
+struct HeldService {
+    channel: tempo_core::reconcile::check::Channel,
+    /// The service's download as it arrived (LoTW's confirmations, eQSL's InBox, QRZ's book),
+    /// which Apply merges. In memory only, and never written anywhere.
     report: String,
     /// The lines, each with the contact as the check read it: what Apply compares a contact with.
     lines: Vec<tempo_core::reconcile::check::CheckLine>,
@@ -20706,27 +20870,40 @@ impl ConfirmationChecks {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A new check, from the window `window`: the check held, and one still downloading, are
-    /// dropped. The new check's session.
+    /// A new check, from the window `window`: the check held is dropped, and so is any service
+    /// still downloading for one. The new check's session, which each service's check names.
     fn start(&self, window: &str) -> u64 {
         let mut h = self.held();
         h.newest += 1;
         h.window = Some(window.to_string());
-        h.held = None;
+        h.held = Some(CheckSession {
+            session: h.newest,
+            services: Vec::new(),
+        });
         h.newest
     }
 
-    /// Hold a check that landed, only while it is still the newest started. Whether it is held.
-    fn hold(&self, session: CheckSession) -> bool {
+    /// Whether `session` is the check held: still open for its services to land in.
+    fn open(&self, session: u64) -> bool {
+        self.held()
+            .held
+            .as_ref()
+            .is_some_and(|s| s.session == session)
+    }
+
+    /// Hold one service's check that landed, only while `session` is still the check held. Whether
+    /// it is held. A service checked again in the same session replaces its first check.
+    fn hold(&self, session: u64, service: HeldService) -> bool {
         let mut h = self.held();
-        if h.newest != session.session {
+        let Some(held) = h.held.as_mut().filter(|s| s.session == session) else {
             return false;
-        }
-        h.held = Some(session);
+        };
+        held.services.retain(|s| s.channel != service.channel);
+        held.services.push(service);
         true
     }
 
-    /// Cancel: the check held, and one still downloading, are dropped.
+    /// Cancel: the check held, and any service still downloading for it, are dropped.
     fn cancel(&self) {
         let mut h = self.held();
         h.newest += 1;
@@ -20744,9 +20921,10 @@ impl ConfirmationChecks {
         }
     }
 
-    /// Check `session`'s download and the lines `ticked` names, taken for its Apply: the session
-    /// goes with them. Refused, keeping what is held, when `session` is not the check held or a
-    /// ticked line is not one of its lines.
+    /// Check `session`'s downloads, one per service that landed (in [`CHECKED_SERVICES`]'s order),
+    /// and the lines `ticked` names, taken for its Apply: the session goes with them. Refused,
+    /// keeping what is held, when `session` is not the check held or a ticked line is not one of
+    /// its lines.
     fn take(
         &self,
         session: u64,
@@ -20754,7 +20932,7 @@ impl ConfirmationChecks {
             tempo_core::logbook::RecordId,
             tempo_core::reconcile::check::Mark,
         )],
-    ) -> Result<(String, Vec<tempo_core::reconcile::check::CheckLine>), String> {
+    ) -> Result<TakenCheck, String> {
         let mut h = self.held();
         let Some(held) = h.held.as_ref().filter(|s| s.session == session) else {
             return Err(CHECK_GONE.to_string());
@@ -20762,20 +20940,28 @@ impl ConfirmationChecks {
         let lines = ticked
             .iter()
             .map(|&(id, mark)| {
-                held.lines
+                held.services
                     .iter()
+                    .flat_map(|s| &s.lines)
                     .find(|l| l.contact.id == Some(id) && l.mark == mark)
                     .cloned()
                     .ok_or_else(|| CHECK_LINE_UNKNOWN.to_string())
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let held = h.held.take().expect("the session was found above");
+        let mut held = h.held.take().expect("the session was found above");
         h.window = None;
-        Ok((held.report, lines))
+        let downloads = CHECKED_SERVICES
+            .iter()
+            .filter_map(|&channel| {
+                let at = held.services.iter().position(|s| s.channel == channel)?;
+                Some((channel, held.services.swap_remove(at).report))
+            })
+            .collect();
+        Ok((downloads, lines))
     }
 }
 
-/// A line's mark as the dialog names it.
+/// A line's mark as the dialog names it. A service's name is its confirmation's.
 fn check_mark_name(mark: tempo_core::reconcile::check::Mark) -> &'static str {
     use tempo_core::reconcile::check::{Channel, Mark};
     match mark {
@@ -20786,18 +20972,41 @@ fn check_mark_name(mark: tempo_core::reconcile::check::Mark) -> &'static str {
     }
 }
 
-/// One line of Logbook ▸ Check confirmations: a contact holding LoTW's confirmation, or its upload
-/// mark, that LoTW's own downloads no longer support, with the evidence and whether it starts
-/// ticked.
+/// The mark the dialog names `name`, if it names one ([`check_mark_name`]).
+fn check_mark_of(name: &str) -> Option<tempo_core::reconcile::check::Mark> {
+    use tempo_core::reconcile::check::{Channel, Mark};
+    match name {
+        "lotw" => Some(Mark::Confirmation(Channel::Lotw)),
+        "eqsl" => Some(Mark::Confirmation(Channel::Eqsl)),
+        "qrz" => Some(Mark::Confirmation(Channel::Qrz)),
+        "lotwUpload" => Some(Mark::LotwUpload),
+        _ => None,
+    }
+}
+
+/// The Connections log's name for a service's check: its sync's.
+fn check_connector(channel: tempo_core::reconcile::check::Channel) -> &'static str {
+    use tempo_core::reconcile::check::Channel;
+    match channel {
+        Channel::Lotw => "LoTW",
+        Channel::Eqsl => "eQSL",
+        Channel::Qrz => "QRZ Logbook",
+    }
+}
+
+/// One line of Logbook ▸ Check confirmations: a contact holding a service's confirmation, or
+/// LoTW's upload mark, that the service's own download no longer supports, with the evidence and
+/// whether it starts ticked.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfirmationLineDto {
     id: String,
-    /// What the line takes off: `lotw`, LoTW's confirmation; `lotwUpload`, LoTW's upload mark.
+    /// What the line takes off: `lotw`, `eqsl` or `qrz`, that service's confirmation;
+    /// `lotwUpload`, LoTW's upload mark.
     mark: &'static str,
     /// What the download says: `moved` (the row the line rests on pairs with another contact,
-    /// the sibling), `contradicted` (LoTW holds this contact itself, unconfirmed), or `orphan`
-    /// (the row pairs with no contact).
+    /// the sibling), `contradicted` (the service holds this contact itself, unconfirmed), or
+    /// `orphan` (the row pairs with no contact).
     class: &'static str,
     call: String,
     when_unix: u64,
@@ -20809,7 +21018,7 @@ struct ConfirmationLineDto {
     /// The contact that row pairs with now.
     sibling_id: Option<String>,
     sibling_unix: Option<u64>,
-    /// The time of LoTW's own unconfirmed record of this contact (`contradicted` only).
+    /// The time of the service's own unconfirmed record of this contact (`contradicted` only).
     own_unix: Option<u64>,
     /// The evidence decides it: the line starts ticked.
     decisive: bool,
@@ -20821,14 +21030,15 @@ struct ConfirmationLineDto {
     remove_submitted: Vec<String>,
     /// The contact holds a paper card, which the change keeps, with its award credit.
     card_held: bool,
-    /// Owed to LoTW once every line listed for this contact is applied: it goes in the next LoTW
-    /// upload.
+    /// Owed to LoTW once every line listed for this contact is applied, and not before: it goes in
+    /// the next LoTW upload because of the change.
     owed_after: bool,
 }
 
 impl ConfirmationLineDto {
-    /// `line` as the dialog shows it; `lines` are the check's, for what the contact is once each
-    /// of its lines is applied. `None` for a contact with no id, which no Apply could name.
+    /// `line` as the dialog shows it; `lines` are its service's check's, for what the contact is
+    /// once each of its lines is applied. `None` for a contact with no id, which no Apply could
+    /// name.
     fn of(
         line: &tempo_core::reconcile::check::CheckLine,
         lines: &[tempo_core::reconcile::check::CheckLine],
@@ -20868,32 +21078,45 @@ impl ConfirmationLineDto {
             remove_granted: line.remove.granted.clone(),
             remove_submitted: line.remove.submitted.clone(),
             card_held: line.card_held(),
-            owed_after: tempo_app::station::owed_to_lotw(&applied),
+            owed_after: tempo_app::station::owed_to_lotw(&applied)
+                && !tempo_app::station::owed_to_lotw(&line.contact),
         })
     }
 }
 
-/// What Logbook ▸ Check confirmations found.
+/// What Logbook ▸ Check confirmations found for one service.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfirmationCheckDto {
-    /// This check: what its Apply names.
+    /// The check this service was checked in: what its Apply names.
     session: u64,
+    /// `lotw`, `eqsl` or `qrz`.
+    service: &'static str,
+    /// How many records the service's download held: LoTW's confirmations, eQSL's cards, QRZ's
+    /// book. Said in the Connections log, where a bench can hold it against the service's own
+    /// count.
+    records: usize,
     /// Newest first; a contact's confirmation line before its upload line.
     lines: Vec<ConfirmationLineDto>,
-    /// Contacts LoTW confirms that lack its confirmation: Apply adds it.
-    gains: usize,
-    /// LoTW confirmations the check leaves alone: no LoTW row within a day of them, or logged
-    /// under another call than the one LoTW was asked about.
+    /// The contacts the service confirms that lack its confirmation: Apply adds it.
+    gain_ids: Vec<String>,
+    /// The service's confirmations the check leaves alone: no row of it within a day of them, or
+    /// logged under another call than the one in Settings.
     unreached: usize,
     out_of_scope: usize,
-    /// LoTW upload marks it leaves alone, the same two ways.
+    /// LoTW upload marks it leaves alone, the same two ways (LoTW only).
     uploads_unreached: usize,
     uploads_out_of_scope: usize,
 }
 
 impl ConfirmationCheckDto {
-    fn of(session: u64, check: &tempo_core::reconcile::check::ConfirmationCheck) -> Self {
+    fn of(
+        session: u64,
+        channel: tempo_core::reconcile::check::Channel,
+        records: usize,
+        found: &tempo_app::station::ServiceCheck,
+    ) -> Self {
+        let check = &found.check;
         let mut lines: Vec<ConfirmationLineDto> = check
             .lines
             .iter()
@@ -20903,8 +21126,10 @@ impl ConfirmationCheckDto {
         lines.sort_by(|a, b| b.when_unix.cmp(&a.when_unix));
         Self {
             session,
+            service: check_mark_name(tempo_core::reconcile::check::Mark::Confirmation(channel)),
+            records,
             lines,
-            gains: check.gains.len(),
+            gain_ids: found.gains.iter().map(|id| id.to_string()).collect(),
             unreached: check.flags.unreached,
             out_of_scope: check.flags.out_of_scope,
             uploads_unreached: check.uploads.unreached,
@@ -20931,15 +21156,22 @@ impl TickedLineDto {
         ),
         String,
     > {
-        use tempo_core::reconcile::check::{Channel, Mark};
         let id = self.id.parse().map_err(|_| LOG_ROW_GONE.to_string())?;
-        let mark = match self.mark.as_str() {
-            "lotw" => Mark::Confirmation(Channel::Lotw),
-            "lotwUpload" => Mark::LotwUpload,
-            _ => return Err(CHECK_LINE_UNKNOWN.to_string()),
-        };
+        let mark = check_mark_of(&self.mark).ok_or_else(|| CHECK_LINE_UNKNOWN.to_string())?;
         Ok((id, mark))
     }
+}
+
+/// What Apply in Check confirmations made of one service's check.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceAppliedDto {
+    /// `lotw`, `eqsl` or `qrz`.
+    service: &'static str,
+    /// Contacts whose confirmation from this service was taken off.
+    confirmations: usize,
+    /// Contacts that gained the service's confirmation from its download.
+    gained: usize,
 }
 
 /// What Apply in Check confirmations made.
@@ -20948,34 +21180,39 @@ impl TickedLineDto {
 struct ConfirmationAppliedDto {
     /// The lines the operator ticked.
     ticked: usize,
-    /// Contacts whose LoTW confirmation was taken off, and whose upload mark was cleared: fewer
-    /// than ticked when a contact changed after the check.
-    confirmations: usize,
+    /// Each service checked, LoTW, eQSL, QRZ: fewer confirmations taken off than ticked when a
+    /// contact changed after the check.
+    services: Vec<ServiceAppliedDto>,
+    /// Contacts whose LoTW upload mark was cleared.
     uploads: usize,
-    /// What merging the download added, as a sync counts it.
-    newly_confirmed: usize,
-    newly_credited: usize,
     /// The file holding the changed contacts as they were: Logbook ▸ Import ADIF puts them back.
     before_file: Option<String>,
 }
 
-/// A check started from the window `window`, run and held: [`confirmation_check_on`] with the
-/// account `access` reads, then held for its Apply unless a newer check or Cancel came first.
+/// One service's check in the check `session`: unless that check is no longer held, `run`
+/// downloads and checks (the service's `*_check_on`, with the account it reads), and what it
+/// found is held for the check's Apply, unless Cancel, a newer check or its window closing came
+/// first.
 fn checked_and_held(
     checks: &ConfirmationChecks,
-    window: &str,
-    engine: &SharedEngine,
-    access: impl FnOnce(&SharedEngine) -> Result<LotwAccess, String>,
-    fetch: &dyn Fn(&str) -> Result<String, String>,
+    session: u64,
+    channel: tempo_core::reconcile::check::Channel,
+    run: impl FnOnce() -> Result<(String, tempo_app::station::ServiceCheck), String>,
 ) -> Result<ConfirmationCheckDto, String> {
-    let session = checks.start(window);
-    let (report, check) = confirmation_check_on(engine, &access(engine)?, fetch)?;
-    let dto = ConfirmationCheckDto::of(session, &check);
-    let held = checks.hold(CheckSession {
+    if !checks.open(session) {
+        return Err(CHECK_CANCELLED.to_string());
+    }
+    let (report, found) = run()?;
+    let records = tempo_core::logbook::parse_adif(&report).len();
+    let dto = ConfirmationCheckDto::of(session, channel, records, &found);
+    let held = checks.hold(
         session,
-        report,
-        lines: check.lines,
-    });
+        HeldService {
+            channel,
+            report,
+            lines: found.check.lines,
+        },
+    );
     if !held {
         return Err(CHECK_CANCELLED.to_string());
     }
@@ -20983,7 +21220,7 @@ fn checked_and_held(
 }
 
 /// Apply of check `session`, the lines `ticked` names
-/// ([`tempo_app::logwrite::apply_confirmation_check`]): its download and lines taken from what is
+/// ([`tempo_app::logwrite::apply_confirmation_check`]): its downloads and lines taken from what is
 /// held, so the check is gone whatever comes of it.
 fn applied_from(
     checks: &ConfirmationChecks,
@@ -21000,52 +21237,85 @@ fn applied_from(
         .map(TickedLineDto::parse)
         .collect::<Result<Vec<_>, String>>()
         .and_then(|ticked| checks.take(session, &ticked));
-    let (report, lines) = match taken {
+    let (downloads, lines) = match taken {
         Ok(taken) => taken,
         Err(e) => return (Err(e), tempo_app::logstore::Durability::default()),
     };
     let (made, durability) =
-        tempo_app::logwrite::apply_confirmation_check(engine, &report, &lines, now_unix);
+        tempo_app::logwrite::apply_confirmation_check(engine, &downloads, &lines, now_unix);
     let made = made.map(|m| ConfirmationAppliedDto {
         ticked: ticked.len(),
-        confirmations: m.confirmations,
+        services: m
+            .services
+            .iter()
+            .map(|s| ServiceAppliedDto {
+                service: check_mark_name(tempo_core::reconcile::check::Mark::Confirmation(
+                    s.channel,
+                )),
+                confirmations: s.confirmations,
+                gained: s.gained,
+            })
+            .collect(),
         uploads: m.uploads,
-        newly_confirmed: m.merged.newly_confirmed,
-        newly_credited: m.merged.newly_credited,
         before_file: m.before_file.map(|p| p.display().to_string()),
     });
     (made, durability)
 }
 
-/// Logbook ▸ Check confirmations: LoTW's whole confirmation history and its whole own-QSO list,
-/// downloaded once on the blocking pool (no sync cursor moves), and checked against the log read
-/// with the Engine lock released ([`confirmation_check_on`]). It changes nothing: the download is
-/// held for the operator's Apply ([`apply_confirmation_check`]) or Cancel. The list.
+/// Logbook ▸ Check confirmations, started from the window it runs in: a new check, the one held
+/// and any service still downloading for it dropped. Each service is then checked in it
+/// ([`confirmation_check`]). Its session.
+#[tauri::command]
+async fn start_confirmation_check(
+    checks: State<'_, SharedConfirmationChecks>,
+    window: tauri::WebviewWindow,
+) -> Result<u64, String> {
+    Ok(checks.start(window.label()))
+}
+
+/// Logbook ▸ Check confirmations, one service (`lotw`, `eqsl` or `qrz`) in the check `session`:
+/// its whole history downloaded once on the blocking pool (no sync cursor moves), with the account
+/// Settings and the keychain hold for it, and checked against the log read with the Engine lock
+/// released ([`lotw_check_on`], [`eqsl_check_on`], [`qrz_check_on`]). It changes nothing: the
+/// download is held for the operator's Apply ([`apply_confirmation_check`]) or Cancel. The
+/// service's list.
 #[tauri::command]
 async fn confirmation_check(
     state: State<'_, SharedEngine>,
     checks: State<'_, SharedConfirmationChecks>,
-    window: tauri::WebviewWindow,
+    session: u64,
+    service: String,
 ) -> Result<ConfirmationCheckDto, String> {
-    let (engine, checks, label) = (
-        Arc::clone(&state),
-        Arc::clone(&checks),
-        window.label().to_string(),
-    );
+    use tempo_core::reconcile::check::{Channel, Mark};
+    let Some(Mark::Confirmation(channel)) = check_mark_of(&service) else {
+        return Err(format!(
+            "Check confirmations has no service called {service}."
+        ));
+    };
+    let (engine, checks) = (Arc::clone(&state), Arc::clone(&checks));
     let checked = tauri::async_runtime::spawn_blocking(move || {
-        checked_and_held(&checks, &label, &engine, lotw_access, &|url| {
-            propagation::live::lotw::fetch_report(url)
+        checked_and_held(&checks, session, channel, || match channel {
+            Channel::Lotw => lotw_check_on(&engine, &lotw_access(&engine)?, &|url| {
+                propagation::live::lotw::fetch_report(url)
+            }),
+            Channel::Eqsl => eqsl_check_on(&engine, &eqsl_access(&engine)?, &|url| {
+                propagation::live::eqsl::fetch_inbox(url)
+            }),
+            Channel::Qrz => qrz_check_on(&engine, &qrz_access(&engine)?, &|body| {
+                propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+            }),
         })
     })
     .await
     .map_err(|e| format!("the check did not finish: {e}"))?;
     conn_logged(
-        "LoTW",
+        check_connector(channel),
         |c: &ConfirmationCheckDto| {
             format!(
-                "check confirmations: {} listed, {} would gain a confirmation",
+                "check confirmations: {} records, {} listed, {} would gain a confirmation",
+                c.records,
                 c.lines.len(),
-                c.gains
+                c.gain_ids.len()
             )
         },
         checked,
@@ -21054,8 +21324,8 @@ async fn confirmation_check(
 
 /// Apply in Logbook ▸ Check confirmations: the lines the operator ticked, each only while its
 /// contact still holds what the line showed ([`tempo_app::logwrite::apply_confirmation_check`]:
-/// the before-file first, then the download merged, then the changes). Nothing is uploaded. What
-/// it made, once it is on disk.
+/// the before-file first, then each service's download merged, then the changes). Nothing is
+/// uploaded. What it made, once it is on disk.
 #[tauri::command]
 async fn apply_confirmation_check(
     state: State<'_, SharedEngine>,
@@ -21068,8 +21338,8 @@ async fn apply_confirmation_check(
     durable_command(move || applied_from(&checks, session, &ticked, &engine, now)).await
 }
 
-/// Cancel in Logbook ▸ Check confirmations: the check held, and one still downloading, are
-/// dropped. Nothing changes.
+/// Cancel in Logbook ▸ Check confirmations: the check held, and any service still downloading
+/// for it, are dropped. Nothing changes.
 #[tauri::command]
 async fn cancel_confirmation_check(
     checks: State<'_, SharedConfirmationChecks>,
@@ -33780,6 +34050,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_activation,
             park_state_review,
             apply_park_states,
+            start_confirmation_check,
             confirmation_check,
             apply_confirmation_check,
             cancel_confirmation_check,
@@ -42771,6 +43042,151 @@ mod tests {
         }
     }
 
+    /// LoTW's check, against the fake `lotw`, in the check `session` ([`crate::lotw_check_on`]).
+    fn lotw_checked(
+        checks: &crate::ConfirmationChecks,
+        session: u64,
+        engine: &SharedEngine,
+        lotw: &FakeLotw,
+    ) -> Result<crate::ConfirmationCheckDto, String> {
+        crate::checked_and_held(
+            checks,
+            session,
+            tempo_core::reconcile::check::Channel::Lotw,
+            || crate::lotw_check_on(engine, &test_lotw(), &|url| lotw.fetch(url)),
+        )
+    }
+
+    /// The eQSL account the tests check with, for a profile with its own QTH Nickname. It is no
+    /// one's: the fake below answers every request.
+    fn test_eqsl() -> crate::EqslAccess {
+        crate::EqslAccess {
+            username: "k2def-test".into(),
+            password: "not-a-password".into(),
+            qth_nickname: Some("Home".into()),
+            owncall: Some("K2DEF".into()),
+        }
+    }
+
+    /// eQSL's InBox as its download reads: the banner, then `rows`, the cards sent to K2DEF.
+    fn eqsl_answer(rows: &[String]) -> String {
+        format!(
+            "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<ADIF_Ver:5>3.1.6\n\
+             <EOH>\n{}",
+            rows.concat()
+        )
+    }
+
+    /// A fake eQSL: its InBox answers with `inbox`, and every request it is asked is kept, in order.
+    struct FakeEqsl {
+        inbox: String,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeEqsl {
+        fn answering(inbox: String) -> Self {
+            Self {
+                inbox,
+                asked: Default::default(),
+            }
+        }
+
+        fn fetch(&self, url: &str) -> Result<String, String> {
+            self.asked.borrow_mut().push(url.to_string());
+            if url.starts_with(tempo_core::eqsl::EQSL_INBOX_URL) {
+                Ok(self.inbox.clone())
+            } else {
+                Err(format!("not a request eQSL answers: {url}"))
+            }
+        }
+    }
+
+    /// eQSL's check, against the fake `eqsl`, in the check `session` ([`crate::eqsl_check_on`]).
+    fn eqsl_checked(
+        checks: &crate::ConfirmationChecks,
+        session: u64,
+        engine: &SharedEngine,
+        eqsl: &FakeEqsl,
+    ) -> Result<crate::ConfirmationCheckDto, String> {
+        crate::checked_and_held(
+            checks,
+            session,
+            tempo_core::reconcile::check::Channel::Eqsl,
+            || crate::eqsl_check_on(engine, &test_eqsl(), &|url| eqsl.fetch(url)),
+        )
+    }
+
+    /// The QRZ Logbook key the tests check with. It is no one's: the fake below answers.
+    fn test_qrz() -> crate::QrzAccess {
+        crate::QrzAccess {
+            key: "not-a-key".into(),
+            owncall: Some("K2DEF".into()),
+        }
+    }
+
+    /// QRZ's answer to a FETCH: the result, the count, and the book, its brackets escaped as QRZ
+    /// sends them.
+    fn qrz_answer(rows: &[String]) -> String {
+        format!(
+            "RESULT=OK&COUNT={}&ADIF={}",
+            rows.len(),
+            rows.concat().replace('<', "&lt;").replace('>', "&gt;")
+        )
+    }
+
+    /// A fake QRZ Logbook: a FETCH answers with `answer`, and every body it is posted is kept, in
+    /// order.
+    struct FakeQrz {
+        answer: String,
+        posted: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeQrz {
+        fn answering(answer: String) -> Self {
+            Self {
+                answer,
+                posted: Default::default(),
+            }
+        }
+
+        fn post(&self, body: String) -> Result<String, String> {
+            self.posted.borrow_mut().push(body.clone());
+            if body.contains("&ACTION=FETCH") {
+                Ok(self.answer.clone())
+            } else {
+                Err("not a request this fake answers".into())
+            }
+        }
+    }
+
+    /// QRZ's check, against the fake `qrz`, in the check `session` ([`crate::qrz_check_on`]).
+    fn qrz_checked(
+        checks: &crate::ConfirmationChecks,
+        session: u64,
+        engine: &SharedEngine,
+        qrz: &FakeQrz,
+    ) -> Result<crate::ConfirmationCheckDto, String> {
+        crate::checked_and_held(
+            checks,
+            session,
+            tempo_core::reconcile::check::Channel::Qrz,
+            || crate::qrz_check_on(engine, &test_qrz(), &|body| qrz.post(body)),
+        )
+    }
+
+    /// What Apply says it made of one service's check.
+    fn applied(
+        service: &'static str,
+        confirmations: usize,
+        gained: usize,
+    ) -> crate::ServiceAppliedDto {
+        crate::ServiceAppliedDto {
+            service,
+            confirmations,
+            gained,
+        }
+    }
+
     /// `log` on a store of the test's own, imported as Logbook ▸ Import ADIF imports a file.
     fn store_holding(
         tag: &str,
@@ -42906,10 +43322,8 @@ mod tests {
         let (dir, engine, lotw) = check_scene("check-lists");
         let checks = crate::ConfirmationChecks::default();
         let before = engine.stored_records();
-        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
-            lotw.fetch(url)
-        })
-        .expect("the check reads");
+        let session = checks.start("main");
+        let dto = lotw_checked(&checks, session, &engine, &lotw).expect("the check reads");
         let seen: Vec<_> = dto
             .lines
             .iter()
@@ -42933,9 +43347,10 @@ mod tests {
                 ("W1AW", "lotwUpload", "moved", true, None, true),
             ]
         );
+        let late = stored_at(&engine, "W1AW", "180000").id.expect("an id");
         assert_eq!(
-            (dto.gains, dto.unreached, dto.out_of_scope),
-            (1, 1, 0),
+            (dto.gain_ids.clone(), dto.unreached, dto.out_of_scope),
+            (vec![late.to_string()], 1, 0),
             "W1AW at 18:00 gains; W9IMP's mark is counted"
         );
         assert_eq!(
@@ -42970,14 +43385,8 @@ mod tests {
             .expect("on disk");
         let made = made.expect("applied");
         assert_eq!(
-            (
-                made.ticked,
-                made.confirmations,
-                made.uploads,
-                made.newly_confirmed,
-                made.newly_credited
-            ),
-            (3, 2, 1, 1, 1)
+            (made.ticked, made.services.as_slice(), made.uploads),
+            (3, &[applied("lotw", 2, 1)][..], 1)
         );
         assert_eq!(
             made.before_file,
@@ -43028,15 +43437,14 @@ mod tests {
     /// when Cancel comes is dropped as it lands.
     #[test]
     fn cancelling_the_check_changes_nothing() {
+        use tempo_core::reconcile::check::Channel;
         let (dir, engine, lotw) = check_scene("check-cancel");
         let checks = crate::ConfirmationChecks::default();
         let before = engine.stored_records();
         let files = || std::fs::read_dir(&dir).unwrap().count();
         let folder = files();
-        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
-            lotw.fetch(url)
-        })
-        .expect("the check reads");
+        let session = checks.start("main");
+        let dto = lotw_checked(&checks, session, &engine, &lotw).expect("the check reads");
         assert!(
             !decisive(&dto).is_empty(),
             "premise: there is something to apply"
@@ -43051,13 +43459,10 @@ mod tests {
             checks.cancel();
             lotw.fetch(url)
         };
-        let landed = crate::checked_and_held(
-            &checks,
-            "main",
-            &engine,
-            |_| Ok(test_lotw()),
-            &cancelled_meanwhile,
-        );
+        let session = checks.start("main");
+        let landed = crate::checked_and_held(&checks, session, Channel::Lotw, || {
+            crate::lotw_check_on(&engine, &test_lotw(), &cancelled_meanwhile)
+        });
         assert_eq!(landed, Err(crate::CHECK_CANCELLED.to_string()));
         assert_eq!(
             engine.stored_records(),
@@ -43068,42 +43473,95 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// ★ The check uploads nothing and moves no cursor. LoTW is asked exactly twice, in the form
-    /// a full re-download asks: the whole confirmation history for the Settings call, and the
-    /// whole own-QSO list with no start date. Apply asks nothing (it is handed no transport).
-    /// Nothing is queued to a connector, and neither the LoTW nor the eQSL sync cursor moves.
+    /// ★ The check uploads nothing and moves no cursor, for each service. Each is asked once for
+    /// the whole of what it holds: LoTW twice, in the form a full re-download asks (the whole
+    /// confirmation history for the Settings call, and the whole own-QSO list with no start
+    /// date); eQSL for its InBox from 1900, said outright, for the QTH Nickname set; QRZ with one
+    /// bare FETCH of the whole book. Apply asks nothing (it is handed no transport). Nothing is
+    /// queued to a connector, and no sync cursor moves: not LoTW's, eQSL's or QRZ's.
     #[test]
     fn the_check_uploads_nothing_and_moves_no_cursor() {
         let (dir, engine, lotw) = check_scene("check-no-upload");
+        let eqsl = FakeEqsl::answering(eqsl_answer(&[check_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180100",
+            "<EQSL_QSL_RCVD:1>Y",
+        )]));
+        let qrz = FakeQrz::answering(qrz_answer(&[check_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180000",
+            "<APP_QRZLOG_STATUS:1>C",
+        )]));
         {
             let mut eng = engine.lock().unwrap();
             eng.set_lotw_cursor("2026-09-30 12:00:00".into());
             eng.set_eqsl_cursor("20260930".into());
+            eng.set_qrz_sync_cursor(1_790_000_000);
             eng.take_pending_uploads();
         }
         let checks = crate::ConfirmationChecks::default();
-        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
-            lotw.fetch(url)
-        })
-        .expect("the check reads");
+        let session = checks.start("main");
+        let found = [
+            lotw_checked(&checks, session, &engine, &lotw),
+            eqsl_checked(&checks, session, &engine, &eqsl),
+            qrz_checked(&checks, session, &engine, &qrz),
+        ]
+        .map(|dto| dto.expect("the check reads"));
+        assert_eq!(
+            found.each_ref().map(|dto| (dto.service, dto.records)),
+            [("lotw", 4), ("eqsl", 1), ("qrz", 1)],
+            "each download's records, as the Connections log says them"
+        );
+        let ticked: Vec<crate::TickedLineDto> = found.iter().flat_map(decisive).collect();
         let (made, durability) =
-            crate::applied_from(&checks, dto.session, &decisive(&dto), &engine, CHECKED_AT);
+            crate::applied_from(&checks, session, &ticked, &engine, CHECKED_AT);
         durability
             .wait(tempo_app::logstore::DURABLE_WAIT)
             .expect("on disk");
-        made.expect("applied");
+        assert_eq!(
+            made.expect("applied").services,
+            [
+                applied("lotw", 2, 1),
+                applied("eqsl", 0, 1),
+                applied("qrz", 0, 1)
+            ],
+            "W1AW at 18:00 gains each service's confirmation"
+        );
 
         let mut eng = engine.lock().unwrap();
         assert!(eng.take_pending_uploads().is_empty(), "nothing is queued");
         assert_eq!(
             (
                 eng.settings().lotw_last_qsl.as_str(),
-                eng.settings().eqsl_last_sync.as_str()
+                eng.settings().eqsl_last_sync.as_str(),
+                eng.settings().qrz_last_sync_unix
             ),
-            ("2026-09-30 12:00:00", "20260930"),
+            ("2026-09-30 12:00:00", "20260930", 1_790_000_000),
             "no cursor moved"
         );
         drop(eng);
+        let inbox = eqsl.asked.borrow();
+        assert_eq!(inbox.len(), 1, "one InBox download, and nothing else");
+        for part in [
+            "UserName=k2def-test",
+            "&QTHNickname=Home",
+            "&RcvdSince=190001010000",
+        ] {
+            assert!(inbox[0].contains(part), "the InBox: {part}");
+        }
+        assert!(
+            !inbox[0].contains("Archive"),
+            "the InBox and its archive, both"
+        );
+        assert_eq!(
+            *qrz.posted.borrow(),
+            ["KEY=not-a-key&ACTION=FETCH"],
+            "one bare FETCH of the whole book, and nothing else"
+        );
         let asked = lotw.asked.borrow();
         assert_eq!(asked.len(), 2, "two downloads, and nothing else: {asked:?}");
         for part in [
@@ -43185,10 +43643,8 @@ mod tests {
             asked: std::cell::RefCell::new(Vec::new()),
         };
         let checks = crate::ConfirmationChecks::default();
-        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
-            lotw.fetch(url)
-        })
-        .expect("the check reads");
+        let session = checks.start("main");
+        let dto = lotw_checked(&checks, session, &engine, &lotw).expect("the check reads");
         assert_eq!(decisive(&dto).len(), 1, "{:?}", dto.lines);
         let (made, durability) =
             crate::applied_from(&checks, dto.session, &decisive(&dto), &engine, CHECKED_AT);
@@ -43211,42 +43667,235 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// One check at a time is held: a check that lands after a newer one started is dropped as
-    /// it lands, and so is a check whose window closed while it downloaded, or after.
+    /// One check at a time is held, each service landing in it as it arrives: a service that lands
+    /// after a newer check started is dropped as it lands, and so is one whose check's window
+    /// closed while it downloaded, or after.
     #[test]
     fn only_the_newest_check_of_an_open_window_is_held() {
+        use tempo_core::reconcile::check::Channel;
         let checks = crate::ConfirmationChecks::default();
-        let session = |session| crate::CheckSession {
-            session,
+        let service = |channel| crate::HeldService {
+            channel,
             report: String::new(),
             lines: Vec::new(),
         };
+        let held = |session| {
+            checks
+                .take(session, &[])
+                .map(|(downloads, _)| downloads.into_iter().map(|(c, _)| c).collect::<Vec<_>>())
+        };
         let first = checks.start("main");
         let second = checks.start("main");
-        assert!(!checks.hold(session(first)), "a newer check started");
-        assert!(checks.hold(session(second)));
-        checks.window_closed("logbook");
         assert!(
-            checks.take(second, &[]).is_ok(),
-            "another window closing leaves it"
+            !checks.hold(first, service(Channel::Lotw)),
+            "a newer check started"
         );
-        let third = checks.start("logbook");
-        assert!(checks.hold(session(third)));
+        assert!(checks.hold(second, service(Channel::Qrz)));
+        assert!(checks.hold(second, service(Channel::Lotw)));
         checks.window_closed("logbook");
         assert_eq!(
-            checks.take(third, &[]).map(|_| ()),
+            held(second),
+            Ok(vec![Channel::Lotw, Channel::Qrz]),
+            "another window closing leaves it; Apply merges LoTW's first"
+        );
+        let third = checks.start("logbook");
+        assert!(checks.hold(third, service(Channel::Eqsl)));
+        checks.window_closed("logbook");
+        assert_eq!(
+            held(third),
             Err(crate::CHECK_GONE.to_string()),
             "its window closed"
         );
         let fourth = checks.start("logbook");
         checks.window_closed("logbook");
         assert!(
-            !checks.hold(session(fourth)),
+            !checks.hold(fourth, service(Channel::Lotw)),
             "its window closed while it downloaded"
         );
     }
 
-    /// Logbook ▸ Check confirmations reaches the backend only through its three commands, each
+    /// ★ Each service's lines change only as ticked. 1.17.0 put LoTW's, eQSL's and QRZ's
+    /// confirmations of W1AW's 18:00 contact on its 06:00 one, and on K1ABC, never uploaded, eQSL's
+    /// card of a 15:00 QSO this log lacks. Each service's check names it, and its lines and gains.
+    /// The operator ticks 06:00's eQSL and QRZ lines and leaves its LoTW line: 06:00 loses those
+    /// two and keeps LoTW's confirmation with its DXCC, K1ABC keeps its card, and 18:00 gains each
+    /// service's confirmation. A line of eQSL or QRZ never says its contact goes in the next LoTW
+    /// upload: neither confirmation gave award credit, so taking one off owes LoTW nothing.
+    #[test]
+    fn each_services_check_changes_only_the_lines_ticked() {
+        use tempo_core::reconcile::check::replay;
+        let lotw = FakeLotw {
+            report: lotw_answer(&[check_row(
+                "W1AW",
+                "20m",
+                "FT8",
+                "180200",
+                "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            )]),
+            own: lotw_answer(&[]),
+            asked: std::cell::RefCell::new(Vec::new()),
+        };
+        let eqsl = FakeEqsl::answering(eqsl_answer(&[
+            check_row("W1AW", "20m", "FT8", "180100", "<EQSL_QSL_RCVD:1>Y"),
+            check_row("K1ABC", "20m", "FT8", "150000", "<EQSL_QSL_RCVD:1>Y"),
+        ]));
+        let book = [
+            check_row("W1AW", "20m", "FT8", "180000", "<APP_QRZLOG_STATUS:1>C"),
+            check_row("W1AW", "20m", "FT8", "060000", ""),
+        ];
+        let qrz = FakeQrz::answering(qrz_answer(&book));
+        let mut log = tempo_core::logbook::parse_adif(
+            &[
+                check_row("W1AW", "20m", "FT8", "060000", ""),
+                check_row("W1AW", "20m", "FT8", "180000", ""),
+                check_row("K1ABC", "20m", "FT8", "100000", ""),
+            ]
+            .concat(),
+        );
+        for text in [&lotw.report, &eqsl.inbox, &book.concat()] {
+            log = replay::left_by_1_17(log, &tempo_core::logbook::report_rows(text));
+        }
+        let (dir, engine) = store_holding("check-each-service", &log);
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let found = [
+            lotw_checked(&checks, session, &engine, &lotw),
+            eqsl_checked(&checks, session, &engine, &eqsl),
+            qrz_checked(&checks, session, &engine, &qrz),
+        ]
+        .map(|dto| dto.expect("the check reads"));
+        let late = stored_at(&engine, "W1AW", "180000");
+        let gains = vec![late.id.expect("an id").to_string()];
+        let lines = |dto: &crate::ConfirmationCheckDto| -> Vec<(String, &'static str, bool, bool)> {
+            dto.lines
+                .iter()
+                .map(|l| (l.call.clone(), l.mark, l.decisive, l.owed_after))
+                .collect()
+        };
+        let line =
+            |call: &str, mark, decisive, owed_after| (call.to_string(), mark, decisive, owed_after);
+        assert_eq!(
+            found
+                .each_ref()
+                .map(|dto| (dto.service, lines(dto), dto.gain_ids.clone())),
+            [
+                (
+                    "lotw",
+                    vec![line("W1AW", "lotw", true, true)],
+                    gains.clone()
+                ),
+                (
+                    "eqsl",
+                    vec![
+                        line("K1ABC", "eqsl", false, false),
+                        line("W1AW", "eqsl", true, false)
+                    ],
+                    gains.clone()
+                ),
+                ("qrz", vec![line("W1AW", "qrz", true, false)], gains.clone()),
+            ],
+            "only LoTW's line costs 06:00 its upload to LoTW"
+        );
+
+        let before = engine.stored_records();
+        let ticked: Vec<crate::TickedLineDto> = found[1..].iter().flat_map(decisive).collect();
+        let (made, durability) =
+            crate::applied_from(&checks, session, &ticked, &engine, CHECKED_AT);
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("on disk");
+        let made = made.expect("applied");
+        assert_eq!(
+            (made.ticked, made.services.as_slice(), made.uploads),
+            (
+                2,
+                &[
+                    applied("lotw", 0, 1),
+                    applied("eqsl", 1, 1),
+                    applied("qrz", 1, 1)
+                ][..],
+                0
+            )
+        );
+        let early = stored_at(&engine, "W1AW", "060000");
+        let mut expected = before
+            .iter()
+            .find(|r| r.id == early.id)
+            .cloned()
+            .expect("held before");
+        assert!(
+            expected.qsl_rcvd.lotw && expected.credit_granted == ["DXCC"],
+            "premise: LoTW's unticked line has something to keep: {expected:?}"
+        );
+        expected.qsl_rcvd.eqsl = false;
+        expected.qsl_rcvd.qrz = false;
+        assert_eq!(
+            early, expected,
+            "06:00 loses eQSL's and QRZ's confirmations, and keeps LoTW's with its DXCC"
+        );
+        let k1abc = stored_at(&engine, "K1ABC", "100000");
+        assert_eq!(
+            Some(&k1abc),
+            before.iter().find(|r| r.call == "K1ABC"),
+            "K1ABC keeps its card"
+        );
+        let late = stored_at(&engine, "W1AW", "180000");
+        assert!(
+            late.qsl_rcvd.lotw
+                && late.qsl_rcvd.eqsl
+                && late.qsl_rcvd.qrz
+                && late.credit_granted == ["DXCC"],
+            "18:00 gains each service's confirmation: {late:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A download that stops short checks nothing, and nothing of it is held: eQSL's InBox cut off
+    /// inside its last card, QRZ's answer holding fewer records than its count says, and QRZ
+    /// refusing the FETCH, in its own words.
+    #[test]
+    fn a_download_that_stops_short_checks_nothing() {
+        let (dir, engine, _) = check_scene("check-cut-short");
+        let inbox = eqsl_answer(&[check_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180100",
+            "<EQSL_QSL_RCVD:1>Y",
+        )]);
+        let cut_inbox = FakeEqsl::answering(inbox[..inbox.len() - 7].to_string());
+        let book = [
+            check_row("W1AW", "20m", "FT8", "180000", "<APP_QRZLOG_STATUS:1>C"),
+            check_row("K1ABC", "20m", "FT8", "100000", ""),
+        ];
+        let cut_book = FakeQrz::answering(qrz_answer(&book).replace("COUNT=2", "COUNT=3"));
+        let refused = FakeQrz::answering("RESULT=FAIL&REASON=invalid+api+key".into());
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        assert_eq!(
+            eqsl_checked(&checks, session, &engine, &cut_inbox),
+            Err(
+                "eQSL's download stopped before its end, so nothing was checked. Try again."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            qrz_checked(&checks, session, &engine, &cut_book),
+            Err(
+                "QRZ's logbook download stopped before its end, so nothing was checked. Try again."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            qrz_checked(&checks, session, &engine, &refused),
+            Err("invalid api key".to_string())
+        );
+        let (downloads, _) = checks.take(session, &[]).expect("the check is still open");
+        assert!(downloads.is_empty(), "nothing was held");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Logbook ▸ Check confirmations reaches the backend only through its four commands, each
     /// DEFINED as an `async fn` — so none runs on the UI thread, and the census scans above read
     /// every one of them — and REGISTERED: a name missing from `generate_handler!` fails at
     /// runtime with nothing at compile time to catch it.
@@ -43261,6 +43910,7 @@ mod tests {
             .expect("the end of the handler list")
             .0;
         for name in [
+            "start_confirmation_check",
             "confirmation_check",
             "apply_confirmation_check",
             "cancel_confirmation_check",

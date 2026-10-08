@@ -16,6 +16,10 @@
 /// ever go to eQSL over TLS.
 pub const EQSL_INBOX_URL: &str = "https://www.eqsl.cc/qslcard/DownloadInBox.cfm";
 
+/// `RcvdSince` for the whole InBox: from 1900-01-01 00:00. Logbook ▸ Check confirmations sends it
+/// outright, because eQSL documents no meaning for a request that leaves it out.
+pub const WHOLE_INBOX_SINCE: &str = "190001010000";
+
 /// Step-1 success marker (matched case-insensitively).
 const BUILT_MARKER: &str = "your adif log file has been built";
 
