@@ -6,6 +6,7 @@
 // operator-anchored) and only add propagation context — never demote an ATNO because a
 // band happens to read closed this minute.
 import type { NeedAlert, NeedTag, PathPrediction } from '../types'
+import { t } from '../i18n'
 
 export interface ChaseTarget {
   call: string
@@ -76,7 +77,7 @@ export function buildChaseTargets(
 
 /** One plain-language line for the pane's Basic view / empty hint. */
 export function chaseSummaryLine(targets: ChaseTarget[]): string {
-  if (targets.length === 0) return 'No needed stations being heard right now — call CQ or wait for spots.'
+  if (targets.length === 0) return t('chase.empty')
   const openCount = targets.filter((t) => t.openNow).length
   const top = targets[0]
   const where = top.entity || top.call

@@ -1083,11 +1083,142 @@ use tempo_core::message::{same_call, Msg};
 /// (`get_snapshot`) and the radio loop (waterfall feed) during the ~1–2 s decode.
 ///
 /// The `Arc`/`Mutex` is created ONCE per [`Engine`] and never replaced; a tier /
-/// source switch swaps the boxed contents *under the lock* (waiting for any decode
-/// in flight). That one stable lock is the single serialization point for ALL
-/// process-global decode FFI state (the WSJT-X a7 table, the packjt77 hash table,
-/// and the FT1 IR-HARQ buffers), so nothing races the C decoder.
+/// source switch swaps the boxed contents *under the lock* — at once when no decode
+/// holds it, else by that decode as it lets go (`NextSource`). That one stable lock
+/// is the single serialization point for ALL process-global decode FFI state (the
+/// WSJT-X a7 table, the packjt77 hash table, and the FT1 IR-HARQ buffers), so nothing
+/// races the C decoder.
 pub type SharedSource = Arc<Mutex<Box<dyn SignalSource>>>;
+
+/// A decoder the engine asked for while a decode held [`SharedSource`]'s lock. That
+/// decode swaps it in before it lets go of the lock (see [`run_decode_job`]), the point
+/// the swap was made when the engine waited for the lock itself — with the Engine lock
+/// held, which stopped the radio loop, the thing that unkeys the radio, for the rest
+/// of the decode.
+type NextSource = Arc<Mutex<Option<Box<dyn SignalSource>>>>;
+
+/// An FT1 IR-HARQ reset asked for while a decode held the decoder or the modem. The next
+/// native decode makes it before it reads the buffers. Process-wide, as the buffers are.
+static HARQ_RESET_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The same for the FT8 a7 table.
+static A7_RESET_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Clear the FT8 a7 table now when no decode is in the modem, else leave the clear to the next
+/// native decode, which makes it before it reads the table — never waiting for the decode. Every
+/// local path that clears the table (a band, radio or tier change, the end of a Tune, an ATU
+/// tune-up) passes this where it passed `modes::reset_ft8_a7`, which waited for the modem with
+/// the Engine lock held.
+fn reset_ft8_a7_without_waiting() {
+    match modes::Ft8A7ResetGuard::try_acquire() {
+        Some(modem) => modem.reset(),
+        None => A7_RESET_OWED.store(true, std::sync::atomic::Ordering::SeqCst),
+    }
+}
+
+/// WSJT-X 3.0.2's `no_a7_decodes`. After a band change or a mode switch it shows no a7 decode
+/// for 1.5 T/R periods, "because they can be leftovers from the previous band" (or mode):
+/// `band_changed` and `switch_mode` set it (`widgets/mainwindow.cpp:12073-12076`,
+/// `:11664-11666`), and `readFromStdout` drops such a line before anything reads it: the window,
+/// ALL.TXT, the UDP feed, PSK Reporter and the auto-sequencer (`:6184-6186`).
+///
+/// On 3.0.2's own clock: each set starts a `QTimer::singleShot` of `int(1500.0*m_TRperiod)` ms
+/// that nothing cancels, and the first to fire clears the flag. So the hide ends when the earliest
+/// timer still pending at the latest set fires, which after FT8 → FT4 → FT8 is 1.5 FT4 periods
+/// after the first switch, not 1.5 FT8 periods after the last.
+#[derive(Default)]
+struct A7Hide {
+    /// When each pending timer fires. Pruned at every set of those that have already fired.
+    timers: Vec<Instant>,
+}
+
+impl A7Hide {
+    fn set(&mut self, now: Instant, period_secs: f64) {
+        self.timers.retain(|&fires| fires > now);
+        self.timers
+            .push(now + Duration::from_millis((1500.0 * period_secs) as u64));
+    }
+
+    fn hides(&self, now: Instant) -> bool {
+        !self.timers.is_empty() && self.timers.iter().all(|&fires| fires > now)
+    }
+
+    /// As if `by` had passed (tests).
+    #[cfg(any(test, feature = "test-util"))]
+    fn age(&mut self, by: Duration) {
+        for fires in &mut self.timers {
+            *fires = fires
+                .checked_sub(by)
+                .expect("the monotonic clock reaches back that far");
+        }
+    }
+}
+
+/// The T/R periods WSJT-X 3.0.2 times a mode switch's a7 hide with: `m_TRperiod` as the new mode's
+/// handler has left it when it calls `switch_mode`. FT8 (`:11007` before `:11102`), FT4 (`:10914`,
+/// `:10919`) and MSK144 (`:11441`, `:11466`; the T/R spinner's value, taken here as MSK144's own)
+/// set the new period first. JT65 (`:11300`, `:11301`), WSPR (`:11540`, `:11541`), FST4
+/// (`:10852`) and FST4W (`:10896`) call it while the period of the mode being left is still set.
+/// Q65 calls it twice, before and after restoring its own period (`:11369`, `:11383`, `:11400`).
+/// A mode WSJT-X does not have uses its own period.
+fn wsjtx_switch_hide_periods(
+    entered: Tier,
+    left_secs: f64,
+    entered_secs: f64,
+) -> (f64, Option<f64>) {
+    match entered {
+        Tier::Jt65 | Tier::Wspr | Tier::Fst4 | Tier::Fst4w => (left_secs, None),
+        Tier::Q65 => (left_secs, Some(entered_secs)),
+        _ => (entered_secs, None),
+    }
+}
+
+/// The modes WSJT-X has. A period of one of these that a band or mode change catches while it
+/// decodes is still shown, as WSJT-X shows it ([`Engine::fold_late`]).
+fn is_wsjtx_mode(tier: Tier) -> bool {
+    matches!(
+        tier,
+        Tier::Ft8
+            | Tier::Ft4
+            | Tier::Fst4
+            | Tier::Fst4w
+            | Tier::Q65
+            | Tier::Msk144
+            | Tier::Jt65
+            | Tier::Wspr
+    )
+}
+
+/// The audio span the waterfall opens on, 200-3000 Hz above the dial (`ui/src/waterfall.ts`,
+/// `WF_F_MIN`..`WF_STD_HI`). WSJT-X 3.0.2's starts at 0 Hz and is as wide as its plot, 4 bins
+/// of 1500/2048 Hz a pixel at its defaults (`widegraph.cpp:93-96`, `plotter.cpp:950`).
+const WATERFALL_VIEW_HZ: (f64, f64) = (200.0, 3000.0);
+
+/// The modes a mode switch turns TX off between when it takes the Tx frequency off the waterfall
+/// at the new dial: the ones WSJT-X has, as WSJT-X does, and FT2, FT1 and DX1, which it does not
+/// have, by the same rule. JS8 is not here: leaving it halts already, and so does entering it
+/// while it cannot transmit.
+fn mode_switch_halts_off_the_waterfall(tier: Tier) -> bool {
+    is_wsjtx_mode(tier) || matches!(tier, Tier::Ft2 | Tier::TempoFast | Tier::TempoDeep)
+}
+
+/// What a decode job's audio was received on: the band, dial and mode, and that mode's period.
+#[derive(Clone, Debug, PartialEq)]
+struct HeardOn {
+    band: String,
+    dial_mhz: f64,
+    tier: Tier,
+    period_secs: f64,
+}
+
+/// A period a band or mode change caught while it was being decoded, shown on its own
+/// ([`Engine::fold_late`]) until the next period of the new context replaces it.
+struct LatePeriod {
+    heard: HeardOn,
+    /// Its boundary slot, in its own mode's numbering.
+    slot: u64,
+    decodes: Vec<modes::Decode>,
+}
 
 /// Lock a [`SharedSource`], RECOVERING from poison instead of propagating it —
 /// the same strategy as `tempo_fast_sys::modem_lock()` and the audio-device
@@ -1104,9 +1235,25 @@ pub fn source_lock(s: &SharedSource) -> std::sync::MutexGuard<'_, Box<dyn Signal
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// [`source_lock`] without waiting: `None` while a decode holds the decoder.
+fn try_source_lock(s: &SharedSource) -> Option<std::sync::MutexGuard<'_, Box<dyn SignalSource>>> {
+    match s.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+/// Lock a [`NextSource`], recovering from poison as [`source_lock`] does.
+fn next_source_lock(n: &NextSource) -> std::sync::MutexGuard<'_, Option<Box<dyn SignalSource>>> {
+    n.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The serialized decoder effects of a native operating transition. Remote
-/// commits already own this mutex; local verbs acquire it at the same points
-/// they always have. Neither path skips the reset or replaces the shared mutex.
+/// commits already own this mutex; local verbs ask for it at the same points
+/// they always have, and leave the effect to a decode holding it rather than wait
+/// ([`Engine::install_source`], [`Engine::harq_reset_locked`]). Neither path skips
+/// the reset or replaces the shared mutex.
 enum DecoderMutation {
     Install(Box<dyn SignalSource>),
     ResetHarq,
@@ -1565,6 +1712,9 @@ enum DecodeBranch {
 /// [`DecodeResult`] so the engine can fold it (`process_decodes` / WAV) with no copy.
 pub struct DecodeJob {
     source: SharedSource,
+    /// A decoder asked for while this or an earlier decode held the lock: swapped in
+    /// before the decode and again before the lock is let go.
+    next_source: NextSource,
     frame: Vec<f32>,
     branch: DecodeBranch,
     // A-priori request context — native branch only (tempodeep/companion ignore it).
@@ -1595,6 +1745,11 @@ pub struct DecodeJob {
     /// result is stale and dropped — it belongs to a decode context that no longer
     /// exists (slot indices / AP context are meaningless across the switch).
     epoch: u64,
+    /// What the audio was received on, when all of it was captured in the context this job was
+    /// built in and the mode is one of WSJT-X's: a result that lands after a band or mode change
+    /// is then still shown, under these ([`Engine::fold_late`]). `None` for a capture a change
+    /// cut in two, a re-decode, and the modes WSJT-X does not have.
+    heard_on: Option<HeardOn>,
     /// This radio chain's private copy of the modem's process-global decode state
     /// (a7 replay table, packjt77 callsign hashes, IR-HARQ pool, cached wideband
     /// spectrum), or `None` for the single-radio path.
@@ -1648,6 +1803,8 @@ pub struct DecodeResult {
     pass: DecodePass,
     slot: u64,
     epoch: u64,
+    /// The job's [`DecodeJob::heard_on`].
+    heard_on: Option<HeardOn>,
     /// The decode PANICKED and was contained — see [`run_decode_job`]. Carries no
     /// decodes and an empty frame, and exists only so the result still comes back:
     /// the radio loop clears its in-flight latch when a result lands, so a job that
@@ -1749,6 +1906,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
             },
             slot,
             epoch,
+            heard_on: None,
             failed: false,
         })
         .collect()
@@ -1808,6 +1966,9 @@ pub enum DecodeApplied {
         slot: u64,
         frame: Vec<f32>,
     },
+    /// A period heard on the band or mode just left, folded for display only
+    /// ([`Engine::fold_late`]): never a TX decision, never a UDP decode or a spot.
+    Late { n: usize },
 }
 
 /// Run one [`DecodeJob`] — the heavy decode, off the engine mutex.
@@ -1850,6 +2011,7 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
                 pass,
                 slot,
                 epoch,
+                heard_on: None,
                 failed: true,
             }
         }
@@ -1859,6 +2021,7 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
 fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
     let DecodeJob {
         source,
+        next_source,
         frame,
         branch,
         nfa,
@@ -1876,12 +2039,19 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         pass,
         slot,
         epoch,
+        heard_on,
         ctx,
     } = job;
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
     // against the engine thread's harq_reset / seed_hash_table / source swaps.
     let mut src = source_lock(&source);
+    // A decoder left for a decode that never reached its hand-over below (a contained
+    // panic unwinds past it) decodes this one, rather than the decoder it replaced.
+    let waiting = next_source_lock(&next_source).take();
+    if let Some(decoder) = waiting {
+        *src = decoder;
+    }
     // The decode itself. Run directly when the job carries no per-chain context
     // (the single-radio path, unchanged), or inside `DecoderCtx::scoped` when it
     // does — see the `match ctx` below.
@@ -1900,9 +2070,15 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         }
         DecodeBranch::Native => {
             // IR-HARQ off (or non-FT1 mode): clear buffered RV0 so nothing
-            // cross-frame-combines. Exactly where decode_frame reset it.
-            if harq_reset {
+            // cross-frame-combines. Exactly where decode_frame reset it. A reset an
+            // operator action asked for while a decode ran is made here too, before
+            // this decode reads the buffers; likewise the a7 table's.
+            let owed = HARQ_RESET_OWED.swap(false, std::sync::atomic::Ordering::SeqCst);
+            if harq_reset || owed {
                 tempo_fast::harq_reset();
+            }
+            if A7_RESET_OWED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                modes::reset_ft8_a7();
             }
             let iwave = channel::capture_to_i16(&frame);
             let req = modes::DecodeRequest {
@@ -1945,13 +2121,22 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         // and pre-existing in shape, but it must be closed before two chains transmit.
         Some(ctx) => ctx.lock().unwrap_or_else(|e| e.into_inner()).scoped(decode),
     };
+    // A decoder asked for while this decode ran takes over before the lock is let go.
+    // The lock on it is held until the decoder's is released, so one asked for in
+    // between finds the decoder free and is swapped in by the asker instead.
+    let mut next = next_source_lock(&next_source);
+    if let Some(decoder) = next.take() {
+        *src = decoder;
+    }
     drop(src);
+    drop(next);
     DecodeResult {
         decodes,
         frame,
         pass,
         slot,
         epoch,
+        heard_on,
         failed: false,
     }
 }
@@ -2498,6 +2683,9 @@ pub struct Engine {
     /// is stable for the engine's lifetime; a tier/source switch swaps the boxed
     /// contents under the lock.
     source: SharedSource,
+    /// The decoder a switch asked for while a decode held [`source`](Self::source)'s
+    /// lock, for that decode to swap in as it lets go. See [`Engine::install_source`].
+    next_source: NextSource,
     /// The decoder's display label, CACHED so [`snapshot`](Engine::snapshot) never
     /// touches [`source`](Self::source)'s lock. Written ONLY by
     /// [`install_source`](Engine::install_source) — see there for why.
@@ -2520,6 +2708,13 @@ pub struct Engine {
     /// ([`begin_slot_capture`](Engine::begin_slot_capture)), where the ring rolls into
     /// a capture that genuinely belongs to the current context.
     capture_epoch: u64,
+    /// The period a band or mode change caught while it was being decoded — see [`LatePeriod`].
+    late: Option<LatePeriod>,
+    /// What the early pass of that period had already folded (and written to ALL.TXT) when the
+    /// context changed, so its boundary pass writes each line once ([`Engine::fold_late`]).
+    late_early_seen: Option<(u64, std::collections::HashSet<String>)>,
+    /// WSJT-X 3.0.2's a7 hide after a band change or a mode switch — see [`A7Hide`].
+    a7_hide: A7Hide,
     /// Which kind of source [`source`](Self::source) currently is. Tracked so
     /// [`set_tier`](Engine::set_tier) only re-points the *native* source and a
     /// live companion isn't clobbered, and so [`ingest`](Engine::ingest) routes
@@ -2567,6 +2762,14 @@ pub struct Engine {
     /// The slot over whose unkey the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
     slot_unkey_failed: Option<crate::dto::SlotUnkeyFailed>,
+    /// The slot over Nexus ended part way through because its audio stopped reaching the radio,
+    /// which halted TX ([`Engine::halt_tx_for_lost_slot_audio`]). Kept until the operator turns TX
+    /// on again.
+    slot_audio_lost: Option<crate::dto::SlotAudioLost>,
+    /// The operator's PTT press Nexus's own Flex client kept off the air because the radio still
+    /// took its transmit audio from the DAX Nexus set, not its mic ([`Engine::set_ptt_refused`]).
+    /// Kept until a press keys, or fails for another reason.
+    ptt_refused: Option<crate::dto::PttRefused>,
     /// Unix-secs when the current unattended-transmit run began (first TX after the
     /// last operator action), or `None` if not transmitting. The watchdog trips on
     /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
@@ -5158,9 +5361,13 @@ impl Engine {
             harq_rescues: 0,
             // Default native source = FT8 (matches the default link tier).
             source: Arc::new(Mutex::new(Box::new(default_source))),
+            next_source: NextSource::default(),
             source_label: default_source_label,
             decode_epoch: 0,
             capture_epoch: 0,
+            late: None,
+            late_early_seen: None,
+            a7_hide: A7Hide::default(),
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
             fd_club: None,
@@ -5179,6 +5386,8 @@ impl Engine {
             tx_watchdog: false,
             slot_key_refused: None,
             slot_unkey_failed: None,
+            slot_audio_lost: None,
+            ptt_refused: None,
             tx_watchdog_start: None,
             cq_pause_until: None,
             recent_dt: VecDeque::new(),
@@ -6031,8 +6240,8 @@ impl Engine {
         if self.source_kind == SourceKind::Native && self.tier_mode_kind(self.tier()) != kind_before
         {
             if let Some(kind) = self.tier_mode_kind(self.tier()) {
-                // Swap UNDER the lock (waits out any decode in flight) and clear the
-                // context, exactly as `set_tier` does — same reasons. The epoch bump
+                // Swap UNDER the lock (now, or by a decode in flight as it lets go) and
+                // clear the context, exactly as `set_tier` does — same reasons. The epoch bump
                 // inside is the load-bearing part: a decode already dispatched at the
                 // OLD period would otherwise land after the swap and be folded in
                 // with slot indices that no longer mean anything.
@@ -6369,13 +6578,13 @@ impl Engine {
     /// `apply_settings`), so swinging radios mid-session never resets the operator to Chat. No-op if
     /// `id` isn't a configured radio or is already active.
     pub fn set_active_radio(&mut self, id: u32) {
-        self.set_active_radio_with_reset(id, modes::reset_ft8_a7);
+        self.set_active_radio_with_reset(id, reset_ft8_a7_without_waiting);
     }
 
     /// The same native handoff after its owner has acquired decoder serialization
     /// without waiting. The owner must separately validate Remote authority and
     /// hardware completion; the decoder guard grants neither. Local selection
-    /// retains its existing blocking reset at the same point in the lifecycle.
+    /// makes the same reset at the same point, without waiting for a decode.
     pub fn set_active_radio_with_decoder_guard(&mut self, id: u32, guard: modes::Ft8A7ResetGuard) {
         self.set_active_radio_with_reset(id, || guard.reset());
     }
@@ -6484,6 +6693,8 @@ impl Engine {
         // them as AP hypotheses on the new radio's band would seed wrong-call decodes.
         reset();
         self.sideband_override = None;
+        // The band handed off from, for WSJT-X's a7 hide once the new radio's tune is adopted.
+        let band_left = self.settings.band.clone();
         // Flip active + mirror the new profile's CAT/audio into the flat fields — Transport::
         // from_settings then differs and the loop's existing swap tears down the old rig + opens
         // the new one (unkey-first).
@@ -6494,6 +6705,11 @@ impl Engine {
         // else its persisted last tune, else the mirrored dial. `band` follows the chosen dial.
         let tune = radio_selection::incoming_tune(&self.settings, self.radio_live.get(&id));
         tune.apply(&mut self.settings);
+        // …and WSJT-X's hide after a band change, as `set_frequency` starts it, when the new
+        // radio is on another band.
+        if !band_left.eq_ignore_ascii_case(&self.settings.band) {
+            self.a7_hide.set(Instant::now(), self.active_slot_secs());
+        }
         self.app
             .set_radio(tune.dial_mhz, &tune.band, &tune.sideband);
         if !tune.monitored {
@@ -6686,7 +6902,7 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
-        self.tune_dial_with_reset(dial_mhz, band, mode, origin, modes::reset_ft8_a7);
+        self.tune_dial_with_reset(dial_mhz, band, mode, origin, reset_ft8_a7_without_waiting);
     }
 
     fn tune_dial_with_reset(
@@ -6832,6 +7048,10 @@ impl Engine {
             reset();
         }
         if band_changed {
+            // WSJT-X hides a7 decodes for 1.5 periods after a band change (`band_changed`,
+            // which a move inside one band never calls), which the period still decoding
+            // needs: its own a7 lines came from the table before the clear.
+            self.a7_hide.set(Instant::now(), self.active_slot_secs());
             // ⚠️ BAND CHANGE ONLY — this is an FT-mode TX/timing behaviour and
             // deliberately NOT widened to the FM hop: without a halt the
             // sequencer keeps calling a station that isn't on the new band
@@ -7021,7 +7241,9 @@ impl Engine {
                 self.app.clear_stations();
                 // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
                 // them as AP hypotheses on the new band would seed wrong-call decodes.
-                modes::reset_ft8_a7();
+                reset_ft8_a7_without_waiting();
+                // …and WSJT-X's hide after a band change, as `set_frequency` starts it.
+                self.a7_hide.set(Instant::now(), self.active_slot_secs());
                 // Context halt, exactly like the app-commanded band change above: spinning
                 // the rig's own VFO across a band edge must not take the operator's mic away.
                 self.halt_tx_for_context_change("band change at the rig");
@@ -7702,7 +7924,7 @@ impl Engine {
     /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
     /// bands, and the TX lockout guards the air regardless.
     pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
-        self.pick_band_with_reset(band, mode, modes::reset_ft8_a7);
+        self.pick_band_with_reset(band, mode, reset_ft8_a7_without_waiting);
     }
 
     fn pick_band_with_reset(&mut self, band: &str, mode: Option<&str>, reset: impl FnMut()) {
@@ -7758,7 +7980,12 @@ impl Engine {
     // Remote entry shares every native section/memory/power decision but cannot
     // acquire transmit authority as a side effect. Local entry keeps its latch.
     fn set_operating_mode_with_arming(&mut self, mode: &str, follow_freq: bool, arm_manual: bool) {
-        self.set_operating_mode_with_reset(mode, follow_freq, arm_manual, modes::reset_ft8_a7);
+        self.set_operating_mode_with_reset(
+            mode,
+            follow_freq,
+            arm_manual,
+            reset_ft8_a7_without_waiting,
+        );
     }
 
     fn set_operating_mode_with_reset(
@@ -8094,7 +8321,7 @@ impl Engine {
             band,
             split_up_khz,
             arm_manual,
-            modes::reset_ft8_a7,
+            reset_ft8_a7_without_waiting,
         );
     }
 
@@ -9343,6 +9570,18 @@ impl Engine {
         self.manual_ptt = on && self.tx_enabled && self.tx_allowed();
     }
 
+    /// What came of the operator's PTT press, as the radio loop keyed it, for the status lane:
+    /// `Some(mode)` when Nexus's own Flex client kept it off the air because the radio still took
+    /// its transmit audio from the DAX Nexus set, not its mic (operator ruling, 2026-10-08, "Same
+    /// rule for Phone"); `None` for a press that keyed, or failed for another reason, so each press
+    /// answers anew. `mode` is the transmit slice's, in the radio's own word.
+    pub fn set_ptt_refused(&mut self, mode: Option<&str>) {
+        self.ptt_refused = mode.map(|mode| crate::dto::PttRefused {
+            at: now_unix_secs(),
+            mode: mode.to_string(),
+        });
+    }
+
     /// Whether the operator is holding manual PTT (live phone) — read by the loop. Also
     /// masks on read, so a key that became out-of-privilege (knob turned to a locked
     /// segment while holding PTT) drops the next loop pass.
@@ -10211,7 +10450,7 @@ impl Engine {
     /// Still at the command rather than at its end: the tune-up is one rig command whose end
     /// Nexus never sees. Other sections are untouched, for the reasons given at the Tune release.
     pub fn note_atu_tune_started(&mut self) {
-        self.note_atu_tune_started_with_reset(modes::reset_ft8_a7);
+        self.note_atu_tune_started_with_reset(reset_ft8_a7_without_waiting);
     }
 
     fn note_atu_tune_started_with_reset(&mut self, reset: impl FnOnce()) {
@@ -11051,6 +11290,9 @@ impl Engine {
     /// positional arguments of [`fd_log_manual`](Self::fd_log_manual) are the shape the
     /// FT sequencer and the club host hand off the air and stay; a QSO party's four
     /// slots have no way to ride them.
+    ///
+    /// ONE row through [`contest_log_manual_rows`](Self::contest_log_manual_rows), the
+    /// write a county line takes too, so the two cannot record a contact differently.
     pub fn contest_log_manual(
         &mut self,
         call: &str,
@@ -11058,6 +11300,36 @@ impl Engine {
         mode: &str,
         submode: Option<&str>,
     ) -> Result<bool, String> {
+        let logged = self.contest_log_manual_rows(call, &[fields.to_vec()], mode, submode)?;
+        Ok(logged == [true])
+    }
+
+    /// ⭐ **Log ONE contact as several rows** — a station on a COUNTY LINE, which the
+    /// Illinois QSO Party counts once per county: *"Contacts with/by stations at the border
+    /// of 2/3/4 counties count as 2/3/4 counties and 2/3/4 QSOs"* (its 2026 rules).
+    ///
+    /// `rows` is one field vector per row, each exactly what
+    /// [`contest_log_manual`](Self::contest_log_manual) takes; the entry strip sends the same
+    /// vector once per county, with that county in its QTH slot. The answer is, per row, the
+    /// bool that function returns for one: did the row enter the log.
+    ///
+    /// ⚠️ **One contact on the air, so ONE time, band and serial for every row.** The band
+    /// is synced and the clock read once, before the first row, and the peer's serial is
+    /// bound once and released once. A clock read per row could put two counties of one
+    /// contact a second apart, or either side of a minute, and the sponsor's checker then
+    /// has rows that do not match the other station's log.
+    ///
+    /// ⭐ **Each row is admitted on its OWN dupe key**, through the write a single contact
+    /// takes, so an already-worked county is refused (or, under a ruleset that logs its
+    /// duplicates, marked) exactly as it would be alone, and the other counties still log.
+    /// The journal is written once, after the last row.
+    pub fn contest_log_manual_rows(
+        &mut self,
+        call: &str,
+        rows: &[Vec<(String, String)>],
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<Vec<bool>, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
         let now = now_unix_secs();
         // The phone mode behind a "PH" class, on the same terms as `fd_log_contact` —
@@ -11067,6 +11339,10 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
+        // No row is no contact: no serial to bind and nothing to write.
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
         // ⭐ **Stamp the row with the number THIS STATION COPIED**, which is the number
         // bound to them by `working` — not a fresh one, and not a lookup of whatever the
         // counter has reached by now.
@@ -11077,16 +11353,20 @@ impl Engine {
         // relied upon, because logging must stamp a real serial even on a path that
         // never announced the peer — an older shell, a test, a future caller.
         station.log.session.working(call, now);
-        let logged =
-            station
-                .log
-                .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now);
+        let logged: Vec<bool> = rows
+            .iter()
+            .map(|fields| {
+                station
+                    .log
+                    .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now)
+            })
+            .collect();
         // The row carries the number from here on, so the binding may finally be
         // forgotten. Done whether or not the row landed: a dupe is refused above, and a
         // refused contact is over — its number is spent, which no log checker can see,
         // while handing it to the next station is an error against both of them.
         station.log.session.logged(call);
-        if logged {
+        if logged.contains(&true) {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }
         Ok(logged)
@@ -12971,7 +13251,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         area: &str,
         decoder: impl FnMut(&mut Self, DecoderMutation),
     ) {
-        self.set_area_with_decoder_and_reset(area, decoder, modes::reset_ft8_a7);
+        self.set_area_with_decoder_and_reset(area, decoder, reset_ft8_a7_without_waiting);
     }
 
     fn set_area_with_decoder_and_reset(
@@ -13336,7 +13616,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
     fn clear_decode_context(&mut self) {
         self.decode_history.clear();
         self.last_decode_slot = None;
-        self.early_seen = None;
+        // Kept aside for the period still decoding, if one is (`fold_late`).
+        self.late_early_seen = self.early_seen.take();
+        // The live feed is the context being left: shown on after the change, its lines read as
+        // the new band's (the panes wipe on the change and take the feed in again). A period
+        // still decoding comes back as `late`, under what it was heard on.
+        self.last_decodes.clear();
+        self.late = None;
         // Advance the decode-context generation so any decode still in flight on the
         // worker (built in the OLD context) lands stale and is dropped — its slot
         // indices / AP context are meaningless after the switch.
@@ -13350,11 +13636,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// `tempo_fast::harq_reset()` serialized behind the decoder lock, so it can never race
     /// the worker thread's in-flight decode (which uses the same process-global FT1
-    /// IR-HARQ buffers). Ordinary engine-thread resets acquire here; a native
+    /// IR-HARQ buffers). Ordinary engine-thread resets come here; a native
     /// transition already holding the guard uses `harq_reset_serialized`. The
     /// decode path's reset runs under this same lock in [`run_decode_job`].
+    ///
+    /// ⛔ NEVER WAITS FOR THE DECODE. A decode holds the decoder lock, and the modem lock
+    /// inside it, for its whole length, and every caller holds the Engine lock: a
+    /// double-click, Call CQ, and on the radio loop's own thread a logger's UDP Reply and a
+    /// Chat QSY. Waiting here stopped the radio loop, the only thing that unkeys the radio,
+    /// for the rest of the decode. So the reset is made now when both locks are free, and
+    /// otherwise owed to the next native decode, which makes it before it reads the buffers:
+    /// no decode reads them in between, so every decode sees what it saw when this waited.
     fn harq_reset_locked(&self) {
-        Self::harq_reset_serialized(&source_lock(&self.source));
+        let decoder = try_source_lock(&self.source);
+        match (decoder, modes::Ft8A7ResetGuard::try_acquire()) {
+            (Some(_decoder), Some(mut modem)) => modem.reset_tempo_harq_held(),
+            _ => HARQ_RESET_OWED.store(true, std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     fn harq_reset_serialized(_source: &std::sync::MutexGuard<'_, Box<dyn SignalSource>>) {
@@ -13834,7 +14132,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tier: Tier,
         install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
     ) {
-        self.set_tier_with_installer_and_reset(tier, install, modes::reset_ft8_a7);
+        self.set_tier_with_installer_and_reset(tier, install, reset_ft8_a7_without_waiting);
     }
 
     fn set_tier_with_installer_and_reset(
@@ -13875,7 +14173,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A real transition (the no-op guard above already returned). State TRANSITIONS are
         // logged; current state never is, and nothing here is on a timer.
         tempo_core::applog::info("mode", &format!("tier {:?} → {:?}", self.app.tier(), tier));
+        let left_secs = self.active_slot_secs();
         self.app.set_tier(tier);
+        // WSJT-X hides a7 decodes after ANY mode switch, an FT8 ↔ FT4 change on one band
+        // included (`switch_mode`), on the period 3.0.2 has set by then.
+        let (period, then) = wsjtx_switch_hide_periods(tier, left_secs, self.active_slot_secs());
+        let now = Instant::now();
+        self.a7_hide.set(now, period);
+        if let Some(period) = then {
+            self.a7_hide.set(now, period);
+        }
         // Leaving JS8: a scheduled heartbeat must not fire on return, and a half-sent
         // multi-frame message cannot resume on another tier — clear all of it now.
         if from == Tier::Js8 {
@@ -13912,8 +14219,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // 25 minutes. The retune to the new tier queues behind it too.
         //
         // ⚠️ SCOPED TO THE TIERS WHERE IT IS NEW. Halting on ANY armed tier switch
-        // also disarms an FT8→FT4 change, which is shipped gold-standard behaviour
-        // and not mine to alter — `tier_switch_keeps_message_layer` caught exactly
+        // also disarms an FT8→FT4 change that keeps the Tx frequency on the waterfall,
+        // which WSJT-X leaves armed (one that takes it off halts at the QSY below, as
+        // WSJT-X halts it) — `tier_switch_keeps_message_layer` caught exactly
         // that. FT8/FT4/FT2/FT1/DX1 keep their existing behaviour (their overs are
         // 13 s or less, and trailing one out reads as "the over finishes"); the
         // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
@@ -13993,9 +14301,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // clobber it; the tier still updates for TX / display.
         if self.source_kind == SourceKind::Native {
             if let Some(kind) = self.tier_mode_kind(tier) {
-                // Swap the boxed decoder UNDER the lock (waits for any decode in
-                // flight) so the stable serialization mutex is preserved and no
-                // job can be reading the old mode as it's replaced.
+                // Swap the boxed decoder UNDER the lock (now, or by a decode in
+                // flight as it lets go) so the stable serialization mutex is preserved
+                // and no job can be reading the old mode as it's replaced.
                 install(self, Box::new(NativeSource::from_kind(kind)));
             }
         }
@@ -14042,6 +14350,26 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
             // operator to 160 m would be the same defect.
             if let Some(ch) = self.prepare_tier_frequency(tier) {
+                // WSJT-X 3.0.2 stops Tx and turns Enable Tx off when a mode switch moves the dial
+                // so far that the Tx frequency is off the waterfall at the new dial (`switch_mode`
+                // → `on_bandComboBox_activated` → `band_changed`, mainwindow.cpp:11675-11679,
+                // 12089-12097, "disable auto Tx if 'blind' QSY outside of waterfall"), so the next
+                // over cannot go out in the new mode to a station still on the old one. The QSO is
+                // left as it is; the operator turns TX on again in the new mode. Between the modes
+                // WSJT-X has, and by the same rule into or out of FT2, FT1 and DX1, which it does
+                // not have; never into WSPR, which it exempts. A move to another band halts in
+                // `tune_dial_with_reset`, as every band change does.
+                let tx_hz = self.settings.dial_mhz * 1e6 + f64::from(self.tx_offset_hz);
+                let (lo, hi) = WATERFALL_VIEW_HZ;
+                let view = ch.dial_mhz * 1e6 + lo..ch.dial_mhz * 1e6 + hi;
+                if mode_switch_halts_off_the_waterfall(from)
+                    && mode_switch_halts_off_the_waterfall(tier)
+                    && tier != Tier::Wspr
+                    && ch.band.eq_ignore_ascii_case(&self.settings.band)
+                    && !view.contains(&tx_hz)
+                {
+                    self.halt_tx_for_context_change("mode switch");
+                }
                 self.tune_dial_with_reset(
                     ch.dial_mhz,
                     &ch.band,
@@ -14069,11 +14397,34 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// Routing every swap through here is what keeps the cache honest: the label
     /// is derived from the box that is about to be installed, so a new swap site
-    /// cannot forget it. The lock IS taken here — this is the swap path, which
-    /// already waits out any decode in flight, and that is unchanged.
+    /// cannot forget it.
+    ///
+    /// ⛔ AND THE SWAP NEVER WAITS FOR A DECODE. This used to take the decoder lock and
+    /// so wait out any decode in flight, with the Engine lock held by every caller (a
+    /// tier, source or area change, a settings save that changes the mode, a JS8 speed
+    /// change): the radio loop, the only thing that unkeys the radio, stood still for
+    /// the rest of the decode. Now the box is swapped at once when the lock is free, and
+    /// otherwise left in [`NextSource`] for the decode holding the lock to swap in before
+    /// it lets go — the moment the swap used to land, with nothing waiting for it. Every
+    /// caller also clears the decode context, so the decode in flight lands stale either
+    /// way, as it always did.
     fn install_source(&mut self, src: Box<dyn SignalSource>) {
         let source = Arc::clone(&self.source);
-        self.install_source_into(&mut source_lock(&source), src);
+        let next_source = Arc::clone(&self.next_source);
+        // Held while the decoder lock is tried: a decode letting go takes this lock
+        // before it releases the decoder (`run_decode_job`), so it cannot miss a box
+        // left here.
+        let mut next = next_source_lock(&next_source);
+        match try_source_lock(&source) {
+            Some(mut slot) => {
+                drop(next);
+                self.install_source_into(&mut slot, src);
+            }
+            None => {
+                self.source_label = src.label();
+                *next = Some(src);
+            }
+        };
     }
 
     fn install_source_into(
@@ -14082,6 +14433,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         src: Box<dyn SignalSource>,
     ) {
         self.source_label = src.label();
+        // Newer than any box still waiting for a decode to let go.
+        *next_source_lock(&self.next_source) = None;
         *slot = src;
     }
 
@@ -14449,7 +14802,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
             at: now_unix_secs(),
             why: why.to_string(),
+            flex_audio: None,
         });
+    }
+
+    /// The refusal [`Self::halt_tx_for_refused_key`] just put on screen was Nexus's own Flex
+    /// client keeping the key off the air, for where the radio takes its transmit audio from: the
+    /// client's own words replace the rigctld answer (`RPRT -1` carries no reason), and the cause
+    /// is the UI's to say. With no refusal on screen there is nothing to explain.
+    pub fn explain_refused_key(&mut self, why: &str, flex_audio: crate::dto::FlexAudioRefusal) {
+        if let Some(refused) = self.slot_key_refused.as_mut() {
+            refused.why = why.to_string();
+            refused.flex_audio = Some(flex_audio);
+        }
     }
 
     /// Halt TX because the radio did not accept the unkey that ended a slot over (FT8, FT4, JS8
@@ -14487,6 +14852,37 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.slot_unkey_failed = Some(crate::dto::SlotUnkeyFailed {
             at: now_unix_secs(),
             why: why.to_string(),
+        });
+    }
+
+    /// Halt TX because the slot over on the air (FT8, FT4, JS8 and the other timed-slot modes)
+    /// lost its audio part way through, and keep the reason on screen until the operator turns TX
+    /// on again ([`Self::set_tx_enabled`]). Nexus's own Flex client carries an over to the radio
+    /// as DAX, all of it handed over at the key; native audio going off under it (the operator, or
+    /// the receive floor giving up on DAX) or its DAX transmit route going takes the rest with it,
+    /// and the radio would stay keyed with nothing to send until the over's own end. Operator
+    /// ruling, 2026-10-08, "End the over": the over ends there and TX turns off.
+    /// [`Self::halt_tx`] is that end, the Stop TX: its slot abort has the radio loop unkey and
+    /// flush in the same tick.
+    ///
+    /// One event, one line in the log, and no stop for a voice memory, as
+    /// [`Self::halt_tx_for_refused_key`]: nothing here started one.
+    pub fn halt_tx_for_lost_slot_audio(&mut self) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over: its audio stopped reaching the radio part way through (Flex native DAX \
+                 audio went off), so it was ended; transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_audio_lost = Some(crate::dto::SlotAudioLost {
+            at: now_unix_secs(),
         });
     }
 
@@ -14713,6 +15109,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.slot_key_refused = None;
             // …and a failed slot unkey's, the same way.
             self.slot_unkey_failed = None;
+            // …and a slot over ended for its lost audio, the same way.
+            self.slot_audio_lost = None;
         } else {
             // A SLOT over already in flight is NOT cut here. Operator (2026-07-31):
             // "TX Off should disable TX for the next cycle, but allow any ongoing
@@ -16516,7 +16914,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn set_tune(&mut self, on: bool) {
-        self.set_tune_with_reset(on, modes::reset_ft8_a7);
+        self.set_tune_with_reset(on, reset_ft8_a7_without_waiting);
     }
 
     fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
@@ -21206,6 +21604,8 @@ contact yourself."
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.slot_key_refused = self.slot_key_refused.clone();
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
+        s.radio.slot_audio_lost = self.slot_audio_lost.clone();
+        s.radio.ptt_refused = self.ptt_refused.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
@@ -21523,13 +21923,33 @@ contact yourself."
         // NOT gated: "have I ever worked this entity, on any band" needs no band label, and an
         // ATNO heard while tuning past on 5 MHz is still an ATNO.
         let cur_band = (!self.settings.band.is_empty()).then_some(self.settings.band.as_str());
+        // A period a band or mode change caught decoding (`fold_late`) is coloured for the band
+        // and mode it was heard on, as WSJT-X colours it (`m_currentBandPeriod`).
+        let late = self.late.as_ref();
+        let late_band = late.and_then(|l| (!l.heard.band.is_empty()).then_some(&*l.heard.band));
+        let late_band_key = late.map_or_else(String::new, |l| {
+            tempo_core::logbook::Logbook::band_key(
+                &l.heard.band,
+                Self::adif_mode(l.heard.tier),
+                fold_mode,
+            )
+        });
         // The hot index again, for every row below: B4 in both scopes and every badge. Nothing
         // inside the rows asks for it a second time.
         let hot = self.station.hot();
-        s.recent_decodes = self
+        let mut rows: Vec<DecodeRow> = self
             .last_decodes
             .iter()
-            .map(|d| {
+            .map(|d| (d, false))
+            .chain(
+                late.into_iter()
+                    .flat_map(|l| l.decodes.iter().map(|d| (d, true))),
+            )
+            .map(|(d, heard_before)| {
+                let (cur_band, cur_band_key, link_tier) = match late {
+                    Some(l) if heard_before => (late_band, late_band_key.as_str(), l.heard.tier),
+                    _ => (cur_band, cur_band_key.as_str(), s.link.tier),
+                };
                 // A Fox multiplex row classifies by its SECOND half (the one carrying the
                 // Fox's call as sender — country, B4 and rarity are about the transmitter);
                 // the first half contributes only its addressee and its RR73-ness below.
@@ -21577,9 +21997,7 @@ contact yourself."
                 // The stronger scope, same set as the roster above.
                 let worked_band = from
                     .as_deref()
-                    .map(|c| {
-                        hot.worked_call_band(&c.to_ascii_uppercase(), &cur_band_key, fold_mode)
-                    })
+                    .map(|c| hot.worked_call_band(&c.to_ascii_uppercase(), cur_band_key, fold_mode))
                     .unwrap_or(false);
                 // New-grid (B3): the decode carries a Maidenhead grid we've never
                 // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
@@ -21674,7 +22092,7 @@ contact yourself."
                     // (native source's mode, or a companion stream's per-decode
                     // WSJT-X mode); fall back to the selected tier when unknown
                     // (DX1's robust path, or an unrecognized companion mode).
-                    tier: d.mode.map(Tier::from_mode_kind).unwrap_or(s.link.tier),
+                    tier: d.mode.map(Tier::from_mode_kind).unwrap_or(link_tier),
                     // DTO wire contract keeps rv as i32 (-1 = N/A); collapse the
                     // unified Option<i32> at this boundary.
                     rv: d.rv.unwrap_or(-1),
@@ -21683,6 +22101,16 @@ contact yourself."
                 }
             })
             .collect();
+        s.late_decodes = late.map(|l| crate::dto::LateDecodes {
+            band: l.heard.band.clone(),
+            dial_mhz: l.heard.dial_mhz,
+            tier: l.heard.tier,
+            period_start_ms: (l.slot.saturating_sub(1) as f64 * l.heard.period_secs * 1000.0)
+                as u64,
+            slot: (l.slot as f64 * l.heard.period_secs / self.active_slot_secs()) as u64,
+            rows: rows.split_off(self.last_decodes.len()),
+        });
+        s.recent_decodes = rows;
         drop(hot);
         // Append OUR OWN transmissions as `mine` rows so the operator sees each of
         // their calls in the decode feed (WSJT-X own-TX). The UI keys these by
@@ -22647,6 +23075,7 @@ contact yourself."
 
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
+        let next_source = self.next_source.clone();
         // The epoch stamped here decides whether the RESULT still applies (see
         // `apply_decode_result`). Boundary/Early decode the slot capture in progress,
         // which began under `capture_epoch` — a mid-slot band change bumps
@@ -22665,6 +23094,7 @@ contact yourself."
         if self.source_kind == SourceKind::Companion {
             return DecodeJob {
                 source,
+                next_source,
                 frame,
                 branch: DecodeBranch::Companion,
                 nfa: 0,
@@ -22682,6 +23112,7 @@ contact yourself."
                 pass,
                 slot,
                 epoch,
+                heard_on: None,
                 ctx: None,
             };
         }
@@ -22689,6 +23120,7 @@ contact yourself."
             // DX1 full-passband acquisition — its own robust path, no AP context.
             return DecodeJob {
                 source,
+                next_source,
                 frame,
                 branch: DecodeBranch::TempoDeep,
                 nfa: 0,
@@ -22706,6 +23138,7 @@ contact yourself."
                 pass,
                 slot,
                 epoch,
+                heard_on: None,
                 ctx: None,
             };
         }
@@ -22799,6 +23232,7 @@ contact yourself."
         };
         DecodeJob {
             source,
+            next_source,
             frame,
             branch: DecodeBranch::Native,
             nfa,
@@ -22824,6 +23258,18 @@ contact yourself."
             pass,
             slot,
             epoch,
+            // A period still decoding when the band or mode changes is shown under what it was
+            // heard on, as WSJT-X shows it — when all of its audio is from this context (a
+            // capture a mid-slot change cut in two stays dropped, #103).
+            heard_on: (matches!(pass, DecodePass::Boundary | DecodePass::Early)
+                && epoch == self.decode_epoch
+                && is_wsjtx_mode(self.app.tier()))
+            .then(|| HeardOn {
+                band: self.settings.band.clone(),
+                dial_mhz: self.settings.dial_mhz,
+                tier: self.app.tier(),
+                period_secs: self.active_slot_secs(),
+            }),
             // Single-radio today: the chain owner attaches its own context with
             // `DecodeJob::with_ctx`. `None` keeps the shipped path byte-identical.
             ctx: None,
@@ -22838,7 +23284,16 @@ contact yourself."
         if result.epoch != self.decode_epoch {
             // Built in a decode context that no longer exists (tier/source/band
             // switch since dispatch) — its slot indices / AP context are meaningless.
-            return DecodeApplied::Stale;
+            // WSJT-X still shows such a period: nothing in `readFromStdout` drops a line for
+            // a QSY or a mode switch. One heard whole on the band and mode just left is shown
+            // under them, and only shown (`fold_late`); anything else is dropped.
+            return match result.heard_on {
+                Some(heard) if !result.failed => {
+                    let decodes = self.without_hidden_a7(result.decodes);
+                    self.fold_late(heard, decodes, result.slot, result.pass)
+                }
+                _ => DecodeApplied::Stale,
+            };
         }
         if result.failed {
             // A contained panic. Drop it exactly like a stale result: it carries no
@@ -22870,6 +23325,9 @@ contact yourself."
             slot,
             ..
         } = result;
+        // WSJT-X 3.0.2 drops an a7 line in the 1.5 periods after a band change or a mode
+        // switch before anything reads it (`A7Hide`).
+        let decodes = self.without_hidden_a7(decodes);
         match pass {
             DecodePass::Boundary => {
                 // If the early pass already ingested this boundary's messages, keep
@@ -22916,6 +23374,84 @@ contact yourself."
             // The F6 redecode runs its own display-only fold in `redecode`, not here.
             DecodePass::Redecode => DecodeApplied::Stale,
         }
+    }
+
+    /// `decodes` without the a7 lines WSJT-X 3.0.2 would not show now ([`A7Hide`]).
+    fn without_hidden_a7(&self, mut decodes: Vec<modes::Decode>) -> Vec<modes::Decode> {
+        if self.a7_hide.hides(Instant::now()) {
+            decodes.retain(|d| d.nap != 7);
+        }
+        decodes
+    }
+
+    /// Fold a period a band or mode change caught while it was decoding, as WSJT-X 3.0.2 treats
+    /// the lines it reads after `band_changed` or `switch_mode`: shown, coloured for the band it
+    /// was received on (`displayDecodedText` is given `m_currentBandPeriod`, which keeps the old
+    /// band for 0.6 periods after a dial change, `widgets/mainwindow.cpp:4156-4165`,
+    /// `:6923-6940`), and written to ALL.TXT at the dial it was received on
+    /// (`m_freqNominalPeriod`, `:15256`).
+    ///
+    /// Nothing else reads it. WSJT-X sends such a line neither to a logger (`postDecode` returns
+    /// for 0.6 periods after a dial change, `:13401`) nor to PSK Reporter (`okToPost`, 0.8
+    /// periods, `:7458-7459`); its mode switch moves the dial too (`switch_mode`,
+    /// `:11675-11679`). And no line heard on the band or mode just left reaches the QSO
+    /// sequencer, the roster, the decode history a click is answered from, the parity slot or the
+    /// F6 audio here, so none can start, advance or log a contact, or key the radio (WSJT-X's
+    /// `auto_sequence` would answer one after a knob QSY, `:7434`, `:7560`).
+    ///
+    /// The early pass may have folded part of the same period before the change. Those lines are
+    /// shown again with the rest (the panes dropped them with the old band) but written once.
+    fn fold_late(
+        &mut self,
+        heard: HeardOn,
+        decodes: Vec<modes::Decode>,
+        slot: u64,
+        pass: DecodePass,
+    ) -> DecodeApplied {
+        let written = match self.late_early_seen.take() {
+            Some((s, seen)) if s == slot && pass == DecodePass::Boundary => seen,
+            _ => std::collections::HashSet::new(),
+        };
+        if self.settings.write_all_txt {
+            let mode = format!("{:?}", heard.tier).to_uppercase();
+            let stamp = crate::alltxt::period_start_unix(slot.saturating_sub(1), heard.period_secs);
+            for d in decodes
+                .iter()
+                .filter(|d| !written.contains(d.message.trim()))
+            {
+                self.station
+                    .all_txt_pending
+                    .push(crate::alltxt::all_txt_line(
+                        stamp,
+                        heard.dial_mhz,
+                        false,
+                        &mode,
+                        d.snr,
+                        d.dt,
+                        d.freq,
+                        &d.message,
+                    ));
+            }
+            let len = self.station.all_txt_pending.len();
+            if len > 5000 {
+                self.station.all_txt_pending.drain(0..len - 5000);
+            }
+        }
+        let n = decodes.len();
+        if n > 0 {
+            self.late = Some(LatePeriod {
+                heard,
+                slot,
+                decodes,
+            });
+        }
+        DecodeApplied::Late { n }
+    }
+
+    /// As if `by` had passed since the last band change or mode switch, for the a7 hide (tests).
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_a7_hide(&mut self, by: Duration) {
+        self.a7_hide.age(by);
     }
 
     /// WSJT-X-style EARLY decode pass (FT8/FT4, native source only): decode the
@@ -23240,6 +23776,8 @@ contact yourself."
         self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
         self.last_decodes = decodes;
         self.last_decode_slot = Some(slot);
+        // A period shown from before a band or mode change gives way to this context's own.
+        self.late = None;
         n
     }
 
@@ -23870,7 +24408,13 @@ contact yourself."
     /// `qso_record` (what the log carries) and the B4 band-key (what the log is probed
     /// with). If these ever diverged, mode-scoped B4 would silently never match.
     fn adif_mode_for_tier(&self) -> &'static str {
-        match self.app.tier() {
+        Self::adif_mode(self.app.tier())
+    }
+
+    /// [`Self::adif_mode_for_tier`] for any tier — a period heard before a mode change is
+    /// probed for B4 under the mode it was heard in.
+    fn adif_mode(tier: Tier) -> &'static str {
+        match tier {
             Tier::TempoDeep => "TempoDeep",
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
@@ -33291,6 +33835,34 @@ mod tests {
         );
     }
 
+    /// Nexus's own Flex client keeps a key off the air for the audio route, and the rigctld wire
+    /// says only `RPRT -1`: the refusal on screen takes the client's words and its cause, and
+    /// nothing is explained while nothing was refused.
+    #[test]
+    fn a_flex_clients_refusal_takes_its_own_words_and_cause() {
+        use crate::dto::{FlexAudioCause, FlexAudioRefusal};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let cause = FlexAudioRefusal {
+            mode: "DIGU".into(),
+            cause: FlexAudioCause::NotYetDax,
+        };
+        let words = "not keying a DIGU over: the radio takes its transmit audio from its mic input";
+        e.explain_refused_key(words, cause.clone());
+        assert_eq!(e.snapshot().radio.slot_key_refused, None, "nothing refused");
+        e.halt_tx_for_refused_key("rigctld PTT error: \"RPRT -1\\n\"");
+        e.explain_refused_key(words, cause.clone());
+        let refused = e.snapshot().radio.slot_key_refused.unwrap();
+        assert_eq!(
+            (refused.why.as_str(), refused.flex_audio),
+            (words, Some(cause))
+        );
+        let radio = serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        assert_eq!(
+            radio["slotKeyRefused"]["flexAudio"],
+            serde_json::json!({ "mode": "DIGU", "cause": "notYetDax" })
+        );
+    }
+
     #[test]
     fn a_failed_slot_unkey_halts_tx_as_stop_tx_does_and_says_why_until_tx_is_on_again() {
         // WSJT-X's rig-failure handler presses its own Halt Tx on a PTT off Hamlib answers with an
@@ -33355,6 +33927,64 @@ mod tests {
         assert!(
             e.take_voice_mem_halt(),
             "the operator's Stop TX lost its voice-memory stop"
+        );
+    }
+
+    #[test]
+    fn a_slot_over_that_lost_its_audio_halts_tx_as_stop_tx_does_and_says_so_until_tx_is_on_again() {
+        // Operator ruling, 2026-10-08, "End the over": a slot over whose DAX audio goes part way
+        // through ends there, TX turns off, and the status lane says why.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(!e.poll_tx(0).is_empty(), "baseline: the QSO transmits");
+        e.take_slot_tx_abort();
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        assert_eq!(
+            radio(&e).get("slotAudioLost"),
+            None,
+            "absent until it happens, so every earlier snapshot is byte-identical"
+        );
+
+        e.halt_tx_for_lost_slot_audio();
+        assert!(!e.tx_enabled(), "TX is off, as Stop TX leaves it");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to cut and unkey, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(2).is_empty() && e.poll_tx(4).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        assert!(
+            !e.take_voice_mem_halt(),
+            "nothing asks the radio to stop a voice memory it may be playing"
+        );
+        let lost = e
+            .snapshot()
+            .radio
+            .slot_audio_lost
+            .expect("the reason is kept for the operator");
+        assert!(lost.at > 0, "with the time it happened");
+        assert!(radio(&e)["slotAudioLost"]["at"].is_u64());
+        assert_eq!(
+            (
+                e.snapshot().radio.slot_key_refused,
+                e.snapshot().radio.slot_unkey_failed
+            ),
+            (None, None),
+            "neither a refused key nor a failed unkey"
+        );
+
+        e.set_tx_enabled(false);
+        assert!(
+            e.snapshot().radio.slot_audio_lost.is_some(),
+            "TX Off is not an answer to it"
+        );
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_audio_lost,
+            None,
+            "turning TX on again is, and clears it"
         );
     }
 
@@ -35443,8 +36073,10 @@ mod tests {
     #[test]
     fn engine_dx1_tier_beacon_roundtrip() {
         let mut a = Engine::new("W9XYZ", "EN37", 0);
-        a.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
+        // DX1 before arming: the switch from FT8 at 14.074 takes the Tx frequency off the
+        // waterfall, which turns TX off.
         a.set_tier(Tier::TempoDeep);
+        a.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         a.set_beacon(true); // beacon is off by default; this test exercises it
 
         // Slot 0 is a TX slot (parity 0) and a beacon slot → "CQ W9XYZ EN37".
@@ -35526,8 +36158,10 @@ mod tests {
     #[test]
     fn tier_switch_keeps_message_layer() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
-        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
+        // FT1 before arming: the switch from FT8 at 14.074 takes the Tx frequency off the
+        // waterfall, which turns TX off. FT1 -> DX1 below keeps the channel, so TX stays on.
         e.set_tier(Tier::TempoFast); // default is now FT8; this test compares FT1 vs DX1
+        e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
         e.set_beacon(true); // beacon off by default; this test compares beacon waveforms
         let ft1_wave = e.poll_tx(0);
         e.set_tier(Tier::TempoDeep);
@@ -41453,6 +42087,173 @@ mod tests {
         assert_eq!(fd.score_note_key, "");
     }
 
+    /// An Illinois station in the Illinois QSO Party, from KANE, and the strip's two-slot
+    /// field vector for one county.
+    fn ilqp_from_kane() -> (Engine, impl Fn(&str) -> Vec<(String, String)>) {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "KANE".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), q.to_string()),
+            ]
+        };
+        (e, ex)
+    }
+
+    /// ⭐ **A county line is ONE call that logs one scored row PER COUNTY, at one time.**
+    ///
+    /// ILQP's 2026 rules: *"Contacts with/by stations at the border of 2/3/4 counties count as
+    /// 2/3/4 counties and 2/3/4 QSOs."* The strip sends the same vector once per county; every
+    /// row must be an ordinary contact with its own county, and all of them must carry the ONE
+    /// time, band and mode they were worked at — two rows a second apart are two contacts the
+    /// sponsor's checker has to match separately.
+    #[test]
+    fn a_county_line_logs_one_scored_row_per_county_at_one_time() {
+        let (mut e, ex) = ilqp_from_kane();
+        let rows = |qs: &[&str]| qs.iter().map(|q| ex(q)).collect::<Vec<_>>();
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG"]), "CW", None)
+                .unwrap(),
+            vec![true, true]
+        );
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(fd.qso_count, 2, "two QSOs, one per county");
+        assert_eq!(fd.points, 4, "two CW contacts, 2 points each");
+        assert_eq!(fd.mult_count, Some(2), "COOK and DUPG, each a county");
+        let worked: Vec<(&str, String)> = fd
+            .log
+            .iter()
+            .map(|q| (q.call.as_str(), q.rcvd.join(" ")))
+            .collect();
+        assert_eq!(
+            worked,
+            vec![
+                ("K9NR", "599 COOK".to_string()),
+                ("K9NR", "599 DUPG".to_string())
+            ]
+        );
+        let first = &fd.log[0];
+        for q in &fd.log {
+            assert_eq!(
+                (q.when_unix, q.band.as_str(), q.mode.as_str()),
+                (first.when_unix, first.band.as_str(), "CW"),
+                "one contact on the air: one time, band and mode"
+            );
+        }
+
+        // Four counties are four contacts, in the order given.
+        assert_eq!(
+            e.contest_log_manual_rows(
+                "N9MOB",
+                &rows(&["COOK", "DUPG", "KANE", "WILL"]),
+                "CW",
+                None
+            )
+            .unwrap(),
+            vec![true; 4]
+        );
+        let fd = e.snapshot().field_day.expect("still in the contest");
+        assert_eq!(fd.qso_count, 6);
+        assert_eq!(fd.points, 12);
+        assert_eq!(fd.mult_count, Some(4), "COOK, DUPG, KANE and WILL");
+        let n9mob: Vec<String> = fd
+            .log
+            .iter()
+            .filter(|q| q.call == "N9MOB")
+            .map(|q| q.rcvd.join(" "))
+            .collect();
+        assert_eq!(n9mob, ["599 COOK", "599 DUPG", "599 KANE", "599 WILL"]);
+
+        // THE FILE the operator submits carries one QSO line per county.
+        let cab = e.export_log("cabrillo").expect("one entry");
+        for county in ["COOK", "DUPG"] {
+            let line = format!(" W9XYZ 599 KANE K9NR 599 {county}\n");
+            assert_eq!(cab.matches(line.as_str()).count(), 1, "{line:?} in\n{cab}");
+        }
+
+        // An empty list is no contact at all: nothing is written.
+        assert_eq!(
+            e.contest_log_manual_rows("K9ZZZ", &[], "CW", None).unwrap(),
+            Vec::<bool>::new()
+        );
+        assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
+    }
+
+    /// ⭐ **Each county of a line is dupe-checked on its own, and the others still log.**
+    ///
+    /// ILQP keys a contact on call, band, mode (CW and digital one) AND county, so a station
+    /// already worked in DuPage is a dupe there and nowhere else on the line. The refusal is
+    /// exactly the one a single contact gets: `false`, nothing written for that county.
+    #[test]
+    fn a_county_line_refuses_only_the_county_already_worked() {
+        let (mut e, ex) = ilqp_from_kane();
+        let rows = |qs: &[&str]| qs.iter().map(|q| ex(q)).collect::<Vec<_>>();
+        assert!(e
+            .contest_log_manual("K9NR", &ex("DUPG"), "CW", None)
+            .unwrap());
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "CW", None)
+                .unwrap(),
+            vec![true, false, true],
+            "DUPG is the dupe, COOK and KANE are new"
+        );
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(fd.qso_count, 3, "DUPG once, then COOK and KANE");
+        let counties: Vec<String> = fd.log.iter().map(|q| q.rcvd.join(" ")).collect();
+        assert_eq!(counties, ["599 DUPG", "599 COOK", "599 KANE"]);
+        // The same line on DIGITAL is three dupes — CW and digital are one mode here…
+        assert_eq!(
+            e.contest_log_manual_rows(
+                "K9NR",
+                &rows(&["COOK", "DUPG", "KANE"]),
+                "DIG",
+                Some("RTTY")
+            )
+            .unwrap(),
+            vec![false; 3]
+        );
+        // …and on PHONE three new contacts, the positive control that the refusals above are
+        // the dupe key and not a line that refuses everything after its first dupe.
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "PH", None)
+                .unwrap(),
+            vec![true; 3]
+        );
+        assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
+    }
+
+    /// ⭐ **A county line's rows are ORDINARY rows** — each its own sequence number, so a
+    /// correction from the logbook reaches one county's row and leaves the others alone, as
+    /// it would two contacts logged one at a time.
+    #[test]
+    fn a_county_lines_rows_are_corrected_one_at_a_time() {
+        let (mut e, ex) = ilqp_from_kane();
+        let rows = vec![ex("COOK"), ex("DUPG")];
+        assert_eq!(
+            e.contest_log_manual_rows("K9NR", &rows, "CW", None)
+                .unwrap(),
+            vec![true, true]
+        );
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("the contest is running");
+        };
+        let seqs: Vec<u64> = station.log.qsos().iter().map(|q| q.seq).collect();
+        assert_eq!(seqs, [1, 2], "two rows, two sequence numbers");
+        let band = station.log.qsos()[1].band.clone();
+        assert!(station.log.correct_row(seqs[1], "K9NS", &band));
+        let calls: Vec<&str> = station.log.qsos().iter().map(|q| q.call.as_str()).collect();
+        assert_eq!(calls, ["K9NR", "K9NS"], "the DUPG row alone was corrected");
+    }
+
     /// ⭐ **The New York QSO Party on the operator's screen and in the file they submit** —
     /// the strip's own command, the snapshot's score and boards, and the dialog's export.
     ///
@@ -44834,10 +45635,11 @@ mod tests {
     }
 
     /// Epoch guard: a decode that was in flight across a decode-context switch
-    /// (tier/source/band change) must land STALE and be dropped — its slot indices
-    /// and AP context belong to a context that no longer exists.
+    /// (tier/source/band change) never folds into the new context — its slot indices
+    /// and AP context belong to a context that no longer exists. A WSJT-X mode's period
+    /// is still shown, as WSJT-X shows it, and only shown (`fold_late`).
     #[test]
-    fn decode_result_dropped_when_epoch_advances() {
+    fn decode_result_never_folds_into_the_context_after_a_switch() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
         // Full-size capture (the real FT8 decoder asserts a minimum length).
@@ -44849,9 +45651,10 @@ mod tests {
         let result = run_decode_job(job);
         e.set_tier(Tier::Ft4); // clear_decode_context bumps the epoch
         assert!(
-            matches!(e.apply_decode_result(result), DecodeApplied::Stale),
-            "a result from the pre-switch context must be dropped as stale"
+            matches!(e.apply_decode_result(result), DecodeApplied::Late { n: 0 }),
+            "a result from the pre-switch context is shown at most, never folded"
         );
+        assert!(e.last_decode_slot.is_none() && e.decode_history.is_empty());
     }
 
     /// Control for the epoch guard: with no context switch, a boundary result folds
@@ -55664,22 +56467,351 @@ mod tests {
     #[test]
     fn an_ft_tier_switch_keeps_its_shipped_behaviour() {
         // The fix above is deliberately SCOPED. Halting on any armed tier switch
-        // would also disarm FT8→FT4, which is shipped gold-standard behaviour and
-        // not ours to change — their overs are 13 s or less and trailing one out
-        // reads as "the over finishes". This pins that they are untouched.
-        for (from, to) in [
-            (Tier::Ft8, Tier::Ft4),
-            (Tier::Ft4, Tier::Ft8),
-            (Tier::TempoFast, Tier::TempoDeep),
+        // would also disarm FT8→FT4 where WSJT-X keeps Enable Tx on: a switch that
+        // leaves the dial, and so the Tx frequency, where it was (one that takes the
+        // Tx frequency off the waterfall turns TX off, as WSJT-X does:
+        // `a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_turns_tx_off`).
+        // This pins that they are untouched.
+        for (from, to, dial) in [
+            (Tier::Ft8, Tier::Ft4, 14.080),
+            (Tier::Ft4, Tier::Ft8, 14.074),
+            (Tier::TempoFast, Tier::TempoDeep, 14.0905),
         ] {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.set_tier(from);
+            e.set_frequency(dial, "20m", "USB");
             e.set_tx_enabled(true);
             e.set_tier(to);
             assert!(
                 e.tx_enabled(),
                 "{from:?} -> {to:?} disarmed TX; FT behaviour must not change"
             );
+        }
+    }
+
+    /// Mid-QSO on `tier` at `dial` MHz on `band` with TX on at `tx_hz`: W1AW's CQ heard and
+    /// answered, our first over on the air. Returns the slot that over keyed on.
+    fn mid_qso(e: &mut Engine, tier: Tier, band: &str, dial: f64, tx_hz: f32) -> u64 {
+        e.set_tier(tier);
+        e.set_frequency(dial, band, "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN31", -10)], 1);
+        e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-10), None)
+            .expect("working W1AW");
+        e.set_tx_offset(tx_hz);
+        let slot = key_one_over(e, 2);
+        // The setup's own band change armed it; the switch starts from a clean flag.
+        e.take_slot_tx_abort();
+        slot
+    }
+
+    /// The QSO as the screen shows it: state, DX call and the message it sends next.
+    fn qso_shown(e: &Engine) -> Option<(String, Option<String>, Option<String>)> {
+        e.snapshot().qso.map(|q| (q.state, q.dxcall, q.tx_now))
+    }
+
+    /// The first over that keys in the four slots after `slot`: its slot, its length in
+    /// seconds and the message the QSO sends.
+    fn next_over(e: &mut Engine, slot: u64) -> Option<(u64, f32, Option<String>)> {
+        (slot + 1..slot + 5).find_map(|s| {
+            let secs = e.poll_tx(s).first()?.len() as f32 / 12_000.0;
+            Some((s, secs, e.snapshot().qso.and_then(|q| q.tx_now)))
+        })
+    }
+
+    /// WSJT-X 3.0.2 stops Tx and turns Enable Tx off when a mode switch moves the dial so far
+    /// that the Tx frequency is off the waterfall at the new dial (`band_changed`,
+    /// mainwindow.cpp:12089-12097, reached from `switch_mode` at 11675-11679). Nexus kept TX on,
+    /// and its next over went out in the new mode to a partner still on the old one. The QSO is
+    /// left as it was, as 3.0.2 leaves it, and goes on in the new mode once TX is on again.
+    #[test]
+    fn a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_turns_tx_off() {
+        for (from, to, band, dial, tx_hz, lands) in [
+            (Tier::Ft8, Tier::Ft4, "20m", 14.074, 1500.0, 14.080),
+            (Tier::Ft4, Tier::Ft8, "20m", 14.080, 1500.0, 14.074),
+            // Tx at 3.5745 MHz, below the FT4 waterfall's 3.5752-3.578.
+            (Tier::Ft8, Tier::Ft4, "80m", 3.573, 1500.0, 3.575),
+            // Tx at 3.5765 MHz, above the FT8 waterfall's 3.5732-3.576.
+            (Tier::Ft4, Tier::Ft8, "80m", 3.575, 1500.0, 3.573),
+        ] {
+            let case = format!("{from:?} -> {to:?} on {band}, Tx at {tx_hz} Hz");
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, from, band, dial, tx_hz);
+            let before = qso_shown(&e);
+            assert!(before.is_some(), "{case}: premise: a QSO with W1AW");
+            e.set_tier(to);
+            assert!(
+                (e.settings().dial_mhz - lands).abs() < 1e-9,
+                "{case}: premise: the dial lands on {lands}, got {}",
+                e.settings().dial_mhz
+            );
+            let (armed, cut) = (e.tx_enabled(), e.take_slot_tx_abort());
+            let next = next_over(&mut e, slot);
+            assert!(
+                !armed,
+                "{case}: TX Enable stayed on, and the next over went out (slot, s, message): \
+                 {next:?}"
+            );
+            assert!(cut, "{case}: the over in flight was not cut");
+            assert_eq!(next, None, "{case}: an over keyed at the next boundary");
+            assert_eq!(
+                qso_shown(&e),
+                before,
+                "{case}: the QSO is not as 3.0.2 leaves it"
+            );
+            // TX on again: the QSO goes on where it was, in the new mode.
+            e.set_tx_enabled(true);
+            let resumed = next_over(&mut e, slot);
+            let sent = before.and_then(|q| q.2);
+            assert!(
+                matches!(&resumed, Some((_, secs, msg))
+                    if *msg == sent && (*secs < 7.5) == (to == Tier::Ft4)),
+                "{case}: re-armed, the over is not {sent:?} in {to:?}: {resumed:?}"
+            );
+        }
+    }
+
+    /// Where 3.0.2 leaves Enable Tx alone, so does Nexus: a switch with TX already off, a knob
+    /// QSY inside the band (3.0.2 halts only for a band picked from its menu, which its mode
+    /// switch does: `m_bandEdited`, 12064), a switch that leaves the dial where it is, one whose
+    /// small jump keeps the Tx frequency on the waterfall, and a switch into WSPR, which
+    /// `band_changed` exempts (12090).
+    #[test]
+    fn a_mode_switch_keeps_tx_where_wsjtx_keeps_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let slot = mid_qso(&mut e, Tier::Ft8, "20m", 14.074, 1500.0);
+        e.set_tx_enabled(false);
+        let before = qso_shown(&e);
+        e.set_tier(Tier::Ft4);
+        assert!(
+            (e.settings().dial_mhz - 14.080).abs() < 1e-9,
+            "TX off: premise: the dial moved"
+        );
+        assert!(!e.tx_enabled(), "TX off: the switch turned TX on");
+        assert_eq!(next_over(&mut e, slot), None, "TX off: an over keyed");
+        assert_eq!(qso_shown(&e), before, "TX off: the switch changed the QSO");
+
+        type Act = fn(&mut Engine);
+        let cases: [(&str, Tier, &str, f64, f32, Act, f64); 5] = [
+            (
+                "a knob QSY inside the band",
+                Tier::Ft8,
+                "20m",
+                14.074,
+                1500.0,
+                |e| e.observe_rig_freq(14_076_000),
+                14.076,
+            ),
+            (
+                "FT8 -> FT4 with the dial already on 14.080",
+                Tier::Ft8,
+                "20m",
+                14.080,
+                1500.0,
+                |e| e.set_tier(Tier::Ft4),
+                14.080,
+            ),
+            (
+                "FT8 -> FT4 on 80 m, Tx at 3.5755 on the FT4 waterfall",
+                Tier::Ft8,
+                "80m",
+                3.573,
+                2500.0,
+                |e| e.set_tier(Tier::Ft4),
+                3.575,
+            ),
+            (
+                "FT4 -> FT8 on 80 m, Tx at 3.5755 on the FT8 waterfall",
+                Tier::Ft4,
+                "80m",
+                3.575,
+                500.0,
+                |e| e.set_tier(Tier::Ft8),
+                3.573,
+            ),
+            (
+                "FT8 -> WSPR",
+                Tier::Ft8,
+                "20m",
+                14.074,
+                1500.0,
+                |e| e.set_tier(Tier::Wspr),
+                14.0956,
+            ),
+        ];
+        for (case, tier, band, dial, tx_hz, act, lands) in cases {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, tier, band, dial, tx_hz);
+            act(&mut e);
+            assert!(
+                (e.settings().dial_mhz - lands).abs() < 1e-9,
+                "{case}: premise: the dial is on {lands}, got {}",
+                e.settings().dial_mhz
+            );
+            assert!(e.tx_enabled(), "{case}: TX Enable turned off");
+            assert!(
+                !e.take_slot_tx_abort(),
+                "{case}: the over in flight was cut"
+            );
+            if e.tier() != Tier::Wspr {
+                assert!(
+                    next_over(&mut e, slot).is_some(),
+                    "{case}: nothing keyed at the next boundary"
+                );
+            }
+        }
+    }
+
+    /// The length in seconds of the over a QSO on `tier` sends at `dial` MHz on `band`.
+    fn own_over_secs(tier: Tier, band: &str, dial: f64) -> Option<f32> {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let slot = mid_qso(&mut e, tier, band, dial, 1500.0);
+        next_over(&mut e, slot).map(|(_, secs, _)| secs)
+    }
+
+    /// The same rule for FT2, FT1 and DX1, which WSJT-X does not have: a switch into or out of
+    /// one of them that takes the Tx frequency off the waterfall at the new dial stops the over
+    /// and turns TX off, as FT8 <-> FT4 does, so the next over cannot go out in a mode the
+    /// partner is not using. The QSO is left as it was and goes on in the new mode once TX is on
+    /// again.
+    #[test]
+    fn a_switch_into_or_out_of_ft2_ft1_or_dx1_off_the_waterfall_turns_tx_off() {
+        for (from, to, band, dial, tx_hz, lands) in [
+            (Tier::Ft8, Tier::Ft2, "20m", 14.074, 1500.0, 14.084),
+            (Tier::Ft2, Tier::Ft8, "20m", 14.084, 1500.0, 14.074),
+            (Tier::Ft8, Tier::TempoFast, "20m", 14.074, 1500.0, 14.0905),
+            (Tier::TempoFast, Tier::Ft8, "20m", 14.0905, 1500.0, 14.074),
+            (Tier::Ft4, Tier::TempoDeep, "20m", 14.080, 1500.0, 14.0905),
+            (Tier::TempoDeep, Tier::Ft4, "20m", 14.0905, 1500.0, 14.080),
+            // A 1.5 kHz jump: Tx at 10.144 MHz, below the FT2 waterfall's 10.1442-10.147.
+            (Tier::TempoFast, Tier::Ft2, "30m", 10.1425, 1500.0, 10.144),
+        ] {
+            let case = format!("{from:?} -> {to:?} on {band}, Tx at {tx_hz} Hz");
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, from, band, dial, tx_hz);
+            let before = qso_shown(&e);
+            assert!(before.is_some(), "{case}: premise: a QSO with W1AW");
+            e.set_tier(to);
+            assert!(
+                (e.settings().dial_mhz - lands).abs() < 1e-9,
+                "{case}: premise: the dial lands on {lands}, got {}",
+                e.settings().dial_mhz
+            );
+            let (armed, cut) = (e.tx_enabled(), e.take_slot_tx_abort());
+            let next = next_over(&mut e, slot);
+            assert!(
+                !armed,
+                "{case}: TX Enable stayed on, and the next over went out (slot, s, message): \
+                 {next:?}"
+            );
+            assert!(cut, "{case}: the over in flight was not cut");
+            assert_eq!(next, None, "{case}: an over keyed at the next boundary");
+            assert_eq!(qso_shown(&e), before, "{case}: the QSO changed");
+            // TX on again: the QSO goes on where it was, in the new mode's own over.
+            e.set_tx_enabled(true);
+            let resumed = next_over(&mut e, slot);
+            let (sent, own) = (before.and_then(|q| q.2), own_over_secs(to, band, lands));
+            assert!(
+                matches!(&resumed, Some((_, secs, msg)) if *msg == sent && Some(*secs) == own),
+                "{case}: re-armed, the over is not {sent:?} in {to:?} ({own:?} s): {resumed:?}"
+            );
+        }
+    }
+
+    /// Where the rule leaves TX alone, a switch into or out of FT2, FT1 or DX1 leaves it alone
+    /// too: TX already off, a switch that leaves the dial where it is, one whose small jump keeps
+    /// the Tx frequency on the waterfall, and a switch into WSPR, which WSJT-X exempts.
+    #[test]
+    fn a_switch_into_or_out_of_ft2_ft1_or_dx1_keeps_tx_where_the_rule_keeps_it() {
+        for to in [Tier::Ft2, Tier::TempoFast] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, Tier::Ft8, "20m", 14.074, 1500.0);
+            e.set_tx_enabled(false);
+            let before = qso_shown(&e);
+            e.set_tier(to);
+            assert!(
+                (e.settings().dial_mhz - 14.074).abs() > 0.005,
+                "TX off, FT8 -> {to:?}: premise: the dial moved"
+            );
+            assert!(!e.tx_enabled(), "TX off, FT8 -> {to:?}: TX turned on");
+            assert_eq!(
+                next_over(&mut e, slot),
+                None,
+                "TX off, FT8 -> {to:?}: an over keyed"
+            );
+            assert_eq!(
+                qso_shown(&e),
+                before,
+                "TX off, FT8 -> {to:?}: the QSO changed"
+            );
+        }
+
+        let cases: [(&str, Tier, &str, f64, f32, Tier, f64); 5] = [
+            (
+                "FT8 -> FT2 with the dial already on 14.084",
+                Tier::Ft8,
+                "20m",
+                14.084,
+                1500.0,
+                Tier::Ft2,
+                14.084,
+            ),
+            (
+                "FT1 -> DX1, which share one channel",
+                Tier::TempoFast,
+                "20m",
+                14.0905,
+                1500.0,
+                Tier::TempoDeep,
+                14.0905,
+            ),
+            (
+                "FT1 -> FT2 on 30 m, Tx at 10.1445 on the FT2 waterfall",
+                Tier::TempoFast,
+                "30m",
+                10.1425,
+                2000.0,
+                Tier::Ft2,
+                10.144,
+            ),
+            (
+                "FT2 -> FT1 on 30 m, Tx at 10.1445 on the FT1 waterfall",
+                Tier::Ft2,
+                "30m",
+                10.144,
+                500.0,
+                Tier::TempoFast,
+                10.1425,
+            ),
+            (
+                "FT1 -> WSPR",
+                Tier::TempoFast,
+                "20m",
+                14.0905,
+                1500.0,
+                Tier::Wspr,
+                14.0956,
+            ),
+        ];
+        for (case, from, band, dial, tx_hz, to, lands) in cases {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, from, band, dial, tx_hz);
+            e.set_tier(to);
+            assert!(
+                (e.settings().dial_mhz - lands).abs() < 1e-9,
+                "{case}: premise: the dial is on {lands}, got {}",
+                e.settings().dial_mhz
+            );
+            assert!(e.tx_enabled(), "{case}: TX Enable turned off");
+            assert!(
+                !e.take_slot_tx_abort(),
+                "{case}: the over in flight was cut"
+            );
+            if to != Tier::Wspr {
+                assert!(
+                    next_over(&mut e, slot).is_some(),
+                    "{case}: nothing keyed at the next boundary"
+                );
+            }
         }
     }
 
@@ -60052,5 +61184,842 @@ mod dedup_gate_tests {
             e.stored_log().last().unwrap().ota.their_ref.as_deref(),
             Some("US-0001")
         );
+    }
+}
+
+/// Nothing the operator does waits for a decode in flight with the Engine lock held.
+///
+/// The radio loop takes the Engine lock on every tick and is the only thing that drops PTT, so an
+/// action that waits under that lock for the decoder holds the unkey for as long as the decode
+/// has left to run. Each test here runs one action while a decode is in flight on another thread
+/// (its job holding the decoder lock, and the modem lock held inside it as the real decoder's FFI
+/// call holds it for the whole decode), and measures how long the action held the Engine lock.
+#[cfg(test)]
+mod decode_in_flight_tests {
+    use super::tests::dec_snr;
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// How long the decode in flight runs when nothing ends it, and so what an action that waits
+    /// for it holds the Engine lock for.
+    const DECODE_MS: u64 = 600;
+    /// An action that does not wait for the decode is done well inside this.
+    const NO_WAIT: Duration = Duration::from_millis(100);
+
+    /// A decode in flight: holds the modem lock as the FFI decode does, says when it is decoding,
+    /// and decodes nothing until `go` arrives or its sender is dropped.
+    struct DecodeInFlight {
+        decoding: mpsc::Sender<()>,
+        go: mpsc::Receiver<()>,
+    }
+
+    impl SignalSource for DecodeInFlight {
+        fn label(&self) -> String {
+            "decode in flight".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            // The a7 reset guard is the modem lock itself.
+            let _modem = loop {
+                match modes::Ft8A7ResetGuard::try_acquire() {
+                    Some(modem) => break modem,
+                    None => std::thread::sleep(Duration::from_millis(1)),
+                }
+            };
+            let _ = self.decoding.send(());
+            let _ = self.go.recv();
+            Vec::new()
+        }
+    }
+
+    /// Run `act` on `e` while a decode is in flight, the way a command or the radio loop runs it
+    /// under the Engine lock, and return how long it took (how long it held that lock) with the
+    /// decode's result. The decode ends when `act` returns, or after [`DECODE_MS`] if `act` is
+    /// still waiting for it.
+    fn during_a_decode(e: &mut Engine, act: impl FnOnce(&mut Engine)) -> (Duration, DecodeResult) {
+        let (decoding, decoding_rx) = mpsc::channel();
+        let (go, go_rx) = mpsc::channel();
+        e.install_source(Box::new(DecodeInFlight {
+            decoding,
+            go: go_rx,
+        }));
+        e.begin_slot_capture();
+        let job = e.build_decode_job(vec![0.0; 1024], 9, DecodePass::Boundary);
+        let decode = std::thread::spawn(move || run_decode_job(job));
+        decoding_rx.recv().expect("the decode is in flight");
+        let late = go.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(DECODE_MS));
+            let _ = late.send(());
+        });
+        let t0 = Instant::now();
+        act(e);
+        let held = t0.elapsed();
+        let _ = go.send(());
+        (held, decode.join().expect("the decode ends"))
+    }
+
+    fn ft8() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e
+    }
+
+    /// Double-click to work, and a logger's WSJT-X UDP Reply, which the radio loop handles on its
+    /// own thread: both run `call_station_ctx`, whose IR-HARQ reset used to wait for the decode.
+    #[test]
+    fn working_a_caller_never_waits_for_the_decode() {
+        let mut e = ft8();
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN31", -5)], 3);
+        let (held, result) = during_a_decode(&mut e, |e| {
+            e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-5), Some(1500.0))
+                .expect("the double-click starts the QSO");
+        });
+        assert_eq!(e.qso_dxcall(), Some("W1AW"), "the QSO started");
+        assert!(
+            !matches!(e.apply_decode_result(result), DecodeApplied::Stale),
+            "the period in flight is still folded in, as before"
+        );
+        assert!(
+            held < NO_WAIT,
+            "working a caller held the Engine lock {held:?} while a decode ran"
+        );
+    }
+
+    /// Call CQ enters the running QSO mode, whose IR-HARQ reset used to wait for the decode.
+    #[test]
+    fn calling_cq_never_waits_for_the_decode() {
+        let mut e = ft8();
+        let (held, _) = during_a_decode(&mut e, |e| {
+            e.set_mode("qso-run").expect("Call CQ");
+        });
+        assert!(
+            held < NO_WAIT,
+            "Call CQ held the Engine lock {held:?} while a decode ran"
+        );
+    }
+
+    /// A tier change used to swap the decoder under its lock, waiting the decode out. The decode
+    /// in flight is never folded into the new tier (its period belongs to the tier being left;
+    /// it is shown under that tier), and the new decoder is in place before anything decodes
+    /// again.
+    #[test]
+    fn a_tier_change_never_waits_for_the_decode_and_swaps_the_decoder_when_it_ends() {
+        let mut e = ft8();
+        let (held, result) = during_a_decode(&mut e, |e| e.set_tier(Tier::Ft4));
+        assert!(
+            held < NO_WAIT,
+            "the tier change held the Engine lock {held:?} while a decode ran"
+        );
+        assert!(
+            matches!(e.apply_decode_result(result), DecodeApplied::Late { n: 0 }),
+            "the FT8 period in flight is shown under FT8 (it decoded nothing), never folded"
+        );
+        assert_eq!(
+            source_lock(&e.source).label(),
+            "Native (FT4)",
+            "the FT4 decoder is in place for the next period"
+        );
+        assert_eq!(e.snapshot().radio.source_label, "Native (FT4)");
+    }
+
+    /// Chat's coordinated QSY runs from `plan_tx` on the radio loop's thread: the move to the new
+    /// channel (here across bands, so the a7 table is cleared too) and the IR-HARQ reset used to
+    /// wait for the decode there.
+    #[test]
+    fn a_chat_qsy_never_waits_for_the_decode() {
+        let mut e = Engine::new("KA9AAA", "EN52", 0);
+        e.set_tx_enabled(true);
+        e.qsy_configure(vec!["20m".into(), "40m".into()], 1);
+        e.select_peer("KB9BBB");
+        e.qsy_set_enabled(true);
+        e.ingest_decodes_for_test(&[dec_snr("KA9AAA KB9BBB EN52", -5)], 0);
+        let _ = e.poll_tx(2);
+        let at = e
+            .snapshot()
+            .qsy
+            .and_then(|q| q.next_slot)
+            .expect("the move is scheduled");
+        let (held, _) = during_a_decode(&mut e, |e| {
+            let _ = e.plan_tx(at);
+        });
+        assert_eq!(e.snapshot().radio.band, "40m", "the station moved");
+        assert!(
+            held < NO_WAIT,
+            "the Chat QSY held the Engine lock {held:?} while a decode ran"
+        );
+    }
+
+    /// Every other local action that resets the decoder's carried state or swaps the decoder: none
+    /// waits for the decode. Each row is one place the reset or the swap is asked for.
+    #[test]
+    fn no_decoder_reset_or_swap_waits_for_the_decode() {
+        type Step = fn(&mut Engine);
+        let rows: &[(&str, Step, Step)] = &[
+            (
+                "a band change",
+                |_| {},
+                |e| e.set_frequency(7.074, "40m", "USB"),
+            ),
+            (
+                "a knob QSY across bands, on the radio loop's thread",
+                |e| e.observe_rig_freq(14_074_000),
+                |e| e.observe_rig_freq(7_074_000),
+            ),
+            ("a band pick", |_| {}, |e| e.pick_band("40m", None)),
+            (
+                "working a spot on another band",
+                |_| {},
+                |e| e.work_spot("digital", 7.074, "40m"),
+            ),
+            (
+                "releasing Tune",
+                |e| {
+                    e.set_tx_enabled(true);
+                    e.set_tune(true);
+                },
+                |e| e.set_tune(false),
+            ),
+            (
+                "an ATU tune-up reaching the radio",
+                |_| {},
+                |e| e.note_atu_tune_started(),
+            ),
+            (
+                "a radio handoff",
+                |e| {
+                    e.apply_restored_settings(Settings {
+                        radios: vec![
+                            crate::settings::RadioProfile {
+                                id: 0,
+                                ..Default::default()
+                            },
+                            crate::settings::RadioProfile {
+                                id: 1,
+                                ..Default::default()
+                            },
+                        ],
+                        active_radio: 0,
+                        ..Settings::default()
+                    });
+                    e.set_tier(Tier::Ft8);
+                },
+                |e| e.set_active_radio(1),
+            ),
+            (
+                "a section change from 2 m FM simplex to the FT8 channel",
+                |e| {
+                    e.set_operating_mode("phone", false);
+                    e.set_frequency(146.52, "2m", "FM");
+                },
+                |e| e.set_operating_mode("digital", true),
+            ),
+            (
+                "a tier change that leaves the band",
+                |_| {},
+                |e| e.set_tier(Tier::Msk144),
+            ),
+            (
+                "entering Chat from a band FT1 has no channel on",
+                |e| e.set_frequency(5.357, "60m", "USB"),
+                |e| e.set_area("msg"),
+            ),
+            (
+                "Chat mode from FT8",
+                |_| {},
+                |e| {
+                    e.set_mode("chat").expect("chat");
+                },
+            ),
+            (
+                "a source change",
+                |_| {},
+                |e| e.set_source(SourceKind::Native).expect("native"),
+            ),
+            (
+                "a change to a WSJT-X companion source",
+                |e| e.settings.companion_addr = "127.0.0.1:0".into(),
+                |e| e.set_source(SourceKind::Companion).expect("companion"),
+            ),
+            (
+                "a settings save that changes the mode's period",
+                |e| e.set_tier(Tier::Q65),
+                |e| {
+                    let mut s = e.settings().clone();
+                    s.q65_period_s = if s.q65_period_s == 60 { 30 } else { 60 };
+                    e.apply_settings(s);
+                },
+            ),
+            (
+                "a JS8 speed change",
+                |e| e.set_tier(Tier::Js8),
+                |e| {
+                    let next = (e.settings().js8_speed + 1) % 4;
+                    e.js8_set_speed(next).expect("speed");
+                },
+            ),
+        ];
+        let mut waited = Vec::new();
+        for (what, setup, act) in rows {
+            let mut e = ft8();
+            setup(&mut e);
+            let (held, _) = during_a_decode(&mut e, *act);
+            if held >= NO_WAIT {
+                waited.push(format!("{what}: {held:?}"));
+            }
+        }
+        assert!(
+            waited.is_empty(),
+            "held the Engine lock while a decode ran: {waited:#?}"
+        );
+    }
+
+    /// A decoder that panics as it decodes, once it is told to go or after [`DECODE_MS`]: a
+    /// decode that never reaches its hand-over.
+    struct PanicsInFlight {
+        decoding: mpsc::Sender<()>,
+        go: mpsc::Receiver<()>,
+    }
+
+    impl SignalSource for PanicsInFlight {
+        fn label(&self) -> String {
+            "panics in flight".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            let _ = self.decoding.send(());
+            let _ = self.go.recv_timeout(Duration::from_millis(DECODE_MS));
+            panic!("a decoder fault");
+        }
+    }
+
+    /// The decode in flight swaps in the decoder asked for while it ran just before it lets go
+    /// of the lock. One that panics never gets there, so the next decode puts the decoder in
+    /// before it decodes, unless a newer one was put in first.
+    #[test]
+    fn a_decoder_asked_for_while_a_decode_panicked_is_put_in_by_the_next_decode() {
+        for (then, want) in [(None, "Native (FT4)"), (Some(Tier::Ft2), "Native (FT2)")] {
+            let mut e = ft8();
+            let (decoding, decoding_rx) = mpsc::channel();
+            let (go, go_rx) = mpsc::channel();
+            e.install_source(Box::new(PanicsInFlight {
+                decoding,
+                go: go_rx,
+            }));
+            e.begin_slot_capture();
+            let job = e.build_decode_job(vec![0.0; 1024], 9, DecodePass::Boundary);
+            let decode = std::thread::spawn(move || run_decode_job(job));
+            decoding_rx.recv().expect("the decode is in flight");
+            let t0 = Instant::now();
+            e.set_tier(Tier::Ft4);
+            let held = t0.elapsed();
+            drop(go);
+            let result = decode.join().expect("the panic is contained");
+            assert!(result.failed, "premise: the decode panicked");
+            assert!(
+                held < NO_WAIT,
+                "the tier change held the Engine lock {held:?} while a decode ran"
+            );
+            if let Some(tier) = then {
+                e.set_tier(tier);
+            }
+            e.begin_slot_capture();
+            let frame = vec![0.0; e.active_frame_samples()];
+            let _ = run_decode_job(e.build_decode_job(frame, 10, DecodePass::Boundary));
+            assert_eq!(
+                source_lock(&e.source).label(),
+                want,
+                "the next decode ran on the wrong decoder (after {then:?})"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod band_or_mode_change_tests {
+    //! A band change or a mode switch, set against WSJT-X 3.0.2: the period then being decoded is
+    //! shown under what it was heard on and reaches nothing else, and a7 decodes are hidden for 1.5
+    //! periods on 3.0.2's own clock.
+    use super::tests::dec_snr;
+    use super::*;
+
+    const FT8_HIDE: Duration = Duration::from_millis(22_500);
+    const FT4_HIDE: Duration = Duration::from_millis(11_250);
+    const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn the_a7_hide_lasts_one_and_a_half_periods_on_3_0_2s_clock() {
+        let t0 = Instant::now();
+        let mut hide = A7Hide::default();
+        assert!(!hide.hides(t0), "nothing is hidden before a change");
+        hide.set(t0, 15.0);
+        assert!(hide.hides(t0) && hide.hides(t0 + FT8_HIDE - MS));
+        assert!(!hide.hides(t0 + FT8_HIDE));
+        // `int(1500.0*m_TRperiod)` ms: FT4's 7.5 s period hides for 11,250 ms.
+        let mut hide = A7Hide::default();
+        hide.set(t0, 7.5);
+        assert!(hide.hides(t0 + FT4_HIDE - MS) && !hide.hides(t0 + FT4_HIDE));
+    }
+
+    /// Every set starts a timer nothing cancels, and the first to fire ends the hide.
+    #[test]
+    fn the_a7_hide_ends_when_the_first_pending_timer_fires_as_3_0_2s_does() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        // FT8 → FT4 at 0 s (an 11.25 s timer), FT4 → FT8 at 5 s (22.5 s): shown again at 11.25 s.
+        let mut hide = A7Hide::default();
+        hide.set(t0, 7.5);
+        hide.set(t0 + s(5), 15.0);
+        assert!(hide.hides(t0 + FT4_HIDE - MS));
+        assert!(
+            !hide.hides(t0 + FT4_HIDE),
+            "the FT4 switch's timer ends it, as in 3.0.2"
+        );
+        // A timer still pending from an earlier set ends a later hide early: a band change on FT8
+        // at 0 s (22.5 s), FT4 at 1 s (fires at 12.25 s), another switch at 13 s (24.25 s).
+        let mut hide = A7Hide::default();
+        hide.set(t0, 15.0);
+        hide.set(t0 + s(1), 7.5);
+        assert!(!hide.hides(t0 + Duration::from_millis(12_250)));
+        hide.set(t0 + s(13), 7.5);
+        assert!(hide.hides(t0 + s(13)) && hide.hides(t0 + FT8_HIDE - MS));
+        assert!(
+            !hide.hides(t0 + FT8_HIDE),
+            "the band change's timer ends it"
+        );
+    }
+
+    fn ft8() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e
+    }
+
+    /// The hide `act` starts: how long each timer it sets runs, in ms, from when `act` ran.
+    fn hides_set_by(e: &mut Engine, act: impl FnOnce(&mut Engine)) -> Vec<u64> {
+        let before = e.a7_hide.timers.clone();
+        let t0 = Instant::now();
+        act(e);
+        let took = t0.elapsed();
+        e.a7_hide
+            .timers
+            .iter()
+            .filter(|t| !before.contains(t))
+            .map(|&t| {
+                let ms = t.duration_since(t0);
+                assert!(took < Duration::from_millis(50), "the action took {took:?}");
+                // Rounded down to the 50 ms the action may have spent before setting it.
+                (ms.as_millis() as u64 / 50) * 50
+            })
+            .collect()
+    }
+
+    /// The switch's own timers come first: a mode with no channel on this band also moves the dial
+    /// to another band, and that band change starts its own (as 3.0.2's `switch_mode` does through
+    /// `on_bandComboBox_activated`, `:11676-11679`).
+    #[test]
+    fn a_mode_switch_hides_a7_on_the_period_3_0_2_has_set_by_then() {
+        // The new mode's period where 3.0.2's handler sets it before `switch_mode`…
+        assert_eq!(
+            hides_set_by(&mut ft8(), |e| e.set_tier(Tier::Ft4)),
+            [11_250]
+        );
+        let mut e = ft8();
+        e.set_tier(Tier::Ft4);
+        assert_eq!(hides_set_by(&mut e, |e| e.set_tier(Tier::Ft8)), [22_500]);
+        let mut e = ft8();
+        let msk144 = hides_set_by(&mut e, |e| e.set_tier(Tier::Msk144));
+        assert_eq!(msk144[..1], [(1500.0 * e.active_slot_secs()) as u64]);
+        // …the period being left where it calls `switch_mode` first…
+        for tier in [Tier::Jt65, Tier::Wspr, Tier::Fst4, Tier::Fst4w] {
+            let set = hides_set_by(&mut ft8(), |e| e.set_tier(tier));
+            assert_eq!(set[..1], [22_500], "{tier:?}: {set:?}");
+        }
+        // …and both for Q65, which calls it before and after restoring its own period.
+        let mut e = ft8();
+        let q65 = hides_set_by(&mut e, |e| e.set_tier(Tier::Q65));
+        assert_eq!(q65[..2], [22_500, (1500.0 * e.active_slot_secs()) as u64]);
+        // No switch, no hide.
+        assert!(hides_set_by(&mut ft8(), |e| e.set_tier(Tier::Ft8)).is_empty());
+    }
+
+    #[test]
+    fn a_band_change_hides_a7_and_a_move_within_the_band_does_not() {
+        let mut e = ft8();
+        assert!(hides_set_by(&mut e, |e| e.set_frequency(14.080, "20m", "USB")).is_empty());
+        assert_eq!(
+            hides_set_by(&mut e, |e| e.set_frequency(7.074, "40m", "USB")),
+            [22_500]
+        );
+        // Across a band at the rig's own knob, too.
+        assert_eq!(
+            hides_set_by(&mut ft8(), |e| e.observe_rig_freq(7_074_000)),
+            [22_500]
+        );
+        // A hop to FM simplex on 2 m clears the decode context and the a7 table, but it is no
+        // band change, so WSJT-X's `band_changed` would never run for it.
+        let mut e = ft8();
+        e.set_frequency(144.174, "2m", "USB");
+        assert!(hides_set_by(&mut e, |e| e.set_frequency(146.520, "2m", "FM")).is_empty());
+    }
+
+    /// A decoder that hears `early` on an early pass and `full` on a full one, every time.
+    struct Hears {
+        early: Vec<modes::Decode>,
+        full: Vec<modes::Decode>,
+    }
+
+    impl SignalSource for Hears {
+        fn label(&self) -> String {
+            "hears".into()
+        }
+        fn mode_kind(&self) -> Option<modes::ModeKind> {
+            Some(modes::ModeKind::Ft8)
+        }
+        fn decode(&mut self, req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+            if req.partial {
+                self.early.clone()
+            } else {
+                self.full.clone()
+            }
+        }
+    }
+
+    fn heard(msg: &str, freq: f32) -> modes::Decode {
+        modes::Decode {
+            freq,
+            mode: Some(modes::ModeKind::Ft8),
+            ..dec_snr(msg, -10)
+        }
+    }
+
+    /// FT8 on 20 m at 14.074 with ALL.TXT on, hearing `full` on every full pass.
+    fn hearing(full: Vec<modes::Decode>) -> Engine {
+        let mut e = ft8();
+        e.settings.write_all_txt = true;
+        e.install_source(Box::new(Hears {
+            early: Vec::new(),
+            full,
+        }));
+        e.begin_slot_capture();
+        e
+    }
+
+    /// The boundary job for slot 9, decoded: a decode in flight whose result has yet to land.
+    fn slot_9(e: &Engine) -> DecodeResult {
+        run_decode_job(e.build_decode_job(vec![0.0; 1024], 9, DecodePass::Boundary))
+    }
+
+    fn messages(rows: &[DecodeRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.message.as_str()).collect()
+    }
+
+    #[test]
+    fn the_period_decoding_at_a_band_change_is_shown_under_the_band_it_was_heard_on() {
+        let lines = vec![
+            heard("CQ W9XYZ EN52", 1200.0),
+            heard("KD9TAW W1AW -10", 1500.0),
+        ];
+        let run = |qsy: bool| {
+            let mut e = hearing(lines.clone());
+            // W1AW's CQ, heard the period before, is the line the operator works.
+            e.ingest_decodes_for_test(&[heard("CQ W1AW FN31", 1500.0)], 7);
+            e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-10), Some(1500.0))
+                .expect("working W1AW");
+            let result = slot_9(&e);
+            if qsy {
+                e.set_frequency(7.074, "40m", "USB");
+            }
+            let applied = e.apply_decode_result(result);
+            (e, applied)
+        };
+        // The control: with no QSY the period is the live one, and W1AW's report advances the QSO.
+        let (e, applied) = run(false);
+        assert!(matches!(applied, DecodeApplied::Boundary { n: 2, .. }));
+        assert_eq!(
+            e.snapshot().qso.map(|q| q.state).as_deref(),
+            Some("AwaitRr73")
+        );
+
+        let (mut e, applied) = run(true);
+        assert!(matches!(applied, DecodeApplied::Late { n: 2 }));
+        let s = e.snapshot();
+        let late = s.late_decodes.expect("the period in flight is shown");
+        assert_eq!(
+            (late.band.as_str(), late.dial_mhz, late.tier),
+            ("20m", 14.074, Tier::Ft8),
+            "under what it was heard on, never 40 m"
+        );
+        assert_eq!((late.period_start_ms, late.slot), (8 * 15_000, 9));
+        assert_eq!(messages(&late.rows), ["CQ W9XYZ EN52", "KD9TAW W1AW -10"]);
+        assert!(
+            s.recent_decodes.is_empty(),
+            "no 20 m line in 40 m's live feed"
+        );
+        // …and nothing else reads it.
+        assert_eq!(
+            s.qso.map(|q| q.state).as_deref(),
+            Some("AwaitReport"),
+            "W1AW's report from 20 m advanced the QSO"
+        );
+        assert!(s.stations.is_empty(), "20 m stations in 40 m's roster");
+        assert!(e.decode_history.is_empty() && e.last_decode_slot.is_none());
+        assert!(
+            e.wire_decodes().is_empty() && e.current_period_decodes().is_empty(),
+            "a 20 m line for a logger or PSK Reporter on 40 m"
+        );
+        assert!(e.last_rx.is_none(), "20 m audio for F6 on 40 m");
+        // ALL.TXT: written, at 20 m's dial, as FT8, stamped with the period it was heard in.
+        let all = e.take_all_txt_pending();
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert!(
+            all.iter()
+                .all(|l| l.starts_with("700101_000200    14.074 Rx FT8")),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn the_period_decoding_at_a_mode_change_is_shown_under_the_mode_it_was_heard_in() {
+        let mut e = hearing(vec![heard("CQ W9XYZ EN52", 1200.0)]);
+        let result = slot_9(&e);
+        e.set_tier(Tier::Ft4);
+        assert!(matches!(
+            e.apply_decode_result(result),
+            DecodeApplied::Late { n: 1 }
+        ));
+        let late = e.snapshot().late_decodes.expect("shown");
+        assert_eq!(
+            (late.band.as_str(), late.dial_mhz, late.tier),
+            ("20m", 14.074, Tier::Ft8),
+            "under FT8 and its dial, not FT4's 14.080"
+        );
+        assert_eq!(
+            (late.period_start_ms, late.slot),
+            (8 * 15_000, 18),
+            "FT8's period, sorting by its boundary in FT4's numbering"
+        );
+        assert_eq!(late.rows[0].tier, Tier::Ft8);
+        let all = e.take_all_txt_pending();
+        assert!(
+            all.len() == 1 && all[0].starts_with("700101_000200    14.074 Rx FT8"),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn a_split_capture_a_failed_decode_and_a_mode_wsjtx_lacks_stay_dropped() {
+        // A capture a mid-slot QSY cut in two (#103): its job is built after the QSY.
+        let mut e = hearing(vec![heard("CQ W9XYZ EN52", 1200.0)]);
+        e.set_frequency(7.074, "40m", "USB");
+        let result = slot_9(&e);
+        assert!(matches!(
+            e.apply_decode_result(result),
+            DecodeApplied::Stale
+        ));
+        // A mode WSJT-X does not have: FT1.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::TempoFast);
+        e.install_source(Box::new(Hears {
+            early: Vec::new(),
+            full: vec![heard("CQ W9XYZ EN52", 1200.0)],
+        }));
+        e.begin_slot_capture();
+        let result = slot_9(&e);
+        e.set_tier(Tier::Ft8);
+        assert!(matches!(
+            e.apply_decode_result(result),
+            DecodeApplied::Stale
+        ));
+        assert!(e.snapshot().late_decodes.is_none());
+    }
+
+    /// The early pass may have folded, and written, part of the period before the change.
+    #[test]
+    fn a_late_periods_early_lines_are_shown_with_the_rest_and_written_once() {
+        let (a, b) = (
+            heard("CQ W9XYZ EN52", 1200.0),
+            heard("CQ K1ABC FN42", 900.0),
+        );
+        let mut e = ft8();
+        e.settings.write_all_txt = true;
+        e.install_source(Box::new(Hears {
+            early: vec![a.clone()],
+            full: vec![a, b],
+        }));
+        e.begin_slot_capture();
+        let early = run_decode_job(e.build_decode_job(vec![0.0; 1024], 9, DecodePass::Early));
+        assert!(matches!(
+            e.apply_decode_result(early),
+            DecodeApplied::Early { n: 1 }
+        ));
+        let boundary = slot_9(&e);
+        e.set_frequency(7.074, "40m", "USB");
+        assert!(matches!(
+            e.apply_decode_result(boundary),
+            DecodeApplied::Late { n: 2 }
+        ));
+        let late = e.snapshot().late_decodes.expect("shown");
+        assert_eq!(messages(&late.rows), ["CQ W9XYZ EN52", "CQ K1ABC FN42"]);
+        let all = e.take_all_txt_pending();
+        for line in ["CQ W9XYZ EN52", "CQ K1ABC FN42"] {
+            assert_eq!(
+                all.iter().filter(|l| l.ends_with(line)).count(),
+                1,
+                "{line} in {all:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_new_bands_first_period_replaces_the_one_shown_from_the_old_band() {
+        let mut e = hearing(vec![heard("CQ W9XYZ EN52", 1200.0)]);
+        let result = slot_9(&e);
+        e.set_frequency(7.074, "40m", "USB");
+        e.apply_decode_result(result);
+        assert!(e.snapshot().late_decodes.is_some());
+        e.begin_slot_capture();
+        let next = run_decode_job(e.build_decode_job(vec![0.0; 1024], 11, DecodePass::Boundary));
+        assert!(matches!(
+            e.apply_decode_result(next),
+            DecodeApplied::Boundary { n: 1, .. }
+        ));
+        let s = e.snapshot();
+        assert!(s.late_decodes.is_none());
+        assert_eq!(messages(&s.recent_decodes), ["CQ W9XYZ EN52"]);
+    }
+
+    /// WSJT-X colours a late line for `m_currentBandPeriod`, the band it was received on.
+    #[test]
+    fn a_late_period_is_coloured_for_the_band_it_was_heard_on() {
+        let line = heard("CQ W1AW EN37", 1200.0);
+        let mut e = hearing(vec![line.clone()]);
+        e.set_dxcc_resolver(|call| call.chars().next().map(|c| c.to_string()));
+        // W1AW and EN37 worked on 20 m only.
+        let rec = e.qso_record("W1AW".into(), Some("EN37".into()), Some(-5));
+        e.log_qso(rec);
+        let result = slot_9(&e);
+        e.set_frequency(7.074, "40m", "USB");
+        e.apply_decode_result(result);
+        let late = e.snapshot().late_decodes.expect("shown");
+        let row = &late.rows[0];
+        assert!(
+            !row.new_grid && !row.new_band,
+            "a 20 m line coloured for 40 m: new grid {}, new band {}",
+            row.new_grid,
+            row.new_band
+        );
+        // The control: the same line heard on 40 m is a new grid and a new band there.
+        e.ingest_decodes_for_test(&[line], 11);
+        let live = &e.snapshot().recent_decodes[0];
+        assert!(live.new_grid && live.new_band, "control: {live:?}");
+    }
+
+    /// A handoff to a radio on another band is a band change; one on the same band is not.
+    #[test]
+    fn a_radio_handoff_hides_a7_when_it_changes_the_band() {
+        let mut e = ft8();
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let r1 = e.add_radio();
+        assert_eq!(e.settings.band, "20m");
+        assert!(hides_set_by(&mut e, |e| e.set_active_radio(r1)).is_empty());
+        assert_eq!(
+            e.settings.band, "20m",
+            "premise: the second radio is on 20 m"
+        );
+        e.set_frequency(7.074, "40m", "USB");
+        assert_eq!(
+            (e.settings.active_radio, e.settings.band.as_str()),
+            (r1, "40m")
+        );
+        assert_eq!(hides_set_by(&mut e, |e| e.set_active_radio(0)), [22_500]);
+        assert_eq!(
+            e.settings.band, "20m",
+            "premise: the first radio is on 20 m"
+        );
+    }
+
+    /// The panes wipe on a band or mode change and take the live feed in again, so a line of the
+    /// band or mode left still in it was shown as the new one's.
+    #[test]
+    fn a_band_or_mode_change_leaves_no_line_of_the_old_one_in_the_live_feed() {
+        let changes: [fn(&mut Engine); 2] = [
+            |e| e.set_frequency(7.074, "40m", "USB"),
+            |e| e.set_tier(Tier::Ft4),
+        ];
+        for change in changes {
+            let mut e = hearing(vec![heard("CQ W9XYZ EN52", 1200.0)]);
+            let result = slot_9(&e);
+            assert!(matches!(
+                e.apply_decode_result(result),
+                DecodeApplied::Boundary { n: 1, .. }
+            ));
+            assert_eq!(messages(&e.snapshot().recent_decodes), ["CQ W9XYZ EN52"]);
+            change(&mut e);
+            let s = e.snapshot();
+            assert!(
+                s.recent_decodes.is_empty(),
+                "on {} {:?}, the live feed still has {:?}",
+                s.radio.band,
+                s.link.tier,
+                messages(&s.recent_decodes)
+            );
+        }
+    }
+
+    /// 3.0.2 drops a hidden a7 line before anything reads it.
+    #[test]
+    fn an_a7_line_hidden_after_a_switch_reaches_nothing() {
+        let a7 = modes::Decode {
+            nap: 7,
+            ..heard("KD9TAW W1AW -10", 1500.0)
+        };
+        let run = |aged: Option<Duration>| {
+            let mut e = hearing(vec![a7.clone()]);
+            e.ingest_decodes_for_test(&[heard("CQ W1AW FN31", 1500.0)], 7);
+            e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-10), Some(1500.0))
+                .expect("working W1AW");
+            e.set_tier(Tier::Ft4);
+            e.set_tier(Tier::Ft8);
+            e.install_source(Box::new(Hears {
+                early: Vec::new(),
+                full: vec![a7.clone()],
+            }));
+            if let Some(by) = aged {
+                e.age_a7_hide(by);
+            }
+            e.begin_slot_capture();
+            let _ = e.take_all_txt_pending();
+            let result = slot_9(&e);
+            e.apply_decode_result(result);
+            let s = e.snapshot();
+            (
+                messages(&s.recent_decodes)
+                    .iter()
+                    .map(|m| m.to_string())
+                    .collect::<Vec<_>>(),
+                e.take_all_txt_pending().len(),
+                s.qso.map(|q| q.state),
+            )
+        };
+        let (shown, written, state) = run(None);
+        assert!(shown.is_empty(), "{shown:?}");
+        assert_eq!(written, 0, "written to ALL.TXT");
+        assert_eq!(
+            state.as_deref(),
+            Some("AwaitReport"),
+            "read by the sequencer"
+        );
+        // The control, 1.5 periods on: shown, written and read.
+        let (shown, written, state) = run(Some(FT8_HIDE));
+        assert_eq!(shown, ["KD9TAW W1AW -10"]);
+        assert_eq!(written, 1);
+        assert_eq!(state.as_deref(), Some("AwaitRr73"));
     }
 }

@@ -280,11 +280,11 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   Phone/CW/RTTY/PSK/SSTV/APRS/JS8 — so each cockpit stands on
   its own. **The sweeps do not match this census one for one** (the claim that they did was false for
   four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop
-  TX/Esc-Stop macro/Tune/latch, PSK's Stop TX/Esc-Stop macro/Tune/latch and SSTV's Stop/latch (the one
-  exact match); Operate's guard list is the
-  whole TX/sequencer surface of the strip, not a stop-control list. Census-only, and outside both
-  sweeps by construction: Phone's Space and CW's/Operate's Esc (keyboard-only) and RTTY's sequencer
-  Abort (conditionally rendered).
+  TX/Esc-Stop macro/Tune/latch, PSK's Stop TX/Esc-Stop macro/Tune/latch, SSTV's Stop/latch (the one
+  exact match) and Operate's Stop TX/Tune in each of its layouts; Operate's structure test guards the
+  whole TX/sequencer surface of the strip as well, which is not a stop-control list. Census-only, and
+  outside both sweeps by construction: Phone's Space and CW's/Operate's Esc (keyboard-only) and RTTY's
+  sequencer Abort (conditionally rendered).
   **Nothing else about a pane bears on whether it may be hidden.** A pane *may* host a stop control
   of its own, and it goes away with the pane: **two do** — Phone's `voiceKeyer` (■ Stop → `stopVoice`
   → `Engine::stop_voice`, which flushes the output ring and unkeys) and RTTY's `stream` (the "Auto on"
@@ -319,12 +319,14 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   screen that remains**.
   Two guards, and neither is the rule alone: `panelState.test.ts` checks **names** across every
   vocabulary (`ALL_PANEL_VOCABULARIES`, itself checked against every vocabulary the module
-  exports); `components/stop-line.test.tsx` checks **wiring** for Phone/CW/RTTY/PSK/SSTV — with every id
+  exports); `components/stop-line.test.tsx` checks **wiring** for Phone/CW/RTTY/PSK/SSTV/JS8 and, since
+  ⊞ Arrange came to it (2026-10-07), Operate in both layouts — with every id
   in a cockpit's vocabulary removed, singly and all at once, every stop control **on that cockpit's
-  list** must still be in the document, found by accessible name, and no more disabled than it was.
-  Operate is swept in `OperateCockpit.structure.test.tsx`, and that sweep is **presence-only** (see
-  the next bullet) — not the same check. A stop control gated on an id called `dsp` is caught only by
-  the wiring sweeps; a dead `ptt` entry only by the name guard. Render each cockpit with **the props
+  list** must still be in the document, found by accessible name, and no more disabled than it was; the
+  cockpits that arrange are swept over fifty placements each as well (`stop-line.<cockpit>.test.tsx`).
+  `OperateCockpit.structure.test.tsx` holds the whole of Operate's strip to the same shape. A stop
+  control gated on an id called `dsp` is caught only by the wiring sweeps; a dead `ptt` entry only by
+  the name guard. Render each cockpit with **the props
   App gives it** — the TX-enable latch only exists when `onSetTxEnabled` is passed, and omitting it
   made the RTTY/SSTV sweeps blind to a control on both their lists.
 - **What the stop-line guards do NOT prove.** Written down rather than chased with more guards:
@@ -333,9 +335,8 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   is **exact-word** on whole normalised ids, so `txStop`/`pttRow`/`killTx` pass it — substring
   matching is not an option, it rejects `voiceKeyer` for containing `keyer`; the **practice
   note-pairing is computed for Phone only**, with no coverage test across vocabularies of the kind
-  the name guard has (that costs courtesy, not the guarantee); **Operate's sweep is presence-only**
-  (no baseline, no `disabled` comparison, no one-id-at-a-time pass) and is not the equivalent of the
-  four-cockpit sweep; **no sweep can see a keyboard-only or conditionally rendered stop** (both look
+  the name guard has (that costs courtesy, not the guarantee); **no sweep can see a keyboard-only or
+  conditionally rendered stop** (both look
   for buttons by accessible name in one fixture state, so Phone's Space, CW's/Operate's Esc and RTTY's
   sequencer Abort are census-only by construction); and that a *newly added* stop control reached its
   cockpit's sweep list is a human step.

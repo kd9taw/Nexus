@@ -213,6 +213,18 @@ describe('OperateRoster need chips are scoped to the surface', () => {
     expect(screen.queryByText('MODE')).not.toBeNull()
   })
 
+  // Operator ruling 2026-10-07: each mode counts separately, so a need for FT4 is not one the
+  // FT8 roster can close, and the FT4 roster shows it.
+  it('shows a new-mode chip for FT4 on the FT4 roster and not on the FT8 one', () => {
+    const ft4 = { ...arAlert('FT4'), exactMode: 'FT4' }
+    renderRoster(ft4, '30m', 'FT8')
+    expect(screen.queryByText('RF9C')).not.toBeNull()
+    expect(screen.queryByText('MODE')).toBeNull()
+    cleanup()
+    renderRoster(ft4, '30m', 'FT4')
+    expect(screen.queryByText('MODE')).not.toBeNull()
+  })
+
   it('keeps an all-time-new entity chip even from a CW alert (band/mode agnostic)', () => {
     renderRoster(arAlert('CW', ['NewEntity']))
     expect(screen.queryAllByTitle('NEW ONE').length).toBeGreaterThan(0)

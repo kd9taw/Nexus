@@ -3,7 +3,7 @@
  * absent. The operator finds activators on the air now, clicks Hunt to QSY and
  * tag the next logged QSO with the park/summit reference.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { TreePine, Mountain, RefreshCw, X } from 'lucide-react'
 import type { AppSnapshot, OtaSpot, Activation } from '../types'
 import {
@@ -28,6 +28,7 @@ import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 
@@ -204,10 +205,27 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     const raw = surfaceGet(keys.program)
     return raw === 'POTA' || raw === 'SOTA' || raw === 'Both' ? raw : 'POTA'
   })
-  const [nativeSpots, setSpots] = useState<OtaSpot[]>([])
-  const spots = observation ? observation.feeds.flatMap(f => f.spots) : nativeSpots
-  const [loading, setLoading] = useState(false)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  // THE TWO PROGRAMMES' LISTS ARE WINDOW FEEDS (features/connectFeeds): every board in this window
+  // that shows a programme shares its poll — the view, a Conditions box and the rail's box ask once a
+  // minute between them, not once each, and show the same answer. Each answer carries its own time.
+  const wantPota = !observed && program !== 'SOTA'
+  const wantSota = !observed && program !== 'POTA'
+  const pota = useFeed(POTA_SPOTS, wantPota).value
+  const sota = useFeed(SOTA_SPOTS, wantSota).value
+  const potaAsking = useFeedAsking(wantPota ? POTA_SPOTS : null)
+  const sotaAsking = useFeedAsking(wantSota ? SOTA_SPOTS : null)
+  const fetched = useMemo(() => [...(pota?.spots ?? []), ...(sota?.spots ?? [])], [pota, sota])
+  // A log change re-reads THIS board's rows from the station's cache (below), over the answer it was
+  // read against; the next answer replaces it.
+  const [reread, setReread] = useState<{ over: OtaSpot[]; spots: OtaSpot[] } | null>(null)
+  const spots = observation
+    ? observation.feeds.flatMap(f => f.spots)
+    : reread && reread.over === fetched
+      ? reread.spots
+      : fetched
+  const loading = potaAsking || sotaAsking
+  const answeredAt = Math.max(pota?.at ?? 0, sota?.at ?? 0)
+  const lastUpdated = answeredAt > 0 ? new Date(answeredAt) : null
   // Band filter — set of band strings; empty = All.
   const [bandFilter, setBandFilter] = useState<string[]>(() => {
     try {
@@ -261,35 +279,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   const [filtersOpen, setFiltersOpen] = useState(false)
   const narrowed = bandFilter.length > 0 || modeFilter !== 'All'
 
-  const loadSpots = useCallback(async (p: Program) => {
-    if (observed) return
-    setLoading(true)
-    let loaded: OtaSpot[] = []
-    if (p === 'Both') {
-      const [pota, sota] = await Promise.all([
-        withErrorToast(
-          () => getOtaSpots('POTA'),
-          t('ota.spots.failed', { program: 'POTA' }),
-        ).then((s) => s ?? []),
-        withErrorToast(
-          () => getOtaSpots('SOTA'),
-          t('ota.spots.failed', { program: 'SOTA' }),
-        ).then((s) => s ?? []),
-      ])
-      loaded = [...pota, ...sota]
-    } else {
-      const s = await withErrorToast(() => getOtaSpots(p), t('ota.spots.failed', { program: p }))
-      loaded = s ?? []
-    }
-    setLoading(false)
-    setSpots(loaded)
-    setLastUpdated(new Date())
-  }, [observed])
-
-  // Initial load
-  useEffect(() => {
-    if (!observed) void loadSpots(program)
-  }, [program, loadSpots, observed])
+  // Fetch now — the Refresh button, and the worked parks an import just changed: each programme this
+  // board shows, shared with every board that shows it.
+  const refresh = () => {
+    if (wantPota) void refreshFeed(POTA_SPOTS)
+    if (wantSota) void refreshFeed(SOTA_SPOTS)
+  }
 
   // Re-derive what the LOG says over the rows already fetched, when the log changes. A contact
   // just logged has to drop its activator off the board now, not up to 60 s later — but
@@ -297,33 +292,22 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // this reads the shared cache and can reach no feed (`getOtaSpots(p, true)`). Nothing cached
   // yet (the first moments after launch, or a fetch that failed) leaves the board as it is: the
   // next poll fetches anyway, and a blank board would be a worse answer than a stale one.
-  const rereadSpots = useCallback(async (p: Program) => {
-    const programs: Program[] = p === 'Both' ? ['POTA', 'SOTA'] : [p]
-    try {
-      const parts = await Promise.all(programs.map((x) => getOtaSpots(x, true)))
-      if (parts.every(Array.isArray)) setSpots(parts.flat())
-    } catch {
-      /* nothing cached for this programme — keep what the board shows */
-    }
-  }, [])
   const logTick = snap.logTick
   const lastLogTick = useRef(logTick)
   useEffect(() => {
     if (observed || logTick === lastLogTick.current) return
     lastLogTick.current = logTick
-    void rereadSpots(program)
-  }, [logTick, program, observed, rereadSpots])
-
-  // Auto-poll every 60 s
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  useEffect(() => {
-    if (observed) return
-    if (intervalRef.current) clearInterval(intervalRef.current)
-    intervalRef.current = setInterval(() => void loadSpots(program), 60_000)
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [program, loadSpots, observed])
+    const over = fetched
+    const programs: Program[] = program === 'Both' ? ['POTA', 'SOTA'] : [program]
+    Promise.all(programs.map((x) => getOtaSpots(x, true))).then(
+      (parts) => {
+        if (parts.every(Array.isArray)) setReread({ over, spots: parts.flat() })
+      },
+      () => {
+        /* nothing cached for this programme — keep what the board shows */
+      },
+    )
+  }, [logTick, program, observed, fetched])
 
   // Derive the set of distinct bands in the current spot list (for filter chips).
   const availableBands = (() => {
@@ -521,7 +505,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       const n = await importHuntedParksCsv(csv)
       setHuntedN(n)
       pushToast(t('ota.hunted.imported', { formatted: n.toLocaleString() }), 'success')
-      void loadSpots(program) // refresh NEW PARK badges against the new worked-set
+      refresh() // NEW PARK badges against the new worked-set
     } catch (e) {
       pushToast(t('ota.hunted.importFailed', { detail: String(e) }), 'error')
     } finally {
@@ -788,7 +772,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             <button
               type="button"
               className="filter-chip pota-refresh-btn"
-              onClick={() => void loadSpots(program)}
+              onClick={refresh}
               disabled={loading}
               title={t('ota.refresh.title')}
               aria-label={t('ota.refresh.title')}

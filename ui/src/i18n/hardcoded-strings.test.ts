@@ -206,6 +206,8 @@ const MIGRATED = [
   'features/dxpedAlarm.ts',
   'features/chaseFeed.ts',
   'features/shareCard.ts',
+  // The POTA/SOTA lists' failed-fetch toast, said once a window now that the lists are feeds here.
+  'features/connectFeeds.ts',
   'components/prop/ActivityMatrix.tsx',
   'components/prop/BandAdvisor.tsx',
   'components/prop/BandConditionStrip.tsx',
@@ -243,6 +245,9 @@ const MIGRATED = [
   'components/SpotsPanel.tsx',
   'components/SpotDialog.tsx',
   'components/ParkStateReview.tsx',
+  // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes
+  // are tokens, held as data or a named constant.
+  'components/ConfirmationReview.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/PounceBanner.tsx',
@@ -377,6 +382,7 @@ const MIGRATED = [
   'components/connect/paneFormat.ts',
   // Connect's Spots box (plan H8), born migrated: its one status line is the Phone pane's own.
   'components/connect/SpotsBox.tsx',
+  'components/connect/NeededBox.tsx',
   'components/Conversation.tsx',
   'components/Composer.tsx',
   'components/MessageBubble.tsx',
@@ -437,6 +443,8 @@ const MIGRATED = [
   'components/panes/ArrangePanes.tsx',
   // Phone's left side (2026-10-03): born migrated; its two names are the caller's.
   'components/panes/LeftSide.tsx',
+  // A box in a cockpit (2026-10-07): born migrated; the entries' names are the Conditions boxes'.
+  'components/panes/CockpitBox.tsx',
   'features/profiles.ts',
   'features/registry.ts',
   // Batch 18 (2026-08-19) — the Operate cockpit: its header, the waterfall strip, the two
@@ -564,6 +572,11 @@ const MIGRATED = [
   'features/slotKeyRefused.ts',
   // …and of a slot over whose unkey the radio did not take — migrated from birth, the same way.
   'features/slotUnkeyFailed.ts',
+  // …and of a slot over the station ended when its audio stopped reaching the radio — migrated
+  // from birth.
+  'features/slotAudioLost.ts',
+  // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
+  'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
 ]

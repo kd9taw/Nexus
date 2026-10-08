@@ -10,6 +10,7 @@ import { OperateCockpit } from './OperateCockpit'
 import { openPanelWindow } from '../api'
 import { t } from '../i18n'
 import type { AppSnapshot } from '../types'
+import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 vi.mock('./Waterfall', () => ({
@@ -85,7 +86,7 @@ function makeSnap(): AppSnapshot {
 function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLayoutApi<OperatePanelId> {
   return {
     layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

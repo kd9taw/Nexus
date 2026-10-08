@@ -10,7 +10,7 @@ import { RemoteHistoryContext, RemoteCollectionsContext } from '../remote-web/co
 import { useStationControl, useStationCapability, useStationData } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
-import type { DecodeRow, NeedAlert, Tier } from '../types'
+import type { DecodeRow, LateDecodes, NeedAlert, Tier } from '../types'
 import { resolveDecodeNeeds, isAwardNeed } from '../features/decodeNeeds'
 import type { NeedBandScopes } from '../features/needs'
 import { NEED_VISUALS, type NeedCat } from '../features/needVisuals'
@@ -22,6 +22,7 @@ import {
   passesFilter,
   periodStartMs,
   renderWindow,
+  type DecodeEntry,
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
@@ -91,6 +92,10 @@ interface Props {
   /** Active mode/tier — sets the T/R period for separator UTC times; a tier
    * change wipes the pane like a band change. */
   tier: Tier
+  /** The period a band or mode change caught while it was decoding (the snapshot's
+   * `lateDecodes`): shown after the wipe, as WSJT-X shows it, under the band and mode it was
+   * heard on, and never worked from. */
+  late?: LateDecodes | null
   /** Session count of IR-HARQ rescues (decodes recovered by combining). */
   harqRescues: number
   /** Work / answer a decoded station. `freq` = the decode's audio offset (Hz) so the
@@ -226,6 +231,7 @@ export function OperateDecodes({
   rxOffsetHz,
   band,
   tier,
+  late = null,
   harqRescues,
   onCall,
   onSelectDecode,
@@ -388,9 +394,13 @@ export function OperateDecodes({
           historySeen.current.sequence = entry.sequence
         }
       }
-    } else histRef.current.ingest(decodes, slot)
+    } else {
+      // The period caught decoding at the change is older than anything live, so it goes first.
+      if (late) histRef.current.ingestLate(late)
+      histRef.current.ingest(decodes, slot)
+    }
     setTick((t) => t + 1)
-  }, [decodes, slot, remoteHistory, remoteCollections, band, tier])
+  }, [decodes, slot, late, remoteHistory, remoteCollections, band, tier])
 
   // Inbound UDP Clear: when clearTick changes (skip mount), wipe without
   // calling onErase (no echo loop back to the logger).
@@ -520,8 +530,10 @@ export function OperateDecodes({
 
   // WSJT-X double-click dispatch: Alt = toggle session ignore; Ctrl = populate
   // DX fields + move RX onto the signal (no QSO start, no TX arm); plain = work.
-  const handleDouble = (e: React.MouseEvent, d: DecodeRow) => {
-    if (!d.from) return
+  const handleDouble = (e: React.MouseEvent, d: DecodeEntry) => {
+    // A row heard before a band or mode change is display only: answering it here would start a
+    // QSO on the band or mode it was not heard on.
+    if (!d.from || d.heard) return
     if (e.altKey) {
       if (control) onToggleIgnore?.(d.from)
       return
@@ -538,7 +550,7 @@ export function OperateDecodes({
   // Alt+Enter toggles ignore — the pointerless equivalent of click/double-click.
   const roving = useRovingList(drawn.length, (i, mods) => {
     const d = drawn[i]
-    if (!d?.from) return
+    if (!d?.from || d.heard) return
     if (mods.alt) { if (control) onToggleIgnore?.(d.from) }
     else if (mods.shift) { if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz) }
     else if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
@@ -719,9 +731,11 @@ export function OperateDecodes({
           // Tooltip suffix for highlighted rows so the operator knows why the color appeared.
           // An appended CLAUSE carrying its own separator, interpolated whole.
           const hlTip = hlEntry ? t('operate.decodes.row.highlighted') : ''
-          // Need context for this row (why is this station worth working) — icons + colour.
+          // Need context for this row (why is this station worth working) — icons + colour. The
+          // surface's mode is the tier, the mode every row here is decoded in: a "new mode" need
+          // is for one mode, so an FT4 need never marks a row on the FT8 feed.
           const rowAlerts = d.from ? (needAlertsByCall.get(d.from.toUpperCase()) ?? []) : []
-          const needs = resolveDecodeNeeds(d, band, rowAlerts, 'Digital', needScopes)
+          const needs = resolveDecodeNeeds(d, band, rowAlerts, tier, needScopes)
           // Beam heading for this row: the decode's own grid when it sent one, else
           // the centre of its entity (marked `~`), else nothing at all.
           const az = azimuthTo(myGrid, d.grid, d.country, centroids)
@@ -742,7 +756,7 @@ export function OperateDecodes({
                   which differs nearly every time: a separator between EVERY decode instead of
                   one per period. Reported twice (2026-08-21/22), both saying it begins "after
                   some time" — that is the buffer reaching MAX_ROWS, not elapsed time. */}
-              {sort === 'time' && i > 0 && d.slot !== drawn[i - 1].slot && (
+              {sort === 'time' && i > 0 && !d.heard && (d.slot !== drawn[i - 1].slot || drawn[i - 1].heard) && (
                 <div
                   className="od-period-sep"
                   role="separator"
@@ -752,6 +766,29 @@ export function OperateDecodes({
                 >
                   <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
                   <span className="od-sep-band">{band}</span>
+                </div>
+              )}
+              {/* A period heard before a band or mode change heads its rows with what it was
+                  received on, the first row of a freshly wiped pane included: WSJT-X's separator
+                  names the band it was heard on (`m_currentBandPeriod`). */}
+              {sort === 'time' && d.heard && (i === 0 || d.slot !== drawn[i - 1].slot || !drawn[i - 1].heard) && (
+                <div
+                  className="od-period-sep"
+                  role="separator"
+                  aria-label={t('operate.decodes.period.heard.aria', {
+                    time: fmtUtc(d.heard.periodStartMs),
+                    band: d.heard.band,
+                    mode: d.heard.tier,
+                  })}
+                >
+                  <span className="od-sep-utc">{fmtUtc(d.heard.periodStartMs)}</span>
+                  <span className="od-sep-band">
+                    {t('operate.decodes.period.heard', {
+                      band: d.heard.band,
+                      mode: d.heard.tier,
+                      dial: d.heard.dialMhz.toFixed(3),
+                    })}
+                  </span>
                 </div>
               )}
               <div
@@ -785,11 +822,14 @@ export function OperateDecodes({
                 style={hlStyle}
                 onClick={() => {
                   roving.setActive(i)
-                  if (selectControl && d.from) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+                  if (selectControl && d.from && !d.heard)
+                    onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
                 }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
-                  !callControl ? d.message : ignoredRow
+                  d.heard
+                    ? t('operate.decodes.row.heard.title', { band: d.heard.band, mode: d.heard.tier })
+                    : !callControl ? d.message : ignoredRow
                     ? t('operate.row.ignored.title')
                     : d.from
                       ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })

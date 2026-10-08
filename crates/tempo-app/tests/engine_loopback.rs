@@ -24,7 +24,13 @@ fn to_capture(mut rx: Vec<f32>) -> Vec<f32> {
 fn two_engines_exchange_a_directed_message() {
     let mut a = Engine::new("W9XYZ", "EN37", 0); // transmits on even slots
     let mut b = Engine::new("K2DEF", "FN31", 1); // transmits on odd slots
-                                                 // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends.
+
+    // Directed free-text chat is FT1-native; default tier is now FT8, so pin FT1, before
+    // arming: the switch from FT8 at 14.074 takes the Tx frequency off the waterfall, which
+    // turns TX off.
+    a.set_tier(Tier::TempoFast);
+    b.set_tier(Tier::TempoFast);
+    // TX is disarmed by default now (WSJT-X Enable-Tx) — arm both ends.
     a.set_tx_enabled(true);
     b.set_tx_enabled(true);
     // Pin the pre-arranged static parities: this loopback ingests a decode in the SAME
@@ -33,9 +39,6 @@ fn two_engines_exchange_a_directed_message() {
     // itself is covered by the engine unit tests.
     a.set_tx_cycle_auto(false);
     b.set_tx_cycle_auto(false);
-    // Directed free-text chat is FT1-native; default tier is now FT8, so pin FT1.
-    a.set_tier(Tier::TempoFast);
-    b.set_tier(Tier::TempoFast);
     // Presence is established via beacons; enable them (off by default now).
     a.set_beacon(true);
     b.set_beacon(true);
@@ -106,10 +109,12 @@ fn two_engines_exchange_a_directed_message() {
 fn directed_message_is_acked_and_marked_delivered() {
     let mut a = Engine::new("W9XYZ", "EN37", 0); // Tx 1st (even)
     let mut b = Engine::new("K2DEF", "FN31", 1); // Tx 2nd (odd)
-    a.set_tx_enabled(true);
-    b.set_tx_enabled(true);
     a.set_tier(Tier::TempoFast);
     b.set_tier(Tier::TempoFast);
+    // Armed after the switch to FT1: the switch from FT8 at 14.074 takes the Tx frequency off
+    // the waterfall, which turns TX off.
+    a.set_tx_enabled(true);
+    b.set_tx_enabled(true);
     // This loopback ingests a decode in the SAME slot it was TXed (real radio decodes one
     // slot later), so pin the static parities and let the modem carry the exchange.
     a.set_tx_cycle_auto(false);

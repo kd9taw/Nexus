@@ -1,7 +1,7 @@
 import { RemoteLogEntry, useRemoteOperations } from './operations'
 import { useContext, useEffect, useState } from 'react'
 import type { AppSnapshot } from '../types'
-import { RecallPanel } from '../components/RecallPanel'
+import { RecallPanel, recallCardClass } from '../components/RecallPanel'
 import { bandKey, modeKey } from '../features/callHistory'
 import { useStationData } from '../stationAccess'
 import { t } from '../i18n'
@@ -12,9 +12,9 @@ import type { Recall } from './recall'
 
 /** `onRemove`/`hideNote`/`paneTitle`: the card's own ✕, handed down to RecallPanel. Only the
  *  Operate cockpit passes them — there the card is a ⊞ entry of its own (`recall`). */
-export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string }; onRemove?: () => void; hideNote?: string; paneTitle?: string }
-export type RemoteRecallEntryProps = Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string; pendingWork?: { call: string; ts: number } | null; onConsumeWork?: () => void }
-export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context, onRemove, hideNote, paneTitle }: RecallProps) {
+export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; kept?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string }; onRemove?: () => void; hideNote?: string; paneTitle?: string }
+export type RemoteRecallEntryProps = Omit<RecallProps, 'call' | 'bounded' | 'kept'> & { selectedCall?: string; pendingWork?: { call: string; ts: number } | null; onConsumeWork?: () => void }
+export function RemoteRecall({ snap, call, mode, bounded, kept, onOpenLog, context, onRemove, hideNote, paneTitle }: RecallProps) {
   const source = useContext(RemoteCollectionsContext)
   const available = useStationData()
   const cu = call.trim().toUpperCase()
@@ -38,7 +38,7 @@ export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context, on
   if (cu.length < 3) return null
   const retry = <button type="button" className="le-qrz le-lookup" disabled={!available} onClick={() => setRefresh(n => n + 1)}>{t('remote.recallRefresh')}</button>
   const value = available && !error && result?.call === cu ? result : null
-  if (!value) return <div className={`recall-card${bounded ? ' cockpit-recall' : ''}`}>
+  if (!value) return <div className={recallCardClass(bounded, kept)}>
     <strong>{cu}</strong><p className="dim" role="status">{t(error || !available || !/^[A-Z0-9/]{3,32}$/.test(cu) ? 'remote.collectionUnavailable' : 'remote.collectionLoading')}</p>{retry}
   </div>
   const band = context?.band ?? snap.radio.band, logMode = context?.mode ?? mode
@@ -52,14 +52,14 @@ export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context, on
     hist={{ ...value.history, qsos: value.rows, dupeThisBand: dupe }}
     newEntity={Boolean(value.entity?.trim()) && !value.slots.workedEver}
     newBandSlot={newBandSlot} newModeSlot={value.slots.workedEver && !newBandSlot && !value.slots.modesWorked.includes(modeKey(logMode))}
-    latestNote={value.latestNote} hasLookup={false} bounded={bounded} onOpenLog={onOpenLog}
+    latestNote={value.latestNote} hasLookup={false} bounded={bounded} kept={kept} onOpenLog={onOpenLog}
     onRemove={onRemove} hideNote={hideNote} paneTitle={paneTitle}
     historyNotice={<div className="dim" role="status"><p>{t('remote.recallSnapshot')}</p>
       {value.rows.length < value.history.count && <p>{t('remote.collectionCapped', { count: value.rows.length, total: value.history.count })}</p>}{retry}</div>} />
 }
 
 /** The existing log pane hosts an observer's local callsign and the same recall card. */
-export function ObserverRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string }) {
+export function ObserverRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omit<RecallProps, 'call' | 'bounded' | 'kept'> & { selectedCall?: string }) {
   const [call, setCall] = useState('')
   useEffect(() => { if (selectedCall) setCall(selectedCall) }, [selectedCall])
   return <div className="log-entry">

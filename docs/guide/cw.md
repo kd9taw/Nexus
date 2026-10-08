@@ -120,7 +120,12 @@ under Decode and the Sent echo, and Needed under Band Activity and the Copilot;
 on a narrower one both go at the bottom of the left-hand column, after Rig
 controls, Band Activity and the Copilot, with a divider between them that you
 drag to share the height. On a small window the column scrolls; hide a pane you
-do not need to give them more room. Spots opens on the CW spots on the band your
+do not need to give them more room.
+
+**Boxes.** As on [Phone](phone.md), ⊞ Panels ▸ **Arrange** ends each column with **+ Add a
+box**, for up to six panes of [Conditions](connect.md) among this screen's own. Clicking a station
+in a box selects it in the boxes only, so the call a macro's **!** sends is never changed from a
+box, and nothing in a box transmits. Spots opens on the CW spots on the band your
 radio is on (a spot in the CW part of the band and a skimmer's CW decode, never a
 skimmer's RTTY or FT8 decode there) and moves with the radio when you change
 band; its Filter chips widen it to other modes and bands. Needed opens on the CW

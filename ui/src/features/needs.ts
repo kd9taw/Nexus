@@ -10,6 +10,7 @@ import type { BandChannel, GridRarity, NeedAlert, NeedTag } from '../types'
 // stays node-testable.)
 import { bandScopeOk } from '../alerts'
 import { bandRangeForLabel } from '../band'
+import { modeKey } from './callHistory'
 
 /**
  * Chase-importance weight per need tag — the UI mirror of the backend's `NeedTag::tier()`
@@ -394,7 +395,7 @@ export function sameBand(a: string | null | undefined, b: string | null | undefi
 /** Need tags that survive on ANY band, because the predicate behind them carries no band:
  * an all-time-new entity is new everywhere; a DXpedition/POTA/SOTA/wanted flag is a
  * property of the station. `NewMode` belongs here too — the backend keys `worked_mode` as
- * (entity, mode-class) with no band, so a mode need is closable on whatever band you hear
+ * (entity, mode) with no band, so a mode need is closable on whatever band you hear
  * the station on. Everything else (NewBand, and NewZone/NewGrid/NewState for 5BWAZ/VUCC/
  * 5BWAS, plus Confirm from the per-band `confirmed_band` set) is a per-band claim and must
  * match the band in front of the operator. */
@@ -412,7 +413,7 @@ const BAND_AGNOSTIC_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>([
 
 /** Need tags that are additionally MODE-specific: a CW-only "new mode", or an
  * unconfirmed contact, cannot be closed from a digital surface. NewBand is deliberately
- * absent — a band slot closes in any mode. */
+ * absent — a band slot closes in any mode. NewMode is narrower still: see `tagsForSurface`. */
 const MODE_GATED_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>(['NewMode', 'Confirm'])
 
 /**
@@ -432,12 +433,20 @@ const MODE_GATED_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>(['NewMode', 'Conf
  * false for every per-band claim and only the band-agnostic tags survive. That is the ruling
  * (2026-08-13): "an all-time new one" is answerable without knowing the band; "new on this
  * band" is not.
+ *
+ * A NewMode need is a need for ONE mode (operator ruling 2026-10-07, "each mode separately"):
+ * the backend names it in `exactMode`, and the chip shows only where the surface is that mode,
+ * both sides through `modeKey` — an FT4 need never paints the FT8 roster, and USB and LSB are one
+ * mode. An alert that names no exact mode (a station heard in a class alone, or a build that
+ * sends none) keeps the class rule, as Confirm does.
  */
 export function tagsForSurface(alert: NeedAlert, band: string, feedMode: string): NeedTag[] {
   const sameModeClass = modeClassOf(alert.mode) === modeClassOf(feedMode)
+  const sameMode = alert.exactMode ? modeKey(alert.exactMode) === modeKey(feedMode) : sameModeClass
   const sameBandLabel = sameBand(alert.band, band)
   return alert.tags.filter((t) => {
-    if (MODE_GATED_TAGS.has(t) && !sameModeClass) return false
+    const modeOk = t === 'NewMode' ? sameMode : !MODE_GATED_TAGS.has(t) || sameModeClass
+    if (!modeOk) return false
     return BAND_AGNOSTIC_TAGS.has(t) || sameBandLabel
   })
 }

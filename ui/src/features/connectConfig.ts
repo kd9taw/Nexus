@@ -18,6 +18,8 @@ export const PANE_IDS = [
   'scope', 'amp', 'kpOutlook', 'bandTiles',
   'clock',
   'spots', 'pota',
+  // The Needed board (2026-10-07), appended so a stored layout's repairs pick what they always picked.
+  'needed',
 ] as const
 export type PaneId = (typeof PANE_IDS)[number]
 

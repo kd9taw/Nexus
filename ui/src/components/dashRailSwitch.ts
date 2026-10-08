@@ -17,6 +17,9 @@ export interface DashRailSwitch {
   /** This window is large enough to show it (`lg` and up). Below that the row still records the
    *  choice and says why nothing appears (the menu's rule: a note explains, it never refuses). */
   fits: boolean
+  /** Below `lg` the rail's boxes stand in this cockpit's columns instead (features/dashRail
+   *  `DASH_RAIL_FOLDS`), and the row says so. */
+  folds?: boolean
   set: (on: boolean) => void
 }
 

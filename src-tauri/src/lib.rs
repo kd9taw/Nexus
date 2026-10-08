@@ -238,7 +238,7 @@ mod whole_log_reader_tests {
     //! (`io_fence::whole_log_off_engine_lock`).
     use super::*;
     use crate::remote_service::stored_log_tests::StoredLog;
-    use propagation::model::{Band, ModeClass};
+    use propagation::model::Band;
     use propagation::OperatorNeeds;
 
     /// A log with something for every question: several bands, modes and states, a satellite
@@ -285,7 +285,7 @@ mod whole_log_reader_tests {
 
     /// Everything a reader can observe of a needs model, as one comparable value: every set it
     /// exposes, sorted, and its verdict for every worked entity (and two it never worked) on
-    /// every band in every mode class — which is what reads its private worked/confirmed sets.
+    /// every band in each mode below — which is what reads its private worked/confirmed sets.
     fn observed(n: &propagation::LogNeeds) -> String {
         fn sorted<T: std::fmt::Debug>(items: impl Iterator<Item = T>) -> String {
             let mut v: Vec<String> = items.map(|x| format!("{x:?}")).collect();
@@ -308,8 +308,10 @@ mod whole_log_reader_tests {
         entities.sort();
         for e in &entities {
             for b in Band::ALL {
-                for m in [ModeClass::Cw, ModeClass::Phone, ModeClass::Digital] {
-                    out.push(format!("{e}/{b:?}/{m:?}={:?}", n.need(e, b, m)));
+                // Each class a source can name, and the exact modes the fixture logs plus one it
+                // never does: the mode need is judged per mode.
+                for m in ["CW", "Phone", "Digital", "FT8", "FT4", "SSB", "FM", "RTTY"] {
+                    out.push(format!("{e}/{b:?}/{m}={:?}", n.need(e, b, m)));
                 }
             }
         }
@@ -20507,6 +20509,517 @@ async fn apply_park_states(
     .await
 }
 
+// ----- Logbook ▸ Check confirmations ------------------------------------------------------------
+// Confirmations that 1.17.0 and earlier put on the wrong contact (#400), found with LoTW's own
+// downloads and taken off only by the operator's tick ([`tempo_core::reconcile::check`]). One
+// check at a time holds what it downloaded, from the check until Apply, Cancel, a new check or
+// the window that ran it closing.
+
+/// What a check asks LoTW with: the account, and the call both downloads are for. Never printed or
+/// logged: it holds the password, as the request URLs built from it do.
+struct LotwAccess {
+    username: String,
+    password: String,
+    /// The Settings call (`qso_owncall`), which is also the check's scope; `None` asks LoTW for
+    /// every call on the account, and judges every contact.
+    owncall: Option<String>,
+}
+
+/// The account a check of LoTW asks with: the username and call from Settings, and the password
+/// from the keychain, read as a LoTW sync reads them ([`download_lotw_report_impl`]).
+fn lotw_access(engine: &SharedEngine) -> Result<LotwAccess, String> {
+    let (username, owncall) = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.lotw_username.trim().to_string(),
+            s.mycall.trim().to_string(),
+        )
+    };
+    if username.is_empty() {
+        return Err("Set your LoTW username in Settings first.".to_string());
+    }
+    let password = lotw_keychain()?
+        .get_password()
+        .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
+    Ok(LotwAccess {
+        username,
+        password,
+        owncall: Some(owncall).filter(|c| !c.is_empty()),
+    })
+}
+
+/// One of LoTW's downloads, whole or not at all: its report file, through to its end marker. A
+/// check of part of a history would take a confirmation whose row was cut off for a misplaced
+/// one, so a download that stops short checks nothing.
+fn whole_lotw_download(body: String) -> Result<String, String> {
+    if !tempo_core::lotw::is_lotw_adif(&body) {
+        return Err(
+            "LoTW answered, but not with its report file, so nothing was checked. Your username \
+             and password are fine; LoTW may be returning an error page, or be down for \
+             maintenance. Try again shortly."
+                .to_string(),
+        );
+    }
+    if !is_complete_lotw_body(&body) {
+        return Err(
+            "LoTW's download stopped before its end, so nothing was checked. Try again."
+                .to_string(),
+        );
+    }
+    Ok(body)
+}
+
+/// Logbook ▸ Check confirmations, read: LoTW's whole confirmation history and its whole own-QSO
+/// list, each asked for once in the form a full re-download asks (`qso_qslsince=1900-01-01`, and
+/// `qso_qsorxsince=1900-01-01` with no start date) and fetched by `fetch`, then checked against
+/// the log read with the Engine lock released ([`tempo_app::station::check_lotw_confirmations`]).
+/// It moves no sync cursor and writes nothing. The confirmation download, which Apply merges, and
+/// the check.
+fn confirmation_check_on(
+    engine: &SharedEngine,
+    access: &LotwAccess,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<(String, tempo_core::reconcile::check::ConfirmationCheck), String> {
+    let query = tempo_core::lotw::LotwQuery {
+        username: access.username.clone(),
+        password: access.password.clone(),
+        owncall: access.owncall.clone(),
+        qsl_since: None,
+    };
+    let report = whole_lotw_download(fetch(&tempo_core::lotw::build_report_url(&query))?)?;
+    let own = whole_lotw_download(fetch(&tempo_core::lotw::build_own_report_url(
+        &query, None,
+    ))?)?;
+    let plan = tempo_app::engine::log_plan(engine);
+    let check = tempo_app::station::check_lotw_confirmations(
+        &plan,
+        &report,
+        &own,
+        access.owncall.as_deref(),
+    )?;
+    Ok((report, check))
+}
+
+/// The Logbook's Check confirmations in flight: the one check whose download is held, from the
+/// check until Apply, Cancel, a new check or the window that ran it closing. Only the newest
+/// check started is ever held: one that lands after a newer check started, or after Cancel, is
+/// dropped as it lands.
+#[derive(Default)]
+struct ConfirmationChecks(std::sync::Mutex<HeldCheck>);
+
+/// Shared with the blocking pool, where a check downloads and reads.
+type SharedConfirmationChecks = Arc<ConfirmationChecks>;
+
+#[derive(Default)]
+struct HeldCheck {
+    /// The newest check started: what a check that lands must still be, to be held.
+    newest: u64,
+    /// The window it was started from.
+    window: Option<String>,
+    held: Option<CheckSession>,
+}
+
+/// One check, held for its Apply.
+struct CheckSession {
+    session: u64,
+    /// LoTW's confirmation download as it arrived, which Apply merges as a sync merges it. In
+    /// memory only, and never written anywhere.
+    report: String,
+    /// The lines, each with the contact as the check read it: what Apply compares a contact with.
+    lines: Vec<tempo_core::reconcile::check::CheckLine>,
+}
+
+/// What Apply says of a check that is no longer held: applied already, cancelled, replaced by a
+/// newer check, or its window closed. Nothing changed.
+const CHECK_GONE: &str =
+    "This check is no longer open, so nothing was changed. Run Check confirmations again.";
+
+/// What a check says when it lands after a newer one started or after Cancel: it is not held.
+const CHECK_CANCELLED: &str = "This check was cancelled, so nothing was kept from it.";
+
+/// What Apply says of a ticked line that is not one of the check's lines.
+const CHECK_LINE_UNKNOWN: &str = "A ticked line is not one of this check's lines, so nothing \
+                                  was changed. Run Check confirmations again.";
+
+impl ConfirmationChecks {
+    fn held(&self) -> std::sync::MutexGuard<'_, HeldCheck> {
+        // A panic while it was held leaves a check or none: either is a state to go on from.
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A new check, from the window `window`: the check held, and one still downloading, are
+    /// dropped. The new check's session.
+    fn start(&self, window: &str) -> u64 {
+        let mut h = self.held();
+        h.newest += 1;
+        h.window = Some(window.to_string());
+        h.held = None;
+        h.newest
+    }
+
+    /// Hold a check that landed, only while it is still the newest started. Whether it is held.
+    fn hold(&self, session: CheckSession) -> bool {
+        let mut h = self.held();
+        if h.newest != session.session {
+            return false;
+        }
+        h.held = Some(session);
+        true
+    }
+
+    /// Cancel: the check held, and one still downloading, are dropped.
+    fn cancel(&self) {
+        let mut h = self.held();
+        h.newest += 1;
+        h.window = None;
+        h.held = None;
+    }
+
+    /// The window `label` closed: a check it started is dropped, held or still downloading.
+    fn window_closed(&self, label: &str) {
+        let mut h = self.held();
+        if h.window.as_deref() == Some(label) {
+            h.newest += 1;
+            h.window = None;
+            h.held = None;
+        }
+    }
+
+    /// Check `session`'s download and the lines `ticked` names, taken for its Apply: the session
+    /// goes with them. Refused, keeping what is held, when `session` is not the check held or a
+    /// ticked line is not one of its lines.
+    fn take(
+        &self,
+        session: u64,
+        ticked: &[(
+            tempo_core::logbook::RecordId,
+            tempo_core::reconcile::check::Mark,
+        )],
+    ) -> Result<(String, Vec<tempo_core::reconcile::check::CheckLine>), String> {
+        let mut h = self.held();
+        let Some(held) = h.held.as_ref().filter(|s| s.session == session) else {
+            return Err(CHECK_GONE.to_string());
+        };
+        let lines = ticked
+            .iter()
+            .map(|&(id, mark)| {
+                held.lines
+                    .iter()
+                    .find(|l| l.contact.id == Some(id) && l.mark == mark)
+                    .cloned()
+                    .ok_or_else(|| CHECK_LINE_UNKNOWN.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let held = h.held.take().expect("the session was found above");
+        h.window = None;
+        Ok((held.report, lines))
+    }
+}
+
+/// A line's mark as the dialog names it.
+fn check_mark_name(mark: tempo_core::reconcile::check::Mark) -> &'static str {
+    use tempo_core::reconcile::check::{Channel, Mark};
+    match mark {
+        Mark::Confirmation(Channel::Lotw) => "lotw",
+        Mark::Confirmation(Channel::Eqsl) => "eqsl",
+        Mark::Confirmation(Channel::Qrz) => "qrz",
+        Mark::LotwUpload => "lotwUpload",
+    }
+}
+
+/// One line of Logbook ▸ Check confirmations: a contact holding LoTW's confirmation, or its upload
+/// mark, that LoTW's own downloads no longer support, with the evidence and whether it starts
+/// ticked.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmationLineDto {
+    id: String,
+    /// What the line takes off: `lotw`, LoTW's confirmation; `lotwUpload`, LoTW's upload mark.
+    mark: &'static str,
+    /// What the download says: `moved` (the row the line rests on pairs with another contact,
+    /// the sibling), `contradicted` (LoTW holds this contact itself, unconfirmed), or `orphan`
+    /// (the row pairs with no contact).
+    class: &'static str,
+    call: String,
+    when_unix: u64,
+    time_known: bool,
+    band: String,
+    mode: String,
+    /// The time of the row the line rests on.
+    row_unix: u64,
+    /// The contact that row pairs with now.
+    sibling_id: Option<String>,
+    sibling_unix: Option<u64>,
+    /// The time of LoTW's own unconfirmed record of this contact (`contradicted` only).
+    own_unix: Option<u64>,
+    /// The evidence decides it: the line starts ticked.
+    decisive: bool,
+    /// Why it starts unticked: `dateOnly`, `notReplayed`, `tie`, `orphan`, `insideWindow` or
+    /// `notToTheMinute`.
+    unticked: Option<&'static str>,
+    /// The credit codes the change takes off.
+    remove_granted: Vec<String>,
+    remove_submitted: Vec<String>,
+    /// The contact holds a paper card, which the change keeps, with its award credit.
+    card_held: bool,
+    /// Owed to LoTW once every line listed for this contact is applied: it goes in the next LoTW
+    /// upload.
+    owed_after: bool,
+}
+
+impl ConfirmationLineDto {
+    /// `line` as the dialog shows it; `lines` are the check's, for what the contact is once each
+    /// of its lines is applied. `None` for a contact with no id, which no Apply could name.
+    fn of(
+        line: &tempo_core::reconcile::check::CheckLine,
+        lines: &[tempo_core::reconcile::check::CheckLine],
+    ) -> Option<Self> {
+        use tempo_core::reconcile::check::{uncheck, LineClass, Unticked};
+        let id = line.contact.id?;
+        let applied = lines
+            .iter()
+            .filter(|l| l.contact.id == Some(id))
+            .fold(line.contact.clone(), |r, l| uncheck(&r, l).unwrap_or(r));
+        Some(Self {
+            id: id.to_string(),
+            mark: check_mark_name(line.mark),
+            class: match line.class {
+                LineClass::Moved => "moved",
+                LineClass::Contradicted => "contradicted",
+                LineClass::Orphan => "orphan",
+            },
+            call: line.contact.call.clone(),
+            when_unix: line.contact.when_unix,
+            time_known: line.contact.time_known,
+            band: line.contact.band.clone(),
+            mode: line.contact.mode.clone(),
+            row_unix: line.row_unix,
+            sibling_id: line.sibling.and_then(|s| s.id).map(|id| id.to_string()),
+            sibling_unix: line.sibling.map(|s| s.when_unix),
+            own_unix: line.own_unix,
+            decisive: line.decisive(),
+            unticked: line.unticked.map(|why| match why {
+                Unticked::DateOnly => "dateOnly",
+                Unticked::NotReplayed => "notReplayed",
+                Unticked::Tie => "tie",
+                Unticked::Orphan => "orphan",
+                Unticked::InsideWindow => "insideWindow",
+                Unticked::NotToTheMinute => "notToTheMinute",
+            }),
+            remove_granted: line.remove.granted.clone(),
+            remove_submitted: line.remove.submitted.clone(),
+            card_held: line.card_held(),
+            owed_after: tempo_app::station::owed_to_lotw(&applied),
+        })
+    }
+}
+
+/// What Logbook ▸ Check confirmations found.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmationCheckDto {
+    /// This check: what its Apply names.
+    session: u64,
+    /// Newest first; a contact's confirmation line before its upload line.
+    lines: Vec<ConfirmationLineDto>,
+    /// Contacts LoTW confirms that lack its confirmation: Apply adds it.
+    gains: usize,
+    /// LoTW confirmations the check leaves alone: no LoTW row within a day of them, or logged
+    /// under another call than the one LoTW was asked about.
+    unreached: usize,
+    out_of_scope: usize,
+    /// LoTW upload marks it leaves alone, the same two ways.
+    uploads_unreached: usize,
+    uploads_out_of_scope: usize,
+}
+
+impl ConfirmationCheckDto {
+    fn of(session: u64, check: &tempo_core::reconcile::check::ConfirmationCheck) -> Self {
+        let mut lines: Vec<ConfirmationLineDto> = check
+            .lines
+            .iter()
+            .filter_map(|l| ConfirmationLineDto::of(l, &check.lines))
+            .collect();
+        // Stable: the check lists confirmation lines before upload lines.
+        lines.sort_by(|a, b| b.when_unix.cmp(&a.when_unix));
+        Self {
+            session,
+            lines,
+            gains: check.gains.len(),
+            unreached: check.flags.unreached,
+            out_of_scope: check.flags.out_of_scope,
+            uploads_unreached: check.uploads.unreached,
+            uploads_out_of_scope: check.uploads.out_of_scope,
+        }
+    }
+}
+
+/// A line the operator ticked: the contact, and the line's mark ([`ConfirmationLineDto`]).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TickedLineDto {
+    id: String,
+    mark: String,
+}
+
+impl TickedLineDto {
+    fn parse(
+        &self,
+    ) -> Result<
+        (
+            tempo_core::logbook::RecordId,
+            tempo_core::reconcile::check::Mark,
+        ),
+        String,
+    > {
+        use tempo_core::reconcile::check::{Channel, Mark};
+        let id = self.id.parse().map_err(|_| LOG_ROW_GONE.to_string())?;
+        let mark = match self.mark.as_str() {
+            "lotw" => Mark::Confirmation(Channel::Lotw),
+            "lotwUpload" => Mark::LotwUpload,
+            _ => return Err(CHECK_LINE_UNKNOWN.to_string()),
+        };
+        Ok((id, mark))
+    }
+}
+
+/// What Apply in Check confirmations made.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmationAppliedDto {
+    /// The lines the operator ticked.
+    ticked: usize,
+    /// Contacts whose LoTW confirmation was taken off, and whose upload mark was cleared: fewer
+    /// than ticked when a contact changed after the check.
+    confirmations: usize,
+    uploads: usize,
+    /// What merging the download added, as a sync counts it.
+    newly_confirmed: usize,
+    newly_credited: usize,
+    /// The file holding the changed contacts as they were: Logbook ▸ Import ADIF puts them back.
+    before_file: Option<String>,
+}
+
+/// A check started from the window `window`, run and held: [`confirmation_check_on`] with the
+/// account `access` reads, then held for its Apply unless a newer check or Cancel came first.
+fn checked_and_held(
+    checks: &ConfirmationChecks,
+    window: &str,
+    engine: &SharedEngine,
+    access: impl FnOnce(&SharedEngine) -> Result<LotwAccess, String>,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<ConfirmationCheckDto, String> {
+    let session = checks.start(window);
+    let (report, check) = confirmation_check_on(engine, &access(engine)?, fetch)?;
+    let dto = ConfirmationCheckDto::of(session, &check);
+    let held = checks.hold(CheckSession {
+        session,
+        report,
+        lines: check.lines,
+    });
+    if !held {
+        return Err(CHECK_CANCELLED.to_string());
+    }
+    Ok(dto)
+}
+
+/// Apply of check `session`, the lines `ticked` names
+/// ([`tempo_app::logwrite::apply_confirmation_check`]): its download and lines taken from what is
+/// held, so the check is gone whatever comes of it.
+fn applied_from(
+    checks: &ConfirmationChecks,
+    session: u64,
+    ticked: &[TickedLineDto],
+    engine: &SharedEngine,
+    now_unix: u64,
+) -> (
+    Result<ConfirmationAppliedDto, String>,
+    tempo_app::logstore::Durability,
+) {
+    let taken = ticked
+        .iter()
+        .map(TickedLineDto::parse)
+        .collect::<Result<Vec<_>, String>>()
+        .and_then(|ticked| checks.take(session, &ticked));
+    let (report, lines) = match taken {
+        Ok(taken) => taken,
+        Err(e) => return (Err(e), tempo_app::logstore::Durability::default()),
+    };
+    let (made, durability) =
+        tempo_app::logwrite::apply_confirmation_check(engine, &report, &lines, now_unix);
+    let made = made.map(|m| ConfirmationAppliedDto {
+        ticked: ticked.len(),
+        confirmations: m.confirmations,
+        uploads: m.uploads,
+        newly_confirmed: m.merged.newly_confirmed,
+        newly_credited: m.merged.newly_credited,
+        before_file: m.before_file.map(|p| p.display().to_string()),
+    });
+    (made, durability)
+}
+
+/// Logbook ▸ Check confirmations: LoTW's whole confirmation history and its whole own-QSO list,
+/// downloaded once on the blocking pool (no sync cursor moves), and checked against the log read
+/// with the Engine lock released ([`confirmation_check_on`]). It changes nothing: the download is
+/// held for the operator's Apply ([`apply_confirmation_check`]) or Cancel. The list.
+#[tauri::command]
+async fn confirmation_check(
+    state: State<'_, SharedEngine>,
+    checks: State<'_, SharedConfirmationChecks>,
+    window: tauri::WebviewWindow,
+) -> Result<ConfirmationCheckDto, String> {
+    let (engine, checks, label) = (
+        Arc::clone(&state),
+        Arc::clone(&checks),
+        window.label().to_string(),
+    );
+    let checked = tauri::async_runtime::spawn_blocking(move || {
+        checked_and_held(&checks, &label, &engine, lotw_access, &|url| {
+            propagation::live::lotw::fetch_report(url)
+        })
+    })
+    .await
+    .map_err(|e| format!("the check did not finish: {e}"))?;
+    conn_logged(
+        "LoTW",
+        |c: &ConfirmationCheckDto| {
+            format!(
+                "check confirmations: {} listed, {} would gain a confirmation",
+                c.lines.len(),
+                c.gains
+            )
+        },
+        checked,
+    )
+}
+
+/// Apply in Logbook ▸ Check confirmations: the lines the operator ticked, each only while its
+/// contact still holds what the line showed ([`tempo_app::logwrite::apply_confirmation_check`]:
+/// the before-file first, then the download merged, then the changes). Nothing is uploaded. What
+/// it made, once it is on disk.
+#[tauri::command]
+async fn apply_confirmation_check(
+    state: State<'_, SharedEngine>,
+    checks: State<'_, SharedConfirmationChecks>,
+    session: u64,
+    ticked: Vec<TickedLineDto>,
+) -> Result<ConfirmationAppliedDto, String> {
+    let (engine, checks) = (Arc::clone(&state), Arc::clone(&checks));
+    let now = u64::try_from(now_unix()).unwrap_or(0);
+    durable_command(move || applied_from(&checks, session, &ticked, &engine, now)).await
+}
+
+/// Cancel in Logbook ▸ Check confirmations: the check held, and one still downloading, are
+/// dropped. Nothing changes.
+#[tauri::command]
+async fn cancel_confirmation_check(
+    checks: State<'_, SharedConfirmationChecks>,
+) -> Result<(), String> {
+    checks.cancel();
+    Ok(())
+}
+
 /// Where a park or summit is: the US states, DC and Canadian provinces it lies in, as the hunter
 /// feed writes them ("US-ND"; a park on a state line names each). Empty where nothing here places
 /// it, and its contact then takes a state as every contact did before.
@@ -26969,6 +27482,30 @@ async fn contest_log_manual(
     .await
 }
 
+/// ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois
+/// QSO Party counts once per county.
+///
+/// `rows` is one field vector per row, each shaped as [`contest_log_manual`]'s `fields`; the
+/// engine stamps every row with one time and one band and dupe-checks each on its own
+/// ([`Engine::contest_log_manual_rows`]). The answer is, per row, whether it entered the log:
+/// a dupe is a `false` here rather than an error, because the other counties of the same
+/// contact did log and the strip has to say which county it was. Err only when contest mode
+/// is off. Answers once the rows are in the journal on disk ([`journaled_command`]).
+#[tauri::command]
+async fn contest_log_manual_rows(
+    state: State<'_, SharedEngine>,
+    call: String,
+    rows: Vec<Vec<(String, String)>>,
+    mode: String,
+    submode: Option<String>,
+) -> Result<Vec<bool>, String> {
+    journaled_command(Arc::clone(&state), move |eng| {
+        let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        eng.contest_log_manual_rows(&call, &rows, &mode, sub)
+    })
+    .await
+}
+
 /// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites section's strip.
 ///
 /// Identical to [`contest_log_manual`] except for where the row's band and frequency
@@ -32775,6 +33312,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedWxHistory::default())
         .manage(SolarIndicesCache::default())
         .manage(LogTallies::default())
+        .manage(SharedConfirmationChecks::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(BetaUpdateState::default())
@@ -33053,6 +33591,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             clear_hunt_target,
             fd_log_manual,
             contest_log_manual,
+            contest_log_manual_rows,
             contest_log_satellite,
             contest_working,
             contest_entry_reset,
@@ -33183,6 +33722,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_activation,
             park_state_review,
             apply_park_states,
+            confirmation_check,
+            apply_confirmation_check,
+            cancel_confirmation_check,
             get_need_alerts,
             get_all_spots,
             get_propagation,
@@ -33317,6 +33859,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                     if quit::hold_the_close(app) {
                         api.prevent_close();
                     }
+                }
+            }
+            // A confirmation check whose window is gone has no dialog left to Apply it: its
+            // download goes with the window.
+            if let tauri::WindowEvent::Destroyed = event {
+                if let Some(checks) = window.app_handle().try_state::<SharedConfirmationChecks>() {
+                    checks.window_closed(window.label());
                 }
             }
         })
@@ -34889,6 +35438,37 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "get_scope_frame,"),
             "get_scope_frame is not registered — the scope's frame poll would fail at runtime"
+        );
+    }
+
+    /// A county line logs only if `contest_log_manual_rows` is REGISTERED: left out of
+    /// `generate_handler!` the strip's Enter fails at runtime and the contact is not logged. It
+    /// must also be the engine's many-row write, journaled before it answers, so every county
+    /// of the contact shares one time and reaches the disk before the strip says "Logged".
+    #[test]
+    fn the_county_line_command_is_registered_and_journals_the_engines_rows() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nasync fn contest_log_manual_rows(")
+            .expect("the command a county line logs through must exist")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows("),
+            "contest_log_manual_rows must journal Engine::contest_log_manual_rows"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
+            "contest_log_manual_rows is not registered — a county line would fail at runtime"
         );
     }
 
@@ -42049,6 +42629,568 @@ mod tests {
             0,
             "nothing re-uploads (premise: {queued} queued before)"
         );
+    }
+
+    // ── Logbook ▸ Check confirmations ──────────────────────────────────────────────────────────
+
+    /// When these tests Apply: 2026-10-07 18:00:00 UTC.
+    const CHECKED_AT: u64 = 1_791_396_000;
+
+    /// One ADIF record: `call` on `band` in `mode` at `hhmmss` UTC on 2026-10-01, with `more`.
+    fn check_row(call: &str, band: &str, mode: &str, hhmmss: &str, more: &str) -> String {
+        format!(
+            "<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<QSO_DATE:8>20261001<TIME_ON:6>{hhmmss}\
+             {more}<EOR>\n",
+            call.len(),
+            band.len(),
+            mode.len()
+        )
+    }
+
+    /// LoTW's answer as its downloads read: the banner, `rows`, and the end marker.
+    fn lotw_answer(rows: &[String]) -> String {
+        format!(
+            "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW\n<eoh>\n{}\
+             <APP_LoTW_EOF>\n",
+            rows.concat()
+        )
+    }
+
+    /// The account the tests check with. It is no one's: the fake below answers every request.
+    fn test_lotw() -> crate::LotwAccess {
+        crate::LotwAccess {
+            username: "k2def-test".into(),
+            password: "not-a-password".into(),
+            owncall: Some("K2DEF".into()),
+        }
+    }
+
+    /// A fake LoTW: the confirmation download answers with `report`, the own-QSO list with `own`,
+    /// and every request it is asked is kept, in order.
+    struct FakeLotw {
+        report: String,
+        own: String,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeLotw {
+        fn fetch(&self, url: &str) -> Result<String, String> {
+            self.asked.borrow_mut().push(url.to_string());
+            if url.contains("&qso_qsl=yes") {
+                Ok(self.report.clone())
+            } else if url.contains("&qso_qsl=no") {
+                Ok(self.own.clone())
+            } else {
+                Err(format!("not a request LoTW answers: {url}"))
+            }
+        }
+    }
+
+    /// `log` on a store of the test's own, imported as Logbook ▸ Import ADIF imports a file.
+    fn store_holding(
+        tag: &str,
+        log: &[tempo_core::logbook::QsoRecord],
+    ) -> (std::path::PathBuf, SharedEngine) {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store(tag, 0);
+        let mut text = tempo_core::logbook::adif_header();
+        for r in log {
+            text.push_str(&tempo_core::logbook::adif_record_own_log(r));
+        }
+        let (made, written) =
+            tempo_app::logwrite::until_written(|| tempo_app::logwrite::import_adif(&engine, &text));
+        written
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("on disk");
+        assert_eq!(made.expect("imported").0, log.len());
+        (dir, engine)
+    }
+
+    /// The log as 1.17.0 left it, built by replaying its merges, never set by hand: LoTW's
+    /// own-QSO pull, then a sync of its confirmations. 18:00 W1AW and 10:00 K1ABC were uploaded.
+    fn left_by_1_17(
+        rows: &[String],
+        confirmations: &str,
+        own: &str,
+    ) -> Vec<tempo_core::logbook::QsoRecord> {
+        use tempo_core::logbook::{UploadOutcome, UploadStatus};
+        use tempo_core::reconcile::check::replay;
+        let mut log = tempo_core::logbook::parse_adif(&rows.concat());
+        for r in log.iter_mut().filter(|r| {
+            (r.call == "W1AW" && r.when_unix % 86_400 == 18 * 3600)
+                || (r.call == "K1ABC" && r.when_unix % 86_400 == 10 * 3600)
+        }) {
+            r.upload.lotw = Some(UploadStatus {
+                outcome: UploadOutcome::Pending,
+                when_unix: 1,
+                detail: None,
+            });
+        }
+        let log = replay::echoed_by_1_17(log, &tempo_core::logbook::parse_adif(own));
+        replay::left_by_1_17(log, &tempo_core::logbook::report_rows(confirmations))
+    }
+
+    /// The scene: #400's pair on W1AW (06:00 marked Accepted from 18:00's upload, then given
+    /// 18:00's confirmation); K1ABC at 10:00 holding the confirmation of a 15:00 QSO this log
+    /// does not hold, while LoTW holds 10:00 itself unconfirmed; K5ORF holding the confirmation of
+    /// a QSO five hours from it, of which LoTW holds no upload; N0SUP holding its own
+    /// confirmation; and W9IMP a LoTW mark an import brought, which LoTW names nowhere. The log
+    /// on a store, and the fake LoTW answering for it.
+    fn check_scene(tag: &str) -> (std::path::PathBuf, SharedEngine, FakeLotw) {
+        let confirmations = lotw_answer(&[
+            check_row(
+                "W1AW",
+                "20m",
+                "FT8",
+                "180200",
+                "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            check_row(
+                "K1ABC",
+                "20m",
+                "FT8",
+                "150000",
+                "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            check_row("K5ORF", "40m", "CW", "140000", "<QSL_RCVD:1>Y"),
+            check_row("N0SUP", "20m", "FT8", "120100", "<QSL_RCVD:1>Y"),
+        ]);
+        let own = lotw_answer(&[
+            check_row("W1AW", "20m", "FT8", "180000", "<QSL_RCVD:1>Y"),
+            check_row("K1ABC", "20m", "FT8", "100000", "<QSL_RCVD:1>N"),
+            check_row("K1ABC", "20m", "FT8", "150000", "<QSL_RCVD:1>Y"),
+            check_row("N0SUP", "20m", "FT8", "120000", "<QSL_RCVD:1>Y"),
+        ]);
+        let log = left_by_1_17(
+            &[
+                check_row("W1AW", "20m", "FT8", "060000", ""),
+                check_row("W1AW", "20m", "FT8", "180000", ""),
+                check_row("K1ABC", "20m", "FT8", "100000", ""),
+                check_row("K5ORF", "40m", "CW", "090000", ""),
+                check_row("N0SUP", "20m", "FT8", "120000", ""),
+                check_row("W9IMP", "20m", "FT8", "080000", "<LOTW_QSL_RCVD:1>Y"),
+            ],
+            &confirmations,
+            &own,
+        );
+        let (dir, engine) = store_holding(tag, &log);
+        let lotw = FakeLotw {
+            report: confirmations,
+            own,
+            asked: std::cell::RefCell::new(Vec::new()),
+        };
+        (dir, engine, lotw)
+    }
+
+    /// The lines `dto` starts ticked, as Apply names them.
+    fn decisive(dto: &crate::ConfirmationCheckDto) -> Vec<crate::TickedLineDto> {
+        dto.lines
+            .iter()
+            .filter(|l| l.decisive)
+            .map(|l| crate::TickedLineDto {
+                id: l.id.clone(),
+                mark: l.mark.to_string(),
+            })
+            .collect()
+    }
+
+    /// The contact `call` at `hhmmss`, as the store holds it.
+    fn stored_at(
+        engine: &SharedEngine,
+        call: &str,
+        hhmmss: &str,
+    ) -> tempo_core::logbook::QsoRecord {
+        let when = tempo_core::logbook::parse_adif(&check_row(call, "20m", "FT8", hhmmss, ""))[0]
+            .when_unix;
+        let found: Vec<_> = engine
+            .stored_records()
+            .into_iter()
+            .filter(|r| r.call == call && r.when_unix == when)
+            .collect();
+        assert_eq!(found.len(), 1, "{call} at {hhmmss}");
+        found.into_iter().next().unwrap()
+    }
+
+    /// ★ "Check confirmations" lists only the defect's lines: newest first, each with its class,
+    /// whether it starts ticked and why not, and whether the contact goes in the next LoTW
+    /// upload. A contact LoTW confirms is not listed, and a mark LoTW names nowhere is counted.
+    /// Reading it writes nothing. Applying the lines that start ticked changes those and no
+    /// other, gives the right contact LoTW's confirmation, and queues nothing to a connector; a
+    /// ticked line that is not one of the check's changes nothing and keeps the check.
+    #[test]
+    fn the_confirmation_check_lists_only_the_defects_lines_and_changes_only_what_is_applied() {
+        let (dir, engine, lotw) = check_scene("check-lists");
+        let checks = crate::ConfirmationChecks::default();
+        let before = engine.stored_records();
+        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
+            lotw.fetch(url)
+        })
+        .expect("the check reads");
+        let seen: Vec<_> = dto
+            .lines
+            .iter()
+            .map(|l| {
+                (
+                    l.call.as_str(),
+                    l.mark,
+                    l.class,
+                    l.decisive,
+                    l.unticked,
+                    l.owed_after,
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("K1ABC", "lotw", "contradicted", true, None, false),
+                ("K5ORF", "lotw", "orphan", false, Some("orphan"), true),
+                ("W1AW", "lotw", "moved", true, None, true),
+                ("W1AW", "lotwUpload", "moved", true, None, true),
+            ]
+        );
+        assert_eq!(
+            (dto.gains, dto.unreached, dto.out_of_scope),
+            (1, 1, 0),
+            "W1AW at 18:00 gains; W9IMP's mark is counted"
+        );
+        assert_eq!(
+            dto.lines[2].remove_granted,
+            ["DXCC"],
+            "the code 18:00's row brought"
+        );
+        assert_eq!(
+            engine.stored_records(),
+            before,
+            "reading the check writes nothing"
+        );
+
+        // A ticked line the check does not have — K1ABC has no upload line — changes nothing,
+        // and the check is still there to Apply.
+        let k1abc = dto.lines[0].id.clone();
+        let wrong = [crate::TickedLineDto {
+            id: k1abc,
+            mark: "lotwUpload".into(),
+        }];
+        let (made, durability) =
+            crate::applied_from(&checks, dto.session, &wrong, &engine, CHECKED_AT);
+        assert_eq!(made, Err(crate::CHECK_LINE_UNKNOWN.to_string()));
+        assert!(durability.is_empty());
+
+        let queued = engine.lock().unwrap().take_pending_uploads().len();
+        let ticked = decisive(&dto);
+        let (made, durability) =
+            crate::applied_from(&checks, dto.session, &ticked, &engine, CHECKED_AT);
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("on disk");
+        let made = made.expect("applied");
+        assert_eq!(
+            (
+                made.ticked,
+                made.confirmations,
+                made.uploads,
+                made.newly_confirmed,
+                made.newly_credited
+            ),
+            (3, 2, 1, 1, 1)
+        );
+        assert_eq!(
+            made.before_file,
+            Some(
+                dir.join(tempo_app::logwrite::before_file_name(CHECKED_AT))
+                    .display()
+                    .to_string()
+            )
+        );
+
+        let w1aw_0600 = stored_at(&engine, "W1AW", "060000");
+        assert!(
+            !w1aw_0600.qsl_rcvd.any()
+                && w1aw_0600.credit_granted.is_empty()
+                && w1aw_0600.upload.lotw.is_none(),
+            "06:00 is as it was before 1.17.0, owed to LoTW: {w1aw_0600:?}"
+        );
+        let w1aw_1800 = stored_at(&engine, "W1AW", "180000");
+        assert!(
+            w1aw_1800.qsl_rcvd.lotw && w1aw_1800.credit_granted == ["DXCC"],
+            "18:00 gained the confirmation LoTW holds for it: {w1aw_1800:?}"
+        );
+        let k1abc = stored_at(&engine, "K1ABC", "100000");
+        assert!(
+            !k1abc.qsl_rcvd.lotw && k1abc.credit_granted.is_empty(),
+            "{k1abc:?}"
+        );
+        // Every contact no ticked line names, and the merge did not confirm, is as it was.
+        let after = engine.stored_records();
+        for call in ["K5ORF", "N0SUP", "W9IMP"] {
+            let was = before.iter().find(|r| r.call == call);
+            let now = after.iter().find(|r| r.call == call);
+            assert_eq!(now, was, "{call} is untouched");
+        }
+        assert_eq!(
+            engine.lock().unwrap().take_pending_uploads().len(),
+            0,
+            "nothing re-uploads (premise: {queued} queued before)"
+        );
+        // Applied, the check is gone.
+        let (made, _) = crate::applied_from(&checks, dto.session, &ticked, &engine, CHECKED_AT);
+        assert_eq!(made, Err(crate::CHECK_GONE.to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ Cancel changes nothing: the log is record for record what it was, no before-file is
+    /// written, and the check is gone, so an Apply of it is refused. A check still downloading
+    /// when Cancel comes is dropped as it lands.
+    #[test]
+    fn cancelling_the_check_changes_nothing() {
+        let (dir, engine, lotw) = check_scene("check-cancel");
+        let checks = crate::ConfirmationChecks::default();
+        let before = engine.stored_records();
+        let files = || std::fs::read_dir(&dir).unwrap().count();
+        let folder = files();
+        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
+            lotw.fetch(url)
+        })
+        .expect("the check reads");
+        assert!(
+            !decisive(&dto).is_empty(),
+            "premise: there is something to apply"
+        );
+        checks.cancel();
+        let (made, durability) =
+            crate::applied_from(&checks, dto.session, &decisive(&dto), &engine, CHECKED_AT);
+        assert_eq!(made, Err(crate::CHECK_GONE.to_string()));
+        assert!(durability.is_empty());
+
+        let cancelled_meanwhile = |url: &str| {
+            checks.cancel();
+            lotw.fetch(url)
+        };
+        let landed = crate::checked_and_held(
+            &checks,
+            "main",
+            &engine,
+            |_| Ok(test_lotw()),
+            &cancelled_meanwhile,
+        );
+        assert_eq!(landed, Err(crate::CHECK_CANCELLED.to_string()));
+        assert_eq!(
+            engine.stored_records(),
+            before,
+            "the log is record for record what it was"
+        );
+        assert_eq!(files(), folder, "no before-file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ The check uploads nothing and moves no cursor. LoTW is asked exactly twice, in the form
+    /// a full re-download asks: the whole confirmation history for the Settings call, and the
+    /// whole own-QSO list with no start date. Apply asks nothing (it is handed no transport).
+    /// Nothing is queued to a connector, and neither the LoTW nor the eQSL sync cursor moves.
+    #[test]
+    fn the_check_uploads_nothing_and_moves_no_cursor() {
+        let (dir, engine, lotw) = check_scene("check-no-upload");
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.set_lotw_cursor("2026-09-30 12:00:00".into());
+            eng.set_eqsl_cursor("20260930".into());
+            eng.take_pending_uploads();
+        }
+        let checks = crate::ConfirmationChecks::default();
+        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
+            lotw.fetch(url)
+        })
+        .expect("the check reads");
+        let (made, durability) =
+            crate::applied_from(&checks, dto.session, &decisive(&dto), &engine, CHECKED_AT);
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("on disk");
+        made.expect("applied");
+
+        let mut eng = engine.lock().unwrap();
+        assert!(eng.take_pending_uploads().is_empty(), "nothing is queued");
+        assert_eq!(
+            (
+                eng.settings().lotw_last_qsl.as_str(),
+                eng.settings().eqsl_last_sync.as_str()
+            ),
+            ("2026-09-30 12:00:00", "20260930"),
+            "no cursor moved"
+        );
+        drop(eng);
+        let asked = lotw.asked.borrow();
+        assert_eq!(asked.len(), 2, "two downloads, and nothing else: {asked:?}");
+        for part in [
+            "&qso_qsl=yes",
+            "&qso_qsldetail=yes",
+            "&qso_withown=yes",
+            "&qso_owncall=K2DEF",
+            "&qso_qslsince=1900-01-01",
+        ] {
+            assert!(asked[0].contains(part), "the confirmations: {part}");
+        }
+        for part in [
+            "&qso_qsl=no",
+            "&qso_owncall=K2DEF",
+            "&qso_qsorxsince=1900-01-01",
+        ] {
+            assert!(asked[1].contains(part), "the own-QSO list: {part}");
+        }
+        assert!(
+            !asked[1].contains("qso_startdate"),
+            "the whole own-QSO list, from no start date"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ Awards move only where the two contacts differ. K1ABC was worked on 20 m at 06:00 in
+    /// Ohio and at 18:00 in Indiana, and 1.17.0 put the 18:00 contact's LoTW confirmation on the
+    /// 06:00 one. Apply takes Ohio off WAS and puts Indiana on, and leaves Connecticut (W1AW, on
+    /// 40 m); both contacts are the United States on 20 m, so neither the DXCC confirmed count nor
+    /// 20 m's moves. Read through the Awards view's own fold, kept between the two reads as the
+    /// app keeps it.
+    #[test]
+    fn awards_move_only_where_the_two_contacts_differ() {
+        let confirmations = lotw_answer(&[
+            check_row(
+                "K1ABC",
+                "20m",
+                "FT8",
+                "180200",
+                "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            check_row("W1AW", "40m", "FT8", "120100", "<QSL_RCVD:1>Y"),
+            check_row("VE3ABC", "20m", "FT8", "130100", "<QSL_RCVD:1>Y"),
+        ]);
+        let own = lotw_answer(&[]);
+        let log = left_by_1_17(
+            &[
+                check_row("K1ABC", "20m", "FT8", "060000", "<STATE:2>OH"),
+                check_row("K1ABC", "20m", "FT8", "180000", "<STATE:2>IN"),
+                check_row("W1AW", "40m", "FT8", "120000", "<STATE:2>CT"),
+                check_row("VE3ABC", "20m", "FT8", "130000", ""),
+            ],
+            &confirmations,
+            &own,
+        );
+        let (dir, engine) = store_holding("check-awards", &log);
+        let tallies = crate::LogTallies::default();
+        let was = crate::log_folds::awards_kept(&engine, &tallies).expect("folded");
+        let needed =
+            |a: &propagation::AwardSummary, state: &str| a.was.needed.iter().any(|s| s == state);
+        let on_20m = |a: &propagation::AwardSummary| {
+            a.bands
+                .iter()
+                .find(|b| b.band == "20m")
+                .map(|b| b.confirmed)
+        };
+        assert_eq!(
+            (was.dxcc_confirmed, on_20m(&was), was.was.confirmed),
+            (2, Some(2), 2)
+        );
+        assert!(
+            !needed(&was, "OH") && needed(&was, "IN") && !needed(&was, "CT"),
+            "1.17.0 confirmed Ohio and Connecticut"
+        );
+
+        let lotw = FakeLotw {
+            report: confirmations,
+            own,
+            asked: std::cell::RefCell::new(Vec::new()),
+        };
+        let checks = crate::ConfirmationChecks::default();
+        let dto = crate::checked_and_held(&checks, "main", &engine, |_| Ok(test_lotw()), &|url| {
+            lotw.fetch(url)
+        })
+        .expect("the check reads");
+        assert_eq!(decisive(&dto).len(), 1, "{:?}", dto.lines);
+        let (made, durability) =
+            crate::applied_from(&checks, dto.session, &decisive(&dto), &engine, CHECKED_AT);
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("on disk");
+        made.expect("applied");
+
+        let now = crate::log_folds::awards_kept(&engine, &tallies).expect("folded");
+        assert_eq!(
+            (now.dxcc_confirmed, on_20m(&now)),
+            (2, Some(2)),
+            "both K1ABC contacts are the United States on 20 m: DXCC does not move"
+        );
+        assert_eq!(now.was.confirmed, 2);
+        assert!(
+            needed(&now, "OH") && !needed(&now, "IN") && !needed(&now, "CT"),
+            "Ohio, the wrong contact's state, is needed again; Indiana is confirmed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One check at a time is held: a check that lands after a newer one started is dropped as
+    /// it lands, and so is a check whose window closed while it downloaded, or after.
+    #[test]
+    fn only_the_newest_check_of_an_open_window_is_held() {
+        let checks = crate::ConfirmationChecks::default();
+        let session = |session| crate::CheckSession {
+            session,
+            report: String::new(),
+            lines: Vec::new(),
+        };
+        let first = checks.start("main");
+        let second = checks.start("main");
+        assert!(!checks.hold(session(first)), "a newer check started");
+        assert!(checks.hold(session(second)));
+        checks.window_closed("logbook");
+        assert!(
+            checks.take(second, &[]).is_ok(),
+            "another window closing leaves it"
+        );
+        let third = checks.start("logbook");
+        assert!(checks.hold(session(third)));
+        checks.window_closed("logbook");
+        assert_eq!(
+            checks.take(third, &[]).map(|_| ()),
+            Err(crate::CHECK_GONE.to_string()),
+            "its window closed"
+        );
+        let fourth = checks.start("logbook");
+        checks.window_closed("logbook");
+        assert!(
+            !checks.hold(session(fourth)),
+            "its window closed while it downloaded"
+        );
+    }
+
+    /// Logbook ▸ Check confirmations reaches the backend only through its three commands, each
+    /// DEFINED as an `async fn` — so none runs on the UI thread, and the census scans above read
+    /// every one of them — and REGISTERED: a name missing from `generate_handler!` fails at
+    /// runtime with nothing at compile time to catch it.
+    #[test]
+    fn the_confirmation_check_commands_are_async_and_registered() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for name in [
+            "confirmation_check",
+            "apply_confirmation_check",
+            "cancel_confirmation_check",
+        ] {
+            // Column zero, so this test's own strings cannot satisfy it.
+            assert!(
+                src.lines()
+                    .any(|l| l.starts_with(&format!("async fn {name}("))),
+                "{name} is not an async command"
+            );
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered"
+            );
+        }
     }
 
     /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge

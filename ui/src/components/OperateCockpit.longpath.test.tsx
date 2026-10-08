@@ -15,6 +15,7 @@ import { OperateCockpit } from './OperateCockpit'
 import { pointRotatorAtCall } from '../api'
 import { t } from '../i18n'
 import type { AppSnapshot } from '../types'
+import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const pushToast = vi.fn()
@@ -74,7 +75,7 @@ function panelsApi(): PanelLayoutApi<OperatePanelId> {
   const state: Partial<Record<OperatePanelId, PanelState>> = {}
   return {
     layout: { v: 1, state, share: {} },
-    stateOf: (id) => state[id] ?? 'docked',
+    stateOf: (id) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id),
     setPanelState: vi.fn(),
     shareOf: () => 1,
     setShare: vi.fn(),

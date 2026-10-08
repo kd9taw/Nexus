@@ -219,11 +219,32 @@ export function nativeCivBlockedReason(rigModel: number, rigConn: string): strin
 }
 
 /**
- * Icoms with more than ONE data mode, where `1A 06`'s first byte selects D1/D2/D3.
+ * Icoms with more than ONE data mode, where `1A 06`'s first byte selects D1/D2/D3. Each radio's own
+ * CI-V reference, "Data mode with filter width settings" (`1A 06`), first data byte:
  *
- * ⚠️ NEEDS BENCH. The IC-7300 has a single DATA mode and is deliberately absent; the rest are
- * listed from their CI-V references and none of it has been confirmed against a radio here. The
- * selector defaults to D1 — today's behaviour — so an operator who never touches it is
- * unaffected either way.
+ * | Radio | Reference | `1A 06` |
+ * |---|---|---|
+ * | IC-7610 (3078) | CI-V Reference Guide A7380-7EX-4, PDF p. 13 | 00 = OFF, 01 = DATA1, 02 = DATA2, 03 = DATA3 |
+ * | IC-9700 (3081) | CI-V Reference Guide A7508-3EX-4, PDF p. 19 | 00 = Data mode OFF, 01 = Data mode ON |
+ * | IC-705 (3085) | CI-V Reference Guide A7560-8EX-6, PDF p. 23 | 00 = Data mode OFF, 01 = Data mode ON |
+ * | IC-905 (3090) | CI-V Reference Guide A7711-9EX-2, PDF p. 24 | 00 = Data mode OFF, 01 = Data mode ON |
+ * | IC-7300 (3073) | Full Manual A7292-4EX-12, PDF p. 168 | 00 = Data mode OFF, 01 = Data mode ON |
+ *
+ * So the IC-7610 is the only one with a choice to make. The IC-9700, IC-705 and IC-905 were listed
+ * here too, and on them a D2 or D3 is a value Icom does not define. The selector defaults to D1,
+ * so an operator who never touched it is unaffected either way. ⚠️ NEEDS BENCH: what an IC-9700,
+ * 705 or 905 does with `1A 06 02` or `03` has not been seen on a radio here.
  */
-export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078, 3081, 3085, 3090]
+export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078]
+
+/**
+ * Does Settings show the D1/D2/D3 picker for this radio? On a radio with more than one DATA mode,
+ * always. On another native Icom only while it still holds a D2 or D3 (saved when the picker was
+ * offered there by mistake, or while the radio was set up as an IC-7610): the native daemon sends
+ * that choice on every DATA write, so the picker stays until it is set back to D1 rather than go
+ * away with the choice still in force.
+ */
+export function dataModePickerShown(rigModel: number, icomDataMode: number): boolean {
+  if (MULTI_DATA_MODE_ICOMS.includes(rigModel)) return true
+  return NATIVE_CIV_MODELS.includes(rigModel) && icomDataMode > 1
+}

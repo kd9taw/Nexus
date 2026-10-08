@@ -6,6 +6,7 @@ import { act, renderHook } from '@testing-library/react'
 import * as panelState from './panelState'
 import {
   ALL_PANEL_VOCABULARIES,
+  BOX_IDS,
   STOP_CONTROL_WORDS,
   MIN_SHARE,
   OPERATE_PANELS,
@@ -490,12 +491,12 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
       'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
-      'spots', 'needed',
+      'spots', 'needed', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
       'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
-      'spots', 'needed',
+      'spots', 'needed', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
   })
 
@@ -544,9 +545,10 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
   // vocabulary's `defaultRemoved` is the answer, and each case below drives one reader of an
   // absent state: `stateOf`, `undoRemoves`, `reset`, and a record written by today's build.
   const PHONE_KEY = panelStorageKey('phone')
-  const HIDDEN = ['spots', 'needed'] as const
+  // The two feeds, and the six boxes (2026-10-07), which ship hidden for the same reason.
+  const HIDDEN = ['spots', 'needed', ...BOX_IDS] as const
 
-  it('a FRESH record shows Spots and Needed hidden, and every other Phone pane docked', () => {
+  it('a FRESH record shows Spots, Needed and the boxes hidden, and every other Phone pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
     for (const id of HIDDEN) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
     for (const id of PHONE_PANELS.panelIds) {
@@ -623,9 +625,13 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
-    for (const v of [OPERATE_PANELS, SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS, panelState.JS8_PANELS]) {
+    for (const v of [SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS]) {
       expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope'])
     }
+    // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the six boxes of each ship hidden
+    // beside its RF scope pane.
+    expect([...(panelState.JS8_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', ...BOX_IDS])
+    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', ...BOX_IDS])
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
@@ -657,6 +663,11 @@ describe('the RF scope pane ships hidden in the five digital cockpits (operator,
       expect(result.current.stateOf('rfScope'), `${v.view}: it ships visible`).toBe('removed')
       for (const id of v.panelIds) {
         if (id === 'rfScope') continue
+        // JS8's boxes ship hidden too (panelState.boxes.test.ts reads them).
+        if ((BOX_IDS as readonly string[]).includes(id)) {
+          expect(result.current.stateOf(id), `${v.view}: "${id}" ships visible`).toBe('removed')
+          continue
+        }
         expect(result.current.stateOf(id), `${v.view}: "${id}" changed its default`).toBe('docked')
       }
       unmount()
@@ -693,11 +704,11 @@ describe("CW ships Phone's two feeds hidden too (plan H8)", () => {
   // Each case drives one reader of an absent state, as Phone's do, against CW's own record.
   const CW_KEY = panelStorageKey('cw')
 
-  it('a FRESH CW record shows Spots and Needed hidden, and every other CW pane docked', () => {
+  it('a FRESH CW record shows Spots, Needed and the boxes hidden, and every other CW pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(CW_PANELS))
-    for (const id of ['spots', 'needed'] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
+    for (const id of ['spots', 'needed', ...BOX_IDS] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
     for (const id of CW_PANELS.panelIds) {
-      if (id === 'spots' || id === 'needed') continue
+      if (id === 'spots' || id === 'needed' || (BOX_IDS as readonly string[]).includes(id)) continue
       expect(result.current.stateOf(id), `"${id}" changed its default`).toBe('docked')
     }
     expect(localStorage.getItem(CW_KEY)).toBeNull()
@@ -740,7 +751,7 @@ describe("CW ships Phone's two feeds hidden too (plan H8)", () => {
   })
 
   it("the feeds take Phone's places: Spots under Decode's column, Needed under the middle one, both last below three tracks", () => {
-    expect(CW_PANELS.arrange!.columns.a).toEqual(['decode', 'sent', 'spots'])
+    expect(CW_PANELS.arrange!.columns.a).toEqual(['decode', 'sent', 'spots', ...BOX_IDS])
     expect(CW_PANELS.arrange!.columns.b).toEqual(['bandActivity', 'copilot', 'needed'])
     expect(CW_PANELS.arrange!.pinned).toEqual([])
     expect(CW_PANELS.arrange!.stockMerged).toEqual(['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'])

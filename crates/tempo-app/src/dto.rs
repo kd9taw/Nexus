@@ -216,6 +216,26 @@ pub struct DecodeRow {
     pub rv: i32,
 }
 
+/// A period heard before a band or mode change, as [`AppSnapshot::late_decodes`] carries it.
+/// Its rows are coloured (B4, new grid, new band, confirmed) for `band` and `tier`, never for the
+/// band or mode now selected, and nothing they show can be worked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LateDecodes {
+    /// The band it was received on (`""` off the bands).
+    pub band: String,
+    /// The dial it was received on (MHz).
+    pub dial_mhz: f64,
+    /// The mode it was received in.
+    pub tier: Tier,
+    /// The received period's start, Unix milliseconds — what its separator shows.
+    pub period_start_ms: u64,
+    /// Where it sorts among the panes' rows: its boundary in the CURRENT mode's slot numbering
+    /// (a mode change renumbers the slots).
+    pub slot: u64,
+    pub rows: Vec<DecodeRow>,
+}
+
 /// The radio-frequency / signal tier a message or link is using.
 ///
 /// `Ft1` is the fast 4 s coherent tier; `Dx1` is the non-coherent, fading-
@@ -1078,6 +1098,48 @@ pub struct SlotKeyRefused {
     /// What came back for the key, in the rig link's own words. Data: shown as it is, never
     /// translated.
     pub why: String,
+    /// Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
+    /// its transmit audio from: the UI says that in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flex_audio: Option<FlexAudioRefusal>,
+}
+
+/// Why Nexus's own Flex client kept a slot over's key off the air
+/// ([`SlotKeyRefused::flex_audio`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexAudioRefusal {
+    /// The transmit slice's mode, in the radio's own word (`DIGU`). Data, never translated.
+    pub mode: String,
+    pub cause: FlexAudioCause,
+}
+
+/// What kept a key off the air ([`FlexAudioRefusal`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FlexAudioCause {
+    /// Native audio is on, and the radio does not take its transmit audio from Nexus's DAX yet: it
+    /// takes it from its mic input, or Nexus's DAX transmit stream does not exist yet.
+    NotYetDax,
+    /// Native audio is off, and the radio still takes its transmit audio from the DAX Nexus set
+    /// while it was on, which nothing feeds until the operator's own setting, its mic input, is
+    /// back.
+    DaxUnfed,
+    /// A voice over, and the radio still takes its transmit audio from the DAX Nexus set (for a
+    /// digital mode, or while native audio was on) in place of its mic input, until Nexus puts the
+    /// mic back.
+    MicNotBack,
+}
+
+/// The operator's PTT that Nexus's own Flex client kept off the air because the radio still took
+/// its transmit audio from the DAX Nexus set, not its mic ([`RadioStatus::ptt_refused`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PttRefused {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// The transmit slice's mode, in the radio's own word (`USB`). Data, never translated.
+    pub mode: String,
 }
 
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
@@ -1089,6 +1151,15 @@ pub struct SlotUnkeyFailed {
     /// What came back for the unkey, in the rig link's own words. Data: shown as it is, never
     /// translated.
     pub why: String,
+}
+
+/// A slot over Nexus ended part way through because its audio stopped reaching the radio
+/// ([`RadioStatus::slot_audio_lost`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotAudioLost {
+    /// When, in Unix seconds.
+    pub at: u64,
 }
 
 /// Current radio / slot-timing status.
@@ -1373,6 +1444,20 @@ pub struct RadioStatus {
     /// happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_unkey_failed: Option<SlotUnkeyFailed>,
+    /// A slot over (FT8, FT4, JS8 and the other timed-slot modes) lost its audio part way through:
+    /// Flex native DAX audio went off under it (the operator, or the receive floor giving up on
+    /// DAX), or its DAX transmit route went. Nexus ended the over there, rather than leave the
+    /// radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling TX.
+    /// ABSENT until it happens, so every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_audio_lost: Option<SlotAudioLost>,
+    /// The operator's last PTT press (Phone) did not key: right after the transmit slice left a
+    /// digital mode, or native audio went off, the radio still took its transmit audio from the
+    /// DAX Nexus set, not its mic, and Nexus's own Flex client kept the key off the air. Cleared by
+    /// the next press that keys, or that fails for another reason. ABSENT until it happens, so
+    /// every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ptt_refused: Option<PttRefused>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]
@@ -3657,6 +3742,11 @@ pub struct AppSnapshot {
     pub field_day: Option<FieldDayStatus>,
     /// Signals decoded in the most recent RX slot (live decode feed).
     pub recent_decodes: Vec<DecodeRow>,
+    /// The period a band or mode change caught while it was being decoded, which WSJT-X shows
+    /// and so does this: display only, under the band, dial and mode it was heard on. Absent
+    /// unless there is one, until the next period of the new band or mode decodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_decodes: Option<LateDecodes>,
     /// JTAlert-style UDP callsign highlights (call → CSS colors) for the
     /// decode panes. Empty unless a cooperating app sent HighlightCallsign.
     #[serde(default)]

@@ -150,11 +150,35 @@ describe('one click from ⊞ Panels or the NOW bar, remembered per section', () 
   })
 })
 
+describe('each cockpit keeps its own rail, and each starts from today’s', () => {
+  // The operator's "Per cockpit" (2026-10-07): FT's rail can differ from Phone's, and each starts from the
+  // rail every cockpit shared before. The records are App's (components/DashRail `useDashRail`).
+  const railBoxes = () => [...railEl()!.querySelectorAll<HTMLElement>('.dash-rail-col > .pane-frame')].map((f) => f.dataset.pane)
+  it('a pick and a close in Phone’s rail stay in Phone’s; CW’s still shows today’s rail, and both survive a relaunch', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ phone: true, cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: { rail1: 'clock', rail2: 'spacewx', rail3: 'needed', rail4: 'getout' } }))
+    await mountOn('phone')
+    await waitFor(() => expect(railEl()).not.toBeNull())
+    expect(railBoxes(), 'Phone’s first open is not today’s rail').toEqual(['clock', 'spacewx', 'needed', 'getout'])
+    fireEvent.change(railEl()!.querySelectorAll('select.pane-pick')[1], { target: { value: 'selection' } })
+    fireEvent.click(within(railEl()!.querySelector<HTMLElement>('[data-pane="getout"]')!).getByRole('button', { name: /^Hide/ }))
+    await act(async () => {})
+    expect(railBoxes()).toEqual(['clock', 'selection', 'needed'])
+    navTo('CW')
+    await waitFor(() => expect(document.querySelector('main.cw-cockpit')).not.toBeNull())
+    await waitFor(() => expect(railBoxes()).toEqual(['clock', 'spacewx', 'needed', 'getout']))
+    cleanup()
+    await mountOn('phone')
+    await waitFor(() => expect(railEl()).not.toBeNull())
+    expect(railBoxes(), 'Phone’s own rail did not survive a relaunch').toEqual(['clock', 'selection', 'needed'])
+  })
+})
+
 describe('never on a small window', () => {
-  it('below lg: no rail, no NOW bar switch, and the ⊞ row keeps the choice and says why', async () => {
-    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+  it('below lg: no rail, no NOW bar switch, and the ⊞ row keeps the choice and says why (a cockpit with no box columns)', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ rtty: true }))
     windowOf(1280, 800) // 85 % → 1506 effective px: md
-    await mountOn('cw')
+    await mountOn('rtty')
     expect(document.documentElement.getAttribute('data-viewport')).toBe('md')
     expect(railEl(), 'the rail rendered below lg').toBeNull()
     expect(shellMarked()).toBe(false)
@@ -164,6 +188,78 @@ describe('never on a small window', () => {
     expect(row.checked, 'the choice was lost on a small window').toBe(true)
     expect(row.getAttribute('aria-describedby')).toBeTruthy()
     expect(menu.textContent).toContain('Needs a larger window')
+  })
+})
+
+describe('on a window too small for the rail, its boxes stand in the cockpit’s columns', () => {
+  // The operator's "They move into the columns" (2026-10-07): beside FT, Phone, CW and JS8, below `lg` the rail's
+  // boxes stand at the foot of the column the cockpit's own boxes stand in until placed, until the window is wide
+  // enough again; the record is never rewritten by a width. Their picker is the rail's; they carry no ✕ (a slot
+  // closed there could come back only from the rail's own ⊞, which a window this size does not show).
+  const SLOTS = { rail1: 'clock', rail2: 'spacewx', rail3: 'needed', rail4: 'getout' }
+  const foldedIn = (main: string) =>
+    [...document.querySelectorAll<HTMLElement>(`${main} .pane-frame[data-pane^="rail"]`)].map(
+      (f) => `${f.dataset.pane}:${f.querySelector('[data-box]')?.getAttribute('data-box')}`,
+    )
+  const resize = async (w: number, h: number) => {
+    windowOf(w, h)
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+  }
+
+  it('CW: at the foot of the leading column, with no ✕; the NOW bar and the ⊞ row say so; the rail comes back on a larger window and folds again', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: SLOTS }))
+    windowOf(1280, 800)
+    await mountOn('cw')
+    expect(document.documentElement.getAttribute('data-viewport')).toBe('md')
+    expect(railEl(), 'the rail rendered below lg').toBeNull()
+    await waitFor(() => expect(foldedIn('main.cw-cockpit')).toEqual(['rail1:clock', 'rail2:spacewx', 'rail3:neededBoard', 'rail4:getout']))
+    const frames = [...document.querySelectorAll<HTMLElement>('main.cw-cockpit .pane-frame[data-pane^="rail"]')]
+    const lead = frames[0].closest('.cockpit-col')!
+    expect(lead, 'not in the leading column').toBe(document.querySelector('main.cw-cockpit .cockpit-panes > .cockpit-col'))
+    expect(frames.every((f) => f.parentElement === lead), 'the boxes are spread over the columns').toBe(true)
+    expect([...lead.children].slice(-4), 'not at the foot of the column').toEqual(frames)
+    for (const f of frames) expect(within(f).queryByRole('button', { name: /^Hide/ }), 'a folded box offers a ✕').toBeNull()
+    expect(nowSwitch()?.getAttribute('aria-pressed'), 'the NOW bar does not offer the switch that moves them').toBe('true')
+    const menu = openPanels()
+    expect((within(menu).getByRole('checkbox', { name: 'Dashboard rail' }) as HTMLInputElement).checked).toBe(true)
+    expect(menu.textContent).toContain('stand at the foot of this screen')
+    fireEvent.click(document.body)
+    // A larger window: the rail stands beside the cockpit again, and the columns let them go.
+    await resize(1366, 768)
+    await waitFor(() => expect(railEl()).not.toBeNull())
+    expect(foldedIn('main.cw-cockpit')).toEqual([])
+    expect([...railEl()!.querySelectorAll<HTMLElement>('.dash-rail-col > .pane-frame')].map((f) => f.dataset.pane)).toEqual(['clock', 'spacewx', 'needed', 'getout'])
+    await resize(1280, 800)
+    await waitFor(() => expect(railEl()).toBeNull())
+    expect(foldedIn('main.cw-cockpit')).toHaveLength(4)
+    expect(JSON.parse(localStorage.getItem('nexus.dashrail.config')!), 'a width rewrote the rail’s record').toEqual({ slots: SLOTS })
+  })
+
+  it('FT: at the foot of the side rail, in FT’s arranged columns; turned off, FT draws today’s tree again', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ operate: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: SLOTS }))
+    windowOf(1280, 800)
+    await mountOn('operate')
+    const lower = () => document.querySelector<HTMLElement>('.operate-host:not([hidden]) main.operate-cockpit .cockpit-lower')!
+    await waitFor(() => expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')).toHaveLength(4))
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    const side = lower().querySelector<HTMLElement>(':scope > aside.op-stack')!
+    expect(side, 'FT’s side rail is not drawn').not.toBeNull()
+    expect([...side.querySelectorAll<HTMLElement>(':scope > .pane-frame[data-pane^="rail"]')].map((f) => f.dataset.pane)).toEqual(['rail1', 'rail2', 'rail3', 'rail4'])
+    // A pick in a folded box is the rail's: its slot takes it.
+    const pick = side.querySelector<HTMLSelectElement>('.pane-frame[data-pane="rail2"] select.pane-pick')!
+    fireEvent.change(pick, { target: { value: 'bandTiles' } })
+    await act(async () => {})
+    expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')[1]).toBe('rail2:bandTiles')
+    expect(JSON.parse(localStorage.getItem('nexus.dashrail.config')!).sections.operate.rail2).toBe('bandTiles')
+    // Off from the NOW bar: the boxes go, and with nothing else arranged FT is today's tree.
+    fireEvent.click(nowSwitch()!)
+    await act(async () => {})
+    expect(foldedIn('.operate-host:not([hidden]) main.operate-cockpit')).toEqual([])
+    expect(lower().hasAttribute('data-arranged')).toBe(false)
   })
 })
 
@@ -251,6 +347,56 @@ describe('a click in the rail never changes the station the cockpit is working',
       }
     } finally {
       vi.mocked(api.getAllSpots).mockImplementation(async () => [])
+    }
+  })
+
+  it('a Needed row selects inside the rail too, then works the need through the board’s own Work, keying nothing', async () => {
+    // The Needed board's row click is the Spots board's: a select and a Work. In the rail the select is
+    // the rail's own; the Work is the board's (handleWorkNeeded: a QSY and its cockpit).
+    const K1CW = {
+      call: 'K1CW', entity: 'United States', band: '20m', zone: 5, tags: ['NewBand'], priority: 50,
+      headline: 'New band — United States 20m', mode: 'CW', freqMhz: 14.025,
+    }
+    vi.mocked(api.getNeedAlerts).mockResolvedValue([K1CW] as unknown as Awaited<ReturnType<typeof api.getNeedAlerts>>)
+    try {
+      localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+      localStorage.setItem(
+        'nexus.dashrail.config',
+        JSON.stringify({ slots: { rail1: 'clock', rail2: 'needed', rail3: 'spacewx', rail4: 'getout' } }),
+      )
+      await mountOn('cw')
+      const rail = railEl()!
+      const row = await waitFor(() => {
+        const r = [...rail.querySelectorAll<HTMLElement>('[data-pane="needed"] .np-row')].find((x) =>
+          x.querySelector('.np-call')?.textContent?.includes('K1CW'),
+        )
+        if (!r) throw new Error('the rail’s Needed box does not list the need')
+        return r
+      })
+      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq'] as const
+      const SWITCHES = ['setPtt', 'setTune', 'setTxEnabled'] as const
+      for (const fn of [api.selectPeer, api.workSpot, ...VERBS.map((v) => api[v]), ...SWITCHES.map((v) => api[v])]) {
+        vi.mocked(fn).mockClear()
+      }
+      await act(async () => {
+        fireEvent.click(row)
+      })
+      await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
+      await act(async () => {})
+      expect(document.querySelector('.view-crash'), 'the cockpit the Work opened crashed').toBeNull()
+      expect(vi.mocked(api.workSpot).mock.calls, 'the Work is not the board’s own').toEqual([['cw', 14.025, '20m', 'K1CW', undefined]])
+      const worked = vi.mocked(api.workSpot).mock.invocationCallOrder[0]
+      expect(
+        vi.mocked(api.selectPeer).mock.invocationCallOrder.filter((n) => n < worked),
+        'the click selected the station app-wide',
+      ).toEqual([])
+      expect(row.classList.contains('selected'), 'the rail’s Needed box marks the row it selected').toBe(true)
+      for (const v of VERBS) expect(api[v], `the Work keyed through ${v}`).not.toHaveBeenCalled()
+      for (const v of SWITCHES) {
+        expect(vi.mocked(api[v]).mock.calls.filter(([on]) => on === true), `the Work turned ${v} on`).toEqual([])
+      }
+    } finally {
+      vi.mocked(api.getNeedAlerts).mockImplementation(async () => [])
     }
   })
 

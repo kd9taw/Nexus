@@ -86,6 +86,7 @@ export function PaneFrame<S extends string = SlotId>({
   onRemoveTab,
   rotateSecs,
   onRotate,
+  marked,
 }: {
   slotId: S
   /** The slot as the picker's accessible name says it. Omitted ⇒ the slot id (Connect's). */
@@ -114,6 +115,9 @@ export function PaneFrame<S extends string = SlotId>({
   onAddTab?: (paneId: PaneId) => void
   /** Take the shown pane out of the slot — offered only while the slot holds two or more. */
   onRemoveTab?: () => void
+  /** The panes on screen elsewhere, which the picker marks: beside a cockpit, what the cockpit and the rail's
+   *  other slots show (once per screen across the two: choosing one moves it here). Omitted ⇒ none marked. */
+  marked?: ReadonlySet<PaneId>
   /** Seconds between tabs, when this slot rotates (the dashboard window and the TV page). */
   rotateSecs?: number
   /** Set or clear it. Omitted ⇒ the menu offers no rotation (the main window). */
@@ -141,7 +145,6 @@ export function PaneFrame<S extends string = SlotId>({
   }, [rotateSecs, tabsKey, paneId, paused])
   const def = paneById(paneId)
   if (!def) return null
-  const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
   const scale = textScale ?? 1
   const helpUrl = paneHelpUrl(paneId)
   const tabbed = tabs && tabs.length > 1 ? tabs : null
@@ -219,7 +222,7 @@ export function PaneFrame<S extends string = SlotId>({
                 <optgroup key={cat} label={PANE_CATEGORY_LABEL[cat]()}>
                   {items.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.title}
+                      {p.id !== paneId && marked?.has(p.id) ? t('panels.box.pick.onScreen', { title: p.title }) : p.title}
                     </option>
                   ))}
                 </optgroup>
@@ -258,8 +261,18 @@ export function PaneFrame<S extends string = SlotId>({
         {...(tabbed ? { role: 'tabpanel', id: panelId, 'aria-labelledby': tabId(paneId) } : {})}
         style={scale === 1 ? undefined : ({ '--box-text-scale': scale } as CSSProperties)}
       >
-        {body ?? <p className="pane-basic">{def.basic(ctx)}</p>}
+        <PaneBody pane={paneId} ctx={ctx} />
       </div>
     </section>
   )
+}
+
+/** A box's body: the pane's full panel, or its one-line state while the panel has nothing to show
+ *  (`expert` returns null → `basic`). The ONE renderer of a box's body, wherever the box stands — this
+ *  frame on Conditions, in the dashboard window and in the rail, and any area that shows an entry of
+ *  the shared list (features/sharedPanes) — so no surface can draw a box differently. */
+export function PaneBody({ pane, ctx }: { pane: PaneId; ctx: PaneContext }) {
+  const def = paneById(pane)
+  if (!def) return null
+  return <>{def.expert(ctx) ?? <p className="pane-basic">{def.basic(ctx)}</p>}</>
 }

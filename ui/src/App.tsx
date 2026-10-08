@@ -87,11 +87,14 @@ import { sectionFeatures, featureById, type FeatureId } from './features/registr
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
 import { useAlertGeoScope } from './features/alertGeoScope'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
-import { isDashRailSection, useDashRailSections, type DashRailSection } from './features/dashRail'
-import { DashRail } from './components/DashRail'
+import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
+import { sharedPaneById, sharedPaneOf } from './features/sharedPanes'
+import type { PaneId } from './features/connectConfig'
+import { DashRail, dashRailRecords, useDashRail } from './components/DashRail'
+import type { BoxSource, RailLink } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
@@ -176,6 +179,8 @@ import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
+import { slotAudioLostLane } from './features/slotAudioLost'
+import { pttRefusedLane } from './features/pttRefused'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
@@ -325,6 +330,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // whether it does. Off everywhere until the operator turns it on.
   const viewportClass = useViewportClass()
   const dashRail = useDashRailSections()
+  // Its contents, per cockpit (each starting from the rail every cockpit shared before), owned here with the
+  // cockpits' own records, so the two can share one reading of what is on screen.
+  const dashRailRec = useDashRail()
   const railFits = viewportClass === 'lg' || viewportClass === 'xl'
   // Density (row heights / padding) and text size (#215) — both chosen in Settings ▸ Workspace.
   const [density, setDensity] = useDensity()
@@ -717,6 +725,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('slotUnkeyFailed', remote ? null : slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
   }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why, remote])
+
+  // …and one the station ended part way through because its audio stopped reaching the radio (Flex
+  // native DAX audio went off under it): TX halted the same way, and the lane says so until TX is
+  // turned on again; not on the Remote page either.
+  useEffect(() => {
+    setStatus('slotAudioLost', remote ? null : slotAudioLostLane(snap?.radio.slotAudioLost))
+  }, [snap?.radio.slotAudioLost?.at, remote])
+
+  // The operator's PTT press that Nexus's own Flex client kept off the air, the radio still on the
+  // DAX Nexus set and not on its mic: the lane says so, in place of the PTT advice, until a press
+  // keys; not on the Remote page either.
+  useEffect(() => {
+    setStatus('pttRefused', remote ? null : pttRefusedLane(snap?.radio.pttRefused))
+  }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode, remote])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
@@ -2648,11 +2670,18 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { isOn: railIsOn, setOn: setRailOn } = dashRail
   const railSection: DashRailSection | null = !remote && isDashRailSection(effectiveView) ? effectiveView : null
   const railShown = railSection != null && railFits && railIsOn(railSection)
+  // ON A WINDOW TOO SMALL FOR IT (the operator's "They move into the columns"): beside FT, Phone, CW and
+  // JS8 the rail's boxes stand in the cockpit's columns instead, until the window is wide enough again.
+  const railFoldsHere = railSection != null && DASH_RAIL_FOLDS.includes(railSection)
+  const railFolds = railFoldsHere && !railFits && railIsOn(railSection!)
   // Its switch for the cockpit's ⊞ Panels menu, published before paint (components/dashRailSwitch) and
   // withdrawn when App goes: null where the rail does not stand.
   const railSwitch = useMemo<DashRailSwitch | null>(
-    () => (railSection ? { on: railIsOn(railSection), fits: railFits, set: (on: boolean) => setRailOn(railSection, on) } : null),
-    [railSection, railIsOn, setRailOn, railFits],
+    () =>
+      railSection
+        ? { on: railIsOn(railSection), fits: railFits, folds: railFoldsHere, set: (on: boolean) => setRailOn(railSection, on) }
+        : null,
+    [railSection, railIsOn, setRailOn, railFits, railFoldsHere],
   )
   useLayoutEffect(() => publishDashRailSwitch(railSwitch), [railSwitch])
   useLayoutEffect(() => () => publishDashRailSwitch(null), [])
@@ -2821,6 +2850,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       />
       <OperateDecodes
         decodes={snap.recentDecodes}
+        late={snap.lateDecodes}
         slot={snap.radio.slot}
         rxOffsetHz={snap.radio.rxOffsetHz}
         band={snap.radio.band}
@@ -2876,9 +2906,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
 
   // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below, by the
-  // Phone and CW cockpits' Spots and Needed panes (#345) and by Connect's Spots box — so a pane or
-  // a box can never be wired differently from its view, and working a row from one is the view's
-  // own act.
+  // Phone and CW cockpits' Spots and Needed panes (#345) and by the Spots and Needed boxes on Connect
+  // and in the rail — so a pane or a box can never be wired differently from its view, and working a
+  // row from one is the view's own act.
   const spotsBoard = {
     bandPlan,
     selectedCall: activePeer,
@@ -2917,6 +2947,93 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       : null,
   }
+  // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside FT,
+  // Phone, CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
+  // differently in one place from the other. The amplifier and the band ride the snapshot App already
+  // polls, as on Connect; the Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they
+  // are to Connect. Neither the rail nor a box stands on the hosted Remote page (the desktop first), so
+  // this wiring is always the native one.
+  const boxSource: BoxSource = {
+    myGrid: settings?.mygrid ?? '',
+    theme,
+    stations: snap.stations ?? [],
+    prop,
+    needByCall,
+    needAlerts: visibleAlerts,
+    amp: snap.radio.amp ?? null,
+    rigBand: snap.radio.band ?? null,
+    onWorkSpot: handleWorkMapSpot,
+    onPoint: (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined,
+    spotsFeed: { rows: allSpots, board: spotsBoard },
+    otaBoard: { snap, onHunt: handleHuntSpot, onSnap: setSnap },
+    neededBoard,
+  }
+  // The cockpits' boxes are the desktop's: the Remote page keeps its own panes.
+  const cockpitBoxes = remote ? undefined : boxSource
+  // ONCE PER SCREEN, ACROSS THE COCKPIT AND THE RAIL BESIDE IT (the operator's "Once per screen"): one reading
+  // of what the two show, made here, where both records live. The cockpit's own Spots and Needed panes come
+  // first, then the rail's slots, then the cockpit's boxes: a slot whose board the cockpit shows as a pane of
+  // its own shows another (features/dashRail `railOnScreen`), and a box whose entry the rail shows shows
+  // another (features/panelState `boxEntries`). Neither record is rewritten by that, so each gets its own back
+  // when the other lets it go. A pick on either side moves the entry there and hands the other side what it
+  // showed, as two boxes swap. Only the cockpit on screen has the rail beside it.
+  const boxCockpits: Partial<Record<DashRailSection, { spec: PanelVocabulary<string>; panels: PanelLayoutApi<string> }>> = {
+    operate: { spec: OPERATE_PANELS as PanelVocabulary<string>, panels: operatePanels as unknown as PanelLayoutApi<string> },
+    phone: { spec: PHONE_PANELS as PanelVocabulary<string>, panels: phonePanels as unknown as PanelLayoutApi<string> },
+    cw: { spec: CW_PANELS as PanelVocabulary<string>, panels: cwPanels as unknown as PanelLayoutApi<string> },
+    js8: { spec: JS8_PANELS as PanelVocabulary<string>, panels: js8Panels as unknown as PanelLayoutApi<string> },
+  }
+  const railRecords = railSection ? dashRailRecords(dashRailRec, railSection) : null
+  const railHost = railSection && cockpitBoxes ? boxCockpits[railSection] : undefined
+  const hostOwn = railHost ? ownShown(railHost.spec, railHost.panels.layout, railHost.panels.stateOf) : []
+  const railBoxes =
+    railRecords && (railShown || (railFolds && railHost))
+      ? railOnScreen(railRecords.slots, DASH_SLOT_IDS.filter((s) => railRecords.panels.stateOf(s) !== 'removed'), hostOwn)
+      : []
+  const railShows = railBoxes.map((b) => b.entry)
+  const hostEntries = railHost ? boxEntries(railHost.spec, railHost.panels.layout, railHost.panels.stateOf, railShows) : {}
+  // The rail's pick: the box in its slot, and what the cockpit showed of it moves: a box of the cockpit that
+  // showed it takes what the slot showed, and the cockpit's own pane that is that board is hidden (a hide that
+  // ends nothing).
+  const railPick = (slot: DashSlotId, pane: PaneId) => {
+    if (!railRecords) return
+    const was = railBoxes.find((b) => b.slot === slot)?.entry ?? sharedPaneOf(railRecords.slots[slot])?.id
+    railRecords.assignPane(slot, pane)
+    const entry = sharedPaneOf(pane)?.id
+    if (!railHost || entry == null) return
+    const box = Object.keys(hostEntries).find((b) => hostEntries[b] === entry)
+    if (box != null && was != null) railHost.panels.setBox?.(box, was)
+    for (const [own, e] of Object.entries(railHost.spec.sharedAs ?? {})) {
+      if (e === entry && railHost.panels.stateOf(own) !== 'removed') railHost.panels.setPanelState(own, 'removed')
+    }
+  }
+  const railLink: RailLink | undefined =
+    railRecords && railBoxes.length > 0
+      ? {
+          shows: railShows,
+          // A box took one of the rail's: the slot that showed it takes what the box showed.
+          take: (entry, give) => {
+            const slot = railBoxes.find((b) => b.entry === entry)?.slot
+            if (slot == null) return
+            const pane = give != null ? sharedPaneById(give)?.pane : undefined
+            if (pane) railRecords.assignPane(slot, pane)
+            else railRecords.panels.setPanelState(slot, 'removed')
+          },
+          // Below lg, the rail's boxes themselves, for the cockpit's columns.
+          folded: railFolds
+            ? {
+                boxes: railBoxes,
+                pick: (slot, entry) => {
+                  const pane = sharedPaneById(entry)?.pane
+                  if (pane) railPick(slot, pane)
+                },
+              }
+            : undefined,
+        }
+      : undefined
+  /** What a cockpit's boxes are lent: the window's source, and the rail beside it while it is the one on screen. */
+  const boxesFor = (section: DashRailSection): BoxSource | undefined =>
+    cockpitBoxes && railLink && section === railSection ? { ...cockpitBoxes, rail: railLink } : cockpitBoxes
   const cwWorkspace = (
     <CwCockpit
       active={!remote || (effectiveView === 'cw' && !remote.stale)}
@@ -2939,6 +3056,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       panels={cwPanels}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
+      boxes={boxesFor('cw')}
     />
   )
   const phoneWorkspace = (
@@ -2963,6 +3081,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       onOpenSettings={openSettingsAt}
       spotsBoard={spotsBoard}
       neededBoard={neededBoard}
+      boxes={boxesFor('phone')}
     />
   )
 
@@ -3173,12 +3292,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
-          // The Spots and POTA/SOTA boxes are the two boards themselves: the Spots view's own
-          // `spotsBoard` and feed, and the POTA/SOTA view's own hunt wiring, handed over whole so
-          // a Work or a HUNT from a box is the view's act. A browser's POTA/SOTA board is
-          // RemoteOta, a different surface, so a browser's box gets no hunt wiring (its one line).
+          // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
+          // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
+          // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A
+          // browser's POTA/SOTA board is RemoteOta, a different surface, so a browser's box gets no
+          // hunt wiring (its one line); and the Needed box is the desktop's for now (2026-10-07).
           spotsFeed={{ rows: allSpots, board: spotsBoard }}
           otaBoard={remote ? undefined : { snap, onHunt: handleHuntSpot, onSnap: setSnap }}
+          neededBoard={remote ? undefined : neededBoard}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
@@ -3527,7 +3648,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
         // The dashboard rail's switch: beside an operating cockpit, and only where the window can
         // show the rail, so the bar never offers a press that changes nothing.
-        rail={railSection && railFits ? { on: railShown, onToggle: () => setRailOn(railSection, !railShown) } : undefined}
+        rail={
+          // Where the switch changes what is on screen: the rail beside the cockpit, or its boxes in the columns.
+          railSection && (railFits || railFoldsHere)
+            ? { on: railShown || railFolds, onToggle: () => setRailOn(railSection, !railIsOn(railSection)) }
+            : undefined
+        }
       />
 
       {/* `data-dash-rail` while the dashboard rail takes width beside the cockpit: Operate's QSO strip
@@ -3629,6 +3755,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               panels={operatePanels}
               onPopOut={() => void openPanelWindow('operate')}
               active={effectiveView === 'operate'}
+              boxes={boxesFor('operate')}
             />
           </div>
           {remote?.cwPhone && isViewEnabled('cw') && (remoteContacts.cw || effectiveView === 'cw') && (
@@ -3754,6 +3881,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
+                boxes={boxesFor('js8')}
               />
             </div>
           )}
@@ -3765,21 +3893,18 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         {railShown && railSection && (
           <DashRail
             section={railSection}
-            myGrid={settings?.mygrid ?? ''}
-            theme={theme}
-            stations={snap.stations ?? []}
-            prop={prop}
-            needByCall={needByCall}
-            needAlerts={visibleAlerts}
-            // The amplifier and the band ride the snapshot App already polls, as on Connect.
-            amp={snap.radio.amp ?? null}
-            rigBand={snap.radio.band ?? null}
-            onWorkSpot={handleWorkMapSpot}
-            onPoint={(settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
-            // The Spots and POTA/SOTA boxes are the two boards themselves, lent as they are to
-            // Connect (the rail never stands on the Remote page, so the hunt wiring is always native).
-            spotsFeed={{ rows: allSpots, board: spotsBoard }}
-            otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
+            // Everything its boxes are lent, exactly as the cockpits' boxes are (`boxSource`, above).
+            {...boxSource}
+            rail={{
+              ...dashRailRecords(dashRailRec, railSection),
+              // What this screen shows in each slot (once per screen), and the pick that moves an entry here.
+              slots: { ...railRecords!.slots, ...Object.fromEntries(railBoxes.map((b) => [b.slot, b.pane])) },
+              stored: railRecords!.slots,
+              assignPane: railPick,
+              marked: new Set(
+                [...hostOwn, ...Object.values(hostEntries)].flatMap((e) => (e != null ? (sharedPaneById(e)?.pane ?? []) : [])),
+              ),
+            }}
             onHide={() => setRailOn(railSection, false)}
             scale={scale}
           />

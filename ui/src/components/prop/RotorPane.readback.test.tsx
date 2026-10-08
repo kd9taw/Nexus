@@ -9,7 +9,7 @@
 // `RPRT -11` for ever while taking every `P` perfectly. Its owner got no compass, no slew and —
 // the part that matters — no STOP.
 //
-// So the two states are separated here: nothing configured renders nothing (most stations),
+// So the two states are separated here: nothing configured draws only its one line (most stations),
 // configured-but-silent keeps the controls and shows "—". Pinned because the honest-looking
 // fix (a fake needle at 0°) and the tidy-looking one (hide it all) are both worse.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -88,7 +88,7 @@ describe('a configured rotator that does not report its position', () => {
 })
 
 describe('a station with no rotator at all', () => {
-  it('renders nothing, so the pane frame can say how to set one up', async () => {
+  it('draws no rose, only the line saying how to set one up', async () => {
     api.getSettings.mockImplementation(() =>
       Promise.resolve({ rotatorModel: 0, rotatorHost: '' } as never),
     )
@@ -97,6 +97,7 @@ describe('a station with no rotator at all', () => {
     // Give the settings read and the first poll a chance to land before concluding.
     await waitFor(() => expect(api.readRotatorState).toHaveBeenCalled())
     expect(container.querySelector('.rotor-pane')).toBeNull()
+    expect(container.textContent).toBe(t('connect.pane.rotor.basic'))
   })
 
   it('an external rotctld address counts as configured', async () => {

@@ -1,0 +1,263 @@
+// @vitest-environment jsdom
+//
+// THE BOXES IN THE REAL APP (any pane in any area, 2026-10-07): what App lends a cockpit's boxes, by what
+// the screen does with it.
+//   · ⛔ A click in a box never selects a station app-wide. The selected station is the one a CW macro's
+//     `!` sends, so a stray click on a Getting Out row mid-QSO would re-target the next macro from a
+//     display — the dashboard rail's rule (App.dashRail.test.tsx), here inside the CW cockpit itself.
+//   · A Spots box's row click works the spot through the board's own Work and keys nothing.
+//   · The hosted Remote page keeps its own panes: the same stored record draws no box there.
+//   · FT (2026-10-07) gets the same boxes, in its arranged columns, with the same selection rule.
+// Each case asserts the cockpit itself rendered, so nothing here can pass over a crash panel.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { act, cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
+  const { appApiAnswers } = await import('./appCockpits.testkit')
+  return { ...auto, ...appApiAnswers() }
+})
+vi.mock('./toast', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  pushToast: vi.fn(),
+  withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
+}))
+vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" /> }))
+vi.mock('./components/MapView', () => ({ MapView: () => <div data-testid="map" /> }))
+
+import * as api from './api'
+import App from './App'
+import { APP_SNAPSHOT } from './appCockpits.testkit'
+import settingsFixture from './components/__fixtures__/defaultSettings.json'
+import type { AppSnapshot, Settings } from './types'
+
+// The real App mounts per case; under the full suite's load that outruns vitest's default 5 s.
+vi.setConfig({ testTimeout: 30_000 })
+
+const SECTIONS_ON = { phone: true, cw: true, rtty: true, psk: true, sstv: true, aprs: true, js8: true, connect: true }
+/** CW's record with two boxes in column 2: the Selection box, so the boxes' own selection is visible,
+ *  and a list a station can be clicked in. */
+const cwBoxes = (second: string) =>
+  JSON.stringify({ v: 2, state: { box1: 'docked', box2: 'docked' }, share: {}, boxes: { box1: 'selection', box2: second } })
+
+async function mountOn(view: string): Promise<void> {
+  localStorage.setItem('nexus.workspace', 'dx')
+  window.location.hash = `#${view}`
+  render(<App />)
+  await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull())
+  await act(async () => {})
+}
+const cockpit = () => document.querySelector<HTMLElement>('main.cw-cockpit')
+const box = (b: string) => cockpit()?.querySelector<HTMLElement>(`.pane-frame[data-pane="${b}"]`) ?? null
+
+beforeEach(() => {
+  localStorage.clear()
+  localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: SECTIONS_ON }))
+  Object.defineProperty(window, 'innerWidth', { value: 1920, configurable: true })
+  Object.defineProperty(window, 'innerHeight', { value: 1080, configurable: true })
+  vi.mocked(api.selectPeer).mockClear()
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+  window.matchMedia = ((q: string) =>
+    ({ matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }) as unknown as MediaQueryList) as typeof window.matchMedia
+})
+
+describe('⛔ a click in a box never changes the station the cockpit is working', () => {
+  it('a Getting Out row in a CW box selects in the boxes only — no app-wide select, which a macro would send', async () => {
+    localStorage.setItem('nexus.panels.cw.main', cwBoxes('getout'))
+    await mountOn('cw')
+    expect(cockpit(), 'the CW cockpit did not render').not.toBeNull()
+    await waitFor(() => expect(within(box('box2')!).getByText('K1ABC')).toBeTruthy())
+    vi.mocked(api.selectPeer).mockClear()
+    fireEvent.click(within(box('box2')!).getByText('K1ABC'))
+    await act(async () => {})
+    expect(api.selectPeer, 'a click in a box selected a station app-wide').not.toHaveBeenCalled()
+    expect(box('box1')!.querySelector('.cs-call')?.textContent, 'the boxes’ own selection').toBe('K1ABC')
+  })
+
+  it('a Spots box works a spot through the board’s own Work, selecting in the boxes only and keying nothing', async () => {
+    const K1CW = {
+      call: 'K1CW', entity: 'United States', zone: 5, state: null, band: '20m', freqMhz: 14.025, mode: 'CW',
+      submode: 'CW', spotter: 'W3LPL', corroborators: [], ageSecs: 30, comment: '', licensed: true, spotterLocal: true,
+    }
+    vi.mocked(api.getAllSpots).mockResolvedValue([K1CW] as unknown as Awaited<ReturnType<typeof api.getAllSpots>>)
+    try {
+      localStorage.setItem('nexus.panels.cw.main', cwBoxes('spotsBoard'))
+      await mountOn('cw')
+      expect(cockpit(), 'the CW cockpit did not render').not.toBeNull()
+      const row = await waitFor(() => {
+        const r = [...box('box2')!.querySelectorAll<HTMLElement>('.sp-row')].find((x) => x.querySelector('.np-call')?.textContent === 'K1CW')
+        if (!r) throw new Error('the Spots box does not list the spot')
+        return r
+      })
+      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq'] as const
+      const SWITCHES = ['setPtt', 'setTune', 'setTxEnabled'] as const
+      for (const fn of [api.selectPeer, api.workSpot, ...VERBS.map((v) => api[v]), ...SWITCHES.map((v) => api[v])]) vi.mocked(fn).mockClear()
+      await act(async () => {
+        fireEvent.click(row)
+      })
+      await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
+      await act(async () => {})
+      expect(document.querySelector('.view-crash'), 'the cockpit the Work opened crashed').toBeNull()
+      expect(vi.mocked(api.workSpot).mock.calls, 'the Work is not the board’s own').toEqual([['cw', 14.025, '20m', 'K1CW', undefined]])
+      const worked = vi.mocked(api.workSpot).mock.invocationCallOrder[0]
+      expect(vi.mocked(api.selectPeer).mock.invocationCallOrder.filter((n) => n < worked), 'the click selected the station app-wide').toEqual([])
+      for (const v of VERBS) expect(api[v], `the Work keyed through ${v}`).not.toHaveBeenCalled()
+      for (const v of SWITCHES) expect(vi.mocked(api[v]).mock.calls.filter(([on]) => on === true), `the Work turned ${v} on`).toEqual([])
+    } finally {
+      vi.mocked(api.getAllSpots).mockImplementation(async () => [])
+    }
+  })
+})
+
+describe('FT’s boxes (2026-10-07): App lends them to the FT cockpit as to the others', () => {
+  const ft = () => document.querySelector<HTMLElement>('main.operate-cockpit')
+  const ftBox = (b: string) => ft()?.querySelector<HTMLElement>(`.pane-frame[data-pane="${b}"]`) ?? null
+  it('a stored box stands in FT’s side rail, and a click in it selects in the boxes only — never app-wide', async () => {
+    localStorage.setItem('nexus.panels.operate.main', cwBoxes('getout'))
+    await mountOn('operate')
+    expect(ft(), 'the FT cockpit did not render').not.toBeNull()
+    await waitFor(() => expect(within(ftBox('box2')!).getByText('K1ABC')).toBeTruthy())
+    expect(ftBox('box1')!.closest('.op-stack'), 'the box is not in FT’s arranged columns').not.toBeNull()
+    vi.mocked(api.selectPeer).mockClear()
+    fireEvent.click(within(ftBox('box2')!).getByText('K1ABC'))
+    await act(async () => {})
+    expect(api.selectPeer, 'a click in a box selected a station app-wide').not.toHaveBeenCalled()
+    expect(ftBox('box1')!.querySelector('.cs-call')?.textContent, 'the boxes’ own selection').toBe('K1ABC')
+  })
+})
+
+describe('the hosted Remote page keeps its own panes', () => {
+  it('the same stored record draws no box there, while the desktop draws it', async () => {
+    localStorage.setItem('nexus.panels.cw.main', cwBoxes('getout'))
+    await mountOn('cw')
+    expect(box('box1'), 'control: the desktop draws the stored box').not.toBeNull()
+    cleanup()
+    window.location.hash = '#cw'
+    render(
+      <App
+        remote={{
+          snapshot: APP_SNAPSHOT as unknown as AppSnapshot,
+          settings: settingsFixture as unknown as Settings,
+          bandPlan: [],
+          status: <div>Observer</div>,
+          // A station that serves the CW and Phone screens, as the hosted page learns from its offer.
+          cwPhone: true,
+        }}
+      />,
+    )
+    await screen.findByText('Observer')
+    await act(async () => {})
+    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
+    // The hosted page opens on its own landing screen: go to CW the way an operator does.
+    const cw = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].find((b) => b.querySelector('.mode-label')?.textContent === 'CW')
+    expect(cw, 'premise: the Remote page offers CW').toBeTruthy()
+    fireEvent.click(cw!)
+    await act(async () => {})
+    expect(cockpit(), 'premise: the Remote page shows the CW cockpit').not.toBeNull()
+    expect(document.querySelector('.pane-frame[data-pane^="box"]'), 'a box on the Remote page').toBeNull()
+  })
+
+  it('…and in the FT cockpit: a stored FT box is drawn on the desktop and not on the Remote page', async () => {
+    localStorage.setItem('nexus.panels.operate.main', cwBoxes('getout'))
+    await mountOn('operate')
+    expect(document.querySelector('main.operate-cockpit .pane-frame[data-pane="box1"]'), 'control: the desktop draws the stored box').not.toBeNull()
+    cleanup()
+    window.location.hash = '#operate'
+    render(
+      <App
+        remote={{
+          snapshot: APP_SNAPSHOT as unknown as AppSnapshot,
+          settings: settingsFixture as unknown as Settings,
+          bandPlan: [],
+          status: <div>Observer</div>,
+          cwPhone: true,
+        }}
+      />,
+    )
+    await screen.findByText('Observer')
+    await act(async () => {})
+    // FT's cockpit is always mounted (a keep-alive host) and draws boxes only while it is the screen on
+    // view, so the premise is that it IS on view here, or the check below would pass for that reason.
+    const onView = () => document.querySelector('.operate-host:not([hidden]) main.operate-cockpit')
+    if (!onView()) {
+      const labels = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].map((b) => b.querySelector('.mode-label')?.textContent ?? '')
+      const ftNav = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].find((b) => /^(FT|DX|Operate|Digital)/.test(b.querySelector('.mode-label')?.textContent ?? ''))
+      expect(ftNav, `premise: the Remote page offers FT (it offers ${labels.join(', ')})`).toBeTruthy()
+      fireEvent.click(ftNav!)
+      await act(async () => {})
+    }
+    expect(onView(), 'premise: the Remote page shows the FT cockpit').not.toBeNull()
+    expect(document.querySelector('main.operate-cockpit .pane-frame[data-pane^="box"]'), 'a box on the Remote page').toBeNull()
+  })
+})
+
+describe('once per screen, across the cockpit and the dashboard rail beside it', () => {
+  // The operator's "Once per screen" (2026-10-07), across the cockpit and its rail, computed in App, which owns
+  // both records: the cockpit's own Spots and Needed panes first, then the rail's slots, then the cockpit's
+  // boxes. A pick on either side moves the entry there and hands the other side what it showed.
+  const RAIL = { rail1: 'clock', rail2: 'bandTiles', rail3: 'spacewx', rail4: 'getout' }
+  const railFrame = (pane: string) => document.querySelector<HTMLElement>(`.dash-rail .pane-frame[data-pane="${pane}"]`)
+  const railPanes = () => [...document.querySelectorAll<HTMLElement>('.dash-rail .dash-rail-col > .pane-frame')].map((f) => f.dataset.pane)
+  const shows = (b: string) => box(b)?.querySelector('[data-box]')?.getAttribute('data-box') ?? null
+  const railOn = () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: RAIL }))
+  }
+
+  it('a box whose board the rail shows shows another; picked there, it moves into the box and the rail takes what the box showed', async () => {
+    railOn()
+    localStorage.setItem('nexus.panels.cw.main', JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'clock' } }))
+    await mountOn('cw')
+    expect(cockpit(), 'the CW cockpit did not render').not.toBeNull()
+    await waitFor(() => expect(railPanes()).toEqual(['clock', 'bandTiles', 'spacewx', 'getout']))
+    // The rail keeps its Clock; the box shows the first pane not on screen, and its picker marks the Clock.
+    const instead = shows('box1')
+    expect(instead, 'the Clock is on the screen twice').not.toBe('clock')
+    expect(instead).not.toBeNull()
+    const pick = box('box1')!.querySelector<HTMLSelectElement>('select.pane-pick')!
+    expect([...pick.options].find((o) => o.value === 'clock')?.textContent).toMatch(/on screen/)
+    // The record still says the Clock: what the box shows changed, not what it holds.
+    expect(JSON.parse(localStorage.getItem('nexus.panels.cw.main')!).boxes.box1).toBe('clock')
+    fireEvent.change(pick, { target: { value: 'clock' } })
+    await act(async () => {})
+    expect(shows('box1')).toBe('clock')
+    expect(railFrame('clock'), 'the Clock is still in the rail').toBeNull()
+    expect(railPanes()[0], 'the rail’s slot did not take what the box showed').toBe(instead)
+  })
+
+  it('a pick in the rail moves a board out of a box, which takes what the slot showed', async () => {
+    railOn()
+    localStorage.setItem('nexus.panels.cw.main', JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'selection' } }))
+    await mountOn('cw')
+    await waitFor(() => expect(railPanes()).toEqual(['clock', 'bandTiles', 'spacewx', 'getout']))
+    expect(shows('box1')).toBe('selection')
+    const slotPick = railFrame('getout')!.querySelector<HTMLSelectElement>('select.pane-pick')!
+    expect([...slotPick.options].find((o) => o.value === 'selection')?.textContent, 'the rail’s picker does not mark the box’s').toMatch(/on screen/)
+    fireEvent.change(slotPick, { target: { value: 'selection' } })
+    await act(async () => {})
+    expect(railPanes()).toEqual(['clock', 'bandTiles', 'spacewx', 'selection'])
+    expect(shows('box1'), 'the box did not take what the slot showed').toBe('getout')
+  })
+
+  it('the cockpit’s own Needed pane comes first: the rail’s Needed slot shows another until the rail’s pick hides the pane', async () => {
+    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots: { ...RAIL, rail4: 'needed' } }))
+    localStorage.setItem('nexus.panels.cw.main', JSON.stringify({ v: 2, state: { needed: 'docked' }, share: {} }))
+    await mountOn('cw')
+    expect(cockpit()!.querySelector('[data-pane="needed"]'), 'premise: CW shows its own Needed pane').not.toBeNull()
+    await waitFor(() => expect(railPanes()).toHaveLength(4))
+    expect(railPanes(), 'the Needed board is on the screen twice').not.toContain('needed')
+    const slot4 = document.querySelectorAll<HTMLElement>('.dash-rail .dash-rail-col > .pane-frame')[3]
+    fireEvent.change(slot4.querySelector<HTMLSelectElement>('select.pane-pick')!, { target: { value: 'needed' } })
+    await act(async () => {})
+    expect(railPanes()[3]).toBe('needed')
+    expect(cockpit()!.querySelector('[data-pane="needed"]'), 'the cockpit still shows its own Needed pane').toBeNull()
+    expect(JSON.parse(localStorage.getItem('nexus.panels.cw.main')!).state.needed).toBe('removed')
+  })
+})

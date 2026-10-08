@@ -331,6 +331,8 @@ impl AppState {
                 tx_watchdog: false,
                 slot_key_refused: None,
                 slot_unkey_failed: None,
+                slot_audio_lost: None,
+                ptt_refused: None,
                 decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,
@@ -981,6 +983,7 @@ impl AppState {
             field_day: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
+            late_decodes: None,
             highlights: Vec::new(),
             clear_tick: 0,
             logged_tick: 0,
