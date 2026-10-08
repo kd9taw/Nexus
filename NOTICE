@@ -249,6 +249,71 @@ header. AetherSDR states that it wrote its SmartSDR implementation by consulting
 FlexLib source and that it incorporates no FlexLib code; Nexus adds none. AetherSDR is an
 independent project, and Nexus is not affiliated with it.
 
+### Hamlib — the Icom network (LAN / Wi-Fi) protocol core
+License: **GNU LGPL, version 2.1 or later** (LGPL-2.1-or-later), as every upstream file's header and SPDX
+line state. Copyright (c) 2026 by Mikael Nousiainen OH3BHX. The copies ported here are **converted to the
+GNU GPL, version 3 or later, under section 3 of the LGPL 2.1**, and Nexus's changes to them are
+GPL-3.0-only, so each ported file passes on under GPL version 3, like the rest of Nexus.
+<https://github.com/Hamlib/Hamlib/pull/2178>, ported from commit `2e3e4a6a`
+(`2e3e4a6add3bd806e828d035200777608d2bdbd5`, 2026-10-07), an open pull request when it was taken.
+
+Nexus's Icom network client (`crates/tempo-net/src/icom/`) is **ported from the Icom network backend in
+that pull request**, translated from C to Rust:
+
+- the packet parser and builder, the login passcode and the capabilities reader
+  (`rigs/icom/network_proto.c`, `rigs/icom/network_proto.h`);
+- the sequence tracking and retransmit buffer (`rigs/icom/network_seqbuf.c`,
+  `rigs/icom/network_seqbuf.h`);
+- the matching tests (`test/test_icom_network_proto.c`, `test/test_icom_network_seqbuf.c`).
+
+Read for protocol facts only, with no code taken: `rigs/icom/ICOM.md` and the six model files
+(`rigs/icom/ic7610net.c`, `rigs/icom/ic9700net.c`, `rigs/icom/ic705net.c`, `rigs/icom/ic905net.c`,
+`rigs/icom/ic7760net.c`, `rigs/icom/ic7300mk2net.c`).
+
+Nexus does not port Hamlib's backend glue, its configuration tokens, its streaming subsystem or its CI-V
+command layer. The CI-V layer the client carries is Nexus's own, written from Icom's CI-V reference guides
+(see *Rig-control protocol interoperability* below). The session is restructured to have one owner and
+take time as an input, and every transmit rule in it is Nexus's own. Each ported file carries the upstream
+copyright line and the converted licence notice, names its upstream files, the commit and Nexus's
+deliberate changes, and is marked as modified, with a date.
+
+**Lineage: kappanhang.** The upstream author states that the protocol implementation "is based on the
+open-source kappanhang project and local testing/debugging with packet capture"
+(<https://github.com/Hamlib/Hamlib/pull/2178#issuecomment-5424249880>). kappanhang
+(<https://github.com/nonoo/kappanhang>, last commit `66f2369e`, 2021-05-26) is by Norbert Varga HA2NON and
+Akos Marton ES1AKOS, and its README credits W6EL with the passcode algorithm. The login passcode's
+95-entry substitution table is the same, value for value, in kappanhang's `passcode.go` and Hamlib's
+`network_proto.c`; it is a fixed constant that the radio's login requires, not a secret. Whether the
+upstream files carry other kappanhang expression cannot be confirmed: they carry no kappanhang notice.
+Nexus reproduces kappanhang's notice here, so its conditions are met either way. kappanhang's Go files
+carry no per-file header; its licence is the repository's `LICENSE`, reproduced verbatim:
+
+> MIT License
+>
+> Copyright (c) 2020 Norbert Varga HA2NON, Akos Marton ES1AKOS
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+>
+> /Icom is a registered trademark of Icom Incorporated (Japan)/
+
+Hamlib and kappanhang are independent projects; Nexus is not affiliated with or endorsed by either.
+
 ### fldigi — RTTY demodulator
 License: **GNU GPL, version 3 or later** (GPL-3.0-or-later). <http://www.w1hkj.com/> ·
 <https://sourceforge.net/p/fldigi/fldigi/>
@@ -830,7 +895,8 @@ Apache-2.0 section 4 does require a copy of the License to accompany the redistr
 Nexus controls transceivers over their manufacturers' **published** control
 protocols. Each implementation is **independent of the manufacturers' code**: original
 Nexus code written from the public protocol documentation, except the FlexRadio client core,
-which is ported from the open-source AetherSDR (see *Upstream lineage*), to interoperate with
+which is ported from the open-source AetherSDR, and the Icom network protocol core, which is
+ported from the open-source Hamlib (see *Upstream lineage* for both), to interoperate with
 hardware the operator owns — a
 long-standing, widely-practiced form of interoperability (Hamlib, WSJT-X, N1MM, and
 many others control the same radios the same way). **No manufacturer SDK, library,
@@ -843,6 +909,14 @@ implementation of the CI-V command set (frequency, mode, PTT, levels/meters, and
 command tables in Icom's operating manuals — e.g. the IC-7300 §19 command list).
 Command opcodes and byte layouts are functional facts of the wire protocol; no Icom
 software or manual text is reproduced.
+
+The Icom network client (`crates/tempo-net/src/icom/`) carries those CI-V frames over Icom's UDP
+network protocol, the one Icom's RS-BA1 software uses. Icom documents the radios' network ports, their
+network users and the CI-V command set, but publishes no specification of the UDP transport. Nexus's
+implementation of it is ported from Hamlib, whose protocol knowledge descends from the open-source
+kappanhang project (see *Upstream lineage*); the per-model CI-V facts it uses come from Icom's published
+CI-V reference guides. No Icom software, including RS-BA1 and its Remote Utility, is used, copied or
+bundled.
 
 ### FlexRadio SmartSDR
 The FlexRadio panadapter path (`crates/tempo-net/src/flex{cat,vita,disc}.rs` and
@@ -1359,12 +1433,16 @@ The bundled and linked components combine into the GPLv3 whole:
 
 - GPLv3 / LGPL / GPLv2-or-later (WSJT-X, Hamlib, FFTW, fldigi, AetherSDR) combine into
   the GPLv3 whole (FFTW's v2-or-later and fldigi's v3-or-later are satisfied by
-  electing v3).
+  electing v3). The Icom network code ported from Hamlib is LGPL-2.1-or-later upstream; the
+  copies here are converted to the GPL, version 3 or later, under section 3 of the LGPL 2.1,
+  which the FSF lists as compatible with GPLv3
+  (<https://www.gnu.org/licenses/license-list.html#LGPLv2.1>).
 - Permissive licenses (BSL-1.0 for Boost; MIT / Apache-2.0 for Tauri, cpal,
   sgp4, keyring, reqwest, hound, socket2, serde, React, TypeScript, Vite,
   Radix; ISC for d3-geo, topojson-client, world-atlas, us-atlas, lucide-react;
   ISC for slowrx and MIT for the `slowrx.rs` port of it vendored at
-  `crates/tempo-sstv/`; MIT for cty.dat and the CQ-zone data; public domain for
+  `crates/tempo-sstv/`; MIT for cty.dat and the CQ-zone data; MIT for kappanhang, whose
+  notice is reproduced under *Upstream lineage*; public domain for
   the WMM, Natural Earth, and Census-derived data) are compatible with
   redistribution under GPLv3.
 - MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations

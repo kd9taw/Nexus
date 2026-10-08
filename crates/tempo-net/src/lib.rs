@@ -22,6 +22,9 @@
 //! - [`flex`] — the native FlexRadio client's protocol core (SmartSDR session, status
 //!   decoding, typed command encoding, ownership, the unkey readback), ported from AetherSDR.
 //!   Nothing in the app uses it yet; the shipped Flex path is [`flexcat`] / [`flexvita`].
+//! - [`icom`] — the Icom network (LAN / Wi-Fi) client's protocol core (the packets, the login
+//!   passcode, the capabilities reply, sequence tracking), ported from Hamlib. Nothing in the app
+//!   uses it yet.
 //! - [`wl2k`] — the Winlink CMS telnet transport (`server.winlink.org:8772`). One
 //!   session per operator action, never a reconnect loop and never a poll; the B2F
 //!   protocol it carries lives in `tempo_core::winlink` and is joined to it through
@@ -44,6 +47,7 @@ pub mod flex;
 pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;
+pub mod icom;
 pub mod mqtt;
 pub mod n1mm;
 pub mod n3fjp;
