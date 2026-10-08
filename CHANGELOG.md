@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
   Conditions pane, as Phone, CW and JS8 do. Moving a pane changes nothing it does: a double-click
   still answers the station, and Band Activity keeps its decodes. Nothing moves until you move it, so
-  nobody's FT screen changes on update, and Reset layout puts both layouts back. Not on Nexus Remote.
+  nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
+  Nexus Remote.
 
 ### Changed
 
