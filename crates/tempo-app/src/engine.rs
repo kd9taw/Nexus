@@ -1189,6 +1189,11 @@ fn is_wsjtx_mode(tier: Tier) -> bool {
     )
 }
 
+/// The audio span the waterfall opens on, 200-3000 Hz above the dial (`ui/src/waterfall.ts`,
+/// `WF_F_MIN`..`WF_STD_HI`). WSJT-X 3.0.2's starts at 0 Hz and is as wide as its plot, 4 bins
+/// of 1500/2048 Hz a pixel at its defaults (`widegraph.cpp:93-96`, `plotter.cpp:950`).
+const WATERFALL_VIEW_HZ: (f64, f64) = (200.0, 3000.0);
+
 /// What a decode job's audio was received on: the band, dial and mode, and that mode's period.
 #[derive(Clone, Debug, PartialEq)]
 struct HeardOn {
@@ -14143,8 +14148,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // 25 minutes. The retune to the new tier queues behind it too.
         //
         // ⚠️ SCOPED TO THE TIERS WHERE IT IS NEW. Halting on ANY armed tier switch
-        // also disarms an FT8→FT4 change, which is shipped gold-standard behaviour
-        // and not mine to alter — `tier_switch_keeps_message_layer` caught exactly
+        // also disarms an FT8→FT4 change that keeps the Tx frequency on the waterfall,
+        // which WSJT-X leaves armed (one that takes it off halts at the QSY below, as
+        // WSJT-X halts it) — `tier_switch_keeps_message_layer` caught exactly
         // that. FT8/FT4/FT2/FT1/DX1 keep their existing behaviour (their overs are
         // 13 s or less, and trailing one out reads as "the over finishes"); the
         // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
@@ -14273,6 +14279,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
             // operator to 160 m would be the same defect.
             if let Some(ch) = self.prepare_tier_frequency(tier) {
+                // WSJT-X 3.0.2 stops Tx and turns Enable Tx off when a mode switch moves the dial
+                // so far that the Tx frequency is off the waterfall at the new dial (`switch_mode`
+                // → `on_bandComboBox_activated` → `band_changed`, mainwindow.cpp:11675-11679,
+                // 12089-12097, "disable auto Tx if 'blind' QSY outside of waterfall"), so the next
+                // over cannot go out in the new mode to a station still on the old one. The QSO is
+                // left as it is; the operator turns TX on again in the new mode. Only between modes
+                // WSJT-X has, and never into WSPR, which it exempts. A move to another band halts
+                // in `tune_dial_with_reset`, as every band change does.
+                let tx_hz = self.settings.dial_mhz * 1e6 + f64::from(self.tx_offset_hz);
+                let (lo, hi) = WATERFALL_VIEW_HZ;
+                let view = ch.dial_mhz * 1e6 + lo..ch.dial_mhz * 1e6 + hi;
+                if is_wsjtx_mode(from)
+                    && is_wsjtx_mode(tier)
+                    && tier != Tier::Wspr
+                    && ch.band.eq_ignore_ascii_case(&self.settings.band)
+                    && !view.contains(&tx_hz)
+                {
+                    self.halt_tx_for_context_change("mode switch");
+                }
                 self.tune_dial_with_reset(
                     ch.dial_mhz,
                     &ch.band,
@@ -56066,22 +56091,197 @@ mod tests {
     #[test]
     fn an_ft_tier_switch_keeps_its_shipped_behaviour() {
         // The fix above is deliberately SCOPED. Halting on any armed tier switch
-        // would also disarm FT8→FT4, which is shipped gold-standard behaviour and
-        // not ours to change — their overs are 13 s or less and trailing one out
-        // reads as "the over finishes". This pins that they are untouched.
-        for (from, to) in [
-            (Tier::Ft8, Tier::Ft4),
-            (Tier::Ft4, Tier::Ft8),
-            (Tier::TempoFast, Tier::TempoDeep),
+        // would also disarm FT8→FT4 where WSJT-X keeps Enable Tx on: a switch that
+        // leaves the dial, and so the Tx frequency, where it was (one that takes the
+        // Tx frequency off the waterfall turns TX off, as WSJT-X does:
+        // `a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_turns_tx_off`).
+        // This pins that they are untouched.
+        for (from, to, dial) in [
+            (Tier::Ft8, Tier::Ft4, 14.080),
+            (Tier::Ft4, Tier::Ft8, 14.074),
+            (Tier::TempoFast, Tier::TempoDeep, 14.0905),
         ] {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.set_tier(from);
+            e.set_frequency(dial, "20m", "USB");
             e.set_tx_enabled(true);
             e.set_tier(to);
             assert!(
                 e.tx_enabled(),
                 "{from:?} -> {to:?} disarmed TX; FT behaviour must not change"
             );
+        }
+    }
+
+    /// Mid-QSO on `tier` at `dial` MHz on `band` with TX on at `tx_hz`: W1AW's CQ heard and
+    /// answered, our first over on the air. Returns the slot that over keyed on.
+    fn mid_qso(e: &mut Engine, tier: Tier, band: &str, dial: f64, tx_hz: f32) -> u64 {
+        e.set_tier(tier);
+        e.set_frequency(dial, band, "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN31", -10)], 1);
+        e.call_station_ctx("W1AW", None, Some("CQ W1AW FN31"), Some(-10), None)
+            .expect("working W1AW");
+        e.set_tx_offset(tx_hz);
+        let slot = key_one_over(e, 2);
+        // The setup's own band change armed it; the switch starts from a clean flag.
+        e.take_slot_tx_abort();
+        slot
+    }
+
+    /// The QSO as the screen shows it: state, DX call and the message it sends next.
+    fn qso_shown(e: &Engine) -> Option<(String, Option<String>, Option<String>)> {
+        e.snapshot().qso.map(|q| (q.state, q.dxcall, q.tx_now))
+    }
+
+    /// The first over that keys in the four slots after `slot`: its slot, its length in
+    /// seconds and the message the QSO sends.
+    fn next_over(e: &mut Engine, slot: u64) -> Option<(u64, f32, Option<String>)> {
+        (slot + 1..slot + 5).find_map(|s| {
+            let secs = e.poll_tx(s).first()?.len() as f32 / 12_000.0;
+            Some((s, secs, e.snapshot().qso.and_then(|q| q.tx_now)))
+        })
+    }
+
+    /// WSJT-X 3.0.2 stops Tx and turns Enable Tx off when a mode switch moves the dial so far
+    /// that the Tx frequency is off the waterfall at the new dial (`band_changed`,
+    /// mainwindow.cpp:12089-12097, reached from `switch_mode` at 11675-11679). Nexus kept TX on,
+    /// and its next over went out in the new mode to a partner still on the old one. The QSO is
+    /// left as it was, as 3.0.2 leaves it, and goes on in the new mode once TX is on again.
+    #[test]
+    fn a_mode_switch_that_takes_the_tx_frequency_off_the_waterfall_turns_tx_off() {
+        for (from, to, band, dial, tx_hz, lands) in [
+            (Tier::Ft8, Tier::Ft4, "20m", 14.074, 1500.0, 14.080),
+            (Tier::Ft4, Tier::Ft8, "20m", 14.080, 1500.0, 14.074),
+            // Tx at 3.5745 MHz, below the FT4 waterfall's 3.5752-3.578.
+            (Tier::Ft8, Tier::Ft4, "80m", 3.573, 1500.0, 3.575),
+            // Tx at 3.5765 MHz, above the FT8 waterfall's 3.5732-3.576.
+            (Tier::Ft4, Tier::Ft8, "80m", 3.575, 1500.0, 3.573),
+        ] {
+            let case = format!("{from:?} -> {to:?} on {band}, Tx at {tx_hz} Hz");
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, from, band, dial, tx_hz);
+            let before = qso_shown(&e);
+            assert!(before.is_some(), "{case}: premise: a QSO with W1AW");
+            e.set_tier(to);
+            assert!(
+                (e.settings().dial_mhz - lands).abs() < 1e-9,
+                "{case}: premise: the dial lands on {lands}, got {}",
+                e.settings().dial_mhz
+            );
+            let (armed, cut) = (e.tx_enabled(), e.take_slot_tx_abort());
+            let next = next_over(&mut e, slot);
+            assert!(
+                !armed,
+                "{case}: TX Enable stayed on, and the next over went out (slot, s, message): \
+                 {next:?}"
+            );
+            assert!(cut, "{case}: the over in flight was not cut");
+            assert_eq!(next, None, "{case}: an over keyed at the next boundary");
+            assert_eq!(
+                qso_shown(&e),
+                before,
+                "{case}: the QSO is not as 3.0.2 leaves it"
+            );
+            // TX on again: the QSO goes on where it was, in the new mode.
+            e.set_tx_enabled(true);
+            let resumed = next_over(&mut e, slot);
+            let sent = before.and_then(|q| q.2);
+            assert!(
+                matches!(&resumed, Some((_, secs, msg))
+                    if *msg == sent && (*secs < 7.5) == (to == Tier::Ft4)),
+                "{case}: re-armed, the over is not {sent:?} in {to:?}: {resumed:?}"
+            );
+        }
+    }
+
+    /// Where 3.0.2 leaves Enable Tx alone, so does Nexus: a switch with TX already off, a knob
+    /// QSY inside the band (3.0.2 halts only for a band picked from its menu, which its mode
+    /// switch does: `m_bandEdited`, 12064), a switch that leaves the dial where it is, one whose
+    /// small jump keeps the Tx frequency on the waterfall, and a switch into WSPR, which
+    /// `band_changed` exempts (12090).
+    #[test]
+    fn a_mode_switch_keeps_tx_where_wsjtx_keeps_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let slot = mid_qso(&mut e, Tier::Ft8, "20m", 14.074, 1500.0);
+        e.set_tx_enabled(false);
+        let before = qso_shown(&e);
+        e.set_tier(Tier::Ft4);
+        assert!(
+            (e.settings().dial_mhz - 14.080).abs() < 1e-9,
+            "TX off: premise: the dial moved"
+        );
+        assert!(!e.tx_enabled(), "TX off: the switch turned TX on");
+        assert_eq!(next_over(&mut e, slot), None, "TX off: an over keyed");
+        assert_eq!(qso_shown(&e), before, "TX off: the switch changed the QSO");
+
+        type Act = fn(&mut Engine);
+        let cases: [(&str, Tier, &str, f64, f32, Act, f64); 5] = [
+            (
+                "a knob QSY inside the band",
+                Tier::Ft8,
+                "20m",
+                14.074,
+                1500.0,
+                |e| e.observe_rig_freq(14_076_000),
+                14.076,
+            ),
+            (
+                "FT8 -> FT4 with the dial already on 14.080",
+                Tier::Ft8,
+                "20m",
+                14.080,
+                1500.0,
+                |e| e.set_tier(Tier::Ft4),
+                14.080,
+            ),
+            (
+                "FT8 -> FT4 on 80 m, Tx at 3.5755 on the FT4 waterfall",
+                Tier::Ft8,
+                "80m",
+                3.573,
+                2500.0,
+                |e| e.set_tier(Tier::Ft4),
+                3.575,
+            ),
+            (
+                "FT4 -> FT8 on 80 m, Tx at 3.5755 on the FT8 waterfall",
+                Tier::Ft4,
+                "80m",
+                3.575,
+                500.0,
+                |e| e.set_tier(Tier::Ft8),
+                3.573,
+            ),
+            (
+                "FT8 -> WSPR",
+                Tier::Ft8,
+                "20m",
+                14.074,
+                1500.0,
+                |e| e.set_tier(Tier::Wspr),
+                14.0956,
+            ),
+        ];
+        for (case, tier, band, dial, tx_hz, act, lands) in cases {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let slot = mid_qso(&mut e, tier, band, dial, tx_hz);
+            act(&mut e);
+            assert!(
+                (e.settings().dial_mhz - lands).abs() < 1e-9,
+                "{case}: premise: the dial is on {lands}, got {}",
+                e.settings().dial_mhz
+            );
+            assert!(e.tx_enabled(), "{case}: TX Enable turned off");
+            assert!(
+                !e.take_slot_tx_abort(),
+                "{case}: the over in flight was cut"
+            );
+            if e.tier() != Tier::Wspr {
+                assert!(
+                    next_over(&mut e, slot).is_some(),
+                    "{case}: nothing keyed at the next boundary"
+                );
+            }
         }
     }
 

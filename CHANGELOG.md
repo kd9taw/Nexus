@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decodes the decoder found by expecting the previous period's messages (WSJT-X marks them a7) are
   hidden for one and a half periods after any band or mode change, FT8 to FT4 and back on one band
   included, because they can be left over from the band or mode you left.
+- **Switching mode in the middle of a QSO turns TX off when the dial moves away from your Tx
+  frequency, as WSJT-X does.** FT8 to FT4 on 20 m moves the dial from 14.074 to 14.080, and until
+  now TX stayed on, so the next over went out in FT4 to a station still on FT8. Now, when a switch
+  between the WSJT-X modes leaves the frequency you were transmitting on off the waterfall at the
+  new dial (200 to 3000 Hz above it), the over on the air stops and TX turns off. The QSO stays
+  where it was; turn TX on again to carry on in the new mode. A switch that leaves your Tx
+  frequency on the waterfall, a switch into WSPR, and a turn of the VFO knob leave TX as it was.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
