@@ -238,7 +238,7 @@ mod whole_log_reader_tests {
     //! (`io_fence::whole_log_off_engine_lock`).
     use super::*;
     use crate::remote_service::stored_log_tests::StoredLog;
-    use propagation::model::{Band, ModeClass};
+    use propagation::model::Band;
     use propagation::OperatorNeeds;
 
     /// A log with something for every question: several bands, modes and states, a satellite
@@ -285,7 +285,7 @@ mod whole_log_reader_tests {
 
     /// Everything a reader can observe of a needs model, as one comparable value: every set it
     /// exposes, sorted, and its verdict for every worked entity (and two it never worked) on
-    /// every band in every mode class — which is what reads its private worked/confirmed sets.
+    /// every band in each mode below — which is what reads its private worked/confirmed sets.
     fn observed(n: &propagation::LogNeeds) -> String {
         fn sorted<T: std::fmt::Debug>(items: impl Iterator<Item = T>) -> String {
             let mut v: Vec<String> = items.map(|x| format!("{x:?}")).collect();
@@ -308,8 +308,10 @@ mod whole_log_reader_tests {
         entities.sort();
         for e in &entities {
             for b in Band::ALL {
-                for m in [ModeClass::Cw, ModeClass::Phone, ModeClass::Digital] {
-                    out.push(format!("{e}/{b:?}/{m:?}={:?}", n.need(e, b, m)));
+                // Each class a source can name, and the exact modes the fixture logs plus one it
+                // never does: the mode need is judged per mode.
+                for m in ["CW", "Phone", "Digital", "FT8", "FT4", "SSB", "FM", "RTTY"] {
+                    out.push(format!("{e}/{b:?}/{m}={:?}", n.need(e, b, m)));
                 }
             }
         }
