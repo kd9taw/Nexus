@@ -1147,8 +1147,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [settings?.popupNotifications])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
-  // the master switch off), so the fetch just re-runs when the configured event changes.
+  // the master switch off), so the fetch just re-runs when the configured event changes —
+  // and after every save made here (`settingsSaves`), because the same answer carries
+  // whether the picked contest can start (`problem`), and a class or a county filled in
+  // changes that without changing the event.
   const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
+  const [settingsSaves, setSettingsSaves] = useState(0)
   useEffect(() => {
     let live = true
     getFdRuleset()
@@ -1157,7 +1161,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     return () => {
       live = false
     }
-  }, [settings?.fdEvent])
+  }, [settings?.fdEvent, settingsSaves])
   // The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts). They gate the
   // need ICONS as well as the sound/toast — "I selected grids, vhf/uhf 6m and up ... and its
   // still showing the grid icons in ft8 in both roster and classic mode when on hf bands"
@@ -2561,6 +2565,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const handleSettingsSaved = useCallback(() => {
     getSnapshot().then(setSnap).catch(() => {})
     reloadSettings()
+    setSettingsSaves((n) => n + 1)
   }, [reloadSettings])
 
   const handleDismissOnboarding = useCallback(() => {
@@ -3134,6 +3139,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             fdActive={settings?.fdActive ?? false}
             fdRuleset={fdRuleset}
             tier={tier}
+            onOpenSettings={openSettingsAt}
+            onSettingsSaved={handleSettingsSaved}
           />
         </main>
       )

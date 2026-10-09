@@ -3970,6 +3970,25 @@ export const EN = {
   // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
   // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
   'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
+  // The lines under the Field Day mode switch at the top of the contest screen. The switch
+  // itself reads Settings' label and accessible names (settings.fieldDay.mode.*). {{contest}}
+  // and {{picked}} are contests' own names and {{modes}} on-air mode tokens, all invariant;
+  // {{field}}, {{first}} and {{second}} are Settings' names for the exchange boxes.
+  'fieldDay.mode.off':
+    'Off. When it is on, the log strips, this screen and the exports follow the {{contest}} rules.',
+  'fieldDay.mode.on':
+    'The {{contest}} rules apply now: the log strips, this screen and the exports follow them.',
+  'fieldDay.mode.rule.banned': 'Not permitted: {{modes}}. Contacts in them are logged but do not count.',
+  'fieldDay.mode.rule.cluster': 'DX cluster assistance is not permitted.',
+  'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
+  'fieldDay.mode.picked':
+    'Picked in Settings: {{picked}}. Turn Field Day mode off and on again to switch to it.',
+  'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
+  'fieldDay.mode.needs.two':
+    'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
+  'fieldDay.mode.needs.open': 'Open in Settings',
+  'fieldDay.mode.club':
+    'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.

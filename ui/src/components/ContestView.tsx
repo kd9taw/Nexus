@@ -9,7 +9,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
@@ -164,6 +164,59 @@ interface Props {
   /** The active digital tier (App's snap.link.tier) — the banned-mode chip
    *  checks it against the ruleset's bannedModes. */
   tier?: string
+  /** Open Settings at a section (App's `openSettingsAt`): where the mode switch sends an
+   *  operator whose contest cannot start yet. */
+  onOpenSettings?: (target: string) => void
+  /** App re-reads the settings and the snapshot after this screen saves the mode switch, so
+   *  the rail, Settings and every cockpit see the change at once. */
+  onSettingsSaved?: () => void
+}
+
+/**
+ * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
+ * turn on while there is something, and says what it is.
+ *
+ * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
+ * both events need a class (WFD calls it a category) and a section before the station enters
+ * them, and naming both when both are blank says more than the session constructor, which
+ * stops at the first. Every other reason is that constructor's own sentence off the preview
+ * (`FdRulesetDto.problem`), which names the slot: "Your COUNTY is empty…".
+ */
+type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
+
+function startBlocker(
+  s: Pick<Settings, 'fdEvent' | 'fdClass' | 'fdSection'> | null,
+  preview: FdRulesetDto | null | undefined,
+): StartBlocker | null {
+  const event = s?.fdEvent?.trim()
+  if (s && isFieldDay(event)) {
+    const fields: ('class' | 'category' | 'section')[] = []
+    if (!(s.fdClass ?? '').trim()) fields.push(event === 'wfd' ? 'category' : 'class')
+    if (!(s.fdSection ?? '').trim()) fields.push('section')
+    if (fields.length > 0) return { fields }
+  }
+  return preview?.problem ? { problem: preview.problem } : null
+}
+
+/** The Settings section that fixes a blocker: Field Day Setup for its class and section, the
+ *  station data for any other contest's slots. Section ids, never tab names. */
+function blockerTarget(b: StartBlocker): string {
+  return 'fields' in b ? 'field-day' : 'contest-station'
+}
+
+/** A Field Day exchange field by the name Settings gives it, so the sentence names the box. */
+function fieldLabel(f: 'class' | 'category' | 'section'): string {
+  if (f === 'class') return t('settings.fieldDay.class.label')
+  if (f === 'category') return t('settings.fieldDay.category.label')
+  return t('settings.fieldDay.section.label')
+}
+
+function blockerText(b: StartBlocker, contest: string): string {
+  if ('problem' in b) return b.problem
+  const [first, second] = b.fields
+  return second
+    ? t('fieldDay.mode.needs.two', { contest, first: fieldLabel(first), second: fieldLabel(second) })
+    : t('fieldDay.mode.needs.one', { contest, field: fieldLabel(first) })
 }
 
 interface LogRowMeta {
@@ -1498,7 +1551,16 @@ export function FieldDayScoreboard({
   )
 }
 
-export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier, observation }: Props) {
+export function ContestView({
+  fieldDay,
+  onSetMode,
+  fdActive = false,
+  fdRuleset = null,
+  tier,
+  observation,
+  onOpenSettings,
+  onSettingsSaved,
+}: Props) {
   const observed = observation !== undefined
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
@@ -1632,24 +1694,71 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }
 
+  // ⭐ THE FIELD DAY MODE SWITCH. The same `fdActive` Settings writes, through the same patch
+  // seam as the scoring panel: the settings the backend holds at save time, this one field
+  // changed. What it shows is App's copy (`fdActive`), which App re-reads after the save; the
+  // value just written bridges the moment between the two, so the switch does not flick back.
+  const [modeWritten, setModeWritten] = useState<boolean | null>(null)
+  useEffect(() => setModeWritten(null), [fdActive])
+  const modeOn = modeWritten ?? fdActive
+  const [modeBusy, setModeBusy] = useState(false)
+  // A refused turn-on: what was missing at the moment the operator asked, read fresh then.
+  const [refusal, setRefusal] = useState<StartBlocker | null>(null)
+  const toggleMode = async () => {
+    if (observed || modeBusy) return
+    const next = !modeOn
+    setModeBusy(true)
+    try {
+      if (next) {
+        // Against what is saved NOW, not the copy this screen opened with: a class typed in
+        // Settings a minute ago counts, and so does a county.
+        const [s, preview] = await Promise.all([getSettings(), getFdRuleset().catch(() => null)])
+        const blocked = startBlocker(s, preview)
+        if (blocked) {
+          setRefusal(blocked)
+          return
+        }
+      }
+      await patchSettings(() => ({ fdActive: next }))
+      setRefusal(null)
+      setModeWritten(next)
+      onSettingsSaved?.()
+    } catch (e) {
+      pushToast(String(e), 'error')
+    } finally {
+      setModeBusy(false)
+    }
+  }
+
   // Event header: the window arrives Rust-computed on the DTO (fd_rules data —
   // real 27 h SFD / 30 h WFD durations; the old TS date math hardcoded 24 h and
   // called WFD over with six hours left). Snapshots refresh it, so the year
   // rollover and the active→next transition need no client-side clock walk.
-  const eventKind: FdKind = (fieldDay?.event === 'wfd' ? 'wfd' : 'arrlfd')
+  // The contest picked in Settings, as the preview resolved it (an id the rules data does not
+  // carry resolves to the ARRL Field Day mode entry would fall back to).
+  const pickedEvent = fdRuleset?.event ?? (nativeSettings?.fdEvent?.trim() || undefined)
+  // The running session's contest, and with no session (Field Day mode off, or a station that
+  // cannot enter yet) the picked one: no session used to read as ARRL Field Day whatever the
+  // picker said.
+  const shownEvent = fieldDay ? fieldDay.event : pickedEvent
+  const eventKind: FdKind = (shownEvent === 'wfd' ? 'wfd' : 'arrlfd')
   const isWfd = eventKind === 'wfd'
   // ⭐ WHICH CONTEST THIS IS. Every Field Day word on this screen — the banner, the header,
   // the class/section, the log table's columns, the summary — used to be printed whatever
   // the picker said, so a CQ WW log sat under an "ARRL Field Day" banner with Class and
   // Section columns empty on every row.
-  const fdEventIsFieldDay = isFieldDay(fieldDay?.event)
+  const fdEventIsFieldDay = isFieldDay(shownEvent)
   // Why club sync is not running, when it is switched on for a contest it cannot run — read
   // from the station's own settings, which a Remote observation does not carry.
   const clubRefusal = clubSyncRefusal(nativeSettings)
-  const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(fieldDay?.event)
+  const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(shownEvent)
+  // The window: the session's, else the preview's. Both are the rules data's running-or-next
+  // window, so the banner reads the same before the contest starts as during it.
+  const windowStart = fieldDay ? fieldDay.eventStartUnix : fdRuleset?.eventStartUnix
+  const windowEnd = fieldDay ? fieldDay.eventEndUnix : fdRuleset?.eventEndUnix
   const fdEvent = useMemo(
-    () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName),
-    [eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName],
+    () => fdEventFromWindow(eventKind, windowStart, windowEnd, eventName),
+    [eventKind, windowStart, windowEnd, eventName],
   )
   // The contest's received slots, one log-table column each (Field Day keeps its own two).
   const slotColumns = fdEventIsFieldDay ? [] : (fieldDay?.receives ?? [])
@@ -1732,10 +1841,77 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }
 
+  // ⭐ THE LINES UNDER THE SWITCH. One reason the contest cannot start, when there is one: a
+  // refused turn-on shows the reason it read at that moment, otherwise App's preview (re-pulled
+  // after every save) and the settings this screen opened with. With a session running there
+  // is nothing to start.
+  const blocker = observed
+    ? null
+    : (refusal ?? (fieldDay ? null : startBlocker(nativeSettings, fdRuleset)))
+  const modeLines: { key: string; text: string }[] = []
+  if (fieldDay) {
+    // Which rules apply now, plainly. The ruleset facts are the PICKED contest's, so they are
+    // read only while that is the contest running; the line below says when it is not.
+    modeLines.push({ key: 'on', text: t('fieldDay.mode.on', { contest: eventName }) })
+    const running = fdRuleset && fdRuleset.event === (fieldDay.event || 'arrlfd') ? fdRuleset : null
+    if (running && running.bannedModes.length > 0) {
+      modeLines.push({
+        key: 'banned',
+        text: t('fieldDay.mode.rule.banned', { modes: running.bannedModes.join(', ') }),
+      })
+    }
+    if (running && !running.clusterAllowed) {
+      modeLines.push({ key: 'cluster', text: t('fieldDay.mode.rule.cluster') })
+    }
+    if (running && !running.spottingAllowed) {
+      modeLines.push({ key: 'spotting', text: t('fieldDay.mode.rule.spotting') })
+    }
+    // A contest picked while this one runs takes effect when the mode goes off and on again
+    // (the session is kept across every save, which is what protects its log). Say so here,
+    // beside the switch that does it.
+    if (pickedEvent && pickedEvent !== (fieldDay.event || 'arrlfd')) {
+      modeLines.push({ key: 'picked', text: t('fieldDay.mode.picked', { picked: contestName(pickedEvent) }) })
+    }
+  } else if (!observed && !blocker && !modeOn) {
+    modeLines.push({ key: 'off', text: t('fieldDay.mode.off', { contest: eventName }) })
+  }
+  // ⭐ WHAT THE SWITCH DOES TO A CLUB, said before it is pressed. Club sync follows its own
+  // settings, not this switch (`Engine::fd_sync_targets`): with the mode off the station stays
+  // in the club event, and its outbox is empty until a session is back, so the contacts it
+  // owes wait in the journal and go when the mode returns.
+  const clubOn =
+    !observed &&
+    !clubRefusal &&
+    !!nativeSettings &&
+    (nativeSettings.fdHostEnable === true || (nativeSettings.fdJoinAddr ?? '').trim() !== '')
+  if (clubOn) modeLines.push({ key: 'club', text: t('fieldDay.mode.club') })
+  // Running / S&P with nothing to switch between and the master off: see the buttons.
+  const roleLocked = !fieldDay && !modeOn
+
   return (
     <section className="conversation panel fieldday">
-      {/* EVENT BANNER */}
+      {/* EVENT BANNER: the Field Day mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
+        {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
+            that offers it reads the same words. Not a transmit control: on enters the contest
+            passive (S&P), off leaves it, and either is the save Settings makes. Read-only for
+            a Remote observer, who is watching a station, not operating it. */}
+        <label className="fd-mode-switch">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={modeOn}
+            className={`toggle${modeOn ? ' on' : ''}`}
+            disabled={observed || modeBusy}
+            onClick={() => void toggleMode()}
+            aria-label={
+              modeOn ? t('settings.fieldDay.mode.aria.disable') : t('settings.fieldDay.mode.aria.enable')
+            }
+          >
+            <span className="toggle-knob" />
+          </button>
+          <span className="fd-mode-label">{t('settings.fieldDay.mode.label')}</span>
+        </label>
         <span className="fd-event-name">{eventName}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
         {/* Warn-only rule advisories (banned mode + assistance) — passive status
@@ -1756,6 +1932,32 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           </span>
         ) : null}
       </div>
+      {(blocker || modeLines.length > 0) && (
+        <div className="fd-mode-status">
+          {blocker && (
+            <p className="fd-mode-line warn" role={refusal ? 'alert' : 'status'}>
+              {blockerText(blocker, eventName)}
+              {onOpenSettings && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => onOpenSettings(blockerTarget(blocker))}
+                  >
+                    {t('fieldDay.mode.needs.open')}
+                  </button>
+                </>
+              )}
+            </p>
+          )}
+          {modeLines.map((l) => (
+            <p key={l.key} className={`fd-mode-line ${l.key}`}>
+              {l.text}
+            </p>
+          ))}
+        </div>
+      )}
 
       <div className="panel-header fd-header">
         <div className="fd-ident">
@@ -1778,13 +1980,16 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             <span className="fd-class">{fieldDay?.sentExchange || '—'}</span>
           )}
         </div>
+        {/* ⚠️ Not with Field Day mode off and no session: either button ENTERS the contest
+            (`set_mode`), and an entry the master switch does not know about is one the
+            snapshot hides, so a Running started from here would call CQ unseen. */}
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
           <button
             type="button"
             className={`fd-role-btn${running ? ' active' : ''}`}
             aria-pressed={running}
-            disabled={observed}
-            onClick={() => { if (!observed) onSetMode?.('fieldday-run') }}
+            disabled={observed || roleLocked}
+            onClick={() => { if (!observed && !roleLocked) onSetMode?.('fieldday-run') }}
           >
             {t('fieldDay.role.running')}
           </button>
@@ -1792,8 +1997,8 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             type="button"
             className={`fd-role-btn${!running ? ' active' : ''}`}
             aria-pressed={!running}
-            disabled={observed}
-            onClick={() => { if (!observed) onSetMode?.('fieldday-sp') }}
+            disabled={observed || roleLocked}
+            onClick={() => { if (!observed && !roleLocked) onSetMode?.('fieldday-sp') }}
           >
             {t('fieldDay.role.sp')}
           </button>

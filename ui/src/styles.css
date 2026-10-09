@@ -12203,6 +12203,40 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* The Field Day mode switch, first in the banner, beside the contest's name and window. The
+   switch is the shared `.toggle`; this only sets its label beside it. */
+.fd-mode-switch {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+.fd-mode-label {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+/* The lines under the banner: what keeps the contest from starting, or which rules apply now. */
+.fd-mode-status {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px var(--space-4);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border-soft);
+}
+.fd-mode-line {
+  margin: 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-dim);
+}
+.fd-mode-line.warn {
+  color: var(--alert-warning);
+  font-weight: 600;
+}
 /* Warn-only FD rule advisory (FdAdvisories.tsx) — a PASSIVE status line, never a
    control, hosted by the FD event banner and the Operate cockpit header (outside
    every ⊞-removable pane). --alert-warning exists in both themes. Ellipsizes in
