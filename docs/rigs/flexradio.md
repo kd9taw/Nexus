@@ -123,6 +123,9 @@ The other keyer choices work on a Flex too, and are worth knowing about:
 mutes and unmutes the native DAX receive stream cleanly during a long macro, and
 whether Stop TX cuts the *one* word already inside the radio or lets it finish.
 
+**On the Flex native client (Beta)** Nexus does not send CW yet, and the CW screen says so. For CW,
+turn the client off (SmartSDR CAT sends it as above), or use the WinKeyer or Soundcard keyer.
+
 ---
 
 ## Phone (SSB) on a Flex

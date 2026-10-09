@@ -1,5 +1,6 @@
 //! The unkey readback: the interlock state machine that turns "we sent `xmit 0`" into "the radio
-//! reports READY and no transmitting client".
+//! reports READY and no transmitting client", and, for each other kind of transmission, what
+//! proves that it ended ([`Profile`]).
 //!
 //! **A reply is not RF cessation.** `R<seq>|0|` to `xmit 0` means the radio started the
 //! transition (D `TCPIP-xmit`). [`StopTracker`] accepts an unkey only after this whole ordered
@@ -40,6 +41,36 @@
 //! tracker single-owner); the transition timeout is a constructor argument defaulting to the
 //! upstream 5 s, so simulator tests can shorten it. Recorded in the repo-root NOTICE (AetherSDR
 //! entry).
+//!
+//! **The readback per kind** is added for Nexus, with no upstream code taken. Each kind of
+//! transmission has a [`Profile`]: the interlock source it keys under, and whose hand ends it.
+//!
+//! - `xmit 1` ([`KEY`]): the sequence above, unchanged.
+//! - The tune carrier ([`TUNE`]): the same ordered sequence under the tune's own source, and the
+//!   transmit status must agree: `tune=1` while keyed, `tune=0` after our stop's reply. Either one
+//!   alone is not the end.
+//! - A CWX send ([`CWX`]) and an ATU cycle ([`ATU`]): the radio ends these by its own hand, so the
+//!   proof is a window ([`Window`]). From the start's reply on, every keyed sample names us with
+//!   the kind's source, and the end is the radio holding idle: for CWX through a hold after the
+//!   last word's expected end, for the ATU once a result ([`ATU_RESULTS`]) has been reported. Later
+//!   CWX words join the open window ([`StopTracker::append`]). A `cwx clear` the radio took
+//!   empties its buffer ([`StopTracker::cleared`]): from its reply the window waits only for the
+//!   hold, and has a transition's time to see it.
+//!
+//! What fails an `xmit` attempt fails these too: a foreign owner, a physical keying source, a
+//! partial line, a failed reply or write, a second start, a missed deadline. The facts behind the
+//! three new profiles are AetherSDR's notes and code comments at the same commit, read for facts,
+//! and none is confirmed on a real radio: each constant says where its facts come from and what
+//! stands in where the notes are silent. Admission refuses those starts until a tester's bench
+//! confirms their profiles.
+//!
+//! **An amplifier's reason** is added for Nexus too, for every kind, `xmit` included: a keying
+//! report (PTT_REQUESTED, TRANSMITTING) whose only reason names an amplifier ([`amplifier_only`],
+//! `reason=AMP:PG-XL` while the radio waits on a PowerGeniusXL in line, in AetherSDR's notes) is
+//! ours when its source and its place in the order are (operator ruling, 2026-10-09). Any other
+//! reason, two reasons, or an amplifier's reason on a release or idle report still fails, and the
+//! idle that ends an attempt still carries no reason. ⚠️ Unconfirmed until a tester's bench with
+//! an amplifier in line.
 
 use std::num::NonZeroU64;
 
@@ -48,6 +79,128 @@ pub const TRANSITION_TIMEOUT_MS: u64 = 5000;
 
 /// The longest raw line the tracker accepts.
 pub const MAX_LINE: usize = 4096;
+
+/// What keys the radio for one kind of transmission, and what proves that it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Profile {
+    /// The interlock's `source` while this kind keys the radio.
+    pub source: &'static str,
+    /// Whose hand ends it, and so what proves the end.
+    pub ending: Ending,
+}
+
+/// Whose hand ends a kind of transmission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// Ours: our stop, then the radio's ordered release (UNKEY_REQUESTED, READY still naming us,
+    /// READY idle). With `tune_status`, the transmit status must agree as well: `tune=1` while
+    /// keyed, `tune=0` after the stop's reply.
+    OurStop { tune_status: bool },
+    /// The radio's: it ends the transmission by itself, and the proof is a [`Window`]. With
+    /// `atu_result`, the window must also see a result ([`ATU_RESULTS`]).
+    Radio { atu_result: bool },
+}
+
+/// `xmit 1`: the sequence in this file's header, captured on a FLEX-6700 on 4.2.18.
+pub const KEY: Profile = Profile {
+    source: "SW",
+    ending: Ending::OurStop { tune_status: false },
+};
+
+/// `transmit tune 1`, the radio's tune carrier. ⚠️ Unconfirmed until a tester's bench. From
+/// AetherSDR's notes: the interlock reports `source=TUNE` during a TUNE
+/// (`docs/pgxl-telemetry-source-evidence.md`, a FLEX-8600 on SmartSDR 4.2.20.41343); the
+/// UNKEY_REQUESTED that follows carries no source (`docs/architecture/digital-voice-thumbdv-waveform.md`);
+/// the transmit status carries `tune=` (its transmit decoder). Not in the notes: the READY steps
+/// after the unkey, taken to be the `xmit` capture's.
+pub const TUNE: Profile = Profile {
+    source: "TUNE",
+    ending: Ending::OurStop { tune_status: true },
+};
+
+/// `cwx send`, keyed by the radio's own break-in. ⚠️ Unconfirmed until a tester's bench, and its
+/// source is not in AetherSDR's notes at all: `SW`, the source the radio reports for software
+/// keying (`src/models/RadioModel.cpp`, after FlexLib's ParsePTTSource), stands in until the bench
+/// reports the real one.
+pub const CWX: Profile = Profile {
+    source: "SW",
+    ending: Ending::Radio { atu_result: false },
+};
+
+/// `atu start`, an ATU cycle. ⚠️ Unconfirmed until a tester's bench. AetherSDR's notes give the
+/// results ([`ATU_RESULTS`]) and that a start keys the transmitter as a tune does
+/// (`docs/agents/flex-protocol.md`), but not the source it keys under: `TUNE`, the tune carrier's,
+/// stands in.
+pub const ATU: Profile = Profile {
+    source: "TUNE",
+    ending: Ending::Radio { atu_result: true },
+};
+
+/// The `atu status` values that end a cycle: AetherSDR's list (`src/models/TransmitModel.cpp`,
+/// after FlexLib's ParseATUTuneStatus) without `NONE`, the status before any cycle, and
+/// `TUNE_IN_PROGRESS`. Any other value is not a result.
+pub const ATU_RESULTS: [&str; 8] = [
+    "TUNE_NOT_STARTED",
+    "TUNE_BYPASS",
+    "TUNE_SUCCESSFUL",
+    "TUNE_OK",
+    "TUNE_FAIL_BYPASS",
+    "TUNE_FAIL",
+    "TUNE_ABORTED",
+    "TUNE_MANUAL_BYPASS",
+];
+
+/// The longest a tune carrier may be held: the radio loop's own ceiling.
+pub const TUNE_HOLD_MAX_MS: u64 = 60_000;
+
+/// How long past its hold the session ends a tune carrier by itself. The radio latches the
+/// carrier, and the radio loop that would release it can stall for a decode's length.
+pub const TUNE_MARGIN_MS: u64 = 2_000;
+
+/// How long an ATU cycle may take, from its reply to its result and the idle interlock, before
+/// the attempt fails. The bench is to measure the real cycle.
+pub const ATU_CEILING_MS: u64 = 20_000;
+
+/// How long the radio must hold idle past a CWX word's expected end and its break-in delay before
+/// the word counts as ended.
+pub const CWX_IDLE_MS: u64 = 300;
+
+/// How long past a CWX word's expected end and its break-in delay the radio may take to fall idle
+/// before the attempt fails.
+pub const CWX_GRACE_MS: u64 = 1_000;
+
+/// The timing of a radio-ended start's proof. Each CWX word brings its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    /// How long after its reply the transmission is on the air by design: a CWX word's keying
+    /// time at the radio's speed. Nothing for an ATU cycle, whose end the radio reports.
+    pub lasting_ms: u64,
+    /// How long the radio must then hold idle before the end counts.
+    pub hold_ms: u64,
+    /// How long past `lasting_ms` the radio has to fall idle, with its result for the ATU, before
+    /// the attempt fails.
+    pub grace_ms: u64,
+}
+
+impl Window {
+    /// A CWX word's window: `word_ms` of keying at the radio's speed, then its break-in delay.
+    pub fn cwx(word_ms: u64, break_in_delay_ms: u64) -> Window {
+        Window {
+            lasting_ms: word_ms,
+            hold_ms: break_in_delay_ms.saturating_add(CWX_IDLE_MS),
+            grace_ms: break_in_delay_ms.saturating_add(CWX_GRACE_MS),
+        }
+    }
+
+    /// An ATU cycle's window: its result and the idle interlock, within [`ATU_CEILING_MS`].
+    pub fn atu() -> Window {
+        Window {
+            lasting_ms: 0,
+            hold_ms: 0,
+            grace_ms: ATU_CEILING_MS,
+        }
+    }
+}
 
 /// Where an input happened: the transport session (nonzero, never reused) and its position in
 /// that session's single order of writes and lines (strictly increasing from 1).
@@ -90,6 +243,10 @@ pub enum Phase {
     AwaitUnkey,
     AwaitReady,
     AwaitOwnerClear,
+    /// A tune's interlock has released, and its transmit status has not yet said `tune=0`.
+    AwaitTuneOff,
+    /// A radio-ended start is under way: its window is open.
+    Window,
     Confirmed,
     Failed,
 }
@@ -127,12 +284,39 @@ pub struct StopTracker {
     stop: Option<StopRequest>,
     stop_written: bool,
     stop_replied: bool,
+    /// What the armed attempt is.
+    profile: Profile,
+    /// The transmit status said `tune=1` between the start's reply and the stop's.
+    tune_on: bool,
+    /// ... and `tune=0` after the stop's reply.
+    tune_off: bool,
+    /// The open window's timing (the latest word's hold and grace).
+    window: Window,
+    /// Later starts in the window that await their reply: sequence, keying time, written.
+    words: Vec<(u32, u64, bool)>,
+    /// When the window's transmission is expected to have ended by design.
+    expected_end_ms: u64,
+    /// When the window fails unless the radio has settled.
+    window_deadline_ms: u64,
+    /// Since when every sample has been idle, in the window.
+    idle_since_ms: Option<u64>,
+    /// The window has seen an ATU result since the last `TUNE_IN_PROGRESS`.
+    atu_result: bool,
 }
 
 impl Default for StopTracker {
     fn default() -> Self {
         StopTracker::new(TRANSITION_TIMEOUT_MS)
     }
+}
+
+/// Whether an interlock `reason` names an amplifier and nothing else: `AMP:<name>`, one name, as
+/// the radio reports an amplifier in line it is waiting on (`AMP:PG-XL`, a PowerGeniusXL, in
+/// AetherSDR's notes). An empty name, two reasons or any other reason is not.
+pub fn amplifier_only(reason: &str) -> bool {
+    reason
+        .strip_prefix("AMP:")
+        .is_some_and(|name| !name.is_empty() && !name.contains(','))
 }
 
 /// Upstream's guarded number parse: one to ten digits of `base`, fitting 32 bits. A missing or
@@ -171,6 +355,15 @@ impl StopTracker {
             stop: None,
             stop_written: false,
             stop_replied: false,
+            profile: KEY,
+            tune_on: false,
+            tune_off: false,
+            window: Window::atu(),
+            words: Vec::new(),
+            expected_end_ms: 0,
+            window_deadline_ms: 0,
+            idle_since_ms: None,
+            atu_result: false,
         }
     }
 
@@ -226,7 +419,33 @@ impl StopTracker {
             self.fail(Failure::Timeout);
             return false;
         }
+        self.settle_window();
         true
+    }
+
+    /// An open window, at the time of the last input: confirmed once the radio has settled (idle,
+    /// no start awaiting its reply, and the ATU's result reported) for its hold past the expected
+    /// end; failed if it has not settled by the deadline.
+    fn settle_window(&mut self) {
+        if self.phase != Phase::Window {
+            return;
+        }
+        let now = self.last_ms;
+        let result =
+            !matches!(self.profile.ending, Ending::Radio { atu_result: true }) || self.atu_result;
+        match self.idle_since_ms {
+            Some(idle) if self.words.is_empty() && result => {
+                let end = idle
+                    .max(self.expected_end_ms)
+                    .saturating_add(self.window.hold_ms);
+                if now >= end {
+                    self.phase = Phase::Confirmed;
+                    self.deadline_ms = now.saturating_add(self.timeout_ms);
+                }
+            }
+            _ if now >= self.window_deadline_ms => self.fail(Failure::Timeout),
+            _ => {}
+        }
     }
 
     fn accept(&mut self, stamp: Stamp, now_ms: u64) -> bool {
@@ -246,6 +465,94 @@ impl StopTracker {
     /// Arm for a key attempt from [`Phase::Idle`]. The sequence number must be nonzero and above
     /// any this tracker has seen. Returns whether it armed; on `false` nothing may be written.
     pub fn begin(&mut self, operation: Operation, key_sequence: u32, now_ms: u64) -> bool {
+        self.begin_as(operation, KEY, key_sequence, now_ms)
+    }
+
+    /// [`Self::begin`] for a kind our own stop ends ([`Ending::OurStop`]: [`KEY`], [`TUNE`]).
+    pub fn begin_as(
+        &mut self,
+        operation: Operation,
+        profile: Profile,
+        key_sequence: u32,
+        now_ms: u64,
+    ) -> bool {
+        matches!(profile.ending, Ending::OurStop { .. })
+            && self.arm(operation, profile, key_sequence, now_ms)
+    }
+
+    /// Arm for a start the radio ends by itself ([`Ending::Radio`]: [`CWX`], [`ATU`]), with its
+    /// window's timing. `end` is what [`Self::evidence`] hands back once the window proves the
+    /// end: a stop request the session mints for the operation, though no stop need be sent.
+    pub fn begin_window(
+        &mut self,
+        operation: Operation,
+        end: StopRequest,
+        profile: Profile,
+        key_sequence: u32,
+        window: Window,
+        now_ms: u64,
+    ) -> bool {
+        if !matches!(profile.ending, Ending::Radio { .. })
+            || !end.matches(operation)
+            || !self.arm(operation, profile, key_sequence, now_ms)
+        {
+            return false;
+        }
+        self.stop = Some(end);
+        self.window = window;
+        true
+    }
+
+    /// One more start in the open window (a later CWX word), with its own timing. Its sequence
+    /// number must be above any this tracker has seen. Returns whether it was taken; on `false`
+    /// nothing may be written.
+    pub fn append(
+        &mut self,
+        operation: Operation,
+        sequence: u32,
+        window: Window,
+        now_ms: u64,
+    ) -> bool {
+        if !self.advance_clock(now_ms)
+            || self.phase != Phase::Window
+            || self.operation != Some(operation)
+            || sequence <= self.key_sequence
+        {
+            return false;
+        }
+        self.key_sequence = sequence;
+        self.words.push((sequence, window.lasting_ms, false));
+        self.window.hold_ms = window.hold_ms;
+        self.window.grace_ms = window.grace_ms;
+        // The word's write and reply get a transition's time, as a key's do.
+        self.window_deadline_ms = self
+            .window_deadline_ms
+            .max(now_ms.saturating_add(self.timeout_ms));
+        true
+    }
+
+    /// The radio took a `cwx clear` (its reply, at `now_ms`): nothing more is to be sent, so the
+    /// open window no longer waits out the last word's expected end, only the radio holding idle
+    /// for its hold, and has a transition's time from here to see it, as every stop does. A word
+    /// still awaiting its reply keeps its own timing; outside an open window nothing changes.
+    pub fn cleared(&mut self, now_ms: u64) {
+        if !self.advance_clock(now_ms) || self.phase != Phase::Window || !self.words.is_empty() {
+            return;
+        }
+        self.expected_end_ms = self.expected_end_ms.min(now_ms);
+        self.window_deadline_ms = self
+            .window_deadline_ms
+            .max(now_ms.saturating_add(self.timeout_ms));
+        self.settle_window();
+    }
+
+    fn arm(
+        &mut self,
+        operation: Operation,
+        profile: Profile,
+        key_sequence: u32,
+        now_ms: u64,
+    ) -> bool {
         if !self.advance_clock(now_ms) {
             return false;
         }
@@ -260,11 +567,22 @@ impl StopTracker {
         self.stop = None;
         self.stop_written = false;
         self.stop_replied = false;
+        self.profile = profile;
+        self.tune_on = false;
+        self.tune_off = false;
+        self.words.clear();
+        self.idle_since_ms = None;
+        self.atu_result = false;
         self.key_sequence = key_sequence;
         self.stop_sequence = 0;
         self.deadline_ms = now_ms + self.timeout_ms;
         self.phase = Phase::AwaitKeyWrite;
         true
+    }
+
+    /// The armed attempt's profile (the last one's once it is over).
+    pub fn profile(&self) -> Profile {
+        self.profile
     }
 
     /// Bind the stop for the armed attempt. Allowed once, from the key's reply up to
@@ -302,9 +620,9 @@ impl StopTracker {
         true
     }
 
-    /// A write that ended at the transport: the key (`keying`) or the unkey. Only a full write of
-    /// the exact command counts; sequence zero is reserved. Any other transmit-capable write
-    /// during an attempt fails it.
+    /// A write that ended at the transport: the key, or a later word in an open window
+    /// (`keying`), or the unkey. Only a full write of the exact command counts; sequence zero is
+    /// reserved. Any other transmit-capable write during an attempt fails it.
     pub fn command_written(
         &mut self,
         stamp: Stamp,
@@ -331,8 +649,21 @@ impl StopTracker {
             if self.phase == Phase::AwaitStopWrite {
                 self.phase = Phase::AwaitStopReply;
             }
+        } else if self.phase == Phase::Window && keying && self.word_written(sequence) {
+            // Taken: the word now awaits its reply.
         } else {
             self.fail(Failure::UnsupportedActivity);
+        }
+    }
+
+    /// A later word's write, in the open window: each is taken once.
+    fn word_written(&mut self, sequence: u32) -> bool {
+        match self.words.iter_mut().find(|w| w.0 == sequence && !w.2) {
+            Some(word) => {
+                word.2 = true;
+                true
+            }
+            None => false,
         }
     }
 
@@ -349,14 +680,22 @@ impl StopTracker {
             self.fail(Failure::Reply);
             return;
         };
+        let result = rest.split_once('|').and_then(|(code, _)| number(code, 16));
+        if self.phase == Phase::Window {
+            self.word_reply(sequence, result == Some(0));
+            return;
+        }
         if sequence != self.key_sequence && sequence != self.stop_sequence {
             return;
         }
-        let result = rest.split_once('|').and_then(|(code, _)| number(code, 16));
         if result != Some(0) {
             self.fail(Failure::Reply);
         } else if sequence == self.key_sequence && self.phase == Phase::AwaitKeyReply {
-            self.phase = Phase::AwaitPttRequested;
+            if matches!(self.profile.ending, Ending::Radio { .. }) {
+                self.open_window();
+            } else {
+                self.phase = Phase::AwaitPttRequested;
+            }
         } else if sequence == self.stop_sequence
             && self.stop_written
             && !self.stop_replied
@@ -369,6 +708,125 @@ impl StopTracker {
         } else {
             self.fail(Failure::Ordering);
         }
+    }
+
+    /// The radio took a radio-ended start: from here its window proves the end. The tracker was
+    /// idle when it armed, and no sample has arrived since (any would have failed the attempt), so
+    /// the radio is idle as the window opens.
+    fn open_window(&mut self) {
+        self.phase = Phase::Window;
+        self.deadline_ms = 0;
+        self.expected_end_ms = self.last_ms.saturating_add(self.window.lasting_ms);
+        self.window_deadline_ms = self.expected_end_ms.saturating_add(self.window.grace_ms);
+        self.idle_since_ms = Some(self.last_ms);
+    }
+
+    /// A reply in the open window. A later word's sets when the transmission is expected to end;
+    /// any other (a stop's, another command's) is not the window's.
+    fn word_reply(&mut self, sequence: u32, ok: bool) {
+        let Some(i) = self.words.iter().position(|w| w.0 == sequence) else {
+            return;
+        };
+        if !self.words[i].2 {
+            self.fail(Failure::Ordering);
+        } else if !ok {
+            self.fail(Failure::Reply);
+        } else {
+            let (_, lasting, _) = self.words.remove(i);
+            self.expected_end_ms = self
+                .expected_end_ms
+                .max(self.last_ms)
+                .saturating_add(lasting);
+            self.window_deadline_ms = self.expected_end_ms.saturating_add(self.window.grace_ms);
+        }
+    }
+
+    /// A transmit status line during a tune: `tune=1` between the start's reply and the stop's,
+    /// `tune=0` after the stop's reply. Anything else in between fails the attempt. A line without
+    /// `tune` says nothing about the carrier, and other kinds do not read it.
+    fn transmit_status(&mut self, envelope: &str, body: &str) {
+        if self.profile.ending != (Ending::OurStop { tune_status: true })
+            || matches!(
+                self.phase,
+                Phase::Disconnected | Phase::AwaitIdle | Phase::Idle | Phase::Failed
+            )
+        {
+            return;
+        }
+        let mut tune = None;
+        for token in body.split(' ') {
+            if let Some(value) = token.strip_prefix("tune=") {
+                if tune.replace(value).is_some() {
+                    self.fail(Failure::InvalidInput);
+                    return;
+                }
+            }
+        }
+        let on = match tune {
+            None => return,
+            Some("1") => true,
+            Some("0") => false,
+            Some(_) => {
+                self.fail(Failure::InvalidInput);
+                return;
+            }
+        };
+        if !self.envelope_is_ours(envelope) {
+            self.fail(Failure::Ownership);
+            return;
+        }
+        let keyed = self.phase > Phase::AwaitKeyReply;
+        match on {
+            true if keyed && !self.stop_replied => self.tune_on = true,
+            false if self.stop_replied && self.tune_on => {
+                self.tune_off = true;
+                if self.phase == Phase::AwaitTuneOff {
+                    self.phase = Phase::Confirmed;
+                }
+            }
+            _ => self.fail(Failure::State),
+        }
+    }
+
+    /// An `atu` status line during an ATU cycle: a result after the start's reply counts toward
+    /// the end, and `TUNE_IN_PROGRESS` withdraws an earlier one. Before the reply, any status
+    /// fails the attempt, as an interlock sample does.
+    fn atu_status(&mut self, envelope: &str, body: &str) {
+        if self.profile.ending != (Ending::Radio { atu_result: true })
+            || !matches!(
+                self.phase,
+                Phase::AwaitKeyWrite | Phase::AwaitKeyReply | Phase::Window | Phase::Confirmed
+            )
+        {
+            return;
+        }
+        let mut status = None;
+        for token in body.split(' ') {
+            if let Some(value) = token.strip_prefix("status=") {
+                if status.replace(value).is_some() {
+                    self.fail(Failure::InvalidInput);
+                    return;
+                }
+            }
+        }
+        let Some(status) = status else { return };
+        if !self.envelope_is_ours(envelope) {
+            self.fail(Failure::Ownership);
+            return;
+        }
+        match self.phase {
+            Phase::Window if status == "TUNE_IN_PROGRESS" => self.atu_result = false,
+            Phase::Window if ATU_RESULTS.contains(&status) => self.atu_result = true,
+            Phase::Window => {}
+            // A new cycle after the proof revokes it.
+            Phase::Confirmed if status != "TUNE_IN_PROGRESS" => {}
+            _ => self.fail(Failure::State),
+        }
+    }
+
+    /// A status envelope's handle is no client's or ours.
+    fn envelope_is_ours(&self, envelope: &str) -> bool {
+        matches!(number(envelope, 16), Some(h) if h == 0 || h == self.client_handle)
     }
 
     fn interlock(&mut self, body: &str) {
@@ -439,20 +897,44 @@ impl StopTracker {
             self.fail(Failure::InvalidInput);
             return;
         }
-        if (handle != 0 && handle != self.client_handle) || (!source.is_empty() && source != "SW") {
+        let keyed_by = self.profile.source;
+        if (handle != 0 && handle != self.client_handle)
+            || (!source.is_empty() && source != keyed_by)
+        {
             self.fail(Failure::Ownership);
             return;
         }
-        if allowed != "1" || !reason.is_empty() {
+        // A keying report whose only reason names an amplifier is ours when everything else is:
+        // its source above, and its place in the order below. Any other reason, or one on any
+        // other report, fails the attempt.
+        let keying = matches!(state, "PTT_REQUESTED" | "TRANSMITTING");
+        if allowed != "1" || !(reason.is_empty() || (keying && amplifier_only(reason))) {
             self.fail(Failure::State);
             return;
         }
         let ours = handle == self.client_handle;
+        if self.phase == Phase::Window {
+            // The radio keys and releases as it goes; every sample names us, keyed with the kind's
+            // source and released with none, until it holds idle.
+            match state {
+                _ if idle => {
+                    self.idle_since_ms.get_or_insert(self.last_ms);
+                }
+                "PTT_REQUESTED" | "TRANSMITTING" if source == keyed_by && ours => {
+                    self.idle_since_ms = None;
+                }
+                "UNKEY_REQUESTED" | "READY" if source.is_empty() && ours => {
+                    self.idle_since_ms = None;
+                }
+                _ => self.fail(Failure::State),
+            }
+            return;
+        }
         match self.phase {
-            Phase::AwaitPttRequested if state == "PTT_REQUESTED" && source == "SW" && ours => {
+            Phase::AwaitPttRequested if state == "PTT_REQUESTED" && source == keyed_by && ours => {
                 self.phase = Phase::AwaitTransmitting;
             }
-            Phase::AwaitTransmitting if state == "TRANSMITTING" && source == "SW" && ours => {
+            Phase::AwaitTransmitting if state == "TRANSMITTING" && source == keyed_by && ours => {
                 self.phase = Phase::Transmitting;
                 if self.stop.is_some() {
                     self.phase = if self.stop_replied {
@@ -467,16 +949,23 @@ impl StopTracker {
                 }
             }
             // The same state again is not a new keying operation.
-            Phase::Transmitting if state == "TRANSMITTING" && source == "SW" && ours => {}
+            Phase::Transmitting if state == "TRANSMITTING" && source == keyed_by && ours => {}
             Phase::AwaitUnkey if state == "UNKEY_REQUESTED" && source.is_empty() && ours => {
                 self.phase = Phase::AwaitReady;
             }
             Phase::AwaitReady if state == "READY" && source.is_empty() && ours => {
                 self.phase = Phase::AwaitOwnerClear;
             }
-            Phase::AwaitOwnerClear | Phase::Confirmed if idle && self.stop_matches() => {
-                self.phase = Phase::Confirmed;
+            // A tune's release is the end only once its transmit status has said `tune=0` too.
+            Phase::AwaitOwnerClear if idle && self.stop_matches() => {
+                let tune_status = self.profile.ending == (Ending::OurStop { tune_status: true });
+                self.phase = if tune_status && !self.tune_off {
+                    Phase::AwaitTuneOff
+                } else {
+                    Phase::Confirmed
+                };
             }
+            Phase::AwaitTuneOff | Phase::Confirmed if idle && self.stop_matches() => {}
             _ => self.fail(Failure::State),
         }
     }
@@ -498,22 +987,23 @@ impl StopTracker {
                 self.fail(Failure::InvalidInput);
                 return;
             };
-            let Some(body) = body.strip_prefix("interlock ") else {
-                return;
-            };
-            // Interlock band and timing configuration is not a state sample.
-            if body.starts_with("band ") {
-                return;
-            }
-            match number(envelope, 16) {
-                Some(h) if h == 0 || h == self.client_handle => {}
-                _ => {
+            if let Some(body) = body.strip_prefix("transmit ") {
+                self.transmit_status(envelope, body);
+            } else if let Some(body) = body.strip_prefix("atu ") {
+                self.atu_status(envelope, body);
+            } else if let Some(body) = body.strip_prefix("interlock ") {
+                // Interlock band and timing configuration is not a state sample.
+                if body.starts_with("band ") {
+                    return;
+                }
+                if !self.envelope_is_ours(envelope) {
                     self.fail(Failure::Ownership);
                     return;
                 }
+                self.interlock(body);
             }
-            self.interlock(body);
         }
+        self.settle_window();
     }
 
     /// Let time pass: a missed deadline fails the attempt.
@@ -1014,6 +1504,440 @@ mod tests {
             bounded.tracker.failure(),
             Failure::InvalidInput,
             "input is bounded"
+        );
+    }
+
+    // ── The readback per kind (Nexus's own) ──────────────────────────────────────────────────
+    //
+    // The lines are the simulator's (`tempo-flexsim`'s bundled session), so these tests and the
+    // simulator agree on what the radio says for each kind.
+
+    /// The simulator's lines for `command`, for handle 0x12345678: each with the wait before it.
+    fn radio_says(command: &str) -> Vec<(u64, String)> {
+        use tempo_flexsim::session::Item;
+        let session = tempo_flexsim::Session::v4_gui_client();
+        let group = session.lookup(command).expect("the simulator answers it");
+        let mut wait = 0;
+        let mut lines = Vec::new();
+        for item in &session.rule(group, 0).items {
+            match item {
+                Item::Wait(ms) => wait += ms,
+                Item::Send(line) => {
+                    lines.push((wait, line.replace("{h}", "12345678")));
+                    wait = 0;
+                }
+                Item::Vita(_) => {}
+            }
+        }
+        lines
+    }
+
+    impl Harness {
+        /// Feed `lines` at their times.
+        fn play(&mut self, lines: &[(u64, String)]) {
+            for (wait, line) in lines {
+                self.now += wait;
+                self.feed(line);
+            }
+        }
+
+        /// A tune started and keyed, its stop sent and answered, nothing of the release yet.
+        fn tune_stopped(&mut self) {
+            assert!(self.tracker.begin_as(self.operation, TUNE, 101, self.now));
+            self.written(101, true, true);
+            self.feed("R101|0|");
+            self.play(&radio_says("transmit tune 1"));
+            assert_eq!(self.tracker.phase(), Phase::Transmitting, "the tune keyed");
+            self.stop_reply();
+        }
+
+        /// A radio-ended start armed, written and answered: its window is open.
+        fn window_opened(&mut self, profile: Profile, window: Window) {
+            assert!(self.tracker.begin_window(
+                self.operation,
+                self.stop,
+                profile,
+                101,
+                window,
+                self.now
+            ));
+            self.written(101, true, true);
+            self.feed("R101|0|");
+            assert_eq!(self.tracker.phase(), Phase::Window);
+        }
+    }
+
+    #[test]
+    fn a_tune_ends_only_when_its_status_and_the_interlock_agree() {
+        // The simulator's release: `tune=0`, then the interlock's UNKEY_REQUESTED, READY naming
+        // us and, 430 ms on, READY idle.
+        let release = radio_says("transmit tune 0");
+        assert_eq!(release[0].1, "S0|transmit tune=0");
+
+        // The transmit status first: alone it is not the end.
+        let mut h = Harness::new();
+        h.tune_stopped();
+        h.play(&release[..1]);
+        assert_eq!(h.tracker.phase(), Phase::AwaitUnkey, "tune=0 alone: keyed");
+        assert_eq!(h.evidence(), None);
+        h.play(&release[1..]);
+        assert_eq!(h.tracker.phase(), Phase::Confirmed);
+        assert_eq!(h.evidence(), Some(h.stop));
+
+        // The interlock first: alone it is not the end either.
+        let mut h = Harness::new();
+        h.tune_stopped();
+        h.play(&release[1..]);
+        assert_eq!(h.tracker.phase(), Phase::AwaitTuneOff, "idle alone: keyed");
+        assert_eq!(h.evidence(), None);
+        h.play(&release[..1]);
+        assert_eq!(h.tracker.phase(), Phase::Confirmed);
+        assert_eq!(h.evidence(), Some(h.stop));
+    }
+
+    #[test]
+    fn a_tune_keys_under_its_own_source_and_its_status_must_agree() {
+        // The tune's source is not xmit's: an attempt seeing SW, or a hardware source, fails.
+        for source in ["SW", "MIC"] {
+            let mut h = Harness::new();
+            assert!(h.tracker.begin_as(h.operation, TUNE, 101, h.now));
+            h.written(101, true, true);
+            h.feed("R101|0|");
+            h.feed(&REQUESTED.replace("source=SW", &format!("source={source}")));
+            assert_eq!(h.tracker.failure(), Failure::Ownership, "{source}");
+        }
+        // No `tune=1` while keyed: the release alone proves nothing.
+        let mut h = Harness::new();
+        assert!(h.tracker.begin_as(h.operation, TUNE, 101, h.now));
+        h.written(101, true, true);
+        h.feed("R101|0|");
+        let keyed: Vec<_> = radio_says("transmit tune 1")
+            .into_iter()
+            .filter(|(_, l)| l.contains("|interlock "))
+            .collect();
+        h.play(&keyed);
+        h.stop_reply();
+        h.play(&radio_says("transmit tune 0"));
+        assert_eq!(h.tracker.failure(), Failure::State, "tune=0 with no tune=1");
+        assert_eq!(h.evidence(), None);
+        // The carrier back after the stop's reply, a malformed or doubled value, a foreign
+        // envelope: each fails the attempt.
+        for (line, why) in [
+            ("S0|transmit tune=1", Failure::State),
+            ("S0|transmit tune=2", Failure::InvalidInput),
+            ("S0|transmit tune=0 tune=0", Failure::InvalidInput),
+            ("S87654321|transmit tune=0", Failure::Ownership),
+        ] {
+            let mut h = Harness::new();
+            h.tune_stopped();
+            h.feed(line);
+            assert_eq!(h.tracker.failure(), why, "{line}");
+        }
+        // A transmit line without `tune` says nothing about the carrier.
+        let mut h = Harness::new();
+        h.tune_stopped();
+        h.feed("S0|transmit rfpower=50");
+        h.play(&radio_says("transmit tune 0"));
+        assert_eq!(h.evidence(), Some(h.stop));
+    }
+
+    #[test]
+    fn a_cwx_operation_ends_only_after_the_break_in_window() {
+        // A 300 ms word, break-in delay 300 ms: the window ends no sooner than the idle that
+        // follows plus 300 + 300 ms.
+        let window = Window::cwx(300, 300);
+        let mut h = Harness::new();
+        h.window_opened(CWX, window);
+        h.play(&radio_says("cwx send \"CQ\" 1"));
+        let idle = h.now;
+        assert_eq!(h.evidence(), None, "the first idle is not the end");
+        h.now = idle + 600 - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None, "inside the hold");
+        h.now = idle + 600;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.phase(), Phase::Confirmed);
+        assert_eq!(h.evidence(), Some(h.stop));
+        assert!(h.tracker.consume(h.stop, h.now));
+        assert_eq!(h.tracker.phase(), Phase::Idle);
+
+        // The hold starts after the word's expected end, however early the radio is idle.
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(5_000, 300));
+        let opened = h.now;
+        h.now = opened + 5_000 + 600 - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(
+            h.evidence(),
+            None,
+            "idle all along, but the word is not over"
+        );
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop));
+
+        // A key inside the hold starts it again (inside the word's deadline: a radio still keyed
+        // past the word's end + break-in delay + 1 s fails the window, below).
+        let mut h = Harness::new();
+        h.window_opened(CWX, window);
+        h.play(&radio_says("cwx send \"CQ\" 1"));
+        h.now += 100;
+        h.play(&radio_says("cwx send \"CQ\" 1"));
+        let idle = h.now;
+        h.now = idle + 599;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None, "the hold restarted");
+        h.now = idle + 600;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop));
+    }
+
+    #[test]
+    fn a_later_word_joins_the_open_window() {
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        h.play(&radio_says("cwx send \"CQ\" 1"));
+        assert!(h
+            .tracker
+            .append(h.operation, 102, Window::cwx(800, 300), h.now));
+        h.written(102, true, true);
+        // Settled, but the word's reply is outstanding: not the end.
+        h.now += 2_000;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None, "a word awaits its reply");
+        h.feed("R102|0|");
+        let replied = h.now;
+        h.now = replied + 800 + 600 - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None, "the second word's end and hold");
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop));
+        // An append outside an open window, or for another operation, is not taken.
+        let mut h = Harness::new();
+        assert!(!h
+            .tracker
+            .append(h.operation, 102, Window::cwx(300, 300), h.now));
+        h.window_opened(CWX, Window::cwx(300, 300));
+        assert!(!h.tracker.append(op(9), 102, Window::cwx(300, 300), h.now));
+        assert!(!h
+            .tracker
+            .append(h.operation, 101, Window::cwx(300, 300), h.now));
+        // A word's failed reply, or a reply before its write, fails the window.
+        for (written, reply, why) in [
+            (true, "R102|5000007B|", Failure::Reply),
+            (false, "R102|0|", Failure::Ordering),
+        ] {
+            let mut h = Harness::new();
+            h.window_opened(CWX, Window::cwx(300, 300));
+            assert!(h
+                .tracker
+                .append(h.operation, 102, Window::cwx(300, 300), h.now));
+            if written {
+                h.written(102, true, true);
+            }
+            h.feed(reply);
+            assert_eq!(h.tracker.failure(), why, "{reply}");
+        }
+    }
+
+    #[test]
+    fn a_window_fails_on_a_foreign_or_physical_source_and_at_its_deadline() {
+        for line in [
+            "S0|interlock tx_client_handle=0x00000000 state=TRANSMITTING reason= source=MIC tx_allowed=1 amplifier=",
+            "S0|interlock tx_client_handle=0x87654321 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
+            "S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=TUNE tx_allowed=1 amplifier=",
+            "S0|interlock tx_client_handle=0x00000000 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
+            // A reason other than an amplifier's (an amplifier's alone is ours: below).
+            "S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason=PA_RANGE source=SW tx_allowed=1 amplifier=",
+            "S0|interlock state=TRANSMITTING",
+        ] {
+            let mut h = Harness::new();
+            h.window_opened(CWX, Window::cwx(300, 300));
+            h.feed(line);
+            assert_eq!(h.tracker.phase(), Phase::Failed, "{line}");
+            h.now += 10_000;
+            h.tracker.poll(h.now);
+            assert_eq!(h.evidence(), None, "{line}");
+        }
+        // Still keyed at the word's end + break-in delay + 1 s: the deadline.
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        let opened = h.now;
+        h.feed(TRANSMITTING);
+        h.now = opened + 300 + 300 + 1_000 - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.phase(), Phase::Window);
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.failure(), Failure::Timeout);
+    }
+
+    /// `line` with `reason` in place of its empty reason.
+    fn with_reason(line: &str, reason: &str) -> String {
+        line.replace(" reason= ", &format!(" reason={reason} "))
+    }
+
+    /// ⭐ A keying report whose only reason names an amplifier (`reason=AMP:PG-XL`, a PGXL in line)
+    /// is ours when its source and its place in the order are: an over confirms through it, and a
+    /// CWX window keeps going. Any other reason, two reasons or no name fails, and so does an
+    /// amplifier's reason on a release, on the idle that would end it, out of order or under
+    /// another source.
+    #[test]
+    fn an_amplifiers_reason_on_a_keying_report_is_ours() {
+        assert!(amplifier_only("AMP:PG-XL"));
+        let keyed = |h: &mut Harness, reason: &str| {
+            assert!(h.tracker.begin(h.operation, 101, h.now));
+            h.written(101, true, true);
+            h.feed("R101|0|");
+            h.feed(&with_reason(REQUESTED, reason));
+        };
+        // The over: both keying reports carry it, and the captured release confirms.
+        let mut h = Harness::new();
+        keyed(&mut h, "AMP:PG-XL");
+        h.feed(&with_reason(TRANSMITTING, "AMP:PG-XL"));
+        assert_eq!(h.tracker.phase(), Phase::Transmitting);
+        h.complete();
+        assert_eq!(h.evidence(), Some(h.stop));
+        // Any other reason on the same report.
+        for reason in [
+            "PA_RANGE",
+            "ANT:ANT2",
+            "AMP:PG-XL,ANT:ANT2",
+            "AMP:",
+            "amp:PG-XL",
+        ] {
+            let mut h = Harness::new();
+            keyed(&mut h, reason);
+            assert_eq!(
+                (h.tracker.phase(), h.tracker.failure()),
+                (Phase::Failed, Failure::State),
+                "{reason}"
+            );
+        }
+        // On a release or on the idle that would end it.
+        let release = [UNKEY, READY_OWNED, IDLE];
+        for at in 0..release.len() {
+            let mut h = Harness::new();
+            h.start();
+            h.stop_reply();
+            for (i, line) in release.iter().enumerate() {
+                if i == at {
+                    h.feed(&with_reason(line, "AMP:PG-XL"));
+                } else {
+                    h.feed(line);
+                }
+            }
+            assert_eq!(h.tracker.phase(), Phase::Failed, "{}", release[at]);
+            assert_eq!(h.evidence(), None);
+        }
+        // Out of order, or under another source.
+        for (line, why) in [
+            (with_reason(TRANSMITTING, "AMP:PG-XL"), Failure::State),
+            (
+                with_reason(&REQUESTED.replace("source=SW", "source=MIC"), "AMP:PG-XL"),
+                Failure::Ownership,
+            ),
+        ] {
+            let mut h = Harness::new();
+            assert!(h.tracker.begin(h.operation, 101, h.now));
+            h.written(101, true, true);
+            h.feed("R101|0|");
+            h.feed(&line);
+            assert_eq!(h.tracker.failure(), why, "{line}");
+        }
+        // In a CWX window: the keying report with an amplifier's reason is ours, and the radio's
+        // release ends the word as it would with no amplifier.
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        let word: Vec<(u64, String)> = radio_says("cwx send \"CQ\" 1")
+            .into_iter()
+            .map(|(wait, line)| {
+                let keying =
+                    line.contains("state=PTT_REQUESTED") || line.contains("state=TRANSMITTING");
+                (
+                    wait,
+                    if keying {
+                        with_reason(&line, "AMP:PG-XL")
+                    } else {
+                        line
+                    },
+                )
+            })
+            .collect();
+        h.play(&word);
+        assert_eq!(h.tracker.phase(), Phase::Window);
+        h.now += 600;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop));
+    }
+
+    #[test]
+    fn an_atu_cycle_ends_on_its_result_and_the_idle_interlock() {
+        let cycle = radio_says("atu start");
+        let result = cycle
+            .iter()
+            .position(|(_, l)| l == "S0|atu status=TUNE_SUCCESSFUL")
+            .expect("the profile's result");
+        let mut h = Harness::new();
+        h.window_opened(ATU, Window::atu());
+        h.play(&cycle[..=result]);
+        assert_eq!(h.evidence(), None, "the result, still keyed");
+        h.play(&cycle[result + 1..]);
+        assert_eq!(h.tracker.phase(), Phase::Confirmed);
+        assert_eq!(h.evidence(), Some(h.stop));
+
+        // The idle interlock with no result is not the end; past the ceiling it fails.
+        let mut h = Harness::new();
+        h.window_opened(ATU, Window::atu());
+        let opened = h.now;
+        h.feed("S0|atu status=TUNE_IN_PROGRESS");
+        h.now = opened + ATU_CEILING_MS - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None);
+        assert_eq!(h.tracker.phase(), Phase::Window);
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.failure(), Failure::Timeout);
+
+        // A result reported before the start's reply cannot be this cycle's.
+        let mut h = Harness::new();
+        assert!(h
+            .tracker
+            .begin_window(h.operation, h.stop, ATU, 101, Window::atu(), h.now));
+        h.written(101, true, true);
+        h.feed("S0|atu status=TUNE_SUCCESSFUL");
+        assert_eq!(h.tracker.failure(), Failure::State);
+        // A new cycle after the proof revokes it.
+        let mut h = Harness::new();
+        h.window_opened(ATU, Window::atu());
+        h.play(&cycle);
+        assert!(h.evidence().is_some());
+        h.feed("S0|atu status=TUNE_IN_PROGRESS");
+        assert_eq!(h.evidence(), None);
+    }
+
+    #[test]
+    fn each_kind_arms_only_through_its_own_door() {
+        let mut h = Harness::new();
+        assert!(!h.tracker.begin_as(h.operation, CWX, 101, h.now));
+        assert!(!h.tracker.begin_as(h.operation, ATU, 101, h.now));
+        assert!(!h
+            .tracker
+            .begin_window(h.operation, h.stop, KEY, 101, Window::atu(), h.now));
+        assert!(!h
+            .tracker
+            .begin_window(h.operation, h.stop, TUNE, 101, Window::atu(), h.now));
+        assert!(
+            !h.tracker
+                .begin_window(h.operation, stop_of(op(9)), CWX, 101, Window::atu(), h.now),
+            "the end request is the operation's"
+        );
+        assert_eq!(h.tracker.phase(), Phase::Idle, "nothing armed");
+        // The profiles' facts, as the simulator and the bench checklist name them.
+        assert_eq!(
+            (KEY.source, TUNE.source, CWX.source, ATU.source),
+            ("SW", "TUNE", "SW", "TUNE")
         );
     }
 

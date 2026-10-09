@@ -25,8 +25,9 @@
 //! ## Bring-up and teardown
 //! A first connect finds no slice of ours, so the daemon makes one the way GUI clients do: a
 //! panadapter, then a slice on it (the radio makes a new slice the transmit slice when it has
-//! none). At teardown it unkeys first, removes the slices and panadapters it owns, and closes the
-//! session, whose own teardown sends one more `xmit 0` if anything of ours may still be keyed.
+//! none). At teardown it first sends every stop of ours (what `T 0` sends), removes the slices and
+//! panadapters it owns, and closes the session, whose own teardown sends those stops once more if
+//! anything of ours may still be keyed and none has gone out.
 //!
 //! ## Audio (Beta, opt-in: `flex_native_audio` on a radio this client serves)
 //! The session registers a UDP port, so DAX rides the same session ([`audio`]): receive audio for
@@ -44,7 +45,12 @@
 //! ## Not yet
 //! No panadapter stream from this session (the older native pan still opens its own), no
 //! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
-//! CW keyer: the core's admission refuses those starts until its unkey readback covers them.
+//! CW keyer: the core has a readback profile for each, but its admission refuses those starts
+//! until a tester's bench confirms them. The stops for all of them are in place: `T 0`, teardown
+//! and the radio loop's belief ([`FlexDaemon::keyed`]) cover a transmission of any kind. The CW
+//! path is built up to that refusal: the WPM control sets the radio's keyer speed (`cw wpm`, which
+//! keys nothing), each word goes to the radio's keyer timed at its speed, and a word the client
+//! does not send, the refusal included, says why on the CW line.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
@@ -65,7 +71,7 @@ use tempo_app::dto::FlexAudioRefusal;
 use tempo_app::engine::receivers::RxOwner;
 use tempo_app::engine::slices::{SliceIntent, SliceReport};
 use tempo_net::flex::admission::another_dax_feeder;
-use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxAudio, TxStop};
+use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxAudio};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
 use tempo_net::flex::reconnect::End;
 use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot};
@@ -110,9 +116,13 @@ pub(crate) struct ClientState {
     pub(crate) native_audio: AtomicBool,
     /// The mode the shim last commanded for a slice, and when, until the radio reports it.
     pub(crate) commanded: Mutex<Option<(u8, String, Instant)>>,
-    /// The last key the shim kept off the air for the audio route: when, its words and its cause,
-    /// for the radio loop to put on screen ([`FlexDaemon::key_refused_since`]).
-    pub(crate) refused: Mutex<Option<(Instant, String, FlexAudioRefusal)>>,
+    /// The last key the shim kept off the air: when, its words, and for the audio route its cause,
+    /// for the radio loop to put on screen ([`FlexDaemon::key_refused_since`]). A CW word the
+    /// client did not send has words and no audio cause.
+    pub(crate) refused: Mutex<Option<(Instant, String, Option<FlexAudioRefusal>)>>,
+    /// The CW speed the shim last set (`cw wpm`), and when, until the radio reports it: a CW word
+    /// is timed at the slower of it and the radio's.
+    pub(crate) cw_wpm: Mutex<Option<(u32, Instant)>>,
     /// The transmit audio routing ([`routing`]): carried out at the radio loop's quiet points
     /// ([`FlexDaemon::sync_tx_routing`]), and asked by the shim at `T 1` whether Nexus's own write
     /// leaves the radio on DAX ([`Routing::leaves_dax`]).
@@ -216,7 +226,9 @@ fn previous_handles(radio: SocketAddr) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-fn remember_handle(radio: SocketAddr, handle: u32) {
+/// Remember `handle` as a recent session of ours on `radio`. The radio loop's tests seed it as an
+/// earlier session would have.
+pub(crate) fn remember_handle(radio: SocketAddr, handle: u32) {
     let mut all = RECENT_HANDLES
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -442,6 +454,15 @@ impl FlexDaemon {
         self.local_addr
     }
 
+    /// Whether a transmission of ours may be on the air through this client: a start of ours whose
+    /// end its readback has not proven (still so once the session has ended keyed), or the radio
+    /// naming this session or an earlier one of ours as the transmitter while it keys or tunes.
+    /// The radio loop counts it with its own keyed state, which cannot see a transmission the loop
+    /// did not key itself. Cheap: no copy of the session's state.
+    pub fn keyed(&self) -> bool {
+        self.conn().ours_on_air()
+    }
+
     /// Tell the shim whether Nexus itself is transmitting, so the broker's disconnect fail-safe
     /// stands down while we are on the air. The same call as the CI-V and OmniRig daemons'.
     pub fn set_tx_intent(&self, on: bool) {
@@ -517,10 +538,11 @@ impl FlexDaemon {
         self.audio.as_ref().and_then(audio::Audio::radio_dax)
     }
 
-    /// Why the shim kept a key asked for at or after `asked` off the air for the audio route, if
-    /// it did: its words and its cause, once. The rigctld answer the radio loop reads for that key,
+    /// Why the shim kept a key asked for at or after `asked` off the air, if it did: its words,
+    /// once, and for the audio route its cause. A CW word the client did not send (`b`) carries
+    /// words only, for the CW line. The rigctld answer the radio loop reads for that key or word,
     /// `RPRT -1`, carries no reason.
-    pub fn key_refused_since(&self, asked: Instant) -> Option<(String, FlexAudioRefusal)> {
+    pub fn key_refused_since(&self, asked: Instant) -> Option<(String, Option<FlexAudioRefusal>)> {
         let refused = lock(&self.state.refused).take();
         match refused {
             Some((at, why, cause)) if at >= asked => Some((why, cause)),
@@ -738,11 +760,12 @@ impl FlexDaemon {
 
 impl Drop for FlexDaemon {
     fn drop(&mut self) {
-        // TX SAFETY: unkey FIRST, while the session is up. A stop asks only "are we keyed?", so
-        // this costs nothing when nothing of ours is on the air. The session's own teardown sends
-        // one more `xmit 0` if anything of ours may still be keyed.
+        // TX SAFETY: every stop of ours FIRST, while the session is up: the open operation's own,
+        // or what the radio shows an earlier session of ours may hold (a tune carrier, a CWX word,
+        // an over). A stop asks only "is it ours?", so this costs nothing when nothing of ours is
+        // on the air.
         if let Some(conn) = &self.conn {
-            let _ = conn.stop(TxStop::Unkey);
+            let _ = conn.end_ours();
             self.restore_routing(conn);
             remove_ours(conn);
         }

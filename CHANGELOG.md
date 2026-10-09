@@ -181,6 +181,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one it was while the others are logged. A part that is not a county on the sponsor's list stops
   the whole line. Each county is an ordinary contact in the log, and a single county logs as
   before.
+- **FlexRadio: CW through the Flex native client, built and off until a tester has checked it on
+  a radio.** Once it is switched on, the CW screen's CAT keyer sends each word of a message to the
+  radio's own CW keyer, which keys and unkeys the radio with its break-in, as it does through
+  SmartSDR CAT, and the WPM control sets the radio's CW speed and no other CW setting. Nexus sends
+  nothing, and says why on the CW line, while the transmit slice is not in CW (so the CW ID after
+  an FT 73, sent in DIGU, stays unsent as it is today), while break-in is off, while Sync CWX is
+  on, or while XIT is on. Stop TX clears the radio's CW buffer at once, so only the word already
+  going out can still finish; if the radio still shows transmitting just after that, Nexus sends
+  the unkey, and if the radio does not confirm it, Nexus says so in red and drops the connection.
+  NEEDS-BENCH on a FLEX radio.
 
 ### Changed
 
@@ -422,6 +432,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PTT pressed as Flex native DAX audio went off. Nexus now holds that key back and says why in the
   status lane; let go of PTT, and the radio has its mic back within a moment. NEEDS-BENCH on a
   FLEX radio.
+- **FlexRadio: an amplifier in line no longer turns an over's end into an alarm.** With the Flex
+  native client (Beta), the radio can name the amplifier it is waiting on while an over keys (a
+  PowerGenius XL shows as `AMP:PG-XL`). Nexus took any such name as a sign the transmitter might
+  not be its own, so on a station with that amplifier an over could end in "the radio did not
+  confirm the unkey" and a dropped connection. An amplifier's name alone now counts as the radio's
+  ordinary report; anything else the radio names there still stops the over and warns you.
+  NEEDS-BENCH on a FLEX radio with an amplifier in line.
+- **FlexRadio: the CW screen says why the Flex native client sent no CW.** With the Flex native
+  client (Beta), the client does not send CW yet, and the CW screen's warning line said instead
+  that the rig did not accept Hamlib's CW keying and to try another keyer. It now says that the
+  client does not send CW yet, and that SmartSDR CAT does: turn the client off for CW, or use the
+  WinKeyer or Soundcard keyer.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of

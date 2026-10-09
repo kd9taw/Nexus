@@ -5208,7 +5208,7 @@ impl RadioLoop {
     /// the rigctld answer, `RPRT -1`, which carries no reason. Anything else: nothing.
     fn explain_flex_refusal(&self, eng: &mut Engine, asked: Instant) {
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
-        if let Some((why, cause)) = flex.and_then(|d| d.key_refused_since(asked)) {
+        if let Some((why, Some(cause))) = flex.and_then(|d| d.key_refused_since(asked)) {
             eng.explain_refused_key(&why, cause);
         }
     }
@@ -5218,6 +5218,17 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// Whether Nexus's own Flex client believes a transmission of ours may be on the air
+    /// ([`crate::flex::FlexDaemon::keyed`]): part of this loop's true keyed set for the teardown
+    /// and the hard stop. The client sees what this loop cannot: a stop the radio has not yet
+    /// proven, a transmission the radio keys for Nexus by itself, an earlier session's carrier.
+    fn flex_keyed(&self) -> bool {
+        self.rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_some_and(crate::flex::FlexDaemon::keyed)
     }
 
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
@@ -6370,8 +6381,10 @@ impl RadioLoop {
                 // must NEVER make the loop forget a physically-keyed transmitter: the fresh rig
                 // starts keyed=false, which would disarm the idle self-heal that is the only thing
                 // that unkeys a wedged rig on the external-Hamlib path (it has no daemon fail-safe,
-                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX.
-                let was_keyed = rig.keyed;
+                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX. Nexus's
+                // own Flex client counts too: it knows what the radio keyed for Nexus that `rig`
+                // never did.
+                let was_keyed = rig.keyed || self.flex_keyed();
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down — flush, unkey, clear TX state, THEN drop the daemon.
                 self.unkey_before_letting_go(
@@ -9210,16 +9223,35 @@ impl RadioLoop {
                                                     // that timed out — two different faults with two different answers.
                                                     // The serial keyline's sibling ten lines above has said the system's
                                                     // own error verbatim since the FTX-1 report, for exactly this reason.
+                        let asked = Instant::now();
                         let cw_err = rig.send_morse(&text).err();
+                        // Nexus's own Flex client says why it sent nothing (the slice not in CW,
+                        // break-in off, ...), in place of the Hamlib advice, which would be wrong
+                        // there. Its refusal drops the rest of the message, as a refused key does,
+                        // so the message cannot resume part way on a later word the radio takes.
+                        let flex_why = cw_err
+                            .as_ref()
+                            .and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                            .and_then(|d| d.key_refused_since(asked))
+                            .map(|(why, _)| why);
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_cw_keyer_error(cw_err.map(|e| {
-                                format!(
-                                    "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
-                                     — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
-                                     (which needs Nexus's audio routed to the rig)."
-                                )
-                            }));
+                            if let Some(why) = flex_why {
+                                tempo_core::applog::info(
+                                    "tx",
+                                    &format!("CW not keyed: {why} (dropped)"),
+                                );
+                                eng.cw_key_refused();
+                                eng.set_cw_keyer_error(Some(why));
+                            } else {
+                                eng.set_cw_keyer_error(cw_err.map(|e| {
+                                    format!(
+                                        "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
+                                         — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
+                                         (which needs Nexus's audio routed to the rig)."
+                                    )
+                                }));
+                            }
                         }
                     }
                 }
@@ -10499,8 +10531,9 @@ impl RadioLoop {
                         .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
                         .flatten()
                         .and_then(|d| d.key_refused_since(asked))
-                        .filter(|(_, r)| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
-                        .map(|(_, r)| r.mode);
+                        .and_then(|(_, r)| r)
+                        .filter(|r| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
+                        .map(|r| r.mode);
                     engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
                     self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
                 } else {
@@ -11473,9 +11506,11 @@ impl RadioLoop {
         // which `contended_switch_never_commands_the_old_rig_with_the_new_radios_settings`
         // pins at exactly one. `manual_ptt_applied` is excluded for the same reason the
         // self-heal excludes it: a physically held mic owns its own unkey path. A tune
-        // can never reach here — the tune branch above returns first.
-        let abort_has_something_to_cut =
-            self.tx_until_ms.is_some() || (rig.keyed && !self.manual_ptt_applied);
+        // can never reach here — the tune branch above returns first. Nexus's own Flex client's
+        // belief counts as `rig.keyed` does (`flex_keyed`): its `T 0` then ends everything of
+        // ours, whatever kind it is.
+        let abort_has_something_to_cut = self.tx_until_ms.is_some()
+            || ((rig.keyed || self.flex_keyed()) && !self.manual_ptt_applied);
         if (slot_tx_abort && abort_has_something_to_cut)
             || (self.tx_until_ms.is_some() && tx_off_cut)
         {

@@ -20,11 +20,23 @@
 //! | [`Fault::ReorderReply`] | one reply arrives after the next one | Replies matched by sequence number |
 //! | [`Fault::DropPings`] | ping replies missing; the radio's keepalive closes a silent session | Keepalive: one missed reply survives, five end the session; a missed ping during an over unkeys |
 //! | [`Fault::StuckTransmit`] | `xmit 0` answered with success, but the interlock stays TRANSMITTING, also after a reconnect | The unkey readback: keyed clears only on the interlock sequence; past the deadline, unkey again, drop the session, tell the operator |
+//! | [`Fault::StuckTune`] | `transmit tune 0` answered with success, but the carrier stays up, also after a reconnect | The tune's readback: it ends only when the transmit status and the interlock agree; past the deadline, `transmit tune 0` again and `xmit 0`, drop the session, tell the operator |
+//! | [`Fault::HoldsCwx`] | a `cwx send` keys the radio and it stays keyed through `cwx clear`, until `xmit 0` | Stop TX mid-message: still transmitting just after the clear, the client sends `xmit 0`; unproven, it escalates and tells the operator |
+//! | [`Fault::KeyingReason`] | every PTT_REQUESTED carries a reason (`AMP:PG-XL`: an amplifier in line), every TRANSMITTING the amplifiers | The readback takes an amplifier's reason on a keying report as ours when the rest matches, and fails on any other reason |
 //! | [`Fault::ForeignClient`] | another client's slice (the TX slice), pan and waterfall, optionally its transmission | Ownership by client handle: never retune, adopt or remove another client's objects; never key a transmitter that is not ours |
 //! | [`Fault::DisconnectMidOver`] | the TCP session closes while the interlock reports TRANSMITTING | A lost session while keyed unkeys locally first, stops DAX TX and reconnects without swapping under a keyed transmitter |
 //! | [`Fault::ForeignDaxTx`] | another program's `dax_tx` stream (SmartSDR's DAX) | Coexistence: Nexus never writes `transmit set dax`, never creates its own DAX transmit stream and never sends DAX TX beside it |
 //! | [`Fault::DaxTxRefused`] | `stream create type=dax_tx` refused | No route without a stream: no `transmit set dax=1`, no DAX TX packet, and a digital key refused rather than sent on the radio's mic |
 //! | [`Fault::DropDaxRx`] | the radio removes a DAX receive stream | The DAX broker creates a stream still held again after its recreate delay |
+//!
+//! # What the radio reports for each kind of transmission
+//!
+//! The bundled session answers the four commands that can key a Flex: `xmit 1`, `transmit tune
+//! 1`, `atu start` and `cwx send`, with what the radio reports while each one keys it and as it
+//! ends. The `xmit` profile is the FLEX-6700 capture the port plan cites. The other three are
+//! built from AetherSDR's notes and comments, read for facts, and the session file names the
+//! source of each line and says where the notes are silent. All three are unconfirmed until a
+//! tester's bench, and Nexus's admission refuses their starts until then.
 //!
 //! # The recorder
 //!

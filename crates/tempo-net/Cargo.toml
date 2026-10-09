@@ -27,6 +27,11 @@ serde_json = "1"
 # The simulated network Icom (`icom::sim`), for another crate's tests: tempo-audio's Icom network
 # daemon runs its suite against it. Test support only; nothing that ships turns it on.
 icom-sim = []
+# The door past `flex::admission::BENCHED` (`flex::session::Config::unbenched`), for another crate's
+# tests: tempo-audio runs the Flex client's CW path with it. It admits the Flex starts no tester's
+# bench has confirmed, so it is test support only: nothing that ships turns it on, and a release
+# build refuses to compile with it.
+flex-unbenched = []
 
 [dev-dependencies]
 # The SmartSDR simulator, for the Flex session's fault suites (`flex::sim_tests`). Test support from

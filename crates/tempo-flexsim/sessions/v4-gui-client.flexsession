@@ -74,10 +74,13 @@ reply 0
 
 # A (decodeTransmitStatus) key names; the radio never sends mox=, the keyed state is the
 # interlock's. D (SmartSDR-Status-Responses): RECEIVE while no slice is the transmitter. Interlock
-# updates are deltas: the timing line below is configuration, not a state sample.
+# updates are deltas: the timing line below is configuration, not a state sample. The CW keys
+# (speed, break_in, break_in_delay) are what the CWX profile below keys with; synccwx=0 because
+# that profile is break-in's: with synccwx=1 the radio holds transmit after a CWX send until it
+# is told to stop (A, RadioModel.cpp), which is not modelled here.
 on sub tx all
 reply 0
-send S0|transmit rfpower=50 tunepower=10 tune=0 mic_selection=MIC mic_level=50 dax=0 vox_enable=0 lo=100 hi=2900 max_power_level=100 synccwx=1
+send S0|transmit rfpower=50 tunepower=10 tune=0 mic_selection=MIC mic_level=50 dax=0 vox_enable=0 lo=100 hi=2900 max_power_level=100 synccwx=0 speed=20 break_in=1 break_in_delay=300
 send S0|interlock timeout=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0
 send S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason= source= tx_allowed=0 amplifier=
 
@@ -193,6 +196,13 @@ on transmit set dax=0
 reply 0
 send S0|transmit dax=0
 
+# D (TCPIP-cw): `cw wpm <5-100>`, the keyer's speed, which CWX keys at too (TCPIP-cwx repeats it).
+# A (the transmit decoder): the radio reports it as the transmit status's `speed`. A rule cannot
+# echo the command's own value, so this one only answers; a test that reads the speed back adds
+# a rule of its own for the value it sets.
+on cw wpm *
+reply 0
+
 # D (TCPIP-xmit, SmartSDR-Status-Responses): each interlock transition is reported, with the
 # client assigned the transmitter. A (the FLEX-6700 captures the plan cites, §3.4): PTT_REQUESTED
 # then TRANSMITTING with our handle; after xmit 0, UNKEY_REQUESTED then READY still naming us, and
@@ -211,14 +221,27 @@ send S0|interlock tx_client_handle=0x{h} state=READY reason= source= tx_allowed=
 wait 430
 send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
 
-# A: the transmit status carries tune. The interlock transitions mirror xmit's; that a tune
-# carrier reports source=SW is not established on hardware.
+# --- The other kinds: the tune carrier, an ATU cycle, a CWX word ------------------------------
+#
+# What the radio reports while each one keys it, and as it ends. D documents the commands but
+# none of these statuses, so each profile is built from AetherSDR's own notes and code comments at
+# 32fa50e4, read directly for facts (A below names the file each one comes from). No code or
+# fixture is taken. Where the notes say nothing, the comment says so and what is used instead.
+# EVERY PROFILE HERE IS UNCONFIRMED UNTIL A TESTER'S BENCH: Nexus's admission refuses all three
+# starts until then.
+
+# The tune carrier. A (docs/pgxl-telemetry-source-evidence.md, a FLEX-8600 on SmartSDR
+# 4.2.20.41343): during a TUNE the interlock reports source=TUNE. A
+# (docs/architecture/digital-voice-thumbdv-waveform.md): the UNKEY_REQUESTED that follows carries
+# no source. A (FlexBackend.cpp, the transmit decoder): the transmit status carries tune=. Not
+# in the notes: the READY steps after the unkey and the timings, which are the xmit capture's
+# above.
 on transmit tune 1
 reply 0
 send S0|transmit tune=1
-send S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=
+send S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=TUNE tx_allowed=1 amplifier=
 wait 30
-send S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=
+send S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=TUNE tx_allowed=1 amplifier=
 
 on transmit tune 0
 reply 0
@@ -228,20 +251,51 @@ send S0|interlock tx_client_handle=0x{h} state=READY reason= source= tx_allowed=
 wait 430
 send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
 
-# D (TCPIP-atu): start needs a TX slice and READY. A: the status names.
+# An ATU cycle. D (TCPIP-atu): start needs a TX slice and READY, and the reply 0 means "ATU
+# starting tune cycle". A (TransmitModel.cpp, after FlexLib's ParseATUTuneStatus): the statuses
+# are NONE, TUNE_NOT_STARTED, TUNE_IN_PROGRESS, TUNE_BYPASS, TUNE_SUCCESSFUL, TUNE_OK,
+# TUNE_FAIL_BYPASS, TUNE_FAIL, TUNE_ABORTED and TUNE_MANUAL_BYPASS. A
+# (docs/agents/flex-protocol.md): `atu start` keys the transmitter, as `transmit tune 1` does. Not
+# in the notes: the source an ATU cycle keys under (TUNE here, as the tune carrier's), and where
+# the result falls against the unkey (before it here).
 on atu start
 reply 0
 send S0|atu status=TUNE_IN_PROGRESS
+send S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=TUNE tx_allowed=1 amplifier=
+wait 30
+send S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=TUNE tx_allowed=1 amplifier=
 wait 500
 send S0|atu status=TUNE_SUCCESSFUL
+send S0|interlock tx_client_handle=0x{h} state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=
+send S0|interlock tx_client_handle=0x{h} state=READY reason= source= tx_allowed=1 amplifier=
+wait 430
+send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
 
 on atu bypass
 reply 0
 send S0|atu status=TUNE_BYPASS
 
-# D (TCPIP-cwx).
+# A CWX word, keyed by the radio's own break-in. D (TCPIP-cwx): `cwx send "<text>" <block>`, the
+# spaces as 0x7f. A (docs/automation-bridge.md, a FLEX-6500 on 4.2.20.41343): the radio reports
+# its progress as `cwx sent=<index>`; D (SmartSDR-TCPIP-API) sends status to subscribers, and Nexus
+# does not subscribe to cwx, so none is sent here. A (RadioModel.cpp): with synccwx=1 the radio
+# holds transmit after the text until it is told, so this profile is the synccwx=0 one. Not in
+# the notes: the source a CWX send keys under (SW here, the one the radio reports for software
+# keying, A: RadioModel.cpp after FlexLib's ParsePTTSource) and the state order (the xmit
+# capture's here). The timing is one short word, keyed 600 ms with break_in_delay=300 included,
+# then the release.
 on cwx send *
 reply 0
+send S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=
+wait 10
+send S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=
+wait 600
+send S0|interlock tx_client_handle=0x{h} state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=
+send S0|interlock tx_client_handle=0x{h} state=READY reason= source= tx_allowed=1 amplifier=
+wait 100
+send S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=
 
+# D (TCPIP-cwx): "Clear the current CWX buffer". What the radio reports after it is not in the
+# notes: nothing here.
 on cwx clear
 reply 0

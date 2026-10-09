@@ -13,16 +13,17 @@
 //! | rigctld | Typed command or intent | Gate |
 //! |---|---|---|
 //! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it |
-//! | `T 0` | `TxStop::Unkey` → `xmit 0` | never gated; sent only while something of ours may be keyed |
+//! | `T 0` | everything of ours (`Connection::end_ours`): the open operation's own stop (`xmit 0`, `transmit tune 0`, `cwx clear`, or the ATU's `xmit 0` and `transmit tune 0`); with none open, every stop the radio's status shows an earlier session of ours may need | never gated; sent only for what is ours |
 //! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback) |
-//! | `b <text>` | `TxStart::CwxSend` → `cwx send` | admission (refuses today: no readback) |
+//! | `b <text>` | `TxStart::CwxSend` → `cwx send`, one word, with its keying time at the radio's speed | admission (refuses today: no readback); then the slice in CW, the radio's break-in on, Sync CWX off, XIT off; a refusal says why ([`super::FlexDaemon::key_refused_since`]) |
 //! | `\stop_morse` | `TxStop::CwxClear` → `cwx clear` | never gated |
+//! | `L KEYSPD <wpm>` | `Command::CwSpeed` → `cw wpm <5–100>` | keys nothing; the engine's WPM control decides the value |
 //! | `F <hz>` | `slice tune <n> <MHz>` | the slice must be ours |
 //! | `M <mode> <width>` | `slice set <n> mode=`, then `filt <n> <lo> <hi>` for a width | a mode the radio offers; a width placed on the mode's side |
 //! | `L RFPOWER <0..1>` | `transmit set rfpower=<0–100>` | the engine's per-mode ceiling decides the value |
 //! | `L AF <0..1>` | `slice set <n> audio_level=` | the slice must be ours |
 //! | `U NB/NR/ANF <0/1>` | `slice set <n> nb=/nr=/anf=` | the slice must be ours |
-//! | `f`, `m`, `t`, `v`, `s`, `l RFPOWER`, `l AF`, `u NB/NR/ANF` | read from the status model | — |
+//! | `f`, `m`, `t`, `v`, `s`, `l RFPOWER`, `l AF`, `l KEYSPD`, `u NB/NR/ANF` | read from the status model | — |
 //! | `\dump_caps` | the authored capabilities ([`authored_caps`]) | — |
 //!
 //! Everything else answers as the shared encoder answers a backend that lacks it (`RPRT -11`),
@@ -60,6 +61,15 @@
 //! ([`super::routing::Routing::leaves_voice_on_dax`]), with its own reason; not while the stream's
 //! browser voice is live with native audio on, which rides DAX.
 //!
+//! ## A CW word is timed at the radio's speed
+//! The radio's own keyer sends each word (`cwx send`) and keys and unkeys itself with its
+//! break-in; the readback proves the word ended once the radio holds idle past the word's
+//! expected end, so the shim hands the session the word's keying time
+//! ([`tempo_core::cw::morse_duration_ms`]) at the speed the radio reports, or at the speed the shim
+//! has just set when that is slower and the radio has not reported it yet ([`word_wpm`]): a word
+//! is never timed shorter than the radio keys it. A word the client does not send says why on the
+//! CW line, in place of the rigctld answer, `RPRT -1`.
+//!
 //! Nexus's own design, not a port.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,17 +77,17 @@ use std::sync::{Arc, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use tempo_app::dto::{FlexAudioCause, FlexAudioRefusal};
-use tempo_net::flex::admission::another_dax_feeder;
+use tempo_net::flex::admission::{another_dax_feeder, Refusal};
 use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, TxStart, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
-use tempo_net::flex::session::{Connection, Snapshot, StopOutcome};
+use tempo_net::flex::session::{Connection, EndOutcome, Snapshot, StopOutcome};
 use tempo_net::flex::status::SliceDelta;
 
 use crate::baud_ladder::{RigCaps, SplitDetect};
 use crate::rigctld_server::RigBackend;
 
 use super::routing::{mode_class, ModeClass};
-use super::{effective_mode, routing_view, ClientState};
+use super::{effective_mode, routing_view, ClientState, COMMANDED_FOR};
 
 /// How long a write waits for the radio's reply: well inside the radio loop's own CAT deadline,
 /// so a radio that does not answer is a refused write, not a dropped CAT connection.
@@ -343,6 +353,38 @@ impl FlexShim {
         matches!(conn.request(command, REQUEST_TIMEOUT), Ok(r) if r.code == 0)
     }
 
+    /// Keep why a key was kept off the air, for the radio loop to put on screen
+    /// ([`super::FlexDaemon::key_refused_since`]): the rigctld answer it reads is only `RPRT -1`.
+    fn refuse(&self, why: String, cause: Option<FlexAudioRefusal>) {
+        *self
+            .state
+            .refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), why, cause));
+    }
+
+    /// Send one CW word to the radio's keyer, timed at the radio's speed, or say why not.
+    fn send_word(&self, text: &str) -> Result<(), String> {
+        let Some(text) = CwxText::new(text) else {
+            return Err(
+                "CW not sent: the text has a character the radio's CW keyer cannot \
+                        take."
+                    .to_string(),
+            );
+        };
+        let conn = self
+            .conn
+            .upgrade()
+            .ok_or("CW not sent: the connection to the radio is closed.")?;
+        let wpm = word_wpm(&conn.snapshot().model, &self.state);
+        let word_ms = tempo_core::cw::morse_duration_ms(text.as_str(), wpm).ceil() as u64;
+        match conn.start_lasting(TxStart::CwxSend(text), Some(word_ms)) {
+            Ok(_) => Ok(()),
+            Err(Some(refusal)) => Err(cw_refusal_words(&refusal)),
+            Err(None) => Err("CW not sent: the connection to the radio is closed.".to_string()),
+        }
+    }
+
     /// Run a start through the core's admission; `false` for any refusal.
     fn start(&self, start: TxStart) -> bool {
         self.conn
@@ -360,12 +402,64 @@ impl FlexShim {
             )
         })
     }
+
+    /// End everything of ours, never gated: what `T 0` means here. Success as for [`Self::stop`].
+    fn end_ours(&self) -> bool {
+        self.conn
+            .upgrade()
+            .is_some_and(|conn| matches!(conn.end_ours(), EndOutcome::Sent(_)))
+    }
 }
 
 /// A 0..1 level as the radio's 0–100.
 fn percent(value: &str) -> Option<i32> {
     let v: f64 = value.trim().parse().ok()?;
     (v.is_finite() && (0.0..=1.0).contains(&v)).then(|| (v * 100.0).round() as i32)
+}
+
+/// The radio keyer's slowest speed (`cw wpm` takes 5–100).
+const SLOWEST_WPM: u32 = 5;
+
+/// The speed a CW word is timed at: the radio's reported speed, or the speed the shim set within
+/// [`COMMANDED_FOR`] when that is slower (the radio may not have reported it yet); the one the shim
+/// set when the radio reports none; with neither, the keyer's slowest. Never faster than the radio
+/// keys it.
+fn word_wpm(model: &StatusModel, state: &ClientState) -> u32 {
+    let reported = model.transmit.cw_speed.and_then(|w| u32::try_from(w).ok());
+    let commanded = *state.cw_wpm.lock().unwrap_or_else(PoisonError::into_inner);
+    match (reported, commanded) {
+        (Some(r), Some((c, at))) if at.elapsed() < COMMANDED_FOR => r.min(c),
+        (Some(r), _) => r,
+        (None, Some((c, _))) => c,
+        (None, None) => SLOWEST_WPM,
+    }
+}
+
+/// The CW line's words for a word the client did not send: what kept it back, and what to do.
+pub(crate) fn cw_refusal_words(refusal: &Refusal) -> String {
+    match refusal {
+        Refusal::NoReadback(_) => "CW not sent: the Flex native client does not send CW yet. For \
+                                   CW, turn the Flex native client off (SmartSDR CAT sends it), \
+                                   or use the WinKeyer or Soundcard keyer."
+            .to_string(),
+        Refusal::NotCw { mode } if mode.is_empty() => "CW not sent: the radio has not said which \
+                                                        mode its transmit slice is in."
+            .to_string(),
+        Refusal::NotCw { mode } => format!(
+            "CW not sent: the radio's transmit slice is in {mode}, not CW. Nexus sends CW to the \
+             radio's keyer only in CW."
+        ),
+        Refusal::BreakInOff => "CW not sent: break-in is off on the radio. Turn on break-in in \
+                                SmartSDR, or use another keyer."
+            .to_string(),
+        Refusal::SyncCwx => "CW not sent: Sync CWX is on in SmartSDR. Turn it off, or use another \
+                             keyer."
+            .to_string(),
+        Refusal::XitOn => "CW not sent: XIT is on for the radio's transmit slice, so the radio \
+                           would send off the frequency Nexus checked. Turn XIT off."
+            .to_string(),
+        other => format!("CW not sent: {other}."),
+    }
 }
 
 fn slice_function(token: &str) -> Option<SliceFunction> {
@@ -492,17 +586,12 @@ impl RigBackend for FlexShim {
         if on {
             if let Some((why, cause)) = self.audio_refuses_key() {
                 tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
-                // For the radio loop to put on screen: the refusal it reads is only `RPRT -1`.
-                *self
-                    .state
-                    .refused
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), why, cause));
+                self.refuse(why, Some(cause));
                 return false;
             }
             self.start(TxStart::Key)
         } else {
-            self.stop(TxStop::Unkey)
+            self.end_ours()
         }
     }
 
@@ -521,6 +610,12 @@ impl RigBackend for FlexShim {
             "AF" => self
                 .read(|s| s.audio_level)
                 .map(|level| format!("{:.6}", (level / 100.0).clamp(0.0, 1.0))),
+            // The keyer's speed as the radio reports it, whoever set it.
+            "KEYSPD" => {
+                let conn = self.conn.upgrade()?;
+                let wpm = conn.snapshot().model.transmit.cw_speed?;
+                Some(wpm.to_string())
+            }
             _ => None,
         }
     }
@@ -537,6 +632,23 @@ impl RigBackend for FlexShim {
             })),
             "AF" => Some(percent(value).is_some_and(|level| {
                 self.write(|slice| Some(Command::SliceAudioLevel { slice, level }))
+            })),
+            // The keyer's speed, which CWX keys at too: the one CW setting Nexus owns.
+            "KEYSPD" => Some(value.trim().parse::<u32>().is_ok_and(|wpm| {
+                let took = self.conn.upgrade().is_some_and(|conn| {
+                    matches!(
+                        conn.request(Command::CwSpeed { wpm }, REQUEST_TIMEOUT),
+                        Ok(r) if r.code == 0
+                    )
+                });
+                if took {
+                    *self
+                        .state
+                        .cw_wpm
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some((wpm, Instant::now()));
+                }
+                took
             })),
             _ => None,
         }
@@ -568,7 +680,14 @@ impl RigBackend for FlexShim {
     }
 
     fn send_morse(&self, text: &str) -> Option<bool> {
-        Some(CwxText::new(text).is_some_and(|text| self.start(TxStart::CwxSend(text))))
+        Some(match self.send_word(text) {
+            Ok(()) => true,
+            Err(why) => {
+                tempo_core::applog::info("cat", &format!("Flex client: {why}"));
+                self.refuse(why, None);
+                false
+            }
+        })
     }
 
     fn stop_morse(&self) -> Option<bool> {

@@ -188,5 +188,7 @@ propagation = { path = "../propagation" }
 tempo-flexsim = { path = "../tempo-flexsim" }
 # TEST-ONLY: the simulated network Icom the Icom network daemon's tests (`src/icomlan/tests.rs`,
 # `tests/icomlan_leak.rs`) run against: tempo-net's `icom-sim` feature, which only test builds turn
-# on. Not a new dependency: tempo-net is already one, behind `device`.
-tempo-net = { path = "../tempo-net", features = ["icom-sim"] }
+# on. Not a new dependency: tempo-net is already one, behind `device`. And `flex-unbenched`, the
+# door the Flex client's tests use to run its CW path, which admission refuses in every build that
+# ships (a release build will not compile with it).
+tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched"] }
