@@ -54,6 +54,16 @@ show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), a
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
+**Super Check Partial and call history**, in every contest. As you type a call in a log
+strip, a line under the boxes lists the calls active in recent contests that contain what
+you have typed; click one to use it. The list is `MASTER.SCP` from supercheckpartial.com
+(maintained by W9KKN): Nexus downloads it the first time a contest starts and checks for a
+newer one at most once a day, and it is never shipped with Nexus. If you imported a
+call-history file for this contest, the boxes it can check (a county, state, section or zone
+the contest accepts) fill from it as you type, marked **history**, and whatever you type
+wins. Unassisted mode turns both off. Both are set up in
+[Settings › Contesting](settings-reference.md#super-check-partial-and-call-history).
+
 The log strip in the [Satellites](satellites.md) section switches too, and it is
 the one strip that does **not** take the band off your dial. It files each
 contact on the band of the transponder you were holding, so you can work the

@@ -12687,6 +12687,58 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .le-fd-moved {
   white-space: nowrap;
 }
+/* SUPER CHECK PARTIAL — one line under the boxes. Its HEIGHT is fixed while SCP is on, so
+   the strip (a `fit="content"` pane, exactly its content) neither grows nor shrinks as
+   matches come and go under the fingers that are typing. It shows the calls that fit on
+   the line and clips the rest: nothing in it has a floor. Tokens only, both themes. */
+.le-scp {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: calc(18px * var(--text-scale));
+  margin-top: var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.le-scp-call {
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+.le-scp-call:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* Already in this log: the call is there, and quieter, because it is no news. */
+.le-scp-worked {
+  color: var(--text-faint);
+}
+/* One character away from what was typed: a different call, so it reads as one. */
+.le-scp-near {
+  font-weight: 400;
+  color: var(--text-dim);
+  text-decoration: underline dotted;
+}
+.le-scp-empty {
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-faint);
+}
+/* A box holding a call-history value, and the word in its caption that says so. Both go
+   the moment the operator types over it. */
+.le-fd-from-history {
+  margin-left: var(--space-1);
+  color: var(--accent);
+}
+.le-fd-input-history {
+  color: var(--accent);
+  font-style: italic;
+}
 
 /* ===========================================================================
    Log view (full-width screen)

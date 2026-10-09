@@ -1039,13 +1039,13 @@ export const EN = {
   // Four whole sentences rather than a stem plus a " since HH:MMZ" fragment: the stamp lands
   // in a different place in different languages. `{{since}}` is a UTC time stamp — invariant.
   'assist.sources.off':
-    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs.',
+    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.offSince':
-    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs.',
+    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.on':
-    'AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification.',
+    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
   'assist.sources.onSince':
-    'AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since {{since}}.',
+    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
   'assist.toggle.declare': 'Declare unassisted entry',
   'assist.toggle.end': 'End unassisted entry',
   'assist.why.summary': 'What this means for your contest category',
@@ -1865,6 +1865,15 @@ export const EN = {
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
+  'logEntry.scp.label': 'Super Check Partial',
+  'logEntry.scp.title':
+    'Calls active in recent contests that match what you have typed. Click one to put it in the Call box.',
+  'logEntry.scp.worked.title': 'Already in this log',
+  'logEntry.scp.near.title': 'One character different from what you typed',
+  'logEntry.scp.none': 'Super Check Partial has no list yet. Settings › Contesting says why.',
+  'logEntry.history.mark': 'history',
+  'logEntry.history.title':
+    'From call history ({{file}}). Type over it if they sent something else.',
   // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
   // joined by "/" (COOK/DUPG) and logged as one contact per county. The county codes are
   // invariant tokens; {{exchange}} is the exchange as logged.
@@ -4094,7 +4103,7 @@ export const EN = {
   'settings.contestCategory.unassisted.aria.declare': 'Declare an unassisted contest entry',
   'settings.contestCategory.unassisted.aria.end': 'End an unassisted contest entry',
   'settings.contestCategory.unassisted.hint':
-    'Turns off the AI CW decoder, DX cluster / RBN spots and the PSK Reporter needs feed together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
+    'Turns off the AI CW decoder, DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
   // The journal. Each entry's own note and the source names in it are the engine's words,
   // printed as they arrive; the UNASSISTED / assisted state and the empty stand-in are ours.
   'settings.contestCategory.journal.label': 'Assistance record',
@@ -4103,6 +4112,36 @@ export const EN = {
   'settings.contestCategory.journal.noSources': 'nothing active',
   'settings.contestCategory.journal.hint':
     'Kept in <code>assistance_journal.json</code> beside your settings, so it survives restarts. Newest first.',
+  'settings.contestAids.legend': 'Super Check Partial and call history',
+  'settings.contestAids.scp.label': 'Super Check Partial',
+  'settings.contestAids.scp.hint':
+    'Lists the calls active in recent contests that match what you type in the contest strip’s Call box. Nexus downloads the list (MASTER.SCP, about 360 KB of callsigns) from supercheckpartial.com, which W9KKN maintains, the first time a contest starts with this on. It is never shipped with Nexus.',
+  'settings.contestAids.auto.label': 'Check for a newer list once a day',
+  'settings.contestAids.auto.hint':
+    'While a contest runs, Nexus asks the site at most once a day whether the list has changed, and downloads it only if it has. Off keeps the list you have; Update now still checks.',
+  'settings.contestAids.update.action': 'Update now',
+  'settings.contestAids.update.busy': 'Checking…',
+  'settings.contestAids.status.none': 'No list yet. It downloads the first time a contest starts.',
+  'settings.contestAids.status.held': '{{count}} calls, downloaded {{date}}.',
+  'settings.contestAids.status.failed':
+    'The last check failed: {{error}}. The list you have is still used.',
+  'settings.contestAids.unassisted':
+    'Unassisted mode is on, so Super Check Partial and call history are off until it ends.',
+  'settings.contestAids.history.label': 'Call history',
+  'settings.contestAids.history.hint':
+    'A call-history file you choose, in N1MM’s format. As you type a call that is in it, Nexus fills the exchange boxes it can check (a county, state, section or zone the contest accepts) and marks them; what you type always wins. A file is used only for the contest it was imported for, and never leaves this computer.',
+  'settings.contestAids.history.fill.label': 'Fill the exchange from call history',
+  'settings.contestAids.history.import.action': 'Import a file…',
+  'settings.contestAids.history.import.busy': 'Importing…',
+  'settings.contestAids.history.import.title':
+    'The file will be used for the contest picked above: {{contest}}.',
+  'settings.contestAids.history.import.ok': 'Imported {{count}} calls for {{contest}}.',
+  'settings.contestAids.history.import.failed': 'That file could not be imported: {{error}}',
+  'settings.contestAids.history.clear.action': 'Clear',
+  'settings.contestAids.history.none': 'No file imported.',
+  'settings.contestAids.history.held': '{{file}}: {{count}} calls, for {{contest}}.',
+  'settings.contestAids.history.otherContest':
+    'This file is for {{contest}}, not the contest picked above, so it is not used now.',
 
   'settings.fieldDay.legend': 'Field Day Setup',
   'settings.fieldDay.mode.label': 'Field Day mode',
