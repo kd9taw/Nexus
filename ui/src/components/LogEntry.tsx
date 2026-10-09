@@ -606,6 +606,10 @@ export function LogEntry({
     values: [],
   })
   const closeFdHits = () => setFdHits((h) => (h.key === '' ? h : { key: '', values: [] }))
+  // A box's blur closes the list a moment later (below). That timer is the strip's: cleared on
+  // unmount, so it never fires on a strip that has gone.
+  const fdHitsCloseTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(fdHitsCloseTimer.current), [])
   /** ⭐ The county list a box takes a COUNTY LINE from (`COOK/DUPG`, one contact per county),
    *  or `undefined` for a box that takes one value per contact — which is every box but a
    *  county box whose sponsor counts a county-line contact once per county.
@@ -2219,7 +2223,8 @@ export function LogEntry({
                 onBlur={() => {
                   commitFdField(f)
                   // …after any click on the list itself has been taken (mouse-down picks).
-                  window.setTimeout(closeFdHits, 150)
+                  window.clearTimeout(fdHitsCloseTimer.current)
+                  fdHitsCloseTimer.current = window.setTimeout(closeFdHits, 150)
                 }}
                 placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
