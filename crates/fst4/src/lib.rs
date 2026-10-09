@@ -483,4 +483,44 @@ mod tests {
                 .join(", ")
         );
     }
+
+    #[test]
+    fn gen_wave_never_writes_past_the_callers_buffer() {
+        // gen_fst4wave's ramp-down ends at wave(nsym*nsps+1), one float past the
+        // samples it emits (gen_fst4wave.f90:82-84); every upstream caller hands it
+        // (nsym+2)*nsps (WSJT-X mainwindow.cpp:5370). Call the ABI exactly as
+        // gen_wave does, into exactly NN*nsps, and read what follows the buffer.
+        use std::os::raw::c_int;
+        const SENTINEL: f32 = 7.0;
+        let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
+        let mut hits = Vec::new();
+        for (&period_s, &nsps) in PERIODS.iter().zip(NSPS.iter()) {
+            let n = NN * nsps;
+            let mut buf = vec![SENTINEL; n + 4];
+            let got = {
+                let _guard = modem_lock();
+                unsafe {
+                    tempo_fast_sys::fst4_gen_wave(
+                        itone.as_ptr(),
+                        NN as c_int,
+                        c_int::from(period_s),
+                        1,
+                        SAMPLE_RATE,
+                        1500.0,
+                        buf.as_mut_ptr(),
+                        n as c_int,
+                    )
+                }
+            };
+            assert_eq!(got as usize, n, "FST4-{period_s} must emit {n} samples");
+            if buf[n..].iter().any(|s| s.to_bits() != SENTINEL.to_bits()) {
+                hits.push(format!("FST4-{period_s}: {:?}", &buf[n..]));
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "fst4_gen_wave wrote past the caller's buffer: {}",
+            hits.join("; ")
+        );
+    }
 }

@@ -358,9 +358,10 @@ contains
     integer(c_int), value, intent(in)    :: nwave_cap
     integer(c_int) :: nwave_out
 
-    integer :: nsps, nwave, ip, icmplx, itone_l(FST4_NN), hmod_l
+    integer :: nsps, nwave, nwork, ip, icmplx, itone_l(FST4_NN), hmod_l
     real    :: fs_l, f0_l, dfreq
     complex :: cwave(1)                      ! icmplx=0: never written
+    real, allocatable :: work(:)             ! not saved: freed on return
 
     nwave_out = -1
     if (nsym /= FST4_NN) return
@@ -380,10 +381,18 @@ contains
     f0_l   = f0 + 1.5 * dfreq
     icmplx = 0
 
-    ! gen_fst4wave writes (nsym+2)*nsps of dphi internally but emits exactly
-    ! nsym*nsps samples (its output loop runs j=nsps..(nsym+1)*nsps-1).
-    call gen_fst4wave(itone_l, nsym, nsps, nwave, fs_l, hmod_l, f0_l, &
-                      icmplx, cwave, wave_out(1:nwave))
+    ! ⭐ THE HEADROOM. gen_fst4wave emits nsym*nsps samples (its output loop runs
+    ! j=nsps..(nsym+1)*nsps-1), but its ramp-down writes one more: wave(k1:k1+nsps/4)
+    ! with k1=(nsym-1)*nsps+3*nsps/4+1 ends at wave(nsym*nsps+1). Every upstream
+    ! caller passes nwave >= (nsym+2)*nsps (mainwindow.cpp:5370, fst4sim.f90:68), so
+    ! the generator gets a work array of that size and only the samples are copied
+    ! out. Handed wave_out(1:nsym*nsps) itself, it wrote one float past the caller's
+    ! buffer on every transmission. The copy changes no sample.
+    nwork = (nsym + 2) * nsps
+    allocate(work(nwork))
+    call gen_fst4wave(itone_l, nsym, nsps, nwork, fs_l, hmod_l, f0_l, &
+                      icmplx, cwave, work)
+    wave_out(1:nwave) = work(1:nwave)
     nwave_out = nwave
   end function fst4_gen_wave
 

@@ -401,6 +401,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dial, the over on the air stops and TX turns off. The QSO stays where it was; turn TX on again to
   carry on in the new mode. A switch that leaves your Tx frequency on the waterfall, Tempo Fast to
   Tempo Deep (they share one channel), and a switch into WSPR leave TX as it was.
+- **FST4 and FST4W no longer write past the end of the audio they make for an over.** Making the
+  audio for every FST4 or FST4W transmission wrote one value just past the space Nexus had set
+  aside for it. On Linux, where it was measured, that did no harm. On Windows and macOS it could
+  damage the memory beside it and crash Nexus later, at some unrelated moment. The audio sent is
+  unchanged, sample for sample, at every period. NEEDS-BENCH: an FST4 and an FST4W transmit on
+  Windows into a dummy load.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
