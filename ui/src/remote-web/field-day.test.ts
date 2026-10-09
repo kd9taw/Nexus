@@ -223,3 +223,15 @@ it('accepts the objective lists a Winter Field Day station sends, and still boun
   Object.assign(settings,before)
  }
 })
+
+// Whether a satellite contact counts rides the status as `false` from a contest where it does
+// not (Winter Field Day 2027), and is absent everywhere else. Taught here for the same reason as
+// the objective multiplier.
+it('accepts the satellite-credit flag a Winter Field Day station sends, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.satelliteCredit=false
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ fd.satelliteCredit='false'
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})

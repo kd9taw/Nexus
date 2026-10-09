@@ -660,6 +660,16 @@ impl FieldDayLog {
     /// Both write paths — [`log_exchange_at`](Self::log_exchange_at) and the journal's
     /// `restore_row` — come through here, because two copies of this decision is how
     /// the live log and the restored one come to disagree about the same contact.
+    fn admit_row(&mut self, key: Vec<String>, satellite: bool) -> Option<bool> {
+        // ⭐ A satellite contact this ruleset gives no credit (Winter Field Day) is logged,
+        // worth nothing, and a dupe of nothing: kept out of the index, it can never refuse a
+        // later contact that does count.
+        if satellite && !self.ruleset().satellite_credit {
+            return Some(false);
+        }
+        self.admit(key)
+    }
+
     fn admit(&mut self, key: Vec<String>) -> Option<bool> {
         let dupe = self.worked.contains(&key);
         if dupe && !self.dupe_rule().log_dupes {
@@ -687,8 +697,15 @@ impl FieldDayLog {
     /// when a row is offered, and every row already in the log was already admitted.
     fn rebuild_dupe_index(&mut self) {
         let rule = self.dupe_rule();
+        let credit = self.ruleset().satellite_credit;
         let mut worked: HashSet<Vec<String>> = HashSet::new();
         for q in &mut self.qsos {
+            // A satellite contact the ruleset gives no credit stays out, as `admit_row`
+            // keeps it out.
+            if !credit && q.sat.is_some() {
+                q.dupe = false;
+                continue;
+            }
             // `insert` is false when the key was already present — an earlier row has
             // it, which is precisely what makes this row a duplicate.
             q.dupe = !worked.insert(rule.key(q));
@@ -897,7 +914,7 @@ impl FieldDayLog {
             .key_of(call, &band, &mode, &rx, &tx, sat_key);
         // The per-ruleset split lives in [`admit`](Self::admit) — one decision, shared
         // with the journal restore, so the live log and the restored one cannot disagree.
-        let Some(dupe) = self.admit(key) else {
+        let Some(dupe) = self.admit_row(key, sat.is_some()) else {
             return false;
         };
         // ⭐ FIRING SITE 1 of 3 (§6.3): the cheap one, at the moment the operator can
@@ -1061,7 +1078,22 @@ impl FieldDayLog {
     /// `+ Clone` because [`score_rows`](Self::score_rows) must stay clonable — the
     /// scorer walks its rows twice, once for points and once for multipliers.
     fn counting(&self) -> impl Iterator<Item = &LoggedQso> + Clone {
-        self.qsos.iter().filter(|q| !q.dupe)
+        // ⭐ …and except a satellite contact the ruleset gives no credit (Winter Field Day):
+        // a row in the log, and in the general log after the merge, worth nothing here.
+        let credit = self.ruleset().satellite_credit;
+        self.qsos
+            .iter()
+            .filter(move |q| !q.dupe && (credit || q.sat.is_none()))
+    }
+
+    /// ⭐ **The rows the entry SUBMITS** — every row except a satellite contact the ruleset
+    /// gives no credit, which the sponsor says not to log (Winter Field Day 2027 rules, p.5).
+    /// Duplicates stay: a contest that reports them wants them in the file. The journal and
+    /// the general-log merge read [`qsos`](Self::qsos), every row, so the contact is never
+    /// lost; only the submitted files leave it out.
+    fn submitted(&self) -> impl Iterator<Item = &LoggedQso> + Clone {
+        let credit = self.ruleset().satellite_credit;
+        self.qsos.iter().filter(move |q| credit || q.sat.is_none())
     }
 
     /// ⭐ **The RAW NON-DUPE contact count** — the number a summary sheet claims, not
@@ -1193,6 +1225,17 @@ impl FieldDayLog {
 
     /// Export the log as ADIF records (one `<EOR>` per QSO).
     pub fn adif(&self) -> String {
+        self.adif_of(self.qsos.iter())
+    }
+
+    /// ⭐ **The ADIF the entry submits**: [`adif`](Self::adif) without the satellite contacts
+    /// a ruleset gives no credit (Winter Field Day: *"Do not log any such contacts"*, 2027
+    /// rules p.5). `adif` itself is the journal and keeps every row.
+    pub fn submission_adif(&self) -> String {
+        self.adif_of(self.submitted())
+    }
+
+    fn adif_of<'a>(&'a self, rows: impl Iterator<Item = &'a LoggedQso>) -> String {
         let mut s = String::from("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n");
         // ⭐ Has the sent exchange moved at any point in this log? If not — and it has
         // not, for either Field Day event, which send one exchange all weekend — the
@@ -1201,7 +1244,7 @@ impl FieldDayLog {
         // just the ones that differ: a later move must not be able to re-label the rows
         // that happen to match the session today.
         let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
-        for q in &self.qsos {
+        for q in rows {
             s.push_str(&adif_field("CALL", &q.call));
             // ⚠️ A MODE OUTSIDE ADIF'S ENUMERATION IS A DROPPED RECORD, NOT A COSMETIC ONE.
             // This wrote `q.submode` raw, and the tiers stamp names ADIF has never heard of
@@ -1582,7 +1625,7 @@ impl FieldDayLog {
                 })
                 .unwrap_or_default(),
         );
-        let Some(dupe) = self.admit(key) else {
+        let Some(dupe) = self.admit_row(key, sat.is_some()) else {
             return RowFate::Passed;
         };
         // The journaled sync seq round-trips; a legacy row without the tag
@@ -1924,7 +1967,7 @@ impl FieldDayLog {
             ),
         };
         let mut s = headers.render();
-        for q in &self.qsos {
+        for q in self.submitted() {
             // QSO: freq mo date time mycall myexch call exch — ARRL requires a
             // REAL `yyyy-mm-dd hhmm`; the old `----------` placeholder failed
             // submission. Legacy rows without a stamp keep the placeholder so

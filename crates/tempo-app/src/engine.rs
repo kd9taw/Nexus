@@ -12152,6 +12152,7 @@ impl Engine {
                     submode: r.submode.clone(),
                     when_unix: r.when_unix,
                     operator: r.operator.clone(),
+                    sat: r.sat.clone(),
                 })
                 .collect(),
         })
@@ -25000,7 +25001,9 @@ contact yourself."
             Mode::FieldDay { station, .. } => {
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
-                    "adif" => Ok(station.log.adif()),
+                    // The file the entry submits: a satellite contact the contest gives
+                    // no credit is left out (the journal keeps it).
+                    "adif" => Ok(station.log.submission_adif()),
                     // NAME and EMAIL, CLUB, ENTRY-CLASS and the typed OPERATORS are the
                     // entrant's own settings, read at export so a corrected typo reaches the
                     // next file; the log writes each only where the contest's rules list that
@@ -43363,6 +43366,61 @@ mod tests {
                 want.iter().map(|l| l.to_string()).collect::<Vec<_>>()
             ),
             "(the position's file, the club's file)\n{own}\n{club_file}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A satellite contact counts for nothing in a Winter Field Day club** — not in the
+    /// club line, not on the spectator board, not in the club's file — and is no club dupe of
+    /// the same station worked without the bird (2027 rules p.5: *"Cross-band, repeated,
+    /// relayed, meshed, and/or internet-linked contacts do not count"*). The shared fixture
+    /// (5 points, OM 7) plus two passes and one terrestrial 70 cm phone contact with a station
+    /// also worked through the bird: 6 points × 8 = 48. The station's own snapshot says the
+    /// contest gives satellites no credit, which the while-typing verdict reads.
+    #[test]
+    fn wfd_club_gives_a_satellite_contact_no_credit() {
+        let (mut e, dir) = wfd_club_fixture("satellite");
+        let row = |seq: u64, call: &str, sect: &str, sat: &str| tempo_net::fdsync::WireQso {
+            pos: "aaaa0001".into(),
+            seq,
+            call: call.into(),
+            class: "1O".into(),
+            sect: sect.into(),
+            ex: vec![],
+            mex: vec![],
+            band: "70cm".into(),
+            mode: "PH".into(),
+            sub: "FM".into(),
+            when: 1_800_727_200 + seq * 60,
+            op: "AA9OP".into(),
+            sat: sat.into(),
+            sat_fm: !sat.is_empty(),
+        };
+        e.fd_club_merge(&row(4, "W5SAT", "STX", "SAUDISAT 1C (SO-50)"));
+        e.fd_club_merge(&row(5, "K5SAT", "NTX", "SAUDISAT 1C (SO-50)"));
+        e.fd_club_merge(&row(6, "W5SAT", "STX", ""));
+        let club = e.fd_club_state(0, 0, "aaaa0001").score;
+        let board: serde_json::Value =
+            serde_json::from_str(&crate::fd_scoreboard::build_data_core(
+                &e.fd_board_snapshot().expect("host role"),
+                1_800_727_200,
+            ))
+            .unwrap();
+        let file = e.fd_club_export(true).expect("one entry");
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            (
+                club,
+                board["score"]["total"].as_u64(),
+                file.matches(" W5SAT ").count() + file.matches(" K5SAT ").count(),
+                fd.satellite_credit,
+                e.fd_club_counts(),
+            ),
+            (48, Some(48), 1, Some(false), (4, 4)),
+            "(club line, board, the club file's lines for the two stations, the snapshot's \
+             satellite credit, the club's dupe keys and sections: the fixture's three and the \
+             terrestrial W5SAT, never a pass's NTX)\n{file}"
         );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);

@@ -83,6 +83,9 @@ pub struct FdBoardRow {
     pub submode: String,
     pub when_unix: u64,
     pub operator: String,
+    /// The bird a satellite contact was worked through, `""` for a terrestrial one — so an
+    /// event that gives satellites no credit (Winter Field Day) leaves the row out.
+    pub sat: String,
 }
 
 /// A known position (identity + label + current operator). Rows referencing a
@@ -501,6 +504,10 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
     let mut unique = vec![false; d.rows.len()];
     for &i in &order {
         let r = &d.rows[i];
+        // A satellite contact the event gives no credit counts for nothing here.
+        if !rs.satellite_credit && !r.sat.is_empty() {
+            continue;
+        }
         log.band = r.band.trim().to_string();
         unique[i] = log.log_submode_at(
             &r.call,
@@ -1004,6 +1011,7 @@ mod tests {
             submode: submode.into(),
             when_unix: when,
             operator: op.into(),
+            sat: String::new(),
         }
     }
 

@@ -58,7 +58,7 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
@@ -75,6 +75,8 @@ function status(v: unknown): void {
     (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
     // Winter Field Day's objective multiplier, beside the claimed total it multiplies.
     (f.objectiveMultiplier !== undefined && !integer(f.objectiveMultiplier)) ||
+    // Whether a satellite contact counts, sent (as false) only by a contest where it does not.
+    (f.satelliteCredit !== undefined && typeof f.satelliteCredit !== 'boolean') ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
     // exchange is its `mex`. Bounded here rather than re-modelled: the real Nexus app is what
     // consumes these, and this gate exists to cap size and shape, not to duplicate the DTO.

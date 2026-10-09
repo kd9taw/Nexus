@@ -300,3 +300,60 @@ fn wfd_cabrillo_header_has_the_exchange_and_a_power_the_sponsor_takes() {
          which its rules ask for neither of):\n{qrp}"
     );
 }
+
+/// The SO-50 contact the satellite tests log: phone on 70 cm through a single-channel FM bird.
+fn so50() -> tempo_core::fieldday::SatLeg {
+    tempo_core::fieldday::SatLeg {
+        band: "70cm".into(),
+        down_hz: 436_795_000,
+        bird: "SAUDISAT 1C (SO-50)".into(),
+        name: Some("SO-50".into()),
+        single_channel_fm: true,
+    }
+}
+
+/// ⭐ **A satellite contact counts for nothing at Winter Field Day, and stands in the way of
+/// nothing.** p.5: *"Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do
+/// not count. Do not log any such contacts."*; p.3: *"Satellite objectives are gone"*. The
+/// contact is still logged and kept (the journal holds it, and the general log and LoTW get it
+/// at the merge), but it scores nothing, is left out of the files the entry submits, and does
+/// not make the same station on 70 cm phone without the bird a duplicate.
+#[test]
+fn a_satellite_contact_counts_for_nothing_at_wfd() {
+    let run = |event: &str, class: &str| {
+        let mut log = fixture(event, "LOW");
+        let theirs = vec![
+            ("CLASS".to_string(), class.to_string()),
+            ("SECTION".to_string(), "STX".to_string()),
+        ];
+        assert!(log.log_satellite_at("W5SAT", &theirs, "PH", "FM", &so50(), DURING + 600));
+        let after_the_pass = log.qso_points();
+        log.band = "70cm".into();
+        let terrestrial = log.log_submode_at("W5SAT", class, "STX", "PH", "FM", 0, DURING + 1200);
+        let cab = log
+            .cabrillo_with(14_000, &CabrilloEntrant::default())
+            .expect("one entry");
+        (
+            after_the_pass,
+            terrestrial,
+            log.qso_points(),
+            log.qso_count(),
+            cab.matches(" W5SAT ").count(),
+            log.submission_adif().matches("<CALL:5>W5SAT").count(),
+            log.adif().matches("<CALL:5>W5SAT").count(),
+        )
+    };
+    assert_eq!(
+        run("wfd", "1O"),
+        (5, true, 6, 4, 1, 1, 2),
+        "Winter Field Day: (points after the pass, the terrestrial contact logged, points, \
+         contacts counted, W5SAT's Cabrillo lines, its submitted ADIF rows, its journal rows)"
+    );
+    // CONTROL: ARRL Field Day credits the pass (7.3.8) and lists the bird as its own band, so
+    // both contacts count and both are filed.
+    assert_eq!(
+        run("arrlfd", "1A"),
+        (6, true, 7, 5, 2, 2, 2),
+        "ARRL Field Day"
+    );
+}

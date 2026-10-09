@@ -3256,6 +3256,9 @@ export interface FieldDayStatus {
   /** The objective multiplier (OM) the ticked objectives earn — present only for a contest
    *  that scores by objectives (Winter Field Day). */
   objectiveMultiplier?: number
+  /** `false` when this contest gives a satellite contact no credit (Winter Field Day 2027): a
+   *  row with a `sat` then counts for nothing and is no dupe of anything. Absent otherwise. */
+  satelliteCredit?: boolean
   /** The active-or-next occurrence of this event's window (Unix UTC), computed in Rust
    *  from the ruleset data — the single source the banner/countdown reads (the old TS
    *  date math hardcoded 24 h and dropped WFD's final six hours). */

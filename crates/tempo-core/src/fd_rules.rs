@@ -240,6 +240,16 @@ pub struct FdRuleset {
     /// two club calls. Empty for every contest that names none, which is every contest
     /// written before this key existed.
     pub bonus_stations: &'static [BonusStation],
+    /// ⭐ **Does a contact made through a satellite count?** `true` for every ruleset but
+    /// Winter Field Day's 2027 one, whose sponsor says *"Cross-band, repeated, relayed,
+    /// meshed, and/or internet-linked contacts do not count. Do not log any such contacts."*
+    /// (2027 rules, p.5) and *"Satellite objectives are gone"* (p.3).
+    ///
+    /// A contact this gives no credit is still LOGGED and kept — it reaches the general log
+    /// and LoTW like any satellite contact — but it scores nothing, enters no dupe index (so
+    /// it never refuses a later contact that does count), and is left out of the files the
+    /// entry submits.
+    pub satellite_credit: bool,
     pub dupe_rule: DupeRule,
     /// Tempo (FT1 keyboard chat) is a first-class FD contact surface for this
     /// event: WFD `true` (the digital-friendly event), SFD `false`.
@@ -1455,6 +1465,21 @@ struct ScoringSpec {
     /// ⚠️ An ADDITION to schema 2 like `relation_points` before it, not a reshape: an
     /// already-shipped build ignores an unknown key and keeps receiving rules updates.
     band_points: Vec<BandPointsSpec>,
+    /// Whether a satellite contact counts — see [`FdRuleset::satellite_credit`].
+    ///
+    /// ⚠️ **The one defaulted key in this block, and the default is the rule every file
+    /// before it states.** This block refuses defaults so a file that forgot how an event
+    /// scores cannot load as though its author had decided something. Absent here is
+    /// `true`, credit, which is exactly what every ruleset written before the key scored
+    /// and what ARRL Field Day's rule 7.3.8 says; a file that forgot it scores as every
+    /// build before this one did. Only `false` changes anything, and only where it is
+    /// written.
+    #[serde(default = "satellite_credit_default")]
+    satellite_credit: bool,
+}
+
+fn satellite_credit_default() -> bool {
+    true
 }
 
 /// One row of [`ScoringSpec::band_points`].
@@ -2928,6 +2953,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     satellite_is_a_band: r.dupe.satellite_is_a_band,
                     fm_satellite_once: r.dupe.fm_satellite_once,
                 },
+                satellite_credit: r.scoring.satellite_credit,
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
                     r.banned_modes

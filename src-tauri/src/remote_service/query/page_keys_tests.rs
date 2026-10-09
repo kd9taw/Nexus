@@ -665,7 +665,7 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 }
 
 /// The Field Day view (`field-day.ts`): the capture's four keys, the operator settings' four, the
-/// ruleset's six and three it may carry, and the running status: seventeen keys and seventeen it
+/// ruleset's six and three it may carry, and the running status: seventeen keys and eighteen it
 /// may carry, with its contacts, club board, dupe rule and location warning. The ruleset the
 /// desktop's Settings previews also carries a location warning; the station's never does.
 #[test]
@@ -714,6 +714,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 "dupeModeGroups",
                 "dupeRule",
                 "objectiveMultiplier",
+                "satelliteCredit",
             ],
         );
         for contact in status["log"].as_array().unwrap() {
@@ -880,6 +881,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         bonus_points: 100,
         total_score: 104,
         objective_multiplier: Some(7),
+        satellite_credit: Some(false),
         event_start_unix: 1_782_500_400,
         event_end_unix: 1_782_597_600,
         mult_count: Some(1),

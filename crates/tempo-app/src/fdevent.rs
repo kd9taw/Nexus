@@ -638,14 +638,19 @@ impl ClubLog {
         // the wire decoder and the journal replay — reach the club log through
         // here, so a legacy row's exchange is reconstructed once or never.
         row.synthesize_legacy_ex(self.exchange());
+        // ⭐ A satellite contact the contest gives no credit (Winter Field Day) is kept in
+        // the club's rows and journal, and acked and counted on its position's board like
+        // any row, but it counts for nothing in the club: no dupe key and no section, so it
+        // never stands in the way of a contact that does count.
+        let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
-        if self.dkeys_set.insert(dkey.clone()) {
+        if counts && self.dkeys_set.insert(dkey.clone()) {
             self.dkeys_list.push(dkey);
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
         }
         let sect = row.section.trim().to_uppercase();
-        if !sect.is_empty() && self.sections_set.insert(sect.clone()) {
+        if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
         let pos = self.positions.entry(row.posid.clone()).or_default();
@@ -760,9 +765,14 @@ impl ClubLog {
         order.sort_by_key(|&i| (self.rows[i].when_unix, i));
         let rule = self.dupe_rule();
         let spec = self.exchange();
+        let credit = self.ruleset().satellite_credit;
         let mut seen: HashSet<Vec<String>> = HashSet::new();
         let mut keep: Vec<usize> = Vec::new();
         for i in order {
+            // A satellite contact the contest gives no credit is in no file and no score.
+            if !credit && !self.rows[i].sat.is_empty() {
+                continue;
+            }
             if seen.insert(self.rows[i].dkey(&rule, spec)) {
                 keep.push(i);
             }

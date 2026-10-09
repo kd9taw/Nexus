@@ -108,7 +108,9 @@ export function wfdLogHints(log: readonly FieldDayQso[]): { bands: number; modes
   const perBand = new Map<string, number>()
   const modes = new Set<string>()
   for (const q of log) {
-    if (q.dupe) continue
+    // A satellite contact counts for nothing at Winter Field Day ("Cross-band, repeated,
+    // relayed … contacts do not count", p.5), so it is no evidence for these either.
+    if (q.dupe || (q.sat ?? '') !== '') continue
     const band = q.band.trim().toLowerCase()
     if (band) perBand.set(band, (perBand.get(band) ?? 0) + 1)
     const mode = (q.mode ?? '').trim().toUpperCase()

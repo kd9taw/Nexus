@@ -153,7 +153,11 @@ export function contestDupe(
   // talks the operator out of a QSO that would have scored. What it costs is the other
   // way: on the satellite strip a genuine repeat through one bird shows no badge until
   // the engine refuses it at log time, where the leg IS in hand and the answer is exact.
-  const sameSat = (q: { sat?: string }): boolean => !rule.satelliteIsABand || !(q.sat ?? '')
+  //
+  // ⭐ And a contest that gives a satellite contact NO credit (Winter Field Day 2027) makes a
+  // satellite row a dupe of nothing at all, so it is skipped whatever the band rule says.
+  const skipSat = rule.satelliteIsABand || fieldDay.satelliteCredit === false
+  const sameSat = (q: { sat?: string }): boolean => !skipSat || !(q.sat ?? '')
   const own = (fieldDay.log ?? []).some(
     (q) =>
       (!rule.byCall || q.call.trim().toUpperCase() === typed) &&

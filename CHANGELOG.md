@@ -113,6 +113,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Power category left at HIGH writes no CATEGORY-POWER line; Settings says so beside the picker. A
   club's file carries the same lines as a position's, and its OPERATORS line now names the
   operators the positions logged under as well as the ones you typed.
+- **A satellite contact counts for nothing at Winter Field Day.** The sponsor's 2027 rules say
+  cross-band and relayed contacts do not count. A contact made through a satellite is still logged
+  and kept, and reaches your logbook and LoTW when you merge the contest log, but it scores
+  nothing, is left out of the Winter Field Day Cabrillo and ADIF files, and does not make the
+  same station worked on the same band without the satellite a duplicate. ARRL Field Day, which
+  counts satellite contacts, is unchanged.
 
 ### Fixed
 

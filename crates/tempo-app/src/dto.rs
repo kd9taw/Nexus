@@ -2244,6 +2244,12 @@ pub struct FieldDayStatus {
     /// know, so every other contest's capture keeps the shape every published page accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objective_multiplier: Option<u32>,
+    /// ⭐ **`Some(false)` when this contest gives a satellite contact no credit** (Winter
+    /// Field Day 2027), and then a row with a `sat` counts for nothing and is no dupe of
+    /// anything, which the while-typing verdict reads. `None` — absent on the wire, for the
+    /// Remote page's sake — for every contest that credits them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub satellite_credit: Option<bool>,
     /// The active-or-next occurrence of this event's window (Unix UTC),
     /// computed in Rust from the ruleset data — the single source the
     /// banner/countdown reads. (The TS date math this replaces hardcoded a

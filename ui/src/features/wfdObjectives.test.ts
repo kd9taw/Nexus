@@ -68,3 +68,10 @@ describe('the log hints', () => {
     expect(wfdLogHints(log)).toEqual({ bands: 0, modes: 1 })
   })
 })
+
+describe('the log hints and satellites', () => {
+  it('leave out a satellite contact, which counts for nothing at Winter Field Day', () => {
+    const pass = (call: string): FieldDayQso => ({ ...q('2m', 'PH'), call, sat: 'ISS (ZARYA)' })
+    expect(wfdLogHints([pass('K1ABC'), pass('W1AW'), pass('N0XYZ')])).toEqual({ bands: 0, modes: 0 })
+  })
+})
