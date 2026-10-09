@@ -224,6 +224,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on, or while XIT is on. Stop TX clears the radio's CW buffer at once, so only the word already
   going out can still finish; if the radio still shows transmitting just after that, Nexus sends
   the unkey, and if the radio does not confirm it, Nexus says so in red and drops the connection.
+  A speed another program sets on the radio (SmartSDR, say) becomes the WPM control's, so the CW
+  screen shows what the radio sends at and Nexus does not set it back. A word with a character
+  Nexus has no Morse for (`!` or `#`, for example) is not sent, and the CW line names the
+  character: Nexus could not tell how long the radio takes to send it. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: Tune with the radio's own carrier through the Flex native client, built and off
+  until a tester has checked it on a radio.** Once it is switched on, Tune on the Flex native
+  client starts the radio's own tune carrier, at the tune power set in SmartSDR, in place of
+  keying the radio and playing Nexus's tone. It runs while you hold Tune, up to your tune timeout
+  (12 seconds unless you change it, never more than 60), and releasing Tune, Stop TX or the
+  timeout ends it; if Nexus itself stalls, the connection ends it 2 seconds after the timeout.
+  Beside Tune, Nexus shows the radio's tune power and its transmit timeout, and when the radio has
+  no transmit timeout it says so: then nothing would end the carrier if Nexus or the network
+  failed during a tune. Nexus writes no power for this carrier, and the Tune power setting says it
+  does not apply there. Tune is also refused where the radio's carrier would fall outside your
+  CW privileges. Until it is switched on, Tune on the Flex native client works as before.
   NEEDS-BENCH on a FLEX radio.
 
 ### Changed
@@ -240,6 +255,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
 
+- **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
+  Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
+  elevation boxes, with the line for the call in your log entry under them, so the bearing (and
+  elevation), ■ STOP and that line with **Point** all show in the stock rail on a 1366×768 screen and
+  larger, where STOP used to be a scroll down inside the box. In a rail narrowed toward its minimum on
+  a 1366×768 or 1600×900 screen the call's line can still be a short scroll down: drag the divider
+  under the box to give it room. The Rotor pane on Conditions and in a cockpit's own columns is
+  unchanged.
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each
@@ -307,8 +330,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QSO party a laptop with another state in Your station data sends its state instead of the
   club's county on every contact. The host now refuses it when it joins, and both that laptop's
   club block and the host's say which exchange each sends and where to set it. A position on an
-  older Nexus, which cannot say, joins as before. A different callsign is not refused: an ARRL
-  Field Day GOTA station must use one.
+  older Nexus, which cannot say, joins as before.
+- **A club position on another callsign is turned away, by name.** Every laptop of one club
+  entry sends the club's call, but a laptop still set to its owner's call sent that call on the
+  air while the club's file claimed its contacts under the host's. The host now refuses it when
+  it joins, and both that laptop's club block and the host's name the two calls and where to set
+  it: Callsign on the air, under Who's who at this event on the Contesting tab. Older Nexus
+  positions send their call too and are refused the same way. ARRL Field Day is the exception,
+  because its GOTA station must use a call of its own: there a position on any call joins as
+  before.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

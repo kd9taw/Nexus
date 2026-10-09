@@ -124,11 +124,12 @@ pub enum Fault {
     /// ([`Foreign::is_named_by`]), and no `xmit 1` while the transmitter is not ours to take.
     ForeignClient(Foreign),
 
-    /// **A disconnect mid-over.** The first time a client keys (`xmit 1` answered with success),
-    /// the simulator closes that TCP session `after` the interlock reports TRANSMITTING. Whether
-    /// a real radio unkeys a client whose connection drops is not established (port plan §3.4
-    /// leaves it to the bench); `radio_stays_keyed` plays the worse answer, and the next
-    /// connection then sees the transmitter held by the dropped handle.
+    /// **A disconnect mid-over.** The first time a client keys (`xmit 1`, or the radio's own tune
+    /// carrier, `transmit tune 1`, answered with success), the simulator closes that TCP session
+    /// `after` the interlock reports TRANSMITTING. Whether a real radio unkeys a client whose
+    /// connection drops is not established (port plan §3.4 leaves it to the bench);
+    /// `radio_stays_keyed` plays the worse answer, and the next connection then sees the
+    /// transmitter, or the tune carrier, held by the dropped handle.
     ///
     /// *Guard:* losing the session while keyed. The client unkeys locally before anything else,
     /// stops feeding DAX TX, reconnects on its ladder without swapping the connection under a

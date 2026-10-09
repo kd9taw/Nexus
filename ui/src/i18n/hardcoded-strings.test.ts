@@ -601,6 +601,9 @@ const MIGRATED = [
   // dock's ESM plate — both migrated from birth; ESM, N1MM's name for it, is held as a token.
   'features/esmHost.ts',
   'components/EsmPlate.tsx',
+  // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
+  // birth.
+  'components/RadioTuneNote.tsx',
 ]
 
 /**

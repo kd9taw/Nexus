@@ -25,7 +25,12 @@ type Shared = Arc<Mutex<Engine>>;
 /// An Illinois QSO Party position at an Illinois county: master on, the party picked,
 /// S&P, a position id and a name, pointed at the club.
 fn party_engine(posid: &str, name: &str, join_addr: &str) -> Shared {
-    let mut e = Engine::new("W9XYZ", "EN50", 0);
+    party_engine_on("W9XYZ", posid, name, join_addr)
+}
+
+/// [`party_engine`]'s position, on the station call `call`.
+fn party_engine_on(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
+    let mut e = Engine::new(call, "EN50", 0);
     let mut s = e.settings().clone();
     s.fd_active = true;
     s.fd_event = "ilqp".into();
@@ -395,6 +400,87 @@ fn a_position_set_up_out_of_state_is_refused_by_name_on_both_screens() {
     log_party(&fixed, "K9BBB", "COOK", "PH");
     let fixed_sd = start_pump(&fixed, &addr);
     wait_until("the position set up in Illinois merges", 20, || {
+        club_rows(&host) == 1
+    });
+    wait_until("the host's note for it goes", 10, || {
+        engine_lock(&host)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .is_some_and(|c| c.refused.is_empty())
+    });
+    for sd in [host_sd, host_pump_sd, fixed_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **A position on another station call than the host's is refused, by name, on both
+/// screens** — over the real bridge and sockets. At the Illinois QSO Party every laptop of a
+/// club entry sends the club's call: one still set to its owner's call would send that call
+/// on the air while the club's file claims its contacts under the host's. CONTROL: the same
+/// position on the club's call joins and its contact merges — and the host's note for it goes.
+#[test]
+fn a_position_on_another_call_is_refused_by_name_on_both_screens() {
+    let dir = std::env::temp_dir().join(format!("ilqp-call-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = party_engine("aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_event.ilqp.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let own = party_engine_on("K9ABC", "bbbb0002", "SSB tent", &addr);
+    log_party(&own, "K9AAA", "COOK", "PH");
+    let own_sd = start_pump(&own, &addr);
+
+    let position_error = |eng: &Shared| {
+        engine_lock(eng)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .and_then(|c| c.last_error)
+            .unwrap_or_default()
+    };
+    wait_until("the position's screen says why", 10, || {
+        position_error(&own).contains("this Nexus as K9ABC,")
+    });
+    let said = position_error(&own);
+    assert!(
+        said.contains("on the air as W9XYZ") && said.contains("Callsign on the air"),
+        "{said}"
+    );
+    let refused = engine_lock(&host)
+        .snapshot()
+        .field_day
+        .and_then(|f| f.club)
+        .map(|c| c.refused)
+        .unwrap_or_default();
+    assert_eq!(refused.len(), 1, "the host's screen names it: {refused:?}");
+    assert_eq!(
+        (
+            refused[0].pos_name.as_str(),
+            refused[0].call.as_str(),
+            refused[0].reason.as_str()
+        ),
+        ("SSB tent", "K9ABC", said.as_str()),
+        "who, on which call, and the very sentence it was sent"
+    );
+    assert_eq!(
+        club_rows(&host),
+        0,
+        "not one of its contacts reached the club"
+    );
+
+    // CONTROL: on the club's call, the same position joins and its contact merges.
+    own_sd.store(true, Ordering::Relaxed);
+    let fixed = party_engine("bbbb0002", "SSB tent", &addr);
+    log_party(&fixed, "K9BBB", "COOK", "PH");
+    let fixed_sd = start_pump(&fixed, &addr);
+    wait_until("the position on the club's call merges", 20, || {
         club_rows(&host) == 1
     });
     wait_until("the host's note for it goes", 10, || {

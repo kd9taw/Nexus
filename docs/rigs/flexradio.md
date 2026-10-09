@@ -195,6 +195,13 @@ Two limits worth knowing before you switch one on:
   voice), and never while SmartSDR's own DAX is connected. It puts your setting
   back when it lets go, and at the next connect after a crash.
 
+**Tune on the Flex native client (Beta)** keys the radio and plays Nexus's tone, as on any CAT
+link. Tuning with the radio's own carrier, at the tune power you set in SmartSDR, is built and
+stays off until a tester has checked it on a radio. Once it is on, Nexus shows the radio's tune
+power and its transmit timeout beside Tune, and says so when the radio has no transmit timeout:
+then nothing would end the carrier if Nexus or the network failed during a tune, so set one in
+SmartSDR.
+
 ---
 
 ## macOS

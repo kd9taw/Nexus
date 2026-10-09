@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
+import type { RadioStatus } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
 // THE BUDGET (2026-10-09). The slowest case here, "is reachable on the Digital tab and saves as a percent", takes
@@ -97,9 +98,10 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel() {
+function renderPanel(radio?: RadioStatus) {
   return render(
     <SettingsPanel
+      radio={radio}
       activeRadioId={0}
       scale={1 as never}
       scaleMode={'auto' as never}
@@ -180,6 +182,27 @@ describe('Tune power — the fixed low level a tune-up keys at', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Digital' }))
     const field = (await screen.findByLabelText(/Tune power/i)).closest('.settings-field')!
     expect(field.textContent).toMatch(/lower|never raise|only.*down/i)
+  })
+
+  it("says, on the Flex native client tuning with the radio's own carrier, that the radio's tune power is used", async () => {
+    // Nexus writes no power for the radio's own carrier (operator ruling, 2026-10-08, "Radio's,
+    // shown, nothing written"), so this setting does nothing there and the row must say so, with
+    // the radio's value. The control: a station without it reads as it always did.
+    const flex = "With the Flex native client, Tune is the radio's own carrier at the tune power set in SmartSDR"
+    const row = async () => {
+      fireEvent.click(await screen.findByRole('tab', { name: 'Digital' }))
+      return (await screen.findByLabelText(/Tune power/i)).closest('.settings-field')!.textContent
+    }
+    renderPanel({ flexTune: { powerPct: 10, txTimeoutMs: 0 } } as RadioStatus)
+    expect(await row()).toContain(
+      `${flex} (10 % now). Nexus writes no power for it, so this setting does not apply there.`,
+    )
+    cleanup()
+    renderPanel({ flexTune: { powerPct: null, txTimeoutMs: null } } as RadioStatus)
+    expect(await row()).toContain(`${flex}. Nexus writes no power for it`)
+    cleanup()
+    renderPanel()
+    expect(await row()).not.toContain('Flex native client')
   })
 })
 

@@ -15,7 +15,7 @@
 //! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it |
 //! | `T 0` | everything of ours (`Connection::end_ours`): the open operation's own stop (`xmit 0`, `transmit tune 0`, `cwx clear`, or the ATU's `xmit 0` and `transmit tune 0`); with none open, every stop the radio's status shows an earlier session of ours may need | never gated; sent only for what is ours |
 //! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback) |
-//! | `b <text>` | `TxStart::CwxSend` → `cwx send`, one word, with its keying time at the radio's speed | admission (refuses today: no readback); then the slice in CW, the radio's break-in on, Sync CWX off, XIT off; a refusal says why ([`super::FlexDaemon::key_refused_since`]) |
+//! | `b <text>` | `TxStart::CwxSend` → `cwx send`, one word, with its keying time at the radio's speed | first, every character one Nexus can time; admission (refuses today: no readback); then the slice in CW, the radio's break-in on, Sync CWX off, XIT off; a refusal says why ([`super::FlexDaemon::key_refused_since`]) |
 //! | `\stop_morse` | `TxStop::CwxClear` → `cwx clear` | never gated |
 //! | `L KEYSPD <wpm>` | `Command::CwSpeed` → `cw wpm <5–100>` | keys nothing; the engine's WPM control decides the value |
 //! | `F <hz>` | `slice tune <n> <MHz>` | the slice must be ours |
@@ -67,8 +67,10 @@
 //! expected end, so the shim hands the session the word's keying time
 //! ([`tempo_core::cw::morse_duration_ms`]) at the speed the radio reports, or at the speed the shim
 //! has just set when that is slower and the radio has not reported it yet ([`word_wpm`]): a word
-//! is never timed shorter than the radio keys it. A word the client does not send says why on the
-//! CW line, in place of the rigctld answer, `RPRT -1`.
+//! is never timed shorter than the radio keys it. A word with a character Nexus has no Morse for
+//! is not sent: it cannot be timed (`morse_duration_ms` skips such a character, while the radio's
+//! keyer may send it), so it could outlast its window and end in a false alarm. A word the client
+//! does not send says why on the CW line, in place of the rigctld answer, `RPRT -1`.
 //!
 //! Nexus's own design, not a port.
 
@@ -372,6 +374,16 @@ impl FlexShim {
                     .to_string(),
             );
         };
+        if let Some(c) = text
+            .as_str()
+            .chars()
+            .find(|c| *c != ' ' && tempo_core::cw::morse_code(*c).is_none())
+        {
+            return Err(format!(
+                "CW not sent: Nexus has no Morse for \"{c}\", so it cannot tell how long the \
+                 radio takes to send it. Take it out of the message, or use another keyer."
+            ));
+        }
         let conn = self
             .conn
             .upgrade()

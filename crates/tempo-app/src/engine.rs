@@ -2822,6 +2822,10 @@ pub struct Engine {
     /// air. The voice keyer, APRS and SSTV refuse while it stands; see
     /// [`Self::observe_flex_radio_has_mic`].
     flex_radio_has_mic: bool,
+    /// While Nexus's own Flex client tunes with the radio's own carrier: what the radio reports
+    /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
+    /// [`Self::observe_flex_tune`].
+    flex_tune: Option<crate::dto::FlexTune>,
     /// The Flex VITA **meter** worker is running — the only thing that produces a
     /// FlexLib-scaled SWR on this radio. Display-only; see
     /// [`Self::observe_flex_meter_stream`].
@@ -5419,6 +5423,7 @@ impl Engine {
             rig_confirmed: false,
             flex_dax_tx: false,
             flex_radio_has_mic: false,
+            flex_tune: None,
             flex_meter_stream: false,
             last_dx_tier: None,
             last_msg_tier: None,
@@ -7521,6 +7526,21 @@ impl Engine {
     /// the voice keyer, APRS and SSTV read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
+    }
+
+    /// Nexus's own Flex client started or stopped tuning with the radio's own carrier, or the
+    /// radio reported a new tune power or transmit timeout. `None`: Tune is a tone Nexus plays, as
+    /// on every other CAT link.
+    ///
+    /// The radio's carrier (`transmit tune`) keys at the radio's tune power, which Nexus only shows
+    /// (operator ruling, 2026-10-08, "Radio's, shown, nothing written"), and the radio puts it
+    /// where its transmit slice says, a place the engine's model of the section's emission does
+    /// not describe: so while this stands, a tune is also judged as CW at the frequency the radio
+    /// transmits on ([`Self::tune_allowed`]). The radio's own transmit timeout is shown beside
+    /// Tune, with a warning when it is off, and never refuses a tune (operator ruling, 2026-10-08,
+    /// "Warn only"). Pushed by the radio loop on the change.
+    pub fn observe_flex_tune(&mut self, tune: Option<crate::dto::FlexTune>) {
+        self.flex_tune = tune;
     }
 
     /// The Flex VITA **meter** worker just started or stopped.
@@ -12143,10 +12163,12 @@ impl Engine {
     /// A position joined. Err when not hosting (a race with the toggle), Err with
     /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
-    /// rules-file id — and Err when it is set up in another exchange ROLE than the club's
-    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it). The
-    /// wording lives on `ClubLog` and in `fdevent` because only they know the contest to
-    /// name. Every refusal is noted for the host's own screen too.
+    /// rules-file id — Err when it is set up in another exchange ROLE than the club's
+    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it), and Err
+    /// when it is on another station CALL than this host's, outside ARRL Field Day (`call`,
+    /// the JOIN's, against the call the club's file is written under). The wording lives on
+    /// `ClubLog` and in `fdevent` because only they know the contest to name. Every refusal
+    /// is noted for the host's own screen too.
     ///
     /// A position that names no role is served as it always was: its contest has one role
     /// (both Field Days), or it is older than the field and cannot say. So is any position
@@ -12173,10 +12195,13 @@ impl Engine {
             return Err("this station is not hosting a club event".into());
         };
         let theirs = role.trim();
-        let refusal = club.join_refusal(v, contest).or_else(|| {
-            (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
-                .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
-        });
+        let refusal = club
+            .join_refusal(v, contest)
+            .or_else(|| {
+                (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
+                    .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
+            })
+            .or_else(|| club.call_refusal(&self.settings.mycall, call));
         if let Some(msg) = refusal {
             club.note_refused(pos, name, call, &msg, now);
             return Err(msg);
@@ -17437,7 +17462,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let was_tuning = self.tuning;
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
-        self.tuning = on && self.tx_allowed();
+        self.tuning = on && self.tune_allowed();
         if self.tuning {
             // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
             // same, though incidentally: any click or keystroke anywhere in its window zeroes
@@ -17492,7 +17517,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Masked by privileges on READ too, so if the dial moves into a locked segment while a
     /// tune is armed, the loop stops keying immediately.
     pub fn tuning(&self) -> bool {
-        self.tuning && self.tx_allowed()
+        self.tuning && self.tune_allowed()
+    }
+
+    /// Whether the licence allows a tune carrier: [`Self::tx_allowed`], and while the carrier is
+    /// the radio's own ([`Self::observe_flex_tune`]) that carrier judged as CW where the radio
+    /// transmits as well, as CW keyed from another section is ([`Self::poll_cw_one`]). The radio
+    /// makes it at its transmit slice, which the section's own model (FT's signal an audio offset
+    /// above the dial, Phone's passband) does not place; where on the slice it lands in each mode is
+    /// for a tester's bench. Both must allow it, so this only ever refuses more.
+    fn tune_allowed(&self) -> bool {
+        self.tx_allowed()
+            && (self.flex_tune.is_none() || self.tx_allowed_as(crate::settings::OperatingMode::Cw))
     }
 
     /// Set the RX input audio level (0.0–1.0) shown in the UI meter. Driven by
@@ -22154,6 +22190,9 @@ contact yourself."
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
         s.radio.flex_radio_has_mic = self.flex_radio_has_mic;
+        s.radio.flex_tune = self.flex_tune;
+        s.radio.flex_tune_refused =
+            self.flex_tune.is_some() && self.tx_allowed() && !self.tune_allowed();
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -30590,6 +30629,71 @@ mod tests {
         // All clear → accepted.
         e.atu_tune()
             .expect("an idle, armed, in-privileges rig runs its tuner");
+    }
+
+    /// ⭐ THE RADIO'S OWN TUNE CARRIER IS JUDGED AS CW TOO. Nexus's Flex client tunes with the
+    /// radio's carrier, which the radio puts at its transmit slice, not where the section's model
+    /// puts Nexus's own signal: so while the client says so (`observe_flex_tune`), a tune needs CW
+    /// privileges at the transmit frequency as well as the section's. A General in DIGU at
+    /// 14.024 MHz may send FT8 1.5 kHz up (14.0255, in the data segment) but holds no CW privilege
+    /// at 14.024 (the CW floor is 14.025): the tone tune keys there, the radio's carrier does not,
+    /// and the snapshot says why. A tune already up stops being asked for once the client says the
+    /// carrier is the radio's (`tuning` is judged on every read, the radio loop's question). At
+    /// 14.030 both are allowed. The CW judgement is added to the section's, never in its place: in
+    /// Phone at 14.100 a General may send CW but not phone, and the radio's carrier is refused
+    /// there as the tone tune is, with the licence's own lock saying why.
+    #[test]
+    fn the_radios_own_tune_carrier_is_judged_as_cw_where_the_radio_puts_it() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.024, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: FT8 1.5 kHz above 14.024 is a General's"
+        );
+        let tune = |e: &mut Engine| {
+            e.set_tune(true);
+            let s = e.snapshot();
+            (e.tuning(), s.radio.tuning, s.radio.flex_tune_refused)
+        };
+        assert_eq!(tune(&mut e), (true, true, false), "the tone tune keys");
+
+        let radio = crate::dto::FlexTune {
+            power_pct: Some(10),
+            tx_timeout_ms: Some(0),
+        };
+        e.observe_flex_tune(Some(radio));
+        assert!(
+            !e.tuning(),
+            "the tune up when the carrier became the radio's"
+        );
+        e.set_tune(false);
+        assert_eq!(tune(&mut e), (false, false, true), "the radio's carrier");
+        assert_eq!(e.snapshot().radio.flex_tune, Some(radio));
+
+        e.set_frequency(14.030, "20m", "USB");
+        assert_eq!(tune(&mut e), (true, true, false), "inside the CW segment");
+        e.set_tune(false);
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.100, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "scene guard: no phone for a General at 14.100"
+        );
+        assert_eq!(
+            tune(&mut e),
+            (false, false, false),
+            "CW is a General's at 14.100, phone is not"
+        );
+
+        e.observe_flex_tune(None);
+        let s = e.snapshot();
+        assert_eq!(
+            (s.radio.flex_tune, s.radio.flex_tune_refused),
+            (None, false)
+        );
     }
 
     #[test]
@@ -43116,6 +43220,93 @@ mod tests {
         assert_eq!(fd.fd_position_role(), "");
     }
 
+    /// ⭐ **A position on another station call than the host's is refused, by name, on both
+    /// screens — except at ARRL Field Day**, whose GOTA station must use a call of its own.
+    /// At a QSO party every laptop of a club entry sends the club's call, and one still set
+    /// to its owner's call sent that call on the air while the club's file claimed its
+    /// contacts under the host's.
+    #[test]
+    fn a_club_refuses_a_position_on_another_call_by_name_except_at_arrl_field_day() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let refused = |e: &Engine| -> Vec<(String, String, String)> {
+            e.snapshot()
+                .field_day
+                .and_then(|f| f.club)
+                .map(|c| c.refused)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| (r.pos_name, r.call, r.reason))
+                .collect()
+        };
+        let mut e = party_host(&dir);
+        let err = e
+            .fd_club_join(v, "aaaa0001", "SSB tent", "k9abc", "ilqp", "in_state")
+            .expect_err("a position on its owner's call is refused");
+        assert!(
+            err.contains("on the air as W9XYZ and this Nexus as K9ABC,"),
+            "it says which call differs: {err}"
+        );
+        assert!(
+            err.contains(
+                "Set Callsign on the air under Who's who at this event on the \
+                 Contesting tab in Settings to W9XYZ"
+            ),
+            "and where to set it: {err}"
+        );
+        assert_eq!(
+            refused(&e),
+            vec![("SSB tent".to_string(), "K9ABC".to_string(), err.clone())],
+            "the host's own screen names it, with the very sentence"
+        );
+        // CONTROLS: the club's call, however it is typed, joins and the host's note goes; a
+        // position that cannot say its call joins as before.
+        e.fd_club_join(v, "aaaa0001", "SSB tent", " w9xyz ", "ilqp", "in_state")
+            .expect("the club's own call joins");
+        e.fd_club_join(v, "bbbb0002", "CW tent", "", "ilqp", "in_state")
+            .expect("a position that cannot say its call joins as before");
+        assert_eq!(refused(&e), Vec::new());
+        e.fd_host_stop();
+
+        // Winter Field Day and ARRL Field Day (the picker's blank default), each hosted on
+        // W9XYZ: only ARRL Field Day has a GOTA station.
+        let host = |event: &str, class: &str, journal: &str| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.fd_class = class.into();
+            s.fd_section = "WI".into();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+            e.set_mode("fieldday-run").unwrap();
+            e.fd_host_start(dir.join(journal)).expect("hosted");
+            e
+        };
+        let mut wfd = host("wfd", "3O", "wfd.jsonl");
+        let err = wfd
+            .fd_club_join(v, "cccc0003", "Tent 2", "K9ABC", "wfd", "")
+            .expect_err("Winter Field Day has no GOTA station");
+        assert!(
+            err.contains("on the air as W9XYZ and this Nexus as K9ABC, and in WFD every"),
+            "{err}"
+        );
+        wfd.fd_host_stop();
+        let mut fd = host("", "3A", "fd.jsonl");
+        let accept = fd
+            .fd_club_join(v, "dddd0004", "GOTA", "K9GOT", "arrlfd", "")
+            .expect("an ARRL Field Day GOTA position joins on its own call");
+        assert_eq!(accept.host_call, "W9XYZ");
+        assert_eq!(refused(&fd), Vec::new());
+        fd.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -43316,13 +43507,14 @@ mod tests {
 
         // POSITIVE CONTROL: the same refusing club welcomes a CURRENT position. A
         // gate that refused everybody would satisfy every assertion above while
-        // locking every tent out of the QSO party.
+        // locking every tent out of the QSO party. It is on the club's call, as every
+        // position of a QSO party club is.
         let accept = backend
             .join(
                 PROTO_VERSION,
                 "cccc0003",
                 "SSB tent",
-                "KD9TAW",
+                "W9ABC",
                 0,
                 "tnqp",
                 "",

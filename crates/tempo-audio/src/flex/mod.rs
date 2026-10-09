@@ -50,7 +50,11 @@
 //! and the radio loop's belief ([`FlexDaemon::keyed`]) cover a transmission of any kind. The CW
 //! path is built up to that refusal: the WPM control sets the radio's keyer speed (`cw wpm`, which
 //! keys nothing), each word goes to the radio's keyer timed at its speed, and a word the client
-//! does not send, the refusal included, says why on the CW line.
+//! does not send, the refusal included, says why on the CW line. So is Tune: once its switch is on
+//! ([`FlexDaemon::tunes_natively`]), the radio loop starts and ends the radio's own carrier with
+//! typed calls ([`FlexDaemon::tune_on`], [`FlexDaemon::tune_off`]) and the screens show the radio's
+//! tune power and transmit timeout beside Tune ([`FlexDaemon::radio_tune`]); until then Tune is the
+//! loop's own tone over the client's audio route, as on every CAT link.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
@@ -67,14 +71,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::dto::FlexAudioRefusal;
+use tempo_app::dto::{FlexAudioRefusal, FlexTune};
 use tempo_app::engine::receivers::RxOwner;
 use tempo_app::engine::slices::{SliceIntent, SliceReport};
-use tempo_net::flex::admission::another_dax_feeder;
-use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxAudio};
+use tempo_net::flex::admission::{another_dax_feeder, Refusal};
+use tempo_net::flex::encode::{
+    AgcMode, Command, Mode, SliceFunction, StartKind, Station, TxAudio, TxStart, TxStop,
+};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
 use tempo_net::flex::reconnect::End;
-use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot};
+use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot, StopOutcome};
 use tempo_net::flex::streams::{UDP_REGISTRATION_PORT, VITA_PORT};
 
 use routing::{Memory, Restore, Routing, Step, View};
@@ -463,6 +469,67 @@ impl FlexDaemon {
         self.conn().ours_on_air()
     }
 
+    // ── The radio's own tune carrier (Beta, switched off until a tester's bench) ─────────────
+
+    /// Whether Tune is the radio's own carrier on this client (`transmit tune`): its readback is
+    /// switched on ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it,
+    /// it is not, and the radio loop tunes as it does over any CAT link: `T 1` and Nexus's tone.
+    pub fn tunes_natively(&self) -> bool {
+        self.conn().switched_on(StartKind::Tune)
+    }
+
+    /// Start the radio's own tune carrier, at the radio's tune power, held at most `hold_ms` (the
+    /// radio loop's tune timeout): the session ends it by itself at that plus its margin, whether
+    /// or not the loop runs. A typed call, as the loop reaches the native CI-V daemon: rigctld has
+    /// no verb for a radio's tune carrier. `Err(None)` when the session is gone.
+    pub fn tune_on(&self, hold_ms: u64) -> Result<(), Option<Refusal>> {
+        self.conn()
+            .start_lasting(TxStart::TuneOn, Some(hold_ms))
+            .map(|_| ())
+    }
+
+    /// End the radio's tune carrier (`transmit tune 0`). Never gated; another client's tune is
+    /// never ended from here.
+    pub fn tune_off(&self) -> StopOutcome {
+        self.conn().stop(TxStop::TuneOff)
+    }
+
+    /// What the radio reports beside Tune: its tune power and its own transmit timeout. Cheap: read
+    /// in place.
+    pub fn radio_tune(&self) -> FlexTune {
+        self.conn().read(|s| FlexTune {
+            power_pct: s
+                .model
+                .transmit
+                .tune_power
+                .and_then(|p| u8::try_from(p).ok()),
+            tx_timeout_ms: s
+                .model
+                .interlock
+                .config
+                .timeout
+                .and_then(|t| u64::try_from(t).ok()),
+        })
+    }
+
+    // ── CW through the radio's keyer (Beta, switched off until a tester's bench) ──────────────
+
+    /// Whether this client sends CW through the radio's keyer (`cwx send`): its readback is
+    /// switched on. Until then every word is refused, and says why.
+    pub fn sends_cw(&self) -> bool {
+        self.conn().switched_on(StartKind::Cwx)
+    }
+
+    /// The radio's CW speed as it reports it (`transmit speed`), whoever set it. Cheap.
+    pub fn cw_speed(&self) -> Option<u32> {
+        self.conn().read(|s| {
+            s.model
+                .transmit
+                .cw_speed
+                .and_then(|w| u32::try_from(w).ok())
+        })
+    }
+
     /// Tell the shim whether Nexus itself is transmitting, so the broker's disconnect fail-safe
     /// stands down while we are on the air. The same call as the CI-V and OmniRig daemons'.
     pub fn set_tx_intent(&self, on: bool) {
@@ -781,6 +848,19 @@ impl Drop for FlexDaemon {
         }
         // The last strong reference: the session's teardown runs here, before drop returns.
         self.conn.take();
+    }
+}
+
+/// The PTT line's words for a tune of the radio's own carrier the client did not start
+/// ([`FlexDaemon::tune_on`]): what kept it back, and what to do. `None`: the session has gone.
+pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
+    match refusal {
+        None => "Tune not keyed: the connection to the radio is closed.".to_string(),
+        Some(Refusal::XitOn) => "Tune not keyed: XIT is on for the radio's transmit slice, so the \
+                                 radio's carrier would sit off the frequency Nexus checked. Turn \
+                                 XIT off."
+            .to_string(),
+        Some(other) => format!("Tune not keyed: {other}."),
     }
 }
 

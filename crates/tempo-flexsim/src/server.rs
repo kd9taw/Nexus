@@ -446,14 +446,12 @@ fn close(shared: &Shared, conn: &Conn, by: Closer) {
     {
         let mut radio = lock(&shared.radio);
         radio.live.retain(|c| c.id != conn.id);
-        if radio.keyed_by == Some(conn.handle) {
-            let stays = by == Closer::Simulator
-                && shared.disconnect_mid_over().is_some_and(|(_, stays)| stays);
-            if !shared.stuck() && !stays {
-                radio.keyed_by = None;
-            }
+        let stays =
+            by == Closer::Simulator && shared.disconnect_mid_over().is_some_and(|(_, stays)| stays);
+        if radio.keyed_by == Some(conn.handle) && !shared.stuck() && !stays {
+            radio.keyed_by = None;
         }
-        if radio.tuned_by == Some(conn.handle) && !shared.stuck_tune() {
+        if radio.tuned_by == Some(conn.handle) && !shared.stuck_tune() && !stays {
             radio.tuned_by = None;
         }
     }
@@ -718,9 +716,13 @@ impl Reader<'_> {
         };
 
         if ok && text == "xmit 1" {
+            lock(&shared.radio).keyed_by = Some(conn.handle);
+        }
+        // The disconnect fires on the first key the radio takes: an over's, or its own tune
+        // carrier's.
+        if ok && matches!(text, "xmit 1" | "transmit tune 1") {
             let after = {
                 let mut radio = lock(&shared.radio);
-                radio.keyed_by = Some(conn.handle);
                 match shared.disconnect_mid_over() {
                     Some((after, _)) if !radio.disconnect_fired => {
                         radio.disconnect_fired = true;
