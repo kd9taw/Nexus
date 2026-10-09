@@ -209,6 +209,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
   as the current one: those feeds carry more than one, and a second spacecraft's readings are
   never mixed in. Reported by KB0UZT (#404).
+- **On a slow disk, the needs, awards, statistics, Journey and confirmation diagnostics never
+  leave out the contact you just logged.** Each waits up to two seconds for that contact to reach
+  the logbook database first. When saving took longer than that, they answered without it: the
+  station you had just worked could stay marked as needed and the counts were one short, with
+  nothing to say so. Now, while the contact is still being saved, they give no answer rather than
+  a short one, and the next look includes it.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now

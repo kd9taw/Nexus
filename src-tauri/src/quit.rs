@@ -1159,8 +1159,11 @@ mod tests {
             &mut |n| told.lock().unwrap().push((false, n)),
             &mut || {
                 asked += 1;
-                // The operator frees the disk, then says keep trying.
+                // The operator frees the disk, then says keep trying — once the change is in: on
+                // a loaded machine its write can outlast the 400 ms window, and the save then
+                // rightly asks again. That Keep trying waits a whole fresh window is held below.
                 drop(hold.take());
+                written(&engine);
                 Choice::KeepTrying
             },
         );
@@ -1187,6 +1190,55 @@ mod tests {
             said[q + 1],
             saving(1),
             "keep trying: back to the saving line at once"
+        );
+        assert_eq!(said.last(), Some(&Notice::Done(SaveDone { saved: true })));
+        assert!(marked_on_disk(&dir, &engine, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Keep trying waits a whole fresh window before it asks again: with the change still held, the
+    /// next question comes no sooner than the patience after the answer, never at once on the
+    /// window already spent; then the disk is freed, and the save that lands ends it.
+    #[test]
+    fn keep_trying_waits_a_whole_fresh_window_before_asking_again() {
+        let patience = Duration::from_millis(300);
+        let (dir, engine) = engine_on_store("quit-fresh-window", 10);
+        let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
+        assert!(card_at(&engine, 1));
+        let told = heard();
+        let mut hold = Some(hold);
+        let (mut asked, mut answered) = (Vec::new(), Vec::new());
+        let outcome = save_the_logbook(
+            &engine,
+            patience,
+            false,
+            &mut |n| told.lock().unwrap().push((false, n)),
+            &mut || {
+                asked.push(Instant::now());
+                if asked.len() > 1 {
+                    // Asked again: the operator frees the disk, and keeps trying once it is in.
+                    drop(hold.take());
+                    written(&engine);
+                }
+                answered.push(Instant::now());
+                Choice::KeepTrying
+            },
+        );
+        assert_eq!(outcome, Outcome::Saved);
+        assert_eq!(asked.len(), 2, "asked again once the fresh window ran out");
+        let fresh = asked[1] - answered[0];
+        assert!(fresh >= patience, "a whole fresh window: {fresh:?}");
+        let said = notices(&told);
+        let questions: Vec<&Notice> = said
+            .iter()
+            .filter(|n| matches!(n, Notice::Failed(_)))
+            .collect();
+        assert_eq!(questions.len(), 2);
+        assert!(
+            questions
+                .iter()
+                .all(|n| matches!(n, Notice::Failed(SaveFailed { pending: 1, .. }))),
+            "each with the change still on its way: {questions:?}"
         );
         assert_eq!(said.last(), Some(&Notice::Done(SaveDone { saved: true })));
         assert!(marked_on_disk(&dir, &engine, 1));
